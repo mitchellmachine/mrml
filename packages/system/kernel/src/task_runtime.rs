@@ -211,6 +211,15 @@ struct TrackedRevocationPlan {
 
 type TrackedRevocationSet = [Option<TrackedRevocationPlan>; MAX_TASK_DELEGATIONS + 1];
 
+struct PeerDeathPublicationPlan {
+    domain_slot: usize,
+    relation_slot: usize,
+    death_slot: usize,
+    wake: WakePlan,
+}
+
+type PeerDeathPublicationSet = [Option<PeerDeathPublicationPlan>; TASK_CONTROL_PEERS];
+
 pub struct DetachedTaskDomain<const CAPS: usize> {
     scheduling: DetachedTask,
     domain: TaskDomain<CAPS>,
@@ -868,7 +877,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .prepare_current_termination()
             .map_err(TaskRuntimeError::Scheduler)?;
 
-        self.validate_peer_death_publication(
+        let peer_plan = self.prepare_peer_death_publication(
             self.domains[slot]
                 .as_ref()
                 .ok_or(TaskRuntimeError::IntegrityFailure)?,
@@ -880,7 +889,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        self.publish_peer_death(&domain, PeerDeathReason::Faulted { vector, address })?;
+        self.commit_peer_death_publication(
+            peer_plan,
+            domain.task,
+            PeerDeathReason::Faulted { vector, address },
+        );
         let next = self.scheduler.commit_current_termination(termination_plan);
         Ok(FaultRetirement {
             task: current,
@@ -912,7 +925,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .prepare_current_termination()
             .map_err(TaskRuntimeError::Scheduler)?;
 
-        self.validate_peer_death_publication(
+        let peer_plan = self.prepare_peer_death_publication(
             self.domains[slot]
                 .as_ref()
                 .ok_or(TaskRuntimeError::IntegrityFailure)?,
@@ -921,7 +934,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        self.publish_peer_death(&domain, PeerDeathReason::ProtocolViolation(violation))?;
+        self.commit_peer_death_publication(
+            peer_plan,
+            domain.task,
+            PeerDeathReason::ProtocolViolation(violation),
+        );
         let next = self.scheduler.commit_current_termination(termination_plan);
         Ok(TaskViolationRetirement {
             task: current,
@@ -953,7 +970,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .scheduler
             .prepare_current_termination()
             .map_err(TaskRuntimeError::Scheduler)?;
-        self.validate_peer_death_publication(
+        let peer_plan = self.prepare_peer_death_publication(
             self.domains[slot]
                 .as_ref()
                 .ok_or(TaskRuntimeError::IntegrityFailure)?,
@@ -962,7 +979,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        self.publish_peer_death(&domain, PeerDeathReason::Exited)?;
+        self.commit_peer_death_publication(peer_plan, domain.task, PeerDeathReason::Exited);
         let next = self.scheduler.commit_current_termination(termination_plan);
         Ok((
             TaskTermination {
@@ -1395,58 +1412,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(slot)
     }
 
-    fn publish_peer_death(
-        &mut self,
-        retired: &TaskDomain<CAPS>,
-        reason: PeerDeathReason,
-    ) -> Result<(), TaskRuntimeError> {
-        let mut wake_plans: [Option<WakePlan>; TASK_CONTROL_PEERS] = array::from_fn(|_| None);
-        for (slot, peer) in wake_plans
-            .iter_mut()
-            .zip(retired.peers.iter().flatten().copied())
-        {
-            *slot = Some(
-                self.scheduler
-                    .prepare_wake(peer)
-                    .map_err(TaskRuntimeError::Scheduler)?,
-            );
-        }
-        for (peer, wake_plan) in retired
-            .peers
-            .iter()
-            .flatten()
-            .copied()
-            .zip(wake_plans.into_iter().flatten())
-        {
-            let slot = self.domain_slot(peer)?;
-            let domain = self.domains[slot]
-                .as_mut()
-                .ok_or(TaskRuntimeError::IntegrityFailure)?;
-            let relation = domain
-                .peers
-                .iter_mut()
-                .find(|candidate| **candidate == Some(retired.task))
-                .ok_or(TaskRuntimeError::IntegrityFailure)?;
-            *relation = None;
-            let death_slot = domain
-                .peer_deaths
-                .iter_mut()
-                .find(|death| death.is_none())
-                .ok_or(TaskRuntimeError::IntegrityFailure)?;
-            *death_slot = Some(PeerDeath {
-                peer: retired.task,
-                reason,
-            });
-            self.scheduler.commit_wake(wake_plan);
-        }
-        Ok(())
-    }
-
-    fn validate_peer_death_publication(
+    fn prepare_peer_death_publication(
         &self,
         retired: &TaskDomain<CAPS>,
-    ) -> Result<(), TaskRuntimeError> {
+    ) -> Result<PeerDeathPublicationSet, TaskRuntimeError> {
         Self::validate_control_state(retired)?;
+        let mut plan = array::from_fn(|_| None);
+        let mut count = 0usize;
         for (index, peer) in retired.peers.iter().enumerate() {
             let Some(peer) = *peer else {
                 continue;
@@ -1457,23 +1429,61 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             if !self.scheduler.contains(peer) {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
-            let slot = self.domain_slot(peer)?;
-            let domain = self.domains[slot]
+            let domain_slot = self.domain_slot(peer)?;
+            let domain = self.domains[domain_slot]
                 .as_ref()
                 .ok_or(TaskRuntimeError::IntegrityFailure)?;
             Self::validate_control_state(domain)?;
-            if domain
+            let mut relations = domain
                 .peers
                 .iter()
-                .filter(|candidate| **candidate == Some(retired.task))
-                .count()
-                != 1
-                || !domain.peer_deaths.iter().any(Option::is_none)
-            {
+                .enumerate()
+                .filter_map(|(slot, candidate)| (*candidate == Some(retired.task)).then_some(slot));
+            let relation_slot = relations.next().ok_or(TaskRuntimeError::IntegrityFailure)?;
+            if relations.next().is_some() {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
+            let death_slot = domain
+                .peer_deaths
+                .iter()
+                .position(Option::is_none)
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            let wake = self
+                .scheduler
+                .prepare_wake(peer)
+                .map_err(TaskRuntimeError::Scheduler)?;
+            plan[count] = Some(PeerDeathPublicationPlan {
+                domain_slot,
+                relation_slot,
+                death_slot,
+                wake,
+            });
+            count += 1;
         }
-        Ok(())
+        Ok(plan)
+    }
+
+    fn commit_peer_death_publication(
+        &mut self,
+        plan: PeerDeathPublicationSet,
+        retired: TaskId,
+        reason: PeerDeathReason,
+    ) {
+        for publication in plan.into_iter().flatten() {
+            let domain = self.domains[publication.domain_slot]
+                .as_mut()
+                .expect("runtime preserves every prepared peer domain");
+            let relation = &mut domain.peers[publication.relation_slot];
+            assert_eq!(*relation, Some(retired));
+            *relation = None;
+            let death_slot = &mut domain.peer_deaths[publication.death_slot];
+            assert!(death_slot.is_none());
+            *death_slot = Some(PeerDeath {
+                peer: retired,
+                reason,
+            });
+            self.scheduler.commit_wake(publication.wake);
+        }
     }
 
     fn validate_control_state(domain: &TaskDomain<CAPS>) -> Result<(), TaskRuntimeError> {

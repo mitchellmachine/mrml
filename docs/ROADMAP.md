@@ -2290,6 +2290,9 @@ live composition remains pending.
    Peer-death publication reserves the complete peer wake set before control-
    state mutation and consumes plans after event publication. Existing coverage
    passes; the total remains 629.
+   Peer publication plans now also bind each exact domain, reciprocal relation,
+   and death-event slot before authority cleanup, eliminating commit-time table
+   searches. Existing coverage passes; the current total remains 630.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.

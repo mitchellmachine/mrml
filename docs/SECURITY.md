@@ -305,6 +305,9 @@ access. The security/acceptance gate is canonical in
   inbox publication, eliminating fallible scheduler lookup after commit.
 - Peer-death publication reserves every exact peer wake generation before any
   reciprocal relation or death-event mutation.
+- Peer-death preparation also reserves each peer's exact domain, reciprocal
+  relation, and empty death-event slots, so authority cleanup cannot be followed
+  by a fallible publication lookup.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact

@@ -6985,6 +6985,11 @@ bounded peer set before removing any reciprocal relation or recording any death.
 Each plan is consumed only after its peer's control event is published, removing
 the former fallible post-mutation wake lookup. Existing protocol-violation and
 multi-peer retirement coverage passes; the total remains 629.
+The same publication plan now also binds every peer's exact domain slot,
+reciprocal-relation slot, and empty death-event slot. Authority cleanup may run
+between preparation and commit, but commit performs no repeated domain or table
+search. Existing fault, violation, exit, and multi-peer coverage passes; the
+current total remains 630.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second
