@@ -2247,6 +2247,9 @@ live composition remains pending.
    Queued delivery now authorizes the endpoint before observing receiver inbox
    state. A full-inbox non-disclosure test preserves sequence and raises the
    kernel total to 623.
+   Direct send now prepares endpoint authority before delegation graph/capacity
+   inspection. Existing substituted-edge coverage proves non-disclosure; the
+   total remains 623.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

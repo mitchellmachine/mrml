@@ -933,16 +933,6 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if !self.scheduler.contains(sender) || !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
-        self.validate_delegation_graph()?;
-        if self
-            .delegations
-            .iter()
-            .filter(|edge| edge.is_none())
-            .count()
-            < requested.len()
-        {
-            return Err(TaskRuntimeError::DelegationTableFull);
-        }
         let sender_slot = self
             .domain_slot(sender)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
@@ -958,6 +948,16 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 endpoint_capability,
             )
             .map_err(TaskRuntimeError::Ipc)?;
+        self.validate_delegation_graph()?;
+        if self
+            .delegations
+            .iter()
+            .filter(|edge| edge.is_none())
+            .count()
+            < requested.len()
+        {
+            return Err(TaskRuntimeError::DelegationTableFull);
+        }
         let (source, destination) = two_domains_mut(&mut self.domains, sender_slot, receiver_slot)
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         let message = Message::transfer(
@@ -2833,7 +2833,7 @@ mod tests {
 
     #[test]
     fn direct_transfer_rejects_semantically_substituted_delegation_edge() {
-        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
         let sender = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
             .unwrap();
@@ -2850,6 +2850,11 @@ mod tests {
             .capabilities_mut(sender)
             .unwrap()
             .insert(ObjectId(0x50), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let wrong_endpoint = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x58), Rights::SIGNAL)
             .unwrap();
         let mut endpoint = Endpoint::new(endpoint_object);
         let (_, message) = runtime
@@ -2871,6 +2876,19 @@ mod tests {
         let edge = runtime.delegations.iter_mut().flatten().next().unwrap();
         edge.destination = unrelated;
 
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    wrong_endpoint,
+                    b"unauthorized",
+                    &[],
+                )
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
         assert_eq!(
             runtime
                 .send_ipc(

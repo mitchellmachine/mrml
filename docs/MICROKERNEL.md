@@ -6897,6 +6897,11 @@ Queued delivery now verifies the sender's exact endpoint SIGNAL authority before
 inspecting receiver inbox topology or capacity. An unauthorized full-inbox probe
 returns only authorization denial, consumes no sequence, and raises the Linux
 kernel total to 623.
+Direct `send_ipc` now prepares its non-mutating endpoint authorization/sequence
+plan before delegation graph or table-capacity inspection. The live substituted-
+edge test now proves an unauthorized caller receives only authorization denial,
+while an authorized caller still detects integrity failure. The total remains
+623.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

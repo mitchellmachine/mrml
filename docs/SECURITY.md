@@ -277,6 +277,8 @@ access. The security/acceptance gate is canonical in
   receiver domain; missing or duplicate records are integrity failures.
 - Queued delivery requires exact endpoint SIGNAL authority before receiver inbox
   topology or capacity is observed, preventing unauthorized fullness probes.
+- Direct send prepares endpoint authority before delegation graph integrity or
+  table capacity is observed, preventing unauthorized kernel-state probes.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and
