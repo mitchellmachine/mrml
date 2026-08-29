@@ -143,6 +143,8 @@ access. The security/acceptance gate is canonical in
   counts beyond their exact supplied slices before exposing the result.
 - Service-image capability-transfer descriptors have explicit ABI alignment;
   malformed width, count, alignment, or payload bounds fail before the trap.
+- Configuration and supervision service-image dispatch releases each received
+  leaf before response visibility; cleanup failure suppresses the response.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

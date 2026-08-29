@@ -6611,13 +6611,21 @@ payloads, descriptor lengths that are not exact 16-byte multiples, excess
 descriptor counts, and unaligned nonempty descriptor storage before trapping.
 Both native profiles build; the Linux configuration and storage suites pass 53
 and 142 tests respectively.
+After successful configuration or supervision dispatch, the service image now
+invokes capability-release operation 12 for every leaf transferred with that
+exact request before making the response visible. Any release failure halts
+without sending the response; ordinary request handling no longer relies on
+sender exit to reclaim delegated receiver authority. Both native profiles build
+and the Linux configuration suite passes 53 tests. This is compile/unit evidence,
+not a newly executed hosted or physical service loop.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
 reuses the existing active-user-copy ticket on an existing syscall path; it
 also adds ordinary result-capacity checks in existing userspace adapters and
 wire alignment/canonical-shape checks in the existing service-image adapter; it
-introduces no new IPC algorithm or mechanism. See [the patent review
+also reuses the existing capability-release syscall for routine leaf cleanup
+and introduces no new IPC algorithm or mechanism. See [the patent review
 log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the

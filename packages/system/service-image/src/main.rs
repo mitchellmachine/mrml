@@ -737,6 +737,7 @@ unsafe fn dispatch_supervision_query(endpoint: u64, sender: u64, request_id: u64
     let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
     dispatch_supervision_query_envelope(&KernelAuthorizer, &request, &[capability], &mut response)
         .unwrap_or_else(|_| halt());
+    unsafe { release_received_capabilities(&[capability]) };
     let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
     if decoded.request_id != request_id
         || decoded.status != ResponseStatus::Ok
@@ -771,6 +772,7 @@ unsafe fn dispatch_supervision_restart(endpoint: u64, sender: u64, request_id: u
         &mut response,
     )
     .unwrap_or_else(|_| halt());
+    unsafe { release_received_capabilities(&[capability]) };
     let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
     if decoded.request_id != request_id
         || decoded.status != ResponseStatus::Ok
@@ -811,6 +813,7 @@ unsafe fn dispatch_supervision_policy(
         &mut response,
     )
     .unwrap_or_else(|_| halt());
+    unsafe { release_received_capabilities(&capabilities) };
     let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
     if decoded.request_id != request_id
         || decoded.status != ResponseStatus::Ok
@@ -893,6 +896,7 @@ unsafe fn dispatch_next_request(
         &mut response,
     )
     .unwrap_or_else(|_| halt());
+    unsafe { release_received_capabilities(&capabilities[..capability_count]) };
     let decoded = ConfigurationResponse::decode(&response).unwrap_or_else(|_| halt());
     if decoded.request_id != request_id
         || decoded.status != ResponseStatus::Ok
@@ -2190,6 +2194,29 @@ unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize
         halt();
     }
     (payload_length, capability_count)
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+unsafe fn release_received_capabilities(capabilities: &[Capability]) {
+    for capability in capabilities {
+        let mut status = 12u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") capability.token(),
+                in("rsi") 0u64,
+                in("rdx") 0u64,
+                in("r10") 0u64,
+                in("r8") 0u64,
+                in("r9") 0u64,
+                options(nostack)
+            )
+        };
+        if status != 0 {
+            halt();
+        }
+    }
 }
 
 /// Concrete x86-64 syscall boundary for the block-service loop. The endpoint,

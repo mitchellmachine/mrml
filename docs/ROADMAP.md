@@ -2064,6 +2064,10 @@ live composition remains pending.
    the common wrapper rejects noncanonical descriptor widths/counts/alignment
    and invalid payload lengths before trapping. Both profiles build; Linux
    configuration and storage suites pass 53 and 142 tests.
+   Successful configuration and supervision dispatch now release every
+   request-transferred leaf before response visibility; release failure
+   suppresses the response. Both service-image profiles build and the Linux
+   configuration suite passes 53 tests.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and
