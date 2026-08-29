@@ -987,7 +987,14 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
                 selected_comdat[earlier] = effective_selection;
                 continue;
             }
-            return Err(anyhow!("incompatible duplicate COFF text definition"));
+            return Err(anyhow!(
+                "incompatible duplicate COFF definition {}: source object {} uses {:?}, source object {} uses {:?}",
+                inputs[*index].symbol,
+                selected_source_object[earlier],
+                earlier_selection,
+                source_object[*index],
+                current_selection
+            ));
         }
         selected
             .try_push(inputs[*index])

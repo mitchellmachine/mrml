@@ -4659,22 +4659,34 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             .checked_add(auxiliary + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    if let Some(object_identity) = object_identity {
+    let symbol = defined_symbol
+        .or(text_section_name)
+        .ok_or(LinkerError::InvalidCoff)?;
+    let local_identity = object_identity
+        .map(|object_identity| CoffSectionIdentity::new(object_identity, text_section_u16))
+        .transpose()?;
+    if defined_symbol.is_some()
+        && let Some(identity) = local_identity
+    {
         if definition_count == definition_storage.len() {
             return Err(LinkerError::TooManyDefinitions);
         }
         definition_storage[definition_count] = LinkDefinition {
             symbol: text_section_name.ok_or(LinkerError::InvalidCoff)?,
             target: LinkDefinitionTarget::CoffTextSection {
-                identity: CoffSectionIdentity::new(object_identity, text_section_u16)?,
+                identity,
                 offset: 0,
             },
         };
         definition_count += 1;
     }
-    let symbol = defined_symbol
-        .or(text_section_name)
-        .ok_or(LinkerError::InvalidCoff)?;
+    let symbol_target = match (defined_symbol, local_identity) {
+        (None, Some(identity)) => LinkDefinitionTarget::CoffTextSection {
+            identity,
+            offset: 0,
+        },
+        _ => LinkDefinitionTarget::Text(0),
+    };
 
     if relocation_table.1 > relocation_storage.len() {
         return Err(LinkerError::TooManyRelocations);
@@ -4856,7 +4868,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
 
     Ok(LinkInput {
         symbol,
-        symbol_target: LinkDefinitionTarget::Text(0),
+        symbol_target,
         additional_definitions: &definition_storage[..definition_count],
         text,
         readonly_data,
@@ -10014,6 +10026,43 @@ mod tests {
         let selection =
             select_static_link_inputs(&[entry, first], &[false, true], "entry").unwrap();
         assert_eq!(selection.indices(), &[0]);
+    }
+
+    #[test]
+    fn links_same_named_local_text_section_identities_without_global_collisions() {
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let first = LinkInput {
+            symbol: ".text$local",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(1, 7).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let second = LinkInput {
+            symbol: ".text$local",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(2, 7).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0xcc, 0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let linked = link_x86_64_static::<64>(&[entry, first, second], "entry").unwrap();
+        assert_eq!(linked.bytes()[16], 0xc3);
+        assert_eq!(&linked.bytes()[32..34], &[0xcc, 0xc3]);
     }
 
     #[test]
