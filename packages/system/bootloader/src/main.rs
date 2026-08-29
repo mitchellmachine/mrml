@@ -1028,13 +1028,13 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .as_mut()
                     .unwrap_or_else(|| halt());
                 let sequence = match runtime.deliver_ipc(
-                        current,
-                        receiver,
-                        endpoint_object,
-                        endpoint,
-                        &payload[..usize::from(length)],
-                        &[],
-                    ) {
+                    current,
+                    receiver,
+                    endpoint_object,
+                    endpoint,
+                    &payload[..usize::from(length)],
+                    &[],
+                ) {
                     Ok(sequence) => sequence,
                     Err(error) if error.is_precommit_send_denial() => {
                         frame.complete_error();
@@ -1089,12 +1089,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     return;
                 }
                 let mut descriptors = [None; MAX_CAPABILITIES];
-                if decode_capability_transfers(
-                    descriptor_bytes,
-                    capability_count,
-                    &mut descriptors,
-                )
-                .is_err()
+                if decode_capability_transfers(descriptor_bytes, capability_count, &mut descriptors)
+                    .is_err()
                 {
                     payload_storage.fill(0);
                     descriptor_storage.fill(0);
@@ -1194,16 +1190,12 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 object,
                 rights,
             } => {
-                let authorized = match runtime.authorize_capability(
-                    current,
-                    capability,
-                    rights,
-                    object,
-                ) {
-                    Ok(()) => true,
-                    Err(mrml_kernel::TaskRuntimeError::Ipc(_)) => false,
-                    Err(_) => halt(),
-                };
+                let authorized =
+                    match runtime.authorize_capability(current, capability, rights, object) {
+                        Ok(()) => true,
+                        Err(mrml_kernel::TaskRuntimeError::Ipc(_)) => false,
+                        Err(_) => halt(),
+                    };
                 frame.complete_authorization(authorized);
             }
             SyscallRequest::ReleaseCapability { capability } => {
@@ -1305,9 +1297,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                                 | HostResourceIoError::StaleHandle,
                             ),
                         )
-                        | SharedBufferSyscallError::UserValidation(
-                            ActiveTaskUserCopyError::Buffer(_),
-                        ),
+                        | SharedBufferSyscallError::UserValidation(ActiveTaskUserCopyError::Buffer(
+                            _,
+                        )),
                     ) => frame.complete_error(),
                     Err(_) => halt(),
                 }
@@ -1532,16 +1524,14 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             feature = "buffer-drift-probe"
                         ))]
                         ScheduleOutcome::Idle => {
-                            let ids = (*core::ptr::addr_of!(SERVICE_IDS))
-                                .unwrap_or_else(|| halt());
+                            let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if supervisor.task(ids[0]) != Ok(None)
                                 || supervisor.pending_cleanup(ids[0]) != Ok(None)
                                 || supervisor.state(ids[0])
                                     != Ok(mrml_kernel::ServiceState::Faulted)
                                 || supervisor.task(ids[1]) != Ok(None)
                                 || supervisor.pending_cleanup(ids[1]) != Ok(None)
-                                || supervisor.state(ids[1])
-                                    != Ok(mrml_kernel::ServiceState::Exited)
+                                || supervisor.state(ids[1]) != Ok(mrml_kernel::ServiceState::Exited)
                             {
                                 halt();
                             }
@@ -4381,10 +4371,7 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
     unsafe { complete_service_cleanup(supervisor, retired.cleanup) };
     match retired.retirement.next {
         ScheduleOutcome::Switch { to, .. } => {
-            #[cfg(any(
-                feature = "invalid-return-probe",
-                feature = "buffer-drift-probe"
-            ))]
+            #[cfg(any(feature = "invalid-return-probe", feature = "buffer-drift-probe"))]
             {
                 let ControlEvent::PeerDied(death) =
                     runtime.receive_control(to).unwrap_or_else(|_| halt())
@@ -4392,15 +4379,18 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
                     halt()
                 };
                 if death.peer() != current
-                    || death.reason()
-                        != PeerDeathReason::ProtocolViolation(violation)
+                    || death.reason() != PeerDeathReason::ProtocolViolation(violation)
                 {
                     halt();
                 }
                 #[cfg(feature = "invalid-return-probe")]
-                unsafe { service_restart_stage(0x26) };
+                unsafe {
+                    service_restart_stage(0x26)
+                };
                 #[cfg(feature = "buffer-drift-probe")]
-                unsafe { service_restart_stage(0x28) };
+                unsafe {
+                    service_restart_stage(0x28)
+                };
             }
             unsafe { enter_service_task(runtime, to) }
         }
@@ -4981,7 +4971,9 @@ unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive)
     };
     let (Some(payload_end), Some(capabilities_end)) = (
         pending.payload_address.checked_add(payload_length),
-        pending.capabilities_address.checked_add(capabilities_length),
+        pending
+            .capabilities_address
+            .checked_add(capabilities_length),
     ) else {
         return false;
     };
