@@ -155,7 +155,9 @@ magnitudes, applies the same product, validates the signed result range, and
 restores the result sign.
 Wide shifts accept a one-word integer count, explicitly distinguish counts below
 and above the 64-bit word boundary, and trap checked counts of 128 or greater.
-Right shift sign-fills only the declared `i128` high word.
+Right shift sign-fills only the declared `i128` high word. Binary shifts and
+wide-local shift assignments share this single bounded lowering so their traps
+and word-boundary behavior cannot diverge.
 General `u128` division and remainder use a fixed 128-step restoring divider,
 retain the divisor in bounded temporary stack storage, and trap a zero divisor.
 `i128` division and remainder store bounded sign state, divide operand magnitudes,

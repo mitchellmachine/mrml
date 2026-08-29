@@ -7378,43 +7378,7 @@ impl<
             self.emit_expression(tree, right, 1)?;
             self.emit(&[0x48, 0x89, 0xc1, 0x5a, 0x58])?;
             self.evaluation_depth -= 2;
-            if self.overflow_checks {
-                self.emit(&[0x48, 0x81, 0xf9, 0x80, 0x00, 0x00, 0x00])?;
-                self.emit_trap_branch(0x83)?;
-            } else {
-                self.emit(&[0x83, 0xe1, 0x7f])?;
-            }
-            self.emit(&[0x48, 0x83, 0xf9, 0x40])?;
-            let less_than_word = self.emit_forward_branch(0x82)?;
-            self.emit(&[0x83, 0xe1, 0x3f])?;
-            match (operator, layout.signed) {
-                (crate::BinaryOperator::ShiftLeft, _) => {
-                    self.emit(&[0x48, 0x89, 0xc2, 0x48, 0xd3, 0xe2, 0x31, 0xc0])?
-                }
-                (crate::BinaryOperator::ShiftRight, false) => {
-                    self.emit(&[0x48, 0x89, 0xd0, 0x48, 0xd3, 0xe8, 0x31, 0xd2])?
-                }
-                (crate::BinaryOperator::ShiftRight, true) => self.emit(&[
-                    0x48, 0x89, 0xd0, 0x48, 0xd3, 0xf8, 0x48, 0xc1, 0xfa, 0x3f,
-                ])?,
-                _ => unreachable!(),
-            }
-            let end = self.emit_unconditional_forward_branch()?;
-            self.patch_forward_branch(less_than_word)?;
-            match (operator, layout.signed) {
-                (crate::BinaryOperator::ShiftLeft, _) => {
-                    self.emit(&[0x48, 0x0f, 0xa5, 0xc2, 0x48, 0xd3, 0xe0])?
-                }
-                (crate::BinaryOperator::ShiftRight, false) => {
-                    self.emit(&[0x48, 0x0f, 0xad, 0xd0, 0x48, 0xd3, 0xea])?
-                }
-                (crate::BinaryOperator::ShiftRight, true) => {
-                    self.emit(&[0x48, 0x0f, 0xad, 0xd0, 0x48, 0xd3, 0xfa])?
-                }
-                _ => unreachable!(),
-            }
-            self.patch_forward_branch(end)?;
-            return Ok(());
+            return self.emit_wide_shift(layout, operator == crate::BinaryOperator::ShiftLeft);
         }
         if let ExprKind::Binary {
             operator:
