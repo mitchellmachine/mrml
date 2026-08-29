@@ -1157,12 +1157,21 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     frame.complete_error();
                     return;
                 }
-                match runtime
-                    .receive_or_block_current()
-                    .unwrap_or_else(|_| halt())
-                {
+                match runtime.receive_ipc_bounded(
+                    current,
+                    pending.payload_capacity,
+                    pending.capability_capacity,
+                ) {
                     Ok(message) => complete_buffer_current(root, pending, &message, frame),
-                    Err(ScheduleOutcome::Switch { to, .. }) => {
+                    Err(mrml_kernel::TaskRuntimeError::ReceiveCapacity) => {
+                        frame.complete_error();
+                    }
+                    Err(mrml_kernel::TaskRuntimeError::InboxEmpty) => match runtime
+                        .receive_or_block_current()
+                        .unwrap_or_else(|_| halt())
+                    {
+                        Ok(_) => halt(),
+                        Err(ScheduleOutcome::Switch { to, .. }) => {
                         insert_pending_buffer(pending);
                         asm!(
                             "out dx, eax",
@@ -1171,8 +1180,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             options(nomem, nostack)
                         );
                         enter_service_task(runtime, to)
-                    }
-                    _ => halt(),
+                        }
+                        _ => halt(),
+                    },
+                    Err(_) => halt(),
                 }
             }
             SyscallRequest::AuthorizeCapability {
@@ -5047,29 +5058,28 @@ unsafe fn complete_pending_buffer(
             )
         }
     }
-    let shape = runtime.peek_ipc_shape(task).unwrap_or_else(|_| halt());
-    if mrml_kernel::BufferCompletion::new(
-        shape.payload_length(),
-        shape.capability_count(),
+    let message = match runtime.receive_ipc_bounded(
+        task,
         pending.payload_capacity,
         pending.capability_capacity,
-    )
-    .is_err()
-    {
-        unsafe {
-            asm!(
-                "mov cr3, {}",
-                in(reg) previous.root().get(),
-                options(nostack, preserves_flags)
-            )
+    ) {
+        Ok(message) => message,
+        Err(mrml_kernel::TaskRuntimeError::ReceiveCapacity) => {
+            unsafe {
+                asm!(
+                    "mov cr3, {}",
+                    in(reg) previous.root().get(),
+                    options(nostack, preserves_flags)
+                )
+            }
+            runtime
+                .context_mut(task)
+                .unwrap_or_else(|_| halt())
+                .complete_error();
+            return;
         }
-        runtime
-            .context_mut(task)
-            .unwrap_or_else(|_| halt())
-            .complete_error();
-        return;
-    }
-    let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
+        Err(_) => halt(),
+    };
     let completion = unsafe { write_buffer_current(target, pending, &message) };
     unsafe {
         asm!(

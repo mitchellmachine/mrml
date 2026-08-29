@@ -28,6 +28,7 @@ pub enum TaskRuntimeError {
     Ipc(IpcError),
     InboxFull,
     InboxEmpty,
+    ReceiveCapacity,
     PeerTableFull,
     ActiveControlPeers,
     ActiveDelegations,
@@ -1073,6 +1074,21 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         domain.inbox_head = ((head + 1) % TASK_INBOX_MESSAGES) as u8;
         domain.inbox_count -= 1;
         Ok(message.into_message())
+    }
+
+    /// Consumes the next message only when both caller-supplied output
+    /// capacities cover its complete bounded shape.
+    pub fn receive_ipc_bounded(
+        &mut self,
+        task: TaskId,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<Message, TaskRuntimeError> {
+        let shape = self.peek_ipc_shape(task)?;
+        if shape.payload_length > payload_capacity || shape.capability_count > capability_capacity {
+            return Err(TaskRuntimeError::ReceiveCapacity);
+        }
+        self.receive_ipc(task)
     }
 
     /// Returns only the bounded shape of the next queued message without
@@ -2180,7 +2196,24 @@ mod tests {
                 capability_count: 0,
             }
         );
-        assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"one");
+        assert!(matches!(
+            runtime.receive_ipc_bounded(receiver, 2, 0),
+            Err(TaskRuntimeError::ReceiveCapacity)
+        ));
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver).unwrap(),
+            QueuedMessageShape {
+                payload_length: 3,
+                capability_count: 0,
+            }
+        );
+        assert_eq!(
+            runtime
+                .receive_ipc_bounded(receiver, 3, 0)
+                .unwrap()
+                .payload(),
+            b"one"
+        );
         assert_eq!(
             runtime.peek_ipc_shape(receiver).unwrap(),
             QueuedMessageShape {
