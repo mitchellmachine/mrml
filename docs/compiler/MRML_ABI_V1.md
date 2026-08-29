@@ -352,6 +352,11 @@ Unsafe unsigned wide `unchecked_disjoint_bitor` combines both word pairs with
 bitwise OR. Pinned-nightly oracle vectors cover low/high-word separation and
 alternating disjoint masks. Overlapping set bits violate the method's
 precondition and remain outside the defined contract.
+Unsafe unsigned wide `unchecked_funnel_shl` and `unchecked_funnel_shr` combine
+two adjacent two-word values without reducing either operand to a host scalar.
+Pinned-nightly oracle vectors cover zero and the 1/63/64/127 boundaries. Shift
+distances at or above 128 violate the unchecked methods' precondition and remain
+outside the defined contract.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

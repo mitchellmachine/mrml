@@ -275,6 +275,10 @@ const MRML_V1_WIDE_SIGNED_UNCHECKED_EXACT_DIVISION_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(dividend: i128, divisor: i128) -> i128 { dividend.unchecked_div_exact(divisor) }";
 const MRML_V1_WIDE_UNSIGNED_UNCHECKED_DISJOINT_BITOR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128) -> u128 { left.unchecked_disjoint_bitor(right) }";
+const MRML_V1_WIDE_UNSIGNED_UNCHECKED_FUNNEL_LEFT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128, distance: u32) -> u128 { left.unchecked_funnel_shl(right, distance) }";
+const MRML_V1_WIDE_UNSIGNED_UNCHECKED_FUNNEL_RIGHT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128, distance: u32) -> u128 { left.unchecked_funnel_shr(right, distance) }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -696,7 +700,11 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     #[cfg(not(target_os = "windows"))]
     let executable = directory.path().join("shared");
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
-    let oracle_features = if source.contains(".unchecked_disjoint_bitor(") {
+    let oracle_features = if source.contains(".unchecked_funnel_shl(")
+        || source.contains(".unchecked_funnel_shr(")
+    {
+        "#![feature(funnel_shifts)]\n"
+    } else if source.contains(".unchecked_disjoint_bitor(") {
         "#![feature(disjoint_bitor)]\n"
     } else if source.contains(".unchecked_div_exact(") {
         "#![feature(exact_div)]\n"
@@ -1222,6 +1230,48 @@ unsafe fn call_mrml_v1_two_wide_return(function: *const u8, left: u128, right: u
             in("rsi") (left >> 64) as u64,
             inlateout("rdx") right as u64 => returned_high,
             in("rcx") (right >> 64) as u64,
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    (u128::from(returned_high) << 64) | u128::from(returned_low)
+}
+
+unsafe fn call_mrml_v1_two_wide_with_u32(
+    function: *const u8,
+    left: u128,
+    right: u128,
+    distance: u32,
+) -> u128 {
+    let returned_low: u64;
+    let returned_high: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 40",
+            "mov qword ptr [rsp + 32], {distance}",
+            "call {function}",
+            "add rsp, 40",
+            function = in(reg) function,
+            distance = in(reg) u64::from(distance),
+            in("rcx") left as u64,
+            inlateout("rdx") (left >> 64) as u64 => returned_high,
+            in("r8") right as u64,
+            in("r9") (right >> 64) as u64,
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") left as u64,
+            in("rsi") (left >> 64) as u64,
+            inlateout("rdx") right as u64 => returned_high,
+            in("rcx") (right >> 64) as u64,
+            in("r8") u64::from(distance),
             lateout("rax") returned_low,
             clobber_abi("C"),
         );
@@ -3225,6 +3275,40 @@ fn mrml_v1_wide_unchecked_disjoint_bitor_matches_valid_oracle_inputs() {
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_UNSIGNED_UNCHECKED_DISJOINT_BITOR_SOURCE, "for (left, right) in [(0u128, 0u128), (1, 2), (u64::MAX as u128, u128::from(u64::MAX) << 64), (0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaau128, 0x5555_5555_5555_5555_5555_5555_5555_5555u128)] { let returned = unsafe { probe(left, right) }; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
+}
+
+#[test]
+fn mrml_v1_wide_unchecked_funnel_shifts_match_valid_oracle_inputs() {
+    let inputs = [
+        (0u128, u128::MAX, 0u32),
+        (1, u128::MAX, 1),
+        (1u128 << 64, 1, 63),
+        (u128::MAX << 64, u64::MAX as u128, 64),
+        (1, 1u128 << 127, 127),
+    ];
+    for (source, method) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_UNCHECKED_FUNNEL_LEFT_SOURCE,
+            "unchecked_funnel_shl",
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_UNCHECKED_FUNNEL_RIGHT_SOURCE,
+            "unchecked_funnel_shr",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|(left, right, distance)| {
+                let returned = unsafe {
+                    call_mrml_v1_two_wide_with_u32(code.pointer, left, right, distance)
+                };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        let driver = format!("for (left, right, distance) in [(0u128, u128::MAX, 0u32), (1, u128::MAX, 1), (1u128 << 64, 1, 63), (u128::MAX << 64, u64::MAX as u128, 64), (1, 1u128 << 127, 127)] {{ let returned = unsafe {{ left.{method}(right, distance) }}; println!(\"{{}}\", returned as u64); println!(\"{{}}\", (returned >> 64) as u64); }}");
+        assert_eq!(actual, rustc_mrml_v1_observations(source, &driver));
+    }
 }
 
 #[test]

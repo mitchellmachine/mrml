@@ -8161,6 +8161,71 @@ impl<
         }
         if let ExprKind::UncheckedIntegerOperation {
             base,
+            argument: Some(other),
+            second_argument: Some(distance),
+            operator:
+                operator @ (crate::BinaryOperator::ShiftLeft
+                | crate::BinaryOperator::ShiftRight),
+            unary: false,
+            disjoint: false,
+            funnel: true,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let other_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                other,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let distance_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                distance,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != expected_type
+                || other_type != expected_type
+                || !matches!(distance_type, RuntimeExpressionType::Integer(None))
+                    && distance_type
+                        != RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit_wide_integer_return(tree, other, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            let previous_width = self.width;
+            self.width = runtime_width("u32")
+                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            self.emit_expression(tree, distance, 1)?;
+            self.width = previous_width;
+            self.emit(&[
+                0x48, 0x89, 0xc1, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x58,
+            ])?;
+            self.evaluation_depth -= 4;
+            self.emit_wide_funnel_shift(layout, operator == crate::BinaryOperator::ShiftLeft)?;
+            return Ok(());
+        }
+        if let ExprKind::UncheckedIntegerOperation {
+            base,
             argument: Some(argument),
             second_argument: None,
             operator: crate::BinaryOperator::BitOr,
@@ -9915,6 +9980,38 @@ impl<
         }
         self.patch_forward_branch(end)?;
         Ok(())
+    }
+
+    fn emit_wide_funnel_shift(
+        &mut self,
+        layout: RuntimeIntegerLayout,
+        shift_left: bool,
+    ) -> Result<(), CodegenError> {
+        if !shift_left {
+            self.emit(&[0x49, 0x90, 0x49, 0x87, 0xd1])?;
+        }
+        self.emit(&[0x48, 0x85, 0xc9])?;
+        let nonzero = self.emit_forward_branch(0x85)?;
+        let end = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(nonzero)?;
+        self.emit(&[0x41, 0x50, 0x41, 0x51, 0x51])?;
+        self.evaluation_depth += 3;
+        let overflow_checks = self.overflow_checks;
+        self.overflow_checks = false;
+        self.emit_wide_shift(layout, shift_left)?;
+        self.overflow_checks = overflow_checks;
+        self.emit(&[
+            0x50, 0x52, 0x41, 0x59, 0x41, 0x58, 0x59, 0x5a, 0x58, 0x41, 0xbb, 0x80,
+            0x00, 0x00, 0x00, 0x41, 0x29, 0xcb, 0x44, 0x89, 0xd9,
+        ])?;
+        self.evaluation_depth -= 3;
+        let overflow_checks = self.overflow_checks;
+        self.overflow_checks = false;
+        self.emit_wide_shift(layout, !shift_left)?;
+        self.overflow_checks = overflow_checks;
+        self.emit(&[0x4c, 0x89, 0xc9])?;
+        self.emit_wide_bitwise(0x09)?;
+        self.patch_forward_branch(end)
     }
 
     fn emit_wide_add(&mut self, layout: RuntimeIntegerLayout) -> Result<(), CodegenError> {
