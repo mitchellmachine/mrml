@@ -10287,6 +10287,16 @@ completion processing, namespace behavior, DMA, caching, scheduling, or another
 storage algorithm. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-29 — Capability-bound NVMe admin-queue DMA ownership
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
+capability-bound pinned-memory and IOMMU-lifetime model to two conventional,
+fixed-size NVMe admin-queue pages. It performs ordinary alignment, extent,
+overlap, generation, and controller-limit checks and retains ownership after
+uncertain removal. It does not encode commands, program queues, process
+completions, identify namespaces, schedule I/O, or implement another storage
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

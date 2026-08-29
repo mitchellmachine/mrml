@@ -8,6 +8,7 @@
 mod nvme_controller;
 mod nvme_discovery;
 mod nvme_mapping;
+mod nvme_queue_dma;
 
 pub use nvme_controller::{
     disable_nvme_controller, NvmeControllerError, NvmeControllerFailure, NvmeControllerRegisterIo,
@@ -21,4 +22,11 @@ pub use nvme_discovery::{
 pub use nvme_mapping::{
     map_nvme_controller_bar, NvmeControllerBarMapping, NvmeControllerBarMappingBackend,
     NvmeControllerBarMappingError, NVME_MMIO_PAGE_BYTES,
+};
+pub use nvme_queue_dma::{
+    prepare_nvme_admin_queue_dma, revoke_nvme_admin_queue_dma, InstalledNvmeAdminQueueDma,
+    NvmeAdminQueueDmaBackend, NvmeAdminQueueDmaError, NvmeAdminQueueDmaLayout,
+    NvmeAdminQueueDmaRequest, NvmeAdminQueueDmaRevocationError, NvmeDmaRegion,
+    NVME_ADMIN_COMPLETION_BYTES, NVME_ADMIN_QUEUE_DEPTH_LIMIT, NVME_ADMIN_SUBMISSION_BYTES,
+    NVME_QUEUE_PAGE_BYTES,
 };

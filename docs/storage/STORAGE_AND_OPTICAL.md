@@ -427,11 +427,16 @@ substituted authority and invalid ranges fail before the backend. A bounded
 controller gate validates `CAP`/`VS`, checked queue, page, doorbell-stride, and
 timeout limits, requires the NVM command set, clears `CC.EN`, and waits for
 `CSTS.RDY` to clear with a fixed-delay bounded poll. Fatal state, timeout, and
-register uncertainty publish no snapshot. Native PCI enumeration, concrete MMIO
-installation, admin and I/O queues,
+register uncertainty publish no snapshot. The initial admin-queue ownership gate
+then requires exact controller-control and separate pin/map/read/write memory
+capabilities, a supported 4 KiB controller page, at least two queue entries, two
+distinct aligned zero-verified pages, and one nonzero DMA generation. Installation
+is atomic; revocation retains exclusive ownership until device and IOMMU removal
+is confirmed. Native PCI enumeration, concrete MMIO installation, queue-register
+programming, admin commands, and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Thirteen focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. Seventeen focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current
