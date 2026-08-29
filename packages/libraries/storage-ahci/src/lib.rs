@@ -16,6 +16,7 @@ mod ahci_engine;
 mod ahci_mapping;
 mod ahci_port;
 mod ahci_port_program;
+mod block_io_adapter;
 mod service_loop;
 mod userspace_syscall_adapter;
 
@@ -75,6 +76,7 @@ pub use ahci_port_program::{
     program_ahci_port_dma_bases, AhciPortProgramError, AhciPortProgramFailure,
     ProgrammedAhciPortDma,
 };
+pub use block_io_adapter::{AhciBlockIoAdapter, AhciBlockIoBackend, AhciBlockIoError};
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };

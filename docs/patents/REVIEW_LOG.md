@@ -250,6 +250,17 @@ Canadian conditions and outside-Canada review requirements remain unchanged.
 See [the Canadian AHCI scope entry](#2026-08-26--canadian-ahci-software-driver-re-evaluation-narrows-the-hold).
 This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Canonical AHCI block read/write adapter
+
+Patent review: **NOT_TRIGGERED**. This increment decodes the already reviewed
+stable block-provider protocol, exact-matches generational catalog records,
+checks conventional block-range arithmetic and read-only state, bounds borrowed
+memory, and forwards the validated request to an abstract mechanism backend. It
+adds no AHCI register sequence, ATA command, DMA behavior, scheduling, caching,
+filesystem algorithm, or storage optimization. The separate AHCI command
+mechanisms retain their existing **TRIGGERED** Canadian scope review. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This

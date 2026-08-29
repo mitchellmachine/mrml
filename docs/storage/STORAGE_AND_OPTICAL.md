@@ -341,6 +341,18 @@ passes 58 tests on Windows and Arch Linux. This is simulated register/memory
 evidence only. Interrupt delivery, data-content verification, NCQ, IOMMU
 hardware, OVMF, installed recovery, and physical hardware remain **PLANNED**.
 
+Canonical AHCI read/write adaptation is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. `AhciBlockIoAdapter` decodes the shared generation-1 interface,
+exact-matches a generational device session, checks LBA arithmetic, capacity,
+logical-block byte count, borrowed-memory length, and read-only state, and then
+passes only the selected catalog record plus exact memory slice to a replaceable
+AHCI mechanism backend. The record carries the exact media generation that the
+backend must revalidate before command issue. Stale, malformed, overflowing,
+out-of-range, and read-only requests never reach device mechanism. The AHCI
+library passes 60 tests on Windows and Arch Linux. A production DMA-buffer
+backend and read/write service-loop dispatch remain **PLANNED**; no hardware I/O
+is claimed.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised

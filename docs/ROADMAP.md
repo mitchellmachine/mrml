@@ -313,6 +313,13 @@ completion. The focused AHCI package passes 58 tests on Windows and Arch Linux.
 Interrupt handling, data-content verification, and native hardware execution
 remain planned.
 
+The canonical read/write adapter is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+It exact-matches the generational provider session and media-bearing catalog
+record, validates block geometry/capacity and exact borrowed-memory length, and
+rejects read-only writes before invoking a replaceable AHCI mechanism backend.
+AHCI passes 60 tests on Windows and Arch Linux. Production DMA-buffer binding
+and service-loop dispatch remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file
