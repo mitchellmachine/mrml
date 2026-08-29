@@ -357,6 +357,10 @@ two adjacent two-word values without reducing either operand to a host scalar.
 Pinned-nightly oracle vectors cover zero and the 1/63/64/127 boundaries. Shift
 distances at or above 128 violate the unchecked methods' precondition and remain
 outside the defined contract.
+Safe unsigned wide `funnel_shl` and `funnel_shr` reuse the same two-word
+composition and trap before emission when the distance is at least 128. Their
+valid boundary results are compared against the pinned nightly independently of
+the unchecked entry points.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

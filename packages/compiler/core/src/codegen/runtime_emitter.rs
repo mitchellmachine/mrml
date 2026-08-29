@@ -8159,18 +8159,33 @@ impl<
             }
             return Ok(());
         }
-        if let ExprKind::UncheckedIntegerOperation {
-            base,
-            argument: Some(other),
-            second_argument: Some(distance),
-            operator:
-                operator @ (crate::BinaryOperator::ShiftLeft
-                | crate::BinaryOperator::ShiftRight),
-            unary: false,
-            disjoint: false,
-            funnel: true,
-        } = expression.kind
-        {
+        let wide_funnel = match expression.kind {
+            ExprKind::IntegerFunnelShift {
+                base,
+                other,
+                distance,
+                left,
+            } => Some((base, other, distance, left, true)),
+            ExprKind::UncheckedIntegerOperation {
+                base,
+                argument: Some(other),
+                second_argument: Some(distance),
+                operator:
+                    operator @ (crate::BinaryOperator::ShiftLeft
+                    | crate::BinaryOperator::ShiftRight),
+                unary: false,
+                disjoint: false,
+                funnel: true,
+            } => Some((
+                base,
+                other,
+                distance,
+                operator == crate::BinaryOperator::ShiftLeft,
+                false,
+            )),
+            _ => None,
+        };
+        if let Some((base, other, distance, left, checked)) = wide_funnel {
             let base_type = runtime_expression_type_with_locals(
                 self.function,
                 self.resolver,
@@ -8221,7 +8236,11 @@ impl<
                 0x48, 0x89, 0xc1, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x58,
             ])?;
             self.evaluation_depth -= 4;
-            self.emit_wide_funnel_shift(layout, operator == crate::BinaryOperator::ShiftLeft)?;
+            if checked {
+                self.emit(&[0x48, 0x81, 0xf9, 0x80, 0x00, 0x00, 0x00])?;
+                self.emit_trap_branch(0x83)?;
+            }
+            self.emit_wide_funnel_shift(layout, left)?;
             return Ok(());
         }
         if let ExprKind::UncheckedIntegerOperation {
