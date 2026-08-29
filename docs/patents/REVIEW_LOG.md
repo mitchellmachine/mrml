@@ -10012,3 +10012,12 @@ construction and uses existing selection and symbol resolution; it introduces
 no new object encoding, relocation kind, compression, cryptographic mechanism,
 or loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-29 — Associative COFF read-only absolute relocations
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional
+PE/COFF association relationship and AMD64 absolute relocation to read-only
+companions of selected text sections. It uses bounded table construction and
+checked layout arithmetic, and introduces no new object encoding, association
+algorithm, relocation kind, compression, cryptographic mechanism, or loader
+behavior. This technical screen is not legal advice or patent clearance.

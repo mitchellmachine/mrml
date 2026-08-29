@@ -2963,10 +2963,11 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation_for_fragment(
     Err(LinkerError::InvalidCoff)
 }
 
-/// Decodes every AMD64 absolute relocation whose field belongs to a
-/// non-associative read-only COMDAT. The prepared inventory binds section
-/// selection to this exact object, and the returned owner is the same first
-/// external offset-zero definition used by standalone fragment decoding.
+/// Decodes every AMD64 absolute relocation whose field belongs to a selected
+/// read-only COMDAT. Standalone sections own their fields directly;
+/// associative sections use the text root's external symbol and the exact raw
+/// span used by text-fragment decoding. The prepared inventory binds all
+/// association and selection decisions to this exact object.
 pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
     object: &'a [u8],
     inventory: &CoffComdatSections,
@@ -3043,6 +3044,65 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
             .ok_or(LinkerError::OffsetOverflow)?;
     }
 
+    let mut associative_starts = [None; MAX_COFF_SECTIONS + 1];
+    for section in 0..section_count {
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+        let Some(metadata) = inventory.section(section_number) else {
+            continue;
+        };
+        if metadata.selection != CoffTextComdatSelection::Associative {
+            continue;
+        }
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
+            continue;
+        }
+        let root = usize::from(
+            inventory
+                .root_section(section_number)
+                .ok_or(LinkerError::InvalidCoffAssociation)?,
+        );
+        let root_header = 20usize
+            .checked_add(
+                root.checked_sub(1)
+                    .ok_or(LinkerError::InvalidCoffAssociation)?
+                    .checked_mul(40)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let root_name = coff_section_name(
+            object
+                .get(root_header..root_header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        if root_name != ".text" && !root_name.starts_with(".text$") {
+            continue;
+        }
+        let raw = usize::try_from(read_u32(object, header + 20)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
+        object.get(raw..end).ok_or(LinkerError::InvalidCoff)?;
+        associative_starts[root] = Some(match associative_starts[root] {
+            None => raw,
+            Some(start) => core::cmp::min(start, raw),
+        });
+    }
+
     let empty = PeReadonlyAbsoluteRelocation {
         readonly_owner: "unused",
         readonly_offset: 0,
@@ -3071,15 +3131,29 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
         };
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
-        if size == 0
-            || !(name == ".rdata" || name.starts_with(".rdata$"))
-            || metadata.selection == CoffTextComdatSelection::Associative
-        {
+        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
             continue;
         }
-        let owner = owners[section + 1].ok_or(LinkerError::UnsupportedCoff)?;
         let raw = usize::try_from(read_u32(object, header + 20)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
+        let (owner_section, readonly_base) =
+            if metadata.selection == CoffTextComdatSelection::Associative {
+                let root = usize::from(
+                    inventory
+                        .root_section(section_number)
+                        .ok_or(LinkerError::InvalidCoffAssociation)?,
+                );
+                let Some(start) = associative_starts[root] else {
+                    continue;
+                };
+                (
+                    root,
+                    raw.checked_sub(start).ok_or(LinkerError::OffsetOverflow)?,
+                )
+            } else {
+                (section + 1, 0)
+            };
+        let owner = owners[owner_section].ok_or(LinkerError::UnsupportedCoff)?;
         let contents = object
             .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
             .ok_or(LinkerError::InvalidCoff)?;
@@ -3127,7 +3201,9 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
             }
             decoded.relocations[decoded.length] = PeReadonlyAbsoluteRelocation {
                 readonly_owner: owner,
-                readonly_offset: field,
+                readonly_offset: readonly_base
+                    .checked_add(field)
+                    .ok_or(LinkerError::OffsetOverflow)?,
                 target_symbol: coff_symbol_name(object, target, symbols_end, string_size)?,
                 addend: i64::from_le_bytes(read_u64_coff(contents, field)?.to_le_bytes()),
             };
@@ -8184,6 +8260,34 @@ mod tests {
         object
     }
 
+    fn two_fragment_coff_with_associative_readonly_relocations() -> std::vec::Vec<u8> {
+        let original = two_fragment_coff_with_associative_readonly();
+        let mut object = std::vec![0u8; 402];
+        object[..180].copy_from_slice(&original[..180]);
+        object[8..12].copy_from_slice(&218u32.to_le_bytes());
+        for (section, (size, raw, relocations, count)) in [
+            (1usize, (8u32, 181u32, 198u32, 1u16)),
+            (2, (1, 189, 0, 0)),
+            (3, (8, 190, 208, 1)),
+        ] {
+            let header = 20 + section * 40;
+            object[header + 16..header + 20].copy_from_slice(&size.to_le_bytes());
+            object[header + 20..header + 24].copy_from_slice(&raw.to_le_bytes());
+            object[header + 24..header + 28].copy_from_slice(&relocations.to_le_bytes());
+            object[header + 32..header + 34].copy_from_slice(&count.to_le_bytes());
+        }
+        object[180] = 0xc3;
+        object[181..189].copy_from_slice(&3i64.to_le_bytes());
+        object[189] = 0xc3;
+        object[190..198].copy_from_slice(&(-2i64).to_le_bytes());
+        for (record, target) in [(198usize, 7u32), (208, 2)] {
+            object[record + 4..record + 8].copy_from_slice(&target.to_le_bytes());
+            object[record + 8..record + 10].copy_from_slice(&1u16.to_le_bytes());
+        }
+        object[218..402].copy_from_slice(&original[184..368]);
+        object
+    }
+
     fn coff_with_standalone_readonly_comdat() -> std::vec::Vec<u8> {
         let mut object = std::vec![0u8; 227];
         object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
@@ -9407,6 +9511,76 @@ mod tests {
             .unwrap()
             .readonly_data,
             b""
+        );
+    }
+
+    #[test]
+    fn assigns_associative_readonly_relocations_to_exact_text_roots() {
+        let object = two_fragment_coff_with_associative_readonly_relocations();
+        let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
+        let decoded =
+            decode_x86_64_coff_readonly_absolute_relocations_from_inventory(&object, &inventory)
+                .unwrap();
+        assert_eq!(
+            decoded.relocations(),
+            &[
+                PeReadonlyAbsoluteRelocation {
+                    readonly_owner: "entry",
+                    readonly_offset: 0,
+                    target_symbol: "helper",
+                    addend: 3,
+                },
+                PeReadonlyAbsoluteRelocation {
+                    readonly_owner: "helper",
+                    readonly_offset: 0,
+                    target_symbol: "entry",
+                    addend: -2,
+                },
+            ]
+        );
+
+        let mut first_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut second_relocations = first_relocations;
+        let mut first_definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let mut second_definitions = first_definitions;
+        let first = decode_x86_64_coff_text_fragment_from_inventory(
+            &object,
+            0,
+            &inventory,
+            &mut first_relocations,
+            &mut first_definitions,
+        )
+        .unwrap();
+        let second = decode_x86_64_coff_text_fragment_from_inventory(
+            &object,
+            1,
+            &inventory,
+            &mut second_relocations,
+            &mut second_definitions,
+        )
+        .unwrap();
+        let image = link_x86_64_pe_with_data_unwind_and_readonly_relocations::<2048, 8192>(
+            &[first, second],
+            "entry",
+            &[],
+            &[],
+            decoded.relocations(),
+        )
+        .unwrap();
+        assert_eq!(
+            u64::from_le_bytes(image.bytes()[0x400..0x408].try_into().unwrap()),
+            0x0000_0001_4000_1013
+        );
+        assert_eq!(
+            u64::from_le_bytes(image.bytes()[0x410..0x418].try_into().unwrap()),
+            0x0000_0001_4000_0ffe
         );
     }
 

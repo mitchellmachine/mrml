@@ -1217,3 +1217,20 @@ Research source:
 
 - Rui Ueyama, [Design and implementation of mold](https://github.com/rui314/mold/blob/main/docs/design.md).
 - System V ABI, [AMD64 Architecture Processor Supplement](https://refspecs.linuxfoundation.org/elf/x86_64-SysV-psABI.pdf).
+
+Associative read-only COFF companions rooted at selected text fragments now
+contribute their bounded AMD64 `ADDR64` relocations to the exact owning text
+input. A single inventory prepass records the first raw companion byte for each
+validated text root; relocation offsets are then checked relative to that
+root's complete read-only span, while companions rooted outside text remain
+unsupported. A synthetic two-root object proves independent ownership, signed
+addends in both directions, and the final relocated PE pointer values. Isolated
+Windows and Arch Linux runs each passed 761 compiler-core tests, all four
+integration groups, and eight driver tests. The exact pinned gnullvm stateful
+archive returned 42 through both linkers: MRML emitted 2,560 bytes versus
+rust-lld's 3,584, with 1,028 zero-fill bytes and two forwarding pointers. Fifty
+links after five warmups measured 10.054 ms median/10.233 ms mean for MRML
+versus 28.660 ms median/29.022 ms mean for rust-lld on this exact Windows host
+and workload. This is a narrow reproducible advantage, not general linker
+superiority. Other read-only relocation kinds and discontiguous non-COMDAT
+read-only packing remain incomplete.
