@@ -62,6 +62,20 @@ compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_interface_storage_filesystem_v1"
+compile_name = "mrml-interface-storage-filesystem-v1"
+package = "org.mrml.interface.storage.filesystem"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_storage_fat32"
+compile_name = "mrml-storage-fat32"
+package = "org.mrml.library.storage.fat32"
+scope = "compile"
+test_only = true
+
 [[projected_build]]
 targets = ["UEFI"]
 

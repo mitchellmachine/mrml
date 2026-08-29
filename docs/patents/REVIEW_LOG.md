@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Restartable FAT32 isolated service entry
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
+authenticated IPC, transferred-capability release, exact-generation endpoint,
+cleanup-gated replacement, ready-message, and fail-stop patterns to the already
+screened FAT32 probe. It introduces no new filesystem, device-command, loading,
+restart, caching, or storage-optimization algorithm. This technical screen is
+not legal advice or patent clearance.
+
 # 2026-08-29 — Canonical filesystem provider probe boundary
 
 Patent review: **NOT_TRIGGERED**. This increment serializes the existing

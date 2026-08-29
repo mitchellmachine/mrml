@@ -39,15 +39,36 @@ environment = "linux"
 kind = "lib"
 name = "mrml_storage_fat32"
 
+[[artifact]]
+kind = "bin"
+name = "mrml-fat32-service"
+
 [rust]
 crate_name = "mrml_storage_fat32"
 crate_type = "lib"
 source = "packages/libraries/storage-fat32/src/lib.rs"
 
+[[binary]]
+crate_name = "mrml_fat32_service"
+output = "mrml-fat32-service"
+self_extern = true
+source = "packages/libraries/storage-fat32/src/service_main.rs"
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
+
 [[dependency]]
 alias = "mrml_interface_storage_filesystem_v1"
 compile_name = "mrml-interface-storage-filesystem-v1"
 package = "org.mrml.interface.storage.filesystem"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
 scope = "compile"
 
 [[host_test]]

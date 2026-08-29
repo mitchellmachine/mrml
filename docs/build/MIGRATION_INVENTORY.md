@@ -515,11 +515,13 @@ The new `packages/libraries/storage-fat32` semantic package declares the isolate
 generation-1 filesystem provider independently of AHCI. Its bounded FAT32 boot-
 sector/geometry, FSInfo, FAT-chain, atomic directory-chain, and checksum-bound
 read-only LFN parsers, atomic file-range reader, and canonical interface probe
-adapter pass twenty-eight `mrml test` cases on Windows and Arch Linux; the
-filesystem interface codec passes three, and storage with both exact dynamic
-requirements passes 135 on each. No live provider, lookup/open policy,
-formatting, recovery boot, interoperability oracle, or physical media was
-exercised.
+adapter and authenticated receive/release/reply service loop pass thirty-three
+`mrml test` cases on Windows and Arch Linux; the filesystem interface codec
+passes three, and storage passes 136 with a hosted exact-generation replacement
+test. Windows builds `mrml-fat32-service.efi` for MRML_NATIVE as a 5,120-byte
+x86-64 PE32+ EFI application with a nonzero entrypoint. No installed provider
+launch, lookup/open policy, formatting, recovery boot, interoperability oracle,
+or physical media was exercised.
 
 The shared UEFI-library move from `crates/mrml-uefi` to
 `packages/libraries/uefi` was checked on a Windows host without changing source

@@ -413,25 +413,30 @@ cleanup-gated restart without reboot; names and manifests grant no authority.
 The storage-side fixed registry exercises cleanup before candidate launch,
 health-check before publication, quarantine on cleanup uncertainty, and an
 unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
-model evidence, not yet a live supervisor/provider restart.
+model evidence; the FAT32-specific route now exercises compatible replacement,
+while installed supervisor/provider restart remains unproved.
 The filesystem interface now has a canonical generation-1 probe byte codec and
 an isolated transport that retains the exact endpoint generation; three focused
-tests pass on both hosts. This is the first executable call boundary, not yet a
-receive/reply service process.
+tests pass on both hosts. The FAT32 provider now consumes this boundary through
+an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
 existing AHCI code was moved intact out of `mrml-storage`, the package advertises
 the exact block-provider fingerprint as `isolated-service`, and its 50 tests pass
-on both hosts while the lean service passes 135. No service entry or live IPC
+on both hosts while the lean service passes 136. No AHCI service entry or live IPC
 route exists yet, so this proves package separation and interface-graph shape,
 not dynamic execution.
 
 `org.mrml.library.storage.fat32` now provides the matching isolated filesystem
 interface generation. Its bounded read-only geometry, FSInfo, FAT-chain, atomic
 directory-chain, checksum-bound LFN, atomic file-range readers, and canonical
-probe adapter pass twenty-eight tests on both hosts, and storage requires this
-binding separately from AHCI.
-Names remain non-authorizing labels. This is package/parser evidence, not a live
-endpoint, mount, or hot replacement.
+probe adapter plus authenticated receive/release/reply service loop pass
+thirty-three tests on both hosts, and storage requires this binding separately
+from AHCI. The MRML-native `mrml-fat32-service.efi` binary builds successfully;
+hosted storage tests replace one exact provider generation, reject its stale
+endpoint, health-check the candidate, and retain the modeled kernel epoch.
+Names remain non-authorizing labels. This is executable service-boundary and
+hosted restart evidence, not installed-kernel execution, a mount, or physical
+hardware evidence.
 
 ```text
 download -> authenticate -> validate ABI/evidence/policy

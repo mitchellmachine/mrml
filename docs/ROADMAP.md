@@ -33,18 +33,20 @@ AHCI package extraction is now **PARTIALLY IMPLEMENTED** without deleting its
 mechanisms: all AHCI modules moved intact to
 `org.mrml.library.storage.ahci`, which provides the generation-1 block interface;
 the storage policy service has no static AHCI module. Windows and Arch Linux each
-pass 50 provider tests and 135 storage tests. The AHCI service entry/IPC adapter,
-then FAT32 provider extraction/implementation, remain next.
+pass 50 provider tests and 136 storage tests. The AHCI service entry/IPC adapter
+remains next after the FAT32 service path.
 
 The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
 and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversal,
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
-file-range reads, and canonical provider probing pass twenty-eight tests on
-Windows and Arch Linux; the filesystem interface codec passes three and storage
-with both dynamic requirements passes 135. Lookup/open policy, checking,
-formatting, writes, service IPC, and live replacement remain next in dependency
-order.
+file-range reads, canonical provider probing, and the isolated syscall-backed
+receive/reply loop pass thirty-three tests on Windows and Arch Linux. The
+filesystem interface codec passes three and storage passes 136, including a
+hosted cleanup-gated generation replacement that rejects the stale endpoint and
+does not change the modeled kernel epoch. Lookup/open policy, checking,
+formatting, writes, installed supervisor launch, and hardware evidence remain
+next in dependency order.
 
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block

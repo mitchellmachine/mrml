@@ -4,9 +4,19 @@
 //!
 //! Native MRML storage does not inherit FAT authority or namespace semantics.
 
+mod service_loop;
+mod userspace_syscall_adapter;
+
 use mrml_interface_storage_filesystem_v1::{
     decode_probe_request, encode_probe_response, FilesystemTransport, ProbeError, ProtocolError,
     PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+};
+
+pub use service_loop::{
+    Fat32ServiceLoop, Fat32ServiceLoopError, Fat32ServiceSyscalls, ReceivedFat32Envelope,
+};
+pub use userspace_syscall_adapter::{
+    Fat32RawSyscall, Fat32SyscallFrame, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;
@@ -807,7 +817,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
 mod tests {
     use super::*;
 
-    fn boot_sector() -> [u8; FAT32_BOOT_SECTOR_BYTES] {
+    pub(crate) fn boot_sector() -> [u8; FAT32_BOOT_SECTOR_BYTES] {
         let mut sector = [0; FAT32_BOOT_SECTOR_BYTES];
         sector[0..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
         sector[11..13].copy_from_slice(&512_u16.to_le_bytes());

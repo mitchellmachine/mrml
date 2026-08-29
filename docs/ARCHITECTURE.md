@@ -414,9 +414,10 @@ leaves the provider unavailable rather than falling back. Storage passes 181
 tests on both hosts before extraction. The complete existing AHCI mechanism now
 lives in `org.mrml.library.storage.ahci`, advertises the block-provider interface,
 and passes 50 tests per host, including bounded capability-authorized command
-construction without issue; the AHCI-free policy service passes 135. This is a
-package/interface extraction, not yet a live provider endpoint. FAT32 and live
-supervisor composition remain planned. This reuses canonical package resolution and cleanup-gated
+construction without issue; the AHCI-free policy service passes 136 after adding
+a test-only FAT32 restart route. This is a package/interface extraction, not yet
+a live AHCI provider endpoint. Installed supervisor composition remains planned.
+This reuses canonical package resolution and cleanup-gated
 service restart, so compatible replacement needs no kernel reboot and cannot
 silently retain stale authority.
 
@@ -424,8 +425,9 @@ silently retain stale authority.
 isolated provider. It supplies the filesystem-interface graph edge and a bounded
 read-only FAT32 geometry, FSInfo, bounded FAT-chain parser, atomic 8.3 directory-
 chain composition, checked read-only LFN labels, atomic bounded file reads, and
-canonical provider probing with twenty-eight passing tests on Windows and Arch
-Linux. It
+canonical provider probing plus a concrete isolated receive/reply service loop
+with thirty-three passing tests on Windows and Arch Linux. Its MRML-native service
+binary builds as a PE32+ EFI application. It
 grants no authority from a FAT signature and does not mount or mutate media.
 Storage requires block and filesystem providers as independently replaceable
 generations.

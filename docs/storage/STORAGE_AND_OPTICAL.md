@@ -470,9 +470,11 @@ the class unavailable until explicit retry and never falls back. Storage passes
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
 the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
-each pass 50 AHCI-library tests and 135 storage-service tests. The AHCI service
-entry/IPC adapter, FAT32 provider, and live supervised restart evidence remain
-**PLANNED**.
+each pass 50 AHCI-library tests. The storage service now passes 136 tests with a
+hosted cleanup-gated FAT32 generation replacement that invalidates the old
+endpoint, health-checks the candidate through canonical probe bytes, and leaves
+the modeled kernel epoch unchanged. The AHCI service entry/IPC adapter and
+installed supervisor execution remain **PLANNED**.
 
 The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
 `org.mrml.library.storage.fat32`. It advertises the exact generation-1 filesystem
@@ -495,10 +497,15 @@ names remain non-authorizing labels. Bounded read-only file ranges require an
 exact validated chain, stage all requested bytes before publication, preserve
 caller output on failure, and wipe temporary buffers. The FAT32 provider now
 consumes the canonical probe bytes and distinguishes malformed calls from
-unsupported media. Twenty-eight tests pass on Windows and Arch Linux; storage
-remains 135 on both. This does not implement
-mount, lookup/open policy, check/repair, format, writes, live IPC, or
-interoperability evidence.
+unsupported media. Its authenticated receive/read/release/reply loop and concrete
+register-level syscall adapter erase transient buffers on every path; the
+`mrml-fat32-service.efi` entry sends a generation-bound ready message and then
+serves calls until fail-stop or supervised replacement. Thirty-three tests pass
+on Windows and Arch Linux, and the MRML-native release binary builds on Windows
+as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. Storage
+passes 136 tests on both hosts. This does not implement mount, lookup/open policy,
+check/repair, format, writes, installed-kernel launch, or physical interoperability
+evidence.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never

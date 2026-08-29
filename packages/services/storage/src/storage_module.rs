@@ -255,6 +255,12 @@ fn authorize_binding<const C: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_interface_storage_filesystem_v1::{
+        decode_probe_response, encode_probe_request, BorrowedReadView, FilesystemServiceEndpoint,
+        FilesystemTransport, IsolatedFilesystemTransport, OpaqueHandle, ProtocolError,
+        PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+    };
+    use mrml_storage_fat32::Fat32Provider;
 
     struct Backend {
         cleanup: bool,
@@ -306,6 +312,116 @@ mod tests {
         (capabilities, handles)
     }
 
+    fn filesystem_binding(
+        provider: u64,
+        provider_generation: u64,
+        system_generation: u64,
+        binding_generation: u64,
+    ) -> StorageModuleBinding {
+        StorageModuleBinding {
+            class: StorageModuleClass::Filesystem,
+            interface_object: ObjectId(10),
+            provider_object: ObjectId(provider),
+            endpoint_object: ObjectId(provider + 1),
+            interface_generation: STORAGE_FILESYSTEM_INTERFACE_GENERATION,
+            provider_generation,
+            system_generation,
+            binding_generation,
+        }
+    }
+
+    fn fat32_header() -> [u8; 512] {
+        let mut sector = [0; 512];
+        sector[0..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
+        sector[11..13].copy_from_slice(&512_u16.to_le_bytes());
+        sector[13] = 8;
+        sector[14..16].copy_from_slice(&32_u16.to_le_bytes());
+        sector[16] = 2;
+        sector[32..36].copy_from_slice(&1_048_576_u32.to_le_bytes());
+        sector[36..40].copy_from_slice(&1024_u32.to_le_bytes());
+        sector[44..48].copy_from_slice(&2_u32.to_le_bytes());
+        sector[48..50].copy_from_slice(&1_u16.to_le_bytes());
+        sector[50..52].copy_from_slice(&6_u16.to_le_bytes());
+        sector[510..512].copy_from_slice(&[0x55, 0xaa]);
+        sector
+    }
+
+    struct RestartBackend {
+        current: Option<StorageModuleBinding>,
+        erased: Option<StorageModuleBinding>,
+        healthchecks: u8,
+        kernel_epoch: u64,
+    }
+
+    impl RestartBackend {
+        fn endpoint(binding: StorageModuleBinding) -> OpaqueHandle {
+            OpaqueHandle::new(
+                u32::try_from(binding.endpoint_object.0).unwrap(),
+                u32::try_from(binding.provider_generation).unwrap(),
+            )
+            .unwrap()
+        }
+    }
+
+    impl FilesystemServiceEndpoint for RestartBackend {
+        fn invoke_probe(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; PROBE_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<[u8; PROBE_RESPONSE_BYTES], ProtocolError> {
+            let current = self.current.ok_or(ProtocolError::Transport)?;
+            if endpoint != Self::endpoint(current) {
+                return Err(ProtocolError::Transport);
+            }
+            Fat32Provider.probe(request, memory)
+        }
+    }
+
+    impl FilesystemServiceEndpoint for &mut RestartBackend {
+        fn invoke_probe(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; PROBE_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<[u8; PROBE_RESPONSE_BYTES], ProtocolError> {
+            (**self).invoke_probe(endpoint, request, memory)
+        }
+    }
+
+    impl StorageModuleBackend for RestartBackend {
+        fn revoke_cleanup_and_erase(&mut self, old: StorageModuleBinding) -> Result<(), ()> {
+            if self.current != Some(old) {
+                return Err(());
+            }
+            self.current = None;
+            self.erased = Some(old);
+            Ok(())
+        }
+
+        fn launch_and_healthcheck(&mut self, candidate: StorageModuleBinding) -> Result<(), ()> {
+            if self.current.is_some() || self.erased.is_none() {
+                return Err(());
+            }
+            self.current = Some(candidate);
+            let request = encode_probe_request(
+                OpaqueHandle::new(4, 1).unwrap(),
+                BorrowedReadView::within(0, 512, 512).unwrap(),
+            )
+            .map_err(|_| ())?;
+            let mut memory = fat32_header();
+            let response = self
+                .invoke_probe(Self::endpoint(candidate), &request, &mut memory)
+                .map_err(|_| ())?;
+            if decode_probe_response(&response) != Ok(Ok(100)) {
+                self.current = None;
+                return Err(());
+            }
+            self.healthchecks += 1;
+            Ok(())
+        }
+    }
+
     #[test]
     fn replacement_cleans_old_before_launch_and_publishes_fresh_generation() {
         let old = binding(20, 3, 7, 1);
@@ -346,6 +462,76 @@ mod tests {
             Some(StorageModuleState::Active(candidate))
         );
         assert_eq!(backend.calls, [1, 1]);
+    }
+
+    #[test]
+    fn compatible_fat32_generation_restarts_without_kernel_reboot() {
+        let old = filesystem_binding(40, 3, 7, 1);
+        let candidate = filesystem_binding(50, 4, 8, 2);
+        let (old_caps, old_handles) = capabilities(old);
+        let (new_caps, new_handles) = capabilities(candidate);
+        let mut registry = StorageModuleRegistry::<2>::new();
+        registry
+            .bind_initial(
+                &old_caps,
+                old_handles[0],
+                old_handles[1],
+                old_handles[2],
+                old,
+            )
+            .unwrap();
+        let mut backend = RestartBackend {
+            current: Some(old),
+            erased: None,
+            healthchecks: 0,
+            kernel_epoch: 99,
+        };
+        let request = encode_probe_request(
+            OpaqueHandle::new(4, 1).unwrap(),
+            BorrowedReadView::within(0, 512, 512).unwrap(),
+        )
+        .unwrap();
+        let mut old_transport =
+            IsolatedFilesystemTransport::new(RestartBackend::endpoint(old), 512, &mut backend)
+                .unwrap();
+        assert_eq!(
+            decode_probe_response(&old_transport.probe(&request, &mut fat32_header()).unwrap()),
+            Ok(Ok(100))
+        );
+        drop(old_transport);
+
+        registry
+            .replace(
+                &new_caps,
+                new_handles[0],
+                new_handles[1],
+                new_handles[2],
+                old.binding_generation,
+                candidate,
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(backend.erased, Some(old));
+        assert_eq!(backend.healthchecks, 1);
+        assert_eq!(backend.kernel_epoch, 99);
+        assert_eq!(
+            backend.invoke_probe(RestartBackend::endpoint(old), &request, &mut fat32_header()),
+            Err(ProtocolError::Transport)
+        );
+        let mut new_transport = IsolatedFilesystemTransport::new(
+            RestartBackend::endpoint(candidate),
+            512,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(
+            decode_probe_response(&new_transport.probe(&request, &mut fat32_header()).unwrap()),
+            Ok(Ok(100))
+        );
+        assert_eq!(
+            registry.state(StorageModuleClass::Filesystem),
+            Some(StorageModuleState::Active(candidate))
+        );
     }
 
     #[test]
