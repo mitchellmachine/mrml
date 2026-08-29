@@ -77,6 +77,10 @@ const MRML_V1_WIDE_SIGNED_WRAPPING_NEGATE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_neg() }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_ABSOLUTE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_abs() }";
+const MRML_V1_WIDE_SIGNED_SATURATING_NEGATE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.saturating_neg() }";
+const MRML_V1_WIDE_SIGNED_SATURATING_ABSOLUTE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.saturating_abs() }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1235,6 +1239,26 @@ fn mrml_v1_wide_wrapping_absolute_value_matches_both_oracle_words() {
             "for input in [0i128, 1, -1, i128::MIN, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         )
     );
+}
+
+#[test]
+fn mrml_v1_wide_saturating_unary_operations_match_both_oracle_words() {
+    let inputs = [0u128, 1, (-1i128) as u128, i128::MIN as u128, i128::MAX as u128];
+    let driver = "for input in [0i128, 1, -1, i128::MIN, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }";
+    for source in [
+        MRML_V1_WIDE_SIGNED_SATURATING_NEGATE_SOURCE,
+        MRML_V1_WIDE_SIGNED_SATURATING_ABSOLUTE_SOURCE,
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
 }
 
 #[test]

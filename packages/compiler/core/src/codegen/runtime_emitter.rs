@@ -7349,6 +7349,32 @@ impl<
             }
             return Ok(());
         }
+        if let ExprKind::IntegerBitTransform {
+            base,
+            transform:
+                transform @ (crate::expression::IntegerBitTransform::SaturatingNegate
+                | crate::expression::IntegerBitTransform::SaturatingAbsolute),
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            return self.emit_wide_saturating_negate(
+                transform == crate::expression::IntegerBitTransform::SaturatingAbsolute,
+            );
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,
@@ -8073,6 +8099,34 @@ impl<
 
     fn emit_wide_bitwise(&mut self, opcode: u8) -> Result<(), CodegenError> {
         self.emit(&[0x4c, opcode, 0xc0, 0x48, opcode, 0xca])
+    }
+
+    fn emit_wide_saturating_negate(&mut self, absolute: bool) -> Result<(), CodegenError> {
+        let nonnegative = if absolute {
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            Some(self.emit_forward_branch(0x89)?)
+        } else {
+            None
+        };
+        self.emit(&[0x48, 0x85, 0xc0])?;
+        let nonzero_low = self.emit_forward_branch(0x85)?;
+        self.emit(&[0x48, 0xb9])?;
+        self.emit(&(1u64 << 63).to_le_bytes())?;
+        self.emit(&[0x48, 0x39, 0xca])?;
+        let not_minimum = self.emit_forward_branch(0x85)?;
+        self.emit(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x48, 0xba])?;
+        self.emit(&i64::MAX.to_le_bytes())?;
+        let saturated = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(nonzero_low)?;
+        self.patch_forward_branch(not_minimum)?;
+        self.emit(&[
+            0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda,
+        ])?;
+        self.patch_forward_branch(saturated)?;
+        if let Some(nonnegative) = nonnegative {
+            self.patch_forward_branch(nonnegative)?;
+        }
+        Ok(())
     }
 
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {
