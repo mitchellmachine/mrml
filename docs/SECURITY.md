@@ -150,6 +150,8 @@ access. The security/acceptance gate is canonical in
   leaf before response visibility; cleanup failure suppresses the response.
 - Capability-release syscall denial covers invalid task-local handles only;
   unexpected runtime or delegation-integrity failure is fail-stop.
+- Restart-policy replacement denial covers unknown service or unauthorized
+  capability only; generation exhaustion and impossible lifecycle errors halt.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

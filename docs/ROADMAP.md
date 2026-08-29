@@ -2074,6 +2074,9 @@ live composition remains pending.
    Operation 12 returns ordinary denial only for an invalid task-local
    capability; unexpected runtime or delegation-integrity failure is fail-stop.
    Ordinary and accounted service profiles build and 593 kernel tests pass.
+   Operation 11 returns ordinary denial only for an unknown service or
+   unauthorized capability; policy-generation exhaustion and other impossible
+   lifecycle failures are fail-stop under the same passing gates.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

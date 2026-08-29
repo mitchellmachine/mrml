@@ -1188,14 +1188,19 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
                         .as_mut()
                         .unwrap_or_else(|| halt());
-                    let replaced = supervisor
-                        .replace_restart_policy(
-                            service,
-                            runtime.capabilities(current).unwrap_or_else(|_| halt()),
-                            capability,
-                            policy,
-                        )
-                        .is_ok();
+                    let replaced = match supervisor.replace_restart_policy(
+                        service,
+                        runtime.capabilities(current).unwrap_or_else(|_| halt()),
+                        capability,
+                        policy,
+                    ) {
+                        Ok(()) => true,
+                        Err(
+                            mrml_kernel::ServiceError::InvalidService
+                            | mrml_kernel::ServiceError::Unauthorized(_),
+                        ) => false,
+                        Err(_) => halt(),
+                    };
                     frame.complete_policy_replacement(replaced);
                 }
                 #[cfg(not(feature = "service-probe"))]

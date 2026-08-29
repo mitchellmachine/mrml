@@ -6626,6 +6626,11 @@ returns a detail-free denial; missing runtime state, delegation-graph
 inconsistency, or any other unexpected failure halts instead of continuing with
 uncertain revocation. Both ordinary and accounted component-service profiles
 cross-build and the Linux kernel suite passes 593 tests.
+Operation 11 now follows the same distinction for restart-policy replacement:
+an unknown service or unauthorized capability returns a detail-free denial,
+while policy-generation exhaustion or any other impossible lifecycle error is
+fail-stop rather than being flattened into denial. The same two profiles and
+593-test Linux kernel suite pass.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
@@ -6633,8 +6638,9 @@ reuses the existing active-user-copy ticket on an existing syscall path; it
 also adds ordinary result-capacity checks in existing userspace adapters and
 wire alignment/canonical-shape checks in the existing service-image adapter; it
 also reuses the existing capability-release syscall for routine leaf cleanup
-and makes its existing integrity failure path fail-stop; it introduces no new
-IPC algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).
+and makes existing revocation/policy integrity failure paths fail-stop; it
+introduces no new IPC algorithm or mechanism. See [the patent review
+log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
