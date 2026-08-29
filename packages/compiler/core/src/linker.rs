@@ -10,7 +10,11 @@ pub const MAX_LINK_INPUTS: usize = 256;
 /// inflate archive, path, or source-object workspaces.
 pub const MAX_LINK_FRAGMENTS: usize = 4096;
 pub const MAX_LINK_RELOCATIONS: usize = 256;
+/// Aggregate relocations across retained fragments do not share one arena.
+pub const MAX_LINK_TOTAL_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
+/// Object-wide PE read-only fixups are separate from per-fragment code arenas.
+pub const MAX_PE_READONLY_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
 /// Runtime metadata is independently bounded but must cover every retained
 /// code fragment from an atomically selected COFF archive member.
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = MAX_LINK_FRAGMENTS;
@@ -421,6 +425,14 @@ impl CoffSectionIdentity {
         }
         Ok(Self { object, section })
     }
+
+    pub const fn object(self) -> u16 {
+        self.object
+    }
+
+    pub const fn section(self) -> u16 {
+        self.section
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -454,6 +466,11 @@ pub enum LinkRelocationTarget<'a> {
 pub enum LinkDefinitionTarget {
     Text(usize),
     ReadonlyData(usize),
+    /// Defines an exact non-global COFF text section without inventing a name.
+    CoffTextSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
     /// Defines an exact non-global COFF read-only section without inventing a name.
     CoffSection {
         identity: CoffSectionIdentity,
@@ -710,6 +727,8 @@ pub struct PeReadonlyAbsoluteRelocation<'a> {
     pub readonly_identity: Option<CoffSectionIdentity>,
     pub readonly_offset: usize,
     pub target_symbol: &'a str,
+    pub target_identity: Option<CoffSectionIdentity>,
+    pub target_offset: usize,
     pub addend: i64,
     pub kind: PeReadonlyRelocationKind,
 }
@@ -728,7 +747,7 @@ pub enum PeReadonlyRelocationKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeReadonlyAbsoluteRelocations<'a> {
-    relocations: [PeReadonlyAbsoluteRelocation<'a>; MAX_LINK_RELOCATIONS],
+    relocations: [PeReadonlyAbsoluteRelocation<'a>; MAX_PE_READONLY_RELOCATIONS],
     length: usize,
 }
 
@@ -2817,7 +2836,11 @@ fn input_definition_target(
 }
 
 fn definition_is_global(target: LinkDefinitionTarget) -> bool {
-    !matches!(target, LinkDefinitionTarget::CoffSection { .. })
+    !matches!(
+        target,
+        LinkDefinitionTarget::CoffTextSection { .. }
+            | LinkDefinitionTarget::CoffSection { .. }
+    )
 }
 
 fn symbol_is_referenced(
@@ -3211,6 +3234,8 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation<'a>(
                     readonly_identity: None,
                     readonly_offset: raw.checked_sub(start).ok_or(LinkerError::OffsetOverflow)?,
                     target_symbol: coff_symbol_name(object, target, symbols_end, string_size)?,
+                    target_identity: None,
+                    target_offset: 0,
                     addend: i64::from_le_bytes(initial.to_le_bytes()),
                     kind: PeReadonlyRelocationKind::Address64,
                 });
@@ -3283,6 +3308,8 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation_for_fragment(
                 readonly_identity: None,
                 readonly_offset: 0,
                 target_symbol: decoded.target_symbol,
+                target_identity: None,
+                target_offset: 0,
                 addend: decoded.addend,
                 kind: decoded.kind,
             });
@@ -3447,11 +3474,13 @@ fn decode_x86_64_coff_readonly_absolute_relocations_for_object<'a>(
         readonly_identity: None,
         readonly_offset: 0,
         target_symbol: "unused",
+        target_identity: None,
+        target_offset: 0,
         addend: 0,
         kind: PeReadonlyRelocationKind::Address64,
     };
     let mut decoded = PeReadonlyAbsoluteRelocations {
-        relocations: [empty; MAX_LINK_RELOCATIONS],
+        relocations: [empty; MAX_PE_READONLY_RELOCATIONS],
         length: 0,
     };
     for section in 0..section_count {
@@ -3529,7 +3558,7 @@ fn decode_x86_64_coff_readonly_absolute_relocations_for_object<'a>(
             .get(relocation_start..relocation_end)
             .ok_or(LinkerError::InvalidCoff)?;
         for index in 0..relocation_count {
-            if decoded.length == MAX_LINK_RELOCATIONS {
+            if decoded.length == MAX_PE_READONLY_RELOCATIONS {
                 return Err(LinkerError::TooManyRelocations);
             }
             let record = relocation_start + index * 10;
@@ -3565,9 +3594,26 @@ fn decode_x86_64_coff_readonly_absolute_relocations_for_object<'a>(
                         .ok_or(LinkerError::OffsetOverflow)?,
                 )
                 .ok_or(LinkerError::OffsetOverflow)?;
-            if *object.get(target + 16).ok_or(LinkerError::InvalidCoff)? != 2 {
+            let target_storage = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
+            let target_section = read_i16(object, target + 12)?;
+            let target_section_u16 = u16::try_from(target_section).ok();
+            let target_is_projected = object_identity.is_some()
+                && target_section_u16
+                    .and_then(|section| inventory.section(section))
+                    .is_some();
+            if target_storage != 2 && !(target_storage == 3 && target_is_projected) {
                 return Err(LinkerError::UnsupportedCoffRelocationTarget);
             }
+            let target_identity = if target_storage == 3 {
+                Some(CoffSectionIdentity::new(
+                    object_identity.ok_or(LinkerError::UnsupportedCoffRelocationTarget)?,
+                    target_section_u16.ok_or(LinkerError::UnsupportedCoffRelocationTarget)?,
+                )?)
+            } else {
+                None
+            };
+            let target_value = usize::try_from(read_u32(object, target + 8)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
             let addend = match kind {
                 PeReadonlyRelocationKind::Address64 => {
                     i64::from_le_bytes(read_u64_coff(contents, field)?.to_le_bytes())
@@ -3592,6 +3638,8 @@ fn decode_x86_64_coff_readonly_absolute_relocations_for_object<'a>(
                         .ok_or(LinkerError::OffsetOverflow)?
                 },
                 target_symbol: coff_symbol_name(object, target, symbols_end, string_size)?,
+                target_identity,
+                target_offset: target_value,
                 addend,
                 kind,
             };
@@ -4255,6 +4303,43 @@ fn validate_discardable_coff_debug_section(
     Ok(())
 }
 
+fn validate_discardable_coff_exclude_directives(
+    object: &[u8],
+    header: usize,
+    contents: &[u8],
+    symbol_count: usize,
+) -> Result<(), LinkerError> {
+    validate_discardable_coff_debug_section(object, header, contents.len(), symbol_count)?;
+    if contents.is_empty() || contents.len() > 4096 {
+        return Err(LinkerError::UnsupportedCoffSection);
+    }
+    let prefix = b"-exclude-symbols:";
+    let mut directives = 0usize;
+    for directive in contents.split(|byte| byte.is_ascii_whitespace()) {
+        if directive.is_empty() {
+            continue;
+        }
+        let symbol = directive
+            .strip_prefix(prefix)
+            .ok_or(LinkerError::UnsupportedCoffSection)?;
+        if symbol.is_empty()
+            || !symbol.iter().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(*byte, b'_' | b'$' | b'@' | b'?' | b'.')
+            })
+        {
+            return Err(LinkerError::UnsupportedCoffSection);
+        }
+        directives = directives
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if directives == 0 {
+        return Err(LinkerError::UnsupportedCoffSection);
+    }
+    Ok(())
+}
+
 /// Decodes one nonempty COFF text fragment by section order. Unwind sections
 /// are validated and retained for the separate typed unwind decoder; they are
 /// never folded into executable bytes or silently treated as ordinary data.
@@ -4434,6 +4519,14 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 return Err(LinkerError::UnsupportedCoffSection);
             }
             metadata_sections.insert(section + 1)?;
+        } else if name == ".drectve" {
+            validate_discardable_coff_exclude_directives(
+                object,
+                header,
+                contents,
+                symbol_count,
+            )?;
+            metadata_sections.insert(section + 1)?;
         } else if name == ".debug" || name.starts_with(".debug$") || name.starts_with(".debug_") {
             validate_discardable_coff_debug_section(object, header, contents.len(), symbol_count)?;
             debug_sections.insert(section + 1)?;
@@ -4559,6 +4652,19 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
         symbol_index = symbol_index
             .checked_add(auxiliary + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if let Some(object_identity) = object_identity {
+        if definition_count == definition_storage.len() {
+            return Err(LinkerError::TooManyDefinitions);
+        }
+        definition_storage[definition_count] = LinkDefinition {
+            symbol: text_section_name.ok_or(LinkerError::InvalidCoff)?,
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(object_identity, text_section_u16)?,
+                offset: 0,
+            },
+        };
+        definition_count += 1;
     }
     let symbol = defined_symbol
         .or(text_section_name)
@@ -7307,7 +7413,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     if runtime_functions.len() > MAX_PE_RUNTIME_FUNCTIONS {
         return Err(LinkerError::TooManyRelocations);
     }
-    if readonly_absolute_relocations.len() > MAX_LINK_RELOCATIONS {
+    if readonly_absolute_relocations.len() > MAX_PE_READONLY_RELOCATIONS {
         return Err(LinkerError::TooManyRelocations);
     }
     let text_size = linked.text_length;
@@ -7661,7 +7767,9 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
         if relocation.readonly_identity.is_none() {
             validate_symbol(relocation.readonly_owner)?;
         }
-        validate_symbol(relocation.target_symbol)?;
+        if relocation.target_identity.is_none() {
+            validate_symbol(relocation.target_symbol)?;
+        }
         let pointer_rva = match relocation.readonly_identity {
             Some(identity) => {
                 let target = resolve_coff_section(
@@ -7694,17 +7802,35 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                     .ok_or(LinkerError::OffsetOverflow)?,
             )
             .ok_or(LinkerError::OffsetOverflow)?;
-        let target_rva = match resolve_symbol(inputs, &linked.layouts, relocation.target_symbol) {
-            Ok(offset) => TEXT_RVA
-                .checked_add(offset)
-                .ok_or(LinkerError::OffsetOverflow)?,
-            Err(LinkerError::UndefinedSymbol) => {
-                let target_index = writable_index(relocation.target_symbol)?;
-                writable_rva
-                    .checked_add(writable_offsets[target_index])
+        let target_rva = if let Some(identity) = relocation.target_identity {
+            let target = resolve_coff_section(
+                inputs,
+                &linked.layouts,
+                identity,
+                relocation.target_offset,
+            )?;
+            if target < linked.readonly_offset {
+                TEXT_RVA
+                    .checked_add(target)
+                    .ok_or(LinkerError::OffsetOverflow)?
+            } else {
+                readonly_rva
+                    .checked_add(target - linked.readonly_offset)
                     .ok_or(LinkerError::OffsetOverflow)?
             }
-            Err(error) => return Err(error),
+        } else {
+            match resolve_symbol(inputs, &linked.layouts, relocation.target_symbol) {
+                Ok(offset) => TEXT_RVA
+                    .checked_add(offset)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+                Err(LinkerError::UndefinedSymbol) => {
+                    let target_index = writable_index(relocation.target_symbol)?;
+                    writable_rva
+                        .checked_add(writable_offsets[target_index])
+                        .ok_or(LinkerError::OffsetOverflow)?
+                }
+                Err(error) => return Err(error),
+            }
         };
         match relocation.kind {
             PeReadonlyRelocationKind::Address64 => {
@@ -8362,7 +8488,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
         relocation_count = relocation_count
             .checked_add(input.relocations.len())
             .ok_or(LinkerError::OffsetOverflow)?;
-        if relocation_count > MAX_LINK_RELOCATIONS {
+        if relocation_count > MAX_LINK_TOTAL_RELOCATIONS {
             return Err(LinkerError::TooManyRelocations);
         }
         for definition in core::iter::once(LinkDefinition {
@@ -8638,6 +8764,9 @@ fn validate_definition_target(
     let valid = match target {
         LinkDefinitionTarget::Text(offset) => offset <= input.text.len(),
         LinkDefinitionTarget::ReadonlyData(offset) => offset <= input.readonly_data.len(),
+        LinkDefinitionTarget::CoffTextSection { identity, offset } => {
+            identity.object != 0 && identity.section != 0 && offset <= input.text.len()
+        }
         LinkDefinitionTarget::CoffSection { identity, offset } => {
             identity.object != 0 && identity.section != 0 && offset <= input.readonly_data.len()
         }
@@ -8659,6 +8788,7 @@ fn resolve_symbol(
             return match target {
                 LinkDefinitionTarget::Text(offset) => layout.text.checked_add(offset),
                 LinkDefinitionTarget::ReadonlyData(offset) => layout.readonly.checked_add(offset),
+                LinkDefinitionTarget::CoffTextSection { .. } => None,
                 LinkDefinitionTarget::CoffSection { .. } => None,
             }
             .ok_or(LinkerError::OffsetOverflow);
@@ -8682,22 +8812,25 @@ fn resolve_coff_section(
                 .map(|definition| definition.target),
         );
         for definition in definitions {
-            if let LinkDefinitionTarget::CoffSection {
-                identity: candidate,
-                offset: base,
-            } = definition
-                && candidate == identity
-            {
+            let (candidate, base, section_base, section_size) = match definition {
+                LinkDefinitionTarget::CoffTextSection { identity, offset } => {
+                    (identity, offset, layout.text, input.text.len())
+                }
+                LinkDefinitionTarget::CoffSection { identity, offset } => {
+                    (identity, offset, layout.readonly, input.readonly_data.len())
+                }
+                _ => continue,
+            };
+            if candidate == identity {
                 if resolved.is_some()
                     || base
                         .checked_add(offset)
-                        .filter(|end| *end <= input.readonly_data.len())
+                        .filter(|end| *end <= section_size)
                         .is_none()
                 {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
-                resolved = layout
-                    .readonly
+                resolved = section_base
                     .checked_add(base)
                     .and_then(|target| target.checked_add(offset));
             }
@@ -10553,6 +10686,13 @@ mod tests {
         )
         .unwrap();
         assert!(text.readonly_data.is_empty());
+        assert!(text.additional_definitions.iter().any(|definition| {
+            matches!(
+                definition.target,
+                LinkDefinitionTarget::CoffTextSection { identity, offset: 0 }
+                    if identity.object() == 7 && identity.section() == 1
+            )
+        }));
 
         let mut second_definitions = definitions;
         let first = decode_x86_64_coff_section_identity_readonly_fragment(
@@ -10600,6 +10740,8 @@ mod tests {
                     readonly_identity: None,
                     readonly_offset: 0,
                     target_symbol: "helper",
+                    target_identity: None,
+                    target_offset: 0,
                     addend: 3,
                     kind: PeReadonlyRelocationKind::Address64,
                 },
@@ -10608,6 +10750,8 @@ mod tests {
                     readonly_identity: None,
                     readonly_offset: 0,
                     target_symbol: "entry",
+                    target_identity: None,
+                    target_offset: 0,
                     addend: -2,
                     kind: PeReadonlyRelocationKind::Address64,
                 },
@@ -10783,6 +10927,8 @@ mod tests {
                     readonly_identity: None,
                     readonly_offset: 0,
                     target_symbol: "entry",
+                    target_identity: None,
+                    target_offset: 0,
                     addend: 5,
                     kind: PeReadonlyRelocationKind::Address32NoBase,
                 },
@@ -10791,6 +10937,8 @@ mod tests {
                     readonly_identity: None,
                     readonly_offset: 8,
                     target_symbol: "literal",
+                    target_identity: None,
+                    target_offset: 0,
                     addend: -4,
                     kind: PeReadonlyRelocationKind::Address64,
                 },
@@ -10827,6 +10975,8 @@ mod tests {
                     readonly_identity: None,
                     readonly_offset: 8,
                     target_symbol: "literal",
+                    target_identity: None,
+                    target_offset: 0,
                     addend: -4,
                     kind: PeReadonlyRelocationKind::Relative32 { trailing_bytes },
                 }
@@ -11340,6 +11490,8 @@ mod tests {
                 readonly_identity: None,
                 readonly_offset: 0,
                 target_symbol: "entry",
+                target_identity: None,
+                target_offset: 0,
                 addend: 3,
                 kind: PeReadonlyRelocationKind::Address64,
             },
@@ -11348,6 +11500,8 @@ mod tests {
                 readonly_identity: None,
                 readonly_offset: 8,
                 target_symbol: "readonly_target",
+                target_identity: None,
+                target_offset: 0,
                 addend: -4,
                 kind: PeReadonlyRelocationKind::Address64,
             },
@@ -11356,6 +11510,8 @@ mod tests {
                 readonly_identity: None,
                 readonly_offset: 16,
                 target_symbol: "writable",
+                target_identity: None,
+                target_offset: 0,
                 addend: 7,
                 kind: PeReadonlyRelocationKind::Address64,
             },
@@ -11364,6 +11520,8 @@ mod tests {
                 readonly_identity: None,
                 readonly_offset: 24,
                 target_symbol: "readonly_target",
+                target_identity: None,
+                target_offset: 0,
                 addend: -1,
                 kind: PeReadonlyRelocationKind::Address32NoBase,
             },
@@ -11372,6 +11530,8 @@ mod tests {
                 readonly_identity: None,
                 readonly_offset: 28,
                 target_symbol: "entry",
+                target_identity: None,
+                target_offset: 0,
                 addend: 2,
                 kind: PeReadonlyRelocationKind::Relative32 { trailing_bytes: 5 },
             },

@@ -9,12 +9,13 @@ use mrml_runtime::{
     MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
 use mrml_rustc::{
-    CodegenOptions, CoffObjectSymbolKind, CoffTextComdatSelection, ElfSelectedDefinitions,
+    CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffTextComdatSelection, ElfSelectedDefinitions,
     ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections, LinkDefinition,
     LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS,
     MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS,
-    MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeReadonlyAbsoluteRelocation,
-    PeRuntimeFunction, PeWritableData, PeWritableRelocation, PeWritableRelocationTarget,
+    MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
+    PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
+    PeWritableRelocationTarget,
     TargetLayout, compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_section_identity_readonly_fragment,
@@ -736,8 +737,10 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                         )
                         .map_err(|error| {
                             anyhow!(
-                                "COFF object {} text fragment {}: {}",
+                                "COFF object {} archive group {} member {} text fragment {}: {}",
                                 object_index,
+                                object_archive_group[object_index],
+                                object_archive_member[object_index],
                                 fragment_index,
                                 error
                             )
@@ -749,8 +752,10 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                         )
                         .map_err(|error| {
                             anyhow!(
-                                "COFF object {} text fragment {} selection: {}",
+                                "COFF object {} archive group {} member {} text fragment {} selection: {}",
                                 object_index,
+                                object_archive_group[object_index],
+                                object_archive_member[object_index],
                                 fragment_index,
                                 error
                             )
@@ -771,8 +776,10 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                     .map_err(|error| {
                         let readonly_index = fragment_index - text_fragment_count;
                         anyhow!(
-                            "COFF object {} read-only fragment {}: {}",
+                            "COFF object {} archive group {} member {} read-only fragment {}: {}",
                             object_index,
+                            object_archive_group[object_index],
+                            object_archive_member[object_index],
                             readonly_index,
                             error
                         )
@@ -918,14 +925,16 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     for index in selection.indices() {
         let current_is_internal = matches!(
             inputs[*index].symbol_target,
-            LinkDefinitionTarget::CoffSection { .. }
+            LinkDefinitionTarget::CoffTextSection { .. }
+                | LinkDefinitionTarget::CoffSection { .. }
         );
         if let Some(earlier) = (!current_is_internal)
             .then(|| {
                 selected.iter().position(|earlier| {
                     !matches!(
                         earlier.symbol_target,
-                        LinkDefinitionTarget::CoffSection { .. }
+                        LinkDefinitionTarget::CoffTextSection { .. }
+                            | LinkDefinitionTarget::CoffSection { .. }
                     ) && earlier.symbol == inputs[*index].symbol
                 })
             })
@@ -1168,7 +1177,7 @@ fn selected_readonly_absolute_relocations<'data>(
     _archive_member: &[u16],
     selected: &SelectedLinkInputs<'data, '_, '_>,
 ) -> Result<Vector<PeReadonlyAbsoluteRelocation<'data>>> {
-    let mut output = Vector::with_capacity(MAX_LINK_RELOCATIONS)
+    let mut output = Vector::with_capacity(MAX_PE_READONLY_RELOCATIONS)
         .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
     for object_index in 0..objects.len() {
         let selected_object = selected
@@ -1217,7 +1226,7 @@ fn selected_readonly_absolute_relocations<'data>(
                     },
                 );
                 if retained {
-                    if output.len() == MAX_LINK_RELOCATIONS {
+                    if output.len() == MAX_PE_READONLY_RELOCATIONS {
                         return Err(anyhow!("too many selected COFF readonly relocations"));
                     }
                     output
@@ -1319,6 +1328,134 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     entry: &str,
     output: &str,
 ) -> Result<()> {
+    let named_target_defined = |symbol: &str| {
+        inputs.iter().any(|input| {
+            (!matches!(
+                input.symbol_target,
+                LinkDefinitionTarget::CoffTextSection { .. }
+                    | LinkDefinitionTarget::CoffSection { .. }
+            )
+                && input.symbol == symbol)
+                || input.additional_definitions.iter().any(|definition| {
+                    !matches!(
+                        definition.target,
+                        LinkDefinitionTarget::CoffTextSection { .. }
+                            | LinkDefinitionTarget::CoffSection { .. }
+                    )
+                        && definition.symbol == symbol
+                })
+        }) || writable_data.iter().any(|data| data.symbol == symbol)
+    };
+    let section_identity_defined = |identity: CoffSectionIdentity| {
+        inputs.iter().any(|input| {
+            matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                || input.additional_definitions.iter().any(|definition| {
+                    matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                })
+        })
+    };
+    for relocation in readonly_absolute_relocations {
+        if let Some(identity) = relocation.readonly_identity
+            && !section_identity_defined(identity)
+        {
+            return Err(anyhow!(
+                "selected read-only relocation owner section is undefined: object {}, section {}",
+                identity.object(),
+                identity.section()
+            ));
+        }
+        if relocation.readonly_identity.is_none()
+            && !named_target_defined(relocation.readonly_owner)
+        {
+            return Err(anyhow!(
+                "selected read-only relocation owner is undefined: {}",
+                relocation.readonly_owner
+            ));
+        }
+        if relocation.target_identity.is_none()
+            && !named_target_defined(relocation.target_symbol)
+        {
+            return Err(anyhow!(
+                "selected read-only relocation target is undefined: {}",
+                relocation.target_symbol
+            ));
+        }
+        if let Some(identity) = relocation.target_identity
+            && !section_identity_defined(identity)
+        {
+            return Err(anyhow!(
+                "selected read-only relocation target section is undefined: object {}, section {}",
+                identity.object(),
+                identity.section()
+            ));
+        }
+    }
+    for input in inputs {
+        for relocation in input.relocations {
+            if let LinkRelocationTarget::Symbol(symbol)
+            | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
+            | LinkRelocationTarget::RequiredSymbol(symbol)
+            | LinkRelocationTarget::LocalSymbol(symbol) = relocation.target
+                && !named_target_defined(symbol)
+            {
+                return Err(anyhow!(
+                    "selected code relocation target is undefined: {}",
+                    symbol
+                ));
+            }
+            if let LinkRelocationTarget::CoffSection { identity, .. } = relocation.target
+                && !section_identity_defined(identity)
+            {
+                return Err(anyhow!(
+                    "selected code relocation target section is undefined: object {}, section {}",
+                    identity.object(),
+                    identity.section()
+                ));
+            }
+        }
+    }
+    for function in runtime_functions {
+        for symbol in [function.begin_symbol, function.end_symbol] {
+            if !named_target_defined(symbol) {
+                return Err(anyhow!(
+                    "selected runtime-function target is undefined: {}",
+                    symbol
+                ));
+            }
+        }
+    }
+    for data in writable_data {
+        for relocation in data.relocations {
+            match relocation.target {
+                PeWritableRelocationTarget::Readonly { owner, .. }
+                    if !named_target_defined(owner) =>
+                {
+                    return Err(anyhow!(
+                        "selected writable relocation read-only owner is undefined: {}",
+                        owner
+                    ));
+                }
+                PeWritableRelocationTarget::WritableSymbol(symbol)
+                    if !named_target_defined(symbol) =>
+                {
+                    return Err(anyhow!(
+                        "selected writable relocation target is undefined: {}",
+                        symbol
+                    ));
+                }
+                PeWritableRelocationTarget::CoffSection { identity, .. }
+                    if !section_identity_defined(identity) =>
+                {
+                    return Err(anyhow!(
+                        "selected writable relocation target section is undefined: object {}, section {}",
+                        identity.object(),
+                        identity.section()
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
     let executable =
         link_x86_64_pe_with_data_unwind_and_readonly_relocations::<MAX_IMAGE, MAX_LINKED>(
             inputs,
@@ -1327,7 +1464,14 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             writable_data,
             readonly_absolute_relocations,
         )
-        .map_err(|_| anyhow!("could not serialize linked PE image"))?;
+        .map_err(|error| {
+            anyhow!(
+                "could not serialize linked PE image: {} (runtime functions {}, read-only relocations {})",
+                error,
+                runtime_functions.len(),
+                readonly_absolute_relocations.len()
+            )
+        })?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic PE bytes",
