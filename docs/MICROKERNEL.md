@@ -6723,6 +6723,11 @@ reciprocal relations and exhausted death-result capacity fail without changing
 the domain, scheduler current task, or a peer result slot; an adversarial test
 raises the Linux kernel total to 598. This preflight applies equally to clean
 exit, hardware-fault retirement, and typed protocol-violation retirement.
+The preflight also requires every peer to retain its exact scheduler identity
+before publication can begin, so a later wake cannot discover an already
+missing peer after relation mutation. A focused scheduler/domain divergence
+test raises the Linux kernel total to 599 without claiming such corruption is a
+normal public transition.
 The live service syscall decoder now routes forged generic or boot-recovery
 return state through that retirement, rejects an impossible pending-buffer
 alias, completes the exact resource/address-space cleanup, and enters only the
@@ -6778,7 +6783,8 @@ separate review; KVM runner admission is test harness plumbing and likewise does
 not trigger review. Exact marker validation is additional test-harness boundary
 checking on that same path and does not trigger separate review. Peer-death
 preflight is conventional transactional integrity validation on the existing
-lifecycle and does not trigger separate review.
+lifecycle and does not trigger separate review. Exact scheduler-identity
+preflight is the same conventional integrity check.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

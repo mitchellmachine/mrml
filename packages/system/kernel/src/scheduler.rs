@@ -528,6 +528,10 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
         self.current
     }
 
+    pub(crate) fn contains(&self, task: TaskId) -> bool {
+        self.scheduler.task(task).is_ok()
+    }
+
     pub const fn ticks(&self) -> u64 {
         self.ticks
     }

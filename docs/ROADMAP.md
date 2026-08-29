@@ -2136,6 +2136,9 @@ live composition remains pending.
    duplicate relations and exhausted result capacity leave domain, scheduler,
    and peer results unchanged; the adversarial test raises the kernel total to
    598 and covers the shared exit/fault/violation preflight.
+   The same preflight now requires each peer's exact scheduler identity before
+   publication, preventing a late wake failure after relation mutation; a
+   focused divergence test raises the kernel total to 599.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

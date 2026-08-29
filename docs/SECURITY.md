@@ -192,7 +192,8 @@ access. The security/acceptance gate is canonical in
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
-  retirement.
+  retirement. Every peer's exact scheduler identity is also required before
+  publication, preventing late wake discovery after relationship mutation.
 - Warning-free invalid-return probe images use a real CPL3 zero-stack interrupt
   and exact typed-cleanup/peer-exit markers; these remain unexecuted until a
   backend runner admits the dedicated mode. KVM now admits it only with a

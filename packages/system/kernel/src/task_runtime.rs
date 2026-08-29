@@ -1186,6 +1186,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             if retired.peers[..index].contains(&Some(peer)) {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
+            if !self.scheduler.contains(peer) {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
             let slot = self.domain_slot(peer)?;
             let domain = self.domains[slot]
                 .as_ref()
@@ -2325,6 +2328,58 @@ mod tests {
         );
         assert_eq!(runtime.current(), Some(violated));
         assert_eq!(runtime.context(violated).copied(), Ok(violated_context));
+        assert!(runtime.domains[observer_slot].as_ref().unwrap().peer_deaths[0].is_none());
+    }
+
+    #[test]
+    fn protocol_violation_rejects_unscheduled_peer_before_retirement() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let violated_context = context(0x30_0000, 0x50_0000);
+        let violated = runtime.create(Priority::NORMAL, violated_context).unwrap();
+        let object = ObjectId(0x77);
+        let observer_capability = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let violated_capability = runtime
+            .capabilities_mut(violated)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                observer,
+                violated,
+                &Endpoint::new(object),
+                observer_capability,
+                violated_capability,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert!(matches!(
+            runtime.receive_control_or_block_current(),
+            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == violated
+        ));
+
+        runtime.scheduler.detach(observer).unwrap();
+        assert_eq!(
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(runtime.current(), Some(violated));
+        assert_eq!(runtime.context(violated).copied(), Ok(violated_context));
+        let observer_slot = runtime.domain_slot(observer).unwrap();
+        assert!(
+            runtime.domains[observer_slot]
+                .as_ref()
+                .unwrap()
+                .peers
+                .contains(&Some(violated))
+        );
         assert!(runtime.domains[observer_slot].as_ref().unwrap().peer_deaths[0].is_none());
     }
 
