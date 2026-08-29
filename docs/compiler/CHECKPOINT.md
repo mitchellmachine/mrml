@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a644bd14`
-  (`compiler: select COFF text COMDAT winners`)
+- Compiler checkpoint commit: `7888330b`
+  (`compiler: enforce strict COFF text matches`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `7888330b` adds bounded COFF text `SAME_SIZE` and `EXACT_MATCH`
+selection. Admission now requires the COMDAT section characteristic and the
+specified leading STATIC section-definition symbol with one auxiliary record.
+`SAME_SIZE` compares raw text-section lengths; `EXACT_MATCH` compares raw text
+contents, matching the PE/COFF rule and current link.exe/lld behavior without
+coupling unrelated read-only sections or symbol metadata. Mixed selection
+kinds, unequal sizes or contents, malformed metadata, associative, LARGEST,
+and NEWEST remain fail-closed. Windows and Arch Linux each passed 753 core unit
+tests, the 2-, 10-, 351-, and 59-test integration groups, seven driver tests,
+and all downstream build-graph suites. The exact stateful gnullvm probe returns
+42 through both linkers with two forwarding pointers and 1,028 zero-fill bytes;
+MRML emits 2,560 bytes versus rust-lld's 3,584 bytes. Fifty measured links after
+five warmups produced 9.175 ms median/9.847 ms mean for MRML and 26.384 ms
+median/26.877 ms mean for rust-lld on this narrow host/workload. `mrml doctor`
+passed; audit retains unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at line
+1244. Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `a644bd14` decodes each nonempty COFF text section's section-definition
 selection byte and removes duplicate text fragments before generic layout.
