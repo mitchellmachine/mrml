@@ -1257,11 +1257,13 @@ bounded command/FIS quiescence polling. Any uncertainty remains quarantined;
 recovery cannot infer that DMA is reclaimable from a requested stop. Storage
 passes 174 tests on Windows and Arch Linux. Base clearing and sanitizing reclamation remain next.
 
-The extracted AHCI provider can now construct, but not issue, one bounded non-NCQ
-DMA EXT command under exact data-buffer direction authority. Recovery must not
-treat a prepared slot as completed I/O and must quarantine any partially written
-command memory. The provider passes 50 tests on Windows and Arch Linux; installed
-recovery and native device execution remain unverified.
+The extracted AHCI provider can now construct and boundedly poll one non-NCQ DMA
+EXT command under exact data-buffer direction authority. Recovery must not treat
+a prepared or merely issued slot as completed I/O: only clean `PxCI` completion,
+clean task-file/SATA error state, and the exact transferred-byte count restore
+the active owner. Every post-issue uncertainty quarantines the port layout and
+data extent. The provider passes 58 tests on Windows and Arch Linux; interrupt
+delivery, installed recovery, and native device execution remain unverified.
 
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,

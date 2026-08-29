@@ -236,6 +236,20 @@ or directory algorithm, formatting/repair, write behavior, caching, storage
 optimization, or interoperability extension. This technical screen is not legal
 advice or patent clearance.
 
+# 2026-08-29 — Bounded non-NCQ AHCI command issue and polling completion
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment performs the conventional host-software `PxCI` publication and bounded
+polling completion of one already prepared ordinary DMA EXT command, followed by
+task-file, SATA-error, interrupt-error, and transferred-byte-count checks. It
+adds MRML-specific linear ownership and post-issue quarantine behavior. It does
+not use NCQ, interrupt-driven termination/re-receipt, aggregate discontiguous
+logical ranges, inline SATA cryptography, controller/PHY circuitry, or device-
+controller concurrency behavior excluded by the recorded scope. Existing
+Canadian conditions and outside-Canada review requirements remain unchanged.
+See [the Canadian AHCI scope entry](#2026-08-26--canadian-ahci-software-driver-re-evaluation-narrows-the-hold).
+This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This

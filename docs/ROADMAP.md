@@ -306,8 +306,12 @@ remains quarantined. The extracted provider now builds and read-verifies one
 capability-direction-checked non-NCQ DMA EXT command in an idle slot, including
 bounded 48-bit LBA, exact byte count, FIS, header, and one contiguous PRDT entry,
 without setting `CI`. The AHCI package passes 50 tests on Windows and Arch Linux.
-Command issue/completion, data verification, interrupt handling, and native
-hardware execution remain planned.
+The next bounded layer issues that prepared slot through `PxCI`, polls with a
+fixed limit, rejects unrelated command activity and device error state, checks
+the exact transferred-byte count, and restores the active owner only on verified
+completion. The focused AHCI package passes 58 tests on Windows and Arch Linux.
+Interrupt handling, data-content verification, and native hardware execution
+remain planned.
 
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches

@@ -86,6 +86,25 @@ pub struct PreparedAhciCommand {
 }
 
 impl PreparedAhciCommand {
+    #[cfg(test)]
+    pub(crate) const fn from_parts(
+        layout: AhciPortDmaLayout,
+        slot: u8,
+        command: AhciAtaCommand,
+        data: AhciDataDmaRegion,
+        lba: u64,
+        sector_count: u16,
+    ) -> Self {
+        Self {
+            layout,
+            slot,
+            command,
+            data,
+            lba,
+            sector_count,
+        }
+    }
+
     pub const fn layout(&self) -> AhciPortDmaLayout {
         self.layout
     }

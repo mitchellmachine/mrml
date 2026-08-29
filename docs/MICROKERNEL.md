@@ -8857,8 +8857,12 @@ non-NCQ DMA EXT command construction. It exact-checks an idle slot, 48-bit LBA,
 sector/byte relation, data-buffer direction rights and non-overlap, then writes
 and verifies the fixed FIS, header, and one contiguous PRDT entry. Partial writes
 quarantine the active DMA owner. AHCI passes 50 tests on Windows and Arch Linux.
-No command was issued and no completion, interrupt, IOMMU hardware, OVMF, or
-physical device was exercised.
+Bounded polling execution now publishes exactly that slot through `PxCI`, rejects
+unrelated issued state, checks task-file/SATA errors and exact transferred bytes,
+and restores active ownership only after verified completion. Every post-issue
+uncertainty quarantines the port and data extents. AHCI passes 58 tests on
+Windows and Arch Linux. No interrupt delivery, IOMMU hardware, OVMF, installed
+recovery, or physical device was exercised.
 
 Stopped AHCI DMA reclamation is now **PARTIALLY IMPLEMENTED IN SOURCE**. The
 kernel-facing service restores the backend-revocable owner only after exact

@@ -327,8 +327,19 @@ one PRDT entry. Device-read requires data-buffer `WRITE`; device-write requires
 dirty headers/tables, active/issued slots, overflow, and partial mutation fail
 closed. Every written header/FIS/PRDT DWORD is read-verified; post-write
 uncertainty quarantines the active layout. The AHCI library passes 55 tests on
-Windows and Arch Linux. `CI` issue, completion/error handling, data verification,
-interrupts, NCQ, hardware, and physical evidence remain **PLANNED**.
+Windows and Arch Linux.
+
+Bounded polling command execution is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+The executor accepts only a clean running non-NCQ port, publishes exactly one
+prepared slot through `PxCI`, rejects appearance of any unrelated issued slot,
+and bounds completion polling to 1,000,000 reads. Completion rechecks task-file,
+SATA-error, and task-file-error interrupt state and requires the command
+header's transferred-byte count to equal the authorized data extent. Any
+uncertainty after the issue write quarantines both the retained port layout and
+data extent; only exact success restores the active-port owner. The AHCI library
+passes 58 tests on Windows and Arch Linux. This is simulated register/memory
+evidence only. Interrupt delivery, data-content verification, NCQ, IOMMU
+hardware, OVMF, installed recovery, and physical hardware remain **PLANNED**.
 
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-

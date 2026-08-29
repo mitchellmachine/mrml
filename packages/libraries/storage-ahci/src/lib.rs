@@ -7,6 +7,7 @@
 
 mod ahci_cleanup;
 mod ahci_command;
+mod ahci_command_execute;
 mod ahci_command_memory;
 mod ahci_controller;
 mod ahci_discovery;
@@ -28,6 +29,10 @@ pub use ahci_cleanup::{reclaim_stopped_ahci_port_dma, AhciCleanupError, AhciClea
 pub use ahci_command::{
     prepare_ahci_dma_command, AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure,
     AhciDataDmaRegion, PreparedAhciCommand,
+};
+pub use ahci_command_execute::{
+    execute_ahci_dma_command, AhciCommandCompletion, AhciCommandExecuteError,
+    AhciCommandExecuteFailure, AHCI_COMMAND_COMPLETION_POLL_LIMIT,
 };
 pub use ahci_command_memory::{
     initialize_ahci_command_memory, AhciCommandMemoryError, AhciCommandMemoryFailure,
