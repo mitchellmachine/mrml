@@ -967,15 +967,12 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             }
             return;
         }
-        let request = match frame.request() {
+        let request = match frame.decode_request() {
             Ok(request) => request,
-            Err(
-                mrml_kernel::SyscallError::InvalidPrivilege
-                | mrml_kernel::SyscallError::InvalidInstruction
-                | mrml_kernel::SyscallError::InvalidStack
-                | mrml_kernel::SyscallError::InvalidFlags,
-            ) => retire_invalid_service_return(),
-            Err(_) => {
+            Err(mrml_kernel::UserCallDecodeError::Return(_)) => {
+                retire_invalid_service_return()
+            }
+            Err(mrml_kernel::UserCallDecodeError::Request(_)) => {
                 frame.complete_error();
                 return;
             }

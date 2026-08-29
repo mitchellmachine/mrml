@@ -57,6 +57,12 @@ impl From<UserReturnError> for SyscallError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserCallDecodeError {
+    Return(UserReturnError),
+    Request(SyscallError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityTransferDescriptor {
     pub capability: Capability,
     pub rights: Rights,
@@ -175,10 +181,19 @@ impl UserCallFrame {
     }
 
     pub fn request(&self) -> Result<SyscallRequest, SyscallError> {
-        self.validate_return().map_err(SyscallError::from)?;
+        self.decode_request().map_err(|error| match error {
+            UserCallDecodeError::Return(error) => SyscallError::from(error),
+            UserCallDecodeError::Request(error) => error,
+        })
+    }
+
+    pub fn decode_request(&self) -> Result<SyscallRequest, UserCallDecodeError> {
+        self.validate_return()
+            .map_err(UserCallDecodeError::Return)?;
         SyscallRequest::decode(
             self.rax, self.rdi, self.rsi, self.rdx, self.r10, self.r8, self.r9,
         )
+        .map_err(UserCallDecodeError::Request)
     }
 
     pub fn complete(&mut self, sequence: u64) {
@@ -1177,11 +1192,18 @@ mod tests {
         assert_eq!(core::mem::offset_of!(UserCallFrame, rip), 15 * 8);
         assert_eq!(core::mem::offset_of!(UserCallFrame, rsp), 18 * 8);
         let mut frame = valid_yield_frame();
+        assert_eq!(frame.decode_request(), Ok(SyscallRequest::Yield));
         assert_eq!(frame.request(), Ok(SyscallRequest::Yield));
         frame.cs = 0x38;
         assert_eq!(
             frame.validate_return(),
             Err(UserReturnError::InvalidPrivilege)
+        );
+        assert_eq!(
+            frame.decode_request(),
+            Err(UserCallDecodeError::Return(
+                UserReturnError::InvalidPrivilege
+            ))
         );
         assert_eq!(frame.request(), Err(SyscallError::InvalidPrivilege));
         frame.cs = u64::from(USER_CODE_SELECTOR);
@@ -1201,6 +1223,13 @@ mod tests {
         assert_eq!(frame.request(), Err(SyscallError::InvalidFlags));
         frame.rflags = 0x202 | (3 << 12);
         assert_eq!(frame.request(), Err(SyscallError::InvalidFlags));
+
+        frame = valid_yield_frame();
+        frame.rax = u64::MAX;
+        assert_eq!(
+            frame.decode_request(),
+            Err(UserCallDecodeError::Request(SyscallError::UnknownOperation))
+        );
     }
 
     fn valid_yield_frame() -> UserCallFrame {

@@ -2150,6 +2150,9 @@ live composition remains pending.
    Boot-recovery decoding now preserves the exact typed return cause and tests
    all four causes before request-data interpretation; live policy continues to
    retire the closed set identically.
+   Generic service decoding now consumes a typed return-versus-request envelope
+   directly. The compatibility `request()` API remains exhaustive, while live
+   retirement no longer reconstructs control-state faults from request errors.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

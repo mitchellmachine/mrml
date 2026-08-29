@@ -195,6 +195,9 @@ access. The security/acceptance gate is canonical in
 - Boot-recovery decoding preserves the exact typed return fault before request
   data is interpreted, while live service policy retires every member of that
   closed set identically.
+- Generic live service decoding distinguishes typed return faults from request
+  errors at the API boundary, preventing future request-error additions from
+  silently changing retirement policy.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
