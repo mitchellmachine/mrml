@@ -120,6 +120,15 @@ architecture. It implements no AHCI command, FAT32 on-disk algorithm, storage
 optimization, crash-recovery algorithm, or new loading technique. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Capability-bound classic IDE port grants
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing exact
+capability and generation checks to the conventional IDE command, control, and
+bus-master I/O-port windows. It performs only checked range construction,
+overlap rejection, and atomic backend publication; it issues no ATA command and
+introduces no storage scheduling, caching, allocation, encoding, or data-layout
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Ordered NVMe I/O-queue teardown
 
 Patent review: **NOT_TRIGGERED**. This increment uses the conventional fixed

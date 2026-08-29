@@ -505,10 +505,14 @@ function and configuration generation, rejects reserved programming-interface
 bits, distinguishes compatibility and native primary/secondary channels, uses
 the architectural fixed compatibility ports without trusting ignored BARs, and
 validates native command/control and optional bus-master I/O BARs within the
-x86 port space. It returns port geometry only; port capabilities, device select,
-PIO commands, ATA identify, media generations, interrupts, bus-master DMA,
+x86 port space. An exact read/write port capability can now install one
+generation-bound channel grant containing only its eight command ports, one
+control port, and optional channel-specific eight-byte bus-master window.
+Excess rights, substituted objects, invalid generations/ranges, overlaps, and
+backend rejection fail before publication. Device select, PIO commands, ATA
+identify, media generations, interrupts, bus-master DMA,
 reset, service IPC, runtime publication, and physical-device evidence remain
-**PLANNED**. Six focused tests pass on Windows and Arch Linux.
+**PLANNED**. Eight focused tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
 
