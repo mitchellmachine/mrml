@@ -105,7 +105,11 @@ fn application_main() -> Result<()> {
         if mrml_runtime::path_exists(output) {
             return Err(anyhow!("refusing to overwrite compiler output"));
         }
-        let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
+        let objects = read_link_objects(
+            &arguments[2..arguments.len() - 4],
+            ObjectFormat::Coff,
+            &arguments[arguments.len() - 3],
+        )?;
         let object_refs = link_object_refs(
             &objects,
             ObjectFormat::Coff,
@@ -128,7 +132,11 @@ fn application_main() -> Result<()> {
         if mrml_runtime::path_exists(output) {
             return Err(anyhow!("refusing to overwrite compiler output"));
         }
-        let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
+        let objects = read_link_objects(
+            &arguments[2..arguments.len() - 4],
+            ObjectFormat::Elf64,
+            &arguments[arguments.len() - 3],
+        )?;
         let object_refs = link_object_refs(
             &objects,
             ObjectFormat::Elf64,
@@ -211,12 +219,24 @@ fn application_main() -> Result<()> {
     Ok(())
 }
 
-fn read_link_objects(paths: &[Text]) -> Result<Vector<LinkFile>> {
+fn read_link_objects(
+    paths: &[Text],
+    format: ObjectFormat,
+    entry: &str,
+) -> Result<Vector<LinkFile>> {
     if paths.is_empty() || paths.len() > MAX_LINK_INPUTS {
         return Err(anyhow!("link input count must be between 1 and 256"));
     }
     let mut objects = Vector::with_capacity(paths.len())
         .map_err(|_| anyhow!("could not allocate link input list"))?;
+    let mut referenced = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
+    let mut defined = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate defined-symbol list"))?;
+    referenced
+        .try_push(Text::from(entry))
+        .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
+    let mut thin_index_selection_safe = true;
     for path in paths {
         let file = MappedFile::open_bounded(path, MAX_ARCHIVE_BYTES)?;
         if file.as_ref().get(..8) == Some(b"!<thin>\n") {
@@ -230,21 +250,51 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<LinkFile>> {
             materialized
                 .try_extend_from_slice(b"!<arch>\n")
                 .map_err(|_| anyhow!("thin archive materialization exceeds 64 MiB"))?;
-            for member in archive.members() {
+            let mut selected = [false; MAX_ARCHIVE_MEMBERS];
+            if archive.symbols().is_empty() || !thin_index_selection_safe {
+                selected[..archive.members().len()].fill(true);
+                thin_index_selection_safe = false;
+            } else {
+                let mut reference_cursor = 0usize;
+                while reference_cursor < referenced.len() {
+                    let symbol = &referenced[reference_cursor];
+                    reference_cursor += 1;
+                    if defined.iter().any(|definition| definition == symbol) {
+                        continue;
+                    }
+                    let Some(candidate) = archive.symbols().iter().find(|candidate| {
+                        candidate.symbol == symbol.as_str() && !selected[candidate.member_index]
+                    }) else {
+                        continue;
+                    };
+                    selected[candidate.member_index] = true;
+                    let member = &archive.members()[candidate.member_index];
+                    let member_file = open_thin_archive_member(&parent, member.name)?;
+                    scan_link_object_symbols_owned(
+                        member_file.as_ref(),
+                        format,
+                        &mut referenced,
+                        &mut defined,
+                    )?;
+                    if !defined
+                        .iter()
+                        .any(|definition| definition.as_str() == candidate.symbol)
+                    {
+                        return Err(anyhow!(
+                            "thin archive symbol index does not match its object member"
+                        ));
+                    }
+                }
+            }
+            for (member_index, member) in archive.members().iter().enumerate() {
                 if !member.external {
                     return Err(anyhow!("thin archive contains an embedded object member"));
                 }
-                let member_path = canonical_path(&join_path(&parent, member.name))?;
-                let relative = member_path
-                    .strip_prefix(parent.as_str())
-                    .filter(|relative| relative.starts_with('/') || relative.starts_with('\\'))
-                    .ok_or_else(|| anyhow!("thin archive member escapes its archive directory"))?;
-                if relative.len() == 1 {
-                    return Err(anyhow!(
-                        "thin archive member resolves to its archive directory"
-                    ));
+                if !selected[member_index] {
+                    append_materialized_archive_member(&mut materialized, "lib.rmeta", &[])?;
+                    continue;
                 }
-                let member_file = MappedFile::open_bounded(&member_path, MAX_ARCHIVE_BYTES)?;
+                let member_file = open_thin_archive_member(&parent, member.name)?;
                 append_materialized_archive_member(
                     &mut materialized,
                     member.name,
@@ -255,12 +305,36 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<LinkFile>> {
                 .try_push(LinkFile::Buffered(materialized))
                 .map_err(|_| anyhow!("could not allocate link input list"))?;
         } else {
+            if file.as_ref().get(..8) == Some(b"!<arch>\n") {
+                thin_index_selection_safe = false;
+            } else if thin_index_selection_safe {
+                scan_link_object_symbols_owned(
+                    file.as_ref(),
+                    format,
+                    &mut referenced,
+                    &mut defined,
+                )?;
+            }
             objects
                 .try_push(LinkFile::Mapped(file))
                 .map_err(|_| anyhow!("could not allocate link input list"))?;
         }
     }
     Ok(objects)
+}
+
+fn open_thin_archive_member(parent: &Text, name: &str) -> Result<MappedFile> {
+    let member_path = canonical_path(&join_path(parent, name))?;
+    let relative = member_path
+        .strip_prefix(parent.as_str())
+        .filter(|relative| relative.starts_with('/') || relative.starts_with('\\'))
+        .ok_or_else(|| anyhow!("thin archive member escapes its archive directory"))?;
+    if relative.len() == 1 {
+        return Err(anyhow!(
+            "thin archive member resolves to its archive directory"
+        ));
+    }
+    Ok(MappedFile::open_bounded(&member_path, MAX_ARCHIVE_BYTES)?)
 }
 
 fn append_materialized_archive_member(
@@ -520,6 +594,42 @@ fn scan_link_object_symbols<'a>(
                     .try_push(symbol)
                     .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
             }
+        }
+    }
+    Ok(())
+}
+
+fn scan_link_object_symbols_owned(
+    object: &[u8],
+    format: ObjectFormat,
+    referenced: &mut Vector<Text>,
+    defined: &mut Vector<Text>,
+) -> Result<()> {
+    let mut borrowed_references = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
+    let mut borrowed_definitions = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate defined-symbol list"))?;
+    scan_link_object_symbols(
+        object,
+        format,
+        &mut borrowed_references,
+        &mut borrowed_definitions,
+    )?;
+    for symbol in borrowed_definitions {
+        if !defined.iter().any(|existing| existing.as_str() == symbol) {
+            defined
+                .try_push(Text::from(symbol))
+                .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+        }
+    }
+    for symbol in borrowed_references {
+        if !referenced
+            .iter()
+            .any(|existing| existing.as_str() == symbol)
+        {
+            referenced
+                .try_push(Text::from(symbol))
+                .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
         }
     }
     Ok(())

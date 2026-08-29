@@ -16,12 +16,22 @@ rustc +$toolchain --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
 rustc +$toolchain --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
     -C opt-level=3 -C relocation-model=static \
     docs/compiler/probes/thin_archive_helper.rs -o "$probe/objects/helper.o"
-(cd "$probe" && ar crsT helpers.a objects/helper.o)
+rustc +$toolchain --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
+    -C opt-level=3 -C relocation-model=static \
+    docs/compiler/probes/thin_archive_leaf.rs -o "$probe/objects/leaf.o"
+rustc +$toolchain --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
+    -C opt-level=3 -C relocation-model=static \
+    docs/compiler/probes/thin_archive_unused.rs -o "$probe/objects/unused.o"
+(cd "$probe" && ar crsT helpers.a objects/helper.o objects/leaf.o objects/unused.o)
 test "$(head -c 8 "$probe/helpers.a")" = '!<thin>'
-(cd "$probe" && test "$(ar t helpers.a)" = 'objects/helper.o')
+(cd "$probe" && test "$(ar t helpers.a)" = "$(printf 'objects/helper.o\nobjects/leaf.o\nobjects/unused.o')")
+rm "$probe/objects/unused.o"
 
 "$mrml" --link-elf "$probe/entry.o" "$probe/helpers.a" \
     --entry start -o "$probe/mrml" >/dev/null
+rustc +$toolchain --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
+    -C opt-level=3 -C relocation-model=static \
+    docs/compiler/probes/thin_archive_unused.rs -o "$probe/objects/unused.o"
 "$lld" -flavor gnu --gc-sections -e start -o "$probe/rust-lld" \
     "$probe/entry.o" "$probe/helpers.a"
 chmod 700 "$probe/mrml" "$probe/rust-lld"

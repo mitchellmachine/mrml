@@ -138,12 +138,16 @@ undefined symbols introduced by later inputs. Index-accelerated extraction,
 explicit start/end archive groups, other non-object metadata members, and
 general `.rlib` admission remain incomplete, so this is not yet the ordinary
 Rust static-library path. GNU thin archives admit validated ordinary and
-long-table member paths; the hosted driver resolves each path relative to the
-archive, rejects absolute paths, parent traversal, and canonical/symlink escape
-from that directory, reads every external member under the existing 64 MiB bound, and
-materializes one bounded in-memory ordinary archive before applying the same
-left-to-right member-identity selector. This preserves semantics but does not
-yet reuse the thin archive's symbol index for lazy external-file reads. BSD
+long-table member paths. When all preceding inputs have an exact bounded symbol
+inventory, the hosted driver uses the untrusted GNU index only to identify
+candidate external members, opens each candidate under the existing 64 MiB
+bound, independently verifies its definitions and references, and continues to
+a stable unresolved-symbol fixed point. Unselected members become empty
+metadata placeholders in the bounded materialized archive, preserving original
+member identities without reading their external files. A missing index or a
+preceding ordinary archive conservatively restores eager materialization. Every
+opened path is resolved relative to the archive and rejects absolute paths,
+parent traversal, and canonical/symlink escape from that directory. BSD
 extended names in thin archives remain unsupported; BSD extended-name symbol
 indexes in ordinary archives are skipped only after their embedded names are
 validated.
@@ -934,13 +938,14 @@ Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.
 
-The independently authored GNU thin-archive probe stored `thin_helper` in an
-external `objects/helper.o`, linked an explicit entry object plus the thin
-archive through MRML and pinned gnullvm rust-lld, and both hosted Arch Linux
-executables exited 42. MRML emitted 4,126 bytes and rust-lld emitted 1,280
-bytes. This proves relative external-member resolution and established archive
-selection for one exact GNU shape, not lazy thin-index extraction, arbitrary
-filesystem authority, or general `.rlib` compatibility.
+The independently authored GNU thin-archive probe stores a helper, its
+transitive leaf, and an unused function in three external objects. It deletes
+the indexed but unreferenced object before the MRML link; MRML reaches the leaf
+without opening the absent unused file and exits 42. The probe restores that
+file for the exact pinned gnullvm rust-lld comparison, whose output also exits
+42. MRML emitted 4,134 bytes and rust-lld emitted 1,416 bytes. This proves lazy
+fixed-point extraction for this GNU thin shape, not arbitrary filesystem
+authority, general `.rlib` compatibility, or broad performance superiority.
 
 Research source:
 
