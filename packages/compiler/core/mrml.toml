@@ -138,41 +138,9 @@ path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Execute the pinned rustc artifact so its scalar observations can be compared with MRML generated code."
 
 [[build_input]]
-fingerprint = "fnv1a64:e2365a97a0d780f8"
-id = "external-command.subslice-then-index-bounds-report-isolated-traps.current-exe"
+fingerprint = "fnv1a64:aceb84ce636077be"
+id = "external-command.semantic-trap-child.current-exe"
 kind = "external-command"
-line = 1160
+line = 32
 path = "packages/compiler/core/tests/semantic_execution.rs"
-reason = "Launch the current semantic test binary in a child process so generated bounds traps cannot terminate the parent test harness."
-
-[[build_input]]
-fingerprint = "fnv1a64:d546254a35670d51"
-id = "external-command.repeated-subslice-then-index-bounds-report-isolated-traps.current-exe"
-kind = "external-command"
-line = 1252
-path = "packages/compiler/core/tests/semantic_execution.rs"
-reason = "Launch the current semantic test binary in a child process so repeated generated bounds traps cannot terminate the parent test harness."
-
-[[build_input]]
-fingerprint = "fnv1a64:750375d2958fb2f5"
-id = "external-command.inclusive-subslice-then-index-bounds-report-isolated-traps.current-exe"
-kind = "external-command"
-line = 1333
-path = "packages/compiler/core/tests/semantic_execution.rs"
-reason = "Launch the current semantic test binary in a child process so inclusive generated bounds traps cannot terminate the parent test harness."
-
-[[build_input]]
-fingerprint = "fnv1a64:95e422f934b98d20"
-id = "external-command.inclusive-slice-subslice-then-index-bounds-report-isolated-traps.current-exe"
-kind = "external-command"
-line = 1427
-path = "packages/compiler/core/tests/semantic_execution.rs"
-reason = "Launch the current semantic test binary in a child process so inclusive slice bounds traps cannot terminate the parent test harness."
-
-[[build_input]]
-fingerprint = "fnv1a64:19837a24a9fd678c"
-id = "external-command.checked-overflow-reports-an-isolated-trap-exit.current-exe"
-kind = "external-command"
-line = 1508
-path = "packages/compiler/core/tests/semantic_execution.rs"
-reason = "Launch the current semantic test binary in a child process so generated overflow traps cannot terminate the parent test harness."
+reason = "Construct one audited current-test executable command used by bounded child processes so generated traps cannot terminate the parent semantic harness."

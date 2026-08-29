@@ -13614,12 +13614,12 @@ mod tests {
     fn mrml_v1_codegen_bounds_wide_funnel_shift_admission() {
         let accepted =
             "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u128, distance: u32) -> u128 { unsafe { left.unchecked_funnel_shl(right, distance) } }";
-        let module = Parser::new(accepted).parse_module::<2, 3>().unwrap();
+        let module = Parser::new(accepted).parse_module::<2, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
         for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
-            compile_x86_64_function::<_, 1024, 3, 24>(&function, &NoConstants, abi).unwrap();
+            compile_x86_64_function::<_, 1024, 4, 24>(&function, &NoConstants, abi).unwrap();
         }
 
         for rejected in [
