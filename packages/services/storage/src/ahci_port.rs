@@ -8,9 +8,8 @@
 //! protocol, NCQ operation, or block I/O.
 
 use crate::ahci_controller::{
-    AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_VERSION_OFFSET,
-    AhciControllerSnapshot, AhciRegisterIo, GHC_AHCI_ENABLE, GHC_HBA_RESET,
-    GHC_INTERRUPT_ENABLE,
+    AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_VERSION_OFFSET, AhciControllerSnapshot,
+    AhciRegisterIo, GHC_AHCI_ENABLE, GHC_HBA_RESET, GHC_INTERRUPT_ENABLE,
 };
 use crate::ahci_discovery::AHCI_ABAR_MINIMUM_BYTES;
 use crate::ahci_mapping::{AHCI_MMIO_PAGE_BYTES, AhciAbarMapping};
@@ -32,8 +31,7 @@ pub const AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE: u32 = 0xc33c_0101;
 pub const AHCI_PORT_MULTIPLIER_SIGNATURE: u32 = 0x9669_0101;
 
 const AHCI_PORT_REGISTER_BYTES: u64 = core::mem::size_of::<u32>() as u64;
-const AHCI_PORT_REGISTER_LIMIT: u32 =
-    AHCI_PORT_STRIDE_BYTES - core::mem::size_of::<u32>() as u32;
+const AHCI_PORT_REGISTER_LIMIT: u32 = AHCI_PORT_STRIDE_BYTES - core::mem::size_of::<u32>() as u32;
 const PORT_COMMAND_START: u32 = 1 << 0;
 const PORT_COMMAND_LIST_OVERRIDE: u32 = 1 << 3;
 const PORT_FIS_RECEIVE_ENABLE: u32 = 1 << 4;
@@ -255,10 +253,10 @@ pub fn discover_ahci_ports<R: AhciRegisterIo>(
         if controller.implemented_ports & port_mask == 0 {
             continue;
         }
-        let first = first[usize::from(port)]
-            .ok_or(AhciPortDiscoveryError::ControllerSnapshotMismatch)?;
-        let second = second[usize::from(port)]
-            .ok_or(AhciPortDiscoveryError::ControllerSnapshotMismatch)?;
+        let first =
+            first[usize::from(port)].ok_or(AhciPortDiscoveryError::ControllerSnapshotMismatch)?;
+        let second =
+            second[usize::from(port)].ok_or(AhciPortDiscoveryError::ControllerSnapshotMismatch)?;
         let snapshot = validate_port_observation(controller, port, first, second)
             .map_err(|error| AhciPortDiscoveryError::Port { port, error })?;
         ports[usize::from(port)] = Some(snapshot);
@@ -270,11 +268,7 @@ pub fn discover_ahci_ports<R: AhciRegisterIo>(
     let after = read_stable_controller_observation(registers)?;
     if after != before
         || !after.available()
-        || !controller.matches_registers(
-            after.capabilities,
-            after.version,
-            after.implemented_ports,
-        )
+        || !controller.matches_registers(after.capabilities, after.version, after.implemented_ports)
     {
         return Err(AhciPortDiscoveryError::ControllerChanged);
     }
@@ -365,18 +359,8 @@ fn read_port_observation<R: AhciRegisterIo>(
         )?,
         command: read_port_register(mapping, port, AHCI_PORT_COMMAND_OFFSET, registers)?,
         signature: read_port_register(mapping, port, AHCI_PORT_SIGNATURE_OFFSET, registers)?,
-        sata_status: read_port_register(
-            mapping,
-            port,
-            AHCI_PORT_SATA_STATUS_OFFSET,
-            registers,
-        )?,
-        sata_active: read_port_register(
-            mapping,
-            port,
-            AHCI_PORT_SATA_ACTIVE_OFFSET,
-            registers,
-        )?,
+        sata_status: read_port_register(mapping, port, AHCI_PORT_SATA_STATUS_OFFSET, registers)?,
+        sata_active: read_port_register(mapping, port, AHCI_PORT_SATA_ACTIVE_OFFSET, registers)?,
         command_issue: read_port_register(
             mapping,
             port,
@@ -476,9 +460,7 @@ fn classify_link_and_signature(
     let speed = (sata_status & SATA_STATUS_SPEED_MASK) >> SATA_STATUS_SPEED_SHIFT;
     let power = (sata_status & SATA_STATUS_POWER_MASK) >> SATA_STATUS_POWER_SHIFT;
     match detection {
-        0 if speed == 0 && power == 0 => {
-            Ok((AhciPortLinkState::NoDevice, None, None, None))
-        }
+        0 if speed == 0 && power == 0 => Ok((AhciPortLinkState::NoDevice, None, None, None)),
         1 if speed == 0 && power == 0 => Ok((
             AhciPortLinkState::PresentWithoutCommunication,
             None,
@@ -507,9 +489,7 @@ fn classify_link_and_signature(
             let device_kind = match signature {
                 AHCI_SATA_SIGNATURE => AhciPortDeviceKind::Sata,
                 AHCI_ATAPI_SIGNATURE => AhciPortDeviceKind::Atapi,
-                AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE => {
-                    AhciPortDeviceKind::EnclosureManagement
-                }
+                AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE => AhciPortDeviceKind::EnclosureManagement,
                 AHCI_PORT_MULTIPLIER_SIGNATURE => AhciPortDeviceKind::PortMultiplier,
                 _ => AhciPortDeviceKind::Unknown,
             };
@@ -520,9 +500,7 @@ fn classify_link_and_signature(
                 Some(signature),
             ))
         }
-        4 if speed == 0 && power == 0 => {
-            Ok((AhciPortLinkState::Offline, None, None, None))
-        }
+        4 if speed == 0 && power == 0 => Ok((AhciPortLinkState::Offline, None, None, None)),
         _ => Err(AhciPortError::InvalidLinkState(sata_status)),
     }
 }
@@ -679,14 +657,12 @@ mod tests {
             }
             self.port_read_mask |= port_mask;
             let value = self.ports[port_index].read(register)?;
-            self.port_read_counts[port_index] = self.port_read_counts[port_index]
-                .checked_add(1)
-                .ok_or(())?;
+            self.port_read_counts[port_index] =
+                self.port_read_counts[port_index].checked_add(1).ok_or(())?;
             if self.port_read_counts[port_index] == PORT_OBSERVATION_READS {
                 if let Some(mutation) = self.mutation {
                     if mutation.port == port {
-                        self.ports[port_index]
-                            .write_for_test(mutation.register, mutation.value);
+                        self.ports[port_index].write_for_test(mutation.register, mutation.value);
                         self.mutation = None;
                     }
                 }
@@ -771,9 +747,7 @@ mod tests {
                 AhciPortLinkSpeed::Generation2,
             ),
         ];
-        for (port, (device_kind, power_state, link_speed)) in
-            expected.into_iter().enumerate()
-        {
+        for (port, (device_kind, power_state, link_speed)) in expected.into_iter().enumerate() {
             let snapshot = snapshots.port(port as u8).unwrap();
             assert_eq!(snapshot.device_object, ObjectId(41));
             assert_eq!(snapshot.configuration_generation, 7);

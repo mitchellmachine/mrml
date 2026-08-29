@@ -45,11 +45,7 @@ impl AhciControllerSnapshot {
     pub(crate) fn is_structurally_valid(self) -> bool {
         self.configuration_generation != 0
             && self.mapping_generation != 0
-            && self.matches_registers(
-                self.capabilities,
-                self.version,
-                self.implemented_ports,
-            )
+            && self.matches_registers(self.capabilities, self.version, self.implemented_ports)
     }
 
     pub(crate) fn matches_registers(
@@ -76,8 +72,7 @@ impl AhciControllerSnapshot {
             && self.port_count == port_count
             && implemented_ports & !valid_port_mask == 0
             && self.command_slot_count == command_slot_count
-            && self.native_command_queuing
-                == (capabilities & CAP_NATIVE_COMMAND_QUEUING != 0)
+            && self.native_command_queuing == (capabilities & CAP_NATIVE_COMMAND_QUEUING != 0)
     }
 }
 

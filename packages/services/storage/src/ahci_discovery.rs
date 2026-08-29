@@ -89,13 +89,15 @@ impl AhciAbarDescriptor {
         if snapshot.header_type & 0x7f != 0 {
             return Err(AhciDiscoveryError::UnsupportedHeader);
         }
-        if (snapshot.class, snapshot.subclass, snapshot.programming_interface)
-            != (
-                AHCI_PCI_CLASS,
-                AHCI_PCI_SUBCLASS,
-                AHCI_PCI_PROGRAMMING_INTERFACE,
-            )
-        {
+        if (
+            snapshot.class,
+            snapshot.subclass,
+            snapshot.programming_interface,
+        ) != (
+            AHCI_PCI_CLASS,
+            AHCI_PCI_SUBCLASS,
+            AHCI_PCI_PROGRAMMING_INTERFACE,
+        ) {
             return Err(AhciDiscoveryError::NotAhci);
         }
         if snapshot.abar & PCI_BAR_IO_SPACE != 0 {
@@ -112,9 +114,7 @@ impl AhciAbarDescriptor {
         if physical_base == 0 {
             return Err(AhciDiscoveryError::MissingAbar);
         }
-        if snapshot.abar_bytes < AHCI_ABAR_MINIMUM_BYTES
-            || !snapshot.abar_bytes.is_power_of_two()
-        {
+        if snapshot.abar_bytes < AHCI_ABAR_MINIMUM_BYTES || !snapshot.abar_bytes.is_power_of_two() {
             return Err(AhciDiscoveryError::InvalidAbarSize);
         }
         if physical_base & (snapshot.abar_bytes - 1) != 0 {
@@ -204,7 +204,11 @@ mod tests {
     fn rejects_unsafe_or_ambiguous_abar_geometry() {
         for (abar, bytes, error) in [
             (0xf7f0_0001, 0x2000, AhciDiscoveryError::IoBar),
-            (0xf7f0_0004, 0x2000, AhciDiscoveryError::UnsupportedMemoryBar),
+            (
+                0xf7f0_0004,
+                0x2000,
+                AhciDiscoveryError::UnsupportedMemoryBar,
+            ),
             (0xf7f0_0008, 0x2000, AhciDiscoveryError::PrefetchableBar),
             (0, 0x2000, AhciDiscoveryError::MissingAbar),
             (0xf7f0_0000, 0x1000, AhciDiscoveryError::InvalidAbarSize),
