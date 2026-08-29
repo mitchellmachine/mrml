@@ -2244,6 +2244,8 @@ live composition remains pending.
    Completion-time pending-record validation now rechecks optional-address
    canonicality and exact output-range disjointness. Both service profiles
    cross-build; live execution remains pending.
+   Pending-layout arithmetic overflow now feeds existing invalid-layout policy
+   instead of global halt. Both service profiles cross-build.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

@@ -4956,10 +4956,12 @@ unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive)
     if pending.capability_capacity == 0 {
         return pending.capabilities_address == 0;
     }
-    let length = pending
+    let Some(length) = pending
         .capability_capacity
         .checked_mul(core::mem::size_of::<u64>())
-        .unwrap_or_else(|| halt());
+    else {
+        return false;
+    };
     if !unsafe {
         service_user_range_is_valid(
             root,
@@ -4971,14 +4973,18 @@ unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive)
     } {
         return false;
     }
-    let payload_end = pending
-        .payload_address
-        .checked_add(u64::try_from(pending.payload_capacity).unwrap_or_else(|_| halt()))
-        .unwrap_or_else(|| halt());
-    let capabilities_end = pending
-        .capabilities_address
-        .checked_add(u64::try_from(length).unwrap_or_else(|_| halt()))
-        .unwrap_or_else(|| halt());
+    let (Ok(payload_length), Ok(capabilities_length)) = (
+        u64::try_from(pending.payload_capacity),
+        u64::try_from(length),
+    ) else {
+        return false;
+    };
+    let (Some(payload_end), Some(capabilities_end)) = (
+        pending.payload_address.checked_add(payload_length),
+        pending.capabilities_address.checked_add(capabilities_length),
+    ) else {
+        return false;
+    };
     if pending.payload_address < capabilities_end && pending.capabilities_address < payload_end {
         return false;
     }

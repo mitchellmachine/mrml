@@ -6893,6 +6893,10 @@ Pending buffered-receive completion now rechecks that zero capability capacity
 has a zero address and that nonempty payload/capability output ranges remain
 disjoint, in addition to exact root and writable mapping validation. Both
 service profiles cross-build; backend execution remains pending.
+Pending-layout multiplication, conversion, and end-address overflow now return
+invalid layout rather than invoking the global halt path. Immediate calls receive
+a scrubbed error; resumed drift follows the existing scoped protocol-retirement
+path. Both service profiles cross-build.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it
