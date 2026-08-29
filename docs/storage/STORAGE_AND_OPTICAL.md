@@ -436,11 +436,18 @@ is confirmed. The queue-programming gate consumes that exclusive owner only
 while `CC.EN` and `CSTS.RDY` are clear, writes and verifies bounded `AQA`, `ASQ`,
 and `ACQ`, enables the baseline 64-byte submission/16-byte completion entry
 sizes, and publishes active queues only after bounded ready polling. Any write,
-readback, fatal-state, or timeout uncertainty quarantines the DMA layout. Native
-PCI enumeration, concrete MMIO installation, admin commands, and I/O queues,
+readback, fatal-state, or timeout uncertainty quarantines the DMA layout. The
+first admin-command path admits only Identify Controller: it exact-authorizes a
+distinct zeroed 4 KiB DMA result page, writes and verifies all 16 command
+dwords before the submission doorbell, bounds phase-tagged completion polling,
+validates command ID, queue ID/head and status, and acknowledges the completion
+head. Pre-mutation failures return the active queue owner; uncertainty after
+mutation quarantines it; an explicit controller error advances and returns the
+reusable queue with decoded status. Native PCI enumeration, concrete MMIO
+installation, identify-data parsing, namespace discovery, and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Twenty-one focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. Twenty-five focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current

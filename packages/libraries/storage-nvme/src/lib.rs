@@ -5,12 +5,18 @@
 //! The storage service retains object identity, filesystem, transaction, and
 //! authority policy. This package never treats PCI identity as authority.
 
+mod nvme_admin_command;
 mod nvme_controller;
 mod nvme_discovery;
 mod nvme_mapping;
 mod nvme_queue_dma;
 mod nvme_queue_program;
 
+pub use nvme_admin_command::{
+    execute_nvme_identify_controller, NvmeAdminCommandError, NvmeAdminCommandFailure,
+    NvmeAdminCommandMemoryIo, NvmeAdminCommandStatus, NvmeIdentifyControllerRequest,
+    NVME_IDENTIFY_BYTES,
+};
 pub use nvme_controller::{
     disable_nvme_controller, NvmeControllerError, NvmeControllerFailure, NvmeControllerRegisterIo,
     NvmeControllerSnapshot, NVME_CAP_OFFSET, NVME_CC_OFFSET, NVME_CSTS_OFFSET, NVME_VERSION_OFFSET,

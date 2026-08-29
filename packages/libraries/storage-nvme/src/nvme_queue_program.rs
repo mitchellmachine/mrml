@@ -18,11 +18,52 @@ const POLLS_PER_500_MS: u32 = 1000;
 #[derive(Debug, Eq, PartialEq)]
 pub struct ActiveNvmeAdminQueues {
     layout: NvmeAdminQueueDmaLayout,
+    submission_tail: u16,
+    completion_head: u16,
+    completion_phase: bool,
+    next_command_id: u16,
 }
 
 impl ActiveNvmeAdminQueues {
     pub const fn layout(&self) -> NvmeAdminQueueDmaLayout {
         self.layout
+    }
+
+    pub(crate) const fn state(&self) -> (u16, u16, bool, u16) {
+        (
+            self.submission_tail,
+            self.completion_head,
+            self.completion_phase,
+            self.next_command_id,
+        )
+    }
+
+    pub(crate) const fn advance(mut self) -> Self {
+        self.submission_tail += 1;
+        if self.submission_tail == self.layout.queue_depth {
+            self.submission_tail = 0;
+        }
+        self.completion_head += 1;
+        if self.completion_head == self.layout.queue_depth {
+            self.completion_head = 0;
+            self.completion_phase = !self.completion_phase;
+        }
+        self.next_command_id = self.next_command_id.wrapping_add(1);
+        if self.next_command_id == 0 {
+            self.next_command_id = 1;
+        }
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_state(layout: NvmeAdminQueueDmaLayout) -> Self {
+        Self {
+            layout,
+            submission_tail: 0,
+            completion_head: 0,
+            completion_phase: true,
+            next_command_id: 1,
+        }
     }
 }
 
@@ -152,7 +193,13 @@ pub fn enable_nvme_admin_queues<I: NvmeAdminQueueRegisterIo>(
             return Err(quarantined(layout, NvmeQueueProgramError::FatalStatus));
         }
         if status & CSTS_READY != 0 {
-            return Ok(ActiveNvmeAdminQueues { layout });
+            return Ok(ActiveNvmeAdminQueues {
+                layout,
+                submission_tail: 0,
+                completion_head: 0,
+                completion_phase: true,
+                next_command_id: 1,
+            });
         }
         io.delay_500_micros();
     }
@@ -245,6 +292,7 @@ mod tests {
             mapping_generation: 9,
             queue_depth: 64,
             timeout_500ms_units: 1,
+            doorbell_stride_bytes: 4,
             submission: NvmeDmaRegion {
                 memory_object: ObjectId(80),
                 allocation_generation: 3,

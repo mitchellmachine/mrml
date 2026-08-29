@@ -10308,6 +10308,17 @@ process completions, identify namespaces, schedule I/O, or implement another
 storage algorithm. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-29 — Bounded NVMe Identify Controller execution
+
+Patent review: **NOT_TRIGGERED**. This increment encodes the conventional fixed
+Identify Controller admin command, verifies its queue entry before a standard
+doorbell write, and validates the standard phase, command ID, queue ID/head,
+and status fields under a bounded single-outstanding-command loop. It uses
+MRML's existing exact DMA capability and quarantine rules and exposes no raw
+admin-command escape hatch. It does not interpret identify data, discover
+namespaces, create I/O queues, or implement a storage scheduling or caching
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
