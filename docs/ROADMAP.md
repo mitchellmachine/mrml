@@ -2105,6 +2105,9 @@ live composition remains pending.
    precommit range, user-mapping, authority, binding, and resource-handle
    denials. Backend uncertainty and internal runtime/copy invariants still halt;
    ordinary/accounted service builds and 595 Linux kernel tests pass.
+   Capability release reports stale/unauthorized handles as precommit denial,
+   but an impossible source-revoke failure after descendant mutation is now an
+   integrity failure and remains fail-stop.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

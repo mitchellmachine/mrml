@@ -658,7 +658,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.revoke_tracked(&descendants.0, 1)?;
         self.capabilities_mut(task)?
             .revoke(capability)
-            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         self.remove_tracked(&descendants.0);
         Ok(())
     }

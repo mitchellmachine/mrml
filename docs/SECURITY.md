@@ -169,6 +169,8 @@ access. The security/acceptance gate is canonical in
 - Shared-buffer syscalls expose only scrubbed failure for proven precommit
   range, mapping, authorization, binding, and resource denials; uncertain
   backend effects and internal runtime/copy invariants remain fail-stop.
+- Capability release classifies an impossible source revocation failure after
+  descendant mutation as integrity failure, not a recoverable caller denial.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.
