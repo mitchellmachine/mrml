@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical AHCI provider catalog endpoint
+
+Patent review: **NOT_TRIGGERED**. This increment publishes caller-supplied,
+generation-bound block-device metadata through the already screened enumeration
+operation using fixed conventional records. It adds no AHCI register or command
+behavior, device discovery, storage scheduling, caching, allocation, naming,
+encoding, data-layout, or optimization algorithm. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-29 — Canonical block-provider enumeration boundary
 
 Patent review: **NOT_TRIGGERED**. This increment serializes the existing

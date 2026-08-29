@@ -12,6 +12,82 @@ pub const ENUMERATE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
 pub const ENUMERATE_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
 const ABI_SCHEMA_VERSION: u16 = 1;
+pub const BLOCK_DEVICE_CATALOG_HEADER_BYTES: usize = 16;
+pub const BLOCK_DEVICE_CATALOG_RECORD_BYTES: usize = 32;
+const BLOCK_DEVICE_CATALOG_MAGIC: [u8; 8] = *b"MRMLBLK\0";
+const BLOCK_DEVICE_CATALOG_VERSION: u16 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BlockProviderDevice {
+    pub session: OpaqueHandle,
+    pub logical_block_bytes: u32,
+    pub flags: u32,
+    pub logical_block_count: u64,
+    pub media_generation: u64,
+}
+
+pub const BLOCK_DEVICE_FLAG_READ_ONLY: u32 = 1 << 0;
+pub const BLOCK_DEVICE_FLAG_FLUSH: u32 = 1 << 1;
+pub const BLOCK_DEVICE_FLAG_RESET: u32 = 1 << 2;
+const BLOCK_DEVICE_KNOWN_FLAGS: u32 = BLOCK_DEVICE_FLAG_READ_ONLY
+    | BLOCK_DEVICE_FLAG_FLUSH
+    | BLOCK_DEVICE_FLAG_RESET;
+
+pub fn encode_block_device_catalog(
+    devices: &[BlockProviderDevice],
+    output: BorrowedWriteView,
+    memory: &mut [u8],
+) -> Result<u64, ProtocolError> {
+    let count = u32::try_from(devices.len()).map_err(|_| ProtocolError::InvalidRequest)?;
+    let records = devices
+        .len()
+        .checked_mul(BLOCK_DEVICE_CATALOG_RECORD_BYTES)
+        .ok_or(ProtocolError::InvalidRequest)?;
+    let written = BLOCK_DEVICE_CATALOG_HEADER_BYTES
+        .checked_add(records)
+        .ok_or(ProtocolError::InvalidRequest)?;
+    if written as u64 > output.length() || written as u64 > MAX_DEVICE_CATALOG_BYTES {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    for device in devices {
+        if device.logical_block_bytes < 512
+            || device.logical_block_bytes > 65_536
+            || !device.logical_block_bytes.is_power_of_two()
+            || device.flags & !BLOCK_DEVICE_KNOWN_FLAGS != 0
+            || device.logical_block_count == 0
+            || device.media_generation == 0
+        {
+            return Err(ProtocolError::InvalidRequest);
+        }
+    }
+    let start = usize::try_from(output.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
+    let end = start
+        .checked_add(written)
+        .ok_or(ProtocolError::InvalidRequest)?;
+    let destination = memory
+        .get_mut(start..end)
+        .ok_or(ProtocolError::InvalidRequest)?;
+    destination.fill(0);
+    destination[0..8].copy_from_slice(&BLOCK_DEVICE_CATALOG_MAGIC);
+    destination[8..10].copy_from_slice(&BLOCK_DEVICE_CATALOG_VERSION.to_le_bytes());
+    destination[10..12]
+        .copy_from_slice(&(BLOCK_DEVICE_CATALOG_RECORD_BYTES as u16).to_le_bytes());
+    destination[12..16].copy_from_slice(&count.to_le_bytes());
+    for (index, device) in devices.iter().enumerate() {
+        let offset = BLOCK_DEVICE_CATALOG_HEADER_BYTES + index * BLOCK_DEVICE_CATALOG_RECORD_BYTES;
+        destination[offset..offset + 4].copy_from_slice(&device.session.index().to_le_bytes());
+        destination[offset + 4..offset + 8]
+            .copy_from_slice(&device.session.generation().to_le_bytes());
+        destination[offset + 8..offset + 12]
+            .copy_from_slice(&device.logical_block_bytes.to_le_bytes());
+        destination[offset + 12..offset + 16].copy_from_slice(&device.flags.to_le_bytes());
+        destination[offset + 16..offset + 24]
+            .copy_from_slice(&device.logical_block_count.to_le_bytes());
+        destination[offset + 24..offset + 32]
+            .copy_from_slice(&device.media_generation.to_le_bytes());
+    }
+    Ok(written as u64)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
@@ -233,5 +309,27 @@ mod tests {
             decode_enumerate_response(&response, 512),
             Err(ProtocolError::InvalidResponse)
         );
+    }
+
+    #[test]
+    fn canonical_catalog_is_bounded_zeroed_and_generational() {
+        let devices = [BlockProviderDevice {
+            session: OpaqueHandle::new(3, 7).unwrap(),
+            logical_block_bytes: 4096,
+            flags: BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET,
+            logical_block_count: 128,
+            media_generation: 9,
+        }];
+        let output = BorrowedWriteView::within(8, 48, 56).unwrap();
+        let mut memory = [0xa5; 56];
+        assert_eq!(
+            encode_block_device_catalog(&devices, output, &mut memory),
+            Ok(48)
+        );
+        assert_eq!(&memory[8..16], b"MRMLBLK\0");
+        assert_eq!(u32::from_le_bytes(memory[20..24].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(memory[24..28].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(memory[28..32].try_into().unwrap()), 7);
+        assert_eq!(u64::from_le_bytes(memory[48..56].try_into().unwrap()), 9);
     }
 }

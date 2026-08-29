@@ -16,6 +16,12 @@ mod ahci_mapping;
 mod ahci_port;
 mod ahci_port_program;
 
+use mrml_interface_storage_block_provider_v1::{
+    decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
+    BlockProviderDevice, BlockProviderTransport, EnumerateError, ProtocolError,
+    ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
+};
+
 pub use ahci_cleanup::{AhciCleanupError, AhciCleanupFailure, reclaim_stopped_ahci_port_dma};
 pub use ahci_command::{
     AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure, AhciDataDmaRegion,
@@ -61,3 +67,56 @@ pub use ahci_port_program::{
     AhciPortProgramError, AhciPortProgramFailure, ProgrammedAhciPortDma,
     program_ahci_port_dma_bases,
 };
+
+pub struct AhciBlockProvider<'a> {
+    devices: &'a [BlockProviderDevice],
+}
+
+impl<'a> AhciBlockProvider<'a> {
+    pub const fn new(devices: &'a [BlockProviderDevice]) -> Self {
+        Self { devices }
+    }
+}
+
+impl BlockProviderTransport for AhciBlockProvider<'_> {
+    fn enumerate(
+        &mut self,
+        request: &[u8; ENUMERATE_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; ENUMERATE_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_enumerate_request(request, memory.len() as u64)?;
+        let result = encode_block_device_catalog(self.devices, request.output, memory)
+            .map_err(|_| EnumerateError::InvalidRequest);
+        Ok(encode_enumerate_response(result))
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use mrml_interface_storage_block_provider_v1::{
+        decode_enumerate_response, encode_enumerate_request, BorrowedWriteView, OpaqueHandle,
+        BLOCK_DEVICE_FLAG_FLUSH,
+    };
+
+    #[test]
+    fn provider_enumerates_exact_generation_bound_catalog() {
+        let devices = [BlockProviderDevice {
+            session: OpaqueHandle::new(4, 8).unwrap(),
+            logical_block_bytes: 512,
+            flags: BLOCK_DEVICE_FLAG_FLUSH,
+            logical_block_count: 65_536,
+            media_generation: 12,
+        }];
+        let mut provider = AhciBlockProvider::new(&devices);
+        let output = BorrowedWriteView::within(16, 48, 64).unwrap();
+        let request = encode_enumerate_request(output).unwrap();
+        let mut memory = [0xa5; 64];
+        let response = provider.enumerate(&request, &mut memory).unwrap();
+        assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(48)));
+        assert_eq!(&memory[16..24], b"MRMLBLK\0");
+        assert_eq!(u32::from_le_bytes(memory[32..36].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(memory[36..40].try_into().unwrap()), 8);
+        assert_eq!(u64::from_le_bytes(memory[56..64].try_into().unwrap()), 12);
+    }
+}

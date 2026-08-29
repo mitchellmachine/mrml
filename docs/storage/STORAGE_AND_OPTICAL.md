@@ -326,7 +326,7 @@ one PRDT entry. Device-read requires data-buffer `WRITE`; device-write requires
 `READ`, with separate `PIN | MAP`. Control DMA overlap, stale/wrong authority,
 dirty headers/tables, active/issued slots, overflow, and partial mutation fail
 closed. Every written header/FIS/PRDT DWORD is read-verified; post-write
-uncertainty quarantines the active layout. The AHCI library passes 50 tests on
+uncertainty quarantines the active layout. The AHCI library passes 51 tests on
 Windows and Arch Linux. `CI` issue, completion/error handling, data verification,
 interrupts, NCQ, hardware, and physical evidence remain **PLANNED**.
 
@@ -594,10 +594,15 @@ binds the ABI magic and schema, exact interface fingerprint and generation,
 operation number, and fixed request/response sizes. The transport routes through
 one opaque endpoint generation and validates the borrowed catalog range before
 IPC; response decoding rejects reserved bytes, unknown status values, and byte
-counts beyond both the caller's output and the 64-KiB interface limit. Three
-focused interface tests pass on Windows and Arch Linux. Provider catalog format,
-provider-side AHCI/NVMe/IDE endpoints, and read/write/flush/reset transport calls
-remain **PLANNED**.
+counts beyond both the caller's output and the 64-KiB interface limit. The
+canonical catalog header and fixed-size records carry only opaque session
+generations, checked block geometry, explicit feature facts, and media
+generations. Encoding validates every record and zeroes the exact output extent
+before publication. The AHCI library implements enumeration over that catalog
+without receiving storage-service authority. Four focused interface tests and
+51 AHCI-library tests pass on Windows and Arch Linux. Provider-side isolated
+IPC, NVMe/IDE endpoints, and read/write/flush/reset transport calls remain
+**PLANNED**.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
 sequential by provider and each parser/register/queue gate is independently
@@ -647,7 +652,7 @@ PCI classes, and manifests do not authorize.
 - Existing-object reuse: **HIGH**
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
-interface passes one focused test and the filesystem interface's canonical probe
+interface passes four focused tests and the filesystem interface's canonical probe
 codec and exact-generation isolated transport pass three on Windows and Arch
 Linux. The fixed-capacity module registry is also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
@@ -661,11 +666,12 @@ slot unavailable until explicit retry and never falls back. Storage passes
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
 the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
-each pass 50 AHCI-library tests. The storage service now passes 137 tests with a
+each pass 51 AHCI-library tests. The storage service now passes 137 tests with a
 hosted cleanup-gated FAT32 generation replacement that invalidates the old
 endpoint, health-checks the candidate through canonical probe bytes, and leaves
-the modeled kernel epoch unchanged. The AHCI service entry/IPC adapter and
-installed supervisor execution remain **PLANNED**.
+the modeled kernel epoch unchanged. The AHCI library now has a canonical catalog
+enumeration endpoint; its isolated service entry/IPC adapter and installed
+supervisor execution remain **PLANNED**.
 
 The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
 `org.mrml.library.storage.fat32`. It advertises the exact generation-1 filesystem
