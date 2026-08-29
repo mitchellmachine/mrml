@@ -1673,6 +1673,52 @@ impl<
                 return Ok(());
             }
         }
+        if let Some(ExprKind::UnsignedIntegerPredicate {
+            base,
+            argument: Some(argument),
+            power_of_two: false,
+        }) = tree.expression(id).map(|expression| expression.kind)
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let argument_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                argument,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type == RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+                && argument_type == base_type
+            {
+                let layout = runtime_integer_layout(crate::IntegerType::U128.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_wide_binary_operands(tree, base, argument, base_type)?;
+                self.emit(&[0x49, 0x89, 0xc1, 0x49, 0x09, 0xd1])?;
+                let nonzero_divisor = self.emit_forward_branch(0x85)?;
+                self.emit(&[
+                    0x4c, 0x89, 0xc0, 0x48, 0x09, 0xc8, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0,
+                ])?;
+                let done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(nonzero_divisor)?;
+                self.emit_wide_divide_or_remainder(layout, true, false)?;
+                self.emit(&[
+                    0x48, 0x09, 0xd0, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0,
+                ])?;
+                self.patch_forward_branch(done)?;
+                self.width = previous_width;
+                return Ok(());
+            }
+        }
         if let Some(ExprKind::SignedIntegerPredicate { base, positive }) =
             tree.expression(id).map(|expression| expression.kind)
         {
