@@ -68,6 +68,15 @@ actual_commit=$(rustup run "$channel" rustc -Vv | sed -n 's/^commit-hash: //p')
 
 export RUSTUP_TOOLCHAIN="$channel"
 
+# GitHub-compatible Actions runners, including Gitea's act_runner, expose these
+# files to persist environment changes into subsequent workflow steps.
+if [ -n "${GITHUB_PATH:-}" ]; then
+    printf '%s\n' "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+fi
+if [ -n "${GITHUB_ENV:-}" ]; then
+    printf 'RUSTUP_TOOLCHAIN=%s\n' "$channel" >>"$GITHUB_ENV"
+fi
+
 printf 'MRML oracle ready: %s (%s)\n' "$channel" "$actual_commit"
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     printf 'Run `source tools/toolchain/setup-oracle.sh` to retain RUSTUP_TOOLCHAIN in this shell.\n'

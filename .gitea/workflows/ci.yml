@@ -25,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install and verify pinned Rust oracle
-        run: bash tools/toolchain/setup-oracle.sh
+        run: source tools/toolchain/setup-oracle.sh
       - name: Build locked stage-zero frontend
         run: cargo build --locked
       - name: Test stage-zero policy implementation
@@ -57,7 +57,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install and verify pinned Rust oracle
-        run: bash tools/toolchain/setup-oracle.sh
+        run: source tools/toolchain/setup-oracle.sh
       - name: Build locked stage-zero frontend
         run: cargo build --locked
       - name: Run every Linux-compatible native test in release mode

@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install and verify pinned Rust oracle
-        run: bash tools/toolchain/setup-oracle.sh
+        run: source tools/toolchain/setup-oracle.sh
       - name: Run locked frontend tests under AddressSanitizer
         env:
           CARGO_TARGET_DIR: target/asan-stage-zero
@@ -45,7 +45,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install and verify pinned Rust oracle
-        run: bash tools/toolchain/setup-oracle.sh
+        run: source tools/toolchain/setup-oracle.sh
       - name: Build locked stage-zero frontend
         run: cargo build --locked
       - name: Run every Linux-compatible native test under AddressSanitizer
