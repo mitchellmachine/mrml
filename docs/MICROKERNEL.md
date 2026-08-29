@@ -6915,6 +6915,13 @@ tests pass.
 Patent review: `NOT_TRIGGERED` — this is conventional bounded validation and
 transaction commit binding for the existing IPC mechanism; it introduces no
 new externally visible mechanism.
+Queued delivery now rejects an authorized same-task route immediately after
+endpoint authentication and before receiver lookup or inbox inspection. An
+unauthorized self-route still returns only authorization denial; a focused
+full-inbox test proves the authorized route returns `SameTaskIpc` without
+consuming a sequence or message, raising the Linux kernel total to 625.
+Patent review: `NOT_TRIGGERED` — this only tightens validation order in the
+existing bounded IPC path.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

@@ -2256,6 +2256,9 @@ live composition remains pending.
    through transfer commit instead of re-authorizing after receiver preflight.
    Capability substitution at commit fails without sequence consumption; the
    kernel total remains 624.
+   Queued delivery now rejects an authenticated same-task route before receiver
+   lookup or inbox inspection. A full-inbox ordering test raises the kernel
+   total to 625 while preserving authorization non-disclosure.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.
