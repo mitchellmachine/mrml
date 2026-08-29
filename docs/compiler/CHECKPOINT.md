@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `d4c9e64a`
-  (`build: expose experimental MRML PE linking`)
+- Compiler checkpoint commit: `a83c5fa1`
+  (`compiler: verify public multi-CGU PE linking`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a83c5fa1` adds durable public-route evidence for a genuine pinned
+Windows gnullvm `.rlib`: 18,280 bytes with two metadata members and eight COFF
+codegen-unit objects containing 32 non-inlined functions across eight modules.
+An external entry and the archive link through explicit `link-pe` and pinned
+rust-lld from identical inputs; both outputs return 42. MRML emits 2,048 bytes
+and rust-lld 1,536 bytes. Fifty direct-driver iterations after five warmups
+measured MRML at 5.269 ms median/5.562 ms mean versus rust-lld at 22.565 ms
+median/22.645 ms mean. This is a strong narrow multi-member archive advantage,
+not general `.rlib` or broad speed superiority. `mrml doctor` passed; audit
+retains the unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` (now at the
+concurrently shifted line 1234). Patent review: **NOT_TRIGGERED**.
 
 Commit `d4c9e64a` adds symmetric explicit `link-pe` and `compile-pe` operations
 to the experimental compiler frontend. They route COFF inputs or one supported
