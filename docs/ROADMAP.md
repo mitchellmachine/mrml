@@ -2290,6 +2290,9 @@ live composition remains pending.
    Peer-death publication reserves the complete peer wake set before control-
    state mutation and consumes plans after event publication. Existing coverage
    passes; the total remains 629.
+   Timer preemption now binds the exact live domain slot before scheduler tick
+   mutation and publishes context without a second fallible lookup. Existing
+   coverage passes; the total remains 629.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

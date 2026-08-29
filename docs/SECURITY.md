@@ -305,6 +305,8 @@ access. The security/acceptance gate is canonical in
   inbox publication, eliminating fallible scheduler lookup after commit.
 - Peer-death publication reserves every exact peer wake generation before any
   reciprocal relation or death-event mutation.
+- Timer preemption binds the current unique domain before advancing scheduler
+  state and performs no fallible domain lookup afterward.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

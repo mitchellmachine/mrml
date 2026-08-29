@@ -6985,6 +6985,11 @@ bounded peer set before removing any reciprocal relation or recording any death.
 Each plan is consumed only after its peer's control event is published, removing
 the former fallible post-mutation wake lookup. Existing protocol-violation and
 multi-peer retirement coverage passes; the total remains 629.
+Timer preemption now resolves and binds the current task's unique live domain
+slot before advancing scheduler time. The interrupted context is installed
+directly into that preserved slot after the tick, eliminating a fallible second
+domain lookup after scheduler mutation. Existing preemption coverage passes;
+the total remains 629.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
 and transactional commit for the existing IPC bookkeeping mechanism.
 The service buffered-receive path now resolves one exact empty pending-table

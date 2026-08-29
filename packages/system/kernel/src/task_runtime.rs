@@ -491,14 +491,27 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .scheduler
             .current()
             .ok_or(TaskRuntimeError::NoCurrentTask)?;
-        if self.context(current)?.page_table() != interrupted.page_table() {
+        let slot = self.domain_slot(current)?;
+        if !self.scheduler.contains(current) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        if self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .context
+            .page_table()
+            != interrupted.page_table()
+        {
             return Err(TaskRuntimeError::AddressSpaceMismatch);
         }
         let outcome = self
             .scheduler
             .timer_tick()
             .map_err(TaskRuntimeError::Scheduler)?;
-        *self.context_mut(current)? = interrupted;
+        self.domains[slot]
+            .as_mut()
+            .expect("preemption preserves the prevalidated domain slot")
+            .context = interrupted;
         Ok(outcome)
     }
 
