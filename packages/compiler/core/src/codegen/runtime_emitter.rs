@@ -7614,6 +7614,9 @@ impl<
             };
             return self.evaluate_wide_const_call_argument(tree, operand, source_type);
         }
+        if let ExprKind::InlineConst { operand } = expression.kind {
+            return self.evaluate_wide_const_call_argument(tree, operand, expected_type);
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {

@@ -149,6 +149,8 @@ Bounded block-sequence arguments evaluate and discard one ordinary const prefix
 before resolving a compatible wide tail.
 Same-width `u128`/`i128` casts inside const-call arguments preserve all bits while
 requiring the cast target to match the callee parameter type.
+Inline `const { ... }` arguments delegate their typed wide operand to the same
+bounded resolver and preserve its checked arithmetic behavior.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.

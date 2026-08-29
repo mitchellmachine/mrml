@@ -125,6 +125,8 @@ const MRML_V1_WIDE_UNSIGNED_SEQUENCE_CONST_CALL_SOURCE: &str = "const fn select(
 const MRML_V1_WIDE_SIGNED_SEQUENCE_CONST_CALL_SOURCE: &str = "const fn select(value: i128) -> i128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select({ 7; select(-1512366075204170947332355369683137040) }) }";
 const MRML_V1_WIDE_UNSIGNED_CAST_CONST_CALL_SOURCE: &str = "const fn signed(value: i128) -> i128 { value } const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { select(signed(-1512366075204170947332355369683137040i128) as u128) }";
 const MRML_V1_WIDE_SIGNED_CAST_CONST_CALL_SOURCE: &str = "const fn unsigned(value: u128) -> u128 { value } const fn select(value: i128) -> i128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select(unsigned(340282366920938463463374607431768211455u128) as i128) }";
+const MRML_V1_WIDE_UNSIGNED_INLINE_CONST_CALL_SOURCE: &str = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { select(const { select(1512366075204170947332355369683137040) + 17 }) }";
+const MRML_V1_WIDE_SIGNED_INLINE_CONST_CALL_SOURCE: &str = "const fn select(value: i128) -> i128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select(const { select(-1512366075204170947332355369683137040) - 17 }) }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1917,6 +1919,8 @@ fn mrml_v1_wide_const_calls_match_oracle_words() {
         MRML_V1_WIDE_SIGNED_SEQUENCE_CONST_CALL_SOURCE,
         MRML_V1_WIDE_UNSIGNED_CAST_CONST_CALL_SOURCE,
         MRML_V1_WIDE_SIGNED_CAST_CONST_CALL_SOURCE,
+        MRML_V1_WIDE_UNSIGNED_INLINE_CONST_CALL_SOURCE,
+        MRML_V1_WIDE_SIGNED_INLINE_CONST_CALL_SOURCE,
     ] {
         let code = compile(source);
         let returned = unsafe { call_mrml_v1_wide_return(code.pointer, 0) };
