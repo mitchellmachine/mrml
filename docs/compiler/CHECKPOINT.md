@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `16665141`
-  (`compiler: select largest COFF text definitions`)
+- Compiler checkpoint commit: `a2b3f5c3`
+  (`compiler: validate COFF unwind associations`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,26 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a2b3f5c3` inventories bounded COFF COMDAT section definitions once per
+object and validates that associative chains have in-range COMDAT parents,
+terminate at a non-associative root, and contain no cycles. PE unwind decoding
+binds explicit associative `.pdata$...` and `.xdata$...` companions to the text
+section named by their relocations and supports the conventional gnullvm/MinGW
+implicit `.pdata$X`/`.xdata$X` to `.text$X` relationship. Reusing the inventory
+avoids a symbol-table rescan for every text fragment. Synthetic tests cover
+valid roots, malformed metadata, bad parents, cycles, detached companions, and
+the existing selection policies. Windows passed 754 compiler-core unit tests,
+the four integration groups, and seven driver tests; Arch Linux passed the full
+compiler-driver and dependent-package graph. The exact stateful gnullvm probe
+returns 42 through both linkers: MRML emits 2,560 bytes versus rust-lld's 3,584,
+with 1,028 bytes of zero fill and two forwarding pointers. Fifty measured links
+after five warmups produced 9.569 ms median/11.661 ms mean for MRML versus
+27.049 ms median/28.860 ms mean for rust-lld on this narrow workload. General
+associative read-only payload selection remains incomplete. `mrml doctor`
+passed; audit retains the unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at
+`semantic_execution.rs:1246`. Patent review: **NOT_TRIGGERED**; see
+`docs/patents/REVIEW_LOG.md`.
 
 Commit `16665141` adds bounded COFF text `LARGEST` selection before layout.
 The largest raw text definition wins with deterministic leftmost ties; replacing
