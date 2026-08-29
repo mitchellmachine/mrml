@@ -38,7 +38,8 @@ commit email address.
 MRML was originally hosted at
 [github.com/mitchellrenouf/mrml](https://github.com/mitchellrenouf/mrml). I
 decided that I no longer agreed with Microsoft hosting the project and wanted
-the code hosted outside the United States.
+the code hosted outside the United States. The GitHub account that hosted the
+repository has since been deleted.
 
 ## Project scope
 
