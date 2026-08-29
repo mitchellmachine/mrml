@@ -89,6 +89,10 @@ const MRML_V1_WIDE_UNSIGNED_SATURATING_SUBTRACT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.saturating_sub(17) }";
 const MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.saturating_sub(17) }";
+const MRML_V1_WIDE_UNSIGNED_ROTATE_LEFT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, distance: u32) -> u128 { input.rotate_left(distance) }";
+const MRML_V1_WIDE_SIGNED_ROTATE_RIGHT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.rotate_right(distance) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1314,6 +1318,33 @@ fn mrml_v1_wide_saturating_subtraction_matches_both_oracle_words() {
             .into_iter()
             .flat_map(|input| {
                 let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_rotations_match_both_oracle_words() {
+    let distances = [0u32, 1, 63, 64, 65, 127, 128, 129, 255];
+    for (source, input, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_ROTATE_LEFT_SOURCE,
+            1512366075204170947332355369683137040u128,
+            "for distance in [0u32, 1, 63, 64, 65, 127, 128, 129, 255] { let returned = probe(1512366075204170947332355369683137040u128, distance); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_ROTATE_RIGHT_SOURCE,
+            (-1512366075204170947332355369683137040i128) as u128,
+            "for distance in [0u32, 1, 63, 64, 65, 127, 128, 129, 255] { let returned = probe(-1512366075204170947332355369683137040i128, distance); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = distances
+            .into_iter()
+            .flat_map(|distance| {
+                let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, input, distance) };
                 [returned as u64, (returned >> 64) as u64]
             })
             .collect::<Vec<_>>();

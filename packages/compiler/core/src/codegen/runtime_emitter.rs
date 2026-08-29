@@ -7390,6 +7390,47 @@ impl<
                 self.emit_wide_saturating_subtract(layout)
             };
         }
+        if let ExprKind::IntegerRotate {
+            base,
+            distance,
+            left,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let distance_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                distance,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(base_type, expected_type)
+                || !matches!(
+                    distance_type,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit_expression(tree, distance, 1)?;
+            self.emit(&[0x48, 0x89, 0xc1, 0x5a, 0x58])?;
+            self.evaluation_depth -= 2;
+            return self.emit_wide_rotate(left);
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,
@@ -8188,6 +8229,22 @@ impl<
             self.emit(&[0x31, 0xc0, 0x31, 0xd2])?;
         }
         self.patch_forward_branch(no_overflow)
+    }
+
+    fn emit_wide_rotate(&mut self, left: bool) -> Result<(), CodegenError> {
+        self.emit(&[0x83, 0xe1, 0x7f, 0x48, 0x83, 0xf9, 0x40])?;
+        let below_word = self.emit_forward_branch(0x82)?;
+        self.emit(&[0x48, 0x87, 0xd0, 0x48, 0x83, 0xe9, 0x40])?;
+        self.patch_forward_branch(below_word)?;
+        if left {
+            self.emit(&[
+                0x49, 0x89, 0xd0, 0x48, 0x0f, 0xa5, 0xc2, 0x4c, 0x0f, 0xa5, 0xc0,
+            ])
+        } else {
+            self.emit(&[
+                0x49, 0x89, 0xc0, 0x48, 0x0f, 0xad, 0xd0, 0x4c, 0x0f, 0xad, 0xc2,
+            ])
+        }
     }
 
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {

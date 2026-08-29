@@ -189,6 +189,8 @@ other inputs use the corresponding exact two-word negation or absolute value.
 maximum according to the direction of signed overflow.
 `saturating_sub` selects unsigned zero on borrow and uses the same signed-bound
 selection for signed subtraction overflow.
+Wide rotations mask the distance to 127, exchange the low/high words for the
+upper half of that range, and use paired cross-word shifts in either direction.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
