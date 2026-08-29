@@ -258,6 +258,8 @@ access. The security/acceptance gate is canonical in
   head to tail; exhaustive bounded-state coverage rejects every other topology.
 - Delegation edges require matching live source/destination objects, DELEGATE on
   the source, and destination rights no broader than the source before graph use.
+- Cross-domain attenuation rejects zero-right capability children before any
+  receiver slot is published.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

@@ -813,6 +813,27 @@ mod tests {
     }
 
     #[test]
+    fn transfer_rejects_zero_rights_without_destination_mutation() {
+        let mut source = CapabilitySpace::<1>::new();
+        let delegated = source
+            .insert(ObjectId(10), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut destination = CapabilitySpace::<1>::new();
+
+        assert_eq!(
+            Message::transfer(
+                b"zero",
+                &[(delegated, Rights::NONE)],
+                &source,
+                &mut destination,
+            )
+            .err(),
+            Some(IpcError::Unauthorized)
+        );
+        assert!(destination.insert(ObjectId(11), Rights::READ).is_ok());
+    }
+
+    #[test]
     fn receiver_authorizes_exact_transferred_capability_shape_and_live_rights() {
         let mut source = CapabilitySpace::<2>::new();
         let shared = source

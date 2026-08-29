@@ -192,6 +192,7 @@ impl<const N: usize> CapabilitySpace<N> {
         requested: Rights,
         destination: &mut CapabilitySpace<M>,
     ) -> Result<Capability, CapabilityError> {
+        Rights::from_bits(requested.bits())?;
         let source = self.entry(capability)?;
         if !source.rights.contains(Rights::DELEGATE) {
             return Err(CapabilityError::DelegationDenied);
@@ -214,6 +215,7 @@ impl<const N: usize> CapabilitySpace<N> {
             return Err(CapabilityError::Invalid);
         }
         for (capability, rights) in requested.iter().copied() {
+            Rights::from_bits(rights.bits())?;
             let source = self.entry(capability)?;
             if !source.rights.contains(Rights::DELEGATE) {
                 return Err(CapabilityError::DelegationDenied);

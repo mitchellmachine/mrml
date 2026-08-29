@@ -6854,6 +6854,9 @@ semantics: the source must retain DELEGATE, source and destination objects must
 match, and destination rights must be a subset of source rights. A focused
 live-handle substitution test fails before endpoint sequence mutation and raises
 the Linux kernel total to 615.
+Single and batched attenuation now reject zero requested rights before
+destination mutation. A focused IPC test proves the destination slot remains
+fully reusable and raises the Linux kernel total to 616.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it
