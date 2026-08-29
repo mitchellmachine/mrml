@@ -165,6 +165,8 @@ const MRML_V1_WIDE_UNSIGNED_POWER_OF_TWO_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { input.is_power_of_two() as u64 }";
 const MRML_V1_WIDE_UNSIGNED_IS_MULTIPLE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, divisor: u128) -> u64 { input.is_multiple_of(divisor) as u64 }";
+const MRML_V1_WIDE_UNSIGNED_MIDPOINT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.midpoint(right) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -1034,6 +1036,40 @@ unsafe fn call_mrml_v1_two_wide_to_u64(function: *const u8, left: u128, right: u
     }
     let _ = discarded;
     returned
+}
+
+unsafe fn call_mrml_v1_two_wide_return(function: *const u8, left: u128, right: u128) -> u128 {
+    let returned_low: u64;
+    let returned_high: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            in("rcx") left as u64,
+            inlateout("rdx") (left >> 64) as u64 => returned_high,
+            in("r8") right as u64,
+            in("r9") (right >> 64) as u64,
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") left as u64,
+            in("rsi") (left >> 64) as u64,
+            inlateout("rdx") right as u64 => returned_high,
+            in("rcx") (right >> 64) as u64,
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    (u128::from(returned_high) << 64) | u128::from(returned_low)
 }
 
 #[test]
@@ -1987,6 +2023,34 @@ fn mrml_v1_wide_multiple_predicate_matches_the_oracle() {
         rustc_mrml_v1_observations(
             source,
             "for (input, divisor) in [(0u128, 0u128), (1, 0), (0, 17), ((1u128 << 64) + 1, (1u128 << 64) + 1), (u128::MAX, 257), (u128::MAX - 1, 257)] { println!(\"{}\", probe(input, divisor)); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_unsigned_midpoints_match_both_oracle_words() {
+    let source = MRML_V1_WIDE_UNSIGNED_MIDPOINT_SOURCE;
+    let code = compile(source);
+    let inputs = [
+        (0u128, 0u128),
+        (0, 1),
+        (1, 2),
+        (u64::MAX as u128, (u64::MAX as u128) + 1),
+        (1u128 << 127, u128::MAX),
+        (0, u128::MAX),
+    ];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(left, right)| {
+            let returned = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            source,
+            "for (left, right) in [(0u128, 0u128), (0, 1), (1, 2), (u64::MAX as u128, (u64::MAX as u128) + 1), (1u128 << 127, u128::MAX), (0, u128::MAX)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
     );
 }

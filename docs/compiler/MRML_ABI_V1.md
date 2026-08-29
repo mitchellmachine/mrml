@@ -217,6 +217,8 @@ Wide unsigned `is_power_of_two` accepts exactly one set bit across either word
 and returns a normalized scalar boolean.
 Wide unsigned `is_multiple_of` uses the two-word remainder path for nonzero
 divisors and preserves Rust's special zero-divisor predicate result.
+Wide unsigned midpoint uses the overflow-free bitwise average across both
+words, including the carry between them.
 Wide signed sign predicates read negativity from the high word and require a
 nonzero two-word value for positivity, again returning a normalized scalar.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but

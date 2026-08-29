@@ -7499,6 +7499,33 @@ impl<
             let result = self.emit_wide_shift(layout, left);
             self.overflow_checks = previous_overflow_checks;
             return result;
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
+            transform: crate::expression::IntegerPairTransform::Midpoint,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, expected_type)?;
+            self.emit(&[
+                0x4d, 0x89, 0xc1, 0x49, 0x21, 0xc1, 0x49, 0x89, 0xca, 0x49, 0x21, 0xd2,
+                0x49, 0x31, 0xc0, 0x48, 0x31, 0xd1, 0x49, 0x0f, 0xac, 0xc8, 1, 0x48, 0xd1,
+                0xe9, 0x4d, 0x01, 0xc1, 0x49, 0x11, 0xca, 0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xd2,
+            ])?;
+            return Ok(());
         } else if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::BitAnd
