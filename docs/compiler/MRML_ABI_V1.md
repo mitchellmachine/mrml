@@ -286,6 +286,11 @@ Wide unsigned `extract_bits` scans exactly 128 source positions from most to
 least significant. Each selected mask position shifts the compressed two-word
 result and appends the corresponding source bit, preserving source order without
 an unbounded or data-dependent allocation. Signed wide operands remain rejected.
+Wide unsigned `deposit_bits` first counts the selected mask positions, aligns
+the corresponding low source bits, and then scans exactly 128 destination
+positions from most to least significant. It scatters only the selected source
+bits with bounded register and private-stack state. Signed wide operands remain
+rejected. The pinned oracle covers empty, full, low-word, and cross-word masks.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

@@ -7739,6 +7739,65 @@ impl<
         } else if let ExprKind::IntegerPairTransform {
             base,
             other,
+            transform: crate::expression::IntegerPairTransform::DepositBits,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, expected_type)?;
+            self.emit(&[
+                0x48, 0x83, 0xec, 8, 0x48, 0xc7, 0x04, 0x24, 0, 0, 0, 0, 0x49, 0x89, 0xc1,
+                0x49, 0x89, 0xd2, 0x41, 0xbb, 128, 0, 0, 0,
+            ])?;
+            let count_loop = self.length;
+            self.emit(&[0x4d, 0x85, 0xd2])?;
+            let unselected = self.emit_forward_branch(0x89)?;
+            self.emit(&[0x48, 0x83, 0x04, 0x24, 1])?;
+            self.patch_forward_branch(unselected)?;
+            self.emit(&[0x49, 0xd1, 0xe1, 0x49, 0xd1, 0xd2, 0x41, 0xff, 0xcb])?;
+            let counted = self.emit_forward_branch(0x84)?;
+            self.emit_backward_branch(count_loop)?;
+            self.patch_forward_branch(counted)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x1c, 0x24, 0x49, 0xf7, 0xdb, 0x49, 0x81, 0xc3, 128, 0, 0, 0,
+            ])?;
+            let align_loop = self.length;
+            self.emit(&[0x4d, 0x85, 0xdb])?;
+            let aligned = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x49, 0xd1, 0xe0, 0x48, 0xd1, 0xd1, 0x49, 0xff, 0xcb])?;
+            self.emit_backward_branch(align_loop)?;
+            self.patch_forward_branch(aligned)?;
+            self.emit(&[0x4d, 0x31, 0xc9, 0x4d, 0x31, 0xd2, 0x41, 0xbb, 128, 0, 0, 0])?;
+            let deposit_loop = self.length;
+            self.emit(&[0x49, 0xd1, 0xe1, 0x49, 0xd1, 0xd2, 0x48, 0x85, 0xd2])?;
+            let empty = self.emit_forward_branch(0x89)?;
+            self.emit(&[0x48, 0x85, 0xc9])?;
+            let clear = self.emit_forward_branch(0x89)?;
+            self.emit(&[0x49, 0x83, 0xc9, 1])?;
+            self.patch_forward_branch(clear)?;
+            self.emit(&[0x49, 0xd1, 0xe0, 0x48, 0xd1, 0xd1])?;
+            self.patch_forward_branch(empty)?;
+            self.emit(&[0x48, 0xd1, 0xe0, 0x48, 0xd1, 0xd2, 0x41, 0xff, 0xcb])?;
+            let deposited = self.emit_forward_branch(0x84)?;
+            self.emit_backward_branch(deposit_loop)?;
+            self.patch_forward_branch(deposited)?;
+            self.emit(&[0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xd2, 0x48, 0x83, 0xc4, 8])?;
+            return Ok(());
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
             transform: crate::expression::IntegerPairTransform::CarrylessMultiply,
         } = expression.kind
         {
