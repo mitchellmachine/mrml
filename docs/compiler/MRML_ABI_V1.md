@@ -253,6 +253,10 @@ retain the divisor in bounded temporary stack storage, and trap a zero divisor.
 restore quotient/remainder signs, and unconditionally trap the `MIN / -1` case.
 Binary division/remainder and their wide-local compound assignments share this
 fixed-step lowering and its zero-divisor and signed-overflow traps.
+Wide `div_floor` and `div_ceil` preserve one evaluation of each operand, retain
+both quotient and remainder from the bounded divider, and adjust a non-exact
+quotient according to the divisor and remainder signs. Unsigned ceiling adds
+one only for a nonzero remainder; unsigned floor is the ordinary quotient.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
@@ -325,6 +329,9 @@ the divisor through `u128::MAX`; a zero divisor must take the isolated trap.
 Signed quotient and remainder by `-17` are compared for both operand signs and
 the exact `i128::MIN`/`i128::MAX` boundaries; both `MIN / -1` and `MIN % -1`
 must take isolated traps.
+Unsigned and signed wide floor/ceiling division are compared across exact and
+non-exact quotients, opposite-sign pairs, the 64-bit word boundary, and the
+signed and unsigned extrema supported without overflow.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
 Wide values returned through a block sequence are also compared word-for-word.
 Immutable wide-local round trips are compared word-for-word.

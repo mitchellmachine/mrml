@@ -181,6 +181,14 @@ const MRML_V1_WIDE_UNSIGNED_ABSOLUTE_DIFFERENCE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.abs_diff(right) }";
 const MRML_V1_WIDE_SIGNED_ABSOLUTE_DIFFERENCE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> u128 { left.abs_diff(right) }";
+const MRML_V1_WIDE_UNSIGNED_DIVIDE_FLOOR_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.div_floor(right) }";
+const MRML_V1_WIDE_UNSIGNED_DIVIDE_CEILING_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.div_ceil(right) }";
+const MRML_V1_WIDE_SIGNED_DIVIDE_FLOOR_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.div_floor(right) }";
+const MRML_V1_WIDE_SIGNED_DIVIDE_CEILING_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.div_ceil(right) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -592,9 +600,14 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     #[cfg(not(target_os = "windows"))]
     let executable = directory.path().join("shared");
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
+    let oracle_features = if source.contains(".div_floor(") || source.contains(".div_ceil(") {
+        "#![feature(int_roundings)]\n"
+    } else {
+        ""
+    };
     fs::write(
         &shared_source,
-        format!("{source}\nfn main() {{ {driver} }}"),
+        format!("{oracle_features}{source}\nfn main() {{ {driver} }}"),
     )
     .expect("write shared oracle source");
     let mut facade_command = Command::new("rustup");
@@ -2159,6 +2172,69 @@ fn mrml_v1_wide_absolute_differences_match_both_oracle_words() {
             "for (left, right) in [(0u128, 0u128), (1, 2), (2, 1), (u64::MAX as u128, (u64::MAX as u128) + 1), (i128::MIN as u128, i128::MAX as u128), (u128::MAX, 0)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"
         };
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_rounded_division_matches_both_oracle_words() {
+    let unsigned_inputs = [
+        (0u128, 1u128),
+        (1, 2),
+        (u64::MAX as u128, (u64::MAX as u128) + 1),
+        (u128::MAX, 257),
+        (u128::MAX, u128::MAX),
+    ];
+    for source in [
+        MRML_V1_WIDE_UNSIGNED_DIVIDE_FLOOR_SOURCE,
+        MRML_V1_WIDE_UNSIGNED_DIVIDE_CEILING_SOURCE,
+    ] {
+        let code = compile(source);
+        let actual = unsigned_inputs
+            .into_iter()
+            .flat_map(|(left, right)| {
+                let returned = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            rustc_mrml_v1_observations(
+                source,
+                "for (left, right) in [(0u128, 1u128), (1, 2), (u64::MAX as u128, (u64::MAX as u128) + 1), (u128::MAX, 257), (u128::MAX, u128::MAX)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+            )
+        );
+    }
+
+    let signed_inputs = [
+        (0i128, 1i128),
+        (7, 3),
+        (-7, 3),
+        (7, -3),
+        (-7, -3),
+        (i128::MIN, 3),
+        (i128::MAX, -3),
+    ];
+    for source in [
+        MRML_V1_WIDE_SIGNED_DIVIDE_FLOOR_SOURCE,
+        MRML_V1_WIDE_SIGNED_DIVIDE_CEILING_SOURCE,
+    ] {
+        let code = compile(source);
+        let actual = signed_inputs
+            .into_iter()
+            .flat_map(|(left, right)| {
+                let returned = unsafe {
+                    call_mrml_v1_two_wide_return(code.pointer, left as u128, right as u128)
+                };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            rustc_mrml_v1_observations(
+                source,
+                "for (left, right) in [(0i128, 1i128), (7, 3), (-7, 3), (7, -3), (-7, -3), (i128::MIN, 3), (i128::MAX, -3)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+            )
+        );
     }
 }
 

@@ -7643,6 +7643,72 @@ impl<
             ])?;
             self.patch_forward_branch(done)?;
             return Ok(());
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
+            transform:
+                transform @ (crate::expression::IntegerPairTransform::DivideFloor
+                | crate::expression::IntegerPairTransform::DivideCeiling),
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !matches!(
+                base_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, expected_type)?;
+            self.emit(&[0x41, 0x50, 0x51, 0x50, 0x52])?;
+            self.evaluation_depth += 4;
+            self.emit_wide_divide_or_remainder(layout, true, false)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit(&[
+                0x4c, 0x8b, 0x44, 0x24, 40, 0x48, 0x8b, 0x4c, 0x24, 32, 0x48, 0x8b,
+                0x44, 0x24, 24, 0x48, 0x8b, 0x54, 0x24, 16,
+            ])?;
+            self.emit_wide_divide_or_remainder(layout, false, false)?;
+            self.emit(&[
+                0x48, 0x8b, 0x0c, 0x24, 0x4c, 0x8b, 0x44, 0x24, 8, 0x4c, 0x8b, 0x5c,
+                0x24, 16, 0x48, 0x83, 0xc4, 48,
+            ])?;
+            self.evaluation_depth -= 6;
+            self.emit(&[0x4d, 0x89, 0xc1, 0x49, 0x09, 0xc9])?;
+            let exact = self.emit_forward_branch(0x84)?;
+            if layout.signed {
+                self.emit(&[0x49, 0x31, 0xcb, 0x4d, 0x85, 0xdb])?;
+                let no_adjustment = self.emit_forward_branch(match transform {
+                    crate::expression::IntegerPairTransform::DivideFloor => 0x89,
+                    crate::expression::IntegerPairTransform::DivideCeiling => 0x88,
+                    _ => unreachable!(),
+                })?;
+                match transform {
+                    crate::expression::IntegerPairTransform::DivideFloor => {
+                        self.emit(&[0x48, 0x83, 0xe8, 1, 0x48, 0x83, 0xda, 0])?;
+                    }
+                    crate::expression::IntegerPairTransform::DivideCeiling => {
+                        self.emit(&[0x48, 0x83, 0xc0, 1, 0x48, 0x83, 0xd2, 0])?;
+                    }
+                    _ => unreachable!(),
+                }
+                self.patch_forward_branch(no_adjustment)?;
+            } else if transform == crate::expression::IntegerPairTransform::DivideCeiling {
+                self.emit(&[0x48, 0x83, 0xc0, 1, 0x48, 0x83, 0xd2, 0])?;
+            }
+            self.patch_forward_branch(exact)?;
+            return Ok(());
         } else if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::BitAnd
