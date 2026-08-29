@@ -338,6 +338,11 @@ Unsafe wide `unchecked_shl` and `unchecked_shr` reuse the two-word logical or
 signed-arithmetic shift lowering without a distance trap. Oracle execution uses
 only distances below 128, including 63/64/127 word boundaries; larger distances
 violate Rust's unchecked-shift precondition and are outside the safe contract.
+Pinned-nightly wide `unchecked_shl_exact` and `unchecked_shr_exact` share that
+lowering but additionally require every shifted-out bit to be redundant for the
+operation. Oracle vectors satisfy both the distance and exactness preconditions
+at the 63/64/127 boundaries; the compiler does not turn invalid calls into a
+defined or safe operation.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

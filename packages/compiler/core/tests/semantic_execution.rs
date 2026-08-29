@@ -265,6 +265,10 @@ const MRML_V1_WIDE_UNSIGNED_UNCHECKED_SHIFT_LEFT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(input: u128, distance: u32) -> u128 { input.unchecked_shl(distance) }";
 const MRML_V1_WIDE_SIGNED_UNCHECKED_SHIFT_RIGHT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(input: i128, distance: u32) -> i128 { input.unchecked_shr(distance) }";
+const MRML_V1_WIDE_UNSIGNED_UNCHECKED_EXACT_SHIFT_LEFT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(input: u128, distance: u32) -> u128 { input.unchecked_shl_exact(distance) }";
+const MRML_V1_WIDE_SIGNED_UNCHECKED_EXACT_SHIFT_RIGHT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(input: i128, distance: u32) -> i128 { input.unchecked_shr_exact(distance) }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -686,7 +690,11 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     #[cfg(not(target_os = "windows"))]
     let executable = directory.path().join("shared");
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
-    let oracle_features = if source.contains(".unchecked_add(")
+    let oracle_features = if source.contains(".unchecked_shl_exact(")
+        || source.contains(".unchecked_shr_exact(")
+    {
+        "#![feature(exact_bitshifts)]\n"
+    } else if source.contains(".unchecked_add(")
         || source.contains(".unchecked_sub(")
         || source.contains(".unchecked_mul(")
         || source.contains(".unchecked_neg(")
@@ -3112,6 +3120,44 @@ fn mrml_v1_wide_unchecked_shifts_match_valid_oracle_inputs() {
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_SIGNED_UNCHECKED_SHIFT_RIGHT_SOURCE, "for (input, distance) in [(0i128, 0u32), (-1, 1), (i128::MIN, 63), (i128::MIN, 64), (i128::MIN, 127)] { let returned = unsafe { probe(input, distance) }; println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
+}
+
+#[test]
+fn mrml_v1_wide_unchecked_exact_shifts_match_valid_oracle_inputs() {
+    let unsigned_inputs = [
+        (0u128, 0u32),
+        (1, 1),
+        (3, 63),
+        ((1u128 << 63) | 1, 64),
+        (1, 127),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_UNCHECKED_EXACT_SHIFT_LEFT_SOURCE);
+    let actual = unsigned_inputs
+        .into_iter()
+        .flat_map(|(input, distance)| {
+            let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, input, distance) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_UNSIGNED_UNCHECKED_EXACT_SHIFT_LEFT_SOURCE, "for (input, distance) in [(0u128, 0u32), (1, 1), (3, 63), ((1u128 << 63) | 1, 64), (1, 127)] { let returned = unsafe { probe(input, distance) }; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
+    let signed_inputs = [
+        (0i128, 0u32),
+        (2, 1),
+        (1i128 << 126, 63),
+        (i128::MIN, 64),
+        (i128::MIN, 127),
+    ];
+    let code = compile(MRML_V1_WIDE_SIGNED_UNCHECKED_EXACT_SHIFT_RIGHT_SOURCE);
+    let actual = signed_inputs
+        .into_iter()
+        .flat_map(|(input, distance)| {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(code.pointer, input as u128, distance)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_SIGNED_UNCHECKED_EXACT_SHIFT_RIGHT_SOURCE, "for (input, distance) in [(0i128, 0u32), (2, 1), (1i128 << 126, 63), (i128::MIN, 64), (i128::MIN, 127)] { let returned = unsafe { probe(input, distance) }; println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
 }
 
 #[test]
