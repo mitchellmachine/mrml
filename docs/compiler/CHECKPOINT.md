@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a848495d`
-  (`compiler: order ELF constructor families`)
+- Compiler checkpoint commit: `858d4606`
+  (`compiler: coalesce ELF common symbols`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,27 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `858d4606` implements bounded conventional ELF `SHN_COMMON` resolution
+through object inventory, reachability, selected definitions, layout, and
+relocation. Regular global definitions override COMMON, COMMON overrides
+regular weak definitions, and repeated tentative declarations coalesce to one
+zero-filled RW allocation using their maximum size and power-of-two alignment.
+Size/alignment arithmetic is checked, alignment is capped at one page, function
+symbols and malformed declarations fail closed, and COMMON extends memory but
+not file payload. Independently authored Rust 2024 objects declared 8-byte/
+alignment-8 and 24-byte/alignment-32 forms; MRML and exact pinned gnullvm
+rust-lld both observed zero initialization, a subsequent writable value, and
+exit 42. With an initialized regular definition present, both selected its
+value and exited 42. MRML emitted 8,192-byte and 8,200-byte executables versus
+rust-lld's 1,480-byte and 1,456-byte outputs. Windows and native Arch Linux each
+passed 742 core tests, integrations of 2/10/351/51, and five driver tests.
+`mrml doctor` passed. `mrml audit` advanced past the two existing linker test
+subprocess sites registered by this milestone, then stopped at fingerprint
+`fnv1a64:0fe5cf1836d3e0dc` in the concurrently modified
+`semantic_execution.rs`; no audit success is claimed. TLS, dynamic symbols,
+thin archives, production linker selection, and broad performance superiority
+remain unproven. Patent review: **NOT_TRIGGERED**.
 
 Commit `a848495d` extends retained ELF constructors to canonical unsuffixed
 preinitializers plus priority-suffixed and unsuffixed initializers/finalizers.
