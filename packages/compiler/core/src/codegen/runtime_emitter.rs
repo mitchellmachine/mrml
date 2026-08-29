@@ -7434,6 +7434,57 @@ impl<
         if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
             && matches!(
                 transform,
+                crate::expression::IntegerBitTransform::IsolateHighestOne
+                    | crate::expression::IntegerBitTransform::IsolateLowestOne
+            )
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(base_type, expected_type) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            if transform == crate::expression::IntegerBitTransform::IsolateLowestOne {
+                self.emit(&[0x48, 0x85, 0xc0])?;
+                let high_word = self.emit_forward_branch(0x84)?;
+                self.emit(&[
+                    0x48, 0x89, 0xc1, 0x48, 0xf7, 0xd8, 0x48, 0x21, 0xc8, 0x31, 0xd2,
+                ])?;
+                let done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(high_word)?;
+                self.emit(&[
+                    0x48, 0x89, 0xd1, 0x48, 0xf7, 0xda, 0x48, 0x21, 0xca, 0x31, 0xc0,
+                ])?;
+                self.patch_forward_branch(done)?;
+            } else {
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                let low_word = self.emit_forward_branch(0x84)?;
+                self.emit(&[
+                    0x48, 0x0f, 0xbd, 0xca, 0x31, 0xc0, 0xba, 1, 0, 0, 0, 0x48, 0xd3,
+                    0xe2,
+                ])?;
+                let done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(low_word)?;
+                self.emit(&[0x31, 0xd2, 0x48, 0x85, 0xc0])?;
+                let zero = self.emit_forward_branch(0x84)?;
+                self.emit(&[
+                    0x48, 0x0f, 0xbd, 0xc8, 0xb8, 1, 0, 0, 0, 0x48, 0xd3, 0xe0,
+                ])?;
+                self.patch_forward_branch(zero)?;
+                self.patch_forward_branch(done)?;
+            }
+            return Ok(());
+        }
+        if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
+            && matches!(
+                transform,
                 crate::expression::IntegerBitTransform::SwapBytes
                     | crate::expression::IntegerBitTransform::ToBigEndian
                     | crate::expression::IntegerBitTransform::ToLittleEndian
