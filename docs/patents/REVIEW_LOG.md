@@ -10277,6 +10277,16 @@ does not implement NVMe registers, commands, queues, completion processing,
 DMA, caching, scheduling, or another storage algorithm. This technical screen
 is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded NVMe controller admission and disable
+
+Patent review: **NOT_TRIGGERED**. This increment decodes conventional fixed
+NVMe capability/version fields, applies checked bounds, clears the standard
+controller-enable bit, and polls the standard ready/fatal status bits under the
+controller-advertised timeout. It implements no command, queue layout,
+completion processing, namespace behavior, DMA, caching, scheduling, or another
+storage algorithm. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

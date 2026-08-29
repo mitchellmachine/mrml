@@ -423,11 +423,15 @@ aligned, non-prefetchable 64-bit controller BAR from an immutable platform-
 enumerator snapshot. A separately authorized exact controller capability now
 prepares a generation-bound, supervisor-only read/write NX mapping through a
 backend that may reject without publication; missing, excess, stale, or
-substituted authority and invalid ranges fail before the backend. Native PCI
-enumeration, concrete MMIO installation, controller registers, admin and I/O queues,
+substituted authority and invalid ranges fail before the backend. A bounded
+controller gate validates `CAP`/`VS`, checked queue, page, doorbell-stride, and
+timeout limits, requires the NVM command set, clears `CC.EN`, and waits for
+`CSTS.RDY` to clear with a fixed-delay bounded poll. Fatal state, timeout, and
+register uncertainty publish no snapshot. Native PCI enumeration, concrete MMIO
+installation, admin and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Nine focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. Thirteen focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current
