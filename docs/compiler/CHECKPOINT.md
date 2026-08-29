@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `858d4606`
-  (`compiler: coalesce ELF common symbols`)
+- Compiler checkpoint commit: `21f59d59`
+  (`compiler: link static ELF TLS`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `21f59d59` admits exact allocated `.tdata.*` and `.tbss.*` sections,
+retains typed `STT_TLS` definitions, applies checked local-exec
+`R_X86_64_TPOFF32` offsets from the end of the contiguous TLS block, and emits
+an aligned read-only `PT_TLS` header with distinct file and memory extents.
+General-dynamic and initial-exec relocation families remain fail-closed. The
+independently authored Rust 2024 probe explicitly installed a two-word test
+thread block through hosted Linux `arch_prctl`, observed initialized TLS value
+7 and zero TLS value 0, wrote 20 and 22, and exited 42 through MRML and exact
+pinned gnullvm rust-lld. Both program headers reported an eight-byte file
+template, 16-byte memory template, and eight-byte alignment; MRML emitted 8,216
+bytes and rust-lld emitted 1,960 bytes. This does not claim production runtime
+thread-pointer or TLS lifecycle integration. Windows and native Arch Linux
+each passed 742 core tests, integrations of 2/10/351/51, and five driver tests.
+Formatting and `mrml doctor` passed. `mrml audit` still stops at the unrelated
+concurrently modified semantic-execution command fingerprint
+`fnv1a64:0fe5cf1836d3e0dc`; no audit success is claimed. Patent review:
+**NOT_TRIGGERED**.
 
 Commit `858d4606` implements bounded conventional ELF `SHN_COMMON` resolution
 through object inventory, reachability, selected definitions, layout, and
