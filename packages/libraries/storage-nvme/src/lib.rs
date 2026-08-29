@@ -9,6 +9,7 @@ mod nvme_controller;
 mod nvme_discovery;
 mod nvme_mapping;
 mod nvme_queue_dma;
+mod nvme_queue_program;
 
 pub use nvme_controller::{
     disable_nvme_controller, NvmeControllerError, NvmeControllerFailure, NvmeControllerRegisterIo,
@@ -29,4 +30,9 @@ pub use nvme_queue_dma::{
     NvmeAdminQueueDmaRequest, NvmeAdminQueueDmaRevocationError, NvmeDmaRegion,
     NVME_ADMIN_COMPLETION_BYTES, NVME_ADMIN_QUEUE_DEPTH_LIMIT, NVME_ADMIN_SUBMISSION_BYTES,
     NVME_QUEUE_PAGE_BYTES,
+};
+pub use nvme_queue_program::{
+    enable_nvme_admin_queues, ActiveNvmeAdminQueues, NvmeAdminQueueRegisterIo,
+    NvmeQueueProgramError, NvmeQueueProgramFailure, NVME_ACQ_OFFSET, NVME_AQA_OFFSET,
+    NVME_ASQ_OFFSET,
 };

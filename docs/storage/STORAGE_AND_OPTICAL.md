@@ -432,11 +432,15 @@ then requires exact controller-control and separate pin/map/read/write memory
 capabilities, a supported 4 KiB controller page, at least two queue entries, two
 distinct aligned zero-verified pages, and one nonzero DMA generation. Installation
 is atomic; revocation retains exclusive ownership until device and IOMMU removal
-is confirmed. Native PCI enumeration, concrete MMIO installation, queue-register
-programming, admin commands, and I/O queues,
+is confirmed. The queue-programming gate consumes that exclusive owner only
+while `CC.EN` and `CSTS.RDY` are clear, writes and verifies bounded `AQA`, `ASQ`,
+and `ACQ`, enables the baseline 64-byte submission/16-byte completion entry
+sizes, and publishes active queues only after bounded ready polling. Any write,
+readback, fatal-state, or timeout uncertainty quarantines the DMA layout. Native
+PCI enumeration, concrete MMIO installation, admin commands, and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Seventeen focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. Twenty-one focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current

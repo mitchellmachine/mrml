@@ -10297,6 +10297,17 @@ uncertain removal. It does not encode commands, program queues, process
 completions, identify namespaces, schedule I/O, or implement another storage
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded NVMe admin-queue programming and activation
+
+Patent review: **NOT_TRIGGERED**. This increment writes and verifies the
+conventional fixed NVMe admin queue attributes and base-address registers,
+selects the standard entry sizes, enables the controller, and applies bounded
+ready/fatal polling. It consumes the already capability-authorized queue owner
+and quarantines it after any uncertain mutation. It does not encode commands,
+process completions, identify namespaces, schedule I/O, or implement another
+storage algorithm. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

@@ -32,6 +32,7 @@ pub struct NvmeAdminQueueDmaLayout {
     pub configuration_generation: u64,
     pub mapping_generation: u64,
     pub queue_depth: u16,
+    pub timeout_500ms_units: u16,
     pub submission: NvmeDmaRegion,
     pub completion: NvmeDmaRegion,
     pub dma_generation: u64,
@@ -45,6 +46,15 @@ pub struct InstalledNvmeAdminQueueDma {
 impl InstalledNvmeAdminQueueDma {
     pub const fn layout(&self) -> NvmeAdminQueueDmaLayout {
         self.layout
+    }
+
+    pub(crate) const fn into_layout(self) -> NvmeAdminQueueDmaLayout {
+        self.layout
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_layout(layout: NvmeAdminQueueDmaLayout) -> Self {
+        Self { layout }
     }
 }
 
@@ -141,6 +151,7 @@ pub fn prepare_nvme_admin_queue_dma<const N: usize, B: NvmeAdminQueueDmaBackend>
         configuration_generation: controller.configuration_generation,
         mapping_generation: controller.mapping_generation,
         queue_depth,
+        timeout_500ms_units: controller.timeout_500ms_units,
         submission: request.submission,
         completion: request.completion,
         dma_generation: request.dma_generation,
