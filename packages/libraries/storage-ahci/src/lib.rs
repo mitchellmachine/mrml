@@ -15,6 +15,7 @@ mod ahci_engine;
 mod ahci_mapping;
 mod ahci_port;
 mod ahci_port_program;
+mod service_loop;
 
 use mrml_interface_storage_block_provider_v1::{
     decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
@@ -22,50 +23,54 @@ use mrml_interface_storage_block_provider_v1::{
     ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
 };
 
-pub use ahci_cleanup::{AhciCleanupError, AhciCleanupFailure, reclaim_stopped_ahci_port_dma};
+pub use ahci_cleanup::{reclaim_stopped_ahci_port_dma, AhciCleanupError, AhciCleanupFailure};
 pub use ahci_command::{
-    AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure, AhciDataDmaRegion,
-    PreparedAhciCommand, prepare_ahci_dma_command,
+    prepare_ahci_dma_command, AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure,
+    AhciDataDmaRegion, PreparedAhciCommand,
 };
 pub use ahci_command_memory::{
-    AhciCommandMemoryError, AhciCommandMemoryFailure, AhciCommandMemoryIo,
-    InitializedAhciCommandMemory, initialize_ahci_command_memory,
+    initialize_ahci_command_memory, AhciCommandMemoryError, AhciCommandMemoryFailure,
+    AhciCommandMemoryIo, InitializedAhciCommandMemory,
 };
 pub use ahci_controller::{
-    AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT, AHCI_VERSION_OFFSET,
-    AhciControllerError, AhciControllerSnapshot, AhciRegisterIo, NativeAhciRegisterIo,
-    reset_ahci_controller,
+    reset_ahci_controller, AhciControllerError, AhciControllerSnapshot, AhciRegisterIo,
+    NativeAhciRegisterIo, AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT,
+    AHCI_VERSION_OFFSET,
 };
 pub use ahci_discovery::{
-    AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE, AHCI_PCI_SUBCLASS,
     AhciAbarDescriptor, AhciDiscoveryError, AhciPciFunctionSnapshot, PciFunctionLocation,
+    AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE, AHCI_PCI_SUBCLASS,
 };
 pub use ahci_dma::{
-    AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_ALIGNMENT,
-    AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_ALIGNMENT, AHCI_RECEIVED_FIS_BYTES,
-    AhciDmaRegion, AhciPortDmaBackend, AhciPortDmaError, AhciPortDmaLayout, AhciPortDmaRequest,
-    AhciPortDmaRevocationError, InstalledAhciPortDma, prepare_ahci_port_dma, revoke_ahci_port_dma,
+    prepare_ahci_port_dma, revoke_ahci_port_dma, AhciDmaRegion, AhciPortDmaBackend,
+    AhciPortDmaError, AhciPortDmaLayout, AhciPortDmaRequest, AhciPortDmaRevocationError,
+    InstalledAhciPortDma, AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES,
+    AHCI_COMMAND_TABLE_ALIGNMENT, AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_ALIGNMENT,
+    AHCI_RECEIVED_FIS_BYTES,
 };
 pub use ahci_engine::{
-    AHCI_ENGINE_STOP_POLL_LIMIT, ActiveAhciPort, AhciEngineError, AhciEngineFailure,
-    StoppedAhciPort, start_ahci_port_engine, stop_ahci_port_engine,
+    start_ahci_port_engine, stop_ahci_port_engine, ActiveAhciPort, AhciEngineError,
+    AhciEngineFailure, StoppedAhciPort, AHCI_ENGINE_STOP_POLL_LIMIT,
 };
 pub use ahci_mapping::{
-    AHCI_MMIO_PAGE_BYTES, AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError,
-    map_ahci_abar,
+    map_ahci_abar, AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError,
+    AHCI_MMIO_PAGE_BYTES,
 };
 pub use ahci_port::{
-    AHCI_ATAPI_SIGNATURE, AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE, AHCI_MAX_PORTS,
+    discover_ahci_ports, AhciPortDeviceKind, AhciPortDiscoveryError, AhciPortError,
+    AhciPortLinkSpeed, AhciPortLinkState, AhciPortPowerState, AhciPortSnapshot,
+    AhciPortSnapshotSet, AHCI_ATAPI_SIGNATURE, AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE, AHCI_MAX_PORTS,
     AHCI_PORT_BASE_OFFSET, AHCI_PORT_COMMAND_ISSUE_OFFSET, AHCI_PORT_COMMAND_OFFSET,
     AHCI_PORT_INTERRUPT_ENABLE_OFFSET, AHCI_PORT_MULTIPLIER_SIGNATURE,
     AHCI_PORT_SATA_ACTIVE_OFFSET, AHCI_PORT_SATA_STATUS_OFFSET, AHCI_PORT_SIGNATURE_OFFSET,
-    AHCI_PORT_STRIDE_BYTES, AHCI_SATA_SIGNATURE, AhciPortDeviceKind, AhciPortDiscoveryError,
-    AhciPortError, AhciPortLinkSpeed, AhciPortLinkState, AhciPortPowerState, AhciPortSnapshot,
-    AhciPortSnapshotSet, discover_ahci_ports,
+    AHCI_PORT_STRIDE_BYTES, AHCI_SATA_SIGNATURE,
 };
 pub use ahci_port_program::{
-    AhciPortProgramError, AhciPortProgramFailure, ProgrammedAhciPortDma,
-    program_ahci_port_dma_bases,
+    program_ahci_port_dma_bases, AhciPortProgramError, AhciPortProgramFailure,
+    ProgrammedAhciPortDma,
+};
+pub use service_loop::{
+    AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };
 
 pub struct AhciBlockProvider<'a> {

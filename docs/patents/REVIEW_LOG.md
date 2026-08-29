@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Isolated AHCI enumeration service loop
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
+authenticated IPC, transferred-capability release, bounded scratch, copy-back,
+reply-ordering, and secret-wipe patterns to the already screened AHCI catalog
+operation. It adds no AHCI register, command, DMA, discovery, storage scheduling,
+caching, allocation, naming, encoding, data-layout, or optimization behavior.
+This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Canonical block-provider flush and reset boundaries
 
 Patent review: **NOT_TRIGGERED**. This increment serializes the existing distinct
