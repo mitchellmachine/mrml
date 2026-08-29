@@ -6876,6 +6876,10 @@ Delegation validation now walks each bounded unique-parent ancestry and rejects
 any edge whose destination is already an ancestor of its source. A focused
 two-hop live semantic-cycle test preserves endpoint sequence and raises the
 Linux kernel total to 621.
+The acyclicity gate precomputes each edge's unique parent once, then performs
+bounded index walks. Worst-case validation is quadratic in the fixed 256-edge
+table rather than repeatedly searching ancestry at every step; the same 621
+tests pass.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

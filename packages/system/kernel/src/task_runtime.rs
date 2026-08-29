@@ -1402,6 +1402,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn validate_delegation_graph(&self) -> Result<(), TaskRuntimeError> {
+        let mut parents = [None; MAX_TASK_DELEGATIONS];
         for (index, edge) in self.delegations.iter().enumerate() {
             let Some(edge) = *edge else {
                 continue;
@@ -1430,21 +1431,26 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
-            let destination = (edge.destination_task, edge.destination);
-            let mut ancestor = (edge.source_task, edge.source);
-            for depth in 0..=MAX_TASK_DELEGATIONS {
-                if ancestor == destination {
-                    return Err(TaskRuntimeError::IntegrityFailure);
-                }
-                let Some(parent) = self.delegations.iter().flatten().find(|candidate| {
-                    (candidate.destination_task, candidate.destination) == ancestor
-                }) else {
+            parents[index] = self.delegations.iter().position(|candidate| {
+                candidate.is_some_and(|candidate| {
+                    (candidate.destination_task, candidate.destination)
+                        == (edge.source_task, edge.source)
+                })
+            });
+        }
+        for (index, edge) in self.delegations.iter().enumerate() {
+            if edge.is_none() {
+                continue;
+            }
+            let mut ancestor = Some(index);
+            for _ in 0..MAX_TASK_DELEGATIONS {
+                let Some(current) = ancestor else {
                     break;
                 };
-                if depth == MAX_TASK_DELEGATIONS {
-                    return Err(TaskRuntimeError::IntegrityFailure);
-                }
-                ancestor = (parent.source_task, parent.source);
+                ancestor = parents[current];
+            }
+            if ancestor.is_some() {
+                return Err(TaskRuntimeError::IntegrityFailure);
             }
         }
         Ok(())
