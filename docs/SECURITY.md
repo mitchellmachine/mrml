@@ -155,6 +155,8 @@ access. The security/acceptance gate is canonical in
 - Service query maps only lookup/authorization failure to absence. Split-phase
   restart maps documented policy drift or capacity exhaustion to denial, while
   terminal identity, generation, policy, or runtime errors fail-stop.
+- Capability authorization maps only task-local IPC/capability errors to
+  denial; missing task state or unexpected runtime errors fail-stop.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

@@ -2083,6 +2083,9 @@ live composition remains pending.
    unexpected runtime failures halt. A new canonical
    `service_restart_request_probe` profile builds the enabled branch; it, the
    ordinary service profile, and 593 Linux kernel tests pass.
+   Operation 6 now maps only IPC/capability errors to authorization denial;
+   missing current-task state and unexpected runtime failures halt. Ordinary
+   and accounted service profiles build and 593 kernel tests pass.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

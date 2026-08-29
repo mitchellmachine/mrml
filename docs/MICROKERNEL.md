@@ -6639,6 +6639,11 @@ Generation exhaustion, object/policy inconsistency, and unexpected runtime
 errors halt. A canonical `service_restart_request_probe` feature profile now
 builds this branch with `service-probe`; that profile, the ordinary service
 profile, and the 593-test Linux kernel suite pass.
+Operation 6 now returns detail-free authorization failure only for an IPC/
+capability error. Missing current-task state or any other unexpected runtime
+failure halts rather than being mistaken for ordinary denial. Ordinary and
+accounted component-service profiles cross-build and 593 Linux kernel tests
+pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6652,7 +6657,8 @@ wire alignment/canonical-shape checks in the existing service-image adapter; it
 also reuses the existing capability-release syscall for routine leaf cleanup
 and makes existing revocation/policy integrity failure paths fail-stop; it
 also classifies existing query/restart errors without introducing a new IPC
-algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).
+algorithm or mechanism, and applies the same fail-stop distinction to existing
+capability authorization. See [the patent review log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
