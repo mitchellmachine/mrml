@@ -321,6 +321,18 @@ excluded by the recorded scope. Existing Canadian conditions and outside-
 Canada review requirements remain unchanged. This technical screen is not legal
 advice or patent clearance.
 
+# 2026-08-29 — Fail-closed AHCI SATA-port COMRESET
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment performs the conventional host-software AHCI/SATA COMRESET sequence,
+bounded link/signature/status verification, error clearing, and ordered engine
+restart. MRML adds exact-generation mapping checks, explicit timing authority,
+linear ownership, memory sanitization, and successor media generations. It adds
+no controller/PHY circuitry, NCQ, scheduling, aggregation, inline cryptography,
+or device-controller concurrency behavior excluded by the recorded scope.
+Existing Canadian conditions and outside-Canada review requirements remain
+unchanged. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This

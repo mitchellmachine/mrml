@@ -350,6 +350,12 @@ restoration, fail-closed ownership, and monotonic nonzero durability serials.
 AHCI passes 71 tests on Windows and Arch Linux. Device reset and raw syscall
 wiring remain planned.
 
+Fail-closed SATA COMRESET is now **PARTIALLY IMPLEMENTED IN SOURCE** with exact
+mapping generations, ordered engine stop/restart, an explicit minimum-delay
+contract, bounded link/signature recovery, error clearing, DMA-memory checks,
+and a checked successor media generation that stales old catalog state. AHCI
+passes 73 tests on Windows and Arch Linux; physical reset is unverified.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

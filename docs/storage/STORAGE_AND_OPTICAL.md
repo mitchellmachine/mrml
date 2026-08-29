@@ -405,6 +405,17 @@ nonzero durability serials only after full success. AHCI passes 71 tests on
 Windows and Arch Linux. Device reset, raw syscall wiring, cache-coherence/IOMMU
 implementations, and physical hardware remain **PLANNED**.
 
+Fail-closed AHCI SATA-port reset is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+It exact-matches the retained ABAR generations, stops command processing before
+FIS receive, holds COMRESET for at least 1,000 microseconds through an explicit
+monotonic-delay contract, bounds link recovery, verifies SATA signature and
+task/queue state, clears error registers, sanitizes received-FIS memory,
+revalidates initialized command memory, and restarts FIS receive before command
+processing. The reusable backend sanitizes its data extent first and publishes
+only a checked successor media generation; old catalog state becomes stale.
+AHCI passes 73 tests on Windows and Arch Linux. This is modeled register,
+memory, and timing-contract evidence, not physical SATA reset evidence.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised

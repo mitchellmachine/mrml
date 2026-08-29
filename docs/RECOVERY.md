@@ -1294,6 +1294,13 @@ post-mutation uncertainty quarantines the active port. AHCI passes 71 tests on
 Windows and Arch Linux. Installed recovery and physical execution remain
 unverified.
 
+AHCI SATA-port reset is **PARTIALLY IMPLEMENTED IN SOURCE** as an ordered,
+bounded COMRESET lifecycle with explicit timing, link/signature verification,
+error clearing, received-FIS sanitization, command-memory revalidation, and a
+successor media generation. Recovery must treat every failed or uncertain reset
+as unavailable and the prior catalog generation as stale after success. AHCI
+passes 73 tests on Windows and Arch Linux; physical reset remains unverified.
+
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,
 verified base-register clearing, and verified zeroing of all retained extents.

@@ -18,6 +18,7 @@ mod ahci_flush;
 mod ahci_mapping;
 mod ahci_port;
 mod ahci_port_program;
+mod ahci_reset;
 mod block_io_adapter;
 mod command_block_backend;
 mod control_service_loop;
@@ -87,6 +88,10 @@ pub use ahci_port::{
 pub use ahci_port_program::{
     program_ahci_port_dma_bases, AhciPortProgramError, AhciPortProgramFailure,
     ProgrammedAhciPortDma,
+};
+pub use ahci_reset::{
+    reset_ahci_sata_port, AhciPortResetError, AhciPortResetFailure, AhciResetIo,
+    AHCI_RESET_LINK_POLL_LIMIT,
 };
 pub use block_io_adapter::{
     AhciBlockControlAdapter, AhciBlockControlBackend, AhciBlockControlError, AhciBlockIoAdapter,

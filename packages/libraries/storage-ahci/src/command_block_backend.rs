@@ -7,9 +7,10 @@
 
 use crate::{
     execute_ahci_dma_command, flush_ahci_cache, prepare_ahci_dma_command,
-    recycle_ahci_command_slot, ActiveAhciPort, AhciAtaCommand, AhciBlockControlBackend,
-    AhciBlockControlError, AhciBlockIoBackend, AhciBlockIoError, AhciCommandBuildFailure,
-    AhciCommandMemoryIo, AhciDataDmaRegion, AhciFlushFailure, AhciRegisterIo,
+    recycle_ahci_command_slot, reset_ahci_sata_port, ActiveAhciPort, AhciAbarMapping,
+    AhciAtaCommand, AhciBlockControlBackend, AhciBlockControlError, AhciBlockIoBackend,
+    AhciBlockIoError, AhciCommandBuildFailure, AhciCommandMemoryIo, AhciDataDmaRegion,
+    AhciFlushFailure, AhciRegisterIo, AhciResetIo,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 use mrml_kernel::{Capability, CapabilitySpace, Rights};
@@ -34,6 +35,7 @@ pub struct AhciCommandBlockBackend<'a, const N: usize, R, M, D> {
     read_data_capability: Capability,
     write_data_capability: Capability,
     data_region: AhciDataDmaRegion,
+    mapping: AhciAbarMapping,
     owner: Option<ActiveAhciPort>,
     registers: R,
     memory: M,
@@ -50,6 +52,7 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
         read_data_capability: Capability,
         write_data_capability: Capability,
         data_region: AhciDataDmaRegion,
+        mapping: AhciAbarMapping,
         owner: ActiveAhciPort,
         registers: R,
         memory: M,
@@ -64,6 +67,9 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
                 .authorize_exact(read_data_capability, read_rights)
                 .ok()
                 != Some(data_region.memory_object)
+            || owner.layout().device_object != mapping.device_object
+            || owner.layout().configuration_generation != mapping.configuration_generation
+            || owner.layout().mapping_generation != mapping.mapping_generation
             || capabilities
                 .authorize_exact(write_data_capability, write_rights)
                 .ok()
@@ -78,6 +84,7 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
             read_data_capability,
             write_data_capability,
             data_region,
+            mapping,
             owner: Some(owner),
             registers,
             memory,
@@ -95,7 +102,7 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
     }
 }
 
-impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
+impl<const N: usize, R: AhciResetIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
     AhciBlockControlBackend for AhciCommandBlockBackend<'_, N, R, M, D>
 {
     fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
@@ -120,8 +127,28 @@ impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBuffe
         Ok(self.durability_serial)
     }
 
-    fn reset(&mut self, _: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
-        Err(AhciBlockControlError::CleanupIncomplete)
+    fn reset(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+        if device.session != self.session || device.media_generation != self.media_generation {
+            return Err(AhciBlockControlError::CleanupIncomplete);
+        }
+        let successor = self
+            .media_generation
+            .checked_add(1)
+            .ok_or(AhciBlockControlError::CleanupIncomplete)?;
+        if self.data_io.sanitize(self.data_region).is_err() {
+            self.owner = None;
+            return Err(AhciBlockControlError::CleanupIncomplete);
+        }
+        let owner = self
+            .owner
+            .take()
+            .ok_or(AhciBlockControlError::CleanupIncomplete)?;
+        let owner =
+            reset_ahci_sata_port(self.mapping, owner, &mut self.registers, &mut self.memory)
+                .map_err(|_| AhciBlockControlError::CleanupIncomplete)?;
+        self.owner = Some(owner);
+        self.media_generation = successor;
+        Ok(successor)
     }
 }
 
@@ -282,6 +309,8 @@ mod tests {
         fn ready() -> Self {
             let mut words = [0; 16];
             words[0x18 / 4] = (1 << 0) | (1 << 4);
+            words[0x24 / 4] = crate::AHCI_SATA_SIGNATURE;
+            words[0x28 / 4] = 3 | (2 << 4) | (1 << 8);
             Self {
                 words,
                 issued_reads: 0,
@@ -306,9 +335,15 @@ mod tests {
             Ok(())
         }
     }
+    impl AhciResetIo for Registers {
+        fn delay_microseconds(&mut self, microseconds: u32) -> Result<(), ()> {
+            (microseconds >= 1_000).then_some(()).ok_or(())
+        }
+    }
 
     struct Memory {
         list: [u32; 256],
+        fis: [u32; 64],
         tables: [u32; 64],
         prdbc_reads: usize,
     }
@@ -319,6 +354,7 @@ mod tests {
             list[2] = 0x3000;
             Self {
                 list,
+                fis: [0; 64],
                 tables: [0; 64],
                 prdbc_reads: 0,
             }
@@ -339,6 +375,7 @@ mod tests {
             let index = usize::try_from(offset / 4).map_err(|_| ())?;
             match region.memory_object {
                 ObjectId(20) => self.list.get(index).copied().ok_or(()),
+                ObjectId(21) => self.fis.get(index).copied().ok_or(()),
                 ObjectId(22) => self.tables.get(index).copied().ok_or(()),
                 _ => Err(()),
             }
@@ -347,6 +384,7 @@ mod tests {
             let index = usize::try_from(offset / 4).map_err(|_| ())?;
             match region.memory_object {
                 ObjectId(20) => *self.list.get_mut(index).ok_or(())? = value,
+                ObjectId(21) => *self.fis.get_mut(index).ok_or(())? = value,
                 ObjectId(22) => *self.tables.get_mut(index).ok_or(())? = value,
                 _ => return Err(()),
             }
@@ -430,6 +468,17 @@ mod tests {
         }
     }
 
+    fn mapping() -> AhciAbarMapping {
+        AhciAbarMapping {
+            device_object: ObjectId(10),
+            configuration_generation: 7,
+            mapping_generation: 9,
+            physical_base: 0xf000_0000,
+            virtual_base: 0xffff_9000_0000_0000,
+            bytes: 0x2000,
+        }
+    }
+
     #[test]
     fn repeated_read_and_write_traverse_complete_owned_lifecycle() {
         let mut capabilities = CapabilitySpace::<2>::new();
@@ -459,6 +508,7 @@ mod tests {
             read_capability,
             write_capability,
             data,
+            mapping(),
             ActiveAhciPort::from_layout(layout()),
             Registers::ready(),
             Memory::initialized(),
@@ -475,6 +525,11 @@ mod tests {
             .unwrap();
         assert_eq!(backend.flush(device(session, 12)), Ok(1));
         assert_eq!(backend.flush(device(session, 12)), Ok(2));
+        assert_eq!(backend.reset(device(session, 12)), Ok(13));
+        assert_eq!(
+            backend.read(device(session, 12), 0, 1, &mut [0; 512]),
+            Err(AhciBlockIoError::MediaChanged)
+        );
         assert!(backend.is_available());
         let (_, _, _, data_io) = backend.into_parts();
         assert_eq!(
@@ -483,7 +538,7 @@ mod tests {
                 data_io.staged_writes,
                 data_io.sanitizes
             ),
-            (1, 1, 2)
+            (1, 1, 3)
         );
     }
 
@@ -516,6 +571,7 @@ mod tests {
             read_capability,
             write_capability,
             data,
+            mapping(),
             ActiveAhciPort::from_layout(layout()),
             Registers::ready(),
             Memory::initialized(),
