@@ -856,7 +856,25 @@ zero initialization, a writable value, and exit 42. A second link added an
 initialized regular definition and both linkers observed its value instead.
 MRML emitted 8,192-byte and 8,200-byte executables versus rust-lld's 1,480-byte
 and 1,456-byte outputs. This proves bounded static COMMON resolution for these
-objects, not TLS, dynamic preemption, or broad ELF compatibility.
+objects, not dynamic TLS, dynamic preemption, or broad ELF compatibility.
+
+The bounded static TLS path admits conventional allocated `.tdata.*` PROGBITS
+and `.tbss.*` NOBITS sections with exact `SHF_WRITE|SHF_ALLOC|SHF_TLS` flags,
+checked power-of-two alignment, and typed `STT_TLS` definitions. Local-exec
+`R_X86_64_TPOFF32` relocations are computed from the end of the complete TLS
+block with signed-32-bit overflow checks. Initialized TLS precedes zero-fill
+TLS in one contiguous template, and the executable publishes its exact file
+and memory extents in a read-only `PT_TLS` program header while the containing
+RW load retains ordinary process mapping semantics. The independently authored
+Rust 2024 probe explicitly installed a two-word test thread block with Linux
+`arch_prctl`, observed initialized value 7 and zero value 0, wrote 20 and 22,
+and exited 42 through both MRML and pinned gnullvm rust-lld. Their outputs were
+8,216 and 1,960 bytes, and both reported an eight-byte TLS file template plus a
+16-byte memory template aligned to eight. This is controlled hosted local-exec
+TLS evidence; the test thread block is explicit and does not claim production
+runtime TLS initialization. General-dynamic `R_X86_64_TLSGD`,
+`__tls_get_addr`, initial-exec relocations, dynamic TLS modules, and production
+thread lifecycle integration remain unsupported.
 
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
@@ -873,7 +891,8 @@ pinned Linux rustc and its relocation is confirmed by `readelf`; the accompanyin
 script links identical inputs with MRML and the pinned gnullvm rust-lld. Both
 controlled outputs exited 42 under Arch Linux WSL. MRML emitted 8,193 bytes and
 rust-lld emitted 1,504 bytes; this is compatibility evidence, not an equivalent
-size or performance comparison. TLS relocations remain unsupported.
+size or performance comparison. Dynamic and initial-exec TLS relocations remain
+unsupported.
 
 Cross-object selection has a detailed companion API that retains the exact
 borrowed symbol when resolution fails; the compatibility entry point still

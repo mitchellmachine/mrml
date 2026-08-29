@@ -9285,6 +9285,16 @@ increment introduces no new symbol-resolution algorithm, object or archive
 format, relocation mechanism, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Bounded ELF static local-exec TLS
+
+Patent review: **NOT_TRIGGERED**. This increment lays out conventional ELF
+`.tdata`/`.tbss` templates, emits the standard `PT_TLS` program header, and
+applies the public AMD64 ABI's local-exec `R_X86_64_TPOFF32` calculation. It
+adds bounded validation and checked arithmetic but no new TLS model, relocation
+encoding, object format, compression, cryptographic mechanism, or runtime
+thread-management algorithm. This technical screen is not legal advice or
+patent clearance.
+
 # 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

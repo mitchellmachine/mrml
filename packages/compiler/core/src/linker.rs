@@ -666,6 +666,8 @@ pub enum ElfSectionKind {
     InitializerArray,
     FinalizerArray,
     WritableData,
+    InitializedTls,
+    ZeroedTls,
     ZeroedData,
     Unwind,
 }
@@ -694,6 +696,7 @@ pub enum ElfSelectedRelocationKind {
     PcRelative32,
     PltRelative32,
     GotPcRelative32,
+    ThreadPointerOffset32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -735,6 +738,7 @@ pub enum ElfSelectedSymbolKind {
     Unspecified,
     Object,
     Function,
+    ThreadLocal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -793,6 +797,10 @@ pub struct ElfSelectedLayout {
     pub initializer_end: usize,
     pub finalizer_start: usize,
     pub finalizer_end: usize,
+    pub tls_offset: usize,
+    pub tls_file_length: usize,
+    pub tls_memory_length: usize,
+    pub tls_alignment: usize,
     pub file_length: usize,
     pub memory_length: usize,
 }
@@ -865,6 +873,14 @@ pub fn layout_x86_64_elf_selected_sections(
             )
         })
     });
+    let has_tls = inputs.iter().any(|input| {
+        input.sections.sections().iter().any(|section| {
+            matches!(
+                section.kind,
+                ElfSectionKind::InitializedTls | ElfSectionKind::ZeroedTls
+            )
+        })
+    });
     let has_writable = inputs.iter().any(|input| {
         input
             .definitions
@@ -878,6 +894,8 @@ pub fn layout_x86_64_elf_selected_sections(
                         | ElfSectionKind::InitializerArray
                         | ElfSectionKind::FinalizerArray
                         | ElfSectionKind::WritableData
+                        | ElfSectionKind::InitializedTls
+                        | ElfSectionKind::ZeroedTls
                         | ElfSectionKind::ZeroedData
                 )
             })
@@ -909,6 +927,10 @@ pub fn layout_x86_64_elf_selected_sections(
         initializer_end: 0,
         finalizer_start: 0,
         finalizer_end: 0,
+        tls_offset: 0,
+        tls_file_length: 0,
+        tls_memory_length: 0,
+        tls_alignment: 1,
         file_length: 0,
         memory_length: 0,
     };
@@ -920,6 +942,8 @@ pub fn layout_x86_64_elf_selected_sections(
         ElfSectionKind::InitializerArray,
         ElfSectionKind::FinalizerArray,
         ElfSectionKind::WritableData,
+        ElfSectionKind::InitializedTls,
+        ElfSectionKind::ZeroedTls,
         ElfSectionKind::ZeroedData,
     ];
     let mut cursor = 0usize;
@@ -938,7 +962,25 @@ pub fn layout_x86_64_elf_selected_sections(
                 cursor = align(cursor, PAGE)?;
             }
             layout.writable_offset = cursor;
-        } else if kind == ElfSectionKind::ZeroedData {
+        } else if kind == ElfSectionKind::InitializedTls && has_tls {
+            for input in inputs {
+                for section in input.sections.sections() {
+                    if matches!(
+                        section.kind,
+                        ElfSectionKind::InitializedTls | ElfSectionKind::ZeroedTls
+                    ) {
+                        layout.tls_alignment = layout.tls_alignment.max(section.alignment);
+                    }
+                }
+            }
+            cursor = align(cursor, layout.tls_alignment)?;
+            layout.tls_offset = cursor;
+        } else if kind == ElfSectionKind::ZeroedTls && has_tls {
+            layout.file_length = cursor;
+            layout.tls_file_length = cursor
+                .checked_sub(layout.tls_offset)
+                .ok_or(LinkerError::OffsetOverflow)?;
+        } else if kind == ElfSectionKind::ZeroedData && layout.file_length == 0 {
             layout.file_length = cursor;
         }
         if matches!(
@@ -964,8 +1006,16 @@ pub fn layout_x86_64_elf_selected_sections(
                 layout.finalizer_start = layout.initializer_end;
                 layout.finalizer_end = cursor;
             }
+            ElfSectionKind::InitializedTls | ElfSectionKind::ZeroedTls if has_tls => {
+                layout.tls_memory_length = cursor
+                    .checked_sub(layout.tls_offset)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
             _ => {}
         }
+    }
+    if layout.file_length == 0 {
+        layout.file_length = cursor;
     }
     append_elf_common_layouts(inputs, &mut layout, &mut cursor)?;
     layout.memory_length = cursor;
@@ -1194,13 +1244,25 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
             let place = section_base
                 .checked_add(relocation.offset)
                 .ok_or(LinkerError::OffsetOverflow)?;
-            let (target, target_is_absolute) = match relocation.target {
-                ElfSelectedRelocationTarget::Section { index, offset } => (
-                    selected_section_layout_offset(&layout, input_index, index)?
-                        .checked_add(offset)
-                        .ok_or(LinkerError::OffsetOverflow)?,
-                    false,
-                ),
+            let (target, target_is_absolute, target_is_tls) = match relocation.target {
+                ElfSelectedRelocationTarget::Section { index, offset } => {
+                    let section = input
+                        .sections
+                        .sections()
+                        .iter()
+                        .find(|section| section.index == index)
+                        .ok_or(LinkerError::InvalidElf)?;
+                    (
+                        selected_section_layout_offset(&layout, input_index, index)?
+                            .checked_add(offset)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                        false,
+                        matches!(
+                            section.kind,
+                            ElfSectionKind::InitializedTls | ElfSectionKind::ZeroedTls
+                        ),
+                    )
+                }
                 ElfSelectedRelocationTarget::Symbol(symbol) => {
                     if let Some((target_input, definition)) =
                         resolve_selected_definition(inputs, symbol)?
@@ -1208,6 +1270,7 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                         if definition.section_index == 0xfff2 {
                             (
                                 selected_common_layout_offset(&layout, inputs, symbol)?,
+                                false,
                                 false,
                             )
                         } else {
@@ -1220,6 +1283,7 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                                 .checked_add(definition.offset)
                                 .ok_or(LinkerError::OffsetOverflow)?,
                                 false,
+                                definition.kind == ElfSelectedSymbolKind::ThreadLocal,
                             )
                         }
                     } else {
@@ -1227,12 +1291,14 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                             selected_elf_array_boundary(&layout, symbol)
                                 .ok_or(LinkerError::UndefinedSymbol)?,
                             false,
+                            false,
                         )
                     }
                 }
                 ElfSelectedRelocationTarget::Absolute(value) => (
                     usize::try_from(value).map_err(|_| LinkerError::OffsetOverflow)?,
                     true,
+                    false,
                 ),
             };
             match relocation.kind {
@@ -1302,6 +1368,22 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                     }
                     patch_i32(&mut bytes, place, displacement)?;
                 }
+                ElfSelectedRelocationKind::ThreadPointerOffset32 => {
+                    if !target_is_tls || target_is_absolute || layout.tls_memory_length == 0 {
+                        return Err(LinkerError::UnsupportedElf);
+                    }
+                    let tls_end = layout
+                        .tls_offset
+                        .checked_add(layout.tls_memory_length)
+                        .ok_or(LinkerError::OffsetOverflow)?;
+                    let value = i128::try_from(target)
+                        .map_err(|_| LinkerError::OffsetOverflow)?
+                        .checked_add(i128::from(relocation.addend))
+                        .and_then(|value| value.checked_sub(i128::try_from(tls_end).ok()?))
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or(LinkerError::RelocationOverflow)?;
+                    patch_i32(&mut bytes, place, value)?;
+                }
             }
         }
     }
@@ -1333,11 +1415,15 @@ pub fn link_x86_64_elf_selected_executable<
     let has_text = linked.layout.text_length != 0;
     let has_readonly = linked.layout.readonly_length != 0;
     let has_writable = linked.memory_length > linked.layout.writable_offset;
+    let has_tls = linked.layout.tls_memory_length != 0;
     if !has_text {
         return Err(LinkerError::UnsupportedElf);
     }
-    let program_count =
-        1 + usize::from(has_text) + usize::from(has_readonly) + usize::from(has_writable);
+    let program_count = 1
+        + usize::from(has_text)
+        + usize::from(has_readonly)
+        + usize::from(has_writable)
+        + usize::from(has_tls);
     let header_bytes = 64usize
         .checked_add(program_count * 56)
         .ok_or(LinkerError::OffsetOverflow)?;
@@ -1434,6 +1520,27 @@ pub fn link_x86_64_elf_selected_executable<
                 .ok_or(LinkerError::OffsetOverflow)?,
             file_size,
             memory_size,
+        )?;
+        program += 56;
+    }
+    if has_tls {
+        let offset = PAYLOAD_OFFSET
+            .checked_add(linked.layout.tls_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let address = usize::try_from(IMAGE_BASE)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            .checked_add(offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        write_elf_program_segment(
+            &mut bytes,
+            program,
+            7,
+            4,
+            offset,
+            address,
+            linked.layout.tls_file_length,
+            linked.layout.tls_memory_length,
+            linked.layout.tls_alignment,
         )?;
     }
     copy_at(&mut bytes, PAYLOAD_OFFSET, linked.bytes())?;
@@ -1545,6 +1652,10 @@ fn selected_elf_array_boundary(layout: &ElfSelectedLayout, symbol: &str) -> Opti
         "__init_array_end" => Some(layout.initializer_end),
         "__fini_array_start" => Some(layout.finalizer_start),
         "__fini_array_end" => Some(layout.finalizer_end),
+        "__tls_image_start" if layout.tls_memory_length != 0 => Some(layout.tls_offset),
+        "__tls_image_end" if layout.tls_memory_length != 0 => {
+            layout.tls_offset.checked_add(layout.tls_memory_length)
+        }
         _ => None,
     }
 }
@@ -1558,6 +1669,8 @@ fn is_elf_array_boundary_symbol(symbol: &str) -> bool {
             | "__init_array_end"
             | "__fini_array_start"
             | "__fini_array_end"
+            | "__tls_image_start"
+            | "__tls_image_end"
     )
 }
 
@@ -1701,6 +1814,12 @@ pub fn decode_x86_64_elf_selected_sections<'a>(
             && flags & 0x4 == 0
         {
             ElfSectionKind::WritableData
+        } else if (name == ".tdata" || name.starts_with(".tdata."))
+            && section_type == 1
+            && flags & 0x403 == 0x403
+            && flags & !0x403 == 0
+        {
+            ElfSectionKind::InitializedTls
         } else if matches!(section_type, 14..=16) {
             if flags & 3 != 3
                 || flags & !0x20_0003 != 0
@@ -1724,6 +1843,12 @@ pub fn decode_x86_64_elf_selected_sections<'a>(
             && flags & 0x4 == 0
         {
             ElfSectionKind::ZeroedData
+        } else if (name == ".tbss" || name.starts_with(".tbss."))
+            && section_type == 8
+            && flags & 0x403 == 0x403
+            && flags & !0x403 == 0
+        {
+            ElfSectionKind::ZeroedTls
         } else if name == ".eh_frame" && section_type == 0x7000_0001 && flags & 0x2 == 0x2 {
             ElfSectionKind::Unwind
         } else {
@@ -1855,6 +1980,7 @@ pub fn decode_x86_64_elf_selected_relocations_from_sections<'a>(
                 2 => (ElfSelectedRelocationKind::PcRelative32, 4),
                 4 => (ElfSelectedRelocationKind::PltRelative32, 4),
                 9 => (ElfSelectedRelocationKind::GotPcRelative32, 4),
+                23 => (ElfSelectedRelocationKind::ThreadPointerOffset32, 4),
                 _ => return Err(LinkerError::UnsupportedElf),
             };
             offset
@@ -2004,6 +2130,7 @@ pub fn decode_x86_64_elf_selected_definitions_from_sections<'a>(
             0 => ElfSelectedSymbolKind::Unspecified,
             1 => ElfSelectedSymbolKind::Object,
             2 => ElfSelectedSymbolKind::Function,
+            6 => ElfSelectedSymbolKind::ThreadLocal,
             _ => return Err(LinkerError::UnsupportedElf),
         };
         let visibility = match *record.get(5).ok_or(LinkerError::InvalidElf)? & 0x3 {
@@ -8554,6 +8681,71 @@ mod tests {
             validate_elf_common_shape(8, 3),
             Err(LinkerError::UnsupportedElf)
         );
+
+        let mut tls_sections = ElfSelectedSections {
+            sections: [empty_section; MAX_LINK_INPUTS],
+            length: 2,
+        };
+        tls_sections.sections[0] = ElfSelectedSection {
+            index: 2,
+            name: ".tdata.value",
+            kind: ElfSectionKind::InitializedTls,
+            bytes: &[7; 8],
+            size: 8,
+            alignment: 8,
+        };
+        tls_sections.sections[1] = ElfSelectedSection {
+            index: 3,
+            name: ".tbss.zero",
+            kind: ElfSectionKind::ZeroedTls,
+            bytes: &[],
+            size: 8,
+            alignment: 8,
+        };
+        let mut tls_definitions = ElfSelectedDefinitions {
+            definitions: [empty_definition; MAX_LINK_DEFINITIONS],
+            length: 1,
+        };
+        tls_definitions.definitions[0] = ElfSelectedDefinition {
+            name: "tls_value",
+            section_index: 2,
+            offset: 0,
+            size: 8,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Default,
+            kind: ElfSelectedSymbolKind::ThreadLocal,
+        };
+        let mut tls_relocations = caller_relocations;
+        tls_relocations.relocations[0].kind = ElfSelectedRelocationKind::ThreadPointerOffset32;
+        tls_relocations.relocations[0].target = ElfSelectedRelocationTarget::Symbol("tls_value");
+        tls_relocations.relocations[0].addend = 0;
+        let tls_objects = [
+            ElfSelectedObject {
+                sections: &caller_sections,
+                definitions: &caller_definitions,
+                relocations: &tls_relocations,
+            },
+            ElfSelectedObject {
+                sections: &tls_sections,
+                definitions: &tls_definitions,
+                relocations: &empty_relocations,
+            },
+        ];
+        let linked =
+            link_x86_64_elf_selected_sections::<8192>(&tls_objects, "entry", 0x401000).unwrap();
+        assert_eq!(linked.layout.tls_offset, 4096);
+        assert_eq!(linked.layout.tls_file_length, 8);
+        assert_eq!(linked.layout.tls_memory_length, 16);
+        assert_eq!(linked.length, 4104);
+        assert_eq!(linked.memory_length, 4112);
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            -16
+        );
+        let executable =
+            link_x86_64_elf_selected_executable::<16384, 8192>(&tls_objects, "entry").unwrap();
+        assert_eq!(read_u16_elf(executable.bytes(), 56).unwrap(), 4);
+        assert_eq!(read_u32_elf(executable.bytes(), 64 + 3 * 56).unwrap(), 7);
     }
 
     #[test]
