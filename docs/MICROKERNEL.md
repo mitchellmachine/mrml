@@ -6745,6 +6745,10 @@ instead of borrowing ordinary request-decoding errors. Privilege, instruction,
 stack, and flags failures remain separately identifiable; the compatibility
 `request()` boundary maps them exhaustively to its existing `SyscallError`
 variants. All 600 Linux kernel tests pass and both invalid-return images build.
+Boot-recovery frame decoding preserves the exact `UserReturnError` inside its
+typed invalid-return result instead of collapsing the four causes. Its focused
+test covers every cause before request fields are interpreted; the live boundary
+still retires all four under the same scoped protocol-violation policy.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6798,7 +6802,8 @@ preflight is the same conventional integrity check.
 Whole-retirement descendant preflight applies the existing capability graph and
 revocation rules and does not introduce a new mechanism or trigger review.
 Typing the existing return-validation result is ordinary error-boundary
-hardening and does not trigger separate review.
+hardening and does not trigger separate review. Preserving that result through
+boot-recovery decoding is the same boundary hardening.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

@@ -192,6 +192,9 @@ access. The security/acceptance gate is canonical in
 - Return-frame privilege, instruction, stack, and flags validation uses a
   dedicated typed error distinct from ordinary syscall argument decoding; the
   compatibility request decoder maps that closed set exhaustively.
+- Boot-recovery decoding preserves the exact typed return fault before request
+  data is interpreted, while live service policy retires every member of that
+  closed set identically.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

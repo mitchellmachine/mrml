@@ -2147,6 +2147,9 @@ live composition remains pending.
    control-state failures remain exhaustively mapped at the legacy syscall
    request boundary. The 600-test kernel suite and both invalid-return images
    pass.
+   Boot-recovery decoding now preserves the exact typed return cause and tests
+   all four causes before request-data interpretation; live policy continues to
+   retire the closed set identically.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

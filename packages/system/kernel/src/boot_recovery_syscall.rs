@@ -1,6 +1,7 @@
 use crate::{
     BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryDelivery, BootRecoveryDeliveryError, Capability,
     SharedBufferUserAccess, SharedBufferUserCopy, TaskId, TaskRuntime, UserCallFrame,
+    UserReturnError,
 };
 
 pub const BOOT_RECOVERY_SYSCALL_OPERATION: u64 = 13;
@@ -15,7 +16,7 @@ impl BootRecoverySyscallRequest {
     pub fn decode_frame(frame: &UserCallFrame) -> Result<Self, BootRecoverySyscallError<(), ()>> {
         frame
             .validate_return()
-            .map_err(|_| BootRecoverySyscallError::InvalidReturn)?;
+            .map_err(BootRecoverySyscallError::InvalidReturn)?;
         Self::decode(
             frame.rax,
             frame.rdi,
@@ -55,7 +56,7 @@ impl BootRecoverySyscallRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BootRecoverySyscallError<U, D> {
     Unsupported,
-    InvalidReturn,
+    InvalidReturn(UserReturnError),
     Malformed,
     UserValidation(U),
     UserCopy(U),
@@ -248,7 +249,33 @@ mod tests {
         frame.cs = 0;
         assert_eq!(
             BootRecoverySyscallRequest::decode_frame(&frame),
-            Err(BootRecoverySyscallError::InvalidReturn)
+            Err(BootRecoverySyscallError::InvalidReturn(
+                UserReturnError::InvalidPrivilege
+            ))
+        );
+        frame.cs = u64::from(USER_CODE_SELECTOR);
+        frame.rip = 1 << 47;
+        assert_eq!(
+            BootRecoverySyscallRequest::decode_frame(&frame),
+            Err(BootRecoverySyscallError::InvalidReturn(
+                UserReturnError::InvalidInstruction
+            ))
+        );
+        frame.rip = 0x4000;
+        frame.rsp = 0;
+        assert_eq!(
+            BootRecoverySyscallRequest::decode_frame(&frame),
+            Err(BootRecoverySyscallError::InvalidReturn(
+                UserReturnError::InvalidStack
+            ))
+        );
+        frame.rsp = 0x7000;
+        frame.rflags = 0;
+        assert_eq!(
+            BootRecoverySyscallRequest::decode_frame(&frame),
+            Err(BootRecoverySyscallError::InvalidReturn(
+                UserReturnError::InvalidFlags
+            ))
         );
     }
 
@@ -296,7 +323,9 @@ mod tests {
                 &mut delivery,
                 &mut invalid
             ),
-            Err(BootRecoverySyscallError::UserValidation(CopyError::Validate))
+            Err(BootRecoverySyscallError::UserValidation(
+                CopyError::Validate
+            ))
         );
         assert!(
             runtime
