@@ -1349,3 +1349,20 @@ cross-format parser evidence, not native Windows execution, general `.rlib`
 compatibility, or a production-linker claim. A complete compiler-core package
 attempt reached `rust-lld` but its generated input objects were absent at final
 link time, so no package-pass result is claimed for this increment.
+
+Standalone read-only COFF COMDAT fragments may now derive their bounded link
+identity from an object-local symbol with no auxiliary records. Text
+relocations to that symbol retain the existing `LocalSymbol` target rather than
+promoting it to an external definition. Duplicate names across objects still
+fail closed during global symbol validation. Synthetic coverage converts the
+existing named read-only COMDAT probe to an object-local symbol, resolves it
+through a separate read-only fragment, and checks the final displacement.
+
+The Linux release driver build passes. The exact ORACLE-0003 gnullvm `libcore`
+probe advances from fragment 0 to fragment 3 and now fails with the typed next
+gate, `unsupported discontiguous COFF read-only layout`. This confirms that the
+first object-local read-only dependency is represented; it does not claim
+general discontiguous packing or full `libcore` support. A compiler-core run
+executed 809 unit tests and exposed four focused expectation/setup failures,
+which were corrected. Its rerun lost generated rustc inputs before final
+linking, so a complete package-pass result is not claimed.

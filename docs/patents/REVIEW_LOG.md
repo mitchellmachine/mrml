@@ -10778,3 +10778,13 @@ It preserves existing PE/COFF parsing, archive-member atomicity, COMDAT rules,
 relocation semantics, and output encoding. It introduces no object format,
 symbol-resolution algorithm, compression method, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Object-local COFF read-only fragment identities
+
+Patent review: **NOT_TRIGGERED**. This increment applies the existing bounded
+local-symbol and duplicate-rejection rules to standalone read-only COFF COMDAT
+fragments. It preserves conventional PE/COFF names, COMDAT selection,
+relocation encoding, output layout, and archive semantics. It introduces no
+object format, symbol-resolution algorithm, compression method, cryptographic
+mechanism, or loader behavior. This technical screen is not legal advice or
+patent clearance.

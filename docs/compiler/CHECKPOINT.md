@@ -100,6 +100,19 @@ complete compiler-core package attempt reached `rust-lld` but failed because
 its generated input object files were absent, so no package-pass claim is made.
 Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
+Commit `922834fe` admits object-local symbols as bounded identities for
+standalone read-only COFF COMDAT fragments while excluding section-definition
+auxiliary records. Same-object text relocations use the existing typed local
+target; cross-object name collisions still fail closed as duplicate symbols.
+The Linux release driver build passes, and the exact ORACLE-0003 gnullvm
+`libcore` probe advances from fragment 0 to the precise next boundary at
+fragment 3, `unsupported discontiguous COFF read-only layout`. One compiler-core
+run compiled and executed 809 unit tests, then reported four focused failures
+that were corrected; the rerun could not execute because generated rustc input
+objects were absent at final `rust-lld` invocation, so no complete package-pass
+claim is made. Patent review: **NOT_TRIGGERED**; see
+`docs/patents/REVIEW_LOG.md`.
+
 Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
 fallible external-symbol inventory over validated symbol and string tables.
 Structural metadata admits at most 4,096 sections, covering the pinned
