@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a83c5fa1`
-  (`compiler: verify public multi-CGU PE linking`)
+- Compiler checkpoint commit: `a73a3af7`
+  (`compiler: link stateful multi-CGU PE data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a73a3af7` adds bounded stateful multi-CGU PE linking for exact
+object-local gnullvm `.data$` and `.bss$` definitions and their AMD64 `REL32`
+references. The durable eight-CGU `.rlib` probe contains eight initialized
+statics and eight 128-byte zero-fill arrays. MRML reports 1,024 bytes of
+uninitialized data and emits a `.data` virtual extent larger than its raw file
+extent; MRML and pinned rust-lld consume identical inputs, emit 2,048-byte and
+1,536-byte images respectively, and both return 42. All 745 Linux core unit
+tests and all six Linux driver tests passed. The combined Linux suite then
+stopped in unrelated concurrent wide-multiply semantic work with
+`UnsupportedRuntimeOperator`; Windows `mrml doctor` passed, while `mrml audit`
+retains the unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at line 1236.
+External writable definitions, writable COMDAT selection, TLS, and base
+relocations remain fail-closed. Patent review: **NOT_TRIGGERED**.
 
 Commit `a83c5fa1` adds durable public-route evidence for a genuine pinned
 Windows gnullvm `.rlib`: 18,280 bytes with two metadata members and eight COFF
