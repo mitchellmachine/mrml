@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e2ab220a`
-  (`compiler: retain ELF initializer arrays`)
+- Compiler checkpoint commit: `a848495d`
+  (`compiler: order ELF constructor families`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a848495d` extends retained ELF constructors to canonical unsuffixed
+preinitializers plus priority-suffixed and unsuffixed initializers/finalizers.
+Numeric priorities are bounded to `u16` and stable-sorted ascending, with
+unsuffixed entries last; runtime code traverses finalizers backward. The layout
+resolves all six conventional `__preinit_array_*`, `__init_array_*`, and
+`__fini_array_*` boundaries, while an explicit input definition wins. The
+independently authored Rust 2024 probe invoked one preinitializer, two ordered
+initializers, and two reverse-traversed finalizers through those boundaries;
+MRML and pinned gnullvm rust-lld both reached the exact state and exited 42.
+Their executables measured 8,232 and 3,072 bytes. Windows and native Arch Linux
+each passed 740 core tests, integrations of 2/10/351/50, and five driver tests.
+Current 50-iteration/five-warmup samples measured MRML/rust-lld at 5.983/5.247
+ms for the tiny trait object, 5.433/5.341 ms for the transitive 16-CGU archive,
+and 6.139/6.669 ms for reachable pinned libcore. Only the larger sample was
+faster in that run; no general superiority claim follows. Automatic production
+startup-runtime invocation remains unproven. Patent review: **NOT_TRIGGERED**.
 
 Commit `e2ab220a` automatically retains the conventional unsuffixed
 `.init_array`/`SHT_INIT_ARRAY` section, inventories it in the same one-time
