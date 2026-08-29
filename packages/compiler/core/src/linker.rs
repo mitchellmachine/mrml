@@ -509,6 +509,15 @@ pub enum PeWritableComdatSelection {
     Any,
 }
 
+/// The bounded COFF duplicate-selection policy attached to one text section.
+/// Selection values outside this deliberately small set fail closed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoffTextComdatSelection {
+    None,
+    NoDuplicates,
+    Any,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeWritableData<'a, 'relocations> {
     pub symbol: &'a str,
@@ -3659,6 +3668,90 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
         readonly_data,
         relocations: &relocation_storage[..relocation_table.1],
     })
+}
+
+/// Returns the section-definition duplicate-selection policy for one nonempty
+/// COFF text fragment. The fragment order is identical to the text decoder.
+pub fn x86_64_coff_text_fragment_comdat_selection(
+    object: &[u8],
+    fragment_index: usize,
+) -> Result<CoffTextComdatSelection, LinkerError> {
+    if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let section_count = usize::from(read_u16(object, 2)?);
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbols_end = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    object
+        .get(symbol_offset..symbols_end)
+        .ok_or(LinkerError::InvalidCoff)?;
+
+    let mut text_ordinal = 0usize;
+    let mut selected_section = None;
+    for section in 0..section_count {
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if size == 0 {
+            continue;
+        }
+        let raw_name = object
+            .get(header..header + 8)
+            .ok_or(LinkerError::InvalidCoff)?;
+        let string_size = usize::try_from(read_u32(object, symbols_end)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if string_size < 4 {
+            return Err(LinkerError::InvalidCoff);
+        }
+        let name = coff_section_name(raw_name, object, symbols_end, string_size)?;
+        if name == ".text" || name.starts_with(".text$") {
+            if text_ordinal == fragment_index {
+                selected_section =
+                    Some(i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?);
+                break;
+            }
+            text_ordinal = text_ordinal
+                .checked_add(1)
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    let selected_section = selected_section.ok_or(LinkerError::InvalidCoff)?;
+    let mut selection = CoffTextComdatSelection::None;
+    let mut symbol_index = 0usize;
+    while symbol_index < symbol_count {
+        let symbol = symbol_offset + symbol_index * 18;
+        let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
+        if read_i16(object, symbol + 12)? == selected_section
+            && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 3
+            && auxiliary == 1
+            && read_u32(object, symbol + 8)? == 0
+        {
+            selection = match *object.get(symbol + 32).ok_or(LinkerError::InvalidCoff)? {
+                0 => CoffTextComdatSelection::None,
+                1 => CoffTextComdatSelection::NoDuplicates,
+                2 => CoffTextComdatSelection::Any,
+                _ => return Err(LinkerError::UnsupportedCoff),
+            };
+        }
+        symbol_index = symbol_index
+            .checked_add(auxiliary + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(selection)
 }
 
 /// Selects the sections reachable from exact defined ELF symbols through RELA
@@ -8049,6 +8142,39 @@ mod tests {
             11
         );
         assert_eq!(&linked.bytes()[16..24], callee_code.bytes());
+    }
+
+    #[test]
+    fn decodes_text_comdat_selection_and_rejects_unsupported_modes() {
+        let mut object = std::vec![0u8; 119];
+        object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[2..4].copy_from_slice(&1u16.to_le_bytes());
+        object[8..12].copy_from_slice(&61u32.to_le_bytes());
+        object[12..16].copy_from_slice(&3u32.to_le_bytes());
+        object[20..27].copy_from_slice(b".text$x");
+        object[36..40].copy_from_slice(&1u32.to_le_bytes());
+        object[40..44].copy_from_slice(&60u32.to_le_bytes());
+        object[56..60].copy_from_slice(&0x6050_0020u32.to_le_bytes());
+        object[60] = 0xc3;
+        object[61..66].copy_from_slice(b"entry");
+        object[73..75].copy_from_slice(&1i16.to_le_bytes());
+        object[77] = 2;
+        object[79..86].copy_from_slice(b".text$x");
+        object[91..93].copy_from_slice(&1i16.to_le_bytes());
+        object[95] = 3;
+        object[96] = 1;
+        object[111] = 2;
+        object[115..119].copy_from_slice(&4u32.to_le_bytes());
+
+        assert_eq!(
+            x86_64_coff_text_fragment_comdat_selection(&object, 0),
+            Ok(CoffTextComdatSelection::Any)
+        );
+        object[111] = 5;
+        assert_eq!(
+            x86_64_coff_text_fragment_comdat_selection(&object, 0),
+            Err(LinkerError::UnsupportedCoff)
+        );
     }
 
     #[test]

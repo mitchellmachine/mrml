@@ -1031,6 +1031,23 @@ ms mean for MRML versus 27.601 ms median/27.599 ms mean for rust-lld. Text and
 readonly COMDAT winner selection, associative groups, SAME_SIZE, EXACT_MATCH,
 LARGEST, and NEWEST remain unsupported.
 
+Text section-definition auxiliaries now use the same bounded typed policy.
+After ordinary archive-member selection and before generic layout, duplicate
+primary text definitions are accepted only when every competing definition is
+`SELECT_ANY`; the deterministic leftmost fragment wins as one unit, so its
+code, local read-only bytes, definitions, and relocations stay coherent.
+NODUPLICATES/plain mixtures and selection bytes other than 0, 1, and 2 fail
+closed. Runtime-function records are retained only when their begin symbol
+belongs to a text fragment retained from that exact source object. Synthetic
+tests verify the auxiliary decoder, leftmost payload, strict duplicate failure,
+and unsupported-policy failure. The unchanged exact stateful gnullvm archive
+returns 42 with both linkers: MRML emits 2,560 bytes with two forwarding
+pointers versus rust-lld's 3,584 bytes. Fifty direct-driver measurements after
+five warmups produced 9.357 ms median/9.596 ms mean for MRML and 27.078 ms
+median/27.167 ms mean for rust-lld. This is a narrow host/workload result, not
+broad superiority. Associative text groups, SAME_SIZE, EXACT_MATCH, LARGEST,
+NEWEST, and independent read-only COMDAT selection remain unsupported.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

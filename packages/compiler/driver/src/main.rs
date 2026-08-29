@@ -9,22 +9,22 @@ use mrml_runtime::{
     MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
 use mrml_rustc::{
-    CodegenOptions, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
-    ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
-    LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS,
-    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
-    PeReadonlyWritableRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
-    PeWritableRelocationTarget, TargetLayout, compile_source_function_with_options,
-    decode_unix_archive, decode_x86_64_coff_readonly_writable_relocation,
-    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_coff_writable_data_fragment,
+    CodegenOptions, CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject,
+    ElfSelectedRelocations, ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput,
+    LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS,
+    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
+    ObjectFormat, PeReadonlyWritableRelocation, PeRuntimeFunction, PeWritableData,
+    PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
+    compile_source_function_with_options, decode_unix_archive,
+    decode_x86_64_coff_readonly_writable_relocation, decode_x86_64_coff_runtime_functions,
+    decode_x86_64_coff_text_fragment, decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
     link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
-    x86_64_coff_readonly_writable_relocation_count, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count,
+    x86_64_coff_readonly_writable_relocation_count, x86_64_coff_text_fragment_comdat_selection,
+    x86_64_coff_text_fragment_count, x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -85,12 +85,14 @@ struct DecodedLinkInputs<'data, 'relocations, 'definitions> {
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
     source_object: Vector<usize>,
+    text_comdat_selection: Vector<CoffTextComdatSelection>,
 }
 
 struct SelectedLinkInputs<'data, 'relocations, 'definitions> {
     inputs: Vector<LinkInput<'data, 'relocations, 'definitions>>,
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
+    source_object: Vector<usize>,
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -708,6 +710,8 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
         .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
     let mut source_object = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
+    let mut text_comdat_selection = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate decoded text COMDAT list"))?;
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
@@ -752,6 +756,15 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             source_object
                 .try_push(object_index)
                 .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
+            text_comdat_selection
+                .try_push(match format {
+                    ObjectFormat::Coff => {
+                        x86_64_coff_text_fragment_comdat_selection(object, fragment_index)
+                            .map_err(|_| anyhow!("could not decode COFF text COMDAT selection"))?
+                    }
+                    ObjectFormat::Elf64 => CoffTextComdatSelection::None,
+                })
+                .map_err(|_| anyhow!("could not allocate decoded text COMDAT list"))?;
             remaining_arenas = rest;
             remaining_definitions = definition_rest;
         }
@@ -761,6 +774,7 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
         archive_group,
         archive_member,
         source_object,
+        text_comdat_selection,
     })
 }
 
@@ -824,21 +838,38 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     source_object: &[usize],
+    text_comdat_selection: &[CoffTextComdatSelection],
     entry: &str,
 ) -> Result<SelectedLinkInputs<'data, 'relocations, 'definitions>> {
-    if inputs.len() != source_object.len() {
+    if inputs.len() != source_object.len() || inputs.len() != text_comdat_selection.len() {
         return Err(anyhow!("decoded source-object count mismatch"));
     }
     let selection =
         select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
             .map_err(|_| anyhow!("could not select static link members"))?;
-    let mut selected = Vector::with_capacity(selection.indices().len())
-        .map_err(|_| anyhow!("could not allocate selected link input list"))?;
+    let mut selected: Vector<LinkInput<'data, 'relocations, 'definitions>> =
+        Vector::with_capacity(selection.indices().len())
+            .map_err(|_| anyhow!("could not allocate selected link input list"))?;
     let mut selected_group = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link origin list"))?;
     let mut selected_member = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link member list"))?;
+    let mut selected_comdat = Vector::with_capacity(selection.indices().len())
+        .map_err(|_| anyhow!("could not allocate selected text COMDAT list"))?;
+    let mut selected_source_object = Vector::with_capacity(selection.indices().len())
+        .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     for index in selection.indices() {
+        if let Some(earlier) = selected
+            .iter()
+            .position(|earlier| earlier.symbol == inputs[*index].symbol)
+        {
+            if selected_comdat[earlier] == CoffTextComdatSelection::Any
+                && text_comdat_selection[*index] == CoffTextComdatSelection::Any
+            {
+                continue;
+            }
+            return Err(anyhow!("duplicate COFF text definition is not SELECT_ANY"));
+        }
         selected
             .try_push(inputs[*index])
             .map_err(|_| anyhow!("could not allocate selected link input list"))?;
@@ -848,18 +879,25 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         selected_member
             .try_push(archive_member[*index])
             .map_err(|_| anyhow!("could not allocate selected link member list"))?;
+        selected_comdat
+            .try_push(text_comdat_selection[*index])
+            .map_err(|_| anyhow!("could not allocate selected text COMDAT list"))?;
+        selected_source_object
+            .try_push(source_object[*index])
+            .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     }
     Ok(SelectedLinkInputs {
         inputs: selected,
         archive_group: selected_group,
         archive_member: selected_member,
+        source_object: selected_source_object,
     })
 }
 
 fn selected_runtime_functions<'data>(
     objects: &[&'data [u8]],
-    archive_group: &[u16],
-    archive_member: &[u16],
+    _archive_group: &[u16],
+    _archive_member: &[u16],
     selected: &SelectedLinkInputs<'_, '_, '_>,
     arena: &mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
 ) -> Result<Vector<PeRuntimeFunction<'data>>> {
@@ -867,16 +905,28 @@ fn selected_runtime_functions<'data>(
         .map_err(|_| anyhow!("could not allocate selected runtime-function list"))?;
     for object_index in 0..objects.len() {
         let selected_object = selected
-            .archive_group
+            .source_object
             .iter()
-            .zip(selected.archive_member.iter())
-            .any(|(group, member)| {
-                *group == archive_group[object_index] && *member == archive_member[object_index]
-            });
+            .any(|source| *source == object_index);
         if selected_object {
             for function in decode_x86_64_coff_runtime_functions(objects[object_index], arena)
                 .map_err(|_| anyhow!("could not decode selected COFF unwind data"))?
             {
+                let retained = selected
+                    .inputs
+                    .iter()
+                    .zip(selected.source_object.iter())
+                    .any(|(input, source)| {
+                        *source == object_index
+                            && (input.symbol == function.begin_symbol
+                                || input
+                                    .additional_definitions
+                                    .iter()
+                                    .any(|definition| definition.symbol == function.begin_symbol))
+                    });
+                if !retained {
+                    continue;
+                }
                 if runtime_functions.len() == MAX_PE_RUNTIME_FUNCTIONS {
                     return Err(anyhow!("selected PE runtime-function count exceeds 256"));
                 }
@@ -1061,6 +1111,7 @@ fn write_linked_pe(
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
+        &decoded.text_comdat_selection,
         entry,
     )?;
     let mut runtime_arena = [PeRuntimeFunction {
@@ -1400,6 +1451,44 @@ mod tests {
         assert_eq!(
             selected_payload_bound(&inputs, &[], &[]).unwrap(),
             4096 + 3 + 5 + 7 + 64
+        );
+    }
+
+    #[test]
+    fn selects_leftmost_text_comdat_any_and_rejects_other_duplicates() {
+        let first = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0x2a],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let second = LinkInput {
+            text: &[0x63],
+            ..first
+        };
+        let any = [CoffTextComdatSelection::Any; 2];
+        let selected =
+            selected_link_inputs(&[first, second], &[0, 0], &[0, 0], &[0, 1], &any, "entry")
+                .unwrap();
+        assert_eq!(selected.inputs.len(), 1);
+        assert_eq!(selected.inputs[0].text, &[0x2a]);
+
+        let strict = [
+            CoffTextComdatSelection::Any,
+            CoffTextComdatSelection::NoDuplicates,
+        ];
+        assert!(
+            selected_link_inputs(
+                &[first, second],
+                &[0, 0],
+                &[0, 0],
+                &[0, 1],
+                &strict,
+                "entry",
+            )
+            .is_err()
         );
     }
 

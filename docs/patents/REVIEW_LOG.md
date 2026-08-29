@@ -9932,3 +9932,13 @@ zero-initialized writable sections, then records their standard PE file and
 virtual extents. It introduces no new object format, relocation algorithm,
 compression, cryptographic mechanism, or loader behavior. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Bounded COFF text SELECT_ANY resolution
+
+Patent review: **NOT_TRIGGERED**. This increment reads the conventional COFF
+section-definition selection byte and applies deterministic leftmost
+`SELECT_ANY` duplicate resolution before layout, while rejecting every
+unsupported policy. It introduces no new object format, duplicate-resolution
+algorithm, relocation mechanism, compression, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent
+clearance.
