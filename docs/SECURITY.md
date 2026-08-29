@@ -222,6 +222,9 @@ access. The security/acceptance gate is canonical in
 - IPC delivery verifies the receiver's exact scheduler identity before any
   capability transfer or enqueue, preventing a late wake failure from leaving
   an apparently failed message queued.
+- Inbox indices, occupied count, head, and tail topology are validated before
+  delivery or receive mutation, preventing corrupt ring state from causing
+  partial capability transfer or endpoint sequencing.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

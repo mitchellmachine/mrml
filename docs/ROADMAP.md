@@ -2179,6 +2179,9 @@ live composition remains pending.
    Delivery now preflights the receiver's exact scheduler identity before
    transfer, sequence, enqueue, or wake. A divergence test proves no message is
    enqueued on rejection and raises the kernel total to 603.
+   Complete inbox ring topology is now checked before transfer or sequence
+   mutation and before receive mutation. A corrupt count/slot test preserves
+   the prior message and next endpoint sequence, raising the total to 604.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

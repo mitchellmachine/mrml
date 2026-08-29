@@ -6791,6 +6791,11 @@ IPC delivery now requires the receiver's exact scheduler identity before
 capability transfer, endpoint sequencing, enqueue, or wake. An adversarial
 scheduler/domain divergence test proves rejection leaves the receiver inbox
 empty, raising the Linux kernel total to 603.
+Delivery and receive now validate the complete bounded inbox ring topology:
+indices, occupied count, head presence, and writable tail. This happens before
+capability transfer or endpoint sequencing. An adversarial count/slot mismatch
+test proves rejection preserves the prior message and next sequence, raising
+the Linux kernel total to 604.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6860,6 +6865,8 @@ does not trigger separate review; the capability-retention test exercises that
 existing rule and likewise does not trigger review.
 Receiver scheduler preflight is conventional transactional integrity validation
 on existing IPC delivery and does not trigger separate review.
+Bounded ring-topology preflight is the same conventional transactional
+validation and does not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

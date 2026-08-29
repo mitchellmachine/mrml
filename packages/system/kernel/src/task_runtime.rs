@@ -1026,6 +1026,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        Self::validate_inbox_state(
+            self.domains[receiver_slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
         if self.domains[receiver_slot]
             .as_ref()
             .is_none_or(|domain| usize::from(domain.inbox_count) == TASK_INBOX_MESSAGES)
@@ -1067,6 +1072,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .flatten()
             .find(|domain| domain.task == task)
             .ok_or(TaskRuntimeError::MissingTask)?;
+        Self::validate_inbox_state(domain)?;
         if domain.inbox_count == 0 {
             return Err(TaskRuntimeError::InboxEmpty);
         }
@@ -1103,6 +1109,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .flatten()
             .find(|domain| domain.task == task)
             .ok_or(TaskRuntimeError::MissingTask)?;
+        Self::validate_inbox_state(domain)?;
         if domain.inbox_count == 0 {
             return Err(TaskRuntimeError::InboxEmpty);
         }
@@ -1115,6 +1122,22 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             payload_length: message.payload().len(),
             capability_count: message.capability_count(),
         })
+    }
+
+    fn validate_inbox_state(domain: &TaskDomain<CAPS>) -> Result<(), TaskRuntimeError> {
+        let count = usize::from(domain.inbox_count);
+        let head = usize::from(domain.inbox_head);
+        let tail = usize::from(domain.inbox_tail);
+        if count > TASK_INBOX_MESSAGES
+            || head >= TASK_INBOX_MESSAGES
+            || tail >= TASK_INBOX_MESSAGES
+            || domain.inbox.iter().flatten().count() != count
+            || (count != 0 && domain.inbox[head].is_none())
+            || (count != TASK_INBOX_MESSAGES && domain.inbox[tail].is_some())
+        {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        Ok(())
     }
 
     /// Links two live domains for typed lifecycle notification. The relation is
@@ -2321,6 +2344,65 @@ mod tests {
         assert_eq!(
             runtime.peek_ipc_shape(receiver),
             Err(TaskRuntimeError::InboxEmpty)
+        );
+    }
+
+    #[test]
+    fn delivery_rejects_corrupt_inbox_before_endpoint_sequence_changes() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x48);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(object);
+        assert_eq!(
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"first",
+                    &[],
+                )
+                .unwrap(),
+            1
+        );
+        let receiver_slot = runtime.domain_slot(receiver).unwrap();
+        runtime.domains[receiver_slot].as_mut().unwrap().inbox_count = 0;
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"rejected",
+                &[],
+            ),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        runtime.domains[receiver_slot].as_mut().unwrap().inbox_count = 1;
+        assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"first");
+        assert_eq!(
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"second",
+                    &[],
+                )
+                .unwrap(),
+            2
         );
     }
 
