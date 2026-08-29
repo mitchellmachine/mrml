@@ -656,7 +656,9 @@ pub fn inventory_x86_64_elf_symbols(
 pub enum ElfSectionKind {
     Text,
     ReadonlyData,
+    PreInitializerArray,
     InitializerArray,
+    FinalizerArray,
     WritableData,
     ZeroedData,
     Unwind,
@@ -768,6 +770,12 @@ pub struct ElfSelectedLayout {
     pub readonly_offset: usize,
     pub readonly_length: usize,
     pub writable_offset: usize,
+    pub preinitializer_start: usize,
+    pub preinitializer_end: usize,
+    pub initializer_start: usize,
+    pub initializer_end: usize,
+    pub finalizer_start: usize,
+    pub finalizer_end: usize,
     pub file_length: usize,
     pub memory_length: usize,
 }
@@ -840,7 +848,9 @@ pub fn layout_x86_64_elf_selected_sections(
         input.sections.sections().iter().any(|section| {
             matches!(
                 section.kind,
-                ElfSectionKind::InitializerArray
+                ElfSectionKind::PreInitializerArray
+                    | ElfSectionKind::InitializerArray
+                    | ElfSectionKind::FinalizerArray
                     | ElfSectionKind::WritableData
                     | ElfSectionKind::ZeroedData
             )
@@ -858,6 +868,12 @@ pub fn layout_x86_64_elf_selected_sections(
         readonly_offset: 0,
         readonly_length: 0,
         writable_offset: 0,
+        preinitializer_start: 0,
+        preinitializer_end: 0,
+        initializer_start: 0,
+        initializer_end: 0,
+        finalizer_start: 0,
+        finalizer_end: 0,
         file_length: 0,
         memory_length: 0,
     };
@@ -865,7 +881,9 @@ pub fn layout_x86_64_elf_selected_sections(
         ElfSectionKind::Text,
         ElfSectionKind::ReadonlyData,
         ElfSectionKind::Unwind,
+        ElfSectionKind::PreInitializerArray,
         ElfSectionKind::InitializerArray,
+        ElfSectionKind::FinalizerArray,
         ElfSectionKind::WritableData,
         ElfSectionKind::ZeroedData,
     ];
@@ -877,7 +895,7 @@ pub fn layout_x86_64_elf_selected_sections(
                 cursor = align(cursor, PAGE)?;
             }
             layout.readonly_offset = cursor;
-        } else if kind == ElfSectionKind::InitializerArray {
+        } else if kind == ElfSectionKind::PreInitializerArray {
             layout.readonly_length = cursor
                 .checked_sub(layout.readonly_offset)
                 .ok_or(LinkerError::OffsetOverflow)?;
@@ -888,30 +906,161 @@ pub fn layout_x86_64_elf_selected_sections(
         } else if kind == ElfSectionKind::ZeroedData {
             layout.file_length = cursor;
         }
-        for (input_index, input) in inputs.iter().enumerate() {
-            for section in input.sections.sections() {
-                if section.kind != kind {
-                    continue;
-                }
-                if layout.length == layout.sections.len() {
-                    return Err(LinkerError::TooManyElfSections);
-                }
-                cursor = align(cursor, section.alignment)?;
-                layout.sections[layout.length] = ElfSelectedSectionLayout {
-                    input_index: u16::try_from(input_index)
-                        .map_err(|_| LinkerError::TooManyInputs)?,
-                    section_index: section.index,
-                    offset: cursor,
-                };
-                layout.length += 1;
-                cursor = cursor
-                    .checked_add(section.size)
-                    .ok_or(LinkerError::OffsetOverflow)?;
+        if matches!(
+            kind,
+            ElfSectionKind::PreInitializerArray
+                | ElfSectionKind::InitializerArray
+                | ElfSectionKind::FinalizerArray
+        ) {
+            append_ordered_elf_array_sections(inputs, kind, &mut layout, &mut cursor)?;
+        } else {
+            append_elf_sections_in_input_order(inputs, kind, &mut layout, &mut cursor)?;
+        }
+        match kind {
+            ElfSectionKind::PreInitializerArray => {
+                layout.preinitializer_start = layout.writable_offset;
+                layout.preinitializer_end = cursor;
             }
+            ElfSectionKind::InitializerArray => {
+                layout.initializer_start = layout.preinitializer_end;
+                layout.initializer_end = cursor;
+            }
+            ElfSectionKind::FinalizerArray => {
+                layout.finalizer_start = layout.initializer_end;
+                layout.finalizer_end = cursor;
+            }
+            _ => {}
         }
     }
     layout.memory_length = cursor;
     Ok(layout)
+}
+
+fn append_elf_sections_in_input_order(
+    inputs: &[ElfSelectedObject<'_, '_>],
+    kind: ElfSectionKind,
+    layout: &mut ElfSelectedLayout,
+    cursor: &mut usize,
+) -> Result<(), LinkerError> {
+    for (input_index, input) in inputs.iter().enumerate() {
+        for section in input.sections.sections() {
+            if section.kind == kind {
+                append_elf_section_layout(layout, cursor, input_index, section)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_ordered_elf_array_sections(
+    inputs: &[ElfSelectedObject<'_, '_>],
+    kind: ElfSectionKind,
+    layout: &mut ElfSelectedLayout,
+    cursor: &mut usize,
+) -> Result<(), LinkerError> {
+    let mut ordered = [(0u16, 0u8, 0u16, 0u16); MAX_LINK_INPUTS];
+    let mut length = 0usize;
+    for (input_index, input) in inputs.iter().enumerate() {
+        for section in input.sections.sections() {
+            if section.kind != kind {
+                continue;
+            }
+            if length == ordered.len() {
+                return Err(LinkerError::TooManyElfSections);
+            }
+            let (priority, base_rank) = elf_array_section_priority(section.name, kind)?;
+            ordered[length] = (
+                priority,
+                base_rank,
+                u16::try_from(input_index).map_err(|_| LinkerError::TooManyInputs)?,
+                section.index,
+            );
+            let mut position = length;
+            while position != 0
+                && elf_array_section_follows(
+                    (ordered[position - 1].0, ordered[position - 1].1),
+                    (priority, base_rank),
+                )
+            {
+                ordered.swap(position - 1, position);
+                position -= 1;
+            }
+            length += 1;
+        }
+    }
+    for &(_, _, input_index, section_index) in &ordered[..length] {
+        let input_index = usize::from(input_index);
+        let section = inputs[input_index]
+            .sections
+            .sections()
+            .iter()
+            .find(|section| section.index == section_index)
+            .ok_or(LinkerError::InvalidElf)?;
+        append_elf_section_layout(layout, cursor, input_index, section)?;
+    }
+    Ok(())
+}
+
+fn elf_array_section_follows(left: (u16, u8), right: (u16, u8)) -> bool {
+    if left.1 != right.1 {
+        return left.1 > right.1;
+    }
+    if left.1 != 0 {
+        return false;
+    }
+    left.0 > right.0
+}
+
+fn append_elf_section_layout(
+    layout: &mut ElfSelectedLayout,
+    cursor: &mut usize,
+    input_index: usize,
+    section: &ElfSelectedSection<'_>,
+) -> Result<(), LinkerError> {
+    if layout.length == layout.sections.len() {
+        return Err(LinkerError::TooManyElfSections);
+    }
+    *cursor = align(*cursor, section.alignment)?;
+    layout.sections[layout.length] = ElfSelectedSectionLayout {
+        input_index: u16::try_from(input_index).map_err(|_| LinkerError::TooManyInputs)?,
+        section_index: section.index,
+        offset: *cursor,
+    };
+    layout.length += 1;
+    *cursor = cursor
+        .checked_add(section.size)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    Ok(())
+}
+
+fn elf_array_section_priority(name: &str, kind: ElfSectionKind) -> Result<(u16, u8), LinkerError> {
+    let base = match kind {
+        ElfSectionKind::PreInitializerArray => ".preinit_array",
+        ElfSectionKind::InitializerArray => ".init_array",
+        ElfSectionKind::FinalizerArray => ".fini_array",
+        _ => return Err(LinkerError::UnsupportedElf),
+    };
+    if name == base {
+        return Ok((u16::MAX, 1));
+    }
+    if kind == ElfSectionKind::PreInitializerArray {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let suffix = name
+        .strip_prefix(base)
+        .and_then(|suffix| suffix.strip_prefix('.'))
+        .ok_or(LinkerError::UnsupportedElf)?;
+    if suffix.is_empty() || suffix.bytes().any(|byte| !byte.is_ascii_digit()) {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let mut priority = 0u16;
+    for digit in suffix.bytes() {
+        priority = priority
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u16::from(digit - b'0')))
+            .ok_or(LinkerError::UnsupportedElf)?;
+    }
+    Ok((priority, 0))
 }
 
 /// Copies selected content into its frozen layout and applies static x86-64
@@ -972,18 +1121,26 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                     false,
                 ),
                 ElfSelectedRelocationTarget::Symbol(symbol) => {
-                    let (target_input, definition) = resolve_selected_definition(inputs, symbol)?
-                        .ok_or(LinkerError::UndefinedSymbol)?;
-                    (
-                        selected_section_layout_offset(
-                            &layout,
-                            target_input,
-                            definition.section_index,
-                        )?
-                        .checked_add(definition.offset)
-                        .ok_or(LinkerError::OffsetOverflow)?,
-                        false,
-                    )
+                    if let Some((target_input, definition)) =
+                        resolve_selected_definition(inputs, symbol)?
+                    {
+                        (
+                            selected_section_layout_offset(
+                                &layout,
+                                target_input,
+                                definition.section_index,
+                            )?
+                            .checked_add(definition.offset)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                            false,
+                        )
+                    } else {
+                        (
+                            selected_elf_array_boundary(&layout, symbol)
+                                .ok_or(LinkerError::UndefinedSymbol)?,
+                            false,
+                        )
+                    }
                 }
                 ElfSelectedRelocationTarget::Absolute(value) => (
                     usize::try_from(value).map_err(|_| LinkerError::OffsetOverflow)?,
@@ -1253,6 +1410,30 @@ fn resolve_selected_definition<'data, 'view, 'inputs>(
     Ok(strong.or(weak))
 }
 
+fn selected_elf_array_boundary(layout: &ElfSelectedLayout, symbol: &str) -> Option<usize> {
+    match symbol {
+        "__preinit_array_start" => Some(layout.preinitializer_start),
+        "__preinit_array_end" => Some(layout.preinitializer_end),
+        "__init_array_start" => Some(layout.initializer_start),
+        "__init_array_end" => Some(layout.initializer_end),
+        "__fini_array_start" => Some(layout.finalizer_start),
+        "__fini_array_end" => Some(layout.finalizer_end),
+        _ => None,
+    }
+}
+
+fn is_elf_array_boundary_symbol(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        "__preinit_array_start"
+            | "__preinit_array_end"
+            | "__init_array_start"
+            | "__init_array_end"
+            | "__fini_array_start"
+            | "__fini_array_end"
+    )
+}
+
 fn selected_section_layout_offset(
     layout: &ElfSelectedLayout,
     input_index: usize,
@@ -1393,15 +1574,23 @@ pub fn decode_x86_64_elf_selected_sections<'a>(
             && flags & 0x4 == 0
         {
             ElfSectionKind::WritableData
-        } else if name == ".init_array"
-            && section_type == 14
-            && flags & 3 == 3
-            && flags & !0x20_0003 == 0
-            && alignment == 8
-            && size % 8 == 0
-            && matches!(read_u64_elf(object, header + 56)?, 0 | 8)
-        {
-            ElfSectionKind::InitializerArray
+        } else if matches!(section_type, 14..=16) {
+            if flags & 3 != 3
+                || flags & !0x20_0003 != 0
+                || alignment != 8
+                || size % 8 != 0
+                || !matches!(read_u64_elf(object, header + 56)?, 0 | 8)
+            {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let kind = match section_type {
+                14 => ElfSectionKind::InitializerArray,
+                15 => ElfSectionKind::FinalizerArray,
+                16 => ElfSectionKind::PreInitializerArray,
+                _ => return Err(LinkerError::UnsupportedElf),
+            };
+            elf_array_section_priority(name, kind)?;
+            kind
         } else if (name == ".bss" || name.starts_with(".bss."))
             && section_type == 8
             && flags & 0x3 == 0x3
@@ -2941,7 +3130,7 @@ fn select_x86_64_elf_sections_from_view(
     } else {
         for section in 1..section_count {
             let header = elf_section_header(section_offset, section_count, section)?;
-            if read_u32_elf(object, header + 4)? == 14
+            if matches!(read_u32_elf(object, header + 4)?, 14..=16)
                 && !elf_section_is_discarded(prepared_groups.unwrap_or(&[]), object_index, section)
             {
                 selected[section] = true;
@@ -3149,7 +3338,7 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
                 group_index,
             )?;
             let section_type = read_u32_elf(object, header + 4)?;
-            if section_type == 14 {
+            if matches!(section_type, 14..=16) {
                 if initializer_count == initializer_sections.len() {
                     return Err(LinkerError::TooManyElfSections.into());
                 }
@@ -3244,6 +3433,16 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
             let ElfSelectedRelocationTarget::Symbol(target) = relocation.target else {
                 continue;
             };
+            if is_elf_array_boundary_symbol(target)
+                && resolve_elf_object_definition(
+                    &symbol_tables[..objects.len()],
+                    &comdat_groups[..comdat_group_count],
+                    target,
+                )?
+                .is_none()
+            {
+                continue;
+            }
             if unresolved[..unresolved_length]
                 .iter()
                 .any(|queued| *queued == Some(target))
@@ -8024,6 +8223,14 @@ mod tests {
 
     #[test]
     fn selected_elf_places_and_relocates_initializer_arrays() {
+        assert_eq!(
+            elf_array_section_priority(".preinit_array.50", ElfSectionKind::PreInitializerArray),
+            Err(LinkerError::UnsupportedElf)
+        );
+        assert_eq!(
+            elf_array_section_priority(".init_array.65536", ElfSectionKind::InitializerArray),
+            Err(LinkerError::UnsupportedElf)
+        );
         let empty_section = ElfSelectedSection {
             index: 0,
             name: "",
@@ -8034,20 +8241,52 @@ mod tests {
         };
         let mut sections = ElfSelectedSections {
             sections: [empty_section; MAX_LINK_INPUTS],
-            length: 2,
+            length: 6,
         };
         sections.sections[0] = ElfSelectedSection {
             index: 1,
             name: ".text",
             kind: ElfSectionKind::Text,
-            bytes: &[0xc3],
-            size: 1,
+            bytes: &[0; 48],
+            size: 48,
             alignment: 16,
         };
         sections.sections[1] = ElfSelectedSection {
             index: 2,
-            name: ".init_array",
+            name: ".preinit_array",
+            kind: ElfSectionKind::PreInitializerArray,
+            bytes: &[0; 8],
+            size: 8,
+            alignment: 8,
+        };
+        sections.sections[2] = ElfSelectedSection {
+            index: 3,
+            name: ".init_array.200",
             kind: ElfSectionKind::InitializerArray,
+            bytes: &[0; 8],
+            size: 8,
+            alignment: 8,
+        };
+        sections.sections[3] = ElfSelectedSection {
+            index: 4,
+            name: ".init_array.100",
+            kind: ElfSectionKind::InitializerArray,
+            bytes: &[0; 8],
+            size: 8,
+            alignment: 8,
+        };
+        sections.sections[4] = ElfSelectedSection {
+            index: 5,
+            name: ".fini_array.100",
+            kind: ElfSectionKind::FinalizerArray,
+            bytes: &[0; 8],
+            size: 8,
+            alignment: 8,
+        };
+        sections.sections[5] = ElfSelectedSection {
+            index: 6,
+            name: ".fini_array.200",
+            kind: ElfSectionKind::FinalizerArray,
             bytes: &[0; 8],
             size: 8,
             alignment: 8,
@@ -8063,13 +8302,13 @@ mod tests {
         };
         let mut definitions = ElfSelectedDefinitions {
             definitions: [empty_definition; MAX_LINK_DEFINITIONS],
-            length: 2,
+            length: 3,
         };
         definitions.definitions[0] = ElfSelectedDefinition {
             name: "entry",
             section_index: 1,
             offset: 0,
-            size: 1,
+            size: 48,
             binding: ElfSelectedSymbolBinding::Global,
             visibility: ElfSelectedSymbolVisibility::Default,
             kind: ElfSelectedSymbolKind::Function,
@@ -8078,10 +8317,19 @@ mod tests {
             name: "initializer",
             section_index: 1,
             offset: 0,
-            size: 1,
+            size: 48,
             binding: ElfSelectedSymbolBinding::Global,
             visibility: ElfSelectedSymbolVisibility::Hidden,
             kind: ElfSelectedSymbolKind::Function,
+        };
+        definitions.definitions[2] = ElfSelectedDefinition {
+            name: "__init_array_start",
+            section_index: 1,
+            offset: 8,
+            size: 8,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Hidden,
+            kind: ElfSelectedSymbolKind::Object,
         };
         let empty_relocation = ElfSelectedRelocation {
             section_index: 0,
@@ -8092,15 +8340,38 @@ mod tests {
         };
         let mut relocations = ElfSelectedRelocations {
             relocations: [empty_relocation; MAX_LINK_RELOCATIONS],
-            length: 1,
+            length: 11,
         };
-        relocations.relocations[0] = ElfSelectedRelocation {
-            section_index: 2,
-            offset: 0,
-            kind: ElfSelectedRelocationKind::Absolute64,
-            target: ElfSelectedRelocationTarget::Symbol("initializer"),
-            addend: 0,
-        };
+        for (relocation, section_index) in
+            relocations.relocations[..5].iter_mut().zip([2, 3, 4, 5, 6])
+        {
+            *relocation = ElfSelectedRelocation {
+                section_index,
+                offset: 0,
+                kind: ElfSelectedRelocationKind::Absolute64,
+                target: ElfSelectedRelocationTarget::Symbol("initializer"),
+                addend: 0,
+            };
+        }
+        for (index, symbol) in [
+            "__preinit_array_start",
+            "__preinit_array_end",
+            "__init_array_start",
+            "__init_array_end",
+            "__fini_array_start",
+            "__fini_array_end",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            relocations.relocations[5 + index] = ElfSelectedRelocation {
+                section_index: 1,
+                offset: index * 8,
+                kind: ElfSelectedRelocationKind::Absolute64,
+                target: ElfSelectedRelocationTarget::Symbol(symbol),
+                addend: 0,
+            };
+        }
         let object = [ElfSelectedObject {
             sections: &sections,
             definitions: &definitions,
@@ -8108,11 +8379,36 @@ mod tests {
         }];
         let linked = link_x86_64_elf_selected_sections::<8192>(&object, "entry", 0x401000).unwrap();
         assert_eq!(linked.layout.writable_offset, 4096);
-        assert_eq!(linked.layout.file_length, 4104);
-        assert_eq!(linked.layout.memory_length, 4104);
+        assert_eq!(linked.layout.preinitializer_start, 4096);
+        assert_eq!(linked.layout.preinitializer_end, 4104);
+        assert_eq!(linked.layout.initializer_start, 4104);
+        assert_eq!(linked.layout.initializer_end, 4120);
+        assert_eq!(linked.layout.finalizer_start, 4120);
+        assert_eq!(linked.layout.finalizer_end, 4136);
+        assert_eq!(linked.layout.file_length, 4136);
+        assert_eq!(linked.layout.memory_length, 4136);
         assert_eq!(
-            u64::from_le_bytes(linked.bytes()[4096..4104].try_into().unwrap()),
-            0x401000
+            linked
+                .layout
+                .sections()
+                .iter()
+                .map(|section| section.section_index)
+                .collect::<std::vec::Vec<_>>(),
+            [1, 2, 4, 3, 5, 6]
+        );
+        for offset in (4096..4136).step_by(8) {
+            assert_eq!(
+                u64::from_le_bytes(linked.bytes()[offset..offset + 8].try_into().unwrap()),
+                0x401000
+            );
+        }
+        assert_eq!(
+            (0..6)
+                .map(|index| u64::from_le_bytes(
+                    linked.bytes()[index * 8..index * 8 + 8].try_into().unwrap()
+                ))
+                .collect::<std::vec::Vec<_>>(),
+            [0x402000, 0x402008, 0x401008, 0x402018, 0x402018, 0x402028]
         );
     }
 

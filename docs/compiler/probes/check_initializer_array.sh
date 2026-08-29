@@ -12,8 +12,9 @@ trap 'rm -rf "$probe"' EXIT
 
 rustc +$toolchain --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
     -C opt-level=3 docs/compiler/probes/initializer_array.rs -o "$probe/input.o"
-readelf -SW "$probe/input.o" | grep -E '\.init_array .*INIT_ARRAY'
-readelf -rW "$probe/input.o" | grep -E '\.rela\.init_array|retained_initializer'
+readelf -SW "$probe/input.o" | grep -E '\.(preinit_array|init_array\.[0-9]+|fini_array\.[0-9]+).*(PREINIT_ARRAY|INIT_ARRAY|FINI_ARRAY)'
+test "$(readelf -SW "$probe/input.o" | grep -Ec '\.(preinit_array|init_array\.[0-9]+|fini_array\.[0-9]+).*(PREINIT_ARRAY|INIT_ARRAY|FINI_ARRAY)')" -eq 5
+readelf -rW "$probe/input.o" | grep -E '__preinit_array_start|__init_array_start|__fini_array_start'
 
 "$mrml" --link-elf "$probe/input.o" --entry start -o "$probe/mrml" >/dev/null
 "$lld" -flavor gnu --gc-sections -e start -o "$probe/rust-lld" "$probe/input.o"
@@ -29,9 +30,7 @@ printf 'initializer-array mrml_exit=%s rust_lld_exit=%s\n' "$mrml_status" "$lld_
 test "$mrml_status" -eq 42
 test "$lld_status" -eq 42
 
-# The retained initializer's exact optimized `mov eax, 7; ret` bytes must
-# survive section GC in each stripped executable even though `start` never
-# calls it. Hex-stream matching is independent of output section headers.
-od -An -v -tx1 "$probe/mrml" | tr -d ' \n' | grep -q 'b807000000c3'
-od -An -v -tx1 "$probe/rust-lld" | tr -d ' \n' | grep -q 'b807000000c3'
+# Exit 42 requires both linkers to synthesize all six boundaries, retain all
+# five arrays and callbacks, order init/fini priorities 100 then 200, and let
+# the runtime traverse finalizers in reverse.
 wc -c "$probe/mrml" "$probe/rust-lld"

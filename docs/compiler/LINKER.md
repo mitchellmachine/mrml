@@ -826,20 +826,22 @@ pinned libcore. All executable checks exited 42. This run shows parity on the
 tiny sample and an advantage on the two archive samples; it is not a general
 speed claim.
 
-Selected ELF links now retain the conventional unsuffixed `SHT_INIT_ARRAY`
-section even when ordinary relocation reachability does not point to it. The
-typed decoder requires the exact `.init_array` name, writable/allocatable
-flags with only optional `SHF_GNU_RETAIN`, eight-byte alignment and total size,
-and the pinned-rustc forms `sh_entsize = 0` or `8`. It lays the array out at the
-front of the writable segment and applies its checked static relocations, so
-the referenced initializer body also survives section GC. The independently
-authored Rust 2024 probe emits one retained initializer that is never called by
-`start`; MRML and pinned gnullvm rust-lld both retained its exact optimized
-body and produced executables that exited 42. MRML emitted 8,200 bytes and
-rust-lld 1,536 bytes. This is bounded retention and relocation evidence, not
-runtime constructor execution: `.preinit_array`, `.fini_array`, priority-
-suffixed ordering, synthesized boundary symbols, and startup-runtime iteration
-remain unsupported.
+Selected ELF links retain canonical `SHT_PREINIT_ARRAY`, `SHT_INIT_ARRAY`, and
+`SHT_FINI_ARRAY` sections even when ordinary relocation reachability does not
+point to them. Initializer and finalizer numeric suffixes are bounded to `u16`
+and stable-sorted ascending; unsuffixed entries follow priority entries.
+Preinitializers intentionally admit only the unsuffixed ABI form, matching the
+pinned rust-lld boundary behavior. The typed decoder requires writable/
+allocatable flags with only optional `SHF_GNU_RETAIN`, eight-byte alignment and
+total size, and `sh_entsize` zero or eight. Layout exposes conventional
+`__preinit_array_*`, `__init_array_*`, and `__fini_array_*` linker-defined
+boundaries, while an explicit user definition still wins. The independently
+authored Rust 2024 probe resolves all six boundaries, invokes one preinitializer
+and two initializers forward, invokes two finalizers backward, and checks the
+exact state order before exiting. MRML and pinned gnullvm rust-lld both exited
+42; their executables measured 8,232 and 3,072 bytes. This proves bounded
+retention, priority layout, boundary relocation, and freestanding runtime
+iteration, not automatic invocation by a production MRML startup runtime.
 
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after

@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-28 — Ordered ELF constructor families and boundaries
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional numeric
+priority ordering to ELF initializer/finalizer arrays, retains the canonical
+preinitializer array, and resolves the standard start/end boundary names to
+their deterministic layout offsets. It implements established static-link and
+startup-runtime conventions and adds no novel ordering, graph, deduplication,
+folding, compression, cryptographic, or loader mechanism. This technical
+screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF initializer-array retention
 
 Patent review: **NOT_TRIGGERED**. This increment retains and lays out one
