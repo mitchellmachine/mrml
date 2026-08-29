@@ -9,6 +9,7 @@ use crate::{
 
 const CREATE_IO_SUBMISSION_QUEUE_OPCODE: u32 = 0x01;
 const CREATE_IO_COMPLETION_QUEUE_OPCODE: u32 = 0x05;
+const DELETE_IO_SUBMISSION_QUEUE_OPCODE: u32 = 0x00;
 const DELETE_IO_COMPLETION_QUEUE_OPCODE: u32 = 0x04;
 const PHYSICALLY_CONTIGUOUS: u32 = 1;
 
@@ -93,6 +94,20 @@ pub enum NvmeIoQueueCreateFailure {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NvmeIoQueueDeleteError {
+    Admin(NvmeAdminCommandError),
+    Rejected(NvmeAdminCommandStatus),
+    DmaRemoval,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct NvmeIoQueueDeleteFailure {
+    pub admin_layout: NvmeAdminQueueDmaLayout,
+    pub io_layout: NvmeIoQueueDmaLayout,
+    pub error: NvmeIoQueueDeleteError,
+}
+
 pub fn create_nvme_io_queue_pair<I: NvmeAdminCommandMemoryIo, B: NvmeIoQueueDmaBackend>(
     prepared: PreparedNvmeIoQueueDma,
     io: &mut I,
@@ -120,6 +135,36 @@ pub fn create_nvme_io_queue_pair<I: NvmeAdminCommandMemoryIo, B: NvmeIoQueueDmaB
     })
 }
 
+/// Deletes the submission queue before its completion queue and releases the
+/// exact IOMMU/DMA layout only after both deletions are confirmed.
+pub fn delete_nvme_io_queue_pair<I: NvmeAdminCommandMemoryIo, B: NvmeIoQueueDmaBackend>(
+    queues: ActiveNvmeIoQueues,
+    io: &mut I,
+    dma: &mut B,
+) -> Result<ActiveNvmeAdminQueues, NvmeIoQueueDeleteFailure> {
+    let layout = queues.layout;
+    let submission = execute_prepared_admin(
+        queues.admin_queues,
+        delete_submission_command(layout.queue_id),
+        io,
+    )
+    .map_err(|failure| delete_failure(failure, layout))?;
+    let completion = execute_prepared_admin(
+        submission.queues,
+        delete_completion_command(layout.queue_id),
+        io,
+    )
+    .map_err(|failure| delete_failure(failure, layout))?;
+    if dma.remove_layout(layout).is_err() {
+        return Err(NvmeIoQueueDeleteFailure {
+            admin_layout: completion.queues.layout(),
+            io_layout: layout,
+            error: NvmeIoQueueDeleteError::DmaRemoval,
+        });
+    }
+    Ok(completion.queues)
+}
+
 fn create_completion_command(layout: NvmeIoQueueDmaLayout) -> [u32; 16] {
     let mut command = [0; 16];
     command[0] = CREATE_IO_COMPLETION_QUEUE_OPCODE;
@@ -145,6 +190,36 @@ fn delete_completion_command(queue_id: u16) -> [u32; 16] {
     command[0] = DELETE_IO_COMPLETION_QUEUE_OPCODE;
     command[10] = u32::from(queue_id);
     command
+}
+
+fn delete_submission_command(queue_id: u16) -> [u32; 16] {
+    let mut command = [0; 16];
+    command[0] = DELETE_IO_SUBMISSION_QUEUE_OPCODE;
+    command[10] = u32::from(queue_id);
+    command
+}
+
+fn delete_failure(
+    failure: NvmeAdminCommandFailure,
+    io_layout: NvmeIoQueueDmaLayout,
+) -> NvmeIoQueueDeleteFailure {
+    let (admin_layout, error) = match failure {
+        NvmeAdminCommandFailure::Untouched { queues, error }
+        | NvmeAdminCommandFailure::InvalidResult { queues, error } => {
+            (queues.layout(), NvmeIoQueueDeleteError::Admin(error))
+        }
+        NvmeAdminCommandFailure::Rejected { queues, status } => {
+            (queues.layout(), NvmeIoQueueDeleteError::Rejected(status))
+        }
+        NvmeAdminCommandFailure::Quarantined { layout, error } => {
+            (layout, NvmeIoQueueDeleteError::Admin(error))
+        }
+    };
+    NvmeIoQueueDeleteFailure {
+        admin_layout,
+        io_layout,
+        error,
+    }
 }
 
 fn recover_without_created_queue<B: NvmeIoQueueDmaBackend>(
@@ -498,6 +573,56 @@ mod tests {
             create_nvme_io_queue_pair(prepared, &mut memory, &mut dma),
             Err(NvmeIoQueueCreateFailure::Quarantined {
                 error: NvmeIoQueueCreateError::DmaRemoval,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn deletes_submission_before_completion_then_removes_dma() {
+        let mut dma = Dma::default();
+        let prepared = make_prepared(&mut dma);
+        let mut memory = AdminMemory::default();
+        let active = create_nvme_io_queue_pair(prepared, &mut memory, &mut dma).unwrap();
+        let admin = delete_nvme_io_queue_pair(active, &mut memory, &mut dma).unwrap();
+        assert_eq!(
+            memory.submission[32] & 0xff,
+            DELETE_IO_SUBMISSION_QUEUE_OPCODE
+        );
+        assert_eq!(memory.submission[32 + 10], 1);
+        assert_eq!(
+            memory.submission[48] & 0xff,
+            DELETE_IO_COMPLETION_QUEUE_OPCODE
+        );
+        assert_eq!(memory.submission[48 + 10], 1);
+        assert_eq!(admin.state(), (4, 4, true, 5));
+        assert_eq!(dma.installed, None);
+    }
+
+    #[test]
+    fn delete_rejection_or_dma_failure_quarantines_exact_layouts() {
+        let mut dma = Dma::default();
+        let prepared = make_prepared(&mut dma);
+        let mut memory = AdminMemory::default();
+        let active = create_nvme_io_queue_pair(prepared, &mut memory, &mut dma).unwrap();
+        memory.reject_command = Some(2);
+        assert!(matches!(
+            delete_nvme_io_queue_pair(active, &mut memory, &mut dma),
+            Err(NvmeIoQueueDeleteFailure {
+                error: NvmeIoQueueDeleteError::Rejected(_),
+                ..
+            })
+        ));
+
+        let mut dma = Dma::default();
+        let prepared = make_prepared(&mut dma);
+        let mut memory = AdminMemory::default();
+        let active = create_nvme_io_queue_pair(prepared, &mut memory, &mut dma).unwrap();
+        dma.reject_remove = true;
+        assert!(matches!(
+            delete_nvme_io_queue_pair(active, &mut memory, &mut dma),
+            Err(NvmeIoQueueDeleteFailure {
+                error: NvmeIoQueueDeleteError::DmaRemoval,
                 ..
             })
         ));

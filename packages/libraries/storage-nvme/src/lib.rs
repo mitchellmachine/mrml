@@ -46,7 +46,9 @@ pub use nvme_io_queue_dma::{
     NvmeIoQueueDmaLayout, NvmeIoQueueDmaRequest, PreparedNvmeIoQueueDma, NVME_IO_QUEUE_DEPTH_LIMIT,
 };
 pub use nvme_io_queue_program::{
-    create_nvme_io_queue_pair, ActiveNvmeIoQueues, NvmeIoQueueCreateError, NvmeIoQueueCreateFailure,
+    create_nvme_io_queue_pair, delete_nvme_io_queue_pair, ActiveNvmeIoQueues,
+    NvmeIoQueueCreateError, NvmeIoQueueCreateFailure, NvmeIoQueueDeleteError,
+    NvmeIoQueueDeleteFailure,
 };
 pub use nvme_mapping::{
     map_nvme_controller_bar, NvmeControllerBarMapping, NvmeControllerBarMappingBackend,

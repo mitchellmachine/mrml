@@ -487,8 +487,12 @@ overlap queue memory. The provider writes and verifies every command dword,
 rings queue-specific submission/completion doorbells, validates phase, command
 ID, queue ID/head, and advances bounded cursors. Explicit device rejection
 returns live cleanup ownership, while malformed or uncertain completion state
-quarantines admin, I/O, and data ownership. Fifty-six focused tests pass on
-Windows and Arch Linux. The class tuple
+quarantines admin, I/O, and data ownership. Provider teardown now deletes the
+submission queue
+before its dependent completion queue, then releases the exact IOMMU/DMA layout
+only after both device deletions complete. Any command rejection, uncertainty,
+or DMA-removal failure retains both layouts as quarantined ownership. Fifty-eight
+focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current

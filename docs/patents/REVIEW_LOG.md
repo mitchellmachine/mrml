@@ -120,6 +120,15 @@ architecture. It implements no AHCI command, FAT32 on-disk algorithm, storage
 optimization, crash-recovery algorithm, or new loading technique. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Ordered NVMe I/O-queue teardown
+
+Patent review: **NOT_TRIGGERED**. This increment uses the conventional fixed
+Delete I/O Submission Queue and Delete I/O Completion Queue commands in their
+dependency order, followed by the existing exact DMA/IOMMU removal operation.
+It adds no storage scheduling, caching, allocation, naming, encoding, or data
+layout mechanism. This technical screen is not legal advice or patent
+clearance.
+
 ## 2026-08-28 — Ordered ELF constructor families and boundaries
 
 Patent review: **NOT_TRIGGERED**. This increment applies conventional numeric
