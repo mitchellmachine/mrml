@@ -6034,6 +6034,8 @@ after semantic analysis. Focused funnel-shift coverage accepts an unchecked
 `u128` operation in an explicit unsafe block while rejecting a safe unchecked
 call, signed receivers, mismatched peer widths, and non-`u32` distances for both
 x86-64 calling conventions. The native Linux compiler gate passes 808 unit
-tests and all integration groups, for 1,296 tests. Windows gnullvm was not run
-for this increment. This does not expand the set of unchecked operations or
+tests and all integration groups, for 1,297 tests. One semantic-execution case
+compares both result words with exact ORACLE-0003 rustc at distances 0, 1, 63,
+64, and 127. Windows gnullvm was not run for this increment. This does not
+expand the set of unchecked operations or
 define behavior for violated unsafe-method preconditions.

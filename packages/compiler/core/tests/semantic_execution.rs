@@ -285,6 +285,8 @@ const MRML_V1_WIDE_UNSIGNED_UNCHECKED_FUNNEL_LEFT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128, distance: u32) -> u128 { left.unchecked_funnel_shl(right, distance) }";
 const MRML_V1_WIDE_UNSIGNED_UNCHECKED_FUNNEL_RIGHT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128, distance: u32) -> u128 { left.unchecked_funnel_shr(right, distance) }";
+const MRML_V1_WIDE_UNSIGNED_SCOPED_UNCHECKED_FUNNEL_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128, distance: u32) -> u128 { unsafe { left.unchecked_funnel_shl(right, distance) } }";
 const MRML_V1_WIDE_UNSIGNED_FUNNEL_LEFT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128, distance: u32) -> u128 { left.funnel_shl(right, distance) }";
 const MRML_V1_WIDE_UNSIGNED_FUNNEL_RIGHT_SOURCE: &str =
@@ -3321,6 +3323,28 @@ fn mrml_v1_wide_unchecked_funnel_shifts_match_valid_oracle_inputs() {
         let driver = format!("for (left, right, distance) in [(0u128, u128::MAX, 0u32), (1, u128::MAX, 1), (1u128 << 64, 1, 63), (u128::MAX << 64, u64::MAX as u128, 64), (1, 1u128 << 127, 127)] {{ let returned = unsafe {{ left.{method}(right, distance) }}; println!(\"{{}}\", returned as u64); println!(\"{{}}\", (returned >> 64) as u64); }}");
         assert_eq!(actual, rustc_mrml_v1_observations(source, &driver));
     }
+}
+
+#[test]
+fn mrml_v1_wide_scoped_unsafe_funnel_shift_matches_valid_oracle_inputs() {
+    let inputs = [
+        (0u128, u128::MAX, 0u32),
+        (1, u128::MAX, 1),
+        (1u128 << 64, 1, 63),
+        (u128::MAX << 64, u64::MAX as u128, 64),
+        (1, 1u128 << 127, 127),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_SCOPED_UNCHECKED_FUNNEL_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(left, right, distance)| {
+            let returned = unsafe {
+                call_mrml_v1_two_wide_with_u32(code.pointer, left, right, distance)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_UNSIGNED_SCOPED_UNCHECKED_FUNNEL_SOURCE, "for (left, right, distance) in [(0u128, u128::MAX, 0u32), (1, u128::MAX, 1), (1u128 << 64, 1, 63), (u128::MAX << 64, u64::MAX as u128, 64), (1, 1u128 << 127, 127)] { let returned = probe(left, right, distance); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
 }
 
 #[test]

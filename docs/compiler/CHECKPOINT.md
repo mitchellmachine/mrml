@@ -68,8 +68,10 @@ without granting unsafe authority to the surrounding safe function. Focused
 funnel-shift admission tests accept `u128` unchecked use only inside that scope
 and reject safe unchecked calls, signed receivers, mismatched peer widths, and
 non-`u32` distances on both x86-64 ABIs. The complete native Linux compiler
-gate passes 808 unit tests and all integration groups, for 1,296 tests. Windows
-gnullvm was not run for this increment. Patent review: **NOT_TRIGGERED**; this
+gate also executes five valid scoped-unsafe funnel distances against the exact
+ORACLE-0003 rustc and compares both result words. It passes 808 unit tests and
+all integration groups, for 1,297 tests. Windows gnullvm was not run for this
+increment. Patent review: **NOT_TRIGGERED**; this
 is a compiler safety-context propagation correction, not a new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
 

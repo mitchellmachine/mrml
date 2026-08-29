@@ -359,7 +359,8 @@ distances at or above 128 violate the unchecked methods' precondition and remain
 outside the defined contract. An explicitly scoped `unsafe` block inside a safe
 function carries the required language context through two-word emission; it
 does not make sibling expressions unsafe or admit a signed or mismatched-width
-funnel operation.
+funnel operation. Native Linux execution matches the exact dated oracle at
+distances 0, 1, 63, 64, and 127 across both result words.
 Safe unsigned wide `funnel_shl` and `funnel_shr` reuse the same two-word
 composition and trap before emission when the distance is at least 128. Their
 valid boundary results are compared against the pinned nightly independently of
