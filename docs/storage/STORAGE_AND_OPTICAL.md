@@ -374,6 +374,17 @@ uncertainty makes the backend unavailable. The AHCI library passes 64 tests on
 Windows and Arch Linux. Cache/IOMMU implementations, service IPC dispatch, and
 physical-device execution remain **PLANNED**.
 
+Isolated AHCI read/write service dispatch is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. The loop accepts exactly one full generation-1 read or write envelope
+and one nonzero transferred shared-memory capability, reconstructs only a
+bounded local borrowed view, copies write input inward or successful read output
+outward in the correct direction, releases the received capability before
+reply, and wipes request, token, scratch, and response buffers on all exits.
+Protocol-level device errors return without copying read scratch to the caller.
+The AHCI library passes 66 tests on Windows and Arch Linux. The raw syscall
+adapter and control-operation dispatch remain **PLANNED**; no hardware evidence
+is claimed.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised

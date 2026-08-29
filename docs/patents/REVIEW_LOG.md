@@ -286,6 +286,17 @@ controller concurrency behavior excluded by the recorded scope. Existing
 Canadian conditions and outside-Canada review requirements remain unchanged.
 This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Isolated AHCI read/write service dispatch
+
+Patent review: **NOT_TRIGGERED**. This increment decodes the existing stable
+block-provider read/write envelopes, bounds a local scratch copy, enforces
+directional shared-memory transfer, releases the received capability before
+reply, and wipes local buffers. It adds no AHCI/ATA command, register sequence,
+DMA mechanism, cache algorithm, scheduling, filesystem behavior, or storage
+optimization. The invoked AHCI command backend retains its existing
+**TRIGGERED** Canadian scope review. This technical screen is not legal advice
+or patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This

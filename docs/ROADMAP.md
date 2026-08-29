@@ -332,6 +332,12 @@ copy-back, and sanitization as one fail-closed reusable transaction. AHCI passes
 64 tests on Windows and Arch Linux. Native cache/IOMMU implementations and
 service dispatch remain planned.
 
+Isolated read/write dispatch is now **PARTIALLY IMPLEMENTED IN SOURCE** with one
+exact transferred shared-memory capability, direction-correct bounded copying,
+release-before-reply, and unconditional local-buffer wiping. AHCI passes 66
+tests on Windows and Arch Linux. Raw syscall adaptation and flush/reset control
+dispatch remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

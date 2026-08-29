@@ -19,6 +19,7 @@ mod ahci_port;
 mod ahci_port_program;
 mod block_io_adapter;
 mod command_block_backend;
+mod data_service_loop;
 mod service_loop;
 mod userspace_syscall_adapter;
 
@@ -84,6 +85,10 @@ pub use ahci_port_program::{
 };
 pub use block_io_adapter::{AhciBlockIoAdapter, AhciBlockIoBackend, AhciBlockIoError};
 pub use command_block_backend::{AhciCommandBlockBackend, AhciDataBufferIo};
+pub use data_service_loop::{
+    AhciDataServiceLoopError, AhciDataServiceSyscalls, AhciReadWriteServiceLoop,
+    ReceivedAhciDataEnvelope,
+};
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };

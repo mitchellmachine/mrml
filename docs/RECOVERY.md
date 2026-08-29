@@ -1273,6 +1273,13 @@ transaction succeeds. Any uncertain DMA, cleanup, or synchronization state
 makes that backend unavailable. AHCI passes 64 tests on Windows and Arch Linux;
 installed recovery and physical-device execution remain unverified.
 
+The isolated AHCI read/write service loop is **PARTIALLY IMPLEMENTED IN
+SOURCE**. It requires one exact transferred shared-memory capability, performs
+only direction-correct bounded copying through wiped local scratch, releases
+that authority before reply, and never copies failed read results outward.
+AHCI passes 66 tests on Windows and Arch Linux. Raw syscall wiring, control
+operations, installed recovery, and physical execution remain unverified.
+
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,
 verified base-register clearing, and verified zeroing of all retained extents.
