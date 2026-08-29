@@ -7565,17 +7565,13 @@ impl<
             else_branch,
         } = expression.kind
         {
-            let condition = tree.evaluate_at(condition, self.resolver).map_err(|error| {
-                self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
-                    error,
-                )))
-            })?;
+            let condition = self.evaluate_wide_const_condition(tree, condition)?;
             return self.evaluate_wide_const_call_argument(
                 tree,
-                if condition == 0 {
-                    else_branch
-                } else {
+                if condition {
                     then_branch
+                } else {
+                    else_branch
                 },
                 expected_type,
             );
@@ -7661,6 +7657,91 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
         }
         Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))
+    }
+
+    fn evaluate_wide_const_condition<const MAX_NODES: usize>(
+        &self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        id: crate::ExprId,
+    ) -> Result<bool, CodegenError> {
+        let expression = tree
+            .expression(id)
+            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if let ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } = expression.kind
+            && matches!(
+                operator,
+                crate::BinaryOperator::Equal
+                    | crate::BinaryOperator::NotEqual
+                    | crate::BinaryOperator::Less
+                    | crate::BinaryOperator::LessEqual
+                    | crate::BinaryOperator::Greater
+                    | crate::BinaryOperator::GreaterEqual
+            )
+        {
+            let left_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                left,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let right_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                right,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let RuntimeExpressionType::Integer(Some(integer_type @ (
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            ))) = left_type
+            else {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            };
+            if !runtime_types_compatible(right_type, left_type) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            let left = self.evaluate_wide_const_call_argument(tree, left, integer_type)?;
+            let right = self.evaluate_wide_const_call_argument(tree, right, integer_type)?;
+            return Ok(match operator {
+                crate::BinaryOperator::Equal => left == right,
+                crate::BinaryOperator::NotEqual => left != right,
+                crate::BinaryOperator::Less if integer_type == crate::IntegerType::I128 => {
+                    (left as i128) < right as i128
+                }
+                crate::BinaryOperator::Less => left < right,
+                crate::BinaryOperator::LessEqual if integer_type == crate::IntegerType::I128 => {
+                    (left as i128) <= right as i128
+                }
+                crate::BinaryOperator::LessEqual => left <= right,
+                crate::BinaryOperator::Greater if integer_type == crate::IntegerType::I128 => {
+                    (left as i128) > right as i128
+                }
+                crate::BinaryOperator::Greater => left > right,
+                crate::BinaryOperator::GreaterEqual
+                    if integer_type == crate::IntegerType::I128 =>
+                {
+                    (left as i128) >= right as i128
+                }
+                crate::BinaryOperator::GreaterEqual => left >= right,
+                _ => unreachable!(),
+            });
+        }
+        tree.evaluate_at(id, self.resolver)
+            .map(|value| value != 0)
+            .map_err(|error| {
+                self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
+                    error,
+                )))
+            })
     }
 
     fn emit_wide_multiply(&mut self, layout: RuntimeIntegerLayout) -> Result<(), CodegenError> {
