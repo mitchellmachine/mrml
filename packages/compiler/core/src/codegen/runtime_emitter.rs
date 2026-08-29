@@ -7588,6 +7588,32 @@ impl<
             })?;
             return self.evaluate_wide_const_call_argument(tree, then, expected_type);
         }
+        if let ExprKind::Cast { operand, target } = expression.kind {
+            let crate::CastType::Integer(target_type @ (
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            )) = target
+            else {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            };
+            if target_type != expected_type {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            let RuntimeExpressionType::Integer(Some(source_type @ (
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            ))) = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                operand,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?
+            else {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            };
+            return self.evaluate_wide_const_call_argument(tree, operand, source_type);
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {
