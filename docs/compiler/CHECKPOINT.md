@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `7888330b`
-  (`compiler: enforce strict COFF text matches`)
+- Compiler checkpoint commit: `16665141`
+  (`compiler: select largest COFF text definitions`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `16665141` adds bounded COFF text `LARGEST` selection before layout.
+The largest raw text definition wins with deterministic leftmost ties; replacing
+an earlier winner also replaces its archive/member and exact source-object
+identity, preventing discarded code or unwind records from surviving through
+stale origin state. Mixed `ANY`/`LARGEST` follows current lld behavior and
+resolves as `LARGEST`; the gnullvm lane's mixed `ANY`/`SAME_SIZE` resolves as
+`SAME_SIZE` and retains its length check. Tests cover larger-later replacement,
+larger-first retention, source-origin propagation, both mixed-policy orders,
+and selection byte 6. Windows and Arch Linux each passed 753 core tests, all
+four integration groups, seven driver tests, and downstream graph suites. The
+exact stateful gnullvm probe still returns 42 through both linkers: MRML emits
+2,560 bytes versus rust-lld's 3,584 bytes, with two forwarding pointers and
+1,028 zero-fill bytes. Fifty measured links after five warmups produced 9.303
+ms median/9.518 ms mean for MRML versus 26.879 ms median/27.059 ms mean for
+rust-lld on this narrow workload. `mrml doctor` passed; audit retains unrelated
+fingerprint `fnv1a64:0fe5cf1836d3e0dc` at line 1244. Patent review:
+**NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `7888330b` adds bounded COFF text `SAME_SIZE` and `EXACT_MATCH`
 selection. Admission now requires the COMDAT section characteristic and the
