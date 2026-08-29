@@ -208,8 +208,7 @@ mod tests {
             },
         ];
         let mut runtime = [0; 512];
-        let runtime_length =
-            encode_runtime_inventory(33, &runtime_records, &mut runtime).unwrap();
+        let runtime_length = encode_runtime_inventory(33, &runtime_records, &mut runtime).unwrap();
         let private = [0x68; LAMPORT_PRIVATE_KEY_BYTES];
         let mut public = [0; LAMPORT_PUBLIC_KEY_BYTES];
         lamport_public_key(&private, &mut public).unwrap();
@@ -425,13 +424,13 @@ mod tests {
         // redefine its independently fixed authenticated recovery state.
         assert!(
             unsafe {
-            hosted_recovery_probe::recover_total_control_plane::<1>(
-                &stale,
-                &release[..release_length],
-                &key_id,
-                &mut release_output,
-            )
-        }
+                hosted_recovery_probe::recover_total_control_plane::<1>(
+                    &stale,
+                    &release[..release_length],
+                    &key_id,
+                    &mut release_output,
+                )
+            }
             .is_err()
         );
 

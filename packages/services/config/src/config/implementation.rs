@@ -4,39 +4,39 @@ use core::ops::{Deref, DerefMut};
 
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
-    recover_and_read_runtime_assignment, recover_and_read_runtime_assignment_shared_backend,
     DeploymentRecoveryStateStore, RecoveredDeploymentOwner, RecoveredRuntimeAssignment,
-    RecoveredRuntimeAssignmentError,
+    RecoveredRuntimeAssignmentError, recover_and_read_runtime_assignment,
+    recover_and_read_runtime_assignment_shared_backend,
 };
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    prepare_isolation_service_route, route_isolation_service,
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
     BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
     HostSubstrateReason, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
     InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
     IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
     PreparedIsolationServiceRoute, Priority, RecoveryStateMetadata, ReleaseInventoryError,
     RestartPolicy, Rights, RoutedIsolationService, RuntimeDomainAssignment,
     RuntimeDomainAssignmentPlan, RuntimeDomainPolicyAssignmentError, ServiceAddressSpaceEraser,
     ServiceCleanupError, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState,
-    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError, PAGE_SIZE,
+    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError, prepare_isolation_service_route,
+    route_isolation_service,
 };
 use mrml_storage::{
-    recover_reachable_state, AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId,
-    BlockFileSession, BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle,
-    BlockVolume, BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
+    AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
+    BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
+    BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
     FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
     InstalledRecoverySessionError, MetadataError, MetadataPointer, NativeBlockCorrelationError,
     NativeSataBlockRoute, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
     PlatformBlockTransport, PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
-    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend,
+    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
     SataNativeBlockCorrelationError, SataNativeBlockCorrelationVerifier, ServicedBlockDevice,
     StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal,
-    StorageTransaction, TransactionError, TransactionReceipt, VolumeHeader, VolumeId,
-    SUPERBLOCK_BYTES, VOLUME_HEADER_BYTES,
+    StorageTransaction, TransactionError, TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader,
+    VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -456,13 +456,13 @@ pub struct SupervisedNativeConfigurationLauncher<
 }
 
 impl<
-        E,
-        const TASKS: usize,
-        const CAPS: usize,
-        const SERVICES: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-    > SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+    E,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     pub const fn new(
         substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
@@ -495,13 +495,13 @@ impl<
 }
 
 impl<
-        E: ServiceAddressSpaceEraser,
-        const TASKS: usize,
-        const CAPS: usize,
-        const SERVICES: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-    > NativeConfigurationServiceLauncher
+    E: ServiceAddressSpaceEraser,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> NativeConfigurationServiceLauncher
     for SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     type Endpoint = NativeConfigurationEndpoint;
@@ -2178,13 +2178,13 @@ pub struct RecoveredInstalledStableTotalSystemSelection<
 }
 
 impl<
-        'a,
-        B: BlockServiceBackend,
-        const DEVICES: usize,
-        const SESSIONS: usize,
-        const EXTENTS: usize,
-        const OBJECTS: usize,
-    > RecoveredInstalledStableTotalSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> RecoveredInstalledStableTotalSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
 {
     pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
         self.installed
@@ -2214,13 +2214,13 @@ impl<
 }
 
 impl<
-        'a,
-        B: BlockServiceBackend,
-        const DEVICES: usize,
-        const SESSIONS: usize,
-        const EXTENTS: usize,
-        const OBJECTS: usize,
-    > RecoveredInstalledStableSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> RecoveredInstalledStableSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
 {
     pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
         self.installed
@@ -2896,13 +2896,13 @@ pub struct StableConfigurationRecoveryValidator<
 }
 
 impl<
-        'a,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -2970,13 +2970,13 @@ impl<
 // table and builds unpublished in-memory configuration/policy values. It
 // retains no storage handle or table reference and performs no mutation.
 unsafe impl<
-        const GRANTS: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > AuthorityRecoveryValidator<GRANTS>
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> AuthorityRecoveryValidator<GRANTS>
     for StableConfigurationRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     type Output = RecoveredStableConfiguration<SETTINGS, AUDIT>;
@@ -3842,12 +3842,12 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
 }
 
 impl<
-        const GRANTS: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const CANDIDATES: usize,
-        const DOMAINS: usize,
-    > RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+> RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
 {
     pub const fn configuration(&self) -> &DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
         &self.configuration
@@ -3914,12 +3914,12 @@ impl<
 }
 
 impl<
-        const GRANTS: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const CANDIDATES: usize,
-        const DOMAINS: usize,
-    > RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+> RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
 {
     pub const fn configuration(&self) -> &DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
         &self.configuration
@@ -4005,14 +4005,14 @@ pub struct StableServiceRecoveryValidator<
 }
 
 impl<
-        'a,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        const SERVICES: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     pub const fn new(
         configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
@@ -4031,14 +4031,14 @@ impl<
 // only planned against immutable supervisor state; no lifecycle mutation occurs
 // until a committed-authority wrapper later consumes the output.
 unsafe impl<
-        const GRANTS: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        const SERVICES: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > AuthorityRecoveryValidator<GRANTS>
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> AuthorityRecoveryValidator<GRANTS>
     for StableServiceRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     type Output = PreparedRecoveredService<SETTINGS, AUDIT>;
@@ -5003,7 +5003,11 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
         let route = self
             .routes
             .iter_mut()
-            .find(|route| route.as_ref().is_some_and(|route| route.spec().domain() == domain))
+            .find(|route| {
+                route
+                    .as_ref()
+                    .is_some_and(|route| route.spec().domain() == domain)
+            })
             .and_then(Option::take);
         if route.is_some() {
             self.count -= 1;
@@ -6333,12 +6337,12 @@ pub struct AccountedPolicyServiceSubstrate<
 }
 
 impl<
-        const TASKS: usize,
-        const CAPS: usize,
-        const SERVICES: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-    > AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
