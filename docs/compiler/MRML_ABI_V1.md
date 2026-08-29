@@ -317,6 +317,11 @@ Wide mixed-signedness wrapping addition and subtraction require an exact
 opposite-signed 128-bit argument. The operand loader preserves each declared
 type, then the lowering performs modulo-2^128 two-word arithmetic; signed and
 unsigned extrema and cross-word negative operands match the pinned oracle.
+Wide strict mixed-signedness add/sub methods use exact two-word bounds rather
+than reinterpreting the argument. Unsigned receivers branch on the signed
+argument and apply its magnitude in the correct direction; signed receivers
+compare the unsigned argument with the exact distance to `i128::MIN` or
+`i128::MAX`. All four method forms match the pinned strict-overflow oracle.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

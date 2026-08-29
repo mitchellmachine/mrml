@@ -8165,6 +8165,71 @@ impl<
             operator: operator @ (crate::BinaryOperator::Add | crate::BinaryOperator::Subtract),
             euclidean: false,
             euclidean_wrapping: false,
+            strict: true,
+            mixed_signedness: true,
+        } = expression.kind
+        {
+            self.emit_wide_mixed_binary_operands(tree, base, argument, expected_type)?;
+            if layout.signed {
+                if operator == crate::BinaryOperator::Add {
+                    self.emit(&[
+                        0x49, 0xc7, 0xc1, 0xff, 0xff, 0xff, 0xff, 0x49, 0xba,
+                    ])?;
+                    self.emit(&i64::MAX.to_le_bytes())?;
+                    self.emit(&[0x4d, 0x29, 0xc1, 0x49, 0x19, 0xca])?;
+                } else {
+                    self.emit(&[0x4d, 0x89, 0xc1, 0x49, 0x89, 0xca, 0x49, 0xbb])?;
+                    self.emit(&(1u64 << 63).to_le_bytes())?;
+                    self.emit(&[0x4d, 0x31, 0xda])?;
+                }
+                self.emit(&[0x4c, 0x39, 0xd2])?;
+                self.emit_trap_branch(0x87)?;
+                let below_limit = self.emit_forward_branch(0x82)?;
+                self.emit(&[0x4c, 0x39, 0xc8])?;
+                self.emit_trap_branch(0x87)?;
+                self.patch_forward_branch(below_limit)?;
+                if operator == crate::BinaryOperator::Add {
+                    self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+                } else {
+                    self.emit(&[
+                        0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48,
+                        0x89, 0xca,
+                    ])?;
+                }
+                return Ok(());
+            }
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let negative = self.emit_forward_branch(0x88)?;
+            if operator == crate::BinaryOperator::Add {
+                self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+            } else {
+                self.emit(&[
+                    0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48, 0x89,
+                    0xca,
+                ])?;
+            }
+            self.emit_trap_branch(0x82)?;
+            let done = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative)?;
+            self.emit(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda])?;
+            if operator == crate::BinaryOperator::Add {
+                self.emit(&[
+                    0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48, 0x89,
+                    0xca,
+                ])?;
+            } else {
+                self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+            }
+            self.emit_trap_branch(0x82)?;
+            self.patch_forward_branch(done)?;
+            return Ok(());
+        }
+        if let ExprKind::WrappingArithmetic {
+            base,
+            argument,
+            operator: operator @ (crate::BinaryOperator::Add | crate::BinaryOperator::Subtract),
+            euclidean: false,
+            euclidean_wrapping: false,
             strict: false,
             mixed_signedness: true,
         } = expression.kind
