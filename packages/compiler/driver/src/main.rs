@@ -1125,7 +1125,13 @@ fn selected_writable_data<'data, 'relocations>(
             .map(|(input, _)| input.symbol);
         if let Some(owner) = owner {
             let fragment_count = x86_64_coff_writable_section_count(objects[object_index])
-                .map_err(|_| anyhow!("could not count selected writable COFF data"))?;
+                .map_err(|error| {
+                    anyhow!(
+                        "COFF object {} writable fragment count: {}",
+                        object_index,
+                        error
+                    )
+                })?;
             for fragment_index in 0..fragment_count {
                 let (arena, rest) = remaining
                     .split_first_mut()
@@ -1136,7 +1142,14 @@ fn selected_writable_data<'data, 'relocations>(
                     owner,
                     arena,
                 )
-                .map_err(|_| anyhow!("could not decode selected writable COFF data"))?;
+                .map_err(|error| {
+                    anyhow!(
+                        "COFF object {} writable fragment {}: {}",
+                        object_index,
+                        fragment_index,
+                        error
+                    )
+                })?;
                 output
                     .try_push(data)
                     .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
