@@ -8159,6 +8159,41 @@ impl<
             }
             return Ok(());
         }
+        if let ExprKind::UncheckedIntegerOperation {
+            base,
+            argument: Some(argument),
+            second_argument: None,
+            operator:
+                operator @ (crate::BinaryOperator::Add
+                | crate::BinaryOperator::Subtract
+                | crate::BinaryOperator::Multiply),
+            unary: false,
+            disjoint: false,
+            funnel: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            match operator {
+                crate::BinaryOperator::Add => {
+                    self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+                }
+                crate::BinaryOperator::Subtract => {
+                    self.emit(&[
+                        0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48,
+                        0x89, 0xca,
+                    ])?;
+                }
+                crate::BinaryOperator::Multiply => {
+                    let overflow_checks = self.overflow_checks;
+                    self.overflow_checks = false;
+                    let result = self.emit_wide_multiply(layout);
+                    self.overflow_checks = overflow_checks;
+                    result?;
+                }
+                _ => unreachable!(),
+            }
+            return Ok(());
+        }
         if let ExprKind::WrappingArithmetic {
             base,
             argument,

@@ -326,6 +326,11 @@ Wide saturating mixed-signedness methods reuse those exact bounds but select an
 endpoint instead of trapping: signed receivers clamp to `i128::MIN` or
 `i128::MAX`, while unsigned receivers clamp to zero or `u128::MAX` according to
 the operation and signed argument direction. Exact boundaries remain unchanged.
+Unsafe wide `unchecked_add`, `unchecked_sub`, and `unchecked_mul` lower to the
+same two-word machine arithmetic used by wrapping operations, but remain
+admitted only in an unsafe function or block. Oracle execution uses exclusively
+valid non-overflowing inputs; violating an unchecked method precondition remains
+Rust undefined behavior and is never presented as a safe MRML-v1 contract.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

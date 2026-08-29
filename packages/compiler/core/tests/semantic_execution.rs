@@ -253,6 +253,12 @@ const MRML_V1_WIDE_SIGNED_SATURATING_ADD_UNSIGNED_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.saturating_add_unsigned(right) }";
 const MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_UNSIGNED_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.saturating_sub_unsigned(right) }";
+const MRML_V1_WIDE_UNSIGNED_UNCHECKED_ADD_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128) -> u128 { left.unchecked_add(right) }";
+const MRML_V1_WIDE_SIGNED_UNCHECKED_SUBTRACT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: i128, right: i128) -> i128 { left.unchecked_sub(right) }";
+const MRML_V1_WIDE_UNSIGNED_UNCHECKED_MULTIPLY_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128) -> u128 { left.unchecked_mul(right) }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -674,7 +680,12 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     #[cfg(not(target_os = "windows"))]
     let executable = directory.path().join("shared");
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
-    let oracle_features = if source.contains(".strict_add(")
+    let oracle_features = if source.contains(".unchecked_add(")
+        || source.contains(".unchecked_sub(")
+        || source.contains(".unchecked_mul(")
+    {
+        "#![feature(unchecked_math)]\n"
+    } else if source.contains(".strict_add(")
         || source.contains(".strict_sub(")
         || source.contains(".strict_mul(")
         || source.contains(".strict_div(")
@@ -2997,6 +3008,37 @@ fn mrml_v1_wide_saturating_mixed_signedness_matches_both_oracle_words() {
             MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_UNSIGNED_SOURCE,
             [(i128::MIN as u128, 1u128), (i128::MAX as u128, 0), (i128::MAX as u128, u128::MAX), ((i128::MIN + 17) as u128, 17)],
             "for (left, right) in [(i128::MIN, 1u128), (i128::MAX, 0), (i128::MAX, u128::MAX), (i128::MIN + 17, 17)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|(left, right)| {
+                let returned = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_unchecked_arithmetic_matches_valid_oracle_inputs() {
+    for (source, inputs, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_UNCHECKED_ADD_SOURCE,
+            [(0u128, 0u128), (1, u128::MAX - 1), (u64::MAX as u128, 1), (1u128 << 127, 1u128 << 126)],
+            "for (left, right) in [(0u128, 0u128), (1, u128::MAX - 1), (u64::MAX as u128, 1), (1u128 << 127, 1u128 << 126)] { let returned = unsafe { probe(left, right) }; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_UNCHECKED_SUBTRACT_SOURCE,
+            [(0u128, 0u128), (i128::MIN as u128, 0), (i128::MAX as u128, i128::MAX as u128), ((1i128 << 96) as u128, (-(1i128 << 95)) as u128)],
+            "for (left, right) in [(0i128, 0i128), (i128::MIN, 0), (i128::MAX, i128::MAX), (1i128 << 96, -(1i128 << 95))] { let returned = unsafe { probe(left, right) }; println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_UNCHECKED_MULTIPLY_SOURCE,
+            [(0u128, u128::MAX), (1, u128::MAX), (u64::MAX as u128, u64::MAX as u128), (1u128 << 64, 1u128 << 63)],
+            "for (left, right) in [(0u128, u128::MAX), (1, u128::MAX), (u64::MAX as u128, u64::MAX as u128), (1u128 << 64, 1u128 << 63)] { let returned = unsafe { probe(left, right) }; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         ),
     ] {
         let code = compile(source);
