@@ -7079,7 +7079,16 @@ impl<
             return Ok(());
         }
         if let ExprKind::Sequence { first, then } = expression.kind {
-            self.emit_expression(tree, first, 1)?;
+            let first_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                first,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            self.emit_discarded_value(tree, first, first_type, 1)?;
             return self.emit_wide_integer_return(tree, then, expected_type);
         }
         if let ExprKind::If {
@@ -8569,6 +8578,9 @@ impl<
             RuntimeExpressionType::Default => {
                 Err(self.error(CodegenErrorKind::RuntimeTypeMismatch))
             }
+            RuntimeExpressionType::Integer(Some(
+                crate::IntegerType::U128 | crate::IntegerType::I128,
+            )) => self.emit_wide_integer_return(tree, root, value_type),
             _ => self.emit_expression(tree, root, depth),
         }
     }
@@ -9008,7 +9020,7 @@ impl<
                 kind: CodegenErrorKind::Expression(error.kind),
                 span: translate_span(body_start + statement.span.start, error.span),
             })?;
-        runtime_expression_type_with_locals(
+        let value_type = runtime_expression_type_with_locals(
             self.function,
             self.resolver,
             &self.locals[..self.saved_locals],
@@ -9020,7 +9032,7 @@ impl<
             kind,
             span: translate_span(body_start, statement.span),
         })?;
-        self.emit_expression(&tree, tree.root(), 0)
+        self.emit_discarded_value(&tree, tree.root(), value_type, 0)
     }
 
     fn emit_assignment<const MAX_EXPRESSION_NODES: usize>(
