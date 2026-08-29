@@ -951,7 +951,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 request, runtime, current, delivery, &mut user,
             ) {
                 Ok(()) => frame.complete(0),
-                Err(mrml_kernel::BootRecoverySyscallError::User(
+                Err(mrml_kernel::BootRecoverySyscallError::UserValidation(
                     ActiveTaskUserCopyError::Buffer(_),
                 ))
                 | Err(mrml_kernel::BootRecoverySyscallError::Delivery(

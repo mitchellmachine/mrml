@@ -57,7 +57,8 @@ pub enum BootRecoverySyscallError<U, D> {
     Unsupported,
     InvalidReturn,
     Malformed,
-    User(U),
+    UserValidation(U),
+    UserCopy(U),
     Delivery(D),
 }
 
@@ -92,12 +93,12 @@ impl BootRecoverySyscallExecutor {
             BOOT_RECOVERY_ENVELOPE_BYTES,
             SharedBufferUserAccess::Write,
         )
-        .map_err(BootRecoverySyscallError::User)?;
+        .map_err(BootRecoverySyscallError::UserValidation)?;
         delivery
             .deliver(runtime, task, request.capability, scratch)
             .map_err(BootRecoverySyscallError::Delivery)?;
         user.write(task, request.output_address, scratch)
-            .map_err(BootRecoverySyscallError::User)
+            .map_err(BootRecoverySyscallError::UserCopy)
     }
 }
 
@@ -295,7 +296,7 @@ mod tests {
                 &mut delivery,
                 &mut invalid
             ),
-            Err(BootRecoverySyscallError::User(CopyError::Validate))
+            Err(BootRecoverySyscallError::UserValidation(CopyError::Validate))
         );
         assert!(
             runtime
@@ -312,7 +313,7 @@ mod tests {
                 &mut delivery,
                 &mut uncertain
             ),
-            Err(BootRecoverySyscallError::User(CopyError::Write))
+            Err(BootRecoverySyscallError::UserCopy(CopyError::Write))
         );
         assert!(
             runtime

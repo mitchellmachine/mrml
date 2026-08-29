@@ -2117,6 +2117,9 @@ live composition remains pending.
    Boot-recovery delivery returns scrubbed failure only for validation and
    other proven precommit denials; copy uncertainty after one-use consumption
    and internal delivery/runtime inconsistency remain fail-stop.
+   Its kernel executor now types user validation and post-delivery copy failure
+   separately, with a focused test proving the former preserves one-use
+   authority and the latter follows consumption.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

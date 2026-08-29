@@ -178,6 +178,9 @@ access. The security/acceptance gate is canonical in
   drift pending scoped retirement.
 - Boot-recovery delivery exposes scrubbed precommit denials but fail-stops on
   output-copy uncertainty after consuming its one-use authority.
+- The boot-recovery executor reports user-range validation and post-consumption
+  copy failure as distinct typed phases; callers need not infer commit state
+  from backend-specific errors.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

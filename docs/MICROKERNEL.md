@@ -6695,6 +6695,11 @@ mapping, wrong-task/already-consumed delivery, or precommit capability denial.
 Output-copy uncertainty after one-use authority consumption and all internal
 delivery/runtime inconsistency remain fail-stop. The same UEFI profiles and 595
 Linux kernel tests pass.
+The kernel boot-recovery executor now exposes validation and copy failure as
+distinct typed phases instead of a shared user-copy error. Its focused test
+proves validation preserves the one-use capability while copy uncertainty
+follows consumption; the bootloader no longer infers that distinction from a
+backend-specific nested error.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6718,7 +6723,8 @@ the same conventional integrity hardening; none triggers a separate patent
 review. Buffered userspace-range denial follows that existing boundary and does
 not introduce a new mechanism; the matching initial receive-range denial has
 the same classification. Boot-recovery precommit denial classification likewise
-uses the existing one-use delivery boundary and does not trigger review.
+uses the existing one-use delivery boundary, and typing its existing phases does
+not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
