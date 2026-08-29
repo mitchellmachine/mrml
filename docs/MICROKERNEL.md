@@ -7012,12 +7012,15 @@ generations as one typed result. Fault recovery and the restart-request service
 probe consume that task directly instead of performing a fallible supervisor
 lookup after task creation. The reprovision-boundary test checks the returned
 task's fresh context and exact supervisor binding; the total remains 630.
-Service registration now rejects an already-supervised exact task generation
-both when planning and again after prepared-slot validation at commit. Vacant
-capacity and stale-plan denials retain precedence, avoiding task-membership
-disclosure through full or invalid plans. Retirement also requires a unique
-running-task match. A focused duplicate-target test preserves the vacant slot
-and raises the Linux kernel total to 631.
+Service registration now rejects an already-supervised exact task generation or
+live service object both when planning and again after prepared-slot validation
+at commit. Atomic launch performs the object check before task creation, so
+ambiguous management authority cannot orphan a new task. Vacant capacity and
+stale-plan denials retain precedence, avoiding membership disclosure through
+full or invalid plans. Retirement also requires a unique running-task match. A
+focused duplicate-target test preserves the vacant slot, and launch coverage
+proves duplicate object denial leaves runtime occupancy unchanged; the Linux
+kernel total remains 631.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second

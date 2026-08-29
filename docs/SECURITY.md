@@ -319,9 +319,10 @@ access. The security/acceptance gate is canonical in
 - Restart commit publishes and returns the exact service/task generations as
   one typed result, so recovery and service dispatch do not rediscover task
   identity through a fallible lookup after creation.
-- Service registration admits each exact task generation into at most one
-  supervisor slot, rechecks that invariant at commit, and preserves full/stale-
-  plan denial precedence so those denials do not disclose task membership.
+- Service registration admits each exact task generation and live service
+  object into at most one supervisor slot, rechecks both at commit, checks the
+  object before atomic-launch task creation, and preserves full/stale-plan
+  denial precedence so those denials do not disclose membership.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact

@@ -2309,7 +2309,8 @@ live composition remains pending.
    post-creation lookup. Existing reprovision-boundary coverage checks the exact
    binding; the total remains 630.
    Service registration now enforces one unique supervisor binding per exact
-   task generation at plan and commit while preserving capacity/stale-plan
+   task generation and live service object at plan/commit; atomic launch checks
+   object uniqueness before task creation while preserving capacity/stale-plan
    denial precedence. Duplicate-target coverage raises the total to 631.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing

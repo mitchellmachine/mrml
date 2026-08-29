@@ -44,6 +44,7 @@ pub enum ServiceError {
     Full,
     InvalidService,
     InvalidObject,
+    ObjectAlreadyRegistered,
     TaskMismatch,
     TaskAlreadyRegistered,
     StillRunning,
@@ -414,6 +415,13 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .iter()
             .position(|entry| !entry.occupied)
             .ok_or(ServiceError::Full)?;
+        if self
+            .slots
+            .iter()
+            .any(|entry| entry.occupied && entry.object == object)
+        {
+            return Err(ServiceError::ObjectAlreadyRegistered);
+        }
         let generation = self.slots[slot].generation;
         let task = runtime
             .create(priority, context)
@@ -470,6 +478,13 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         {
             return Err(ServiceError::TaskAlreadyRegistered);
         }
+        if self
+            .slots
+            .iter()
+            .any(|entry| entry.occupied && entry.object == object)
+        {
+            return Err(ServiceError::ObjectAlreadyRegistered);
+        }
         Ok(ServiceRegistrationPlan {
             slot: slot as u32,
             generation: entry.generation,
@@ -496,6 +511,13 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .any(|entry| entry.occupied && entry.task == Some(plan.task))
         {
             return Err(ServiceError::TaskAlreadyRegistered);
+        }
+        if self
+            .slots
+            .iter()
+            .any(|entry| entry.occupied && entry.object == plan.object)
+        {
+            return Err(ServiceError::ObjectAlreadyRegistered);
         }
         let entry = &mut self.slots[plan.slot as usize];
         entry.object = plan.object;
@@ -1128,8 +1150,8 @@ mod tests {
         ));
         assert_eq!(unavailable_runtime.current(), None);
 
-        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
-        let mut supervisor = ServiceSupervisor::<1>::new();
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let mut supervisor = ServiceSupervisor::<2>::new();
         let (service, task) = supervisor
             .launch(
                 ObjectId(0x51),
@@ -1140,6 +1162,16 @@ mod tests {
             .unwrap();
         assert_eq!(supervisor.task(service), Ok(Some(task)));
         assert_eq!(supervisor.state(service), Ok(ServiceState::Running));
+        assert!(matches!(
+            supervisor.launch(
+                ObjectId(0x51),
+                &mut runtime,
+                Priority::NORMAL,
+                context(0x30_0000, 0x50_0000),
+            ),
+            Err(ServiceError::ObjectAlreadyRegistered)
+        ));
+        assert_eq!(runtime.load().occupied(), 1);
         let _ = runtime.start();
         assert_eq!(runtime.current(), Some(task));
     }
@@ -1290,12 +1322,27 @@ mod tests {
     }
 
     #[test]
-    fn registration_rejects_duplicate_task_before_publication() {
+    fn registration_rejects_duplicate_task_and_object_before_publication() {
         let task = TaskId::from_token((9u64 << 32) | 1);
         let unrelated = TaskId::from_token((9u64 << 32) | 2);
         let policy = RestartPolicy::ONCE_IMMEDIATE;
         let mut supervisor = ServiceSupervisor::<2>::new();
         supervisor.register(ObjectId(0x63), unrelated).unwrap();
+        assert_eq!(
+            supervisor.plan_registration(ObjectId(0x63), task, policy),
+            Err(ServiceError::ObjectAlreadyRegistered)
+        );
+        let plan = supervisor
+            .plan_registration(ObjectId(0x64), task, policy)
+            .unwrap();
+        supervisor.slots[0].object = ObjectId(0x64);
+
+        assert_eq!(
+            supervisor.commit_registration(plan),
+            Err(ServiceError::ObjectAlreadyRegistered)
+        );
+        assert!(!supervisor.slots[1].occupied);
+        supervisor.slots[0].object = ObjectId(0x63);
         let plan = supervisor
             .plan_registration(ObjectId(0x64), task, policy)
             .unwrap();
