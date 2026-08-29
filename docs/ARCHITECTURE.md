@@ -401,6 +401,16 @@ services. A service failure should revoke its authority and resources, notify
 affected peers, permit bounded restart, and leave unrelated services and the
 kernel running.
 
+Storage's modular provider boundary is **PARTIALLY IMPLEMENTED** at the stable
+interface-schema layer. Block transports and filesystems are immutable library
+packages dynamically bound as isolated supervised services to `mrml-storage`;
+they are not ambient in-process plugins. Generation-1 block-provider and
+filesystem interfaces define bounded generational operations and pass focused
+Windows/Arch Linux tests. Runtime rebinding and concrete AHCI/FAT32 providers
+remain planned. This reuses canonical package resolution and cleanup-gated
+service restart, so compatible replacement needs no kernel reboot and cannot
+silently retain stale authority.
+
 ## Authority model
 
 Values must resolve into mechanisms and tests, not remain slogans:

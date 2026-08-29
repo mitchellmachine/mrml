@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Versioned modular storage interfaces
+
+Patent review: **NOT_TRIGGERED**. This increment defines conventional bounded
+versioned IPC schemas for block-provider and filesystem operations and reuses
+MRML's existing package resolution, service isolation, capability, and restart
+architecture. It implements no AHCI command, FAT32 on-disk algorithm, storage
+optimization, crash-recovery algorithm, or new loading technique. This technical
+screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Ordered ELF constructor families and boundaries
 
 Patent review: **NOT_TRIGGERED**. This increment applies conventional numeric

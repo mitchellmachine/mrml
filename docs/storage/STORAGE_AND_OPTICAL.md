@@ -406,6 +406,49 @@ objects, progress, diagnostics, and redaction.
 
 ## Disk checking and images
 
+## Dynamically serviced storage modules
+
+Storage transport and filesystem implementations are dynamically resolved
+library packages behind stable MRML interfaces rather than statically fused
+policy code or path-searched DLL/SO plugins. `mrml-storage` remains the authority,
+object, transaction, and policy service. An AHCI library provides
+`org.mrml.interface.storage.block-provider`; a FAT32 library provides
+`org.mrml.interface.storage.filesystem`. Both initially use the
+`isolated-service` form so MMIO/DMA faults and hostile-filesystem parser faults
+do not share the storage service address space. “Load into the service” means
+bind an exact admitted provider endpoint into its module registry, not map
+mutable code with ambient service authority.
+
+Generation resolution validates the complete candidate graph before activation.
+Updating a provider stages immutable package/interface bytes, drains new calls,
+revokes the old provider's sessions, DMA, mappings, IPC, and derived handles,
+destroys and erases its domain, launches and health-checks a fresh generation,
+then atomically publishes a new binding. Existing handles become stale. Failure
+leaves the module unavailable and never falls back to an incompatible provider.
+The kernel and unrelated services continue running, so a compatible module or
+storage-service update requires no reboot. Boot-bound recovery components may
+remain static until the userspace resolver is available.
+
+The generation-1 block-provider interface bounds enumeration records and 1 MiB
+reads/writes and keeps read, write, flush, and reset distinct. The generation-1
+filesystem interface separates probe, mount/unmount, lookup, read/write/create,
+flush, check, and format. Opaque handles identify exact generations;
+capabilities transferred by the runtime authorize access. Names, signatures,
+PCI classes, and manifests do not authorize.
+
+- Complexity impact: **MEDIUM**
+- TCB impact: **NONE**
+- New parser boundary: **YES**
+- New authority model: **NO**
+- New persistent state: **NO**
+- External dependency: **NO**
+- Failure isolated: **YES**
+- Existing-object reuse: **HIGH**
+
+The two schemas and generated safe types are **PARTIALLY IMPLEMENTED** and each
+passes one focused test on Windows and Arch Linux. Provider packages, runtime
+rebinding, AHCI adaptation, FAT32, and live restart evidence remain **PLANNED**.
+
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never
 silently repairs. GPT checking covers protective MBR, primary and backup

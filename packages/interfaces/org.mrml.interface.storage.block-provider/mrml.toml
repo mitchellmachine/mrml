@@ -1,0 +1,40 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.interface.storage.block-provider"
+kind = "interface"
+name = "mrml-interface-storage-block-provider-v1"
+profile = "interface"
+
+[interface]
+abi = "mrml-call-v1"
+fingerprint = "1bde6037dfde7687b088296e135dd5c7a2406d001250c731165eef8cd817cf51"
+generation = 1
+schema = "1.mri"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_interface_storage_block_provider_v1"
+
+[rust]
+crate_name = "mrml_interface_storage_block_provider_v1"
+crate_type = "lib"
+source = "packages/interfaces/org.mrml.interface.storage.block-provider/src/lib.rs"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

@@ -18,6 +18,14 @@ remain independently attributable.
 
 ## Current priority
 
+Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
+gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
+schemas define bounded opaque-handle operations for isolated library providers;
+each passes one focused test on Windows and Arch Linux. The storage service will
+bind exact admitted generations and restart through complete cleanup rather than
+load path-selected code or reboot. The runtime module registry, AHCI provider
+extraction, and FAT32 provider remain next; current AHCI code is preserved.
+
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block
 sessions, repeats principal and `READ` authorization, reads and validates block

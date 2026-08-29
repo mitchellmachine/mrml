@@ -403,6 +403,14 @@ language/code-generation primitives do not become one giant Store component.
 The generation resolver, not an application filesystem search, selects an exact
 provider:
 
+Storage now has two **PARTIALLY IMPLEMENTED** generation-1 schemas:
+`org.mrml.interface.storage.block-provider` and
+`org.mrml.interface.storage.filesystem`. They select isolated service providers
+because transports own device/DMA state and filesystems parse hostile media.
+AHCI and FAT32 packages may be libraries, but runtime composition is a supervised
+exact-generation endpoint rather than DLL/SO path search. Compatible updates use
+cleanup-gated restart without reboot; names and manifests grant no authority.
+
 ```text
 download -> authenticate -> validate ABI/evidence/policy
   -> resolve typed requirements -> construct candidate generation
