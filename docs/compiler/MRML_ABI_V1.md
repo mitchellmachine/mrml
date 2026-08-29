@@ -208,6 +208,8 @@ one, zero, or positive one.
 Wide signed absolute values conditionally negate both words and trap on
 `i128::MIN` under checked or strict semantics; `unsigned_abs` preserves that
 minimum magnitude in the corresponding `u128` result.
+Wide `strict_neg` always rejects nonzero unsigned inputs and rejects
+`i128::MIN`, independent of the ordinary overflow-check setting.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
