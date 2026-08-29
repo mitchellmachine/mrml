@@ -6884,6 +6884,11 @@ Buffered-send capability descriptor decoding now parses into bounded scratch and
 publishes the caller output only after every token, right, and reserved byte is
 valid. A late-invalid-descriptor test proves prior output remains unchanged and
 raises the Linux kernel total to 622.
+The service buffered-receive path now resolves one exact empty pending-table
+slot before blocking the current task, then publishes only into that still-empty
+slot after the scheduler switch. Duplicate task identity, full table, slot
+substitution, or intervening occupancy fail closed. This path is service-image
+cross-build evidence, not a newly executed backend probe.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

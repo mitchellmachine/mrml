@@ -1166,23 +1166,26 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     Err(mrml_kernel::TaskRuntimeError::ReceiveCapacity) => {
                         frame.complete_error();
                     }
-                    Err(mrml_kernel::TaskRuntimeError::InboxEmpty) => match runtime
-                        .receive_or_block_current()
-                        .unwrap_or_else(|_| halt())
-                    {
-                        Ok(_) => halt(),
-                        Err(ScheduleOutcome::Switch { to, .. }) => {
-                        insert_pending_buffer(pending);
-                        asm!(
-                            "out dx, eax",
-                            in("dx") SERVICE_CALL_PORT,
-                            in("eax") 1u32,
-                            options(nomem, nostack)
-                        );
-                        enter_service_task(runtime, to)
+                    Err(mrml_kernel::TaskRuntimeError::InboxEmpty) => {
+                        let pending_slot = pending_buffer_insert_slot(current);
+                        match runtime
+                            .receive_or_block_current()
+                            .unwrap_or_else(|_| halt())
+                        {
+                            Ok(_) => halt(),
+                            Err(ScheduleOutcome::Switch { to, .. }) => {
+                                insert_pending_buffer(pending_slot, pending);
+                                asm!(
+                                    "out dx, eax",
+                                    in("dx") SERVICE_CALL_PORT,
+                                    in("eax") 1u32,
+                                    options(nomem, nostack)
+                                );
+                                enter_service_task(runtime, to)
+                            }
+                            _ => halt(),
                         }
-                        _ => halt(),
-                    },
+                    }
                     Err(_) => halt(),
                 }
             }
@@ -5121,20 +5124,30 @@ unsafe fn take_pending_buffer(task: mrml_kernel::TaskId) -> Option<PendingBuffer
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn insert_pending_buffer(pending: PendingBufferReceive) {
-    let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
-    if buffers
+unsafe fn pending_buffer_insert_slot(task: mrml_kernel::TaskId) -> usize {
+    if unsafe { pending_buffer_slot(task) }.is_some() {
+        halt();
+    }
+    let buffers = unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_BUFFERS) };
+    buffers
         .iter()
-        .flatten()
-        .any(|existing| existing.task == pending.task)
+        .position(Option::is_none)
+        .unwrap_or_else(|| halt())
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn insert_pending_buffer(slot: usize, pending: PendingBufferReceive) {
+    let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
+    if slot >= buffers.len()
+        || buffers[slot].is_some()
+        || buffers
+            .iter()
+            .flatten()
+            .any(|existing| existing.task == pending.task)
     {
         halt();
     }
-    let slot = buffers
-        .iter_mut()
-        .find(|slot| slot.is_none())
-        .unwrap_or_else(|| halt());
-    *slot = Some(pending);
+    buffers[slot] = Some(pending);
 }
 
 #[cfg(feature = "buffer-drift-probe")]

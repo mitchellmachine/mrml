@@ -271,6 +271,8 @@ access. The security/acceptance gate is canonical in
   already an ancestor of its source before graph use.
 - Buffered-send capability descriptor parsing is transactional; late invalid
   tokens, rights, or reserved bytes cannot publish a partial decoded prefix.
+- Buffered receive preflights and binds its exact empty pending-table slot before
+  scheduler blocking, preventing late capacity discovery after state mutation.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

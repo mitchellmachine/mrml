@@ -2238,6 +2238,9 @@ live composition remains pending.
    Capability-transfer descriptor decoding now publishes output only after the
    complete bounded array validates. A late-error atomicity test raises the
    kernel total to 622.
+   Buffered service receive now preflights an exact pending-table slot before
+   blocking and binds post-switch publication to that slot. Service profiles
+   cross-build; live backend execution remains pending.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
