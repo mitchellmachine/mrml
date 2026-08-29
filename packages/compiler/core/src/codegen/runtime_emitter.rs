@@ -7488,6 +7488,34 @@ impl<
                 _ => unreachable!(),
             });
         }
+        if let ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } = expression.kind
+            && matches!(
+                operator,
+                crate::BinaryOperator::Add | crate::BinaryOperator::Subtract
+            )
+        {
+            let left = self.evaluate_wide_const_call_argument(tree, left, expected_type)?;
+            let right = self.evaluate_wide_const_call_argument(tree, right, expected_type)?;
+            let value = if expected_type == crate::IntegerType::I128 {
+                match operator {
+                    crate::BinaryOperator::Add => (left as i128).checked_add(right as i128),
+                    crate::BinaryOperator::Subtract => (left as i128).checked_sub(right as i128),
+                    _ => unreachable!(),
+                }
+                .map(|value| value as u128)
+            } else {
+                match operator {
+                    crate::BinaryOperator::Add => left.checked_add(right),
+                    crate::BinaryOperator::Subtract => left.checked_sub(right),
+                    _ => unreachable!(),
+                }
+            };
+            return value.ok_or(self.error(CodegenErrorKind::ValueOutOfRange));
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {

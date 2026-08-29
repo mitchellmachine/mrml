@@ -12763,6 +12763,20 @@ mod tests {
             assert!(code.bytes().windows(10).any(|bytes| bytes
                 == [0x48, 0xb8, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]));
         }
+        let source = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select(select(340282366920938463463374607431768211455) + 1) }";
+        let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[1] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            let error = compile_x86_64_function::<_, 128, 4, 32>(
+                &function,
+                &WideConstCallResolver,
+                abi,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind, CodegenErrorKind::ValueOutOfRange);
+        }
     }
 
     #[test]
