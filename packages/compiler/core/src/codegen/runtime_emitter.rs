@@ -7467,6 +7467,27 @@ impl<
                 _ => unreachable!(),
             };
         }
+        if let ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } = expression.kind
+            && matches!(
+                operator,
+                crate::BinaryOperator::BitAnd
+                    | crate::BinaryOperator::BitOr
+                    | crate::BinaryOperator::BitXor
+            )
+        {
+            let left = self.evaluate_wide_const_call_argument(tree, left, expected_type)?;
+            let right = self.evaluate_wide_const_call_argument(tree, right, expected_type)?;
+            return Ok(match operator {
+                crate::BinaryOperator::BitAnd => left & right,
+                crate::BinaryOperator::BitOr => left | right,
+                crate::BinaryOperator::BitXor => left ^ right,
+                _ => unreachable!(),
+            });
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {

@@ -133,7 +133,8 @@ Bounded typed `const fn` calls returning `u128` or `i128` use the same exact-wor
 constant resolver, including nested calls whose result feeds a matching wide
 parameter. Wide literal, negative literal, matching typed named-constant,
 nested-call, bitwise-inverted, and checked signed-negated arguments are evaluated
-under the callee parameter's declared type.
+under the callee parameter's declared type. Matching-type `&`, `|`, and `^`
+arguments compose through that same bounded recursive resolver.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
