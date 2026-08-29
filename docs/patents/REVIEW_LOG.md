@@ -2,6 +2,17 @@
 
 # 2026-08-29 — Cleanup-gated storage module registry
 
+# 2026-08-29 — AHCI provider package extraction
+
+Patent review: **NOT_TRIGGERED**. This increment moves the already reviewed AHCI
+source intact from the storage policy crate into a separate Manifest V2 library
+provider and declares its existing block-provider interface binding. It changes
+no AHCI mechanism, command, register sequence, DMA behavior, filesystem format,
+or loading algorithm. Existing Canadian AHCI review conditions remain unchanged.
+This technical screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Cleanup-gated storage module registry
+
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
 capability, exact-generation, quarantine, service cleanup, launch, health-check,
 and retry patterns to a bounded storage-provider registry. It introduces no new

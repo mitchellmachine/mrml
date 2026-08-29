@@ -501,6 +501,16 @@ checked on a Windows host without changing storage source behavior:
 No Linux host/runtime, live block device, signed service, WHP/KVM, bare-metal,
 or physical-storage execution was exercised by this path-only move.
 
+The 2026-08-29 modular-storage extraction moved every implemented AHCI source
+from `packages/services/storage/src` into
+`packages/libraries/storage-ahci/src` without discarding mechanism. Manifest V2
+now records `org.mrml.library.storage.ahci` as the isolated generation-1
+`org.mrml.interface.storage.block-provider`, and the storage service requires
+that exact dynamic interface. `mrml test` passes 46 AHCI-library and 135 storage-
+service tests on Windows and Arch Linux. This is source/package/interface graph
+evidence; no live provider process, restart, AHCI hardware, IOMMU, OVMF, or
+physical disk was exercised.
+
 The shared UEFI-library move from `crates/mrml-uefi` to
 `packages/libraries/uefi` was checked on a Windows host without changing source
 behavior:

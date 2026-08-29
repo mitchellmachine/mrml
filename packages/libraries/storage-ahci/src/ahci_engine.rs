@@ -64,6 +64,10 @@ impl ActiveAhciPort {
     pub const fn layout(&self) -> AhciPortDmaLayout {
         self.layout
     }
+
+    pub(crate) const fn into_layout(self) -> AhciPortDmaLayout {
+        self.layout
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]

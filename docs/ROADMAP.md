@@ -27,7 +27,12 @@ load path-selected code or reboot. The fixed-capacity registry is now
 **PARTIALLY IMPLEMENTED** with separate authorities, exact generation changes,
 cleanup-before-launch, health-check-before-publication, quarantine, unavailable
 state, and explicit retry. Storage passes 181 tests on Windows and Arch Linux.
-AHCI extraction and FAT32 remain next; current AHCI code is preserved.
+AHCI package extraction is now **PARTIALLY IMPLEMENTED** without deleting its
+mechanisms: all AHCI modules moved intact to
+`org.mrml.library.storage.ahci`, which provides the generation-1 block interface;
+the storage policy service has no static AHCI module. Windows and Arch Linux each
+pass 46 provider tests and 135 storage tests. The AHCI service entry/IPC adapter,
+then FAT32 provider extraction/implementation, remain next.
 
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block

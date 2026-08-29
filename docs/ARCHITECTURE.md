@@ -409,8 +409,11 @@ filesystem interfaces define bounded generational operations and pass focused
 Windows/Arch Linux tests. A fixed-capacity registry now models authority-bound
 binding and cleanup/launch/health-check replacement; failure quarantines or
 leaves the provider unavailable rather than falling back. Storage passes 181
-tests on both hosts. Concrete providers and live supervisor composition remain
-planned. This reuses canonical package resolution and cleanup-gated
+tests on both hosts before extraction. The complete existing AHCI mechanism now
+lives in `org.mrml.library.storage.ahci`, advertises the block-provider interface,
+and passes 46 tests per host; the AHCI-free policy service passes 135. This is a
+package/interface extraction, not yet a live provider endpoint. FAT32 and live
+supervisor composition remain planned. This reuses canonical package resolution and cleanup-gated
 service restart, so compatible replacement needs no kernel reboot and cannot
 silently retain stale authority.
 

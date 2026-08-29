@@ -452,8 +452,13 @@ provider control, and endpoint signal authorities separately; exact-matches all
 generations; cleanup-gates replacement; and publishes only after fresh launch
 and health-check. Cleanup uncertainty quarantines, while failed launch leaves
 the class unavailable until explicit retry and never falls back. Storage passes
-181 tests on Windows and Arch Linux. Concrete provider packages, AHCI adaptation,
-FAT32, and live supervised restart evidence remain **PLANNED**.
+181 tests on Windows and Arch Linux before extraction. The AHCI mechanism is now
+preserved in the separate `org.mrml.library.storage.ahci` package, which declares
+the exact generation-1 block-provider interface and isolated-service placement;
+the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
+each pass 46 AHCI-library tests and 135 storage-service tests. The AHCI service
+entry/IPC adapter, FAT32 provider, and live supervised restart evidence remain
+**PLANNED**.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never
