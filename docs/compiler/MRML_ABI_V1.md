@@ -141,7 +141,9 @@ Matching-type `u128` and `i128` addition evaluates left-to-right, propagates the
 low-word carry into the high word, and uses unsigned-carry or signed-overflow
 branches respectively when ordinary overflow checks are enabled.
 Matching-type subtraction likewise propagates low-word borrow into the high word
-and selects unsigned-borrow or signed-overflow trapping by declared type.
+and selects unsigned-borrow or signed-overflow trapping by declared type. Binary
+addition/subtraction and their wide-local compound assignments share these
+carry-aware lowerings.
 Equality and inequality compare both words after left-to-right evaluation and
 normalize the combined word differences to a boolean that may enter the supported
 one-word integer cast/return path.

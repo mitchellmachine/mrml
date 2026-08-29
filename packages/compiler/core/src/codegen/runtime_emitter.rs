@@ -7347,17 +7347,10 @@ impl<
                     self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
                 }
                 crate::BinaryOperator::Add => {
-                    self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
-                    if self.overflow_checks {
-                        self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
-                    }
+                    self.emit_wide_add(layout)?;
                 }
                 crate::BinaryOperator::Subtract => {
-                    self.emit(&[0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1])?;
-                    if self.overflow_checks {
-                        self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
-                    }
-                    self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+                    self.emit_wide_subtract(layout)?;
                 }
                 crate::BinaryOperator::Multiply => {
                     self.emit_wide_multiply(layout)?;
@@ -7710,6 +7703,22 @@ impl<
         }
         self.patch_forward_branch(end)?;
         Ok(())
+    }
+
+    fn emit_wide_add(&mut self, layout: RuntimeIntegerLayout) -> Result<(), CodegenError> {
+        self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+        if self.overflow_checks {
+            self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
+        }
+        Ok(())
+    }
+
+    fn emit_wide_subtract(&mut self, layout: RuntimeIntegerLayout) -> Result<(), CodegenError> {
+        self.emit(&[0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1])?;
+        if self.overflow_checks {
+            self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
+        }
+        self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])
     }
 
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {
@@ -9487,25 +9496,10 @@ impl<
                             self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
                         }
                         crate::AssignmentOperator::Add => {
-                            self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
-                            if self.overflow_checks {
-                                self.emit_trap_branch(if integer_type.is_signed() {
-                                    0x80
-                                } else {
-                                    0x82
-                                })?;
-                            }
+                            self.emit_wide_add(layout)?;
                         }
                         crate::AssignmentOperator::Subtract => {
-                            self.emit(&[0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1])?;
-                            if self.overflow_checks {
-                                self.emit_trap_branch(if integer_type.is_signed() {
-                                    0x80
-                                } else {
-                                    0x82
-                                })?;
-                            }
-                            self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+                            self.emit_wide_subtract(layout)?;
                         }
                         crate::AssignmentOperator::Multiply => {
                             self.emit_wide_multiply(layout)?;
