@@ -1265,6 +1265,14 @@ the active owner. Every post-issue uncertainty quarantines the port layout and
 data extent. The provider passes 58 tests on Windows and Arch Linux; interrupt
 delivery, installed recovery, and native device execution remain unverified.
 
+The reusable AHCI command backend is **PARTIALLY IMPLEMENTED IN SOURCE** with
+separate exact directional data capabilities and per-request session/media
+generation checks. Recovery may reuse the port only after the complete buffer
+synchronization, command issue/completion, slot recycle, copy-back, and sanitize
+transaction succeeds. Any uncertain DMA, cleanup, or synchronization state
+makes that backend unavailable. AHCI passes 64 tests on Windows and Arch Linux;
+installed recovery and physical-device execution remain unverified.
+
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,
 verified base-register clearing, and verified zeroing of all retained extents.

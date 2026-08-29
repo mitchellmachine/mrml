@@ -362,6 +362,18 @@ exact port layout and data extent; only full cleanup returns both for reuse. The
 AHCI library passes 62 tests on Windows and Arch Linux. This is memory-model
 evidence, not cache-coherence, DMA, IOMMU, or physical-device evidence.
 
+The reusable single-port AHCI block backend is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. It requires separate exact `PIN | MAP | WRITE` and `PIN | MAP | READ`
+data capabilities for device reads and writes, respectively, and revalidates
+the generational provider session and media generation on every operation. One
+bounded transaction composes buffer zero/copy and CPU/device synchronization,
+command preparation, polling execution, slot recycling, result copy-back, and
+data sanitization. Pre-issue rejection can restore the untouched port only if
+sanitization succeeds; command, cleanup, synchronization, or sanitization
+uncertainty makes the backend unavailable. The AHCI library passes 64 tests on
+Windows and Arch Linux. Cache/IOMMU implementations, service IPC dispatch, and
+physical-device execution remain **PLANNED**.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised

@@ -325,6 +325,13 @@ The exact completed command table and mutable header fields are cleared and
 read-verified before the active port and data extent can be reused; all cleanup
 uncertainty quarantines both. AHCI passes 62 tests on Windows and Arch Linux.
 
+The single-port command backend is now **PARTIALLY IMPLEMENTED IN SOURCE**. It
+keeps read-target and write-source DMA authority separate, exact-matches session
+and media generations, and composes synchronization, prepare, execute, recycle,
+copy-back, and sanitization as one fail-closed reusable transaction. AHCI passes
+64 tests on Windows and Arch Linux. Native cache/IOMMU implementations and
+service dispatch remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file
