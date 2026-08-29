@@ -69,10 +69,12 @@ wide locals and computed expressions without duplicating their lowering or
 changing Rust truncation semantics. Focused native Linux tests pass for both
 x86-64 ABIs, and the release compiler build passes. The canonical native Linux
 compiler gate passes all 812 unit tests and every integration group. Its
-semantic-execution group passes 120 tests, including computed wrapping sums
-narrowed to `u64` against exact ORACLE-0003 observations at zero, the low-word
-carry boundary, a high-word-only operand, and full-width wrapping overflow.
-Windows gnullvm was not run.
+semantic-execution group passes 121 tests. Unsigned computed wrapping sums
+narrowed to `u64` match exact ORACLE-0003 at zero, the low-word carry boundary,
+a high-word-only operand, and full-width wrapping overflow. Signed computed
+wrapping sums narrowed through `i16` and then widened to `u64` also match at
+zero, both `i16` boundaries, and both `i128` wrapping boundaries. Windows
+gnullvm was not run.
 Patent review: **NOT_TRIGGERED**; this is ordinary integer-cast lowering, not a
 new mechanism. See `docs/patents/REVIEW_LOG.md`.
 

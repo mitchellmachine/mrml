@@ -6049,5 +6049,6 @@ against exact ORACLE-0003 observations at zero, the low-word carry boundary, a
 high-word-only operand, and full-width wrapping overflow. The release compiler
 build and focused unit test pass. The canonical native Linux compiler gate
 passes all 812 unit tests and every integration group; semantic execution passes
-120 tests, including this computed-narrowing case against ORACLE-0003. Windows
-gnullvm was not run.
+121 tests. ORACLE-0003 comparisons cover both the unsigned computed `u64` case
+and signed computed wrapping sums narrowed through `i16` before widening to
+`u64`, including narrow and full-width boundaries. Windows gnullvm was not run.

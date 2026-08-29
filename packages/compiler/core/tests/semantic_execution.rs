@@ -48,6 +48,8 @@ const MRML_V1_STR_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn
 const MRML_V1_WIDE_NARROW_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(unsigned: u128, signed: i128) -> u64 { (unsigned as u32 as u64) ^ (signed as i16 as u64) }";
 const MRML_V1_WIDE_COMPUTED_NARROW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u64 { let wide: u128 = left.wrapping_add(right); wide as u64 }";
+const MRML_V1_SIGNED_COMPUTED_NARROW_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> u64 { let wide: i128 = left.wrapping_add(right); (wide as i16) as u64 }";
 const MRML_V1_WIDE_RETURN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input }";
 const MRML_V1_WIDE_UNSIGNED_TO_SIGNED_SOURCE: &str =
@@ -1136,6 +1138,28 @@ fn mrml_v1_computed_wide_integer_narrowing_matches_the_oracle() {
         })
         .to_vec();
     assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_COMPUTED_NARROW_SOURCE, "for (left, right) in [(0u128, 0u128), (u64::MAX as u128, 1), (1u128 << 64, 17), (u128::MAX, 2)] { println!(\"{}\", probe(left, right)); }"));
+}
+
+#[test]
+fn mrml_v1_signed_computed_wide_narrowing_matches_the_oracle() {
+    let code = compile(MRML_V1_SIGNED_COMPUTED_NARROW_SOURCE);
+    let inputs = [
+        (0i128, 0i128),
+        (i16::MAX as i128, 1),
+        (i16::MIN as i128, -1),
+        (i128::MAX, 2),
+        (i128::MIN, -2),
+    ];
+    let actual = inputs
+        .map(|(left, right)| unsafe {
+            call_mrml_v1_two_wide_to_u64(
+                code.pointer,
+                left as u128,
+                right as u128,
+            )
+        })
+        .to_vec();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_SIGNED_COMPUTED_NARROW_SOURCE, "for (left, right) in [(0i128, 0i128), (i16::MAX as i128, 1), (i16::MIN as i128, -1), (i128::MAX, 2), (i128::MIN, -2)] { println!(\"{}\", probe(left, right)); }"));
 }
 
 unsafe fn call_mrml_v1_wide_return(function: *const u8, input: u128) -> u128 {
