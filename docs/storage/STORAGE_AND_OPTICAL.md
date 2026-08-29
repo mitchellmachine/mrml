@@ -572,7 +572,9 @@ and media generations through the canonical block-provider catalog without
 granting raw port or DMA authority to the storage service. Its isolated
 enumeration loop uses a transferred shared-memory leaf, bounded scratch,
 validated copy-back, mandatory release, reply-after-release ordering, and
-transient-buffer wiping. Twenty-six focused
+transient-buffer wiping. Its concrete userspace adapter validates immutable
+reply bindings and exact receive/shared-write/release/send register frames.
+Twenty-seven focused
 tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
@@ -619,7 +621,7 @@ isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI, NVMe, and IDE enumeratio
 Each service loop accepts one exact transferred shared-memory leaf, rebuilds the catalog in
 bounded local scratch, copies back only the validated response extent, releases
 the leaf on success or failure, replies only after release, and wipes request,
-token, scratch, and response buffers. The AHCI and NVMe concrete userspace adapters validate
+token, scratch, and response buffers. All three concrete userspace adapters validate
 immutable reply bindings and emits the exact receive, shared-write, release, and
 send register frames. Malformed envelopes fail before copy-back.
 The read

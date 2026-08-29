@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Classic IDE userspace syscall adapter
+
+Patent review: **NOT_TRIGGERED**. This increment maps the already screened IDE
+enumeration service loop onto MRML's existing receive-buffer,
+write-shared-buffer, capability-release, and send-buffer syscall frames. It adds
+no ATA register, port, DMA, command, discovery, storage scheduling, caching,
+allocation, naming, encoding, data-layout, or optimization behavior. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Isolated classic IDE enumeration service loop
 
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
