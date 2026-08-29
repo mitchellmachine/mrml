@@ -1738,6 +1738,15 @@ impl<
             } else if runtime_type_is_fat_reference(expected) {
                 self.emit_slice_value_to_stack(caller_tree, argument, depth)?;
                 2
+            } else if matches!(
+                expected,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) {
+                self.emit_wide_integer_return(caller_tree, argument, expected)?;
+                self.emit(&[0x50, 0x52])?;
+                2
             } else {
                 self.emit_expression(caller_tree, argument, depth)?;
                 self.emit(&[0x50])?;
@@ -1911,6 +1920,13 @@ impl<
                 self.emit_inline_array_value(&tree, tree.root(), return_type, checkpoint)
             } else if runtime_type_is_tuple(return_type) {
                 self.emit_inline_tuple_value(&tree, tree.root(), return_type, checkpoint)
+            } else if matches!(
+                return_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) {
+                self.emit_wide_integer_return(&tree, tree.root(), return_type)
             } else {
                 self.emit_expression(&tree, tree.root(), depth)
             }
@@ -1990,6 +2006,13 @@ impl<
             let branch = self.emit_unconditional_forward_branch()?;
             self.evaluation_depth -= element_count;
             return Ok(branch);
+        } else if matches!(
+            expected_type,
+            RuntimeExpressionType::Integer(Some(
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            ))
+        ) {
+            self.emit_wide_integer_return(&tree, tree.root(), expected_type)?;
         } else {
             self.emit_expression(&tree, tree.root(), 0)?;
         }
@@ -7090,6 +7113,22 @@ impl<
             .map_err(|kind| self.error(kind))?;
             self.emit_discarded_value(tree, first, first_type, 1)?;
             return self.emit_wide_integer_return(tree, then, expected_type);
+        }
+        if let ExprKind::Call {
+            callee,
+            arguments,
+            argument_count,
+        } = expression.kind
+        {
+            let target = self
+                .resolver
+                .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            if !runtime_types_compatible(runtime_type_from_scalar(target.return_type), expected_type)
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            return self.emit_runtime_call(tree, &arguments, target, 1);
         }
         if let ExprKind::If {
             condition,

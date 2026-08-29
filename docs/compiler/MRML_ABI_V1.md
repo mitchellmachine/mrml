@@ -167,6 +167,8 @@ and ownership checks. Checked `+=`/`-=` and bitwise `&=`/`|=`/`^=` preserve both
 words; multiply, divide, remainder, and shift compounds remain fail-closed.
 Discarded wide expression statements and block prefixes execute normally,
 including checked traps, without materializing an unused stack value.
+Bounded calls to earlier ordinary Rust helpers may pass and return supported
+two-word integers; the helper is inlined and does not acquire an external ABI.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -232,6 +234,7 @@ Immutable wide-local round trips are compared word-for-word.
 Whole-value mutable wide-local assignments are compared word-for-word.
 Supported wide compound assignments are compared word-for-word as one sequence.
 Discarded wide-expression prefixes are compared against the retained tail value.
+Wide helper arguments and returns are compared word-for-word after inlining.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

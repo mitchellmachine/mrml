@@ -93,6 +93,7 @@ const MRML_V1_WIDE_LOCAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn
 const MRML_V1_WIDE_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { let mut adjusted: u128 = input; adjusted = adjusted + 17; adjusted }";
 const MRML_V1_WIDE_DISCARD_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input + 3; input + 17 }";
 const MRML_V1_WIDE_COMPOUND_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { let mut value: u128 = input; value += 18446744073709551617; value ^= 1512366075204170947332355369683137040; value -= 3; value &= 170141183460469231731687303715884105727; value |= 17; value }";
+const MRML_V1_WIDE_HELPER_SOURCE: &str = "fn adjust(value: u128) -> u128 { value + 17 } #[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { adjust(input) }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1675,6 +1676,26 @@ fn mrml_v1_wide_compound_assignments_match_oracle_words() {
         rustc_mrml_v1_observations(
             MRML_V1_WIDE_COMPOUND_SOURCE,
             "for input in [0u128, 1, u64::MAX as u128, 1u128 << 96] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_helper_call_matches_oracle_words() {
+    let code = compile(MRML_V1_WIDE_HELPER_SOURCE);
+    let inputs = [0u128, 1, u64::MAX as u128, u128::MAX - 17];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, input, 0) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_HELPER_SOURCE,
+            "for input in [0u128, 1, u64::MAX as u128, u128::MAX - 17] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
     );
 }

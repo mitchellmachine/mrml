@@ -14,6 +14,37 @@ mod tests {
 
     struct MutableReferenceCallResolver;
 
+    struct WideCallResolver;
+
+    impl ConstantResolver for WideCallResolver {
+        fn resolve(&self, _: &str) -> Option<u128> {
+            None
+        }
+
+        fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+            &self,
+            name: &str,
+            argument_count: usize,
+        ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+            if name != "wide_adjust" || argument_count != 1 || MAX_PARAMETERS == 0 {
+                return None;
+            }
+            let mut parameters = [None; MAX_PARAMETERS];
+            parameters[0] = Some(RuntimeCallParameter {
+                name: "value",
+                ty: ScalarType::Integer(crate::IntegerType::U128),
+            });
+            Some(RuntimeCallTarget {
+                name: "wide_adjust",
+                parameters,
+                parameter_count: 1,
+                return_type: ScalarType::Integer(crate::IntegerType::U128),
+                return_type_name: "u128",
+                body_expression: "value + 17",
+            })
+        }
+    }
+
     impl ConstantResolver for MutableReferenceCallResolver {
         fn resolve(&self, _: &str) -> Option<u128> {
             None
@@ -12589,6 +12620,25 @@ mod tests {
                 .windows(4)
                 .any(|bytes| bytes == [0x4c, 0x01, 0xc0, 0x48]));
             assert!(code.bytes().windows(2).any(|bytes| bytes == [0x0f, 0x82]));
+        }
+    }
+
+    #[test]
+    fn mrml_v1_codegen_inlines_two_word_helper_arguments_and_returns() {
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { wide_adjust(input) }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            let code =
+                compile_x86_64_function::<_, 768, 4, 24>(&function, &WideCallResolver, abi)
+                    .unwrap();
+            assert!(code.bytes().windows(2).any(|bytes| bytes == [0x50, 0x52]));
+            assert!(code
+                .bytes()
+                .windows(4)
+                .any(|bytes| bytes == [0x4c, 0x01, 0xc0, 0x48]));
         }
     }
 
