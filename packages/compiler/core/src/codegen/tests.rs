@@ -12559,10 +12559,12 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_wraps_wide_addition_and_subtraction_without_traps() {
+    fn mrml_v1_codegen_wraps_wide_arithmetic_without_traps() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.wrapping_add(17) }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.wrapping_sub(17) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.wrapping_mul(17) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.wrapping_mul(-17) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

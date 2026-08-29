@@ -176,9 +176,9 @@ Matching-type subtraction likewise propagates low-word borrow into the high word
 and selects unsigned-borrow or signed-overflow trapping by declared type. Binary
 addition/subtraction and their wide-local compound assignments share these
 carry-aware lowerings.
-Matching-type `wrapping_add` and `wrapping_sub` preserve the same two-word carry
-or borrow propagation while intentionally discarding overflow without entering
-the checked trap path.
+Matching-type `wrapping_add`, `wrapping_sub`, and `wrapping_mul` preserve the
+corresponding two-word carry, borrow, or low-product result while intentionally
+discarding overflow without entering the checked trap path.
 Equality and inequality compare both words after left-to-right evaluation and
 normalize the combined word differences to a boolean that may enter the supported
 one-word integer cast/return path.

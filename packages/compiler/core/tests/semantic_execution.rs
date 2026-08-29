@@ -67,6 +67,10 @@ const MRML_V1_WIDE_UNSIGNED_WRAPPING_ADD_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_add(17) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_SUBTRACT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_sub(17) }";
+const MRML_V1_WIDE_UNSIGNED_WRAPPING_MULTIPLY_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_mul(17) }";
+const MRML_V1_WIDE_SIGNED_WRAPPING_MULTIPLY_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_mul(-17) }";
 const MRML_V1_WIDE_UNSIGNED_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { (input == 1512366075204170947332355369683137040) as u64 }";
 const MRML_V1_WIDE_SIGNED_NOT_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { (input != -1512366075204170947332355369683137040) as u64 }";
 const MRML_V1_WIDE_UNSIGNED_LESS_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { (input < 1512366075204170947332355369683137040) as u64 }";
@@ -1134,6 +1138,32 @@ fn mrml_v1_wide_wrapping_addition_and_subtraction_match_both_oracle_words() {
             MRML_V1_WIDE_SIGNED_WRAPPING_SUBTRACT_SOURCE,
             [0u128, 17, i128::MIN as u128, (-1i128) as u128, i128::MAX as u128],
             "for input in [0i128, 17, i128::MIN, -1, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_wrapping_multiplication_matches_both_oracle_words() {
+    for (source, inputs, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_WRAPPING_MULTIPLY_SOURCE,
+            [0u128, 1, u64::MAX as u128, u128::MAX / 17 + 1, u128::MAX],
+            "for input in [0u128, 1, u64::MAX as u128, u128::MAX / 17 + 1, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_WRAPPING_MULTIPLY_SOURCE,
+            [0u128, 1, (-1i128) as u128, i128::MIN as u128, i128::MAX as u128],
+            "for input in [0i128, 1, -1, i128::MIN, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         ),
     ] {
         let code = compile(source);
