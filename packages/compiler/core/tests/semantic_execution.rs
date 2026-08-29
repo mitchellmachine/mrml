@@ -245,6 +245,14 @@ const MRML_V1_WIDE_SIGNED_STRICT_ADD_UNSIGNED_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.strict_add_unsigned(right) }";
 const MRML_V1_WIDE_SIGNED_STRICT_SUBTRACT_UNSIGNED_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.strict_sub_unsigned(right) }";
+const MRML_V1_WIDE_UNSIGNED_SATURATING_ADD_SIGNED_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: i128) -> u128 { left.saturating_add_signed(right) }";
+const MRML_V1_WIDE_UNSIGNED_SATURATING_SUBTRACT_SIGNED_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: i128) -> u128 { left.saturating_sub_signed(right) }";
+const MRML_V1_WIDE_SIGNED_SATURATING_ADD_UNSIGNED_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.saturating_add_unsigned(right) }";
+const MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_UNSIGNED_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.saturating_sub_unsigned(right) }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -2953,6 +2961,42 @@ fn mrml_v1_wide_strict_mixed_signedness_matches_both_oracle_words() {
             MRML_V1_WIDE_SIGNED_STRICT_SUBTRACT_UNSIGNED_SOURCE,
             [(i128::MAX as u128, 0u128), (i128::MAX as u128, u128::MAX), (0, 1), ((i128::MIN + 17) as u128, 17)],
             "for (left, right) in [(i128::MAX, 0u128), (i128::MAX, u128::MAX), (0, 1), (i128::MIN + 17, 17)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|(left, right)| {
+                let returned = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_saturating_mixed_signedness_matches_both_oracle_words() {
+    for (source, inputs, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_SATURATING_ADD_SIGNED_SOURCE,
+            [(0u128, (-1i128) as u128), (u128::MAX, 1), (1u128 << 127, i128::MIN as u128), (u128::MAX - 17, 17)],
+            "for (left, right) in [(0u128, -1i128), (u128::MAX, 1), (1u128 << 127, i128::MIN), (u128::MAX - 17, 17)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_SATURATING_SUBTRACT_SIGNED_SOURCE,
+            [(0u128, 1u128), (u128::MAX, (-1i128) as u128), (1u128 << 127, i128::MIN as u128), (17, 17)],
+            "for (left, right) in [(0u128, 1i128), (u128::MAX, -1), (1u128 << 127, i128::MIN), (17, 17)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_SATURATING_ADD_UNSIGNED_SOURCE,
+            [(i128::MAX as u128, 1u128), (i128::MIN as u128, 0), (i128::MIN as u128, 1u128 << 127), ((i128::MAX - 17) as u128, 17)],
+            "for (left, right) in [(i128::MAX, 1u128), (i128::MIN, 0), (i128::MIN, 1u128 << 127), (i128::MAX - 17, 17)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_UNSIGNED_SOURCE,
+            [(i128::MIN as u128, 1u128), (i128::MAX as u128, 0), (i128::MAX as u128, u128::MAX), ((i128::MIN + 17) as u128, 17)],
+            "for (left, right) in [(i128::MIN, 1u128), (i128::MAX, 0), (i128::MAX, u128::MAX), (i128::MIN + 17, 17)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         ),
     ] {
         let code = compile(source);

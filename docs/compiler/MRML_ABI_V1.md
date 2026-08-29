@@ -322,6 +322,10 @@ than reinterpreting the argument. Unsigned receivers branch on the signed
 argument and apply its magnitude in the correct direction; signed receivers
 compare the unsigned argument with the exact distance to `i128::MIN` or
 `i128::MAX`. All four method forms match the pinned strict-overflow oracle.
+Wide saturating mixed-signedness methods reuse those exact bounds but select an
+endpoint instead of trapping: signed receivers clamp to `i128::MIN` or
+`i128::MAX`, while unsigned receivers clamp to zero or `u128::MAX` according to
+the operation and signed argument direction. Exact boundaries remain unchanged.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
