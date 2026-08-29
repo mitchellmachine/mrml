@@ -7498,6 +7498,8 @@ impl<
                 crate::BinaryOperator::Add
                     | crate::BinaryOperator::Subtract
                     | crate::BinaryOperator::Multiply
+                    | crate::BinaryOperator::Divide
+                    | crate::BinaryOperator::Remainder
             )
         {
             let left = self.evaluate_wide_const_call_argument(tree, left, expected_type)?;
@@ -7507,6 +7509,8 @@ impl<
                     crate::BinaryOperator::Add => (left as i128).checked_add(right as i128),
                     crate::BinaryOperator::Subtract => (left as i128).checked_sub(right as i128),
                     crate::BinaryOperator::Multiply => (left as i128).checked_mul(right as i128),
+                    crate::BinaryOperator::Divide => (left as i128).checked_div(right as i128),
+                    crate::BinaryOperator::Remainder => (left as i128).checked_rem(right as i128),
                     _ => unreachable!(),
                 }
                 .map(|value| value as u128)
@@ -7515,6 +7519,8 @@ impl<
                     crate::BinaryOperator::Add => left.checked_add(right),
                     crate::BinaryOperator::Subtract => left.checked_sub(right),
                     crate::BinaryOperator::Multiply => left.checked_mul(right),
+                    crate::BinaryOperator::Divide => left.checked_div(right),
+                    crate::BinaryOperator::Remainder => left.checked_rem(right),
                     _ => unreachable!(),
                 }
             };

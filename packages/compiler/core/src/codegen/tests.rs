@@ -12791,6 +12791,20 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.kind, CodegenErrorKind::ValueOutOfRange);
         }
+        let source = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select(select(17) / 0) }";
+        let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[1] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            let error = compile_x86_64_function::<_, 128, 4, 32>(
+                &function,
+                &WideConstCallResolver,
+                abi,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind, CodegenErrorKind::ValueOutOfRange);
+        }
     }
 
     #[test]

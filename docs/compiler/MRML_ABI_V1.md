@@ -138,6 +138,9 @@ arguments compose through that same bounded recursive resolver. Matching-type
 `+` and `-` arguments use signed- or unsigned-checked arithmetic and fail closed
 on overflow. Matching-type multiplication uses the corresponding checked wide
 operation and the same overflow failure.
+Matching-type division and remainder reject a zero divisor and signed minimum
+divided by or remaindered by negative one instead of evaluating with wrapping or
+host-dependent behavior.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
