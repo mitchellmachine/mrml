@@ -3600,6 +3600,8 @@ diagnostic runtime stubs linked to 520,704 deterministic PE bytes, SHA-256
 Wine 11.16 returned 42. This is one hosted allocator-backed execution path, not
 native Windows, general `alloc` compatibility, a production allocator, or
 physical-hardware evidence.
+The isolated canonical compiler-core package gate at this exact checkpoint
+passed 815 unit tests and 123 semantic-execution tests with zero failures.
 
 The concrete projection-premise entry point validates a fully concrete goal and
 reuses the same fixed projection-aware constraint state, proof stack, associated-

@@ -1446,3 +1446,5 @@ memory/unwind/error stubs linked that consumer with the exact ORACLE-0003
 Wine 11.16 executed the image and returned 42. This is hosted Wine execution of
 one bounded allocator-backed `Vec` path, not native Windows, allocator
 production readiness, broad `alloc` conformance, or physical-hardware evidence.
+An isolated canonical compiler-core package gate at this exact checkpoint passed
+815 unit tests and 123 semantic-execution tests with zero failures.
