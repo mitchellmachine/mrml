@@ -7495,6 +7495,39 @@ impl<
         } = expression.kind
             && matches!(
                 operator,
+                crate::BinaryOperator::ShiftLeft | crate::BinaryOperator::ShiftRight
+            )
+        {
+            let left = self.evaluate_wide_const_call_argument(tree, left, expected_type)?;
+            let shift = tree
+                .evaluate_at(right, self.resolver)
+                .map_err(|error| {
+                    self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
+                        error,
+                    )))
+                })
+                .and_then(|shift| {
+                    u32::try_from(shift)
+                        .ok()
+                        .filter(|shift| *shift < 128)
+                        .ok_or(self.error(CodegenErrorKind::ValueOutOfRange))
+                })?;
+            return Ok(match operator {
+                crate::BinaryOperator::ShiftLeft => left.wrapping_shl(shift),
+                crate::BinaryOperator::ShiftRight if expected_type == crate::IntegerType::I128 => {
+                    ((left as i128) >> shift) as u128
+                }
+                crate::BinaryOperator::ShiftRight => left >> shift,
+                _ => unreachable!(),
+            });
+        }
+        if let ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } = expression.kind
+            && matches!(
+                operator,
                 crate::BinaryOperator::Add
                     | crate::BinaryOperator::Subtract
                     | crate::BinaryOperator::Multiply

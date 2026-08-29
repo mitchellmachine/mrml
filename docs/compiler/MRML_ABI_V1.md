@@ -141,6 +141,8 @@ operation and the same overflow failure.
 Matching-type division and remainder reject a zero divisor and signed minimum
 divided by or remaindered by negative one instead of evaluating with wrapping or
 host-dependent behavior.
+Wide const-call shift arguments use an independently evaluated one-word count,
+reject counts of 128 or greater, and sign-fill only typed `i128` right shifts.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
