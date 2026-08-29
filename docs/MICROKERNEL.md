@@ -6631,6 +6631,14 @@ an unknown service or unauthorized capability returns a detail-free denial,
 while policy-generation exhaustion or any other impossible lifecycle error is
 fail-stop rather than being flattened into denial. The same two profiles and
 593-test Linux kernel suite pass.
+Operation 9 now explicitly maps only unknown-service and authorization errors
+to its detail-free absent result; any future or impossible lifecycle error is
+fail-stop. The enabled operation-10 split path likewise returns denial only for
+documented prepare/revalidation policy states or runtime-capacity unavailability.
+Generation exhaustion, object/policy inconsistency, and unexpected runtime
+errors halt. A canonical `service_restart_request_probe` feature profile now
+builds this branch with `service-probe`; that profile, the ordinary service
+profile, and the 593-test Linux kernel suite pass.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
@@ -6639,8 +6647,8 @@ also adds ordinary result-capacity checks in existing userspace adapters and
 wire alignment/canonical-shape checks in the existing service-image adapter; it
 also reuses the existing capability-release syscall for routine leaf cleanup
 and makes existing revocation/policy integrity failure paths fail-stop; it
-introduces no new IPC algorithm or mechanism. See [the patent review
-log](patents/REVIEW_LOG.md).
+also classifies existing query/restart errors without introducing a new IPC
+algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

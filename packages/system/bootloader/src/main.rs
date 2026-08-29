@@ -1153,11 +1153,15 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .as_ref()
                     .unwrap_or_else(|| halt());
                 let capabilities = runtime.capabilities(current).unwrap_or_else(|_| halt());
-                frame.complete_service_state(
-                    supervisor
-                        .state_authorized(service, capabilities, capability)
-                        .ok(),
-                );
+                let state = match supervisor.state_authorized(service, capabilities, capability) {
+                    Ok(state) => Some(state),
+                    Err(
+                        mrml_kernel::ServiceError::InvalidService
+                        | mrml_kernel::ServiceError::Unauthorized(_),
+                    ) => None,
+                    Err(_) => halt(),
+                };
+                frame.complete_service_state(state);
             }
             SyscallRequest::RestartService {
                 capability,
@@ -4313,18 +4317,38 @@ unsafe fn restart_sender_from_request(
     if ids[1] != service {
         return None;
     }
-    let plan = supervisor
-        .prepare_restart_at(
-            service,
-            runtime.capabilities(requester).unwrap_or_else(|_| halt()),
-            capability,
-            Priority::NORMAL,
-            context,
-            0,
-        )
-        .ok()?;
+    let plan = match supervisor.prepare_restart_at(
+        service,
+        runtime.capabilities(requester).unwrap_or_else(|_| halt()),
+        capability,
+        Priority::NORMAL,
+        context,
+        0,
+    ) {
+        Ok(plan) => plan,
+        Err(
+            mrml_kernel::ServiceError::InvalidService
+            | mrml_kernel::ServiceError::StillRunning
+            | mrml_kernel::ServiceError::RestartLimit
+            | mrml_kernel::ServiceError::RestartBackoff { .. }
+            | mrml_kernel::ServiceError::CleanupRequired
+            | mrml_kernel::ServiceError::Unauthorized(_),
+        ) => return None,
+        Err(_) => halt(),
+    };
     unsafe { service_restart_stage(0x24) };
-    let replacement = supervisor.commit_restart(plan, runtime).ok()?;
+    let replacement = match supervisor.commit_restart(plan, runtime) {
+        Ok(replacement) => replacement,
+        Err(
+            mrml_kernel::ServiceError::InvalidService
+            | mrml_kernel::ServiceError::StillRunning
+            | mrml_kernel::ServiceError::RestartLimit
+            | mrml_kernel::ServiceError::RestartBackoff { .. }
+            | mrml_kernel::ServiceError::CleanupRequired
+            | mrml_kernel::ServiceError::Runtime(mrml_kernel::TaskRuntimeError::Full),
+        ) => return None,
+        Err(_) => halt(),
+    };
     let sender = supervisor
         .task(replacement)
         .ok()

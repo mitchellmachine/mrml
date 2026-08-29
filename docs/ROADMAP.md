@@ -2077,6 +2077,12 @@ live composition remains pending.
    Operation 11 returns ordinary denial only for an unknown service or
    unauthorized capability; policy-generation exhaustion and other impossible
    lifecycle failures are fail-stop under the same passing gates.
+   Operation 9 now exhaustively permits only lookup/authorization denial.
+   Operation 10 permits documented prepare/revalidation denial or runtime
+   capacity exhaustion, while terminal identity, generation, policy, and
+   unexpected runtime failures halt. A new canonical
+   `service_restart_request_probe` profile builds the enabled branch; it, the
+   ordinary service profile, and 593 Linux kernel tests pass.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

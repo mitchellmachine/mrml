@@ -152,6 +152,9 @@ access. The security/acceptance gate is canonical in
   unexpected runtime or delegation-integrity failure is fail-stop.
 - Restart-policy replacement denial covers unknown service or unauthorized
   capability only; generation exhaustion and impossible lifecycle errors halt.
+- Service query maps only lookup/authorization failure to absence. Split-phase
+  restart maps documented policy drift or capacity exhaustion to denial, while
+  terminal identity, generation, policy, or runtime errors fail-stop.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

@@ -149,6 +149,11 @@ name = "service_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]
+features = ["service-probe", "service-restart-request-probe"]
+name = "service_restart_request_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
 features = ["service-probe", "block-service-probe"]
 name = "block_service_probe"
 targets = ["UEFI"]
