@@ -6717,6 +6717,12 @@ service generation `Faulted`, retains its saved context in a one-use cleanup
 ticket, and computes the trusted restart deadline. A focused test proves the
 exact violation/context, idle outcome, state transition, pending cleanup, and
 cleanup completion; 597 Linux kernel tests and both service UEFI profiles pass.
+Peer-death retirement now preflights the complete bounded control graph before
+revoking delegations or removing the current domain. Missing or duplicate
+reciprocal relations and exhausted death-result capacity fail without changing
+the domain, scheduler current task, or a peer result slot; an adversarial test
+raises the Linux kernel total to 598. This preflight applies equally to clean
+exit, hardware-fault retirement, and typed protocol-violation retirement.
 The live service syscall decoder now routes forged generic or boot-recovery
 return state through that retirement, rejects an impossible pending-buffer
 alias, completes the exact resource/address-space cleanup, and enters only the
@@ -6770,7 +6776,9 @@ does not trigger separate review; live dispatch wiring also adds no new
 mechanism. The probe only exercises that existing path and does not trigger
 separate review; KVM runner admission is test harness plumbing and likewise does
 not trigger review. Exact marker validation is additional test-harness boundary
-checking on that same path and does not trigger separate review.
+checking on that same path and does not trigger separate review. Peer-death
+preflight is conventional transactional integrity validation on the existing
+lifecycle and does not trigger separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

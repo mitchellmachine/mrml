@@ -780,6 +780,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
 
+        self.validate_peer_death_publication(
+            self.domains[slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
         self.revoke_task_delegations(current)?;
 
         // Taking the complete domain first revokes the saved context and every
@@ -820,6 +825,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
 
+        self.validate_peer_death_publication(
+            self.domains[slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
         self.revoke_task_delegations(current)?;
         let domain = self.domains[slot]
             .take()
@@ -857,6 +867,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .iter()
             .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        self.validate_peer_death_publication(
+            self.domains[slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
         self.revoke_task_delegations(current)?;
         let domain = self.domains[slot]
             .take()
@@ -1156,6 +1171,35 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             self.scheduler
                 .wake(peer)
                 .map_err(TaskRuntimeError::Scheduler)?;
+        }
+        Ok(())
+    }
+
+    fn validate_peer_death_publication(
+        &self,
+        retired: &TaskDomain<CAPS>,
+    ) -> Result<(), TaskRuntimeError> {
+        for (index, peer) in retired.peers.iter().enumerate() {
+            let Some(peer) = *peer else {
+                continue;
+            };
+            if retired.peers[..index].contains(&Some(peer)) {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+            let slot = self.domain_slot(peer)?;
+            let domain = self.domains[slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            if domain
+                .peers
+                .iter()
+                .filter(|candidate| **candidate == Some(retired.task))
+                .count()
+                != 1
+                || !domain.peer_deaths.iter().any(Option::is_none)
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
         }
         Ok(())
     }
@@ -2169,12 +2213,8 @@ mod tests {
         let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
         let observer_context = context(0x20_0000, 0x40_0000);
         let violated_context = context(0x30_0000, 0x50_0000);
-        let observer = runtime
-            .create(Priority::NORMAL, observer_context)
-            .unwrap();
-        let violated = runtime
-            .create(Priority::NORMAL, violated_context)
-            .unwrap();
+        let observer = runtime.create(Priority::NORMAL, observer_context).unwrap();
+        let violated = runtime.create(Priority::NORMAL, violated_context).unwrap();
         let object = ObjectId(0x75);
         let observer_capability = runtime
             .capabilities_mut(observer)
@@ -2211,7 +2251,10 @@ mod tests {
             TaskProtocolViolation::InvalidUserReturn
         );
         assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == observer));
-        assert_eq!(runtime.context(violated), Err(TaskRuntimeError::MissingTask));
+        assert_eq!(
+            runtime.context(violated),
+            Err(TaskRuntimeError::MissingTask)
+        );
         let ControlEvent::PeerDied(death) = runtime.receive_control(observer).unwrap() else {
             panic!("expected protocol-violation peer death");
         };
@@ -2220,6 +2263,69 @@ mod tests {
             death.reason(),
             PeerDeathReason::ProtocolViolation(TaskProtocolViolation::InvalidUserReturn)
         );
+    }
+
+    #[test]
+    fn protocol_violation_rejects_corrupt_peer_graph_before_retirement() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let violated_context = context(0x30_0000, 0x50_0000);
+        let violated = runtime.create(Priority::NORMAL, violated_context).unwrap();
+        let object = ObjectId(0x76);
+        let observer_capability = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let violated_capability = runtime
+            .capabilities_mut(violated)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                observer,
+                violated,
+                &Endpoint::new(object),
+                observer_capability,
+                violated_capability,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert!(matches!(
+            runtime.receive_control_or_block_current(),
+            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == violated
+        ));
+
+        let observer_slot = runtime.domain_slot(observer).unwrap();
+        runtime.domains[observer_slot]
+            .as_mut()
+            .unwrap()
+            .peers
+            .fill(None);
+        assert_eq!(
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(runtime.current(), Some(violated));
+        assert_eq!(runtime.context(violated).copied(), Ok(violated_context));
+        assert!(matches!(
+            runtime.receive_control(observer),
+            Err(TaskRuntimeError::InboxEmpty)
+        ));
+
+        runtime.domains[observer_slot].as_mut().unwrap().peers[0] = Some(violated);
+        let violated_slot = runtime.domain_slot(violated).unwrap();
+        runtime.domains[violated_slot].as_mut().unwrap().peers[1] = Some(observer);
+        assert_eq!(
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(runtime.current(), Some(violated));
+        assert_eq!(runtime.context(violated).copied(), Ok(violated_context));
+        assert!(runtime.domains[observer_slot].as_ref().unwrap().peer_deaths[0].is_none());
     }
 
     #[test]
