@@ -38,6 +38,25 @@ pub enum SyscallError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserReturnError {
+    InvalidPrivilege,
+    InvalidInstruction,
+    InvalidStack,
+    InvalidFlags,
+}
+
+impl From<UserReturnError> for SyscallError {
+    fn from(error: UserReturnError) -> Self {
+        match error {
+            UserReturnError::InvalidPrivilege => Self::InvalidPrivilege,
+            UserReturnError::InvalidInstruction => Self::InvalidInstruction,
+            UserReturnError::InvalidStack => Self::InvalidStack,
+            UserReturnError::InvalidFlags => Self::InvalidFlags,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityTransferDescriptor {
     pub capability: Capability,
     pub rights: Rights,
@@ -139,24 +158,24 @@ pub struct UserCallFrame {
 }
 
 impl UserCallFrame {
-    pub fn validate_return(&self) -> Result<(), SyscallError> {
+    pub fn validate_return(&self) -> Result<(), UserReturnError> {
         if self.cs != u64::from(USER_CODE_SELECTOR) || self.ss != u64::from(USER_DATA_SELECTOR) {
-            return Err(SyscallError::InvalidPrivilege);
+            return Err(UserReturnError::InvalidPrivilege);
         }
         if !user_address(self.rip) {
-            return Err(SyscallError::InvalidInstruction);
+            return Err(UserReturnError::InvalidInstruction);
         }
         if !user_address(self.rsp) {
-            return Err(SyscallError::InvalidStack);
+            return Err(UserReturnError::InvalidStack);
         }
         if self.rflags & 2 == 0 || self.rflags & !USER_RETURN_FLAGS != 0 {
-            return Err(SyscallError::InvalidFlags);
+            return Err(UserReturnError::InvalidFlags);
         }
         Ok(())
     }
 
     pub fn request(&self) -> Result<SyscallRequest, SyscallError> {
-        self.validate_return()?;
+        self.validate_return().map_err(SyscallError::from)?;
         SyscallRequest::decode(
             self.rax, self.rdi, self.rsi, self.rdx, self.r10, self.r8, self.r9,
         )
@@ -1160,12 +1179,25 @@ mod tests {
         let mut frame = valid_yield_frame();
         assert_eq!(frame.request(), Ok(SyscallRequest::Yield));
         frame.cs = 0x38;
+        assert_eq!(
+            frame.validate_return(),
+            Err(UserReturnError::InvalidPrivilege)
+        );
         assert_eq!(frame.request(), Err(SyscallError::InvalidPrivilege));
         frame.cs = u64::from(USER_CODE_SELECTOR);
         frame.rip = 0xffff_8000_0000_0000;
+        assert_eq!(
+            frame.validate_return(),
+            Err(UserReturnError::InvalidInstruction)
+        );
         assert_eq!(frame.request(), Err(SyscallError::InvalidInstruction));
         frame.rip = 0x40_1000;
+        frame.rsp = 0;
+        assert_eq!(frame.validate_return(), Err(UserReturnError::InvalidStack));
+        assert_eq!(frame.request(), Err(SyscallError::InvalidStack));
+        frame.rsp = 0x7000_0000_0000;
         frame.rflags = 0;
+        assert_eq!(frame.validate_return(), Err(UserReturnError::InvalidFlags));
         assert_eq!(frame.request(), Err(SyscallError::InvalidFlags));
         frame.rflags = 0x202 | (3 << 12);
         assert_eq!(frame.request(), Err(SyscallError::InvalidFlags));

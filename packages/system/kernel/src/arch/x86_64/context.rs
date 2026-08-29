@@ -178,10 +178,10 @@ impl UserContext {
         frame: &UserCallFrame,
     ) -> Result<Self, ContextError> {
         frame.validate_return().map_err(|error| match error {
-            crate::SyscallError::InvalidPrivilege => ContextError::InvalidSelectors,
-            crate::SyscallError::InvalidInstruction => ContextError::InvalidEntry,
-            crate::SyscallError::InvalidStack => ContextError::InvalidStack,
-            _ => ContextError::InvalidFlags,
+            crate::UserReturnError::InvalidPrivilege => ContextError::InvalidSelectors,
+            crate::UserReturnError::InvalidInstruction => ContextError::InvalidEntry,
+            crate::UserReturnError::InvalidStack => ContextError::InvalidStack,
+            crate::UserReturnError::InvalidFlags => ContextError::InvalidFlags,
         })?;
         if page_table.get() == 0 {
             return Err(ContextError::KernelPageTable);

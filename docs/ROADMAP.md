@@ -2143,6 +2143,10 @@ live composition remains pending.
    validates the complete exact-generation set before revoking any of them. A
    stale later root cannot partially revoke an earlier root; the adversarial
    test raises the kernel total to 600.
+   Return-frame validation now has a dedicated `UserReturnError`; all four
+   control-state failures remain exhaustively mapped at the legacy syscall
+   request boundary. The 600-test kernel suite and both invalid-return images
+   pass.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

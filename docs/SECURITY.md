@@ -189,6 +189,9 @@ access. The security/acceptance gate is canonical in
   exact `Faulted` state and a one-use cleanup ticket. Live syscall decoding now
   completes scoped cleanup and kernel-selected handoff; a dedicated QEMU probe
   remains pending.
+- Return-frame privilege, instruction, stack, and flags validation uses a
+  dedicated typed error distinct from ordinary syscall argument decoding; the
+  compatibility request decoder maps that closed set exhaustively.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

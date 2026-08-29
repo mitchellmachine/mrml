@@ -6740,6 +6740,11 @@ kernel-selected successor. Ordinary, accounted, and block-service UEFI profiles
 cross-build and 597 Linux kernel tests pass. A dedicated QEMU execution probe
 remains pending, so this integration is **PARTIALLY IMPLEMENTED** rather than
 hosted-runtime verified.
+Return-frame validation now produces the dedicated typed `UserReturnError`
+instead of borrowing ordinary request-decoding errors. Privilege, instruction,
+stack, and flags failures remain separately identifiable; the compatibility
+`request()` boundary maps them exhaustively to its existing `SyscallError`
+variants. All 600 Linux kernel tests pass and both invalid-return images build.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6792,6 +6797,8 @@ lifecycle and does not trigger separate review. Exact scheduler-identity
 preflight is the same conventional integrity check.
 Whole-retirement descendant preflight applies the existing capability graph and
 revocation rules and does not introduce a new mechanism or trigger review.
+Typing the existing return-validation result is ordinary error-boundary
+hardening and does not trigger separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
