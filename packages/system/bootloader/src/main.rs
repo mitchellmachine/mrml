@@ -1512,6 +1512,24 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             );
                             enter_service_task(runtime, to)
                         }
+                        #[cfg(feature = "invalid-return-probe")]
+                        ScheduleOutcome::Idle => {
+                            let ids = (*core::ptr::addr_of!(SERVICE_IDS))
+                                .unwrap_or_else(|| halt());
+                            if supervisor.task(ids[0]) != Ok(None)
+                                || supervisor.pending_cleanup(ids[0]) != Ok(None)
+                                || supervisor.state(ids[0])
+                                    != Ok(mrml_kernel::ServiceState::Faulted)
+                                || supervisor.task(ids[1]) != Ok(None)
+                                || supervisor.pending_cleanup(ids[1]) != Ok(None)
+                                || supervisor.state(ids[1])
+                                    != Ok(mrml_kernel::ServiceState::Exited)
+                            {
+                                halt();
+                            }
+                            service_restart_stage(0x27);
+                            halt();
+                        }
                         _ => halt(),
                     }
                 }
@@ -4341,7 +4359,26 @@ unsafe fn retire_invalid_service_return() -> ! {
     }
     unsafe { complete_service_cleanup(supervisor, violation.cleanup) };
     match violation.retirement.next {
-        ScheduleOutcome::Switch { to, .. } => unsafe { enter_service_task(runtime, to) },
+        ScheduleOutcome::Switch { to, .. } => {
+            #[cfg(feature = "invalid-return-probe")]
+            {
+                let ControlEvent::PeerDied(death) =
+                    runtime.receive_control(to).unwrap_or_else(|_| halt())
+                else {
+                    halt()
+                };
+                if death.peer() != current
+                    || death.reason()
+                        != PeerDeathReason::ProtocolViolation(
+                            TaskProtocolViolation::InvalidUserReturn,
+                        )
+                {
+                    halt();
+                }
+                unsafe { service_restart_stage(0x26) };
+            }
+            unsafe { enter_service_task(runtime, to) }
+        }
         ScheduleOutcome::Idle => halt(),
         _ => halt(),
     }

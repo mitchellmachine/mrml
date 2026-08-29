@@ -6724,6 +6724,12 @@ kernel-selected successor. Ordinary, accounted, and block-service UEFI profiles
 cross-build and 597 Linux kernel tests pass. A dedicated QEMU execution probe
 remains pending, so this integration is **PARTIALLY IMPLEMENTED** rather than
 hosted-runtime verified.
+Dedicated `invalid_return_probe` kernel and service-image profiles now build
+without warnings. The CPL3 receiver deliberately zeros its stack pointer before
+`int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
+then enters a distinct peer whose only action is a canonical exit and requires
+terminal state marker `0x27`. Runner mode and QEMU execution remain pending, so
+these markers are an unexecuted acceptance contract, not hosted evidence.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6754,7 +6760,8 @@ violation retirement is conventional process-lifecycle isolation rather than a
 new algorithm. Patent review: **NOT_TRIGGERED**; see [the review
 log](patents/REVIEW_LOG.md). Supervisor integration reuses that lifecycle and
 does not trigger separate review; live dispatch wiring also adds no new
-mechanism.
+mechanism. The probe only exercises that existing path and does not trigger
+separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

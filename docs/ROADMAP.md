@@ -2131,6 +2131,10 @@ live composition remains pending.
    raises the total to 597. Live generic and boot-recovery syscall decoding now
    invokes scoped retirement, exact cleanup, and kernel-selected handoff; three
    service profiles cross-build. A dedicated QEMU probe remains pending.
+   Warning-free `invalid_return_probe` kernel/service profiles now encode the
+   real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
+   execution, clean exit, and terminal state marker. Runner execution remains
+   pending.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

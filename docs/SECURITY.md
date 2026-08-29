@@ -189,6 +189,9 @@ access. The security/acceptance gate is canonical in
   exact `Faulted` state and a one-use cleanup ticket. Live syscall decoding now
   completes scoped cleanup and kernel-selected handoff; a dedicated QEMU probe
   remains pending.
+- Warning-free invalid-return probe images use a real CPL3 zero-stack interrupt
+  and exact typed-cleanup/peer-exit markers; these remain unexecuted until a
+  backend runner admits the dedicated mode.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

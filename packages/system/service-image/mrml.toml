@@ -22,6 +22,9 @@ environment = "mrml"
 name = "block-service-loop"
 
 [[feature]]
+name = "invalid-return-probe"
+
+[[feature]]
 name = "preemption-probe"
 
 [[artifact]]
@@ -83,6 +86,11 @@ targets = ["MRML_NATIVE"]
 [[feature_profile]]
 features = ["block-service-loop"]
 name = "block_service_loop"
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = ["invalid-return-probe"]
+name = "invalid_return_probe"
 targets = ["MRML_NATIVE"]
 
 [[target_triple]]

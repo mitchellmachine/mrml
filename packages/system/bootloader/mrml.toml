@@ -38,6 +38,9 @@ name = "fault-probe"
 name = "gpu-benchmark"
 
 [[feature]]
+name = "invalid-return-probe"
+
+[[feature]]
 name = "kernel-image"
 
 [[feature]]
@@ -146,6 +149,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe"]
 name = "service_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "invalid-return-probe"]
+name = "invalid_return_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

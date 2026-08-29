@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
-#![cfg_attr(feature = "block-service-loop", allow(dead_code))]
+#![cfg_attr(
+    any(feature = "block-service-loop", feature = "invalid-return-probe"),
+    allow(dead_code)
+)]
 
 use core::arch::{asm, global_asm};
 
@@ -249,7 +252,11 @@ impl ServicePolicyAuthorizer for KernelAuthorizer {
     }
 }
 
-#[cfg(all(not(feature = "preemption-probe"), not(feature = "block-service-loop")))]
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    not(feature = "block-service-loop"),
+    not(feature = "invalid-return-probe")
+))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
@@ -310,6 +317,24 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         halt();
     }
     unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    not(feature = "block-service-loop"),
+    feature = "invalid-return-probe"
+))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_receiver(
+    _endpoint: u64,
+    _sender: u64,
+    _generation: u64,
+    _shared_write: u64,
+    _shared_read: u64,
+    _restart_manager: u64,
+    _recovery_capability: u64,
+) -> ! {
+    unsafe { asm!("xor rsp, rsp", "xor eax, eax", "int 0x80", options(noreturn)) }
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
@@ -948,7 +973,11 @@ unsafe fn yield_now() {
     }
 }
 
-#[cfg(all(not(feature = "preemption-probe"), not(feature = "block-service-loop")))]
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    not(feature = "block-service-loop"),
+    not(feature = "invalid-return-probe")
+))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
     endpoint: u64,
@@ -1107,6 +1136,36 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         halt();
     }
     unsafe { terminate(3) }
+}
+
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    not(feature = "block-service-loop"),
+    feature = "invalid-return-probe"
+))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_sender(
+    _endpoint: u64,
+    _receiver: u64,
+    _root_capability: u64,
+    _setting_capability: u64,
+    _generation: u64,
+    _supervision_read: u64,
+    _supervised_service: u64,
+) -> ! {
+    unsafe {
+        asm!(
+            "int 0x80",
+            in("rax") 3u64,
+            in("rdi") 0u64,
+            in("rsi") 0u64,
+            in("rdx") 0u64,
+            in("r10") 0u64,
+            in("r8") 0u64,
+            in("r9") 0u64,
+            options(noreturn)
+        )
+    }
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
