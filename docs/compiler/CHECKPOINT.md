@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `89475836`
-  (`compiler: decode COFF readonly relocation sets`)
+- Compiler checkpoint commit: `896d3982`
+  (`compiler: relocate associative COFF readonly data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `896d3982` decodes bounded AMD64 `ADDR64` relocations originating in
+associative read-only COFF companions and assigns them to the exact selected
+text root. One inventory prepass records each validated text root's read-only
+span start; checked section-relative offsets preserve signed in-place addends,
+and non-text association roots remain unsupported. A synthetic two-root object
+proves independent ownership and exact final PE pointer values. Isolated
+Windows and Arch Linux runs each passed 761 compiler-core tests, all four
+integration groups, and eight driver tests. The exact pinned gnullvm stateful
+archive returned 42 through both linkers: MRML emitted 2,560 bytes versus
+rust-lld's 3,584, with 1,028 zero-fill bytes and two forwarding pointers. Fifty
+links after five warmups measured 10.054 ms median/10.233 ms mean for MRML
+versus 28.660 ms median/29.022 ms mean for rust-lld on this narrow Windows
+workload. Other read-only relocation kinds and discontiguous non-COMDAT packing
+remain incomplete. `mrml doctor` passed; audit retains unrelated fingerprint
+`fnv1a64:0fe5cf1836d3e0dc` at `semantic_execution.rs:1362`. Patent review:
+**NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `89475836` removes the `.rdata$.refptr...` name and one-record
 restriction from standalone read-only COFF COMDAT relocation decoding. One
