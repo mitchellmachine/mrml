@@ -13364,6 +13364,18 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_saturates_unsigned_wide_powers() {
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128, exponent: u32) -> u128 { input.saturating_pow(exponent) }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            compile_x86_64_function::<_, 1024, 2, 16>(&function, &NoConstants, abi).unwrap();
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_rejects_zero_word_parameters_at_the_type_span() {
         let source = "#[mrml_abi::export(version = 1)] pub fn consume(input: ()) { }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();

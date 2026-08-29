@@ -215,6 +215,8 @@ const MRML_V1_WIDE_SIGNED_WRAPPING_POWER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(base: i128, exponent: u32) -> i128 { base.wrapping_pow(exponent) }";
 const MRML_V1_WIDE_UNSIGNED_STRICT_POWER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(base: u128, exponent: u32) -> u128 { base.strict_pow(exponent) }";
+const MRML_V1_WIDE_UNSIGNED_SATURATING_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(base: u128, exponent: u32) -> u128 { base.saturating_pow(exponent) }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -2656,6 +2658,35 @@ fn mrml_v1_wide_power_overflows_trap() {
             "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
         );
     }
+}
+
+#[test]
+fn mrml_v1_wide_unsigned_saturating_powers_match_both_oracle_words() {
+    let inputs = [
+        (0u128, 0u32),
+        (0, 7),
+        (1, u32::MAX),
+        (2, 127),
+        (2, 128),
+        (u64::MAX as u128, 2),
+        (u128::MAX, 1),
+        (u128::MAX, 2),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_SATURATING_POWER_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(base, exponent)| {
+            let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, base, exponent) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_SATURATING_POWER_SOURCE,
+            "for (base, exponent) in [(0u128, 0u32), (0, 7), (1, u32::MAX), (2, 127), (2, 128), (u64::MAX as u128, 2), (u128::MAX, 1), (u128::MAX, 2)] { let returned = probe(base, exponent); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
 }
 
 #[test]

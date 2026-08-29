@@ -291,6 +291,13 @@ the corresponding low source bits, and then scans exactly 128 destination
 positions from most to least significant. It scatters only the selected source
 bits with bounded register and private-stack state. Signed wide operands remain
 rejected. The pinned oracle covers empty, full, low-word, and cross-word masks.
+Wide unsigned `saturating_pow` uses the same bounded exponentiation-by-squaring
+control flow as checked and wrapping powers, but each two-word multiplication
+detects discarded high product bits and saturates to `u128::MAX` instead of
+trapping. Zero exponents, exact boundary results, and overflow during either
+result multiplication or base squaring are checked against the pinned oracle.
+Signed wide saturation remains fail-closed until its endpoint selection is
+implemented and independently exercised.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
