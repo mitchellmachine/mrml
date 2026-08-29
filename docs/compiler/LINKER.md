@@ -1251,3 +1251,23 @@ and workload. This probe remains a narrow `ADDR64` regression and performance
 comparison, not representative proof for `ADDR32NB` workloads or general
 linker superiority. Other read-only relocation encodings and discontiguous
 non-COMDAT read-only packing remain incomplete.
+
+Read-only COFF relocation decoding now admits the complete AMD64 PC-relative
+family `REL32` through `REL32_5`. One typed relocation kind retains the
+zero-through-five trailing-byte bias; final PE serialization computes the
+signed displacement from the end of the four-byte field plus that bias, after
+all text and read-only RVAs are fixed. The existing bounded object scan and
+final relocation pass are reused without allocation or another object pass.
+Synthetic coverage independently decodes all six COFF numbers, preserves a
+negative in-place addend, rejects relocation number 10, validates four-byte
+fields, asserts the exact final negative displacement, rejects an impossible
+typed bias, and checks signed overflow. Exact detached Windows and Arch Linux
+runs each passed 771 compiler-core tests, all four integration groups, and eight
+driver tests. The unchanged pinned gnullvm stateful archive returned 42 through
+both linkers with 2,560 MRML bytes, 3,584 rust-lld bytes, 1,028 zero-fill bytes,
+and two forwarding pointers. Fifty links after five warmups measured MRML at
+10.766 ms median/12.022 ms mean versus rust-lld at 30.251 ms median/31.345 ms
+mean on this exact Windows host and workload. The probe is an `ADDR64`
+regression and narrow performance comparison, not representative REL32 evidence
+or general linker superiority. Other read-only relocation encodings and
+discontiguous non-COMDAT read-only packing remain incomplete.

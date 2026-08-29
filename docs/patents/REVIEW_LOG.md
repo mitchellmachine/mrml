@@ -10185,3 +10185,12 @@ companions of selected text sections. It uses bounded table construction and
 checked layout arithmetic, and introduces no new object encoding, association
 algorithm, relocation kind, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-29 — COFF read-only PC-relative relocation family
+
+Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
+conventional PE/COFF AMD64 `REL32` through `REL32_5` relocation encodings. It
+uses bounded table traversal and checked signed displacement arithmetic, and
+introduces no new object encoding, relocation kind, compression, cryptographic
+mechanism, or loader behavior. This technical screen is not legal advice or
+patent clearance.
