@@ -13,7 +13,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(feature = "production-policy")]
 use mrml_kernel::BootPolicy;
-#[cfg(feature = "service-probe")]
+#[cfg(any(feature = "block-service-probe", feature = "component-service-probe"))]
 use mrml_kernel::GuestMappingRevoker;
 #[cfg(any(feature = "timer-probe", feature = "smp-scheduler-probe"))]
 use mrml_kernel::KernelScheduler;

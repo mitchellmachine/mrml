@@ -2083,6 +2083,9 @@ live composition remains pending.
    unexpected runtime failures halt. A new canonical
    `service_restart_request_probe` profile builds the enabled branch; it, the
    ordinary service profile, and 593 Linux kernel tests pass.
+   Exact feature gating now confines `GuestMappingRevoker` to block/component
+   cleanup builds; ordinary, restart-request, component, and block service UEFI
+   profiles cross-build without the former unused import.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

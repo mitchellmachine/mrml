@@ -6639,6 +6639,10 @@ Generation exhaustion, object/policy inconsistency, and unexpected runtime
 errors halt. A canonical `service_restart_request_probe` feature profile now
 builds this branch with `service-probe`; that profile, the ordinary service
 profile, and the 593-test Linux kernel suite pass.
+The bootloader now imports `GuestMappingRevoker` only for the block/component
+profiles that instantiate its hosted cleanup adapter. Ordinary service,
+restart-request, component-service, and block-service UEFI profiles all
+cross-build without the former unused-import warning.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
