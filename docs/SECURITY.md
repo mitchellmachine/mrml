@@ -227,6 +227,8 @@ access. The security/acceptance gate is canonical in
   partial capability transfer or endpoint sequencing.
 - Control receive validates message-ring integrity before consuming a lifecycle
   event, so unrelated corruption cannot suppress or destroy peer-death evidence.
+- Live control peers and pending death results are unique, disjoint, and bound
+  by one aggregate capacity before any control-state mutation.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

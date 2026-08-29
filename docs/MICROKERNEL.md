@@ -6799,6 +6799,11 @@ the Linux kernel total to 604.
 Control receive now applies the same inbox preflight before taking a peer-death
 event. A focused corruption test proves an unrelated malformed message ring
 cannot hide behind or consume that event, raising the Linux kernel total to 605.
+Live peers and pending peer-death results now undergo one combined bounded
+topology check before connection, publication, or control receive. Duplicate
+identities, live/dead overlap, and aggregate capacity amplification fail before
+mutation. A duplicate-death test preserves both events and raises the Linux
+kernel total to 606.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6871,6 +6876,8 @@ on existing IPC delivery and does not trigger separate review.
 Bounded ring-topology preflight is the same conventional transactional
 validation and does not trigger review.
 Applying it to control receive is the same integrity hardening.
+Combined control-topology validation is also conventional bounded-state
+hardening and does not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

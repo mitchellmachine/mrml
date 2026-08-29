@@ -1160,6 +1160,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let (first_domain, second_domain) =
             two_domains_mut(&mut self.domains, first_slot, second_slot)
                 .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        Self::validate_control_state(first_domain)?;
+        Self::validate_control_state(second_domain)?;
         endpoint
             .authorize_member(&first_domain.capabilities, first_capability)
             .map_err(TaskRuntimeError::Ipc)?;
@@ -1200,6 +1202,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .as_mut()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         Self::validate_inbox_state(domain)?;
+        Self::validate_control_state(domain)?;
         if let Some(death) = domain.peer_deaths.iter_mut().find_map(Option::take) {
             return Ok(ControlEvent::PeerDied(death));
         }
@@ -1276,6 +1279,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &self,
         retired: &TaskDomain<CAPS>,
     ) -> Result<(), TaskRuntimeError> {
+        Self::validate_control_state(retired)?;
         for (index, peer) in retired.peers.iter().enumerate() {
             let Some(peer) = *peer else {
                 continue;
@@ -1290,6 +1294,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             let domain = self.domains[slot]
                 .as_ref()
                 .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            Self::validate_control_state(domain)?;
             if domain
                 .peers
                 .iter()
@@ -1297,6 +1302,41 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 .count()
                 != 1
                 || !domain.peer_deaths.iter().any(Option::is_none)
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_control_state(domain: &TaskDomain<CAPS>) -> Result<(), TaskRuntimeError> {
+        let peers = domain.peers.iter().flatten().count();
+        let deaths = domain.peer_deaths.iter().flatten().count();
+        if peers + deaths > TASK_CONTROL_PEERS {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        for (index, peer) in domain.peers.iter().enumerate() {
+            let Some(peer) = *peer else {
+                continue;
+            };
+            if domain.peers[..index].contains(&Some(peer))
+                || domain
+                    .peer_deaths
+                    .iter()
+                    .flatten()
+                    .any(|death| death.peer == peer)
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+        }
+        for (index, death) in domain.peer_deaths.iter().enumerate() {
+            let Some(death) = *death else {
+                continue;
+            };
+            if domain.peer_deaths[..index]
+                .iter()
+                .flatten()
+                .any(|prior| prior.peer == death.peer)
             {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
@@ -2481,6 +2521,35 @@ mod tests {
             Err(TaskRuntimeError::IntegrityFailure)
         ));
         assert!(runtime.domains[slot].as_ref().unwrap().peer_deaths[0].is_some());
+    }
+
+    #[test]
+    fn control_receive_rejects_duplicate_peer_death_without_consuming_either() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let slot = runtime.domain_slot(task).unwrap();
+        let duplicate = PeerDeath {
+            peer: task,
+            reason: PeerDeathReason::Exited,
+        };
+        runtime.domains[slot].as_mut().unwrap().peer_deaths[..2].fill(Some(duplicate));
+
+        assert!(matches!(
+            runtime.receive_control(task),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert_eq!(
+            runtime.domains[slot]
+                .as_ref()
+                .unwrap()
+                .peer_deaths
+                .iter()
+                .flatten()
+                .count(),
+            2
+        );
     }
 
     #[test]

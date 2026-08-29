@@ -2184,6 +2184,9 @@ live composition remains pending.
    the prior message and next endpoint sequence, raising the total to 604.
    Control receive now validates the inbox before consuming peer death; its
    corruption test preserves the event and raises the kernel total to 605.
+   Live peers and pending deaths now share one validated topology before
+   connection, publication, or receive. Duplicate/overlapping identities and
+   aggregate over-capacity fail unchanged; the kernel total rises to 606.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
