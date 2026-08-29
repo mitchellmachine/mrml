@@ -1002,6 +1002,20 @@ MRML image still reports exactly 1,028 zero-fill bytes. This proves the bounded
 static refptr form, not arbitrary COFF import pointers, DLL imports, writable
 COMDAT selection, or general PE relocation support.
 
+The exact gnullvm `.data$\u0001__imp_` forwarding slots are now retained as
+writable NODUPLICATES COMDAT definitions instead of being discarded. A typed
+writable relocation distinguishes their zero-addend AMD64 `ADDR64` reference
+to another writable symbol from the existing writable-to-readonly form. Final
+PE layout resolves both without treating the forwarding name or section name as
+authority. The strengthened probe requires two distinct absolute pointers in
+the emitted `.data` raw extent, each targeting its final writable virtual
+range; cross-object stores and the defining codegen unit's reads still return
+42. MRML remains 2,560 bytes versus rust-lld at 3,584 bytes. On the latest 50
+measured direct-driver links after five warmups, MRML measured 9.564 ms median
+and 9.850 ms mean versus rust-lld at 27.215 ms median and 27.585 ms mean. This
+does not implement arbitrary COFF COMDAT winner selection, associative COMDAT,
+DLL imports, or broad linker superiority.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

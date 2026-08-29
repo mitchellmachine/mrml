@@ -37,6 +37,15 @@ indexing, layout, symbol-resolution, relocation, compression, cryptographic, or
 loader mechanism. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-29 — Writable gnullvm forwarding COMDAT records
+
+Patent review: **NOT_TRIGGERED**. This increment retains conventional gnullvm
+COFF NODUPLICATES writable forwarding records and applies their standard AMD64
+absolute relocation to an already selected writable definition. It introduces
+no new COMDAT policy, indirection scheme, symbol authority, object encoding,
+relocation arithmetic, compression, cryptographic mechanism, or loader
+behavior. This technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF initializer-array retention
 
 Patent review: **NOT_TRIGGERED**. This increment retains and lays out one

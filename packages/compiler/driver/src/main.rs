@@ -14,9 +14,10 @@ use mrml_rustc::{
     LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS,
     MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
     PeReadonlyWritableRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
-    TargetLayout, compile_source_function_with_options, decode_unix_archive,
-    decode_x86_64_coff_readonly_writable_relocation, decode_x86_64_coff_runtime_functions,
-    decode_x86_64_coff_text_fragment, decode_x86_64_coff_writable_data_fragment,
+    PeWritableRelocationTarget, TargetLayout, compile_source_function_with_options,
+    decode_unix_archive, decode_x86_64_coff_readonly_writable_relocation,
+    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
+    decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
@@ -898,8 +899,10 @@ fn writable_relocation_arenas<'a>(
             .try_push(
                 [PeWritableRelocation {
                     offset: 0,
-                    target_readonly_owner: "unused",
-                    target_readonly_offset: 0,
+                    target: PeWritableRelocationTarget::Readonly {
+                        owner: "unused",
+                        offset: 0,
+                    },
                 }; MAX_LINK_RELOCATIONS],
             )
             .map_err(|_| anyhow!("could not allocate writable relocation arenas"))?;

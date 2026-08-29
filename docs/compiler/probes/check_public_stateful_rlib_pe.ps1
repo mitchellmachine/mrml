@@ -41,24 +41,41 @@ try {
     $sectionTable = $peOffset + 24 + $optionalHeaderSize
     $dataVirtualSize = $null
     $dataRawSize = $null
+    $dataVirtualAddress = $null
+    $dataRawAddress = $null
     for ($index = 0; $index -lt $numberOfSections; $index++) {
         $section = $sectionTable + (40 * $index)
         $name = [Text.Encoding]::ASCII.GetString($mrmlImage, $section, 8).TrimEnd([char]0)
         if ($name -eq ".data") {
             $dataVirtualSize = [BitConverter]::ToUInt32($mrmlImage, $section + 8)
+            $dataVirtualAddress = [BitConverter]::ToUInt32($mrmlImage, $section + 12)
             $dataRawSize = [BitConverter]::ToUInt32($mrmlImage, $section + 16)
+            $dataRawAddress = [BitConverter]::ToUInt32($mrmlImage, $section + 20)
             break
         }
     }
     if ($null -eq $dataVirtualSize -or $dataVirtualSize -le $dataRawSize) {
         throw "MRML PE .data does not prove loader-backed zero fill (virtual=$dataVirtualSize raw=$dataRawSize)"
     }
+    $imageBase = [BitConverter]::ToUInt64($mrmlImage, $optionalOffset + 24)
+    $dataAddressStart = $imageBase + $dataVirtualAddress
+    $dataAddressEnd = $dataAddressStart + $dataVirtualSize
+    $forwarderTargets = @()
+    for ($offset = 0; $offset -lt $dataRawSize; $offset += 8) {
+        $candidate = [BitConverter]::ToUInt64($mrmlImage, $dataRawAddress + $offset)
+        if ($candidate -ge $dataAddressStart -and $candidate -lt $dataAddressEnd) {
+            $forwarderTargets += $candidate
+        }
+    }
+    if ($forwarderTargets.Count -ne 2 -or ($forwarderTargets | Sort-Object -Unique).Count -ne 2) {
+        throw "MRML PE did not contain two distinct writable COMDAT forwarder pointers"
+    }
 
     & $mrmlOutput
     $mrmlStatus = $LASTEXITCODE
     & $lldOutput
     $lldStatus = $LASTEXITCODE
-    Write-Output "public-stateful-rlib-pe mrml_exit=$mrmlStatus rust_lld_exit=$lldStatus mrml_bytes=$((Get-Item $mrmlOutput).Length) rust_lld_bytes=$((Get-Item $lldOutput).Length) zero_fill_bytes=$uninitializedBytes"
+    Write-Output "public-stateful-rlib-pe mrml_exit=$mrmlStatus rust_lld_exit=$lldStatus mrml_bytes=$((Get-Item $mrmlOutput).Length) rust_lld_bytes=$((Get-Item $lldOutput).Length) zero_fill_bytes=$uninitializedBytes forwarder_pointers=$($forwarderTargets.Count)"
     if ($mrmlStatus -ne 42 -or $lldStatus -ne 42) {
         throw "public stateful rlib outputs did not both return 42"
     }
