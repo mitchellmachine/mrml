@@ -6602,11 +6602,18 @@ slices before returning them. Its concrete block-service adapter applies the
 same check and returns an error before constructing a received envelope. Both
 the default and `block_service_loop` MRML-native profiles cross-build, and the
 focused Linux storage-service suite passes 142 tests.
+Service-image send descriptors now reside in an explicit 8-byte-aligned wire
+type matching the kernel ABI. The shared send helper rejects empty or oversized
+payloads, descriptor lengths that are not exact 16-byte multiples, excess
+descriptor counts, and unaligned nonempty descriptor storage before trapping.
+Both native profiles build; the Linux configuration and storage suites pass 53
+and 142 tests respectively.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
 reuses the existing active-user-copy ticket on an existing syscall path; it
 also adds ordinary result-capacity checks in existing userspace adapters and
+wire alignment/canonical-shape checks in the existing service-image adapter; it
 introduces no new IPC algorithm or mechanism. See [the patent review
 log](patents/REVIEW_LOG.md).
 

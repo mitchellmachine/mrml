@@ -849,7 +849,7 @@ unsafe extern "sysv64" fn mrml_restart_manager(
     .encode(&mut request)
     .unwrap_or_else(|_| halt());
     let descriptor = capability_descriptor(control, Rights::CONTROL);
-    unsafe { send_buffer(endpoint, receiver, &request, &descriptor) };
+    unsafe { send_buffer(endpoint, receiver, &request, descriptor.as_slice()) };
     let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
     let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
     if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
@@ -976,7 +976,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
             endpoint,
             receiver,
             &schema_request[..schema_length],
-            &root_descriptor,
+            root_descriptor.as_slice(),
         )
     };
     let mut response = [0u8; CONFIG_RESPONSE_BYTES];
@@ -1007,7 +1007,14 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         (root_capability, Rights::CONTROL),
         (setting_capability, Rights::READ.union(Rights::WRITE)),
     );
-    unsafe { send_buffer(endpoint, receiver, &request[..request_length], &descriptors) };
+    unsafe {
+        send_buffer(
+            endpoint,
+            receiver,
+            &request[..request_length],
+            descriptors.as_slice(),
+        )
+    };
     let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
     if length != CONFIG_RESPONSE_BYTES || count != 0 {
         halt();
@@ -1034,7 +1041,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
             endpoint,
             receiver,
             &supervision_request,
-            &supervision_descriptor,
+            supervision_descriptor.as_slice(),
         )
     };
     let mut supervision_response = [0u8; SUPERVISION_RESPONSE_BYTES];
@@ -1069,7 +1076,14 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         (setting_capability, Rights::READ),
         (supervision_read, Rights::CONTROL),
     );
-    unsafe { send_buffer(endpoint, receiver, &supervision_request, &descriptors) };
+    unsafe {
+        send_buffer(
+            endpoint,
+            receiver,
+            &supervision_request,
+            descriptors.as_slice(),
+        )
+    };
     let (length, count) =
         unsafe { receive_buffer(&mut supervision_response, &mut no_capabilities) };
     if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
@@ -2073,26 +2087,53 @@ fn decode_probe_block_completion(encoded: &[u8; BLOCK_REQUEST_BYTES]) -> Option<
 }
 
 #[cfg(not(feature = "preemption-probe"))]
-fn capability_descriptors(first: (u64, Rights), second: (u64, Rights)) -> [u8; 32] {
-    let mut descriptors = [0u8; 32];
+#[repr(C, align(8))]
+struct CapabilityDescriptorBytes<const N: usize>([u8; N]);
+
+#[cfg(not(feature = "preemption-probe"))]
+impl<const N: usize> CapabilityDescriptorBytes<N> {
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+fn capability_descriptors(
+    first: (u64, Rights),
+    second: (u64, Rights),
+) -> CapabilityDescriptorBytes<32> {
+    let mut descriptors = CapabilityDescriptorBytes([0u8; 32]);
     for (index, (capability, rights)) in [first, second].into_iter().enumerate() {
         let start = index * 16;
-        descriptors[start..start + 8].copy_from_slice(&capability.to_le_bytes());
-        descriptors[start + 8..start + 10].copy_from_slice(&rights.bits().to_le_bytes());
+        descriptors.0[start..start + 8].copy_from_slice(&capability.to_le_bytes());
+        descriptors.0[start + 8..start + 10].copy_from_slice(&rights.bits().to_le_bytes());
     }
     descriptors
 }
 
 #[cfg(not(feature = "preemption-probe"))]
-fn capability_descriptor(capability: u64, rights: Rights) -> [u8; 16] {
-    let mut descriptor = [0u8; 16];
-    descriptor[..8].copy_from_slice(&capability.to_le_bytes());
-    descriptor[8..10].copy_from_slice(&rights.bits().to_le_bytes());
+fn capability_descriptor(capability: u64, rights: Rights) -> CapabilityDescriptorBytes<16> {
+    let mut descriptor = CapabilityDescriptorBytes([0u8; 16]);
+    descriptor.0[..8].copy_from_slice(&capability.to_le_bytes());
+    descriptor.0[8..10].copy_from_slice(&rights.bits().to_le_bytes());
     descriptor
 }
 
 #[cfg(not(feature = "preemption-probe"))]
 unsafe fn send_buffer(endpoint: u64, receiver: u64, payload: &[u8], descriptors: &[u8]) {
+    if payload.is_empty()
+        || payload.len() > mrml_kernel::MAX_INLINE_PAYLOAD
+        || !descriptors
+            .len()
+            .is_multiple_of(mrml_kernel::CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
+        || descriptors.len()
+            > mrml_kernel::MAX_CAPABILITIES * mrml_kernel::CAPABILITY_TRANSFER_DESCRIPTOR_BYTES
+        || (!descriptors.is_empty()
+            && !(descriptors.as_ptr() as usize)
+                .is_multiple_of(mrml_kernel::RECEIVED_CAPABILITY_TOKEN_BYTES))
+    {
+        halt();
+    }
     let mut status = 4u64;
     let descriptor_address = if descriptors.is_empty() {
         0
@@ -2108,7 +2149,7 @@ unsafe fn send_buffer(endpoint: u64, receiver: u64, payload: &[u8], descriptors:
             inlateout("rdx") payload.as_ptr() as u64 => _,
             in("r10") payload.len() as u64,
             in("r8") descriptor_address,
-            in("r9") (descriptors.len() / 16) as u64,
+            in("r9") (descriptors.len() / mrml_kernel::CAPABILITY_TRANSFER_DESCRIPTOR_BYTES) as u64,
             options(nostack)
         )
     };

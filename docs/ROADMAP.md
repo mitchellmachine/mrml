@@ -2058,6 +2058,10 @@ live composition remains pending.
    reject returned payload or capability counts beyond their supplied slices
    before slicing or envelope construction. Both service-image profiles
    cross-build and the Linux storage-service suite passes 142 tests.
+   Service-image send descriptors now use explicit 8-byte-aligned storage, and
+   the common wrapper rejects noncanonical descriptor widths/counts/alignment
+   and invalid payload lengths before trapping. Both profiles build; Linux
+   configuration and storage suites pass 53 and 142 tests.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and
