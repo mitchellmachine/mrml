@@ -6550,13 +6550,15 @@ exact objects through separate kernel operations before state changes. It
 checks the admission response and atomic revision-1 commit response, each a
 canonical 112-byte record, and the sender independently decodes both before
 exiting or entering the generation-2 lifecycle proof. The service-probe runtime
-allows seven bounded capabilities per task so the receiver's signal, exact read
+allows nine bounded capabilities per task so the receiver's signal, exact read
 and read/write resource authorities, schema root, commit root, and setting
 authority plus peer-state READ remain separate; derivation remains atomic and
-fail-closed. Pending
-buffered receives are a two-slot task-keyed table rather than one global value,
-so the client and service can block simultaneously without one overwriting the
-other. Sender exit still transitively revokes its derived authority.
+fail-closed. Pending buffered receives are a three-slot task-keyed table rather
+than one global value, matching the runtime's three-task capacity so every live
+service task can have at most one pending record without overwriting another.
+Sender exit still transitively revokes its derived authority. Named task and
+capability capacity constants now drive the runtime, supervisor, and pending
+table const generics instead of repeating numeric literals.
 
 Buffered completion now retains its receive-bound proof as a typed
 `BufferCompletion` rather than dropping back to two unconstrained `usize`

@@ -2056,6 +2056,9 @@ live composition remains pending.
    consumption or output, making the hosted pending-receive slot one-use.
    Pending lookup requires one unambiguous generational-task match; duplicate
    internal records halt rather than silently selecting the first slot.
+   Named capacities now bind the service probe's three-task runtime and pending
+   table plus its nine-capability task spaces. This corrects older
+   two-slot/seven-capability evidence text and prevents const-generic drift.
    The MRML-native service-image generic and block-service receive adapters now
    reject returned payload or capability counts beyond their supplied slices
    before slicing or envelope construction. Both service-image profiles

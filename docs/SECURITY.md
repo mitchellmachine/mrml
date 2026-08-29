@@ -139,6 +139,9 @@ access. The security/acceptance gate is canonical in
   message, so duplicate or re-entrant completion cannot replay the same slot.
 - Pending-record lookup requires a unique generational-task match and fails
   closed on duplicate internal state.
+- The hosted service runtime and pending-receive table share one named
+  three-task capacity; task capability spaces use a separate named nine-slot
+  capacity rather than duplicated numeric configuration.
 - Service-image receive adapters reject kernel-returned payload or capability
   counts beyond their exact supplied slices before exposing the result.
 - Service-image capability-transfer descriptors have explicit ABI alignment;

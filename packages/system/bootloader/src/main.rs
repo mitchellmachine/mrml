@@ -441,16 +441,24 @@ static mut USER_RUNTIME: Option<TaskRuntime<2, 1>> = None;
 static mut USER_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "application-probe")]
 static mut APPLICATION_RUNTIME: Option<TaskRuntime<1, 0>> = None;
+#[cfg(feature = "service-probe")]
+const SERVICE_TASK_CAPACITY: usize = 3;
+#[cfg(feature = "service-probe")]
+const SERVICE_CAPABILITY_CAPACITY: usize = 9;
 #[cfg(all(feature = "service-probe", not(feature = "component-service-probe")))]
-static mut SERVICE_RUNTIME: Option<TaskRuntime<3, 9>> = None;
+static mut SERVICE_RUNTIME: Option<
+    TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+> = None;
 #[cfg(feature = "component-service-probe")]
-static mut SERVICE_RUNTIME: Option<AccountedTaskRuntime<3, 9>> = None;
+static mut SERVICE_RUNTIME: Option<
+    AccountedTaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_ENDPOINT: Option<Endpoint> = None;
 #[cfg(all(feature = "service-probe", not(feature = "component-service-probe")))]
-static mut SERVICE_SUPERVISOR: Option<ServiceSupervisor<3>> = None;
+static mut SERVICE_SUPERVISOR: Option<ServiceSupervisor<SERVICE_TASK_CAPACITY>> = None;
 #[cfg(feature = "component-service-probe")]
-static mut SERVICE_SUPERVISOR: Option<AccountedServiceSupervisor<3>> = None;
+static mut SERVICE_SUPERVISOR: Option<AccountedServiceSupervisor<SERVICE_TASK_CAPACITY>> = None;
 #[cfg(feature = "component-service-probe")]
 static mut COMPONENT_SERVICE_MEMORY: Option<MemoryPoolTable<1, 2>> = None;
 #[cfg(feature = "component-service-probe")]
@@ -501,7 +509,8 @@ struct PendingBufferReceive {
 }
 
 #[cfg(feature = "service-probe")]
-static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; 3] = [None; 3];
+static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; SERVICE_TASK_CAPACITY] =
+    [None; SERVICE_TASK_CAPACITY];
 #[cfg(feature = "service-probe")]
 static mut SERVICE_SYSCALL_PAYLOAD: [u8; MAX_INLINE_PAYLOAD] = [0; MAX_INLINE_PAYLOAD];
 #[cfg(feature = "service-probe")]
@@ -3966,7 +3975,7 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 
 #[cfg(feature = "service-probe")]
 unsafe fn provision_service_resource(
-    runtime: &mut TaskRuntime<3, 9>,
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
     task: mrml_kernel::TaskId,
     peer: Option<mrml_kernel::TaskId>,
 ) -> ([Capability; 2], Option<[Capability; 3]>) {
@@ -4142,7 +4151,7 @@ unsafe fn service_resource_mapping(virtual_address: u64) -> Mapping {
 
 #[cfg(feature = "service-probe")]
 unsafe fn complete_service_cleanup(
-    supervisor: &mut ServiceSupervisor<3>,
+    supervisor: &mut ServiceSupervisor<SERVICE_TASK_CAPACITY>,
     ticket: mrml_kernel::ServiceCleanupTicket,
 ) {
     let root = ticket.context().page_table().get();
@@ -4268,7 +4277,7 @@ unsafe fn release_component_service_accounting() {
 
 #[cfg(feature = "service-restart-request-probe")]
 unsafe fn restart_sender_from_request(
-    runtime: &mut TaskRuntime<3, 9>,
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
     requester: mrml_kernel::TaskId,
     capability: Capability,
     service: ServiceId,
@@ -4361,8 +4370,8 @@ unsafe fn restart_sender_from_request(
 
 #[cfg(feature = "service-probe")]
 unsafe fn restart_service_pair(
-    runtime: &mut TaskRuntime<3, 9>,
-    supervisor: &mut ServiceSupervisor<3>,
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    supervisor: &mut ServiceSupervisor<SERVICE_TASK_CAPACITY>,
     receiver_service: ServiceId,
 ) -> ! {
     let management = unsafe {
@@ -4522,8 +4531,8 @@ unsafe fn service_restart_stage(stage: u32) {
 
 #[cfg(feature = "service-probe")]
 unsafe fn verify_restart_budget_exhausted(
-    runtime: &mut TaskRuntime<3, 9>,
-    supervisor: &mut ServiceSupervisor<3>,
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    supervisor: &mut ServiceSupervisor<SERVICE_TASK_CAPACITY>,
 ) {
     let management = unsafe {
         (*core::ptr::addr_of!(SERVICE_MANAGEMENT))
@@ -4728,7 +4737,10 @@ unsafe fn complete_buffer_current(
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 9>, task: mrml_kernel::TaskId) {
+unsafe fn complete_pending_buffer(
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    task: mrml_kernel::TaskId,
+) {
     let Some(pending) = (unsafe { take_pending_buffer(task) }) else {
         return;
     };
@@ -4797,7 +4809,10 @@ unsafe fn insert_pending_buffer(pending: PendingBufferReceive) {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn enter_service_task(runtime: &mut TaskRuntime<3, 9>, task: mrml_kernel::TaskId) -> ! {
+unsafe fn enter_service_task(
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    task: mrml_kernel::TaskId,
+) -> ! {
     unsafe { complete_pending_buffer(runtime, task) };
     let context = runtime
         .context(task)
