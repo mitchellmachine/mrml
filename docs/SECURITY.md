@@ -216,6 +216,9 @@ access. The security/acceptance gate is canonical in
   insufficient capacity leaves content and capabilities queued. Resumed
   completion restores the prior page table before returning a scrubbed retry
   error.
+- A capacity-denied receive does not consume or orphan derived authority; a
+  focused test retrieves the exact attenuated handle only after sufficient
+  capability capacity is supplied.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

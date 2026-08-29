@@ -2233,6 +2233,60 @@ mod tests {
     }
 
     #[test]
+    fn bounded_receive_retains_derived_capability_until_capacity_fits() {
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x45);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let delegated_object = ObjectId(0x46);
+        let root = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(delegated_object, Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                receiver,
+                &mut Endpoint::new(endpoint_object),
+                endpoint_capability,
+                b"x",
+                &[(root, Rights::READ)],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            runtime.receive_ipc_bounded(receiver, 1, 0),
+            Err(TaskRuntimeError::ReceiveCapacity)
+        ));
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver).unwrap(),
+            QueuedMessageShape {
+                payload_length: 1,
+                capability_count: 1,
+            }
+        );
+        let message = runtime.receive_ipc_bounded(receiver, 1, 1).unwrap();
+        let derived = message.capabilities().next().unwrap();
+        assert_eq!(
+            runtime
+                .capabilities_mut(receiver)
+                .unwrap()
+                .authorize(derived, Rights::READ),
+            Ok(delegated_object)
+        );
+    }
+
+    #[test]
     fn multi_client_messages_bind_sender_and_endpoint_sequence() {
         let mut runtime = TaskRuntime::<3, 1>::new(1_000, 1).unwrap();
         let receiver = runtime

@@ -2173,6 +2173,9 @@ live composition remains pending.
    retain queued message/capabilities, and resumed completion restores the prior
    page table before a scrubbed retry error. The 601-test kernel suite plus
    ordinary and buffer-drift profiles pass.
+   A capability-bearing retry test proves the insufficient attempt retains the
+   queued authority and the sufficient retry yields the exact derived READ
+   handle, raising the kernel total to 602.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
