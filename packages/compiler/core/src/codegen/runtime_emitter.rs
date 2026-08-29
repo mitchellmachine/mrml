@@ -7495,7 +7495,9 @@ impl<
         } = expression.kind
             && matches!(
                 operator,
-                crate::BinaryOperator::Add | crate::BinaryOperator::Subtract
+                crate::BinaryOperator::Add
+                    | crate::BinaryOperator::Subtract
+                    | crate::BinaryOperator::Multiply
             )
         {
             let left = self.evaluate_wide_const_call_argument(tree, left, expected_type)?;
@@ -7504,6 +7506,7 @@ impl<
                 match operator {
                     crate::BinaryOperator::Add => (left as i128).checked_add(right as i128),
                     crate::BinaryOperator::Subtract => (left as i128).checked_sub(right as i128),
+                    crate::BinaryOperator::Multiply => (left as i128).checked_mul(right as i128),
                     _ => unreachable!(),
                 }
                 .map(|value| value as u128)
@@ -7511,6 +7514,7 @@ impl<
                 match operator {
                     crate::BinaryOperator::Add => left.checked_add(right),
                     crate::BinaryOperator::Subtract => left.checked_sub(right),
+                    crate::BinaryOperator::Multiply => left.checked_mul(right),
                     _ => unreachable!(),
                 }
             };

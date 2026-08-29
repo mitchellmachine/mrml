@@ -136,7 +136,8 @@ nested-call, bitwise-inverted, and checked signed-negated arguments are evaluate
 under the callee parameter's declared type. Matching-type `&`, `|`, and `^`
 arguments compose through that same bounded recursive resolver. Matching-type
 `+` and `-` arguments use signed- or unsigned-checked arithmetic and fail closed
-on overflow.
+on overflow. Matching-type multiplication uses the corresponding checked wide
+operation and the same overflow failure.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
