@@ -8163,6 +8163,20 @@ impl<
             base,
             argument: Some(argument),
             second_argument: None,
+            operator: crate::BinaryOperator::BitOr,
+            unary: false,
+            disjoint: true,
+            funnel: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            self.emit_wide_bitwise(0x09)?;
+            return Ok(());
+        }
+        if let ExprKind::UncheckedIntegerOperation {
+            base,
+            argument: Some(argument),
+            second_argument: None,
             operator: crate::BinaryOperator::Divide,
             unary: false,
             disjoint: false,
