@@ -215,6 +215,8 @@ separate: wrapping masks to 127, strict traps at 128, and unbounded shifts
 produce zero or signed fill beyond the width.
 Wide unsigned `is_power_of_two` accepts exactly one set bit across either word
 and returns a normalized scalar boolean.
+Wide signed sign predicates read negativity from the high word and require a
+nonzero two-word value for positivity, again returning a normalized scalar.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.

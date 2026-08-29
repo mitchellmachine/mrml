@@ -1673,6 +1673,37 @@ impl<
                 return Ok(());
             }
         }
+        if let Some(ExprKind::SignedIntegerPredicate { base, positive }) =
+            tree.expression(id).map(|expression| expression.kind)
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)) {
+                self.emit_wide_integer_return(tree, base, base_type)?;
+                if positive {
+                    self.emit(&[0x48, 0x85, 0xd2])?;
+                    let false_result = self.emit_forward_branch(0x88)?;
+                    self.emit(&[
+                        0x48, 0x09, 0xd0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0,
+                    ])?;
+                    let done = self.emit_unconditional_forward_branch()?;
+                    self.patch_forward_branch(false_result)?;
+                    self.emit(&[0x31, 0xc0])?;
+                    self.patch_forward_branch(done)?;
+                } else {
+                    self.emit(&[0x48, 0x85, 0xd2, 0x0f, 0x98, 0xc0, 0x0f, 0xb6, 0xc0])?;
+                }
+                self.width = previous_width;
+                return Ok(());
+            }
+        }
         let operation_type = if expression_type == RuntimeExpressionType::Bool {
             match tree.expression(id).map(|expression| expression.kind) {
                 Some(ExprKind::Binary { left, .. }) => runtime_expression_type_with_locals(

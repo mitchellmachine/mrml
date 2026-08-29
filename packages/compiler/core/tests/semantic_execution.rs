@@ -163,6 +163,10 @@ const RUSTC_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE: &str = concat!(
 );
 const MRML_V1_WIDE_UNSIGNED_POWER_OF_TWO_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { input.is_power_of_two() as u64 }";
+const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
+const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_negative() as u64 }";
 const RUSTC_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str = concat!(
     "#![feature(wrapping_next_power_of_two)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }"
@@ -1921,6 +1925,24 @@ fn mrml_v1_wide_power_of_two_predicate_matches_the_oracle() {
             "for input in [0u128, 1, 3, 1u128 << 63, 1u128 << 64, (1u128 << 64) + 1, 1u128 << 127, u128::MAX] { println!(\"{}\", probe(input)); }",
         )
     );
+}
+
+#[test]
+fn mrml_v1_wide_signed_sign_predicates_match_the_oracle() {
+    let inputs = [i128::MIN, -1, 0, 1, i128::MAX];
+    for source in [
+        MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE,
+        MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE,
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .map(|input| unsafe { call_mrml_v1_wide_return(code.pointer, input as u128) as u64 })
+            .collect::<Vec<_>>();
+        let driver =
+            "for input in [i128::MIN, -1, 0, 1, i128::MAX] { println!(\"{}\", probe(input)); }";
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
 }
 
 #[test]
