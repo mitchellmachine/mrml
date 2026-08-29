@@ -617,6 +617,11 @@ later register and queue work will use the current
 [NVM Express specifications](https://nvmexpress.org/specifications/) as its
 interoperability reference.
 
+The NVMe userspace adapter now also bounds kernel-reported receive payload and
+capability counts by the exact supplied buffers before publishing an envelope.
+Its focused Linux suite passes 68 tests; no new device authority or hardware
+evidence is claimed.
+
 The opt-in classic IDE disk provider is **PARTIALLY IMPLEMENTED** at the same
 authority-free discovery level. It validates an exact PCI mass-storage/IDE
 function and configuration generation, rejects reserved programming-interface
@@ -676,6 +681,11 @@ transient-buffer wiping. Its concrete userspace adapter validates immutable
 reply bindings and exact receive/shared-write/release/send register frames.
 Twenty-seven focused
 tests pass on Windows and Arch Linux.
+
+The IDE userspace adapter applies the same receive-result bound and its focused
+Linux suite passes 28 tests. Patent review: **NOT_TRIGGERED** for these adapter
+checks; they reuse the existing buffered-IPC ABI and add no storage or device
+mechanism. See [the patent review log](../patents/REVIEW_LOG.md).
 
 ## Disk checking and images
 

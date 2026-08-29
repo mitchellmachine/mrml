@@ -55,6 +55,12 @@ FAT32 and 27 Zstd tests, including hostile over-count rejection. This reuses the
 existing service ABI and authority model; it does not expand either provider's
 capabilities or maturity claim.
 
+The NVMe and optional IDE block-provider adapters now enforce that same bound.
+Their focused Linux suites pass 68 and 28 tests respectively, including hostile
+payload and capability over-counts. All five currently concrete isolated
+storage/compression syscall adapters therefore reject a kernel receive result
+that exceeds the buffers supplied to the trap.
+
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block
 sessions, repeats principal and `READ` authorization, reads and validates block

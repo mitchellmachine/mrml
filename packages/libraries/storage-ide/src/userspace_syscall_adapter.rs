@@ -69,6 +69,20 @@ impl<R: IdeRawSyscall> IdeUserspaceSyscalls<R> {
             Err(IdeUserspaceSyscallError::Kernel(frame.rax))
         }
     }
+
+    fn receive_counts(
+        frame: &IdeSyscallFrame,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<(usize, usize), IdeUserspaceSyscallError> {
+        let payload = usize::try_from(frame.rdx).map_err(|_| IdeUserspaceSyscallError::Range)?;
+        let capabilities =
+            usize::try_from(frame.r10).map_err(|_| IdeUserspaceSyscallError::Range)?;
+        if payload > payload_capacity || capabilities > capability_capacity {
+            return Err(IdeUserspaceSyscallError::Range);
+        }
+        Ok((payload, capabilities))
+    }
 }
 
 unsafe impl<R: IdeRawSyscall> IdeServiceSyscalls for IdeUserspaceSyscalls<R> {
@@ -89,11 +103,11 @@ unsafe impl<R: IdeRawSyscall> IdeServiceSyscalls for IdeUserspaceSyscalls<R> {
             r9: 0,
         };
         self.invoke(&mut frame)?;
+        let (payload_length, capability_count) =
+            Self::receive_counts(&frame, request.len(), tokens.len())?;
         Ok(ReceivedIdeEnvelope {
-            payload_length: usize::try_from(frame.rdx)
-                .map_err(|_| IdeUserspaceSyscallError::Range)?,
-            capability_count: usize::try_from(frame.r10)
-                .map_err(|_| IdeUserspaceSyscallError::Range)?,
+            payload_length,
+            capability_count,
         })
     }
 
@@ -248,5 +262,31 @@ mod tests {
         );
         assert_eq!(&raw.memory[32..40], b"MRMLBLK\0");
         assert_eq!(decode_enumerate_response(&raw.response, 48), Ok(Ok(48)));
+    }
+
+    #[test]
+    fn rejects_kernel_counts_beyond_receive_buffers() {
+        let frame = IdeSyscallFrame {
+            rax: 0,
+            rdi: 0,
+            rsi: 0,
+            rdx: ENUMERATE_REQUEST_BYTES as u64 + 1,
+            r10: 1,
+            r8: 0,
+            r9: 0,
+        };
+        assert_eq!(
+            IdeUserspaceSyscalls::<Raw>::receive_counts(&frame, ENUMERATE_REQUEST_BYTES, 1),
+            Err(IdeUserspaceSyscallError::Range)
+        );
+        let frame = IdeSyscallFrame {
+            rdx: 0,
+            r10: 2,
+            ..frame
+        };
+        assert_eq!(
+            IdeUserspaceSyscalls::<Raw>::receive_counts(&frame, ENUMERATE_REQUEST_BYTES, 1),
+            Err(IdeUserspaceSyscallError::Range)
+        );
     }
 }
