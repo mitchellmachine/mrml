@@ -36,10 +36,11 @@ then FAT32 provider extraction/implementation, remain next.
 
 The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
-and bounded read-only FAT32 geometry, FSInfo, and mirrored/active FAT-chain
-traversal pass eleven tests on Windows and Arch Linux; storage with both dynamic
-requirements passes 135. Directory/LFN and file reads, checking, formatting,
-writes, service IPC, and live replacement remain next in dependency order.
+and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversal,
+and fail-closed 8.3 directory-entry parsing pass fifteen tests on Windows and
+Arch Linux; storage with both dynamic requirements passes 135. LFN, directory
+chain composition and file reads, checking, formatting, writes, service IPC, and
+live replacement remain next in dependency order.
 
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block

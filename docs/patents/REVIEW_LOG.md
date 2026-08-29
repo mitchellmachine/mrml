@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Bounded FAT32 short-directory parser
+
+Patent review: **NOT_TRIGGERED**. This increment parses conventional fixed-size
+FAT short-directory records into caller-bounded output, validates standard
+attributes and cluster domains, and handles deleted and end markers. Long-file-
+name records fail closed and no LFN, allocation, lookup optimization, caching,
+formatting/repair, or write mechanism is implemented. This technical screen is
+not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded FAT32 chain traversal
 
 Patent review: **NOT_TRIGGERED**. This increment follows conventional masked
