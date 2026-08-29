@@ -1515,6 +1515,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         for requirement in document.array_sections("requires") {
             let binding = interface_binding(requirement, &relative)?;
             let form = interface_form(requirement, &relative)?;
+            let multiplicity = interface_multiplicity(requirement, &relative)?;
             validate_dynamic_requirement(package_kind, package_id)?;
             requirements.push((
                 package_id.to_owned(),
@@ -1531,6 +1532,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
                     .to_owned(),
                 binding.to_owned(),
                 form.to_owned(),
+                multiplicity.to_owned(),
                 target_families.clone(),
             ));
         }
@@ -1556,7 +1558,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
             ));
         }
     }
-    for (consumer, interface, generation, fingerprint, binding, form, targets) in &requirements {
+    for (consumer, interface, generation, fingerprint, binding, form, _, targets) in &requirements {
         if interface_definitions.get(interface) != Some(&(*generation, fingerprint.clone())) {
             return Err(format!(
                 "InterfaceRequirementInvalid {{ consumer: {consumer}, interface: {interface}, generation: {generation} }}"
@@ -1588,7 +1590,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         }
     }
     let mut interface_bindings = Vec::new();
-    for (consumer, interface, generation, fingerprint, binding, form, targets) in requirements {
+    for (consumer, interface, generation, fingerprint, binding, form, multiplicity, targets) in requirements {
         let matching = providers
             .iter()
             .filter(
@@ -1612,24 +1614,32 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
                 },
             )
             .collect::<Vec<_>>();
-        if matching.len() != 1 {
+        if matching.is_empty() {
+            return Err(format!(
+                "InterfaceUnavailable {{ consumer: {consumer}, interface: {interface}, generation: {generation} }}"
+            ));
+        }
+        if multiplicity == "one" && matching.len() != 1 {
             return Err(format!(
                 "InterfaceProviderAmbiguous {{ consumer: {consumer}, interface: {interface}, providers: {} }}",
                 matching.len()
             ));
         }
-        interface_bindings.push(InterfaceBindingLock {
-            consumer,
-            interface,
-            generation,
-            fingerprint,
-            provider: matching[0].0.clone(),
-            form,
-            targets: targets.into_iter().map(str::to_owned).collect(),
-        });
+        for provider in matching {
+            interface_bindings.push(InterfaceBindingLock {
+                consumer: consumer.clone(),
+                interface: interface.clone(),
+                generation,
+                fingerprint: fingerprint.clone(),
+                provider: provider.0.clone(),
+                form: form.clone(),
+                targets: targets.iter().map(|target| (*target).to_owned()).collect(),
+            });
+        }
     }
     interface_bindings.sort_by(|left, right| {
-        (&left.consumer, &left.interface).cmp(&(&right.consumer, &right.interface))
+        (&left.consumer, &left.interface, &left.provider)
+            .cmp(&(&right.consumer, &right.interface, &right.provider))
     });
     Ok(ManifestDeclarations {
         records: declarations,
@@ -1664,6 +1674,22 @@ fn interface_form<'a>(section: &'a manifest::Section, relative: &str) -> Result<
         ));
     }
     Ok(form)
+}
+
+fn interface_multiplicity<'a>(
+    section: &'a manifest::Section,
+    relative: &str,
+) -> Result<&'a str, String> {
+    let multiplicity = section
+        .optional_string("multiplicity")
+        .map_err(|error| manifest_error(relative, error))?
+        .unwrap_or("one");
+    if !matches!(multiplicity, "one" | "many") {
+        return Err(format!(
+            "InterfaceMultiplicityInvalid {{ file: {relative}, multiplicity: {multiplicity} }}"
+        ));
+    }
+    Ok(multiplicity)
 }
 
 fn validate_dynamic_requirement(package_kind: &str, package_id: &str) -> Result<(), String> {
@@ -5551,6 +5577,24 @@ mod tests {
         let section = in_process.array_sections("requires").next().unwrap();
         assert_eq!(interface_binding(section, "fixture"), Ok("dynamic"));
         assert_eq!(interface_form(section, "fixture"), Ok("in-process"));
+        assert_eq!(interface_multiplicity(section, "fixture"), Ok("one"));
+
+        let many = ManifestDocument::parse(
+            b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[[requires]]\nbinding = \"dynamic\"\nform = \"isolated-service\"\nmultiplicity = \"many\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            interface_multiplicity(many.array_sections("requires").next().unwrap(), "fixture"),
+            Ok("many")
+        );
+        let invalid = ManifestDocument::parse(
+            b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[[requires]]\nbinding = \"dynamic\"\nform = \"isolated-service\"\nmultiplicity = \"ambient\"\n",
+        )
+        .unwrap();
+        assert!(
+            interface_multiplicity(invalid.array_sections("requires").next().unwrap(), "fixture")
+                .is_err()
+        );
 
         let isolated = ManifestDocument::parse(
             b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[[provides]]\nbinding = \"dynamic\"\nform = \"isolated-service\"\n",

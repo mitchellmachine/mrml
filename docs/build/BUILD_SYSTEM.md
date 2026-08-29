@@ -667,6 +667,14 @@ kernel and focused WHP/KVM runners decode the same record. This does not make
 the build tool a runtime authority or implement persistent `DeploymentService`
 activation.
 
+Dynamic requirements remain exactly-one by default. A consumer may explicitly
+declare `multiplicity = "many"`; the workspace resolver then records every exact
+generation/fingerprint/binding/form provider as a separate canonical lock edge,
+ordered by provider package identity. Missing providers still fail, an omitted
+or `one` multiplicity still rejects ambiguity, and neither workspace discovery
+order nor runtime device discovery chooses release membership. The storage
+service uses this bounded form to compose AHCI, NVMe, and classic IDE providers.
+
 Patent review: `TRIGGERED` — package/release/image construction, content identity,
 provenance, parser reuse/differential validation, and publication compositions
 require mechanism-specific worldwide review before implementation. See

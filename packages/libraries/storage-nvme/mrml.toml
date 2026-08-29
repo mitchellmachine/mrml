@@ -16,6 +16,13 @@ must_run = true
 runtime_class = "microvm-eligible"
 supported = ["native-service", "microvm"]
 
+[[provides]]
+binding = "dynamic"
+fingerprint = "1bde6037dfde7687b088296e135dd5c7a2406d001250c731165eef8cd817cf51"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.storage.block-provider"
+
 [[target]]
 arch = "x86_64"
 environment = "mrml"

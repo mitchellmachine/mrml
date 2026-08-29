@@ -569,12 +569,13 @@ mutable code with ambient service authority.
 NVMe and legacy IDE are additional isolated block-provider implementations,
 not new storage authority models. They reuse the same block-provider interface,
 module registry, package admission, generation replacement, and supervisor
-boundary. The current workspace resolver admits only one exact provider for a
-required interface, so the newly introduced `org.mrml.driver.nvme` package does
-not yet publish a provider declaration: explicit multi-provider selection must
-land before a second implementation can enter a coherent release. That missing
-selection gate must fail closed rather than picking a driver from workspace or
-PCI enumeration order.
+boundary. The storage service explicitly declares `multiplicity = "many"` for
+that dynamic interface; the workspace lock therefore records AHCI, NVMe, and
+IDE as three distinct exact provider edges in canonical package order. NVMe and
+IDE now publish the same generation-1 fingerprint and isolated-service form as
+AHCI. Requirements without this explicit multiplicity remain exactly-one and
+fail on ambiguity. PCI enumeration order never selects release membership or
+grants device authority.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
 sequential by provider and each parser/register/queue gate is independently
@@ -629,7 +630,8 @@ codec and exact-generation isolated transport pass three on Windows and Arch
 Linux. The fixed-capacity module registry is also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
 endpoint signal authorities separately; exact-matches all generations; permits
-independently replaceable block-provider slots to coexist; cleanup-gates
+three independently replaceable AHCI, NVMe, and IDE block-provider slots to
+coexist; cleanup-gates
 replacement; and publishes only after fresh launch and health-check. Cleanup
 uncertainty quarantines only the affected slot, while failed launch leaves that
 slot unavailable until explicit retry and never falls back. Storage passes

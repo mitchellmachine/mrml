@@ -120,6 +120,15 @@ architecture. It implements no AHCI command, FAT32 on-disk algorithm, storage
 optimization, crash-recovery algorithm, or new loading technique. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Explicit multi-provider interface composition
+
+Patent review: **NOT_TRIGGERED**. This increment extends the existing exact
+manifest dependency resolution with a bounded explicit `many` multiplicity and
+canonical provider-package ordering. It records each already exact provider as
+a separate lock edge and introduces no package-selection heuristic, storage
+algorithm, data encoding, compression, cryptography, or publication mechanism.
+This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded classic IDE bus-master execution
 
 Patent review: **NOT_TRIGGERED**. This increment performs the conventional

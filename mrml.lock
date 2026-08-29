@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 154
+compile_edges = 164
 build_tool_edges = 0
-runtime_interface_edges = 1
-package_edges = 147
+runtime_interface_edges = 5
+package_edges = 151
 system_release_edges = 3
 
 [[package]]
@@ -89,6 +89,32 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.driver.nvme"
+path = "packages/libraries/storage-nvme"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.driver.storage.ide"
+path = "packages/libraries/storage-ide"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.experiment.vbs-enclave"
 path = "packages/experiments/mrml-vbs-enclave"
 isolation_default = "native-process"
@@ -130,6 +156,32 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.interface.gui.surface"
 path = "packages/interfaces/org.mrml.interface.gui.surface"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.interface.storage.block-provider"
+path = "packages/interfaces/org.mrml.interface.storage.block-provider"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.interface.storage.filesystem"
+path = "packages/interfaces/org.mrml.interface.storage.filesystem"
 isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
@@ -336,6 +388,32 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.library.storage.ahci"
+path = "packages/libraries/storage-ahci"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.library.storage.fat32"
+path = "packages/libraries/storage-fat32"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.interface.storage.filesystem", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.library.tensor"
 path = "packages/gpu/tensor"
 isolation_default = "in-process"
@@ -472,7 +550,7 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "native-service"
 isolation_supported = ["native-service"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.storage.filesystem", "org.mrml.library.crypto", "org.mrml.library.storage.fat32", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
 boot_bound = []
@@ -685,6 +763,42 @@ compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
+
+[[interface_binding]]
+consumer = "org.mrml.service.storage"
+interface = "org.mrml.interface.storage.block-provider"
+generation = 1
+fingerprint = "1bde6037dfde7687b088296e135dd5c7a2406d001250c731165eef8cd817cf51"
+provider = "org.mrml.driver.nvme"
+form = "isolated-service"
+targets = ["MRML_NATIVE", "WINDOWS", "LINUX"]
+
+[[interface_binding]]
+consumer = "org.mrml.service.storage"
+interface = "org.mrml.interface.storage.block-provider"
+generation = 1
+fingerprint = "1bde6037dfde7687b088296e135dd5c7a2406d001250c731165eef8cd817cf51"
+provider = "org.mrml.driver.storage.ide"
+form = "isolated-service"
+targets = ["MRML_NATIVE", "WINDOWS", "LINUX"]
+
+[[interface_binding]]
+consumer = "org.mrml.service.storage"
+interface = "org.mrml.interface.storage.block-provider"
+generation = 1
+fingerprint = "1bde6037dfde7687b088296e135dd5c7a2406d001250c731165eef8cd817cf51"
+provider = "org.mrml.library.storage.ahci"
+form = "isolated-service"
+targets = ["MRML_NATIVE", "WINDOWS", "LINUX"]
+
+[[interface_binding]]
+consumer = "org.mrml.service.storage"
+interface = "org.mrml.interface.storage.filesystem"
+generation = 1
+fingerprint = "58b11da30dcaa7eac23bf94ec176e2cd14e642b9c8449c6639c4383782346fbc"
+provider = "org.mrml.library.storage.fat32"
+form = "isolated-service"
+targets = ["MRML_NATIVE", "WINDOWS", "LINUX"]
 
 [[interface_binding]]
 consumer = "org.mrml.zim"

@@ -362,11 +362,13 @@ mod tests {
     fn multiple_block_provider_slots_coexist_and_replace_independently() {
         let ahci = binding_in(11, 20, 3, 7, 1);
         let nvme = binding_in(12, 30, 5, 7, 1);
+        let ide = binding_in(13, 50, 2, 7, 1);
         let nvme_next = binding_in(12, 40, 6, 8, 2);
         let (ahci_caps, ahci_handles) = capabilities(ahci);
         let (nvme_caps, nvme_handles) = capabilities(nvme);
         let (next_caps, next_handles) = capabilities(nvme_next);
-        let mut registry = StorageModuleRegistry::<3>::new();
+        let (ide_caps, ide_handles) = capabilities(ide);
+        let mut registry = StorageModuleRegistry::<4>::new();
         registry
             .bind_initial(
                 &ahci_caps,
@@ -375,6 +377,16 @@ mod tests {
                 ahci_handles[2],
                 ahci_handles[3],
                 ahci,
+            )
+            .unwrap();
+        registry
+            .bind_initial(
+                &ide_caps,
+                ide_handles[0],
+                ide_handles[1],
+                ide_handles[2],
+                ide_handles[3],
+                ide,
             )
             .unwrap();
         registry
@@ -391,7 +403,7 @@ mod tests {
             registry
                 .states_for_class(StorageModuleClass::BlockProvider)
                 .count(),
-            2
+            3
         );
 
         let mut backend = Backend {
@@ -418,6 +430,10 @@ mod tests {
         assert_eq!(
             registry.state(nvme.module_object),
             Some(StorageModuleState::Active(nvme_next))
+        );
+        assert_eq!(
+            registry.state(ide.module_object),
+            Some(StorageModuleState::Active(ide))
         );
         assert_eq!(backend.calls, [1, 1]);
     }
