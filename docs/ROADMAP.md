@@ -2168,6 +2168,10 @@ live composition remains pending.
    `0x28`, peer exit, and terminal marker `0x29`. The KVM runner admits the mode
    with one verified signed service and exact two-root preparation; all 15
    runner unit tests pass. Actual KVM execution and WHP parity remain pending.
+   Blocked completion now peeks only bounded message counts before dequeue.
+   Undersized saved outputs retain the queued message/capabilities, restore the
+   prior page table, and receive a scrubbed retryable error. The 601-test kernel
+   suite and buffer-drift profile pass.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

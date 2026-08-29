@@ -5047,6 +5047,28 @@ unsafe fn complete_pending_buffer(
             )
         }
     }
+    let shape = runtime.peek_ipc_shape(task).unwrap_or_else(|_| halt());
+    if mrml_kernel::BufferCompletion::new(
+        shape.payload_length(),
+        shape.capability_count(),
+        pending.payload_capacity,
+        pending.capability_capacity,
+    )
+    .is_err()
+    {
+        unsafe {
+            asm!(
+                "mov cr3, {}",
+                in(reg) previous.root().get(),
+                options(nostack, preserves_flags)
+            )
+        }
+        runtime
+            .context_mut(task)
+            .unwrap_or_else(|_| halt())
+            .complete_error();
+        return;
+    }
     let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
     let completion = unsafe { write_buffer_current(target, pending, &message) };
     unsafe {

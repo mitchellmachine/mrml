@@ -229,6 +229,14 @@ impl UserContext {
         self.r9 = 0;
     }
 
+    pub fn complete_error(&mut self) {
+        self.rax = 1;
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
     pub const fn instruction_pointer(&self) -> u64 {
         self.rip
     }
@@ -520,6 +528,12 @@ mod tests {
         assert_eq!(context.rax, 0);
         assert_eq!(context.rdx, 368);
         assert_eq!(context.r10, 5);
+        assert_eq!(context.r8, 0);
+        assert_eq!(context.r9, 0);
+        context.complete_error();
+        assert_eq!(context.rax, 1);
+        assert_eq!(context.rdx, 0);
+        assert_eq!(context.r10, 0);
         assert_eq!(context.r8, 0);
         assert_eq!(context.r9, 0);
     }

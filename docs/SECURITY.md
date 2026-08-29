@@ -212,6 +212,9 @@ access. The security/acceptance gate is canonical in
   retirement and clean peer exit markers. KVM admission requires one verified
   signed service and exact ordered markers; actual backend execution remains
   pending.
+- Blocked buffered receive checks only queued-message shape before dequeue;
+  insufficient saved capacity leaves content and capabilities queued and
+  returns a scrubbed retryable error after restoring the prior page table.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

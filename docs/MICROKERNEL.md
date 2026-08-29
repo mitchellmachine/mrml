@@ -6777,6 +6777,12 @@ state emits `0x29`. The KVM runner now admits the mode only with one verified
 signed service artifact, prepares the exact two isolated roots, and requires
 those ordered markers. Its 15 Linux unit tests pass, including exact fail-closed
 stage validation. Actual KVM execution and WHP parity remain pending.
+Blocked receive completion now peeks only the next queued message's bounded
+payload/capability counts before dequeue. If saved outputs are too small, it
+restores the prior page table, leaves the message and derived capabilities
+queued, and writes a scrubbed error into the saved context for retry. The shape
+API exposes neither content nor handles; 601 kernel tests and the buffer-drift
+UEFI profile pass.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6841,6 +6847,8 @@ conventional validation/cleanup ordering on that path and likewise does not
 trigger review. The dedicated image only exercises that path and does not
 trigger separate review. KVM admission is test-harness plumbing on that same
 path and likewise does not trigger review.
+Pre-dequeue shape validation is conventional bounded queue handling and does
+not trigger separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

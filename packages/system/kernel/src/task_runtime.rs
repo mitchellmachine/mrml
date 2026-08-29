@@ -101,6 +101,22 @@ pub struct ReceivedMessage {
     message: Message,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueuedMessageShape {
+    payload_length: usize,
+    capability_count: usize,
+}
+
+impl QueuedMessageShape {
+    pub const fn payload_length(self) -> usize {
+        self.payload_length
+    }
+
+    pub const fn capability_count(self) -> usize {
+        self.capability_count
+    }
+}
+
 impl ReceivedMessage {
     pub const fn sender(&self) -> TaskId {
         self.sender
@@ -1057,6 +1073,29 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         domain.inbox_head = ((head + 1) % TASK_INBOX_MESSAGES) as u8;
         domain.inbox_count -= 1;
         Ok(message.into_message())
+    }
+
+    /// Returns only the bounded shape of the next queued message without
+    /// exposing its contents, capabilities, or consuming the inbox entry.
+    pub fn peek_ipc_shape(&self, task: TaskId) -> Result<QueuedMessageShape, TaskRuntimeError> {
+        let domain = self
+            .domains
+            .iter()
+            .flatten()
+            .find(|domain| domain.task == task)
+            .ok_or(TaskRuntimeError::MissingTask)?;
+        if domain.inbox_count == 0 {
+            return Err(TaskRuntimeError::InboxEmpty);
+        }
+        let head = usize::from(domain.inbox_head);
+        let message = domain.inbox[head]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .message();
+        Ok(QueuedMessageShape {
+            payload_length: message.payload().len(),
+            capability_count: message.capability_count(),
+        })
     }
 
     /// Links two live domains for typed lifecycle notification. The relation is
@@ -2134,11 +2173,29 @@ mod tests {
                 .err(),
             Some(TaskRuntimeError::InboxFull)
         );
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver).unwrap(),
+            QueuedMessageShape {
+                payload_length: 3,
+                capability_count: 0,
+            }
+        );
         assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"one");
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver).unwrap(),
+            QueuedMessageShape {
+                payload_length: 3,
+                capability_count: 0,
+            }
+        );
         assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"two");
         assert_eq!(
             runtime.receive_ipc(receiver).err(),
             Some(TaskRuntimeError::InboxEmpty)
+        );
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver),
+            Err(TaskRuntimeError::InboxEmpty)
         );
     }
 
