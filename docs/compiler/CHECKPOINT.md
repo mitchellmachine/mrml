@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `0bd379cc`
-  (`compiler: admit external PE writable definitions`)
+- Compiler checkpoint commit: `1974315f`
+  (`compiler: resolve gnullvm PE refptr globals`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,21 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `1974315f` resolves cross-object Rust global reads through the exact
+gnullvm `.rdata$.refptr.*` shape. The bounded decoder requires one zeroed
+eight-byte record, one AMD64 `ADDR64` relocation, and one undefined external
+target; the PE serializer patches the pointer after final writable layout. The
+durable entry object reads exported initialized and zero-fill globals defined in
+an eight-CGU `.rlib`. MRML emits 2,560 bytes and pinned rust-lld emits 3,584
+bytes from identical inputs; both return 42, and MRML reports the exact 1,028
+zero-fill bytes. The Windows core suite passed 746 unit tests and every focused
+integration group, including 56 semantic execution tests; the Windows driver
+suite passed six tests. After concurrent compiler commit `e150ea74`, Linux
+passed 747 core unit tests, every integration group, and all six driver tests.
+`mrml doctor` passed; audit retains unrelated fingerprint
+`fnv1a64:0fe5cf1836d3e0dc` at line 1238. Patent review:
+**NOT_TRIGGERED**.
 
 Commit `0bd379cc` extends selected PE writable storage to exact external
 storage-class-2 `.data$` and `.bss$` definitions. The eight-CGU probe now reads
