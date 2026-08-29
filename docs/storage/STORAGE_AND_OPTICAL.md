@@ -505,7 +505,10 @@ live owners untouched; any later failure reports the exact completed phase and
 retains the remaining layouts as quarantined ownership. The NVMe library now
 publishes caller-supplied namespace sessions and media generations through the
 same canonical block-provider catalog as AHCI, without exposing admin-command
-authority. Sixty-four focused
+authority. Its isolated enumeration loop uses one transferred shared-memory
+leaf, bounded local scratch, validated copy-back, release on every post-receive
+path, reply-after-release ordering, and complete transient-buffer wiping.
+Sixty-six focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
@@ -608,11 +611,11 @@ before publication. The AHCI library implements enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
 55 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
 each implement this same enumeration contract independently. Provider-side
-isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI enumeration. Its service
-loop accepts one exact transferred shared-memory leaf, rebuilds the catalog in
+isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI and NVMe enumeration.
+Each service loop accepts one exact transferred shared-memory leaf, rebuilds the catalog in
 bounded local scratch, copies back only the validated response extent, releases
 the leaf on success or failure, replies only after release, and wipes request,
-token, scratch, and response buffers. Its concrete userspace adapter validates
+token, scratch, and response buffers. The AHCI concrete userspace adapter validates
 immutable reply bindings and emits the exact receive, shared-write, release, and
 send register frames. Malformed envelopes fail before copy-back.
 The read

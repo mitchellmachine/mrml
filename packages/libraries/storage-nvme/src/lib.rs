@@ -18,6 +18,7 @@ mod nvme_prp;
 mod nvme_queue_dma;
 mod nvme_queue_program;
 mod nvme_shutdown;
+mod service_loop;
 
 use mrml_interface_storage_block_provider_v1::{
     decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
@@ -85,6 +86,9 @@ pub use nvme_queue_program::{
 };
 pub use nvme_shutdown::{
     shutdown_nvme_provider, NvmeShutdownError, NvmeShutdownFailure, NvmeShutdownReceipt,
+};
+pub use service_loop::{
+    NvmeEnumerationServiceLoop, NvmeServiceLoopError, NvmeServiceSyscalls, ReceivedNvmeEnvelope,
 };
 
 pub struct NvmeBlockProvider<'a> {

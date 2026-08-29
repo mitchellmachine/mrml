@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Isolated NVMe enumeration service loop
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
+authenticated IPC, transferred-capability release, bounded scratch, copy-back,
+reply-ordering, and transient-wipe patterns to the already screened NVMe catalog
+operation. It adds no NVMe register, queue, command, DMA, discovery, storage
+scheduling, caching, allocation, naming, encoding, data-layout, or optimization
+behavior. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — AHCI userspace syscall adapter
 
 Patent review: **NOT_TRIGGERED**. This increment maps the already screened AHCI
