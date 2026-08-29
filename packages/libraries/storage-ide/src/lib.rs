@@ -6,6 +6,7 @@
 //! authorize I/O; the storage service retains authority and policy.
 
 mod ide_discovery;
+mod ide_dma;
 mod ide_identify;
 mod ide_pio;
 mod ide_ports;
@@ -14,6 +15,11 @@ mod ide_reset;
 pub use ide_discovery::{
     IdeChannelDescriptor, IdeChannelMode, IdeControllerDescriptor, IdeDiscoveryError,
     IdePciFunctionSnapshot, PciFunctionLocation, IDE_PCI_CLASS, IDE_PCI_SUBCLASS,
+};
+pub use ide_dma::{
+    prepare_ide_dma, revoke_ide_dma, IdeDmaBackend, IdeDmaDirection, IdeDmaError, IdeDmaFailure,
+    IdeDmaLayout, IdeDmaMemoryIo, IdeDmaRegion, IdeDmaRequest, IdeDmaRevocationError,
+    PreparedIdeDma, IDE_PRD_ENTRY_LIMIT, IDE_PRD_TABLE_BYTES,
 };
 pub use ide_identify::{
     identify_ide_device, IdeDevice, IdeDeviceIdentity, IdeIdentifyError, IdeIdentifyFailure,

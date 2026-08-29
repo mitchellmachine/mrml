@@ -510,7 +510,7 @@ generation-bound channel grant containing only its eight command ports, one
 control port, and optional channel-specific eight-byte bus-master window.
 Excess rights, substituted objects, invalid generations/ranges, overlaps, and
 backend rejection fail before publication. Media generations, interrupts,
-bus-master DMA, service IPC, runtime publication, and
+bus-master DMA execution, service IPC, runtime publication, and
 physical-device evidence remain
 **PLANNED**. The IDENTIFY gate now selects master/slave devices, performs four
 alternate-status settling reads, clears the task-file address registers, issues
@@ -533,6 +533,14 @@ reset, performs four settling reads, and bounds the return to idle before the
 exact port projection may be removed. Reset or removal uncertainty retains the
 grant for quarantine/retry rather than making replacement authority available.
 Seventeen focused tests pass on Windows and Arch Linux.
+Bus-master DMA ownership now exact-authorizes separately pinned data and PRD
+memory with direction-specific data rights and a nonzero DMA generation. It
+supports the complete 1 MiB interface bound below the classic 32-bit DMA ceiling,
+splits transfers at every 64-KiB boundary into at most 32 conventional PRDs,
+zero-verifies the 4-KiB table, writes and verifies every entry and terminal bit,
+and rejects overlap or substitution. Backend rejection is untouched; partial
+PRD mutation and uncertain IOMMU removal retain quarantined ownership. Twenty
+focused tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
 
