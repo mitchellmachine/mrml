@@ -109,6 +109,14 @@ const MRML_V1_WIDE_UNSIGNED_COUNT_ONES_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.count_ones() }";
 const MRML_V1_WIDE_SIGNED_COUNT_ZEROS_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u32 { input.count_zeros() }";
+const MRML_V1_WIDE_UNSIGNED_LEADING_ZEROS_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.leading_zeros() }";
+const MRML_V1_WIDE_SIGNED_TRAILING_ZEROS_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u32 { input.trailing_zeros() }";
+const MRML_V1_WIDE_UNSIGNED_LEADING_ONES_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.leading_ones() }";
+const MRML_V1_WIDE_SIGNED_TRAILING_ONES_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u32 { input.trailing_ones() }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1442,6 +1450,10 @@ fn mrml_v1_wide_population_counts_match_the_oracle() {
     for (source, signed) in [
         (MRML_V1_WIDE_UNSIGNED_COUNT_ONES_SOURCE, false),
         (MRML_V1_WIDE_SIGNED_COUNT_ZEROS_SOURCE, true),
+        (MRML_V1_WIDE_UNSIGNED_LEADING_ZEROS_SOURCE, false),
+        (MRML_V1_WIDE_SIGNED_TRAILING_ZEROS_SOURCE, true),
+        (MRML_V1_WIDE_UNSIGNED_LEADING_ONES_SOURCE, false),
+        (MRML_V1_WIDE_SIGNED_TRAILING_ONES_SOURCE, true),
     ] {
         let code = compile(source);
         let actual = inputs

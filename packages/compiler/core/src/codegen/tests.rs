@@ -12708,6 +12708,10 @@ mod tests {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { input.count_ones() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u32 { input.count_zeros() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { input.leading_zeros() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u32 { input.trailing_zeros() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { input.leading_ones() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u32 { input.trailing_ones() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

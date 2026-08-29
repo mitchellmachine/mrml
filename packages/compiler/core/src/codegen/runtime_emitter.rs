@@ -5144,22 +5144,67 @@ impl<
                         crate::IntegerType::U128 | crate::IntegerType::I128
                     ))
                 ) {
-                    if !matches!(count, IntegerBitCount::Ones | IntegerBitCount::Zeros) {
+                    if count == IntegerBitCount::Width {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                     }
                     self.emit_wide_integer_return(tree, base, base_type)?;
-                    self.emit(&[0x31, 0xc9, 0x41, 0xb8, 64, 0, 0, 0])?;
-                    let loop_start = self.length;
-                    self.emit(&[
-                        0x48, 0xd1, 0xe8, 0x83, 0xd1, 0, 0x48, 0xd1, 0xea, 0x83, 0xd1, 0,
-                        0x41, 0xff, 0xc8,
-                    ])?;
-                    let done = self.emit_forward_branch(0x84)?;
-                    self.emit_backward_branch(loop_start)?;
-                    self.patch_forward_branch(done)?;
-                    self.emit(&[0x89, 0xc8])?;
-                    if count == IntegerBitCount::Zeros {
-                        self.emit(&[0xb9, 128, 0, 0, 0, 0x29, 0xc1, 0x89, 0xc8])?;
+                    if matches!(count, IntegerBitCount::Ones | IntegerBitCount::Zeros) {
+                        self.emit(&[0x31, 0xc9, 0x41, 0xb8, 64, 0, 0, 0])?;
+                        let loop_start = self.length;
+                        self.emit(&[
+                            0x48, 0xd1, 0xe8, 0x83, 0xd1, 0, 0x48, 0xd1, 0xea, 0x83, 0xd1,
+                            0, 0x41, 0xff, 0xc8,
+                        ])?;
+                        let done = self.emit_forward_branch(0x84)?;
+                        self.emit_backward_branch(loop_start)?;
+                        self.patch_forward_branch(done)?;
+                        self.emit(&[0x89, 0xc8])?;
+                        if count == IntegerBitCount::Zeros {
+                            self.emit(&[0xb9, 128, 0, 0, 0, 0x29, 0xc1, 0x89, 0xc8])?;
+                        }
+                    } else {
+                        if matches!(
+                            count,
+                            IntegerBitCount::LeadingOnes | IntegerBitCount::TrailingOnes
+                        ) {
+                            self.emit(&[0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd2])?;
+                        }
+                        if matches!(
+                            count,
+                            IntegerBitCount::LeadingZeros | IntegerBitCount::LeadingOnes
+                        ) {
+                            self.emit(&[0x48, 0x85, 0xd2])?;
+                            let low_word = self.emit_forward_branch(0x84)?;
+                            self.emit(&[
+                                0x48, 0x0f, 0xbd, 0xca, 0xb8, 63, 0, 0, 0, 0x29, 0xc8,
+                            ])?;
+                            let done = self.emit_unconditional_forward_branch()?;
+                            self.patch_forward_branch(low_word)?;
+                            self.emit(&[0x48, 0x85, 0xc0])?;
+                            let zero = self.emit_forward_branch(0x84)?;
+                            self.emit(&[
+                                0x48, 0x0f, 0xbd, 0xc8, 0xb8, 127, 0, 0, 0, 0x29, 0xc8,
+                            ])?;
+                            let low_done = self.emit_unconditional_forward_branch()?;
+                            self.patch_forward_branch(zero)?;
+                            self.emit(&[0xb8, 128, 0, 0, 0])?;
+                            self.patch_forward_branch(low_done)?;
+                            self.patch_forward_branch(done)?;
+                        } else {
+                            self.emit(&[0x48, 0x85, 0xc0])?;
+                            let high_word = self.emit_forward_branch(0x84)?;
+                            self.emit(&[0x48, 0x0f, 0xbc, 0xc0])?;
+                            let done = self.emit_unconditional_forward_branch()?;
+                            self.patch_forward_branch(high_word)?;
+                            self.emit(&[0x48, 0x85, 0xd2])?;
+                            let zero = self.emit_forward_branch(0x84)?;
+                            self.emit(&[0x48, 0x0f, 0xbc, 0xca, 0x8d, 0x41, 64])?;
+                            let high_done = self.emit_unconditional_forward_branch()?;
+                            self.patch_forward_branch(zero)?;
+                            self.emit(&[0xb8, 128, 0, 0, 0])?;
+                            self.patch_forward_branch(high_done)?;
+                            self.patch_forward_branch(done)?;
+                        }
                     }
                 } else {
                     let operand_width = runtime_expression_width(base_type)
