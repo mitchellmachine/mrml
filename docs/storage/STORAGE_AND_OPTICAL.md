@@ -510,7 +510,7 @@ generation-bound channel grant containing only its eight command ports, one
 control port, and optional channel-specific eight-byte bus-master window.
 Excess rights, substituted objects, invalid generations/ranges, overlaps, and
 backend rejection fail before publication. Media generations, interrupts,
-bus-master DMA, reset, service IPC, runtime publication, and
+bus-master DMA, service IPC, runtime publication, and
 physical-device evidence remain
 **PLANNED**. The IDENTIFY gate now selects master/slave devices, performs four
 alternate-status settling reads, clears the task-file address registers, issues
@@ -528,6 +528,11 @@ mutation. It programs the conventional task file, bounds every per-block DRQ
 transition and final completion, transfers exact logical-block word counts, and
 quarantines port and buffer ownership after any partial or uncertain command.
 Fourteen focused tests pass on Windows and Arch Linux.
+Restart teardown now masks channel interrupts, asserts/deasserts ATA software
+reset, performs four settling reads, and bounds the return to idle before the
+exact port projection may be removed. Reset or removal uncertainty retains the
+grant for quarantine/retry rather than making replacement authority available.
+Seventeen focused tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
 

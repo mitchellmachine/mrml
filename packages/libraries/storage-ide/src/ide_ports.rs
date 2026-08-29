@@ -47,6 +47,22 @@ pub enum IdePortGrantError {
 pub trait IdePortGrantBackend {
     /// Atomically grants only these port ranges to the isolated provider.
     fn install(&mut self, grant: IdeChannelPortGrant) -> Result<(), ()>;
+    /// Removes the exact port projection before the provider can be replaced.
+    fn remove(&mut self, grant: IdeChannelPortGrant) -> Result<(), ()>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct IdePortRevocationError {
+    pub grant: IdeChannelPortGrant,
+}
+
+pub fn revoke_ide_channel_ports<B: IdePortGrantBackend>(
+    grant: IdeChannelPortGrant,
+    backend: &mut B,
+) -> Result<(), IdePortRevocationError> {
+    backend
+        .remove(grant)
+        .map_err(|_| IdePortRevocationError { grant })
 }
 
 pub fn prepare_ide_channel_ports<const N: usize, B: IdePortGrantBackend>(
@@ -132,6 +148,13 @@ mod tests {
                 self.0 = Some(grant);
                 Ok(())
             }
+        }
+        fn remove(&mut self, grant: IdeChannelPortGrant) -> Result<(), ()> {
+            if self.1 || self.0 != Some(grant) {
+                return Err(());
+            }
+            self.0 = None;
+            Ok(())
         }
     }
 
@@ -245,5 +268,28 @@ mod tests {
             prepare_ide_channel_ports(&caps, controller(), request, &mut Backend(None, true)),
             Err(IdePortGrantError::BackendRejected)
         );
+    }
+
+    #[test]
+    fn revocation_retains_grant_until_exact_backend_removal() {
+        let mut caps = CapabilitySpace::<1>::new();
+        let cap = caps
+            .insert(ObjectId(9), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let request = IdePortGrantRequest {
+            port_capability: cap,
+            port_object: ObjectId(9),
+            channel: IdeChannel::Primary,
+            grant_generation: 7,
+        };
+        let mut backend = Backend::default();
+        let grant = prepare_ide_channel_ports(&caps, controller(), request, &mut backend).unwrap();
+        backend.1 = true;
+        let retained = revoke_ide_channel_ports(grant, &mut backend)
+            .unwrap_err()
+            .grant;
+        backend.1 = false;
+        assert_eq!(revoke_ide_channel_ports(retained, &mut backend), Ok(()));
+        assert_eq!(backend.0, None);
     }
 }

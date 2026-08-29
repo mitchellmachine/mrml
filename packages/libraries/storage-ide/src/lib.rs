@@ -9,6 +9,7 @@ mod ide_discovery;
 mod ide_identify;
 mod ide_pio;
 mod ide_ports;
+mod ide_reset;
 
 pub use ide_discovery::{
     IdeChannelDescriptor, IdeChannelMode, IdeControllerDescriptor, IdeDiscoveryError,
@@ -23,6 +24,8 @@ pub use ide_pio::{
     IdePioOperation, IdePioRequest,
 };
 pub use ide_ports::{
-    prepare_ide_channel_ports, IdeChannel, IdeChannelPortGrant, IdePortGrantBackend,
-    IdePortGrantError, IdePortGrantRequest, IdePortRange,
+    prepare_ide_channel_ports, revoke_ide_channel_ports, IdeChannel, IdeChannelPortGrant,
+    IdePortGrantBackend, IdePortGrantError, IdePortGrantRequest, IdePortRange,
+    IdePortRevocationError,
 };
+pub use ide_reset::{reset_ide_channel, IdeResetError, IdeResetFailure};
