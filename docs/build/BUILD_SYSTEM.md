@@ -95,11 +95,11 @@ Policy may temporarily admit honestly labeled mixed-compiler generations.
 
 The public frontend now exposes the first bounded experimental linker route:
 `mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o
-OUTPUT [--release]`. The companion `compile-elf INPUT --function NAME -o OUTPUT
-[--release]` routes one supported Rust source function through the same custom
-compiler and MRML-owned static ELF serializer. Both build the declared compiler
-driver through the native dependency graph; Linux child execution receives the
-driver's explicit bounded 32 MiB stack requirement. The mode name is mandatory,
+OUTPUT [--release]`. Companion `compile-elf`, `link-pe`, and `compile-pe`
+operations route supported Rust source or explicit COFF inputs through the same
+custom compiler and MRML-owned ELF64 or PE32+ serializer. All build the declared
+compiler driver through the native dependency graph; Linux child execution
+receives the driver's explicit bounded 32 MiB stack requirement. The mode name is mandatory,
 `MrmlRustcProduction` fails as unavailable, and upstream rustc remains the
 production compiler/linker for ordinary `mrml build` actions. This is explicit
 development-tool integration, not satisfaction of the production profile gate

@@ -9331,6 +9331,14 @@ no new compilation, linking, object-format, compression, cryptographic, or
 loading mechanism. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-28 — Experimental COFF/PE compiler frontend route
+
+Patent review: **NOT_TRIGGERED**. This increment exposes the existing bounded
+COFF reader and PE32+ serializer through explicit experimental build-frontend
+operations. It introduces no new compilation, linking, object-format,
+compression, cryptographic, or loading mechanism. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

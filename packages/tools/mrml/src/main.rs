@@ -292,6 +292,9 @@ fn print_help() {
     println!(
         "       mrml compiler mrml-rustc-experimental compile-elf INPUT --function NAME -o OUTPUT [--release]"
     );
+    println!(
+        "       mrml compiler mrml-rustc-experimental <link-pe INPUT... --entry NAME|compile-pe INPUT --function NAME> -o OUTPUT [--release]"
+    );
     println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT [OUTPUT] [--compress] [--private-key KEY]"
@@ -330,7 +333,7 @@ fn print_help() {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct ExperimentalElfLinkRequest<'a> {
+struct ExperimentalLinkRequest<'a> {
     inputs: Vec<&'a str>,
     entry: &'a str,
     output: &'a str,
@@ -338,7 +341,7 @@ struct ExperimentalElfLinkRequest<'a> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct ExperimentalElfCompileRequest<'a> {
+struct ExperimentalCompileRequest<'a> {
     input: &'a str,
     function: &'a str,
     output: &'a str,
@@ -361,12 +364,15 @@ fn validate_experimental_compiler_mode(args: &[String], operation: &str) -> Resu
     }
 }
 
-fn parse_experimental_elf_link_request(
-    args: &[String],
-) -> Result<ExperimentalElfLinkRequest<'_>, String> {
-    validate_experimental_compiler_mode(args, "link-elf")?;
-    if args.get(1).map(String::as_str) != Some("link-elf") {
-        return Err("CompilerOperationInvalid { expected: link-elf }".into());
+fn parse_experimental_link_request<'a>(
+    args: &'a [String],
+    expected_operation: &str,
+) -> Result<ExperimentalLinkRequest<'a>, String> {
+    validate_experimental_compiler_mode(args, expected_operation)?;
+    if args.get(1).map(String::as_str) != Some(expected_operation) {
+        return Err(format!(
+            "CompilerOperationInvalid {{ expected: {expected_operation} }}"
+        ));
     }
     let release = args.iter().any(|argument| argument == "--release");
     if args
@@ -403,7 +409,7 @@ fn parse_experimental_elf_link_request(
     if entry.is_empty() || entry.starts_with('-') || output.is_empty() || output.starts_with('-') {
         return Err("CompilerLinkSyntaxError".into());
     }
-    Ok(ExperimentalElfLinkRequest {
+    Ok(ExperimentalLinkRequest {
         inputs,
         entry,
         output,
@@ -411,12 +417,15 @@ fn parse_experimental_elf_link_request(
     })
 }
 
-fn parse_experimental_elf_compile_request(
-    args: &[String],
-) -> Result<ExperimentalElfCompileRequest<'_>, String> {
-    validate_experimental_compiler_mode(args, "compile-elf")?;
-    if args.get(1).map(String::as_str) != Some("compile-elf") {
-        return Err("CompilerOperationInvalid { expected: compile-elf }".into());
+fn parse_experimental_compile_request<'a>(
+    args: &'a [String],
+    expected_operation: &str,
+) -> Result<ExperimentalCompileRequest<'a>, String> {
+    validate_experimental_compiler_mode(args, expected_operation)?;
+    if args.get(1).map(String::as_str) != Some(expected_operation) {
+        return Err(format!(
+            "CompilerOperationInvalid {{ expected: {expected_operation} }}"
+        ));
     }
     let release = args.iter().any(|argument| argument == "--release");
     if args
@@ -448,7 +457,7 @@ fn parse_experimental_elf_compile_request(
     {
         return Err("CompilerCompileSyntaxError".into());
     }
-    Ok(ExperimentalElfCompileRequest {
+    Ok(ExperimentalCompileRequest {
         input,
         function,
         output,
@@ -458,10 +467,15 @@ fn parse_experimental_elf_compile_request(
 
 fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let operation = args.get(1).map(String::as_str);
-    let (release, driver_arguments, failure) = match operation {
-        Some("link-elf") => {
-            let request = parse_experimental_elf_link_request(args)?;
-            let mut arguments = vec!["--link-elf".to_owned()];
+    let (release, driver_arguments, failure, format) = match operation {
+        Some(operation @ ("link-elf" | "link-pe")) => {
+            let request = parse_experimental_link_request(args, operation)?;
+            let (driver_operation, format) = if operation == "link-elf" {
+                ("--link-elf", "ELF64")
+            } else {
+                ("--link-coff", "PE32+")
+            };
+            let mut arguments = vec![driver_operation.to_owned()];
             arguments.extend(request.inputs.into_iter().map(str::to_owned));
             arguments.extend([
                 "--entry".to_owned(),
@@ -469,15 +483,20 @@ fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String
                 "-o".to_owned(),
                 request.output.to_owned(),
             ]);
-            (request.release, arguments, "CompilerLinkFailed")
+            (request.release, arguments, "CompilerLinkFailed", format)
         }
-        Some("compile-elf") => {
-            let request = parse_experimental_elf_compile_request(args)?;
+        Some(operation @ ("compile-elf" | "compile-pe")) => {
+            let request = parse_experimental_compile_request(args, operation)?;
+            let (emit, format) = if operation == "compile-elf" {
+                ("elf-executable", "ELF64")
+            } else {
+                ("pe", "PE32+")
+            };
             (
                 request.release,
                 vec![
                     "--emit".to_owned(),
-                    "elf-executable".to_owned(),
+                    emit.to_owned(),
                     "--function".to_owned(),
                     request.function.to_owned(),
                     request.input.to_owned(),
@@ -485,9 +504,15 @@ fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String
                     request.output.to_owned(),
                 ],
                 "CompilerCompileFailed",
+                format,
             )
         }
-        _ => return Err("CompilerOperationInvalid { expected: link-elf|compile-elf }".into()),
+        _ => {
+            return Err(
+                "CompilerOperationInvalid { expected: link-elf|compile-elf|link-pe|compile-pe }"
+                    .into(),
+            );
+        }
     };
     let host = host_family()?;
     let compile_target = default_rust_target(host)?;
@@ -524,12 +549,12 @@ fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String
         })?;
     if !status.success() {
         return Err(format!(
-            "{failure} {{ mode: MrmlRustcExperimental, format: ELF64, status: {:?} }}",
+            "{failure} {{ mode: MrmlRustcExperimental, format: {format}, status: {:?} }}",
             status.code()
         ));
     }
     println!(
-        "mrml compiler: mode=MrmlRustcExperimental operation={} linker=mrml-rustc format=ELF64 status=PASS",
+        "mrml compiler: mode=MrmlRustcExperimental operation={} linker=mrml-rustc format={format} status=PASS",
         operation.unwrap_or("invalid")
     );
     Ok(())
@@ -5617,8 +5642,8 @@ mod tests {
         ]
         .map(str::to_owned);
         assert_eq!(
-            parse_experimental_elf_link_request(&arguments).unwrap(),
-            ExperimentalElfLinkRequest {
+            parse_experimental_link_request(&arguments, "link-elf").unwrap(),
+            ExperimentalLinkRequest {
                 inputs: vec!["entry.o", "core.rlib"],
                 entry: "start",
                 output: "image",
@@ -5626,26 +5651,32 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_experimental_elf_link_request(&[
-                "mrml-rustc-production".into(),
-                "link-elf".into(),
-                "entry.o".into(),
-                "--entry".into(),
-                "start".into(),
-                "-o".into(),
-                "image".into(),
-            ]),
+            parse_experimental_link_request(
+                &[
+                    "mrml-rustc-production".into(),
+                    "link-elf".into(),
+                    "entry.o".into(),
+                    "--entry".into(),
+                    "start".into(),
+                    "-o".into(),
+                    "image".into(),
+                ],
+                "link-elf"
+            ),
             Err("CompilerModeUnavailable { mode: MrmlRustcProduction }".into())
         );
         assert!(
-            parse_experimental_elf_link_request(&[
-                "mrml-rustc-experimental".into(),
-                "link-elf".into(),
-                "--entry".into(),
-                "start".into(),
-                "-o".into(),
-                "image".into(),
-            ])
+            parse_experimental_link_request(
+                &[
+                    "mrml-rustc-experimental".into(),
+                    "link-elf".into(),
+                    "--entry".into(),
+                    "start".into(),
+                    "-o".into(),
+                    "image".into(),
+                ],
+                "link-elf"
+            )
             .is_err()
         );
         let compile_arguments = [
@@ -5660,8 +5691,8 @@ mod tests {
         ]
         .map(str::to_owned);
         assert_eq!(
-            parse_experimental_elf_compile_request(&compile_arguments).unwrap(),
-            ExperimentalElfCompileRequest {
+            parse_experimental_compile_request(&compile_arguments, "compile-elf").unwrap(),
+            ExperimentalCompileRequest {
                 input: "source.rs",
                 function: "start",
                 output: "image",
@@ -5669,30 +5700,75 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_experimental_elf_compile_request(&[
-                "upstream-rustc".into(),
-                "compile-elf".into(),
-                "source.rs".into(),
-                "--function".into(),
-                "start".into(),
-                "-o".into(),
-                "image".into(),
-            ]),
+            parse_experimental_compile_request(
+                &[
+                    "upstream-rustc".into(),
+                    "compile-elf".into(),
+                    "source.rs".into(),
+                    "--function".into(),
+                    "start".into(),
+                    "-o".into(),
+                    "image".into(),
+                ],
+                "compile-elf"
+            ),
             Err(
                 "CompilerOperationUnsupported { mode: UpstreamRustc, operation: compile-elf }"
                     .into()
             )
         );
         assert!(
-            parse_experimental_elf_compile_request(&[
-                "mrml-rustc-experimental".into(),
-                "compile-elf".into(),
-                "source.rs".into(),
-                "--function".into(),
-                "start".into(),
-                "-o".into(),
-            ])
+            parse_experimental_compile_request(
+                &[
+                    "mrml-rustc-experimental".into(),
+                    "compile-elf".into(),
+                    "source.rs".into(),
+                    "--function".into(),
+                    "start".into(),
+                    "-o".into(),
+                ],
+                "compile-elf"
+            )
             .is_err()
+        );
+        let pe_arguments = [
+            "mrml-rustc-experimental",
+            "compile-pe",
+            "source.rs",
+            "--function",
+            "start",
+            "-o",
+            "image.exe",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            parse_experimental_compile_request(&pe_arguments, "compile-pe").unwrap(),
+            ExperimentalCompileRequest {
+                input: "source.rs",
+                function: "start",
+                output: "image.exe",
+                release: false,
+            }
+        );
+        let pe_link_arguments = [
+            "mrml-rustc-experimental",
+            "link-pe",
+            "entry.obj",
+            "core.rlib",
+            "--entry",
+            "start",
+            "-o",
+            "image.exe",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            parse_experimental_link_request(&pe_link_arguments, "link-pe").unwrap(),
+            ExperimentalLinkRequest {
+                inputs: vec!["entry.obj", "core.rlib"],
+                entry: "start",
+                output: "image.exe",
+                release: false,
+            }
         );
     }
     #[test]

@@ -947,6 +947,11 @@ execution. A durable source probe compiled a terminal `int3` entry, emitted a
 4,097-byte ELF, and produced the expected hosted Linux `SIGTRAP` status 133.
 This proves source-to-owned-linker frontend integration for one supported
 function, not production compiler admission or general crate compilation.
+The symmetric Windows operations expose explicit `link-pe` and `compile-pe`
+routes to the existing bounded COFF/PE path. A durable custom-source probe ran
+through the canonical frontend, emitted a 1,024-byte import-free PE32+ image,
+and returned exit code 42 on the Windows gnullvm host. These operations do not
+invoke rust-lld, silently fall back, or alter ordinary production builds.
 
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes
