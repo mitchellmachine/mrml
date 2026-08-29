@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical classic IDE provider catalog endpoint
+
+Patent review: **NOT_TRIGGERED**. This increment publishes caller-supplied,
+generation-bound IDE device metadata through the already screened canonical
+enumeration operation. It adds no ATA register, port, DMA, command, discovery,
+storage scheduling, caching, allocation, naming, encoding, data-layout, or
+optimization behavior. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — Canonical NVMe provider catalog endpoint
 
 Patent review: **NOT_TRIGGERED**. This increment publishes caller-supplied,

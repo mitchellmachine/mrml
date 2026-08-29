@@ -563,7 +563,10 @@ engine with the exact device-to-memory direction bit. Completion polling is
 bounded, requires the interrupt indication, checks bus-master and ATA errors,
 then stops and verifies the engine before returning live DMA cleanup ownership.
 Any post-mutation error, missing interrupt, or timeout quarantines the channel
-and DMA layout. Twenty-three focused tests pass on Windows and Arch Linux.
+and DMA layout. The IDE library now publishes caller-supplied device sessions
+and media generations through the canonical block-provider catalog without
+granting raw port or DMA authority to the storage service. Twenty-four focused
+tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
 
@@ -603,9 +606,9 @@ generations, checked block geometry, explicit feature facts, and media
 generations. Encoding validates every record and zeroes the exact output extent
 before publication. The AHCI library implements enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
-51 AHCI-library tests pass on Windows and Arch Linux. Provider-side isolated
-IPC, the IDE endpoint, and read/write/flush/reset transport calls remain
-**PLANNED**.
+51 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
+each implement this same enumeration contract independently. Provider-side
+isolated IPC and read/write/flush/reset transport calls remain **PLANNED**.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
 sequential by provider and each parser/register/queue gate is independently
