@@ -201,6 +201,10 @@ access. The security/acceptance gate is canonical in
 - The scoped protocol-violation and peer-death records preserve the exact typed
   return cause; the authorized observer can distinguish privilege, instruction,
   stack, and flags failures without receiving unrelated task state.
+- Buffered receive mapping drift has a distinct scoped protocol-violation type,
+  so future live completion wiring need not conflate mapping revocation with a
+  forged return frame. Runtime retirement is tested; live wiring remains
+  pending.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

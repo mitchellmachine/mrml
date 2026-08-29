@@ -6755,10 +6755,16 @@ typed split directly, so adding an ordinary request error cannot accidentally
 change return-fault retirement; the legacy `request()` adapter remains an
 exhaustive compatibility mapping.
 `TaskProtocolViolation::InvalidUserReturn` now carries that exact typed cause
-through supervisor fault state and the capability-scoped peer-death event. The
+through the supervisor retirement result and capability-scoped peer-death event. The
 invalid-return probe therefore checks `InvalidStack`, not merely an undifferenced
 return failure, before emitting its cleanup marker. All 600 kernel tests and
 both probe images pass.
+The same scoped retirement model now has a distinct
+`BufferedReceiveMappingDrift` violation for a blocked receive whose saved output
+mapping no longer revalidates. A focused task-runtime test proves exact context
+revocation and idle retirement, raising the Linux kernel total to 601. Live
+split-phase completion wiring remains pending, so this is a typed prerequisite,
+not execution evidence.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6817,6 +6823,8 @@ boot-recovery decoding is the same boundary hardening.
 The generic typed decode envelope likewise preserves the existing mechanism and
 does not trigger separate review. Carrying its closed cause through the existing
 lifecycle record is ordinary diagnostic typing and does not trigger review.
+The buffered-receive drift variant reuses that lifecycle without a new
+algorithm and does not trigger separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

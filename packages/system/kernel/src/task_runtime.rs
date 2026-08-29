@@ -76,6 +76,7 @@ pub enum PeerDeathReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskProtocolViolation {
     InvalidUserReturn(UserReturnError),
+    BufferedReceiveMappingDrift,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2359,6 +2360,26 @@ mod tests {
                 UserReturnError::InvalidStack,
             ))
         );
+    }
+
+    #[test]
+    fn buffered_receive_mapping_drift_is_a_distinct_scoped_violation() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let saved = context(0x20_0000, 0x40_0000);
+        let task = runtime.create(Priority::NORMAL, saved).unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == task));
+
+        let retirement = runtime
+            .terminate_current_violation(TaskProtocolViolation::BufferedReceiveMappingDrift)
+            .unwrap();
+        assert_eq!(retirement.task, task);
+        assert_eq!(retirement.context, saved);
+        assert_eq!(
+            retirement.violation,
+            TaskProtocolViolation::BufferedReceiveMappingDrift
+        );
+        assert_eq!(retirement.next, ScheduleOutcome::Idle);
+        assert_eq!(runtime.context(task), Err(TaskRuntimeError::MissingTask));
     }
 
     #[test]
