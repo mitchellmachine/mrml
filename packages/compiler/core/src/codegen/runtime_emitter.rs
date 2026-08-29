@@ -7303,6 +7303,29 @@ impl<
             }
             return Ok(());
         }
+        if let ExprKind::IntegerBitTransform {
+            base,
+            transform: crate::expression::IntegerBitTransform::WrappingNegate,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(base_type, expected_type) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[
+                0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda,
+            ])?;
+            return Ok(());
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,

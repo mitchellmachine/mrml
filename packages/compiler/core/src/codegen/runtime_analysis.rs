@@ -18766,8 +18766,7 @@ fn runtime_expression_type_with_locals<
             };
             if matches!(
                 transform,
-                crate::expression::IntegerBitTransform::WrappingNegate
-                    | crate::expression::IntegerBitTransform::WrappingAbsolute
+                crate::expression::IntegerBitTransform::WrappingAbsolute
                     | crate::expression::IntegerBitTransform::Absolute
                     | crate::expression::IntegerBitTransform::StrictAbsolute
                     | crate::expression::IntegerBitTransform::SaturatingNegate

@@ -179,6 +179,8 @@ carry-aware lowerings.
 Matching-type `wrapping_add`, `wrapping_sub`, and `wrapping_mul` preserve the
 corresponding two-word carry, borrow, or low-product result while intentionally
 discarding overflow without entering the checked trap path.
+`wrapping_neg` applies carry-aware two-word negation without trapping on either
+unsigned nonzero inputs or the signed minimum value.
 Equality and inequality compare both words after left-to-right evaluation and
 normalize the combined word differences to a boolean that may enter the supported
 one-word integer cast/return path.
