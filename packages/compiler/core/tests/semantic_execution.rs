@@ -1517,6 +1517,57 @@ fn mrml_v1_wide_next_powers_of_two_match_both_oracle_words() {
 }
 
 #[test]
+fn mrml_v1_wide_next_power_of_two_overflow_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_NEXT_POWER_OVERFLOW_CHILD";
+    let code = compile(MRML_V1_WIDE_UNSIGNED_NEXT_POWER_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, (1u128 << 127) + 1) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if std::env::var_os(CHILD).is_some() {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, (1u128 << 127) + 1) };
+        panic!("checked wide next-power overflow unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        .args([
+            "--exact",
+            "mrml_v1_wide_next_power_of_two_overflow_traps",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("launch isolated wide next-power trap probe");
+    #[cfg(target_os = "windows")]
+    {
+        assert!(!output.status.success(), "generated next-power trap unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn mrml_v1_wide_signed_signum_matches_both_oracle_words() {
     let source = MRML_V1_WIDE_SIGNED_SIGNUM_SOURCE;
     let code = compile(source);
