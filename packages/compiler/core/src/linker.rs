@@ -600,6 +600,8 @@ struct CoffSectionSet {
 pub struct CoffReadonlyLinkInput<'data, 'definitions> {
     pub input: LinkInput<'data, 'data, 'definitions>,
     pub selection: CoffTextComdatSelection,
+    pub section_number: u16,
+    pub associated_section: Option<u16>,
 }
 
 impl CoffSectionSet {
@@ -4170,6 +4172,49 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
     relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
+    decode_x86_64_coff_text_fragment_for_object_from_inventory(
+        object,
+        fragment_index,
+        inventory,
+        None,
+        relocation_storage,
+        definition_storage,
+    )
+}
+
+/// Decodes one COFF text fragment while projecting every COMDAT read-only
+/// section as a distinct object-local section identity.
+pub fn decode_x86_64_coff_text_fragment_with_section_identities_from_inventory<
+    'data,
+    'relocations,
+    'definitions,
+>(
+    object: &'data [u8],
+    fragment_index: usize,
+    inventory: &CoffComdatSections<'_>,
+    object_identity: u16,
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+    definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
+) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
+    let identity = CoffSectionIdentity::new(object_identity, 1)?;
+    decode_x86_64_coff_text_fragment_for_object_from_inventory(
+        object,
+        fragment_index,
+        inventory,
+        Some(identity.object),
+        relocation_storage,
+        definition_storage,
+    )
+}
+
+fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocations, 'definitions>(
+    object: &'data [u8],
+    fragment_index: usize,
+    inventory: &CoffComdatSections<'_>,
+    object_identity: Option<u16>,
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+    definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
+) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
     inventory.validate_object(object)?;
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
@@ -4300,7 +4345,8 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
         }
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
         if inventory.section(section_number).is_some_and(|metadata| {
-            metadata.selection != CoffTextComdatSelection::Associative
+            object_identity.is_some()
+                || metadata.selection != CoffTextComdatSelection::Associative
                 || inventory.root_section(section_number) != Some(text_section_u16)
         }) {
             readonly_sections.remove(section + 1)?;
@@ -4512,21 +4558,50 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
             && inventory
                 .section(u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .is_some_and(|metadata| metadata.selection != CoffTextComdatSelection::Associative)
+                .is_some()
         {
-            let storage_class = *object
-                .get(target_offset + 16)
-                .ok_or(LinkerError::InvalidCoff)?;
-            if storage_class != 2 && storage_class != 3 {
-                return Err(LinkerError::UnsupportedCoffRelocationTarget);
-            }
-            let name = coff_symbol_name(object, target_offset, symbols_end, string_size)?;
-            let target = if storage_class == 2 {
-                LinkRelocationTarget::Symbol(name)
+            if let Some(object_identity) = object_identity {
+                let section =
+                    u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
+                let target_header = 20usize
+                    .checked_add(
+                        usize::from(section - 1)
+                            .checked_mul(40)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                    )
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let section_size = usize::try_from(read_u32(object, target_header + 16)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let symbol_value = usize::try_from(read_u32(object, target_offset + 8)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let field_addend = usize::try_from(field_addend)
+                    .map_err(|_| LinkerError::InvalidRelocationOffset)?;
+                let target_offset = symbol_value
+                    .checked_add(field_addend)
+                    .filter(|offset| *offset <= section_size)
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                (
+                    LinkRelocationTarget::CoffSection {
+                        identity: CoffSectionIdentity::new(object_identity, section)?,
+                        offset: target_offset,
+                    },
+                    -4,
+                )
             } else {
-                LinkRelocationTarget::LocalSymbol(name)
-            };
-            (target, i64::from(field_addend) - 4)
+                let storage_class = *object
+                    .get(target_offset + 16)
+                    .ok_or(LinkerError::InvalidCoff)?;
+                if storage_class != 2 && storage_class != 3 {
+                    return Err(LinkerError::UnsupportedCoffRelocationTarget);
+                }
+                let name = coff_symbol_name(object, target_offset, symbols_end, string_size)?;
+                let target = if storage_class == 2 {
+                    LinkRelocationTarget::Symbol(name)
+                } else {
+                    LinkRelocationTarget::LocalSymbol(name)
+                };
+                (target, i64::from(field_addend) - 4)
+            }
         } else if target_section > 0
             && writable_sections
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
@@ -4572,6 +4647,21 @@ pub fn x86_64_coff_standalone_readonly_fragment_count(
     object: &[u8],
     inventory: &CoffComdatSections<'_>,
 ) -> Result<usize, LinkerError> {
+    x86_64_coff_projected_readonly_fragment_count(object, inventory, false)
+}
+
+pub fn x86_64_coff_section_identity_readonly_fragment_count(
+    object: &[u8],
+    inventory: &CoffComdatSections<'_>,
+) -> Result<usize, LinkerError> {
+    x86_64_coff_projected_readonly_fragment_count(object, inventory, true)
+}
+
+fn x86_64_coff_projected_readonly_fragment_count(
+    object: &[u8],
+    inventory: &CoffComdatSections<'_>,
+    include_associative: bool,
+) -> Result<usize, LinkerError> {
     inventory.validate_object(object)?;
     let section_count = usize::from(read_u16(object, 2)?);
     let symbol_offset =
@@ -4601,9 +4691,9 @@ pub fn x86_64_coff_standalone_readonly_fragment_count(
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
         if (name == ".rdata" || name.starts_with(".rdata$"))
             && read_u32(object, header + 16)? != 0
-            && inventory
-                .section(section_number)
-                .is_some_and(|metadata| metadata.selection != CoffTextComdatSelection::Associative)
+            && inventory.section(section_number).is_some_and(|metadata| {
+                include_associative || metadata.selection != CoffTextComdatSelection::Associative
+            })
         {
             count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
         }
@@ -4615,6 +4705,39 @@ pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
     object: &'data [u8],
     fragment_index: usize,
     inventory: &CoffComdatSections<'_>,
+    definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
+) -> Result<CoffReadonlyLinkInput<'data, 'definitions>, LinkerError> {
+    decode_x86_64_coff_projected_readonly_fragment(
+        object,
+        fragment_index,
+        inventory,
+        None,
+        definition_storage,
+    )
+}
+
+pub fn decode_x86_64_coff_section_identity_readonly_fragment<'data, 'definitions>(
+    object: &'data [u8],
+    fragment_index: usize,
+    inventory: &CoffComdatSections<'_>,
+    object_identity: u16,
+    definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
+) -> Result<CoffReadonlyLinkInput<'data, 'definitions>, LinkerError> {
+    CoffSectionIdentity::new(object_identity, 1)?;
+    decode_x86_64_coff_projected_readonly_fragment(
+        object,
+        fragment_index,
+        inventory,
+        Some(object_identity),
+        definition_storage,
+    )
+}
+
+fn decode_x86_64_coff_projected_readonly_fragment<'data, 'definitions>(
+    object: &'data [u8],
+    fragment_index: usize,
+    inventory: &CoffComdatSections<'_>,
+    object_identity: Option<u16>,
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<CoffReadonlyLinkInput<'data, 'definitions>, LinkerError> {
     inventory.validate_object(object)?;
@@ -4652,7 +4775,8 @@ pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
             .map_err(|_| LinkerError::OffsetOverflow)?;
         if size == 0
             || !(name == ".rdata" || name.starts_with(".rdata$"))
-            || metadata.selection == CoffTextComdatSelection::Associative
+            || (object_identity.is_none()
+                && metadata.selection == CoffTextComdatSelection::Associative)
         {
             continue;
         }
@@ -4662,12 +4786,19 @@ pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
             let contents = object
                 .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
                 .ok_or(LinkerError::InvalidCoff)?;
-            selected = Some((section_number, contents, metadata.selection));
+            selected = Some((
+                section_number,
+                name,
+                contents,
+                metadata.selection,
+                metadata.associated_section,
+            ));
             break;
         }
         ordinal += 1;
     }
-    let (selected_section, contents, selection) = selected.ok_or(LinkerError::InvalidCoff)?;
+    let (selected_section, section_name, contents, selection, associated_section) =
+        selected.ok_or(LinkerError::InvalidCoff)?;
     let mut primary = None;
     let mut definition_count = 0usize;
     let mut symbol_index = 0usize;
@@ -4677,7 +4808,8 @@ pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
         let storage_class = *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)?;
         if read_i16(object, symbol + 12)?
             == i16::try_from(selected_section).map_err(|_| LinkerError::OffsetOverflow)?
-            && (storage_class == 2 || (storage_class == 3 && auxiliary == 0))
+            && (storage_class == 2
+                || (object_identity.is_none() && storage_class == 3 && auxiliary == 0))
         {
             let value = usize::try_from(read_u32(object, symbol + 8)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -4704,14 +4836,22 @@ pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
     }
     Ok(CoffReadonlyLinkInput {
         input: LinkInput {
-            symbol: primary.ok_or(LinkerError::UnsupportedCoff)?,
-            symbol_target: LinkDefinitionTarget::ReadonlyData(0),
+            symbol: primary.unwrap_or(section_name),
+            symbol_target: match object_identity {
+                Some(object_identity) => LinkDefinitionTarget::CoffSection {
+                    identity: CoffSectionIdentity::new(object_identity, selected_section)?,
+                    offset: 0,
+                },
+                None => LinkDefinitionTarget::ReadonlyData(0),
+            },
             additional_definitions: &definition_storage[..definition_count],
             text: &[],
             readonly_data: contents,
             relocations: &[],
         },
         selection,
+        section_number: selected_section,
+        associated_section,
     })
 }
 
@@ -10244,6 +10384,66 @@ mod tests {
             .readonly_data,
             b""
         );
+    }
+
+    #[test]
+    fn projects_associative_readonly_comdats_as_typed_section_identities() {
+        let object = two_fragment_coff_with_associative_readonly();
+        let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
+        assert_eq!(
+            x86_64_coff_section_identity_readonly_fragment_count(&object, &inventory),
+            Ok(2)
+        );
+
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let text = decode_x86_64_coff_text_fragment_with_section_identities_from_inventory(
+            &object,
+            0,
+            &inventory,
+            7,
+            &mut relocations,
+            &mut definitions,
+        )
+        .unwrap();
+        assert!(text.readonly_data.is_empty());
+
+        let mut second_definitions = definitions;
+        let first = decode_x86_64_coff_section_identity_readonly_fragment(
+            &object,
+            0,
+            &inventory,
+            7,
+            &mut second_definitions,
+        )
+        .unwrap();
+        let second = decode_x86_64_coff_section_identity_readonly_fragment(
+            &object,
+            1,
+            &inventory,
+            7,
+            &mut definitions,
+        )
+        .unwrap();
+        assert_eq!(first.input.readonly_data, b"A");
+        assert_eq!(first.associated_section, Some(1));
+        assert_eq!(
+            first.input.symbol_target,
+            LinkDefinitionTarget::CoffSection {
+                identity: CoffSectionIdentity::new(7, first.section_number).unwrap(),
+                offset: 0,
+            }
+        );
+        assert_eq!(second.input.readonly_data, b"B");
+        assert_eq!(second.associated_section, Some(3));
+        assert_ne!(first.input.symbol_target, second.input.symbol_target);
     }
 
     #[test]

@@ -4,30 +4,31 @@
 #[cfg(test)]
 extern crate std;
 
-use mrml_error::{anyhow, Result};
+use mrml_error::{Result, anyhow};
 use mrml_runtime::{
-    canonical_path, join_path, mrml_println as println, parent_path, MappedFile, Text, Vector,
+    MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
 use mrml_rustc::{
-    compile_source_function_with_options, decode_unix_archive,
+    CodegenOptions, CoffObjectSymbolKind, CoffTextComdatSelection, ElfSelectedDefinitions,
+    ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections, LinkDefinition,
+    LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS,
+    MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS,
+    MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeReadonlyAbsoluteRelocation,
+    PeRuntimeFunction, PeWritableData, PeWritableRelocation, PeWritableRelocationTarget,
+    TargetLayout, compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_from_inventory,
-    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_standalone_readonly_fragment,
-    decode_x86_64_coff_text_fragment_from_inventory, decode_x86_64_coff_writable_data_fragment,
+    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_section_identity_readonly_fragment,
+    decode_x86_64_coff_text_fragment_with_section_identities_from_inventory,
+    decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
     inventory_x86_64_coff_symbols, inventory_x86_64_elf_symbols,
     link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
-    x86_64_coff_standalone_readonly_fragment_count,
+    x86_64_coff_section_identity_readonly_fragment_count,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count, CodegenOptions, CoffObjectSymbolKind,
-    CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
-    ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
-    LinkRelocationTarget, ObjectFormat, PeReadonlyAbsoluteRelocation, PeRuntimeFunction,
-    PeWritableData, PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
-    MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS,
-    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
+    x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -678,7 +679,7 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             ObjectFormat::Elf64 => 1,
         };
         let readonly_fragment_count = match format {
-            ObjectFormat::Coff => x86_64_coff_standalone_readonly_fragment_count(
+            ObjectFormat::Coff => x86_64_coff_section_identity_readonly_fragment_count(
                 object,
                 coff_comdat_sections
                     .as_ref()
@@ -711,10 +712,12 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                         .as_ref()
                         .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?;
                     (
-                        decode_x86_64_coff_text_fragment_from_inventory(
+                        decode_x86_64_coff_text_fragment_with_section_identities_from_inventory(
                             object,
                             fragment_index,
                             inventory,
+                            u16::try_from(object_index + 1)
+                                .map_err(|_| anyhow!("COFF source-object identity overflow"))?,
                             arena,
                             definitions,
                         )
@@ -742,12 +745,14 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                     )
                 }
                 ObjectFormat::Coff => {
-                    let decoded = decode_x86_64_coff_standalone_readonly_fragment(
+                    let decoded = decode_x86_64_coff_section_identity_readonly_fragment(
                         object,
                         fragment_index - text_fragment_count,
                         coff_comdat_sections
                             .as_ref()
                             .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
+                        u16::try_from(object_index + 1)
+                            .map_err(|_| anyhow!("COFF source-object identity overflow"))?,
                         definitions,
                     )
                     .map_err(|error| {
@@ -842,7 +847,7 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
                 x86_64_coff_text_fragment_count(object)
                     .map_err(|_| anyhow!("could not count expanded COFF text fragments"))?
                     .checked_add(
-                        x86_64_coff_standalone_readonly_fragment_count(object, &inventory)
+                        x86_64_coff_section_identity_readonly_fragment_count(object, &inventory)
                             .map_err(mrml_error::message)?,
                     )
                     .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?
@@ -885,9 +890,20 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     let mut selected_source_object = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     for index in selection.indices() {
-        if let Some(earlier) = selected
-            .iter()
-            .position(|earlier| earlier.symbol == inputs[*index].symbol)
+        let current_is_internal = matches!(
+            inputs[*index].symbol_target,
+            LinkDefinitionTarget::CoffSection { .. }
+        );
+        if let Some(earlier) = (!current_is_internal)
+            .then(|| {
+                selected.iter().position(|earlier| {
+                    !matches!(
+                        earlier.symbol_target,
+                        LinkDefinitionTarget::CoffSection { .. }
+                    ) && earlier.symbol == inputs[*index].symbol
+                })
+            })
+            .flatten()
         {
             let earlier_selection = selected_comdat[earlier];
             let current_selection = comdat_selection[*index];
