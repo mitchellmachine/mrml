@@ -209,8 +209,9 @@ access. The security/acceptance gate is canonical in
   pending.
 - Dedicated buffer-drift images exact-match and remove only the blocked
   receiver's writable, non-executable user leaf, then require typed scoped
-  retirement and clean peer exit markers. The markers are not execution
-  evidence until a backend runner admits the profile.
+  retirement and clean peer exit markers. KVM admission requires one verified
+  signed service and exact ordered markers; actual backend execution remains
+  pending.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

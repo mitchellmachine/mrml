@@ -2165,8 +2165,9 @@ live composition remains pending.
    execution probe remains pending.
    Warning-free `buffer_drift_probe` kernel/service profiles now remove the
    exact blocked output leaf before delivery and require typed cleanup marker
-   `0x28`, peer exit, and terminal marker `0x29`. Runner execution remains
-   pending.
+   `0x28`, peer exit, and terminal marker `0x29`. The KVM runner admits the mode
+   with one verified signed service and exact two-root preparation; all 15
+   runner unit tests pass. Actual KVM execution and WHP parity remain pending.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

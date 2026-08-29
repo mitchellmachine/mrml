@@ -1036,6 +1036,7 @@ enum LaunchMode {
     UserProbe,
     ServiceProbe,
     InvalidReturnProbe,
+    BufferDriftProbe,
     ComponentServiceProbe,
     ComponentServiceSmpProbe,
     ComponentReleaseInputs,
@@ -1065,6 +1066,7 @@ impl LaunchMode {
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
             "invalid-return-probe" => Ok(Self::InvalidReturnProbe),
+            "buffer-drift-probe" => Ok(Self::BufferDriftProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
             "component-service-smp-probe" => Ok(Self::ComponentServiceSmpProbe),
             "component-release-inputs" => Ok(Self::ComponentReleaseInputs),
@@ -1080,7 +1082,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, invalid-return-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -1109,6 +1111,28 @@ fn require_invalid_return_stage(exit: VmExit, expected: u32) -> Result<()> {
     {
         return Err(anyhow!(
             "invalid-return stage {:#x} mismatch: {:?}",
+            expected,
+            exit
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn require_buffer_drift_stage(exit: VmExit, expected: u32) -> Result<()> {
+    if !matches!(expected, 0x28 | 0x29) {
+        return Err(anyhow!("buffer-drift expected stage is not canonical"));
+    }
+    if exit
+        != (VmExit::Io {
+            port: SERVICE_PROBE_PORT,
+            size: 4,
+            write: true,
+            value: expected,
+        })
+    {
+        return Err(anyhow!(
+            "buffer-drift stage {:#x} mismatch: {:?}",
             expected,
             exit
         ));
@@ -2259,6 +2283,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe
             | LaunchMode::InvalidReturnProbe
+            | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
             | LaunchMode::ComponentServiceSmpProbe
     );
@@ -2275,6 +2300,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
             | LaunchMode::InvalidReturnProbe
+            | LaunchMode::BufferDriftProbe
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
@@ -2311,6 +2337,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe
             | LaunchMode::InvalidReturnProbe
+            | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
             | LaunchMode::ComponentServiceSmpProbe
             | LaunchMode::ComponentReleaseInputs
@@ -3201,6 +3228,7 @@ fn application_main() -> Result<()> {
         }
         LaunchMode::ServiceProbe
         | LaunchMode::InvalidReturnProbe
+        | LaunchMode::BufferDriftProbe
         | LaunchMode::ComponentServiceProbe
         | LaunchMode::BlockServiceProbe
         | LaunchMode::ServiceRestartRequestProbe => system
@@ -4193,6 +4221,12 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("KVM invalid-return peer execution failed: {:?}", error))?;
         require_invalid_return_stage(exit, 0x27)?;
         exit = VmExit::Halted;
+    } else if mode == LaunchMode::BufferDriftProbe {
+        require_buffer_drift_stage(exit, 0x28)?;
+        exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("KVM buffer-drift peer execution failed: {:?}", error))?;
+        require_buffer_drift_stage(exit, 0x29)?;
+        exit = VmExit::Halted;
     } else if matches!(
         mode,
         LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
@@ -4732,7 +4766,11 @@ fn application_main() -> Result<()> {
         LaunchMode::UserProbe if marker != [0; 4] => {
             return Err(anyhow!("user probe unexpectedly modified the framebuffer"));
         }
-        LaunchMode::ServiceProbe | LaunchMode::InvalidReturnProbe if marker != [0; 4] => {
+        LaunchMode::ServiceProbe
+        | LaunchMode::InvalidReturnProbe
+        | LaunchMode::BufferDriftProbe
+            if marker != [0; 4] =>
+        {
             return Err(anyhow!(
                 "service probe unexpectedly modified the framebuffer"
             ));
@@ -5647,6 +5685,10 @@ mod tests {
             LaunchMode::InvalidReturnProbe
         );
         assert_eq!(
+            LaunchMode::parse("buffer-drift-probe").unwrap(),
+            LaunchMode::BufferDriftProbe
+        );
+        assert_eq!(
             LaunchMode::parse("component-service-probe").unwrap(),
             LaunchMode::ComponentServiceProbe
         );
@@ -5707,6 +5749,22 @@ mod tests {
         assert!(require_invalid_return_stage(stage(0x26), 0x27).is_err());
         assert!(require_invalid_return_stage(stage(0x26), 0x25).is_err());
         assert!(require_invalid_return_stage(VmExit::Halted, 0x26).is_err());
+    }
+
+    #[test]
+    fn buffer_drift_stage_validation_is_exact_and_order_bounded() {
+        let stage = |value| VmExit::Io {
+            port: SERVICE_PROBE_PORT,
+            size: 4,
+            write: true,
+            value,
+        };
+        assert!(require_buffer_drift_stage(stage(0x28), 0x28).is_ok());
+        assert!(require_buffer_drift_stage(stage(0x29), 0x29).is_ok());
+        assert!(require_buffer_drift_stage(stage(0x29), 0x28).is_err());
+        assert!(require_buffer_drift_stage(stage(0x28), 0x29).is_err());
+        assert!(require_buffer_drift_stage(stage(0x28), 0x27).is_err());
+        assert!(require_buffer_drift_stage(VmExit::Halted, 0x28).is_err());
     }
 
     #[test]
