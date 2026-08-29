@@ -2259,6 +2259,9 @@ live composition remains pending.
    Queued delivery now rejects an authenticated same-task route before receiver
    lookup or inbox inspection. A full-inbox ordering test raises the kernel
    total to 625 while preserving authorization non-disclosure.
+   Authenticated sends now validate payload/capability-count bounds before
+   receiver inbox or delegation-table inspection. Full-inbox coverage proves
+   oversized input receives its shape denial first; the total remains 625.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

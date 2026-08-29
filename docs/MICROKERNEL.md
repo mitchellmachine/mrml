@@ -6922,6 +6922,14 @@ full-inbox test proves the authorized route returns `SameTaskIpc` without
 consuming a sequence or message, raising the Linux kernel total to 625.
 Patent review: `NOT_TRIGGERED` — this only tightens validation order in the
 existing bounded IPC path.
+After endpoint authentication and same-task rejection, queued and direct sends
+validate the bounded payload and capability-count shape before receiver inbox
+or delegation-table inspection. `Message::new` and capability transfer reuse
+the same validator. The full-inbox test now proves an authorized oversized
+message returns `PayloadTooLarge` without consuming sequence or inbox state;
+the Linux kernel total remains 625.
+Patent review: `NOT_TRIGGERED` — this consolidates conventional bounds checks
+and moves them earlier in the existing IPC validation sequence.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

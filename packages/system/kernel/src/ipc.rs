@@ -117,13 +117,21 @@ impl AuthorizedIpcCapability {
 }
 
 impl Message {
-    pub fn new(payload: &[u8], capabilities: &[Capability]) -> Result<Self, IpcError> {
-        if payload.len() > MAX_INLINE_PAYLOAD {
+    pub(crate) fn validate_shape(
+        payload_length: usize,
+        capability_count: usize,
+    ) -> Result<(), IpcError> {
+        if payload_length > MAX_INLINE_PAYLOAD {
             return Err(IpcError::PayloadTooLarge);
         }
-        if capabilities.len() > MAX_CAPABILITIES {
+        if capability_count > MAX_CAPABILITIES {
             return Err(IpcError::TooManyCapabilities);
         }
+        Ok(())
+    }
+
+    pub fn new(payload: &[u8], capabilities: &[Capability]) -> Result<Self, IpcError> {
+        Self::validate_shape(payload.len(), capabilities.len())?;
         let mut message = Self {
             payload: [0; MAX_INLINE_PAYLOAD],
             payload_length: payload.len() as u16,
@@ -146,12 +154,7 @@ impl Message {
         source: &CapabilitySpace<S>,
         destination: &mut CapabilitySpace<D>,
     ) -> Result<Self, IpcError> {
-        if payload.len() > MAX_INLINE_PAYLOAD {
-            return Err(IpcError::PayloadTooLarge);
-        }
-        if requested.len() > MAX_CAPABILITIES {
-            return Err(IpcError::TooManyCapabilities);
-        }
+        Self::validate_shape(payload.len(), requested.len())?;
         let mut derived = [None; MAX_CAPABILITIES];
         source
             .derive_batch(requested, destination, &mut derived[..requested.len()])

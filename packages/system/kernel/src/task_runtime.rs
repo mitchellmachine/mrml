@@ -967,6 +967,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         payload: &[u8],
         requested: &[(Capability, Rights)],
     ) -> Result<(u64, Message), TaskRuntimeError> {
+        Message::validate_shape(payload.len(), requested.len()).map_err(TaskRuntimeError::Ipc)?;
         if !self.scheduler.contains(sender) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
@@ -1047,6 +1048,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if sender == receiver {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
+        Message::validate_shape(payload.len(), requested.len()).map_err(TaskRuntimeError::Ipc)?;
         let receiver_slot = self.domain_slot(receiver)?;
         if !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -2506,6 +2508,18 @@ mod tests {
                 &[],
             ),
             Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        let oversized = [0; crate::MAX_INLINE_PAYLOAD + 1];
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                &oversized,
+                &[],
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::PayloadTooLarge))
         );
         runtime.receive_ipc(receiver).unwrap();
         assert_eq!(

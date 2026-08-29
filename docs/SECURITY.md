@@ -285,6 +285,8 @@ access. The security/acceptance gate is canonical in
   from authentication through commit, avoiding a second authority snapshot.
 - After authentication, same-task delivery is rejected before receiver lookup
   or inbox inspection, so inbox capacity cannot supersede the routing invariant.
+- Authenticated message shape is bounded before receiver inbox or delegation
+  state is inspected, preventing malformed sends from probing those capacities.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and
