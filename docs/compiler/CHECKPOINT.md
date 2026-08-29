@@ -67,9 +67,11 @@ through the common two-word emitter before normalizing the low word to the
 target width. This replaces the old direct-parameter-only loader and admits
 wide locals and computed expressions without duplicating their lowering or
 changing Rust truncation semantics. Focused native Linux tests pass for both
-x86-64 ABIs, and the release compiler build passes. The package-wide attempt
-passed 809 of 810 unit tests; one concurrently edited linker test remains red,
-so no complete package-pass claim is made yet. Windows gnullvm was not run.
+x86-64 ABIs, and the release compiler build passes. The latest package-wide
+attempt passed this focused unit among 810 of 812 unit tests; two concurrently
+edited linker tests remain red, so the runner stopped before rebuilding or
+executing integration tests and no complete package-pass or semantic-execution
+claim is made yet. Windows gnullvm was not run.
 Patent review: **NOT_TRIGGERED**; this is ordinary integer-cast lowering, not a
 new mechanism. See `docs/patents/REVIEW_LOG.md`.
 

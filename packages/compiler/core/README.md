@@ -6047,7 +6047,8 @@ addition, and signed wrapping negation for both x86-64 calling conventions. A
 semantic case is added to compare a computed wrapping sum narrowed to `u64`
 against exact ORACLE-0003 observations at zero, the low-word carry boundary, a
 high-word-only operand, and full-width wrapping overflow. The release compiler
-build and focused unit test pass; the package-wide attempt passed 809 of 810
-unit tests but stopped on one concurrently edited linker test before integration
-execution, so neither a complete package pass nor execution of that semantic
-case is claimed yet. Windows gnullvm was not run.
+build and focused unit test pass; the latest package-wide attempt passed 810 of
+812 unit tests, including the computed-narrowing unit, but stopped on two
+concurrently edited linker tests before rebuilding or executing integrations.
+Neither a complete package pass nor execution of that semantic case is claimed
+yet. Windows gnullvm was not run.
