@@ -4574,7 +4574,7 @@ unsafe fn restart_sender_from_request(
         Err(_) => halt(),
     };
     unsafe { service_restart_stage(0x24) };
-    let replacement = match supervisor.commit_restart(plan, runtime) {
+    let replacement = match supervisor.commit_restart_with_task(plan, runtime) {
         Ok(replacement) => replacement,
         Err(
             mrml_kernel::ServiceError::InvalidService
@@ -4586,11 +4586,8 @@ unsafe fn restart_sender_from_request(
         ) => return None,
         Err(_) => halt(),
     };
-    let sender = supervisor
-        .task(replacement)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| halt());
+    let sender = replacement.task();
+    let replacement = replacement.service();
     let endpoint = unsafe {
         (*core::ptr::addr_of!(SERVICE_ENDPOINT))
             .as_ref()

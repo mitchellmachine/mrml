@@ -2304,6 +2304,10 @@ live composition remains pending.
    restart-deadline state before runtime retirement, then publish cleanup and
    stopped state without a fallible late mismatch check. Existing lifecycle
    coverage passes; the total remains 630.
+   Restart commit now returns the exact new service/task generations together;
+   recovery and the restart-request probe consume the task without a fallible
+   post-creation lookup. Existing reprovision-boundary coverage checks the exact
+   binding; the total remains 630.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.

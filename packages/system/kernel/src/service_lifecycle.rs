@@ -136,6 +136,22 @@ pub struct ServiceRecovery {
     pub next: ScheduleOutcome,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceRestartCommit {
+    service: ServiceId,
+    task: TaskId,
+}
+
+impl ServiceRestartCommit {
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+}
+
 /// One-use registration decision bound to one exact vacant supervisor slot.
 /// The plan carries no capability and cannot authorize any other lifecycle
 /// operation. Commit rechecks the slot generation and vacancy before mutation.
@@ -730,12 +746,11 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
                 service: fault.service,
                 error,
             })?;
-        let replacement = self
-            .restart_at(
+        let plan = self
+            .prepare_restart_at(
                 fault.service,
                 management,
                 control,
-                runtime,
                 priority,
                 fresh_context,
                 now,
@@ -744,20 +759,16 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
                 service: fault.service,
                 error,
             })?;
-        let task = self
-            .task(replacement)
+        let replacement = self
+            .commit_restart_with_task(plan, runtime)
             .map_err(|error| ServiceRecoveryError::Restart {
                 service: fault.service,
                 error,
-            })?
-            .ok_or(ServiceRecoveryError::Restart {
-                service: fault.service,
-                error: ServiceError::TaskMismatch,
             })?;
         Ok(ServiceRecovery {
             retired: fault.service,
-            replacement,
-            task,
+            replacement: replacement.service(),
+            task: replacement.task(),
             next: fault.retirement.next,
         })
     }
@@ -852,6 +863,15 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         plan: ServiceRestartPlan,
         runtime: &mut TaskRuntime<TASKS, CAPS>,
     ) -> Result<ServiceId, ServiceError> {
+        self.commit_restart_with_task(plan, runtime)
+            .map(ServiceRestartCommit::service)
+    }
+
+    pub fn commit_restart_with_task<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        plan: ServiceRestartPlan,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<ServiceRestartCommit, ServiceError> {
         let service = plan.service;
         let slot = service.slot as usize;
         let entry = self.restartable_entry(service, plan.now)?;
@@ -873,9 +893,12 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         self.slots[slot].task = Some(task);
         self.slots[slot].state = ServiceState::Running;
         self.slots[slot].completed_restarts += 1;
-        Ok(ServiceId {
-            slot: slot as u32,
-            generation,
+        Ok(ServiceRestartCommit {
+            service: ServiceId {
+                slot: slot as u32,
+                generation,
+            },
+            task,
         })
     }
 
@@ -1397,11 +1420,14 @@ mod tests {
         assert_eq!(plan.service(), service);
         assert_eq!(plan.object(), object);
 
-        let replacement = supervisor.commit_restart(plan, &mut runtime).unwrap();
-        assert_ne!(replacement, service);
+        let replacement = supervisor
+            .commit_restart_with_task(plan, &mut runtime)
+            .unwrap();
+        assert_ne!(replacement.service(), service);
+        assert_eq!(runtime.context(replacement.task()), Ok(&fresh));
         assert_eq!(
-            runtime.context(supervisor.task(replacement).unwrap().unwrap()),
-            Ok(&fresh)
+            supervisor.task(replacement.service()),
+            Ok(Some(replacement.task()))
         );
         assert_eq!(
             supervisor.prepare_restart_at(

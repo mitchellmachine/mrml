@@ -7007,6 +7007,11 @@ runtime to retire the current task. The supervisor then commits stopped state
 and the cleanup ticket without a fallible post-retirement identity check, so it
 cannot report a still-running service after irreversible runtime retirement.
 Existing service lifecycle coverage passes; the total remains 630.
+Restart commit now returns the exact newly published service and task
+generations as one typed result. Fault recovery and the restart-request service
+probe consume that task directly instead of performing a fallible supervisor
+lookup after task creation. The reprovision-boundary test checks the returned
+task's fresh context and exact supervisor binding; the total remains 630.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second

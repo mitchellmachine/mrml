@@ -316,6 +316,9 @@ access. The security/acceptance gate is canonical in
 - Service exit, fault, and violation reserve exact supervisor identity and
   restart-deadline state before runtime retirement; cleanup/stopped publication
   has no fallible identity check after the task is irreversibly retired.
+- Restart commit publishes and returns the exact service/task generations as
+  one typed result, so recovery and service dispatch do not rediscover task
+  identity through a fallible lookup after creation.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact
