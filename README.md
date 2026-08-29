@@ -301,6 +301,27 @@ Bootstrap the repository-owned frontend once with the pinned toolchain:
 cargo build --locked
 ```
 
+Idempotent environment helpers install any missing components and targets from
+`rust-toolchain.toml`, then verify rustc against the newest immutable oracle
+record under `docs/compiler/oracles/`:
+
+```text
+# Linux/Unix; source it to retain RUSTUP_TOOLCHAIN
+source tools/toolchain/setup-oracle.sh
+
+# Native Windows PowerShell; dot-source it to retain the environment
+. .\tools\toolchain\setup-oracle.ps1
+
+# Windows GNU/LLVM toolchain hosted under Wine; toolchain coverage only
+source tools/toolchain/setup-wine-oracle.sh
+```
+
+The Wine helper installs Windows rustup inside the selected `WINEPREFIX` only
+when it is absent and exports the toolchain DLL directory through `WINEPATH`.
+None of these helpers changes rustup's global default. They follow the exact
+repository pin on future oracle upgrades; “latest” means the latest oracle
+committed in this checkout, never an unpinned upstream nightly.
+
 Then use the generated frontend rather than Cargo for workspace components:
 
 ```text
