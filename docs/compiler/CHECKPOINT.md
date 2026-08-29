@@ -62,6 +62,17 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded language milestone
 
+Wide-to-narrow `as` casts now evaluate any admitted `u128` or `i128` operand
+through the common two-word emitter before normalizing the low word to the
+target width. This replaces the old direct-parameter-only loader and admits
+wide locals and computed expressions without duplicating their lowering or
+changing Rust truncation semantics. Focused native Linux tests pass for both
+x86-64 ABIs, and the release compiler build passes. The package-wide attempt
+passed 809 of 810 unit tests; one concurrently edited linker test remains red,
+so no complete package-pass claim is made yet. Windows gnullvm was not run.
+Patent review: **NOT_TRIGGERED**; this is ordinary integer-cast lowering, not a
+new mechanism. See `docs/patents/REVIEW_LOG.md`.
+
 Wide two-word integer emission now unwraps an explicitly scoped `unsafe` block
 before lowering its typed operand, matching the existing one-word emitter
 without granting unsafe authority to the surrounding safe function. Focused

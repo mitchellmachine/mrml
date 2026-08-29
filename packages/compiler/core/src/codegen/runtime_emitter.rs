@@ -5823,7 +5823,7 @@ impl<
                     ))
                 );
                 if wide_integer {
-                    self.emit_wide_parameter_low_word(tree, operand)?;
+                    self.emit_wide_integer_return(tree, operand, operand_type)?;
                 } else {
                     self.emit_expression(tree, operand, depth + 1)?;
                 }
@@ -7158,47 +7158,6 @@ impl<
             self.emit(&[0x48, 0xb8])?;
             self.emit(&value.to_le_bytes())
         }
-    }
-
-    fn emit_wide_parameter_low_word<const MAX_NODES: usize>(
-        &mut self,
-        tree: &crate::ExpressionTree<'_, MAX_NODES>,
-        id: crate::ExprId,
-    ) -> Result<(), CodegenError> {
-        let expression = tree
-            .expression(id)
-            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-        let ExprKind::Identifier(name) = expression.kind else {
-            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-        };
-        let index = self
-            .function
-            .parameters()
-            .iter()
-            .flatten()
-            .position(|parameter| parameter.name == name)
-            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-        let parameter = self
-            .function
-            .parameters()
-            .iter()
-            .flatten()
-            .nth(index)
-            .ok_or(self.error(CodegenErrorKind::UnknownRuntimeName))?;
-        if !matches!(
-            crate::IntegerType::from_name(parameter.ty.text),
-            Some(crate::IntegerType::U128 | crate::IntegerType::I128)
-        ) {
-            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
-        }
-        self.record_identifier_read(name, RuntimePlaceProjections::EMPTY, expression.span)?;
-        let slot = self
-            .local_stack_slots()?
-            .checked_add(self.parameter_stack_slots_from(index + 1)?)
-            .and_then(|slot| slot.checked_add(self.evaluation_depth))
-            .and_then(|slot| slot.checked_add(1))
-            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-        self.emit_stack_slot(slot)
     }
 
     fn emit_wide_integer_return<const MAX_NODES: usize>(

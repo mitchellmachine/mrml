@@ -380,6 +380,9 @@ Bounded calls to earlier ordinary Rust helpers may pass and return supported
 two-word integers; the helper is inlined and does not acquire an external ABI.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
+Ordinary narrowing `as` casts may consume a parameter, local, or computed wide
+expression through the common two-word emitter; the low word is then normalized
+to the exact target width and the high word carries no result authority.
 Other wide casts, expressions, locals, operations, calls, and returns remain
 unavailable and fail closed.
 Ownership and borrowing rules beyond ordinary language checking, other

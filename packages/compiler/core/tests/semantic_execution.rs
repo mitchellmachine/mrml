@@ -46,6 +46,8 @@ const MRML_V1_SLICE_RETURN_SOURCE: &str =
 const MRML_V1_MUT_SLICE_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &mut [u8]) -> &mut [u8] { input[0] += 1; input }";
 const MRML_V1_STR_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &str, alternate: bool) -> &str { if alternate { \"MRML\" } else { input } }";
 const MRML_V1_WIDE_NARROW_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(unsigned: u128, signed: i128) -> u64 { (unsigned as u32 as u64) ^ (signed as i16 as u64) }";
+const MRML_V1_WIDE_COMPUTED_NARROW_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u64 { let wide: u128 = left.wrapping_add(right); wide as u64 }";
 const MRML_V1_WIDE_RETURN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input }";
 const MRML_V1_WIDE_UNSIGNED_TO_SIGNED_SOURCE: &str =
@@ -1117,6 +1119,23 @@ fn mrml_v1_wide_integer_parameters_narrow_from_the_low_word() {
             "for (unsigned, signed) in [(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 0x1020_3040_5060_7080_90a0_b0c0_d0e0_f123u128 as i128), (0xfedc_ba98_7654_3210_0123_4567_89ab_cdefu128, -0x0102_0304_0506_0708_1112_1314_1516_1718i128)] { println!(\"{}\", probe(unsigned, signed)); }",
         )
     );
+}
+
+#[test]
+fn mrml_v1_computed_wide_integer_narrowing_matches_the_oracle() {
+    let code = compile(MRML_V1_WIDE_COMPUTED_NARROW_SOURCE);
+    let inputs = [
+        (0u128, 0u128),
+        (u64::MAX as u128, 1),
+        (1u128 << 64, 17),
+        (u128::MAX, 2),
+    ];
+    let actual = inputs
+        .map(|(left, right)| unsafe {
+            call_mrml_v1_two_wide_to_u64(code.pointer, left, right)
+        })
+        .to_vec();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_COMPUTED_NARROW_SOURCE, "for (left, right) in [(0u128, 0u128), (u64::MAX as u128, 1), (1u128 << 64, 17), (u128::MAX, 2)] { println!(\"{}\", probe(left, right)); }"));
 }
 
 unsafe fn call_mrml_v1_wide_return(function: *const u8, input: u128) -> u128 {

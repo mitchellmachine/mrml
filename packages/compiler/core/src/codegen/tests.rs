@@ -12130,6 +12130,23 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_narrows_wide_locals_and_expressions() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { let wide: u128 = input; wide as u32 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u64 { (input.wrapping_add(18446744073709551616)) as u64 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i16 { (input.wrapping_neg()) as i16 }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 512, 2, 24>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn runtime_stack_model_reserves_two_words_for_128_bit_integers() {
         for integer in [crate::IntegerType::U128, crate::IntegerType::I128] {
             assert_eq!(

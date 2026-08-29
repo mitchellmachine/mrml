@@ -6039,3 +6039,14 @@ compares both result words with exact ORACLE-0003 rustc at distances 0, 1, 63,
 64, and 127. Windows gnullvm was not run for this increment. This does not
 expand the set of unchecked operations or
 define behavior for violated unsafe-method preconditions.
+
+The computed-wide-narrowing milestone replaces a direct-parameter-only low-word
+loader with the common two-word expression emitter followed by exact target-
+width normalization. Unit coverage admits unsigned locals, computed wrapping
+addition, and signed wrapping negation for both x86-64 calling conventions. A
+native Linux semantic case compares a computed wrapping sum narrowed to `u64`
+against exact ORACLE-0003 observations at zero, the low-word carry boundary, a
+high-word-only operand, and full-width wrapping overflow. The release compiler
+build and focused unit test pass; the package-wide attempt passed 809 of 810
+unit tests but stopped on one concurrently edited linker test, so no complete
+package-pass claim is made yet. Windows gnullvm was not run.
