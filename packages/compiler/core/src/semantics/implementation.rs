@@ -1377,12 +1377,21 @@ fn evaluate_const_assignment<'source, const MAX_ITEMS: usize, const MAX_PARAMETE
             })
         }
         ConstCallType::Integer(ty) => {
+            let right_type = if matches!(
+                assignment.operator,
+                crate::AssignmentOperator::ShiftLeft | crate::AssignmentOperator::ShiftRight
+            ) {
+                integer_expression_type(context, symbol_count, &tree, tree.root(), resolver)
+                    .unwrap_or(ty)
+            } else {
+                ty
+            };
             let right = evaluate_integer_const_expression(
                 context,
                 symbol_count,
                 &tree,
                 tree.root(),
-                ty,
+                right_type,
                 resolver,
                 depth,
             )?;

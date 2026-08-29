@@ -334,11 +334,11 @@ mod tests {
     #[test]
     fn evaluates_typed_shift_distances_in_wide_const_functions() {
         let module = Parser::new(
-            "const fn unsigned(value: u128, distance: u32) -> u128 { value >> distance } const fn signed(value: i128, distance: u32) -> i128 { value >> distance }",
+            "const fn unsigned(value: u128, distance: u32) -> u128 { value >> distance } const fn signed(value: i128, distance: u32) -> i128 { value >> distance } const fn unsigned_assign(value: u128, distance: u32) -> u128 { let mut result: u128 = value; result >>= distance; result } const fn signed_assign(value: i128, distance: u32) -> i128 { let mut result: i128 = value; result >>= distance; result }",
         )
-        .parse_module::<4, 4>()
+        .parse_module::<8, 4>()
         .unwrap();
-        let values = analyze_constants::<2, 32, 4, 4>(&module, TargetLayout::X86_64).unwrap();
+        let values = analyze_constants::<2, 32, 8, 4>(&module, TargetLayout::X86_64).unwrap();
         let unsigned = 1512366075204170947332355369683137040u128;
         let signed = -1512366075204170947332355369683137040i128;
         assert_eq!(
@@ -357,6 +357,26 @@ mod tests {
                 &values,
                 TargetLayout::X86_64,
                 "signed",
+                &[signed as u128, 65],
+            ),
+            Some((signed >> 65) as u128)
+        );
+        assert_eq!(
+            evaluate_scalar_const_function(
+                &module,
+                &values,
+                TargetLayout::X86_64,
+                "unsigned_assign",
+                &[unsigned, 65],
+            ),
+            Some(unsigned >> 65)
+        );
+        assert_eq!(
+            evaluate_scalar_const_function(
+                &module,
+                &values,
+                TargetLayout::X86_64,
+                "signed_assign",
                 &[signed as u128, 65],
             ),
             Some((signed >> 65) as u128)
