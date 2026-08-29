@@ -2293,6 +2293,10 @@ live composition remains pending.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.
+   Current-task fault, protocol-violation, and voluntary-exit retirement now
+   reserves the exact scheduler generation before peer/domain mutation and
+   consumes it after peer-death publication without a fallible late lookup.
+   Existing coverage passes; the total remains 629.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

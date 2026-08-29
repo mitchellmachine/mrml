@@ -211,6 +211,10 @@ pub(crate) struct WakePlan {
     task: TaskId,
 }
 
+pub(crate) struct CurrentTerminationPlan {
+    task: TaskId,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct DetachedTask {
     source: TaskId,
@@ -583,14 +587,34 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
     }
 
     pub fn terminate_current(&mut self) -> Result<ScheduleOutcome, KernelScheduleError> {
-        let current = self
-            .current
-            .take()
-            .ok_or(KernelScheduleError::NoCurrentTask)?;
+        let plan = self.prepare_current_termination()?;
+        Ok(self.commit_current_termination(plan))
+    }
+
+    pub(crate) fn prepare_current_termination(
+        &self,
+    ) -> Result<CurrentTerminationPlan, KernelScheduleError> {
+        let task = self.current.ok_or(KernelScheduleError::NoCurrentTask)?;
         self.scheduler
-            .remove(current)
+            .task(task)
             .map_err(KernelScheduleError::Scheduler)?;
-        Ok(self.select_replacement(Some(current)))
+        Ok(CurrentTerminationPlan { task })
+    }
+
+    pub(crate) fn commit_current_termination(
+        &mut self,
+        plan: CurrentTerminationPlan,
+    ) -> ScheduleOutcome {
+        self.current = None;
+        let task = self
+            .scheduler
+            .task_mut(plan.task)
+            .expect("exclusively owned scheduler preserves prepared current identity");
+        task.occupied = false;
+        task.state = TaskState::Blocked;
+        task.budget = 0;
+        task.generation = task.generation.checked_add(1).unwrap_or(0);
+        self.select_replacement(Some(plan.task))
     }
 
     pub fn wake(&mut self, task: TaskId) -> Result<(), KernelScheduleError> {

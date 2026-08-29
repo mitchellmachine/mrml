@@ -307,6 +307,9 @@ access. The security/acceptance gate is canonical in
   reciprocal relation or death-event mutation.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
+- Fault, protocol-violation, and voluntary-exit retirement reserve the exact
+  current scheduler generation before peer or domain mutation and consume it
+  after peer-death publication without a fallible scheduler lookup.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

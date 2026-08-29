@@ -6990,8 +6990,14 @@ slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second
 domain lookup after scheduler mutation. Existing preemption coverage passes;
 the total remains 629.
+Fault, protocol-violation, and voluntary-exit retirement now prepare the exact
+current scheduler generation before delegation, peer, or domain mutation. After
+peer-death publication, the consuming termination commit retires that prepared
+identity and selects its replacement without a fallible scheduler lookup.
+Existing retirement coverage passes; the total remains 629.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
-and transactional commit for the existing IPC bookkeeping mechanism.
+and transactional commit for the existing IPC and scheduler bookkeeping
+mechanisms.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

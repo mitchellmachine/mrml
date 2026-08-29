@@ -829,6 +829,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let slot = self
             .domain_slot(current)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let termination_plan = self
+            .scheduler
+            .prepare_current_termination()
+            .map_err(TaskRuntimeError::Scheduler)?;
 
         self.validate_peer_death_publication(
             self.domains[slot]
@@ -843,10 +847,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         self.publish_peer_death(&domain, PeerDeathReason::Faulted { vector, address })?;
-        let next = self
-            .scheduler
-            .terminate_current()
-            .map_err(TaskRuntimeError::Scheduler)?;
+        let next = self.scheduler.commit_current_termination(termination_plan);
         Ok(FaultRetirement {
             task: current,
             context: domain.context,
@@ -872,6 +873,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let slot = self
             .domain_slot(current)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let termination_plan = self
+            .scheduler
+            .prepare_current_termination()
+            .map_err(TaskRuntimeError::Scheduler)?;
 
         self.validate_peer_death_publication(
             self.domains[slot]
@@ -883,10 +888,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         self.publish_peer_death(&domain, PeerDeathReason::ProtocolViolation(violation))?;
-        let next = self
-            .scheduler
-            .terminate_current()
-            .map_err(TaskRuntimeError::Scheduler)?;
+        let next = self.scheduler.commit_current_termination(termination_plan);
         Ok(TaskViolationRetirement {
             task: current,
             context: domain.context,
@@ -913,6 +915,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let slot = self
             .domain_slot(current)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let termination_plan = self
+            .scheduler
+            .prepare_current_termination()
+            .map_err(TaskRuntimeError::Scheduler)?;
         self.validate_peer_death_publication(
             self.domains[slot]
                 .as_ref()
@@ -923,10 +929,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         self.publish_peer_death(&domain, PeerDeathReason::Exited)?;
-        let next = self
-            .scheduler
-            .terminate_current()
-            .map_err(TaskRuntimeError::Scheduler)?;
+        let next = self.scheduler.commit_current_termination(termination_plan);
         Ok((
             TaskTermination {
                 task: current,
