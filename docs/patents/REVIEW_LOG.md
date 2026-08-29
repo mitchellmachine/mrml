@@ -9942,3 +9942,12 @@ unsupported policy. It introduces no new object format, duplicate-resolution
 algorithm, relocation mechanism, compression, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-29 — Bounded COFF text SAME_SIZE and EXACT_MATCH resolution
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional
+PE/COFF `SAME_SIZE` and `EXACT_MATCH` duplicate checks to raw text-section size
+and contents before deterministic layout. It follows longstanding public object-
+format behavior and introduces no new comparison algorithm, object encoding,
+relocation mechanism, compression, cryptographic mechanism, or loader behavior.
+This technical screen is not legal advice or patent clearance.

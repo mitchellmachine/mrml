@@ -1045,8 +1045,26 @@ returns 42 with both linkers: MRML emits 2,560 bytes with two forwarding
 pointers versus rust-lld's 3,584 bytes. Fifty direct-driver measurements after
 five warmups produced 9.357 ms median/9.596 ms mean for MRML and 27.078 ms
 median/27.167 ms mean for rust-lld. This is a narrow host/workload result, not
-broad superiority. Associative text groups, SAME_SIZE, EXACT_MATCH, LARGEST,
-NEWEST, and independent read-only COMDAT selection remain unsupported.
+broad superiority. Associative text groups, LARGEST, NEWEST, and independent
+read-only COMDAT selection remain unsupported at that checkpoint.
+
+Text `SAME_SIZE` and `EXACT_MATCH` now extend that same pre-layout winner pass.
+The decoder requires the COFF COMDAT characteristic and the specified leading
+STATIC section-definition symbol with one auxiliary record; zero, associative,
+largest, newest, malformed, and mismatched policies still fail closed.
+`SAME_SIZE` keeps the leftmost definition only when every duplicate text
+section has the same raw size. `EXACT_MATCH` compares raw text contents, matching
+the documented PE/COFF section rule and current link.exe/lld behavior rather
+than accidentally comparing unrelated read-only sections or symbol metadata.
+Tests cover equal and unequal sizes, equal and unequal contents, selection
+bytes 3 and 4, the required COMDAT metadata shape, and unsupported associative
+selection. The exact stateful gnullvm probe remains unchanged: both linkers
+return 42, MRML emits 2,560 bytes and rust-lld 3,584 bytes, with 1,028 bytes of
+zero fill and two valid forwarding pointers. Fifty measured links after five
+warmups produced 9.175 ms median/9.847 ms mean for MRML versus 26.384 ms
+median/26.877 ms mean for rust-lld. This remains narrow evidence. Associative
+text groups, LARGEST, NEWEST, and independent read-only COMDAT selection remain
+unsupported.
 
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.

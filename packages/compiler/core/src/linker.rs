@@ -516,6 +516,8 @@ pub enum CoffTextComdatSelection {
     None,
     NoDuplicates,
     Any,
+    SameSize,
+    ExactMatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3720,8 +3722,10 @@ pub fn x86_64_coff_text_fragment_comdat_selection(
         let name = coff_section_name(raw_name, object, symbols_end, string_size)?;
         if name == ".text" || name.starts_with(".text$") {
             if text_ordinal == fragment_index {
-                selected_section =
-                    Some(i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?);
+                selected_section = Some((
+                    i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?,
+                    read_u32(object, header + 36)? & 0x0000_1000 != 0,
+                ));
                 break;
             }
             text_ordinal = text_ordinal
@@ -3729,27 +3733,45 @@ pub fn x86_64_coff_text_fragment_comdat_selection(
                 .ok_or(LinkerError::OffsetOverflow)?;
         }
     }
-    let selected_section = selected_section.ok_or(LinkerError::InvalidCoff)?;
+    let (selected_section, is_comdat) = selected_section.ok_or(LinkerError::InvalidCoff)?;
     let mut selection = CoffTextComdatSelection::None;
+    let mut saw_selected_symbol = false;
     let mut symbol_index = 0usize;
     while symbol_index < symbol_count {
         let symbol = symbol_offset + symbol_index * 18;
         let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
-        if read_i16(object, symbol + 12)? == selected_section
-            && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 3
-            && auxiliary == 1
-            && read_u32(object, symbol + 8)? == 0
-        {
+        if read_i16(object, symbol + 12)? == selected_section && !saw_selected_symbol {
+            saw_selected_symbol = true;
+            if !is_comdat {
+                if *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 3
+                    && auxiliary == 1
+                    && *object.get(symbol + 32).ok_or(LinkerError::InvalidCoff)? != 0
+                {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                break;
+            }
+            if *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? != 3
+                || auxiliary != 1
+                || read_u32(object, symbol + 8)? != 0
+                || read_u16(object, symbol + 14)? != 0
+            {
+                return Err(LinkerError::UnsupportedCoff);
+            }
             selection = match *object.get(symbol + 32).ok_or(LinkerError::InvalidCoff)? {
-                0 => CoffTextComdatSelection::None,
                 1 => CoffTextComdatSelection::NoDuplicates,
                 2 => CoffTextComdatSelection::Any,
+                3 => CoffTextComdatSelection::SameSize,
+                4 => CoffTextComdatSelection::ExactMatch,
                 _ => return Err(LinkerError::UnsupportedCoff),
             };
         }
         symbol_index = symbol_index
             .checked_add(auxiliary + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if is_comdat && selection == CoffTextComdatSelection::None {
+        return Err(LinkerError::UnsupportedCoff);
     }
     Ok(selection)
 }
@@ -8154,23 +8176,39 @@ mod tests {
         object[20..27].copy_from_slice(b".text$x");
         object[36..40].copy_from_slice(&1u32.to_le_bytes());
         object[40..44].copy_from_slice(&60u32.to_le_bytes());
-        object[56..60].copy_from_slice(&0x6050_0020u32.to_le_bytes());
+        object[56..60].copy_from_slice(&0x6050_1020u32.to_le_bytes());
         object[60] = 0xc3;
-        object[61..66].copy_from_slice(b"entry");
+        object[61..68].copy_from_slice(b".text$x");
         object[73..75].copy_from_slice(&1i16.to_le_bytes());
-        object[77] = 2;
-        object[79..86].copy_from_slice(b".text$x");
-        object[91..93].copy_from_slice(&1i16.to_le_bytes());
-        object[95] = 3;
-        object[96] = 1;
-        object[111] = 2;
+        object[77] = 3;
+        object[78] = 1;
+        object[93] = 2;
+        object[97..102].copy_from_slice(b"entry");
+        object[109..111].copy_from_slice(&1i16.to_le_bytes());
+        object[113] = 2;
         object[115..119].copy_from_slice(&4u32.to_le_bytes());
 
         assert_eq!(
             x86_64_coff_text_fragment_comdat_selection(&object, 0),
             Ok(CoffTextComdatSelection::Any)
         );
-        object[111] = 5;
+        object[93] = 3;
+        assert_eq!(
+            x86_64_coff_text_fragment_comdat_selection(&object, 0),
+            Ok(CoffTextComdatSelection::SameSize)
+        );
+        object[93] = 4;
+        assert_eq!(
+            x86_64_coff_text_fragment_comdat_selection(&object, 0),
+            Ok(CoffTextComdatSelection::ExactMatch)
+        );
+        object[93] = 5;
+        assert_eq!(
+            x86_64_coff_text_fragment_comdat_selection(&object, 0),
+            Err(LinkerError::UnsupportedCoff)
+        );
+        object[93] = 2;
+        object[56..60].copy_from_slice(&0x6050_0020u32.to_le_bytes());
         assert_eq!(
             x86_64_coff_text_fragment_comdat_selection(&object, 0),
             Err(LinkerError::UnsupportedCoff)

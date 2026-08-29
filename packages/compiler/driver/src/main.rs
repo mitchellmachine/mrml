@@ -863,12 +863,22 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
             .iter()
             .position(|earlier| earlier.symbol == inputs[*index].symbol)
         {
-            if selected_comdat[earlier] == CoffTextComdatSelection::Any
-                && text_comdat_selection[*index] == CoffTextComdatSelection::Any
-            {
+            let earlier_selection = selected_comdat[earlier];
+            let current_selection = text_comdat_selection[*index];
+            let compatible = match (earlier_selection, current_selection) {
+                (CoffTextComdatSelection::Any, CoffTextComdatSelection::Any) => true,
+                (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::SameSize) => {
+                    selected[earlier].text.len() == inputs[*index].text.len()
+                }
+                (CoffTextComdatSelection::ExactMatch, CoffTextComdatSelection::ExactMatch) => {
+                    selected[earlier].text == inputs[*index].text
+                }
+                _ => false,
+            };
+            if compatible {
                 continue;
             }
-            return Err(anyhow!("duplicate COFF text definition is not SELECT_ANY"));
+            return Err(anyhow!("incompatible duplicate COFF text definition"));
         }
         selected
             .try_push(inputs[*index])
@@ -1490,6 +1500,53 @@ mod tests {
             )
             .is_err()
         );
+
+        let same_size = [CoffTextComdatSelection::SameSize; 2];
+        let selected = selected_link_inputs(
+            &[first, second],
+            &[0, 0],
+            &[0, 0],
+            &[0, 1],
+            &same_size,
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs[0].text, &[0x2a]);
+        let longer = LinkInput {
+            text: &[0x63, 0xc3],
+            ..first
+        };
+        assert!(
+            selected_link_inputs(
+                &[first, longer],
+                &[0, 0],
+                &[0, 0],
+                &[0, 1],
+                &same_size,
+                "entry",
+            )
+            .is_err()
+        );
+
+        let exact = [CoffTextComdatSelection::ExactMatch; 2];
+        assert!(
+            selected_link_inputs(&[first, second], &[0, 0], &[0, 0], &[0, 1], &exact, "entry",)
+                .is_err()
+        );
+        let same_section = LinkInput {
+            readonly_data: &[0x99],
+            ..first
+        };
+        let selected = selected_link_inputs(
+            &[first, same_section],
+            &[0, 0],
+            &[0, 0],
+            &[0, 1],
+            &exact,
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs.len(), 1);
     }
 
     #[test]
