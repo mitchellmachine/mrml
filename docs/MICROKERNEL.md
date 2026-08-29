@@ -6872,6 +6872,10 @@ Stable peer-death records now reject the observing task itself and any identity
 that remains scheduled or still owns a domain record. A focused forged-live-
 death test preserves the record and live task, raising the Linux kernel total to
 620.
+Delegation validation now walks each bounded unique-parent ancestry and rejects
+any edge whose destination is already an ancestor of its source. A focused
+two-hop live semantic-cycle test preserves endpoint sequence and raises the
+Linux kernel total to 621.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

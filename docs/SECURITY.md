@@ -267,6 +267,8 @@ access. The security/acceptance gate is canonical in
   exactly reciprocally linked before consuming or publishing control state.
 - Stable peer-death evidence cannot name the observer or an identity that remains
   scheduled or owns a live task domain.
+- Delegation ancestry is acyclic; bounded validation rejects any child that is
+  already an ancestor of its source before graph use.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

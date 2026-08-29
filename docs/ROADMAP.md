@@ -2230,6 +2230,9 @@ live composition remains pending.
    Stable peer-death records now reject self-death and identities that remain
    scheduled or domain-live. A forged-live-death preservation test raises the
    kernel total to 620.
+   Delegation graph validation now rejects bounded ancestry cycles before send
+   or retirement mutation. A live two-hop cycle test preserves endpoint sequence
+   and raises the kernel total to 621.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
