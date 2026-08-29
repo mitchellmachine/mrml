@@ -4040,3 +4040,8 @@ control handle is required.
 Stable configuration checkpoint publication now revalidates the exact live
 root `READ` capability at commit before consuming its one-use storage receipt.
 Prepared bytes and file state no longer preserve revoked inspection authority.
+
+Recovered service registration now revalidates its exact restart-policy read
+authority and recomputes the registration plan at commit. A prepared recovery
+result cannot preserve a revoked or changed policy decision into the live
+supervisor.

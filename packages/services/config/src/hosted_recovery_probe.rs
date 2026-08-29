@@ -1274,7 +1274,7 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         .map_err(|_| HostedRecoveryProbeError::Recovery)?;
     drop(boot_store);
     let recovered = prepared_service
-        .commit(authorities, &mut supervisor)
+        .commit(authorities, &capabilities, &mut supervisor)
         .map_err(|_| HostedRecoveryProbeError::ServicePublication)?;
     if recovered.configuration().revision() != POLICY_GENERATION {
         return Err(HostedRecoveryProbeBuildError::Probe(

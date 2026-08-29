@@ -7090,6 +7090,12 @@ revalidates exact live `READ` authority before consuming the storage receipt.
 The focused test observes distinct prepare-time and commit-time authorization
 checks; checkpoint bytes and a prepared file write are not cached authority.
 
+Recovered service publication now also revalidates the persisted restart-policy
+setting at commit. The prepared owner retains the exact policy-read handle and
+cached registration plan; commit reloads the live policy, recomputes the plan,
+and requires exact equality before supervisor mutation. The focused recovery
+test observes this additional commit-time authorization.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

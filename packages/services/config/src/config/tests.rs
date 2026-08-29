@@ -3927,13 +3927,37 @@ mod tests {
                 .bind(&mut state_store);
             let mut supervisor = ServiceSupervisor::<1>::new();
             let mut recovered_bytes = [0xa5; 512];
+            struct CountingAuthorizer<'a, const CAPS: usize> {
+                inner: &'a CapabilitySpace<CAPS>,
+                calls: core::cell::Cell<usize>,
+            }
+            impl<const CAPS: usize> CapabilityAuthorizer for CountingAuthorizer<'_, CAPS> {
+                fn authorize_exact(
+                    &self,
+                    capability: Capability,
+                    rights: Rights,
+                    expected: ObjectId,
+                ) -> Result<(), ConfigError> {
+                    self.calls.set(self.calls.get() + 1);
+                    <CapabilitySpace<CAPS> as CapabilityAuthorizer>::authorize_exact(
+                        self.inner,
+                        capability,
+                        rights,
+                        expected,
+                    )
+                }
+            }
+            let authorizer = CountingAuthorizer {
+                inner: &capabilities,
+                calls: core::cell::Cell::new(0),
+            };
             let configuration_validator =
                 StableConfigurationRecoveryValidator::<3, 2, _, _, _>::new(
                     stable.file(),
                     0,
                     stable_principal(),
                     2,
-                    &capabilities,
+                    &authorizer,
                     root_control,
                     setting_read,
                     setting,
@@ -3964,9 +3988,11 @@ mod tests {
                     .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
                     .is_ok()
             );
+            let authorizations_before_commit = authorizer.calls.get();
             let recovered = prepared_service
-                .commit(authorities, &mut supervisor)
+                .commit(authorities, &authorizer, &mut supervisor)
                 .unwrap();
+            assert_eq!(authorizer.calls.get(), authorizations_before_commit + 1);
             assert_eq!(recovered.service().token(), 1u64 << 32);
             assert_eq!(recovered.configuration().revision(), 1);
             assert_eq!(recovered.authorities().epoch(), 9);

@@ -1015,3 +1015,8 @@ A prepared stable configuration checkpoint is likewise data, not authority.
 Commit revalidates its retained exact root/read binding before receipt
 consumption, so revocation after staging prevents publication without relying
 on checkpoint contents or storage identity as authorization.
+
+Prepared recovered-service state does not cache restart-policy authority.
+Publication reloads the policy through the retained exact read handle and
+requires the freshly computed registration plan to equal the validated plan
+before mutating the supervisor.

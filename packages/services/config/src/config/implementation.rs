@@ -3064,6 +3064,7 @@ fn recovery_root_matches(
 pub struct PreparedRecoveredService<const SETTINGS: usize, const AUDIT: usize> {
     recovered: RecoveredStableConfiguration<SETTINGS, AUDIT>,
     registration: ServiceRegistrationPlan,
+    policy_capability: Capability,
     authority_epoch: u64,
 }
 
@@ -3983,17 +3984,39 @@ pub enum RecoveredAssignedTotalAdmissionError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveredSystemCommitError {
     AuthorityEpochMismatch,
+    Policy(PersistedRestartPolicyError),
     Service(ServiceError),
 }
 
 impl<const SETTINGS: usize, const AUDIT: usize> PreparedRecoveredService<SETTINGS, AUDIT> {
-    pub fn commit<const GRANTS: usize, const SERVICES: usize>(
+    pub fn commit<
+        const GRANTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
         self,
         authorities: CommittedRecoveredStorageAuthorities<GRANTS>,
+        capabilities: &A,
         supervisor: &mut ServiceSupervisor<SERVICES>,
     ) -> Result<RecoveredSystemState<GRANTS, SETTINGS, AUDIT>, RecoveredSystemCommitError> {
         if authorities.epoch() != self.authority_epoch {
             return Err(RecoveredSystemCommitError::AuthorityEpochMismatch);
+        }
+        let refreshed = self
+            .recovered
+            .policy
+            .plan_registration(
+                &self.recovered.configuration,
+                capabilities,
+                self.policy_capability,
+                supervisor,
+                self.registration.task(),
+            )
+            .map_err(RecoveredSystemCommitError::Policy)?;
+        if refreshed != self.registration {
+            return Err(RecoveredSystemCommitError::Policy(
+                PersistedRestartPolicyError::PolicyChanged,
+            ));
         }
         let service = supervisor
             .commit_registration(self.registration)
@@ -4079,6 +4102,7 @@ unsafe impl<
         Ok(PreparedRecoveredService {
             recovered,
             registration,
+            policy_capability: self.configuration.policy_capability,
             authority_epoch: authorities.epoch(),
         })
     }
