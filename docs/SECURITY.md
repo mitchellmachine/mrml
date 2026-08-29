@@ -323,6 +323,9 @@ access. The security/acceptance gate is canonical in
   object into at most one supervisor slot, rechecks both at commit, checks the
   object before atomic-launch task creation, and preserves full/stale-plan
   denial precedence so those denials do not disclose membership.
+- Service state inspection requires exact `READ`, while restart preparation and
+  policy replacement require exact `CONTROL`; combined overbroad handles cannot
+  cross those separately authorized boundaries.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact

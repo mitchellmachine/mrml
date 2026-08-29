@@ -7021,6 +7021,11 @@ full or invalid plans. Retirement also requires a unique running-task match. A
 focused duplicate-target test preserves the vacant slot, and launch coverage
 proves duplicate object denial leaves runtime occupancy unchanged; the Linux
 kernel total remains 631.
+Service state inspection, restart preparation, and restart-policy replacement
+now use exact-rights authorization rather than subset authorization. A handle
+carrying combined `READ|CONTROL` is rejected at each boundary, preserving the
+separation between introspection and lifecycle control. Existing focused tests
+cover all three overbroad denials; the total remains 631.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second

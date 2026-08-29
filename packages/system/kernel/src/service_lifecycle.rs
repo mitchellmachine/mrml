@@ -550,7 +550,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     ) -> Result<ServiceState, ServiceError> {
         let entry = self.slot(service)?;
         let object = management
-            .authorize(authority, crate::Rights::READ)
+            .authorize_exact(authority, crate::Rights::READ)
             .map_err(ServiceError::Unauthorized)?;
         if object != entry.object {
             return Err(ServiceError::Unauthorized(
@@ -585,7 +585,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     ) -> Result<(), ServiceError> {
         let entry = self.slot(service)?;
         let authorized = management
-            .authorize(control, crate::Rights::CONTROL)
+            .authorize_exact(control, crate::Rights::CONTROL)
             .map_err(ServiceError::Unauthorized)?;
         if authorized != entry.object {
             return Err(ServiceError::Unauthorized(
@@ -865,7 +865,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             return Err(ServiceError::StillRunning);
         }
         let authorized = management
-            .authorize(control, crate::Rights::CONTROL)
+            .authorize_exact(control, crate::Rights::CONTROL)
             .map_err(ServiceError::Unauthorized)?;
         if authorized != entry.object {
             return Err(ServiceError::Unauthorized(
@@ -1493,9 +1493,25 @@ mod tests {
         let service = supervisor.register(object, task).unwrap();
         let retirement = supervisor.exit_current(&mut runtime).unwrap();
         complete(&mut supervisor, retirement.cleanup);
-        let mut management = CapabilitySpace::<1>::new();
+        let mut management = CapabilitySpace::<2>::new();
         let control = management.insert(object, Rights::CONTROL).unwrap();
+        let overbroad = management
+            .insert(object, Rights::CONTROL.union(Rights::READ))
+            .unwrap();
         let fresh = context(0x30_0000, 0x50_0000);
+        assert_eq!(
+            supervisor.prepare_restart_at(
+                service,
+                &management,
+                overbroad,
+                Priority::RESPONSIVE,
+                fresh,
+                0,
+            ),
+            Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied
+            ))
+        );
         let plan = supervisor
             .prepare_restart_at(
                 service,
@@ -1590,9 +1606,12 @@ mod tests {
         let retirement = supervisor.exit_current_at(&mut runtime, 100).unwrap();
         complete(&mut supervisor, retirement.cleanup);
 
-        let mut management = CapabilitySpace::<2>::new();
+        let mut management = CapabilitySpace::<3>::new();
         let wrong = management.insert(ObjectId(0x85), Rights::CONTROL).unwrap();
         let control = management.insert(object, Rights::CONTROL).unwrap();
+        let overbroad = management
+            .insert(object, Rights::CONTROL.union(Rights::READ))
+            .unwrap();
         let fresh = context(0x30_0000, 0x50_0000);
         let stale_plan = supervisor
             .prepare_restart_at(service, &management, control, Priority::NORMAL, fresh, 110)
@@ -1602,6 +1621,17 @@ mod tests {
                 service,
                 &management,
                 wrong,
+                RestartPolicy::new(3, 0, 0).unwrap(),
+            ),
+            Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        assert_eq!(
+            supervisor.replace_restart_policy(
+                service,
+                &management,
+                overbroad,
                 RestartPolicy::new(3, 0, 0).unwrap(),
             ),
             Err(ServiceError::Unauthorized(
@@ -1980,10 +2010,13 @@ mod tests {
         let object = ObjectId(0x7a);
         let mut supervisor = ServiceSupervisor::<1>::new();
         let service = supervisor.register(object, task).unwrap();
-        let mut management = CapabilitySpace::<3>::new();
+        let mut management = CapabilitySpace::<4>::new();
         let read = management.insert(object, Rights::READ).unwrap();
         let wrong = management.insert(ObjectId(0x7b), Rights::READ).unwrap();
         let control_only = management.insert(object, Rights::CONTROL).unwrap();
+        let overbroad = management
+            .insert(object, Rights::READ.union(Rights::CONTROL))
+            .unwrap();
         assert_eq!(
             supervisor.state_authorized(service, &management, read),
             Ok(ServiceState::Running)
@@ -1996,6 +2029,12 @@ mod tests {
         );
         assert_eq!(
             supervisor.state_authorized(service, &management, control_only),
+            Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        assert_eq!(
+            supervisor.state_authorized(service, &management, overbroad),
             Err(ServiceError::Unauthorized(
                 CapabilityError::PermissionDenied
             ))

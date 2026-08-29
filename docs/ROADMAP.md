@@ -2312,6 +2312,9 @@ live composition remains pending.
    task generation and live service object at plan/commit; atomic launch checks
    object uniqueness before task creation while preserving capacity/stale-plan
    denial precedence. Duplicate-target coverage raises the total to 631.
+   Service state, restart, and policy replacement now require exact `READ` or
+   exact `CONTROL`; overbroad combined handles are rejected in focused coverage.
+   The total remains 631.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.
