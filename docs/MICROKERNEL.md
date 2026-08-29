@@ -6679,6 +6679,12 @@ Explicit capability release now treats an impossible source revocation failure
 after descendant revocation as runtime integrity failure, never as an ordinary
 userspace denial. Initial stale/unauthorized handle rejection remains a
 detail-free false result before mutation.
+Buffered service sends now return a scrubbed error when either payload or
+capability-descriptor userspace input fails complete range validation. Any
+already-copied payload and the complete fixed staging arrays are erased before
+return; impossible validation-ticket or copy failures remain fail-stop. Both
+ordinary and accounted service UEFI profiles build, and 595 Linux kernel tests
+pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6699,7 +6705,8 @@ log](patents/REVIEW_LOG.md). Scratch erasure is ordinary data-lifetime hygiene
 on that existing path, and shared-buffer denial classification is ordinary
 error-boundary hardening. Post-mutation capability-release classification is
 the same conventional integrity hardening; none triggers a separate patent
-review.
+review. Buffered userspace-range denial follows that existing boundary and does
+not introduce a new mechanism.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

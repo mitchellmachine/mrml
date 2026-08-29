@@ -171,6 +171,8 @@ access. The security/acceptance gate is canonical in
   backend effects and internal runtime/copy invariants remain fail-stop.
 - Capability release classifies an impossible source revocation failure after
   descendant mutation as integrity failure, not a recoverable caller denial.
+- Buffered send rejects invalid payload/descriptor userspace mappings without a
+  global halt, erases prior staging, and still fail-stops on copy invariants.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

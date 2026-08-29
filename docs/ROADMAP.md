@@ -2108,6 +2108,9 @@ live composition remains pending.
    Capability release reports stale/unauthorized handles as precommit denial,
    but an impossible source-revoke failure after descendant mutation is now an
    integrity failure and remains fail-stop.
+   Buffered send returns scrubbed failure for invalid payload or descriptor
+   userspace mappings, erasing any prior staging first; ticket/copy invariants
+   still halt. Ordinary/accounted builds and 595 Linux kernel tests pass.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

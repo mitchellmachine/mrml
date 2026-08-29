@@ -1046,7 +1046,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let payload_storage = &mut *core::ptr::addr_of_mut!(SERVICE_SYSCALL_PAYLOAD);
                 payload_storage.fill(0);
                 let payload = &mut payload_storage[..payload_length];
-                copy_from_active_user(root, current, payload_address, payload);
+                if !try_copy_from_active_user(root, current, payload_address, payload) {
+                    payload_storage.fill(0);
+                    frame.complete_error();
+                    return;
+                }
                 let capability_count = usize::from(capability_count);
                 let descriptor_length = capability_count
                     .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
@@ -1055,8 +1059,18 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     &mut *core::ptr::addr_of_mut!(SERVICE_SYSCALL_CAPABILITIES);
                 descriptor_storage.fill(0);
                 let descriptor_bytes = &mut descriptor_storage[..descriptor_length];
-                if descriptor_length != 0 {
-                    copy_from_active_user(root, current, capabilities_address, descriptor_bytes);
+                if descriptor_length != 0
+                    && !try_copy_from_active_user(
+                        root,
+                        current,
+                        capabilities_address,
+                        descriptor_bytes,
+                    )
+                {
+                    payload_storage.fill(0);
+                    descriptor_storage.fill(0);
+                    frame.complete_error();
+                    return;
                 }
                 let mut descriptors = [None; MAX_CAPABILITIES];
                 if decode_capability_transfers(
@@ -4761,22 +4775,26 @@ unsafe fn validate_service_user_range(
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn copy_from_active_user(
+unsafe fn try_copy_from_active_user(
     root: PhysAddr,
     task: mrml_kernel::TaskId,
     address: u64,
     output: &mut [u8],
-) {
+) -> bool {
     let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
     let mut user = ActiveTaskUserCopy::new(&active, root, task, DirectActiveUserMemory);
-    user.validate(
+    match user.validate(
         task,
         address,
         output.len(),
         mrml_kernel::SharedBufferUserAccess::Read,
-    )
-    .unwrap_or_else(|_| halt());
+    ) {
+        Ok(()) => {}
+        Err(ActiveTaskUserCopyError::Buffer(_)) => return false,
+        Err(_) => halt(),
+    }
     user.read(task, address, output).unwrap_or_else(|_| halt());
+    true
 }
 
 #[cfg(feature = "service-probe")]
