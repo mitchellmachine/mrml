@@ -1104,6 +1104,26 @@ mean for rust-lld on this narrow workload. Independent selection and filtering
 of associative read-only payloads remains incomplete, so this is not broad
 linker compatibility or performance superiority.
 
+Explicit associative read-only COMDATs now follow the exact text fragment that
+owns their validated association root. The prepared object inventory is passed
+into fragment decoding, so each `.rdata$...` section whose selection is
+`ASSOCIATIVE` is retained only for its root text section; symbols in companions
+belonging to other fragments are ignored, and a relocation from the retained
+fragment into a discarded companion fails closed. Because the current
+allocation-free `LinkInput` carries one borrowed read-only span, decoding also
+rejects an object layout where excluded companion bytes would be embedded
+inside that retained span rather than silently copying them. An independently
+constructed four-section fixture proves that `.text$a` receives only byte `A`,
+`.text$b` receives only byte `B`, and rebinding the second companion to the
+first root leaves the second fragment with no read-only payload. Windows and
+Arch Linux each pass 755 core tests and their full dependent package graphs.
+The unchanged stateful gnullvm probe returns 42 through both linkers and emits
+2,560 MRML bytes versus 3,584 rust-lld bytes. Fifty measured links after five
+warmups produced 5.749 ms median/6.139 ms mean for MRML and 22.752 ms
+median/22.926 ms mean for rust-lld on this host and workload. Non-associative
+read-only COMDAT duplicate selection and arbitrary discontiguous read-only
+section packing remain incomplete.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

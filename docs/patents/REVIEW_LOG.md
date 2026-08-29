@@ -9971,3 +9971,13 @@ uses bounded graph traversal and ordinary string comparison, and introduces no
 new object encoding, selection algorithm, relocation mechanism, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not legal
 advice or patent clearance.
+
+# 2026-08-29 — Associative COFF read-only ownership
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional
+PE/COFF associative section relationship to retain read-only companion bytes
+with their already selected text root. It uses bounded table lookup, range
+checks, and borrowed-slice selection, and introduces no new object encoding,
+duplicate-selection algorithm, relocation mechanism, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not legal
+advice or patent clearance.

@@ -17,7 +17,8 @@ use mrml_rustc::{
     PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_writable_relocation, decode_x86_64_coff_runtime_functions,
-    decode_x86_64_coff_text_fragment, decode_x86_64_coff_writable_data_fragment,
+    decode_x86_64_coff_text_fragment, decode_x86_64_coff_text_fragment_from_inventory,
+    decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
@@ -743,9 +744,15 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                 .split_first_mut()
                 .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
             let input = match format {
-                ObjectFormat::Coff => {
-                    decode_x86_64_coff_text_fragment(object, fragment_index, arena, definitions)
-                }
+                ObjectFormat::Coff => decode_x86_64_coff_text_fragment_from_inventory(
+                    object,
+                    fragment_index,
+                    coff_comdat_sections
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
+                    arena,
+                    definitions,
+                ),
                 ObjectFormat::Elf64 => {
                     decode_x86_64_elf_with_definitions(object, arena, definitions)
                 }
