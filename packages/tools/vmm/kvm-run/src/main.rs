@@ -1035,6 +1035,7 @@ enum LaunchMode {
     PreemptionProbe,
     UserProbe,
     ServiceProbe,
+    InvalidReturnProbe,
     ComponentServiceProbe,
     ComponentServiceSmpProbe,
     ComponentReleaseInputs,
@@ -1063,6 +1064,7 @@ impl LaunchMode {
             "preemption-probe" => Ok(Self::PreemptionProbe),
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
+            "invalid-return-probe" => Ok(Self::InvalidReturnProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
             "component-service-smp-probe" => Ok(Self::ComponentServiceSmpProbe),
             "component-release-inputs" => Ok(Self::ComponentReleaseInputs),
@@ -1078,7 +1080,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, invalid-return-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -2234,6 +2236,7 @@ fn application_main() -> Result<()> {
     let total_service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::InvalidReturnProbe
             | LaunchMode::ComponentServiceProbe
             | LaunchMode::ComponentServiceSmpProbe
     );
@@ -2249,6 +2252,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::GuiApplicationProbe
             | LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
+            | LaunchMode::InvalidReturnProbe
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
@@ -2284,6 +2288,7 @@ fn application_main() -> Result<()> {
     let service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::InvalidReturnProbe
             | LaunchMode::ComponentServiceProbe
             | LaunchMode::ComponentServiceSmpProbe
             | LaunchMode::ComponentReleaseInputs
@@ -3173,6 +3178,7 @@ fn application_main() -> Result<()> {
             system.prepare_smp_kernel_guest::<16>(&executable, handoff.as_slice(), layout)
         }
         LaunchMode::ServiceProbe
+        | LaunchMode::InvalidReturnProbe
         | LaunchMode::ComponentServiceProbe
         | LaunchMode::BlockServiceProbe
         | LaunchMode::ServiceRestartRequestProbe => system
@@ -4159,6 +4165,36 @@ fn application_main() -> Result<()> {
                 .map_err(|error| anyhow!("KVM block-service execution failed: {:?}", error))?;
         }
         return Err(anyhow!("KVM block-service probe exceeded its stage bound"));
+    } else if mode == LaunchMode::InvalidReturnProbe {
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x26,
+            })
+        {
+            return Err(anyhow!(
+                "KVM invalid-return typed retirement mismatch: {:?}",
+                exit
+            ));
+        }
+        exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("KVM invalid-return peer execution failed: {:?}", error))?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x27,
+            })
+        {
+            return Err(anyhow!(
+                "KVM invalid-return terminal state mismatch: {:?}",
+                exit
+            ));
+        }
+        exit = VmExit::Halted;
     } else if matches!(
         mode,
         LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
@@ -4698,7 +4734,7 @@ fn application_main() -> Result<()> {
         LaunchMode::UserProbe if marker != [0; 4] => {
             return Err(anyhow!("user probe unexpectedly modified the framebuffer"));
         }
-        LaunchMode::ServiceProbe if marker != [0; 4] => {
+        LaunchMode::ServiceProbe | LaunchMode::InvalidReturnProbe if marker != [0; 4] => {
             return Err(anyhow!(
                 "service probe unexpectedly modified the framebuffer"
             ));
@@ -5607,6 +5643,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("service-probe").unwrap(),
             LaunchMode::ServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("invalid-return-probe").unwrap(),
+            LaunchMode::InvalidReturnProbe
         );
         assert_eq!(
             LaunchMode::parse("component-service-probe").unwrap(),

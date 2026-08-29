@@ -6730,6 +6730,11 @@ without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 then enters a distinct peer whose only action is a canonical exit and requires
 terminal state marker `0x27`. Runner mode and QEMU execution remain pending, so
 these markers are an unexecuted acceptance contract, not hosted evidence.
+The KVM runner now admits `invalid-return-probe` only with one verified signed
+service artifact, prepares the same two isolated service roots, and requires
+exact marker `0x26` followed by `0x27` before treating the run as terminal. Its
+13 Linux unit tests pass, including fail-closed mode parsing. The probe has not
+yet been executed under KVM, and WHP runner parity remains pending.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6761,7 +6766,8 @@ new algorithm. Patent review: **NOT_TRIGGERED**; see [the review
 log](patents/REVIEW_LOG.md). Supervisor integration reuses that lifecycle and
 does not trigger separate review; live dispatch wiring also adds no new
 mechanism. The probe only exercises that existing path and does not trigger
-separate review.
+separate review; KVM runner admission is test harness plumbing and likewise does
+not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

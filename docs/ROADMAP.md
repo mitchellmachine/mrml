@@ -2135,6 +2135,9 @@ live composition remains pending.
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
    pending.
+   The KVM runner admits the dedicated mode with one verified signed service,
+   exact two-root preparation, and strict `0x26` then `0x27` acceptance; all 13
+   runner unit tests pass. Actual KVM execution and WHP parity remain pending.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.
