@@ -147,6 +147,20 @@ const RUSTC_WIDE_SIGNED_STRICT_NEGATE_SOURCE: &str = concat!(
     "#![feature(strict_overflow_ops)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.strict_neg() }"
 );
+const MRML_V1_WIDE_UNSIGNED_WRAPPING_SHIFT_LEFT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, distance: u32) -> u128 { input.wrapping_shl(distance) }";
+const MRML_V1_WIDE_SIGNED_STRICT_SHIFT_RIGHT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.strict_shr(distance) }";
+const RUSTC_WIDE_SIGNED_STRICT_SHIFT_RIGHT_SOURCE: &str = concat!(
+    "#![feature(strict_overflow_ops)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.strict_shr(distance) }"
+);
+const MRML_V1_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.unbounded_shr(distance) }";
+const RUSTC_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE: &str = concat!(
+    "#![feature(unbounded_shifts)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.unbounded_shr(distance) }"
+);
 const RUSTC_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str = concat!(
     "#![feature(wrapping_next_power_of_two)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }"
@@ -1788,6 +1802,45 @@ fn mrml_v1_wide_strict_negation_overflows_trap() {
                 || stderr.contains("unexpected return code -1073741795"),
             "missing Windows illegal-instruction status for {mode}; stdout: {stdout}; stderr: {stderr}"
         );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_shift_methods_match_both_oracle_words() {
+    let input = (-1512366075204170947332355369683137040i128) as u128;
+    for (source, oracle_source, distances) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_WRAPPING_SHIFT_LEFT_SOURCE,
+            MRML_V1_WIDE_UNSIGNED_WRAPPING_SHIFT_LEFT_SOURCE,
+            [0u32, 63, 64, 127, 128, u32::MAX],
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_STRICT_SHIFT_RIGHT_SOURCE,
+            RUSTC_WIDE_SIGNED_STRICT_SHIFT_RIGHT_SOURCE,
+            [0u32, 1, 63, 64, 65, 127],
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE,
+            RUSTC_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE,
+            [0u32, 63, 64, 127, 128, u32::MAX],
+        ),
+    ] {
+        let code = compile(source);
+        let actual = distances
+            .into_iter()
+            .flat_map(|distance| {
+                let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, input, distance) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        let driver = if source == MRML_V1_WIDE_SIGNED_STRICT_SHIFT_RIGHT_SOURCE {
+            "for distance in [0u32, 1, 63, 64, 65, 127] { let returned = probe(-1512366075204170947332355369683137040i128, distance); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"
+        } else if source == MRML_V1_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE {
+            "for distance in [0u32, 63, 64, 127, 128, u32::MAX] { let returned = probe(-1512366075204170947332355369683137040i128, distance); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"
+        } else {
+            "for distance in [0u32, 63, 64, 127, 128, u32::MAX] { let returned = probe((-1512366075204170947332355369683137040i128) as u128, distance); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"
+        };
+        assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, driver));
     }
 }
 

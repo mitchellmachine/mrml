@@ -7317,7 +7317,71 @@ impl<
             self.evaluation_depth -= 2;
             return self.emit_wide_shift(layout, operator == crate::BinaryOperator::ShiftLeft);
         }
-        if let ExprKind::Binary {
+        if let ExprKind::IntegerWrappingShift {
+            base,
+            distance,
+            left,
+            unbounded,
+            strict,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let distance_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                distance,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(base_type, expected_type)
+                || !matches!(
+                    distance_type,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit_expression(tree, distance, 1)?;
+            self.emit(&[0x48, 0x89, 0xc1, 0x5a, 0x58])?;
+            self.evaluation_depth -= 2;
+            if unbounded {
+                self.emit(&[0x48, 0x81, 0xf9, 0x80, 0, 0, 0])?;
+                let in_range = self.emit_forward_branch(0x82)?;
+                if !left && layout.signed {
+                    self.emit(&[0x48, 0xc1, 0xfa, 63, 0x48, 0x89, 0xd0])?;
+                } else {
+                    self.emit(&[0x31, 0xc0, 0x31, 0xd2])?;
+                }
+                let done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(in_range)?;
+                let previous_overflow_checks = self.overflow_checks;
+                self.overflow_checks = false;
+                let result = self.emit_wide_shift(layout, left);
+                self.overflow_checks = previous_overflow_checks;
+                result?;
+                self.patch_forward_branch(done)?;
+                return Ok(());
+            }
+            let previous_overflow_checks = self.overflow_checks;
+            self.overflow_checks = strict;
+            let result = self.emit_wide_shift(layout, left);
+            self.overflow_checks = previous_overflow_checks;
+            return result;
+        } else if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::BitAnd
                 | crate::BinaryOperator::BitOr

@@ -210,6 +210,9 @@ Wide signed absolute values conditionally negate both words and trap on
 minimum magnitude in the corresponding `u128` result.
 Wide `strict_neg` always rejects nonzero unsigned inputs and rejects
 `i128::MIN`, independent of the ordinary overflow-check setting.
+Wide shift methods reuse the two-word shift layout while keeping policy
+separate: wrapping masks to 127, strict traps at 128, and unbounded shifts
+produce zero or signed fill beyond the width.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
