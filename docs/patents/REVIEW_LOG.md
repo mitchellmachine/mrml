@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — AHCI userspace syscall adapter
+
+Patent review: **NOT_TRIGGERED**. This increment maps the already screened AHCI
+enumeration service loop onto MRML's existing receive-buffer,
+write-shared-buffer, capability-release, and send-buffer syscall frames. It adds
+no AHCI register, command, DMA, discovery, storage scheduling, caching,
+allocation, naming, encoding, data-layout, or optimization behavior. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Isolated AHCI enumeration service loop
 
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing

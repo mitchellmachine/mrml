@@ -16,6 +16,7 @@ mod ahci_mapping;
 mod ahci_port;
 mod ahci_port_program;
 mod service_loop;
+mod userspace_syscall_adapter;
 
 use mrml_interface_storage_block_provider_v1::{
     decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
@@ -71,6 +72,9 @@ pub use ahci_port_program::{
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
+};
+pub use userspace_syscall_adapter::{
+    AhciRawSyscall, AhciSyscallFrame, AhciUserspaceSyscallError, AhciUserspaceSyscalls,
 };
 
 pub struct AhciBlockProvider<'a> {

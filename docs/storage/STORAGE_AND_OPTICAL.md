@@ -326,7 +326,7 @@ one PRDT entry. Device-read requires data-buffer `WRITE`; device-write requires
 `READ`, with separate `PIN | MAP`. Control DMA overlap, stale/wrong authority,
 dirty headers/tables, active/issued slots, overflow, and partial mutation fail
 closed. Every written header/FIS/PRDT DWORD is read-verified; post-write
-uncertainty quarantines the active layout. The AHCI library passes 54 tests on
+uncertainty quarantines the active layout. The AHCI library passes 55 tests on
 Windows and Arch Linux. `CI` issue, completion/error handling, data verification,
 interrupts, NCQ, hardware, and physical evidence remain **PLANNED**.
 
@@ -606,13 +606,15 @@ generations, checked block geometry, explicit feature facts, and media
 generations. Encoding validates every record and zeroes the exact output extent
 before publication. The AHCI library implements enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
-54 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
+55 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
 each implement this same enumeration contract independently. Provider-side
 isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI enumeration. Its service
 loop accepts one exact transferred shared-memory leaf, rebuilds the catalog in
 bounded local scratch, copies back only the validated response extent, releases
 the leaf on success or failure, replies only after release, and wipes request,
-token, scratch, and response buffers. Malformed envelopes fail before copy-back.
+token, scratch, and response buffers. Its concrete userspace adapter validates
+immutable reply bindings and emits the exact receive, shared-write, release, and
+send register frames. Malformed envelopes fail before copy-back.
 The read
 transport is now canonical: it binds exact endpoint and session generations,
 LBA and nonzero sector count, one caller-bounded writable view, fixed framing,
@@ -692,12 +694,12 @@ slot unavailable until explicit retry and never falls back. Storage passes
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
 the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
-each pass 54 AHCI-library tests. The storage service now passes 137 tests with a
+each pass 55 AHCI-library tests. The storage service now passes 137 tests with a
 hosted cleanup-gated FAT32 generation replacement that invalidates the old
 endpoint, health-checks the candidate through canonical probe bytes, and leaves
 the modeled kernel epoch unchanged. The AHCI library now has a canonical catalog
-enumeration endpoint and capability-cleanup-gated service loop; its raw userspace
-syscall adapter and installed supervisor execution remain **PLANNED**.
+enumeration endpoint, capability-cleanup-gated service loop, and raw userspace
+syscall adapter; installed supervisor execution remains **PLANNED**.
 
 The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
 `org.mrml.library.storage.fat32`. It advertises the exact generation-1 filesystem
