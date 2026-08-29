@@ -120,6 +120,16 @@ architecture. It implements no AHCI command, FAT32 on-disk algorithm, storage
 optimization, crash-recovery algorithm, or new loading technique. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded classic IDE IDENTIFY
+
+Patent review: **NOT_TRIGGERED**. This increment performs the conventional ATA
+device-select, settling-read, task-file clear, IDENTIFY command, status polling,
+and fixed 256-word transfer sequence. It uses ordinary bounded polling and
+fixed-field parsing for identity, capacity, block geometry, and feature facts.
+It adds no storage scheduling, caching, allocation, naming, encoding, or data
+layout algorithm. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — Capability-bound classic IDE port grants
 
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing exact

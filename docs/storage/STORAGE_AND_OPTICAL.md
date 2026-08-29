@@ -509,10 +509,17 @@ x86 port space. An exact read/write port capability can now install one
 generation-bound channel grant containing only its eight command ports, one
 control port, and optional channel-specific eight-byte bus-master window.
 Excess rights, substituted objects, invalid generations/ranges, overlaps, and
-backend rejection fail before publication. Device select, PIO commands, ATA
-identify, media generations, interrupts, bus-master DMA,
-reset, service IPC, runtime publication, and physical-device evidence remain
-**PLANNED**. Eight focused tests pass on Windows and Arch Linux.
+backend rejection fail before publication. PIO commands, media generations,
+interrupts, bus-master DMA, reset, service IPC, runtime publication, and
+physical-device evidence remain
+**PLANNED**. The IDENTIFY gate now selects master/slave devices, performs four
+alternate-status settling reads, clears the task-file address registers, issues
+ATA IDENTIFY, and bounds busy polling to one second. It reads exactly 256 words
+only after DRQ and parses printable fixed-capacity labels, LBA28/LBA48 capacity,
+512-byte through 64-KiB power-of-two logical blocks, transfer bounds, DMA, and
+flush facts into a generation-bound identity. Absent devices remain retryable;
+timeouts, device faults, missing DRQ, and partial data transfers quarantine the
+port grant. Eleven focused tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
 
