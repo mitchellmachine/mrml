@@ -930,14 +930,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if sender == receiver {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
-        if !self.scheduler.contains(sender) || !self.scheduler.contains(receiver) {
+        if !self.scheduler.contains(sender) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
         let sender_slot = self
             .domain_slot(sender)
-            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
-        let receiver_slot = self
-            .domain_slot(receiver)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         let send_plan = endpoint
             .prepare_send(
@@ -948,6 +945,12 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 endpoint_capability,
             )
             .map_err(TaskRuntimeError::Ipc)?;
+        if !self.scheduler.contains(receiver) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let receiver_slot = self
+            .domain_slot(receiver)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         self.validate_delegation_graph()?;
         if self
             .delegations
@@ -998,16 +1001,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         payload: &[u8],
         requested: &[(Capability, Rights)],
     ) -> Result<u64, TaskRuntimeError> {
-        let receiver_slot = self
-            .domains
-            .iter()
-            .position(|domain| {
-                domain
-                    .as_ref()
-                    .is_some_and(|domain| domain.task == receiver)
-            })
-            .ok_or(TaskRuntimeError::MissingTask)?;
-        if !self.scheduler.contains(sender) || !self.scheduler.contains(receiver) {
+        if !self.scheduler.contains(sender) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
         let sender_slot = self
@@ -1022,6 +1016,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 endpoint_capability,
             )
             .map_err(TaskRuntimeError::Ipc)?;
+        let receiver_slot = self.domain_slot(receiver)?;
+        if !self.scheduler.contains(receiver) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
         Self::validate_inbox_state(
             self.domains[receiver_slot]
                 .as_ref()
@@ -2490,6 +2488,50 @@ mod tests {
                 )
                 .unwrap(),
             3
+        );
+    }
+
+    #[test]
+    fn unauthorized_delivery_cannot_probe_missing_receiver_identity() {
+        let mut runtime = TaskRuntime::<1, 2>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x59);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let wrong_endpoint = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x5a), Rights::SIGNAL)
+            .unwrap();
+        let missing = TaskId::from_token((1u64 << 32) | 7);
+        let mut endpoint = Endpoint::new(endpoint_object);
+
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                missing,
+                &mut endpoint,
+                wrong_endpoint,
+                b"probe",
+                &[],
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                missing,
+                &mut endpoint,
+                endpoint_capability,
+                b"authorized",
+                &[],
+            ),
+            Err(TaskRuntimeError::MissingTask)
         );
     }
 

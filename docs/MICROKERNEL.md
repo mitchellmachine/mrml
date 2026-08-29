@@ -6902,6 +6902,10 @@ plan before delegation graph or table-capacity inspection. The live substituted-
 edge test now proves an unauthorized caller receives only authorization denial,
 while an authorized caller still detects integrity failure. The total remains
 623.
+Queued and direct send now authenticate the sender endpoint before receiver
+scheduler or domain lookup. An unauthorized missing-receiver probe returns only
+authorization denial, while the same request with valid endpoint authority
+returns `MissingTask`; the Linux kernel total rises to 624.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot
