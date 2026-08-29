@@ -98,6 +98,21 @@ impl<R: ZstdRawSyscall> ZstdUserspaceSyscalls<R> {
         };
         self.invoke(&mut frame)
     }
+
+    fn receive_counts(
+        frame: &ZstdSyscallFrame,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<(usize, usize), ZstdUserspaceSyscallError> {
+        let payload_length =
+            usize::try_from(frame.rdx).map_err(|_| ZstdUserspaceSyscallError::Range)?;
+        let capability_count =
+            usize::try_from(frame.r10).map_err(|_| ZstdUserspaceSyscallError::Range)?;
+        if payload_length > payload_capacity || capability_count > capability_capacity {
+            return Err(ZstdUserspaceSyscallError::Range);
+        }
+        Ok((payload_length, capability_count))
+    }
 }
 
 unsafe impl<R: ZstdRawSyscall> ZstdServiceSyscalls for ZstdUserspaceSyscalls<R> {
@@ -118,11 +133,11 @@ unsafe impl<R: ZstdRawSyscall> ZstdServiceSyscalls for ZstdUserspaceSyscalls<R> 
             r9: 0,
         };
         self.invoke(&mut frame)?;
+        let (payload_length, capability_count) =
+            Self::receive_counts(&frame, request.len(), capability_tokens.len())?;
         Ok(ReceivedZstdEnvelope {
-            payload_length: usize::try_from(frame.rdx)
-                .map_err(|_| ZstdUserspaceSyscallError::Range)?,
-            capability_count: usize::try_from(frame.r10)
-                .map_err(|_| ZstdUserspaceSyscallError::Range)?,
+            payload_length,
+            capability_count,
         })
     }
 
@@ -191,7 +206,7 @@ mod tests {
     use super::*;
     use crate::ZstdServiceLoop;
     use mrml_interface_zstd_v3::{
-        BorrowedReadView, BorrowedWriteView, decode_decompress_response, encode_decompress_request,
+        decode_decompress_response, encode_decompress_request, BorrowedReadView, BorrowedWriteView,
     };
 
     const TOKEN: u64 = (7_u64 << 32) | 3;
@@ -307,5 +322,31 @@ mod tests {
         );
         assert_eq!(&raw.memory[64..69], b"xxxxx");
         assert_eq!(decode_decompress_response(&raw.response), Ok(Ok(5)));
+    }
+
+    #[test]
+    fn rejects_kernel_counts_beyond_supplied_receive_buffers() {
+        let frame = ZstdSyscallFrame {
+            rax: 0,
+            rdi: 0,
+            rsi: 0,
+            rdx: DECOMPRESS_REQUEST_BYTES as u64 + 1,
+            r10: 1,
+            r8: 0,
+            r9: 0,
+        };
+        assert_eq!(
+            ZstdUserspaceSyscalls::<Raw>::receive_counts(&frame, DECOMPRESS_REQUEST_BYTES, 1),
+            Err(ZstdUserspaceSyscallError::Range)
+        );
+        let frame = ZstdSyscallFrame {
+            rdx: 0,
+            r10: 2,
+            ..frame
+        };
+        assert_eq!(
+            ZstdUserspaceSyscalls::<Raw>::receive_counts(&frame, DECOMPRESS_REQUEST_BYTES, 1),
+            Err(ZstdUserspaceSyscallError::Range)
+        );
     }
 }

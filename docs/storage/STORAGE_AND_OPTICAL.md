@@ -728,6 +728,15 @@ the leaf on success or failure, replies only after release, and wipes request,
 token, scratch, and response buffers. All three concrete userspace adapters validate
 immutable reply bindings and emits the exact receive, shared-write, release, and
 send register frames. Malformed envelopes fail before copy-back.
+The FAT32 adapter now also rejects kernel-reported receive lengths or capability
+counts beyond the exact supplied buffers before publishing a typed envelope;
+its focused Linux suite passes 34 tests. The sibling Zstd service adapter applies
+the same bound and passes 27 focused Linux tests.
+
+Patent review: **NOT_TRIGGERED**. This increment reuses the existing kernel
+buffered-IPC ABI and adds only boundary-result validation; it introduces no new
+filesystem, compression, storage, or device mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
 The read
 transport is now canonical: it binds exact endpoint and session generations,
 LBA and nonzero sector count, one caller-bounded writable view, fixed framing,

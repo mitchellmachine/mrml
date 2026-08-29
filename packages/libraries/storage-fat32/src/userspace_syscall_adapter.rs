@@ -69,6 +69,21 @@ impl<R: Fat32RawSyscall> Fat32UserspaceSyscalls<R> {
             Err(Fat32UserspaceSyscallError::Kernel(frame.rax))
         }
     }
+
+    fn receive_counts(
+        frame: &Fat32SyscallFrame,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<(usize, usize), Fat32UserspaceSyscallError> {
+        let payload_length =
+            usize::try_from(frame.rdx).map_err(|_| Fat32UserspaceSyscallError::Range)?;
+        let capability_count =
+            usize::try_from(frame.r10).map_err(|_| Fat32UserspaceSyscallError::Range)?;
+        if payload_length > payload_capacity || capability_count > capability_capacity {
+            return Err(Fat32UserspaceSyscallError::Range);
+        }
+        Ok((payload_length, capability_count))
+    }
 }
 
 unsafe impl<R: Fat32RawSyscall> Fat32ServiceSyscalls for Fat32UserspaceSyscalls<R> {
@@ -89,11 +104,11 @@ unsafe impl<R: Fat32RawSyscall> Fat32ServiceSyscalls for Fat32UserspaceSyscalls<
             r9: 0,
         };
         self.invoke(&mut frame)?;
+        let (payload_length, capability_count) =
+            Self::receive_counts(&frame, request.len(), capability_tokens.len())?;
         Ok(ReceivedFat32Envelope {
-            payload_length: usize::try_from(frame.rdx)
-                .map_err(|_| Fat32UserspaceSyscallError::Range)?,
-            capability_count: usize::try_from(frame.r10)
-                .map_err(|_| Fat32UserspaceSyscallError::Range)?,
+            payload_length,
+            capability_count,
         })
     }
 
@@ -236,5 +251,31 @@ mod tests {
             ]
         );
         assert_eq!(decode_probe_response(&raw.response), Ok(Ok(100)));
+    }
+
+    #[test]
+    fn rejects_kernel_counts_beyond_supplied_receive_buffers() {
+        let frame = Fat32SyscallFrame {
+            rax: 0,
+            rdi: 0,
+            rsi: 0,
+            rdx: PROBE_REQUEST_BYTES as u64 + 1,
+            r10: 1,
+            r8: 0,
+            r9: 0,
+        };
+        assert_eq!(
+            Fat32UserspaceSyscalls::<Raw>::receive_counts(&frame, PROBE_REQUEST_BYTES, 1),
+            Err(Fat32UserspaceSyscallError::Range)
+        );
+        let frame = Fat32SyscallFrame {
+            rdx: 0,
+            r10: 2,
+            ..frame
+        };
+        assert_eq!(
+            Fat32UserspaceSyscalls::<Raw>::receive_counts(&frame, PROBE_REQUEST_BYTES, 1),
+            Err(Fat32UserspaceSyscallError::Range)
+        );
     }
 }

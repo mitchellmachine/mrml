@@ -48,6 +48,13 @@ does not change the modeled kernel epoch. Lookup/open policy, checking,
 formatting, writes, installed supervisor launch, and hardware evidence remain
 next in dependency order.
 
+The FAT32 and Zstd isolated-service syscall adapters now apply the same receive-
+result bound as AHCI: kernel-reported payload and capability counts cannot
+exceed the exact buffers supplied to the trap. Focused Linux suites pass 34
+FAT32 and 27 Zstd tests, including hostile over-count rejection. This reuses the
+existing service ABI and authority model; it does not expand either provider's
+capabilities or maturity claim.
+
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block
 sessions, repeats principal and `READ` authorization, reads and validates block

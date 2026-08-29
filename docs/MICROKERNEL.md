@@ -70,7 +70,12 @@ task rejection, distinct VM/task projections, invalid-frame no-write, and
 scratch exhaustion. The provider now also has a bounded userspace receive/reply
 loop behind a narrow unsafe runtime trait; its tests prove exact envelope shape,
 range-limited buffer use, response ordering, received-leaf release, and erasure
-on success and failure. A hosted `TaskRuntime` adapter also completes the full
+on success and failure. The concrete Zstd and FAT32 syscall adapters now reject
+a successful kernel receive result when its reported payload length or
+capability count exceeds the exact buffers supplied to the trap, before a typed
+service envelope is returned. Focused Linux suites pass 27 Zstd and 34 FAT32
+tests. This is service-boundary hardening, not new provider authority or
+installed-service evidence. A hosted `TaskRuntime` adapter also completes the full
 authenticated request/
 reply path: only the launch-bound sender is accepted, reply authority is
 separate, the transferred leaf is revoked before reply visibility, and
