@@ -7027,6 +7027,19 @@ impl<
             }
             return self.emit_wide_integer_immediate(literal.value);
         }
+        if let ExprKind::Identifier(name) = expression.kind
+            && self.resolver.resolve_type(name)
+                == match expected_type {
+                    RuntimeExpressionType::Integer(integer_type) => integer_type,
+                    _ => None,
+                }
+        {
+            let value = self
+                .resolver
+                .resolve(name)
+                .ok_or(self.error(CodegenErrorKind::UnknownRuntimeName))?;
+            return self.emit_wide_integer_immediate(value);
+        }
         if let ExprKind::Unary {
             operator: crate::UnaryOperator::Negate,
             operand,
