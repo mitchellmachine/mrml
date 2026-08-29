@@ -1329,3 +1329,23 @@ Windows run. The detached Windows package passed all 801 compiler-core unit
 tests, its integration groups, and eight driver tests. Linux and comparative
 performance were not rerun for this stop-point commit, and full `libcore`
 support is not claimed.
+
+Source-object admission and post-decode fragment admission now have distinct
+bounds. At most 256 ordered objects or archive inputs may enter the driver, but
+one or more validated objects may expand to at most 4,096 code and standalone
+read-only fragments. Hosted vectors are allocated to the exact expanded count;
+archive paths, source identities, and ordinary source-input workspaces do not
+grow to the fragment maximum. The dependency-free link core uses a separate
+bounded layout/selection workspace and preserves atomic `(archive, member)`
+selection across more than 256 fragments. Synthetic coverage selects 257
+fragments of one member.
+
+The actual Linux driver release build passes. A Linux-hosted driver compiled a
+Windows-target object with the exact ORACLE-0003 gnullvm rustc and consumed that
+object plus the pinned gnullvm `libcore` archive. It advances past the former
+256-fragment rejection and fails closed at the next exact content gate,
+`COFF object 1 text fragment 0: unsupported COFF feature`. This is hosted
+cross-format parser evidence, not native Windows execution, general `.rlib`
+compatibility, or a production-linker claim. A complete compiler-core package
+attempt reached `rust-lld` but its generated input objects were absent at final
+link time, so no package-pass result is claimed for this increment.

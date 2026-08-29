@@ -72,6 +72,19 @@ eight driver tests. Linux and comparative performance were not rerun for this
 owner-requested stop point; full `libcore` support is not claimed. Patent
 review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
+Commits `259ff44c` and `c9fac606` separate the 256 source-input ceiling from a
+4,096 decoded-fragment ceiling. Exact-sized hosted vectors own per-fragment
+relocation and definition arenas, while archive paths, source identities, and
+ordinary input workspaces retain their prior bound. A focused unit test selects
+257 fragments of one archive member atomically. The actual Linux driver release
+build passes. A Linux-hosted MRML driver consuming the exact ORACLE-0003 gnullvm
+consumer object and `libcore` archive advances to the next fail-closed boundary,
+`COFF object 1 text fragment 0: unsupported COFF feature`; this is cross-format
+parser evidence, not native Windows execution or full `libcore` support. The
+complete compiler-core package attempt reached `rust-lld` but failed because
+its generated input object files were absent, so no package-pass claim is made.
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
 Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
 fallible external-symbol inventory over validated symbol and string tables.
 Structural metadata admits at most 4,096 sections, covering the pinned

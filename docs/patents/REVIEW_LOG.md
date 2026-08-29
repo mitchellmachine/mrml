@@ -10768,3 +10768,13 @@ bounded bit sets. It preserves the existing PE/COFF association and selection
 rules and introduces no object encoding, archive format, compression method,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-29 — Separate bounded COFF fragment capacity
+
+Patent review: **NOT_TRIGGERED**. This increment separates the existing
+source-object count from a larger fixed post-decode fragment count and uses
+ordinary exact-sized hosted allocation plus bounded selection/layout arrays.
+It preserves existing PE/COFF parsing, archive-member atomicity, COMDAT rules,
+relocation semantics, and output encoding. It introduces no object format,
+symbol-resolution algorithm, compression method, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent clearance.

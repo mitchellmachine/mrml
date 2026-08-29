@@ -23,11 +23,11 @@ try {
     if ($LASTEXITCODE -eq 0) {
         throw "pinned core probe unexpectedly linked; update this recovery probe"
     }
-    $expected = "expanded link fragment count exceeds 256"
+    $expected = "COFF object 1 text fragment 0: unsupported COFF feature"
     if ($diagnostic -notmatch [regex]::Escape($expected)) {
         throw "pinned core probe did not reach the expected content boundary: $diagnostic"
     }
-    Write-Output "pinned-core-coff-inventory archive=$($core.Name) result=EXPECTED_FRAGMENT_BOUNDARY"
+    Write-Output "pinned-core-coff-inventory archive=$($core.Name) result=EXPECTED_FRAGMENT_CONTENT_BOUNDARY"
 } finally {
     if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Recurse }
 }
