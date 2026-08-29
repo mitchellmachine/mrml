@@ -1110,7 +1110,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 frame.complete_authorization(authorized);
             }
             SyscallRequest::ReleaseCapability { capability } => {
-                let released = runtime.revoke_capability(current, capability).is_ok();
+                let released = match runtime.revoke_capability(current, capability) {
+                    Ok(()) => true,
+                    Err(mrml_kernel::TaskRuntimeError::Ipc(_)) => false,
+                    Err(_) => halt(),
+                };
                 frame.complete_authorization(released);
             }
             request @ (SyscallRequest::ReadSharedBuffer { .. }

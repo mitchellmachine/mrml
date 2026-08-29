@@ -6620,6 +6620,12 @@ without sending the response; ordinary request handling no longer relies on
 sender exit to reclaim delegated receiver authority. Both native profiles build
 and the Linux configuration suite passes 53 tests. This is compile/unit evidence,
 not a newly executed hosted or physical service loop.
+The kernel-image operation-12 dispatcher now distinguishes an ordinary invalid
+or stale task-local capability from runtime integrity failures. Only the former
+returns a detail-free denial; missing runtime state, delegation-graph
+inconsistency, or any other unexpected failure halts instead of continuing with
+uncertain revocation. Both ordinary and accounted component-service profiles
+cross-build and the Linux kernel suite passes 593 tests.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
@@ -6627,8 +6633,8 @@ reuses the existing active-user-copy ticket on an existing syscall path; it
 also adds ordinary result-capacity checks in existing userspace adapters and
 wire alignment/canonical-shape checks in the existing service-image adapter; it
 also reuses the existing capability-release syscall for routine leaf cleanup
-and introduces no new IPC algorithm or mechanism. See [the patent review
-log](patents/REVIEW_LOG.md).
+and makes its existing integrity failure path fail-stop; it introduces no new
+IPC algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

@@ -2071,6 +2071,9 @@ live composition remains pending.
    request-transferred leaf before response visibility; release failure
    suppresses the response. Both service-image profiles build and the Linux
    configuration suite passes 53 tests.
+   Operation 12 returns ordinary denial only for an invalid task-local
+   capability; unexpected runtime or delegation-integrity failure is fail-stop.
+   Ordinary and accounted service profiles build and 593 kernel tests pass.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and
