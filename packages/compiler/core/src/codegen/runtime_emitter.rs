@@ -7268,6 +7268,32 @@ impl<
             }
             return Ok(());
         }
+        if let ExprKind::WrappingArithmetic {
+            base,
+            argument,
+            operator:
+                operator @ (crate::BinaryOperator::Add | crate::BinaryOperator::Subtract),
+            euclidean: false,
+            euclidean_wrapping: false,
+            strict: false,
+            mixed_signedness: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            match operator {
+                crate::BinaryOperator::Add => {
+                    self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+                }
+                crate::BinaryOperator::Subtract => {
+                    self.emit(&[
+                        0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48, 0x89,
+                        0xca,
+                    ])?;
+                }
+                _ => unreachable!(),
+            }
+            return Ok(());
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,
