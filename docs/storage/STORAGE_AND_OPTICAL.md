@@ -489,9 +489,12 @@ while failing closed on malformed records. Atomic fixed-capacity composition now
 joins validated cluster extents and rejects any extent after an end marker. The
 read-only LFN path bounds and validates ordinals, reserved fields, short-name
 checksums, termination, UTF-16 structure, and cross-cluster sequences; decoded
-names remain non-authorizing labels. Twenty-one tests pass on Windows and Arch
-Linux; storage remains 135 on both. This does not implement mount, file I/O,
-check/repair, format, live IPC, or interoperability evidence.
+names remain non-authorizing labels. Bounded read-only file ranges require an
+exact validated chain, stage all requested bytes before publication, preserve
+caller output on failure, and wipe temporary buffers. Twenty-six tests pass on
+Windows and Arch Linux; storage remains 135 on both. This does not implement
+mount, lookup/open policy, check/repair, format, writes, live IPC, or
+interoperability evidence.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never

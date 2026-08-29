@@ -1,5 +1,13 @@
 # Patent review log
 
+# 2026-08-29 — Atomic bounded FAT32 file-range reads
+
+Patent review: **NOT_TRIGGERED**. This increment maps a caller-bounded byte range
+over an already validated conventional FAT cluster chain, stages the complete
+result before publishing it, and wipes temporary buffers. It adds no allocation,
+name lookup, caching, prefetch, compression, deduplication, formatting/repair, or
+write mechanism. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded read-only FAT32 LFN decoding
 
 Patent review: **TRIGGERED**. The parser validates and decodes the conventional

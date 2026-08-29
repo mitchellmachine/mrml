@@ -514,10 +514,10 @@ physical disk was exercised.
 The new `packages/libraries/storage-fat32` semantic package declares the isolated
 generation-1 filesystem provider independently of AHCI. Its bounded FAT32 boot-
 sector/geometry, FSInfo, FAT-chain, atomic directory-chain, and checksum-bound
-read-only LFN parsers pass twenty-one `mrml test` cases on Windows and Arch Linux;
-storage with both exact dynamic requirements passes 135 on each. No live provider,
-FAT file operation, formatting, recovery boot, interoperability oracle, or
-physical media was exercised.
+read-only LFN parsers and atomic file-range reader pass twenty-six `mrml test`
+cases on Windows and Arch Linux; storage with both exact dynamic requirements
+passes 135 on each. No live provider, lookup/open policy, formatting, recovery
+boot, interoperability oracle, or physical media was exercised.
 
 The shared UEFI-library move from `crates/mrml-uefi` to
 `packages/libraries/uefi` was checked on a Windows host without changing source

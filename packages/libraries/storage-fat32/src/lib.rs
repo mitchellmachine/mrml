@@ -64,10 +64,19 @@ pub enum Fat32Error {
     InvalidLongNameEncoding,
     InvalidDirectoryEntry,
     DirectoryAlreadyEnded,
+    InvalidFileEntry,
+    InvalidFileRange,
+    InvalidFileChain,
+    InvalidReadBuffers,
+    FileRead,
 }
 
 pub trait Fat32EntryReader {
     fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()>;
+}
+
+pub trait Fat32ClusterReader {
+    fn read_cluster(&mut self, cluster: u32, destination: &mut [u8]) -> Result<(), ()>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,6 +326,109 @@ pub fn read_fat32_cluster_chain<const N: usize, R: Fat32EntryReader>(
             _ => return Err(Fat32Error::ReservedClusterInChain),
         }
     }
+}
+
+pub fn read_fat32_file_range<const N: usize, R: Fat32ClusterReader>(
+    geometry: Fat32Geometry,
+    entry: Fat32ShortDirectoryEntry,
+    chain: Option<&Fat32ClusterChain<N>>,
+    offset: u32,
+    output: &mut [u8],
+    staging: &mut [u8],
+    cluster_scratch: &mut [u8],
+    reader: &mut R,
+) -> Result<(), Fat32Error> {
+    staging.fill(0);
+    cluster_scratch.fill(0);
+    let cluster_bytes = usize::from(geometry.bytes_per_sector)
+        .checked_mul(usize::from(geometry.sectors_per_cluster))
+        .ok_or(Fat32Error::InvalidReadBuffers)?;
+    if entry.is_directory()
+        || entry.is_volume_label()
+        || cluster_bytes == 0
+        || staging.len() != output.len()
+        || cluster_scratch.len() != cluster_bytes
+    {
+        return Err(if entry.is_directory() || entry.is_volume_label() {
+            Fat32Error::InvalidFileEntry
+        } else {
+            Fat32Error::InvalidReadBuffers
+        });
+    }
+
+    let end = u64::from(offset)
+        .checked_add(u64::try_from(output.len()).map_err(|_| Fat32Error::InvalidFileRange)?)
+        .ok_or(Fat32Error::InvalidFileRange)?;
+    if end > u64::from(entry.file_size) {
+        return Err(Fat32Error::InvalidFileRange);
+    }
+    if entry.file_size == 0 {
+        if entry.first_cluster != 0 || chain.is_some() || offset != 0 {
+            return Err(Fat32Error::InvalidFileEntry);
+        }
+        return Ok(());
+    }
+
+    let chain = chain.ok_or(Fat32Error::InvalidFileChain)?;
+    let expected_clusters =
+        (u64::from(entry.file_size) + cluster_bytes as u64 - 1) / cluster_bytes as u64;
+    if chain.length == 0
+        || entry.first_cluster != chain.clusters[0]
+        || u64::try_from(chain.length).map_err(|_| Fat32Error::InvalidFileChain)?
+            != expected_clusters
+    {
+        return Err(Fat32Error::InvalidFileChain);
+    }
+    if output.is_empty() {
+        return Ok(());
+    }
+
+    let result = read_fat32_file_range_into_staging(
+        chain,
+        offset as usize,
+        staging,
+        cluster_scratch,
+        reader,
+    );
+    if let Err(error) = result {
+        staging.fill(0);
+        cluster_scratch.fill(0);
+        return Err(error);
+    }
+    output.copy_from_slice(staging);
+    staging.fill(0);
+    cluster_scratch.fill(0);
+    Ok(())
+}
+
+fn read_fat32_file_range_into_staging<const N: usize, R: Fat32ClusterReader>(
+    chain: &Fat32ClusterChain<N>,
+    offset: usize,
+    staging: &mut [u8],
+    cluster_scratch: &mut [u8],
+    reader: &mut R,
+) -> Result<(), Fat32Error> {
+    let cluster_bytes = cluster_scratch.len();
+    let mut cluster_index = offset / cluster_bytes;
+    let mut within_cluster = offset % cluster_bytes;
+    let mut copied = 0;
+    while copied < staging.len() {
+        let cluster = *chain
+            .clusters
+            .get(cluster_index)
+            .ok_or(Fat32Error::InvalidFileChain)?;
+        reader
+            .read_cluster(cluster, cluster_scratch)
+            .map_err(|()| Fat32Error::FileRead)?;
+        let available = cluster_bytes - within_cluster;
+        let take = core::cmp::min(available, staging.len() - copied);
+        staging[copied..copied + take]
+            .copy_from_slice(&cluster_scratch[within_cluster..within_cluster + take]);
+        copied += take;
+        cluster_index += 1;
+        within_cluster = 0;
+    }
+    Ok(())
 }
 
 pub fn parse_fat32_short_directory<const N: usize>(
@@ -877,6 +989,36 @@ mod tests {
         }
     }
 
+    struct ClusterReader {
+        fail_cluster: Option<u32>,
+        reads: [u8; 8],
+    }
+
+    impl Fat32ClusterReader for ClusterReader {
+        fn read_cluster(&mut self, cluster: u32, destination: &mut [u8]) -> Result<(), ()> {
+            let index = usize::try_from(cluster).map_err(|_| ())?;
+            *self.reads.get_mut(index).ok_or(())? += 1;
+            if self.fail_cluster == Some(cluster) {
+                destination.fill(0xcc);
+                return Err(());
+            }
+            for (offset, byte) in destination.iter_mut().enumerate() {
+                *byte = cluster.wrapping_mul(17).wrapping_add(offset as u32) as u8;
+            }
+            Ok(())
+        }
+    }
+
+    fn file_entry(first_cluster: u32, file_size: u32) -> Fat32ShortDirectoryEntry {
+        Fat32ShortDirectoryEntry {
+            short_name: *b"PAYLOAD BIN",
+            long_name: None,
+            attributes: 0x20,
+            first_cluster,
+            file_size,
+        }
+    }
+
     #[test]
     fn reads_bounded_chain_only_when_mirrored_fats_agree() {
         let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
@@ -1178,5 +1320,186 @@ mod tests {
             parse_fat32_short_directory::<1>(geometry, &bytes),
             Err(Fat32Error::InvalidLongNameSequence)
         );
+    }
+
+    #[test]
+    fn reads_atomic_file_range_across_validated_clusters() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut fat = chain_reader();
+        let chain = read_fat32_cluster_chain::<4, _>(geometry, 2, &mut fat).unwrap();
+        let mut reader = ClusterReader {
+            fail_cluster: None,
+            reads: [0; 8],
+        };
+        let mut output = [0xaa; 20];
+        let mut staging = [0xbb; 20];
+        let mut scratch = [0xdd; 4096];
+        read_fat32_file_range(
+            geometry,
+            file_entry(2, 9000),
+            Some(&chain),
+            4090,
+            &mut output,
+            &mut staging,
+            &mut scratch,
+            &mut reader,
+        )
+        .unwrap();
+        for (index, &byte) in output.iter().enumerate() {
+            let (cluster, offset) = if index < 6 {
+                (2_u32, 4090 + index)
+            } else {
+                (3_u32, index - 6)
+            };
+            assert_eq!(
+                byte,
+                cluster.wrapping_mul(17).wrapping_add(offset as u32) as u8
+            );
+        }
+        assert_eq!(reader.reads, [0, 0, 1, 1, 0, 0, 0, 0]);
+        assert_eq!(staging, [0; 20]);
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn failed_cluster_read_preserves_output_and_clears_temporaries() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut fat = chain_reader();
+        let chain = read_fat32_cluster_chain::<4, _>(geometry, 2, &mut fat).unwrap();
+        let mut reader = ClusterReader {
+            fail_cluster: Some(3),
+            reads: [0; 8],
+        };
+        let mut output = [0xaa; 20];
+        let mut staging = [0xbb; 20];
+        let mut scratch = [0xdd; 4096];
+        assert_eq!(
+            read_fat32_file_range(
+                geometry,
+                file_entry(2, 9000),
+                Some(&chain),
+                4090,
+                &mut output,
+                &mut staging,
+                &mut scratch,
+                &mut reader,
+            ),
+            Err(Fat32Error::FileRead)
+        );
+        assert_eq!(output, [0xaa; 20]);
+        assert_eq!(staging, [0; 20]);
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn rejects_file_range_entry_and_buffer_mismatch_before_io() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut fat = chain_reader();
+        let chain = read_fat32_cluster_chain::<4, _>(geometry, 2, &mut fat).unwrap();
+        let mut reader = ClusterReader {
+            fail_cluster: None,
+            reads: [0; 8],
+        };
+        let mut output = [0xaa; 2];
+        let mut staging = [0xbb; 2];
+        let mut scratch = [0xdd; 4096];
+        assert_eq!(
+            read_fat32_file_range(
+                geometry,
+                file_entry(2, 9000),
+                Some(&chain),
+                8999,
+                &mut output,
+                &mut staging,
+                &mut scratch,
+                &mut reader,
+            ),
+            Err(Fat32Error::InvalidFileRange)
+        );
+        let mut directory = file_entry(2, 9000);
+        directory.attributes = 0x10;
+        assert_eq!(
+            read_fat32_file_range(
+                geometry,
+                directory,
+                Some(&chain),
+                0,
+                &mut output,
+                &mut staging,
+                &mut scratch,
+                &mut reader,
+            ),
+            Err(Fat32Error::InvalidFileEntry)
+        );
+        let mut short_scratch = [0; 512];
+        assert_eq!(
+            read_fat32_file_range(
+                geometry,
+                file_entry(2, 9000),
+                Some(&chain),
+                0,
+                &mut output,
+                &mut staging,
+                &mut short_scratch,
+                &mut reader,
+            ),
+            Err(Fat32Error::InvalidReadBuffers)
+        );
+        assert_eq!(reader.reads, [0; 8]);
+    }
+
+    #[test]
+    fn accepts_only_canonical_empty_file_without_a_chain() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut reader = ClusterReader {
+            fail_cluster: None,
+            reads: [0; 8],
+        };
+        let mut output = [];
+        let mut staging = [];
+        let mut scratch = [0xdd; 4096];
+        assert_eq!(
+            read_fat32_file_range::<1, _>(
+                geometry,
+                file_entry(0, 0),
+                None,
+                0,
+                &mut output,
+                &mut staging,
+                &mut scratch,
+                &mut reader,
+            ),
+            Ok(())
+        );
+        assert_eq!(scratch, [0; 4096]);
+        assert_eq!(reader.reads, [0; 8]);
+    }
+
+    #[test]
+    fn rejects_file_chain_with_trailing_allocated_clusters() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut fat = chain_reader();
+        let chain = read_fat32_cluster_chain::<4, _>(geometry, 2, &mut fat).unwrap();
+        let mut reader = ClusterReader {
+            fail_cluster: None,
+            reads: [0; 8],
+        };
+        let mut output = [0; 1];
+        let mut staging = [0; 1];
+        let mut scratch = [0; 4096];
+        assert_eq!(
+            read_fat32_file_range(
+                geometry,
+                file_entry(2, 4096),
+                Some(&chain),
+                0,
+                &mut output,
+                &mut staging,
+                &mut scratch,
+                &mut reader,
+            ),
+            Err(Fat32Error::InvalidFileChain)
+        );
+        assert_eq!(reader.reads, [0; 8]);
     }
 }

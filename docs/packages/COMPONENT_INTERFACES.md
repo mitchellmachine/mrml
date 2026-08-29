@@ -423,10 +423,10 @@ not dynamic execution.
 
 `org.mrml.library.storage.fat32` now provides the matching isolated filesystem
 interface generation. Its bounded read-only geometry, FSInfo, FAT-chain, atomic
-directory-chain, and checksum-bound LFN parsers pass twenty-one tests on both
-hosts, and storage requires this binding separately from AHCI. Names remain
-non-authorizing labels. This is package/parser evidence, not a live endpoint,
-mount, or hot replacement.
+directory-chain, checksum-bound LFN, and atomic file-range readers pass twenty-six
+tests on both hosts, and storage requires this binding separately from AHCI.
+Names remain non-authorizing labels. This is package/parser evidence, not a live
+endpoint, mount, or hot replacement.
 
 ```text
 download -> authenticate -> validate ABI/evidence/policy
