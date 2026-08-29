@@ -6651,6 +6651,11 @@ because returning through the forged frame is unsafe; scoped service fault
 retirement for that case remains pending. A focused test covers the scrubbed
 completion, the Linux kernel suite passes 594 tests, and ordinary plus
 restart-request UEFI service profiles cross-build.
+The custom boot-recovery operation-13 decoder now preserves that distinction:
+`InvalidReturn` is separate from malformed operation arguments. Invalid return
+state remains fail-stop, while a malformed capability, output range, or reserved
+field returns the same scrubbed generic error. The Linux kernel suite remains
+594 tests; ordinary and block-service UEFI profiles cross-build.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all

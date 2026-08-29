@@ -920,8 +920,14 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             None => halt(),
         };
         if frame.rax == BOOT_RECOVERY_SYSCALL_OPERATION {
-            let request =
-                BootRecoverySyscallRequest::decode_frame(frame).unwrap_or_else(|_| halt());
+            let request = match BootRecoverySyscallRequest::decode_frame(frame) {
+                Ok(request) => request,
+                Err(mrml_kernel::BootRecoverySyscallError::InvalidReturn) => halt(),
+                Err(_) => {
+                    frame.complete_error();
+                    return;
+                }
+            };
             let runtime = (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
                 .as_mut()
                 .unwrap_or_else(|| halt());

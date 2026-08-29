@@ -160,6 +160,8 @@ access. The security/acceptance gate is canonical in
 - Malformed service syscall arguments return a generic error with scrubbed
   result registers. Invalid privilege/return-frame state remains fail-stop
   pending safe task-scoped retirement rather than an unsafe `iret`.
+- Boot-recovery operation 13 preserves the same distinction through an explicit
+  `InvalidReturn` decoder result instead of conflating it with bad arguments.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

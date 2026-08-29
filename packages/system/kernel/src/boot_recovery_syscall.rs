@@ -15,7 +15,7 @@ impl BootRecoverySyscallRequest {
     pub fn decode_frame(frame: &UserCallFrame) -> Result<Self, BootRecoverySyscallError<(), ()>> {
         frame
             .validate_return()
-            .map_err(|_| BootRecoverySyscallError::Malformed)?;
+            .map_err(|_| BootRecoverySyscallError::InvalidReturn)?;
         Self::decode(
             frame.rax,
             frame.rdi,
@@ -55,6 +55,7 @@ impl BootRecoverySyscallRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BootRecoverySyscallError<U, D> {
     Unsupported,
+    InvalidReturn,
     Malformed,
     User(U),
     Delivery(D),
@@ -246,7 +247,7 @@ mod tests {
         frame.cs = 0;
         assert_eq!(
             BootRecoverySyscallRequest::decode_frame(&frame),
-            Err(BootRecoverySyscallError::Malformed)
+            Err(BootRecoverySyscallError::InvalidReturn)
         );
     }
 

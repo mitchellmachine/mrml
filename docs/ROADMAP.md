@@ -2090,6 +2090,10 @@ live composition remains pending.
    instead of halting the hosted image. Forged return-frame state remains
    fail-stop pending scoped service retirement. Ordinary and restart-request
    profiles build and 594 Linux kernel tests pass.
+   Operation 13 now distinguishes invalid return state from malformed request
+   arguments. Only malformed capability/address/reserved fields receive the
+   scrubbed generic error; unsafe return state remains fail-stop. Ordinary and
+   block-service profiles build under the 594-test kernel gate.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

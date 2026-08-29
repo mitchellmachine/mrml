@@ -474,6 +474,11 @@ explicitly and downgrade the status rather than guessing.
   fixed scratch on every return. Pre-delivery validation failure remains
   retryable; copy uncertainty after revocation is terminal. This is focused unit
   evidence, not live booted service, UEFI, TPM hardware, or durability evidence.
+  Its frame decoder now distinguishes unsafe return state from malformed
+  capability/address/reserved arguments. The former remains fail-stop; the
+  latter returns one generic scrubbed syscall error without consuming the
+  delivery. Linux passes 594 kernel tests and ordinary plus block-service UEFI
+  profiles cross-build.
   The kernel-image service dispatcher now recognizes operation 13 before the
   generic decoder, revalidates the complete user return frame and active CR3,
   and initializes the exact metadata-only capability/delivery for the initial
