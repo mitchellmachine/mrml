@@ -1190,7 +1190,8 @@ fn selected_payload_bound(
     }
     for data in writable_data {
         bytes = bytes
-            .checked_add(data.bytes.len())
+            .checked_add(data.initialized.len())
+            .and_then(|bytes| bytes.checked_add(data.zeroed_size))
             .and_then(|bytes| bytes.checked_add(16))
             .ok_or_else(|| anyhow!("selected writable payload size overflow"))?;
     }

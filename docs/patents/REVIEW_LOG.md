@@ -9877,3 +9877,12 @@ alignment. It adds bounded validation and checked layout around a longstanding
 public object-format behavior and introduces no new symbol-resolution
 algorithm, object encoding, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Stateful multi-CGU COFF data and zero fill
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional COFF
+object-local symbol resolution and AMD64 `REL32` arithmetic to initialized and
+zero-initialized writable sections, then records their standard PE file and
+virtual extents. It introduces no new object format, relocation algorithm,
+compression, cryptographic mechanism, or loader behavior. This technical
+screen is not legal advice or patent clearance.

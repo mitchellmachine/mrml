@@ -965,6 +965,20 @@ five warmups, MRML measured 5.269 ms median and 5.562 ms mean versus rust-lld at
 archive and public-routing evidence with a strong narrow process-level speed
 advantage, not general `.rlib` compatibility or broad linker superiority.
 
+The companion stateful `.rlib` probe distributes eight initialized statics and
+eight zero-initialized 128-byte arrays across eight gnullvm codegen units. The
+bounded COFF reader now admits exact object-local `.data$` and `.bss$`
+definitions, retains their local symbol identities through archive selection,
+and resolves AMD64 `REL32` references only after the final PE writable layout is
+known. The serializer separates initialized file bytes from the uninitialized
+virtual extent and reports 1,024 bytes in `SizeOfUninitializedData`; the probe
+also requires `.data` virtual size to exceed its raw size, proving that the
+executed image depends on loader-backed zero fill rather than alignment padding.
+MRML and pinned rust-lld consume identical entry/archive inputs and both return
+42; MRML emits 2,048 bytes and rust-lld emits 1,536 bytes. External writable
+definitions, writable COMDAT selection, TLS, PE base relocations, and general
+COFF data-section compatibility remain unsupported.
+
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes
 the indexed but unreferenced object before the MRML link; MRML reaches the leaf
