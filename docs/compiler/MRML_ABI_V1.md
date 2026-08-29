@@ -205,6 +205,9 @@ overflow traps for checked `next_power_of_two` and wraps to zero for the
 wrapping form.
 Wide signed `signum` returns the canonical two-word representations of negative
 one, zero, or positive one.
+Wide signed absolute values conditionally negate both words and trap on
+`i128::MIN` under checked or strict semantics; `unsigned_abs` preserves that
+minimum magnitude in the corresponding `u128` result.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.

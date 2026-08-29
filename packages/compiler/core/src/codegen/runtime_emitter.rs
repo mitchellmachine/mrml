@@ -7657,6 +7657,72 @@ impl<
         if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
             && matches!(
                 transform,
+                crate::expression::IntegerBitTransform::Absolute
+                    | crate::expression::IntegerBitTransform::StrictAbsolute
+            )
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let nonnegative = self.emit_forward_branch(0x89)?;
+            if transform == crate::expression::IntegerBitTransform::StrictAbsolute
+                || self.overflow_checks
+            {
+                self.emit(&[0x48, 0xb9])?;
+                self.emit(&(1u64 << 63).to_le_bytes())?;
+                self.emit(&[0x48, 0x39, 0xca])?;
+                let ordinary = self.emit_forward_branch(0x85)?;
+                self.emit(&[0x48, 0x85, 0xc0])?;
+                self.emit_trap_branch(0x84)?;
+                self.patch_forward_branch(ordinary)?;
+            }
+            self.emit(&[
+                0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda,
+            ])?;
+            self.patch_forward_branch(nonnegative)?;
+            return Ok(());
+        }
+        if let ExprKind::IntegerUnsignedAbsolute { base } = expression.kind {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+                || expected_type
+                    != RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, base_type)?;
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let nonnegative = self.emit_forward_branch(0x89)?;
+            self.emit(&[
+                0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda,
+            ])?;
+            self.patch_forward_branch(nonnegative)?;
+            return Ok(());
+        }
+        if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
+            && matches!(
+                transform,
                 crate::expression::IntegerBitTransform::SwapBytes
                     | crate::expression::IntegerBitTransform::ToBigEndian
                     | crate::expression::IntegerBitTransform::ToLittleEndian
