@@ -4045,3 +4045,8 @@ Recovered service registration now revalidates its exact restart-policy read
 authority and recomputes the registration plan at commit. A prepared recovery
 result cannot preserve a revoked or changed policy decision into the live
 supervisor.
+
+Prepared service restart now revalidates exact live `CONTROL` at commit for
+both external management spaces and task-local syscall requesters. Revocation
+between prepare and commit creates no replacement task and leaves the service
+stopped for an explicitly reauthorized retry.

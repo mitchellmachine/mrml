@@ -183,6 +183,7 @@ impl ServiceRegistrationPlan {
 pub struct ServiceRestartPlan {
     service: ServiceId,
     object: ObjectId,
+    control: Capability,
     policy_generation: u32,
     priority: Priority,
     context: UserContext,
@@ -798,7 +799,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
                 error,
             })?;
         let replacement = self
-            .commit_restart_with_task(plan, runtime)
+            .commit_restart_with_task(plan, management, runtime)
             .map_err(|error| ServiceRecoveryError::Restart {
                 service: fault.service,
                 error,
@@ -844,7 +845,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     ) -> Result<ServiceId, ServiceError> {
         let plan =
             self.prepare_restart_at(service, management, control, priority, fresh_context, now)?;
-        self.commit_restart(plan, runtime)
+        self.commit_restart(plan, management, runtime)
     }
 
     /// Authorizes and snapshots a restart without mutating lifecycle state.
@@ -886,6 +887,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         Ok(ServiceRestartPlan {
             service,
             object: entry.object,
+            control,
             policy_generation: entry.policy_generation,
             priority,
             context: fresh_context,
@@ -896,16 +898,55 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     /// Consumes an authorized plan only after trusted reprovisioning. Reuse,
     /// generation drift, new cleanup state, backoff drift, and policy changes
     /// all fail before a task is created or supervisor state is changed.
-    pub fn commit_restart<const TASKS: usize, const CAPS: usize>(
+    pub fn commit_restart<const TASKS: usize, const CAPS: usize, const MANAGEMENT_CAPS: usize>(
         &mut self,
         plan: ServiceRestartPlan,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
         runtime: &mut TaskRuntime<TASKS, CAPS>,
     ) -> Result<ServiceId, ServiceError> {
-        self.commit_restart_with_task(plan, runtime)
+        self.commit_restart_with_task(plan, management, runtime)
             .map(ServiceRestartCommit::service)
     }
 
-    pub fn commit_restart_with_task<const TASKS: usize, const CAPS: usize>(
+    pub fn commit_restart_with_task<
+        const TASKS: usize,
+        const CAPS: usize,
+        const MANAGEMENT_CAPS: usize,
+    >(
+        &mut self,
+        plan: ServiceRestartPlan,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<ServiceRestartCommit, ServiceError> {
+        let authorized = management
+            .authorize_exact(plan.control, crate::Rights::CONTROL)
+            .map_err(ServiceError::Unauthorized)?;
+        if authorized != plan.object {
+            return Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        self.commit_restart_authorized(plan, runtime)
+    }
+
+    pub fn commit_restart_with_task_for_requester<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        plan: ServiceRestartPlan,
+        requester: TaskId,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<ServiceRestartCommit, ServiceError> {
+        runtime
+            .authorize_capability_exact(
+                requester,
+                plan.control,
+                crate::Rights::CONTROL,
+                plan.object,
+            )
+            .map_err(ServiceError::Runtime)?;
+        self.commit_restart_authorized(plan, runtime)
+    }
+
+    fn commit_restart_authorized<const TASKS: usize, const CAPS: usize>(
         &mut self,
         plan: ServiceRestartPlan,
         runtime: &mut TaskRuntime<TASKS, CAPS>,
@@ -1525,8 +1566,27 @@ mod tests {
         assert_eq!(plan.service(), service);
         assert_eq!(plan.object(), object);
 
+        management.revoke(control).unwrap();
+        assert_eq!(
+            supervisor.commit_restart(plan, &management, &mut runtime),
+            Err(ServiceError::Unauthorized(CapabilityError::Invalid))
+        );
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Exited));
+        assert!(runtime.current().is_none());
+        let replacement_control = management.insert(object, Rights::CONTROL).unwrap();
+        let plan = supervisor
+            .prepare_restart_at(
+                service,
+                &management,
+                replacement_control,
+                Priority::RESPONSIVE,
+                fresh,
+                0,
+            )
+            .unwrap();
+
         let replacement = supervisor
-            .commit_restart_with_task(plan, &mut runtime)
+            .commit_restart_with_task(plan, &management, &mut runtime)
             .unwrap();
         assert_ne!(replacement.service(), service);
         assert_eq!(runtime.context(replacement.task()), Ok(&fresh));
@@ -1538,7 +1598,7 @@ mod tests {
             supervisor.prepare_restart_at(
                 service,
                 &management,
-                control,
+                replacement_control,
                 Priority::RESPONSIVE,
                 fresh,
                 0,
@@ -1583,12 +1643,55 @@ mod tests {
             )
             .unwrap();
         plan.object = ObjectId(0x83);
+        management.revoke(control).unwrap();
+        plan.control = management.insert(ObjectId(0x83), Rights::CONTROL).unwrap();
         assert_eq!(
-            supervisor.commit_restart(plan, &mut runtime),
+            supervisor.commit_restart(plan, &management, &mut runtime),
             Err(ServiceError::InvalidObject)
         );
         assert_eq!(supervisor.state(service), Ok(ServiceState::Exited));
         assert!(runtime.current().is_none());
+    }
+
+    #[test]
+    fn task_local_restart_commit_revalidates_live_requester_control() {
+        let object = ObjectId(0x8a);
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let service_task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let requester = runtime
+            .create(Priority::BACKGROUND, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let control = runtime
+            .capabilities_mut(requester)
+            .unwrap()
+            .insert(object, Rights::CONTROL)
+            .unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, service_task).unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { .. }));
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
+        let plan = supervisor
+            .prepare_restart_at(
+                service,
+                runtime.capabilities(requester).unwrap(),
+                control,
+                Priority::NORMAL,
+                context(0x40_0000, 0x60_0000),
+                0,
+            )
+            .unwrap();
+        runtime.revoke_capability(requester, control).unwrap();
+        assert_eq!(
+            supervisor.commit_restart_with_task_for_requester(plan, requester, &mut runtime),
+            Err(ServiceError::Runtime(TaskRuntimeError::Ipc(
+                crate::IpcError::Unauthorized
+            )))
+        );
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Exited));
+        assert_eq!(supervisor.task(service), Ok(None));
     }
 
     #[test]
@@ -1647,7 +1750,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            supervisor.commit_restart(stale_plan, &mut runtime),
+            supervisor.commit_restart(stale_plan, &management, &mut runtime),
             Err(ServiceError::InvalidRestartPolicy)
         );
         assert_eq!(
@@ -1732,7 +1835,11 @@ mod tests {
             ),
             Err(ServiceError::GenerationExhausted)
         );
-        assert!(supervisor.commit_restart(plan, &mut runtime).is_ok());
+        assert!(
+            supervisor
+                .commit_restart(plan, &management, &mut runtime)
+                .is_ok()
+        );
     }
 
     #[test]

@@ -1020,3 +1020,8 @@ Prepared recovered-service state does not cache restart-policy authority.
 Publication reloads the policy through the retained exact read handle and
 requires the freshly computed registration plan to equal the validated plan
 before mutating the supervisor.
+
+Service restart plans retain identity and reprovisioning inputs but not cached
+authority. Commit rechecks the retained exact control handle in the live
+management domain—or the requester's live task capability space—before task
+creation. Revocation therefore covers prepared restart decisions.

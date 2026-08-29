@@ -7096,6 +7096,17 @@ cached registration plan; commit reloads the live policy, recomputes the plan,
 and requires exact equality before supervisor mutation. The focused recovery
 test observes this additional commit-time authorization.
 
+Prepared service restart plans now retain the exact `CONTROL` handle and cannot
+cache its authority across reprovisioning. External management-space commits
+reauthorize the handle immediately before task creation; the syscall path uses
+the requester's live task-local capability space through a dedicated runtime
+commit entry. Revoked handles leave the stopped service and scheduler unchanged.
+Kernel passes 632 focused tests, including external and task-local revocation.
+
+Patent review: `NOT_TRIGGERED` — this is conventional commit-time capability
+revalidation and bounded lifecycle sequencing. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
