@@ -2267,6 +2267,9 @@ live composition remains pending.
    raises the kernel total to 626 without consuming endpoint sequence.
    Queued delivery applies that source gate before inbox inspection as well;
    full-inbox stale-source coverage passes without changing the total.
+   Receiver capability capacity now preflights before delegation graph/table or
+   queued inbox inspection and is reused by batch derivation. Full-inbox/full-
+   capability-space coverage passes; the total remains 626.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

@@ -224,6 +224,25 @@ impl<const N: usize> CapabilitySpace<N> {
         Ok(())
     }
 
+    pub(crate) fn validate_derivation_capacity(
+        &self,
+        requested: usize,
+    ) -> Result<(), CapabilityError> {
+        let available = self
+            .entries
+            .iter()
+            .filter(|entry| !entry.occupied && !entry.retired)
+            .count();
+        if available < requested {
+            return Err(if self.entries.iter().any(|entry| entry.retired) {
+                CapabilityError::GenerationExhausted
+            } else {
+                CapabilityError::SpaceFull
+            });
+        }
+        Ok(())
+    }
+
     /// Validates a complete bounded derivation set and destination capacity
     /// before publishing any destination authority.
     pub(crate) fn derive_batch<const M: usize>(
@@ -236,18 +255,7 @@ impl<const N: usize> CapabilitySpace<N> {
             return Err(CapabilityError::Invalid);
         }
         self.validate_derivations(requested)?;
-        let available = destination
-            .entries
-            .iter()
-            .filter(|entry| !entry.occupied && !entry.retired)
-            .count();
-        if available < requested.len() {
-            return Err(if destination.entries.iter().any(|entry| entry.retired) {
-                CapabilityError::GenerationExhausted
-            } else {
-                CapabilityError::SpaceFull
-            });
-        }
+        destination.validate_derivation_capacity(requested.len())?;
         for (output, (capability, rights)) in output.iter_mut().zip(requested.iter().copied()) {
             let source = self
                 .entry(capability)

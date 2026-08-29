@@ -290,6 +290,8 @@ access. The security/acceptance gate is canonical in
 - Requested source delegations are validated as a complete non-mutating batch
   before receiver identity, inbox capacity, or internal delegation state is
   inspected.
+- Receiver capability capacity is preflighted without mutation before queued
+  inbox or delegation graph/table state is inspected.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

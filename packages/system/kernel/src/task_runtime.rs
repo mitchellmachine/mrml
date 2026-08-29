@@ -987,6 +987,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let receiver_slot = self
             .domain_slot(receiver)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        self.domains[receiver_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .capabilities
+            .validate_derivation_capacity(requested.len())
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
         self.validate_delegation_graph()?;
         if self
             .delegations
@@ -1067,6 +1074,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        self.domains[receiver_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .capabilities
+            .validate_derivation_capacity(requested.len())
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
         Self::validate_inbox_state(
             self.domains[receiver_slot]
                 .as_ref()
@@ -2554,6 +2568,31 @@ mod tests {
                     endpoint_capability,
                     b"stale",
                     &[(stale_delegation, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        let delegated = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x60), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        for object in 0x61..0x64 {
+            runtime
+                .capabilities_mut(receiver)
+                .unwrap()
+                .insert(ObjectId(object), Rights::READ)
+                .unwrap();
+        }
+        assert_eq!(
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"no-capacity",
+                    &[(delegated, Rights::READ)],
                 )
                 .err(),
             Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))

@@ -6940,8 +6940,15 @@ Queued delivery performs the same source preflight before inbox topology or
 capacity. The full-inbox adversarial test now includes a stale delegated handle
 and proves it receives only authorization denial without sequence consumption;
 the total remains 626.
+Receiver capability capacity now has one shared non-mutating preflight reused by
+batch derivation. Direct send checks it before delegation graph/table state, and
+queued delivery checks it before inbox state. The full-inbox test fills the
+receiver capability space and proves a capability-bearing send returns only the
+ordinary authorization denial without consuming endpoint or inbox state; the
+total remains 626.
 Patent review: `NOT_TRIGGERED` — this factors and reorders conventional
-capability validation in the existing bounded transfer path.
+capability validation and capacity checks in the existing bounded transfer
+path.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot
