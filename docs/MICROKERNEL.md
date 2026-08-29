@@ -1563,19 +1563,20 @@ replacement mechanics but not cross-address-space service isolation.
 
 The runtime now owns cross-task IPC routing as well. `send_ipc` requires two
 distinct live generational task identities, derives only explicitly requested
-rights from the sender domain into the receiver domain, then authorizes the
-sender's exact SIGNAL capability against the endpoint object. If authorization
-fails after derivation, every tentative receiver capability is revoked before
-the error becomes visible; failure to perform that rollback is an integrity
-failure. Same-task routing is rejected so callers cannot use this interface to
-bypass a domain boundary. Windows and Linux pass 116 kernel tests, including
-attenuation and failed-authorization rollback. Live syscall entry and blocking
+rights from the sender domain into the receiver domain. The sender's exact
+SIGNAL capability and available endpoint sequence are first captured in a
+one-use endpoint-bound plan; capability derivation begins only after that
+preflight succeeds. Committing a stale or substituted plan after transfer is an
+integrity failure rather than an ordinary authorization denial. Same-task
+routing is rejected so callers cannot use this interface to bypass a domain
+boundary. Focused tests cover attenuation, mutation-free authorization denial,
+sequence exhaustion, and stale plan rejection. Live syscall entry and blocking
 endpoint queues are now exercised by the two-root service proof below.
 
 IPC derivation now also commits one bounded exact-generation delegation edge
 for each destination handle. The 256-edge table is capacity-checked before any
-capability mutation, and a denied endpoint authorization removes both every
-tentative handle and its edge. `TaskRuntime::revoke_capability` discovers the
+capability mutation, and denied endpoint authorization creates neither a
+receiver handle nor an edge. `TaskRuntime::revoke_capability` discovers the
 complete descendant set, validates every exact handle before mutation, revokes
 children before their source, and removes the consumed graph relations.
 Revoking an intermediate handle leaves its parent live while invalidating all
@@ -6820,6 +6821,16 @@ delegation graph first: both task identities must be scheduled, every source and
 destination handle must retain its exact generation, and destination nodes must
 be unique. A stale-derived-handle send test proves endpoint sequence remains
 unchanged, raising the Linux kernel total to 610.
+Direct IPC now prepares exact SIGNAL authorization and the next sequence before
+capability transfer. The resulting one-use plan is bound to the endpoint object
+and current sequence; stale-plan commit is an integrity failure. Authorization
+denial and sequence exhaustion leave receiver capabilities, delegation edges,
+and endpoint sequence unchanged. Focused Linux tests raise the kernel total to
+611.
+
+Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
+and commit for the existing bounded IPC endpoint; it introduces no new external
+protocol, algorithm, or device mechanism. See `docs/patents/REVIEW_LOG.md`.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,

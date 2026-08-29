@@ -924,8 +924,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     /// Transfers a message and attenuated capabilities between two distinct
-    /// task domains. Tentative receiver capabilities are revoked if endpoint
-    /// authorization fails, so an unsuccessful send cannot grant authority.
+    /// task domains. Endpoint authority and sequence capacity are reserved
+    /// before receiver capability state changes.
     pub fn send_ipc(
         &mut self,
         sender: TaskId,
@@ -965,6 +965,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                     .is_some_and(|domain| domain.task == receiver)
             })
             .ok_or(TaskRuntimeError::MissingTask)?;
+        let send_plan = endpoint
+            .prepare_send(
+                &self.domains[sender_slot]
+                    .as_ref()
+                    .ok_or(TaskRuntimeError::IntegrityFailure)?
+                    .capabilities,
+                endpoint_capability,
+            )
+            .map_err(TaskRuntimeError::Ipc)?;
         let (source, destination) = two_domains_mut(&mut self.domains, sender_slot, receiver_slot)
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         let message = Message::transfer(
@@ -987,24 +996,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 destination,
             });
         }
-        match endpoint.authorize_send(&source.capabilities, endpoint_capability, &message) {
-            Ok(sequence) => Ok((sequence, message)),
-            Err(error) => {
-                for capability in message.capabilities() {
-                    if destination.capabilities.revoke(capability).is_err() {
-                        return Err(TaskRuntimeError::IntegrityFailure);
-                    }
-                    for edge in &mut self.delegations {
-                        if edge.is_some_and(|edge| {
-                            edge.destination_task == receiver && edge.destination == capability
-                        }) {
-                            *edge = None;
-                        }
-                    }
-                }
-                Err(TaskRuntimeError::Ipc(error))
-            }
-        }
+        let sequence = endpoint
+            .commit_send(send_plan)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        Ok((sequence, message))
     }
 
     /// Delivers into the receiver's bounded kernel-owned inbox and makes a
@@ -1734,7 +1729,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_transfer_is_attenuated_and_authorization_failure_rolls_back() {
+    fn ipc_transfer_is_attenuated_and_authorization_denial_is_preflighted() {
         let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
         let sender = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
@@ -1794,10 +1789,24 @@ mod tests {
             Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
         );
         // One original received capability plus two free slots proves the
-        // tentative denied transfer did not consume receiver authority space.
+        // denied transfer did not consume receiver authority space.
         let receiver_space = runtime.capabilities_mut(receiver).unwrap();
         assert!(receiver_space.insert(ObjectId(8), Rights::READ).is_ok());
         assert!(receiver_space.insert(ObjectId(9), Rights::READ).is_ok());
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"next",
+                    &[],
+                )
+                .unwrap()
+                .0,
+            2
+        );
     }
 
     #[test]

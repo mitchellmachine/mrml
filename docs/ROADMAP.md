@@ -2197,6 +2197,10 @@ live composition remains pending.
    Send and retirement now preflight every delegation edge's scheduled tasks,
    exact source/destination handles, and unique destination node. A stale-edge
    test preserves endpoint sequence and raises the kernel total to 610.
+   Direct send now prepares a one-use endpoint/object/sequence plan before
+   deriving receiver capabilities. Authorization denial, exhausted sequence,
+   and stale-plan tests prove ordinary rejection is mutation-free and raise the
+   kernel total to 611.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

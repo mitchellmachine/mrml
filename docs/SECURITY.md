@@ -238,6 +238,10 @@ access. The security/acceptance gate is canonical in
 - New transfer and retirement validate every delegation edge's exact live
   endpoints and unique destination before mutation, so stale graph state cannot
   be extended or partially revoked.
+- Direct IPC checks exact SIGNAL authority and sequence capacity before deriving
+  receiver capabilities. Its one-use plan binds endpoint object and current
+  sequence; denial and exhaustion create no authority, while a stale commit is
+  an integrity failure.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

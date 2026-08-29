@@ -17,6 +17,7 @@ pub enum IpcError {
     TooManyCapabilities,
     Unauthorized,
     SequenceExhausted,
+    InvalidSequencePlan,
     BufferTooSmall,
     Malformed,
     Replay,
@@ -580,6 +581,12 @@ pub struct Endpoint {
     next_sequence: u64,
 }
 
+pub(crate) struct EndpointSendPlan {
+    object: ObjectId,
+    sequence: u64,
+    next_sequence: u64,
+}
+
 impl Endpoint {
     pub const fn new(object: ObjectId) -> Self {
         Self {
@@ -594,15 +601,33 @@ impl Endpoint {
         endpoint: Capability,
         _message: &Message,
     ) -> Result<u64, IpcError> {
+        let plan = self.prepare_send(sender_space, endpoint)?;
+        self.commit_send(plan)
+    }
+
+    pub(crate) fn prepare_send<const N: usize>(
+        &self,
+        sender_space: &CapabilitySpace<N>,
+        endpoint: Capability,
+    ) -> Result<EndpointSendPlan, IpcError> {
         if sender_space.authorize(endpoint, Rights::SIGNAL)? != self.object {
             return Err(IpcError::Unauthorized);
         }
         let sequence = self.next_sequence;
-        self.next_sequence = self
-            .next_sequence
-            .checked_add(1)
-            .ok_or(IpcError::SequenceExhausted)?;
-        Ok(sequence)
+        let next_sequence = sequence.checked_add(1).ok_or(IpcError::SequenceExhausted)?;
+        Ok(EndpointSendPlan {
+            object: self.object,
+            sequence,
+            next_sequence,
+        })
+    }
+
+    pub(crate) fn commit_send(&mut self, plan: EndpointSendPlan) -> Result<u64, IpcError> {
+        if plan.object != self.object || plan.sequence != self.next_sequence {
+            return Err(IpcError::InvalidSequencePlan);
+        }
+        self.next_sequence = plan.next_sequence;
+        Ok(plan.sequence)
     }
 
     pub(crate) fn authorize_member<const N: usize>(
@@ -662,6 +687,37 @@ mod tests {
             endpoint.authorize_send(&space, wrong, &message),
             Err(IpcError::Unauthorized)
         );
+    }
+
+    #[test]
+    fn endpoint_send_plans_fail_closed_without_consuming_sequence() {
+        let mut space = CapabilitySpace::<2>::new();
+        let allowed = space.insert(ObjectId(9), Rights::SIGNAL).unwrap();
+        let wrong = space.insert(ObjectId(10), Rights::SIGNAL).unwrap();
+        let mut endpoint = Endpoint::new(ObjectId(9));
+
+        assert!(matches!(
+            endpoint.prepare_send(&space, wrong),
+            Err(IpcError::Unauthorized)
+        ));
+        let first = endpoint.prepare_send(&space, allowed).unwrap();
+        let stale = endpoint.prepare_send(&space, allowed).unwrap();
+        assert_eq!(endpoint.commit_send(first), Ok(1));
+        assert_eq!(
+            endpoint.commit_send(stale),
+            Err(IpcError::InvalidSequencePlan)
+        );
+        assert_eq!(
+            endpoint.commit_send(endpoint.prepare_send(&space, allowed).unwrap()),
+            Ok(2)
+        );
+
+        endpoint.next_sequence = u64::MAX;
+        assert!(matches!(
+            endpoint.prepare_send(&space, allowed),
+            Err(IpcError::SequenceExhausted)
+        ));
+        assert_eq!(endpoint.next_sequence, u64::MAX);
     }
 
     #[test]
