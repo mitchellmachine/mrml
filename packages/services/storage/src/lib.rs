@@ -46,8 +46,9 @@ pub use ahci_controller::{
 pub use ahci_dma::{
     AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_ALIGNMENT,
     AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_ALIGNMENT, AHCI_RECEIVED_FIS_BYTES,
-    AhciDmaRegion, AhciPortDmaBackend, AhciPortDmaError, AhciPortDmaLayout, AhciPortDmaRequest,
-    prepare_ahci_port_dma,
+    AhciDmaRegion, AhciPortDmaBackend, AhciPortDmaError, AhciPortDmaLayout,
+    AhciPortDmaRequest, AhciPortDmaRevocationError, InstalledAhciPortDma,
+    prepare_ahci_port_dma, revoke_ahci_port_dma,
 };
 pub use ahci_discovery::{
     AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE,

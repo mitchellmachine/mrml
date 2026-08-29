@@ -47,6 +47,17 @@ pub struct AhciPortDmaLayout {
     pub dma_generation: u64,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct InstalledAhciPortDma {
+    layout: AhciPortDmaLayout,
+}
+
+impl InstalledAhciPortDma {
+    pub const fn layout(&self) -> AhciPortDmaLayout {
+        self.layout
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciPortDmaError {
     DeviceCapability(CapabilityError),
@@ -61,10 +72,26 @@ pub enum AhciPortDmaError {
     BackendRejected,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct AhciPortDmaRevocationError {
+    owner: InstalledAhciPortDma,
+}
+
+impl AhciPortDmaRevocationError {
+    pub fn into_owner(self) -> InstalledAhciPortDma {
+        self.owner
+    }
+}
+
 pub trait AhciPortDmaBackend {
     /// Atomically pins, zero-verifies, and installs exactly these device DMA
     /// mappings. Failure must leave no mapping or retained device access.
     fn install_zeroed_layout(&mut self, layout: AhciPortDmaLayout) -> Result<(), ()>;
+
+    /// Removes exactly the retained layout and completes all required device
+    /// and IOMMU invalidation before success. Failure must keep the layout
+    /// exclusively owned and retryable or fail-stop its device consumer.
+    fn remove_layout(&mut self, layout: AhciPortDmaLayout) -> Result<(), ()>;
 }
 
 pub fn prepare_ahci_port_dma<const N: usize, B: AhciPortDmaBackend>(
@@ -73,7 +100,7 @@ pub fn prepare_ahci_port_dma<const N: usize, B: AhciPortDmaBackend>(
     port: AhciPortSnapshot,
     request: AhciPortDmaRequest,
     backend: &mut B,
-) -> Result<AhciPortDmaLayout, AhciPortDmaError> {
+) -> Result<InstalledAhciPortDma, AhciPortDmaError> {
     let device = capabilities
         .authorize_exact(request.device_capability, Rights::CONTROL)
         .map_err(AhciPortDmaError::DeviceCapability)?;
@@ -162,7 +189,17 @@ pub fn prepare_ahci_port_dma<const N: usize, B: AhciPortDmaBackend>(
     backend
         .install_zeroed_layout(layout)
         .map_err(|_| AhciPortDmaError::BackendRejected)?;
-    Ok(layout)
+    Ok(InstalledAhciPortDma { layout })
+}
+
+pub fn revoke_ahci_port_dma<B: AhciPortDmaBackend>(
+    owner: InstalledAhciPortDma,
+    backend: &mut B,
+) -> Result<(), AhciPortDmaRevocationError> {
+    if backend.remove_layout(owner.layout).is_err() {
+        return Err(AhciPortDmaRevocationError { owner });
+    }
+    Ok(())
 }
 
 fn authorize_region<const N: usize>(
@@ -210,15 +247,26 @@ mod tests {
     #[derive(Default)]
     struct Backend {
         installed: Option<AhciPortDmaLayout>,
-        reject: bool,
+        reject_install: bool,
+        reject_remove: bool,
+        removals: usize,
     }
 
     impl AhciPortDmaBackend for Backend {
         fn install_zeroed_layout(&mut self, layout: AhciPortDmaLayout) -> Result<(), ()> {
-            if self.reject {
+            if self.reject_install {
                 return Err(());
             }
             self.installed = Some(layout);
+            Ok(())
+        }
+
+        fn remove_layout(&mut self, layout: AhciPortDmaLayout) -> Result<(), ()> {
+            if self.reject_remove || self.installed != Some(layout) {
+                return Err(());
+            }
+            self.installed = None;
+            self.removals += 1;
             Ok(())
         }
     }
@@ -296,9 +344,9 @@ mod tests {
         let mut backend = Backend::default();
         let layout =
             prepare_ahci_port_dma(&capabilities, controller, port, request, &mut backend).unwrap();
-        assert_eq!(layout.command_slot_count, 4);
-        assert_eq!(layout.command_tables.bytes, 1024);
-        assert_eq!(backend.installed, Some(layout));
+        assert_eq!(layout.layout().command_slot_count, 4);
+        assert_eq!(layout.layout().command_tables.bytes, 1024);
+        assert_eq!(backend.installed, Some(layout.layout()));
     }
 
     #[test]
@@ -387,12 +435,48 @@ mod tests {
         let (capabilities, controller, port, request) = fixture();
         let mut backend = Backend {
             installed: None,
-            reject: true,
+            reject_install: true,
+            reject_remove: false,
+            removals: 0,
         };
         assert_eq!(
             prepare_ahci_port_dma(&capabilities, controller, port, request, &mut backend),
             Err(AhciPortDmaError::BackendRejected)
         );
         assert!(backend.installed.is_none());
+    }
+
+    #[test]
+    fn successful_revocation_removes_the_exact_layout_once() {
+        let (capabilities, controller, port, request) = fixture();
+        let mut backend = Backend::default();
+        let owner =
+            prepare_ahci_port_dma(&capabilities, controller, port, request, &mut backend).unwrap();
+        let layout = owner.layout();
+        revoke_ahci_port_dma(owner, &mut backend).unwrap();
+        assert_eq!(backend.installed, None);
+        assert_eq!(backend.removals, 1);
+        assert_eq!(backend.remove_layout(layout), Err(()));
+    }
+
+    #[test]
+    fn uncertain_revocation_retains_the_owner_for_exact_retry() {
+        let (capabilities, controller, port, request) = fixture();
+        let mut backend = Backend::default();
+        let owner =
+            prepare_ahci_port_dma(&capabilities, controller, port, request, &mut backend).unwrap();
+        let layout = owner.layout();
+        backend.reject_remove = true;
+        let owner = revoke_ahci_port_dma(owner, &mut backend)
+            .unwrap_err()
+            .into_owner();
+        assert_eq!(owner.layout(), layout);
+        assert_eq!(backend.installed, Some(layout));
+        assert_eq!(backend.removals, 0);
+
+        backend.reject_remove = false;
+        revoke_ahci_port_dma(owner, &mut backend).unwrap();
+        assert_eq!(backend.installed, None);
+        assert_eq!(backend.removals, 1);
     }
 }

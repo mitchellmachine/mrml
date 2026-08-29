@@ -229,10 +229,14 @@ table memory objects. Every allocation and DMA generation must be nonzero;
 physical ranges must have exact sizes, alignment, checked ends, distinct object
 identity, and no overlap. Only one complete layout reaches the atomic backend,
 whose contract requires pinned zeroed memory and no partial mapping on failure.
-Storage passes 161 tests on Windows and Arch Linux. This is host-modeled policy
-and layout evidence only. No IOMMU backend, register programming, engine start,
-interrupt, ATA/ATAPI command, NCQ operation, native PCI enumeration, or physical
-hardware was exercised.
+Successful installation now returns a linear `InstalledAhciPortDma` owner.
+Revocation consumes that owner only after the backend confirms exact layout
+removal and all required device/IOMMU invalidation; uncertainty returns the
+same owner for exact retry, and completed removal cannot be repeated. Storage
+passes 163 tests on Windows and Arch Linux. This is host-modeled policy,
+layout, and lifecycle evidence only. No IOMMU backend, register programming,
+engine start, interrupt, ATA/ATAPI command, NCQ operation, native PCI
+enumeration, or physical hardware was exercised.
 
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation

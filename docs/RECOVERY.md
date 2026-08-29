@@ -1218,8 +1218,11 @@ port and controller generations, controller `CONTROL`, and distinct
 FIS, and command tables. Exact sizes and alignments, nonzero allocation/DMA
 generations, checked physical ends, distinct memory objects, and non-overlap
 must all hold before one complete layout reaches the atomic zeroed/pinned
-backend. Storage passes 161 tests on Windows and Arch Linux. Recovery must not
-reconstruct this layout from names, addresses, or the handed firmware identity;
+backend. A non-copyable installed owner now retains that exact layout through
+lifecycle teardown. Removal consumes it only after confirmed device/IOMMU
+invalidation; uncertainty returns the owner for exact retry rather than
+publishing false cleanup. Storage passes 163 tests on Windows and Arch Linux.
+Recovery must not reconstruct this layout from names, addresses, or the handed firmware identity;
 it must reacquire fresh capabilities and generations. IOMMU installation,
 register programming, commands, interrupts, OVMF, and physical evidence remain
 unimplemented.

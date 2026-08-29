@@ -8809,7 +8809,10 @@ capabilities. Command-list, received-FIS, and command-table runs retain separate
 object/allocation identities, exact derived extents, checked alignment and
 ends, and a fresh DMA generation; aliasing or overlap fails before the backend.
 The backend contract publishes only a complete pinned, zero-verified mapping and
-must leave no mapping on failure. Storage passes 161 tests on Windows and Arch
-Linux. This is safe policy and hostile host-model evidence, not an implemented
-IOMMU backend, AHCI register programming, command execution, interrupt delivery,
-NCQ, OVMF, installed recovery, or physical hardware evidence.
+must leave no mapping on failure. A non-copyable installed owner now enforces
+exact lifecycle teardown: confirmed removal consumes it, while uncertain
+device/IOMMU invalidation returns it for retry and cannot masquerade as cleanup.
+Storage passes 163 tests on Windows and Arch Linux. This is safe policy and
+hostile host-model evidence, not an implemented IOMMU backend, AHCI register
+programming, command execution, interrupt delivery, NCQ, OVMF, installed
+recovery, or physical hardware evidence.

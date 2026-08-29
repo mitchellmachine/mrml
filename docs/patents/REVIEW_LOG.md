@@ -66,6 +66,16 @@ outside the reviewed Canadian jurisdiction still requires the repository's
 worldwide family/status review. This technical screen is not legal advice or a
 claim that AHCI is patent-free.
 
+# 2026-08-29 — Exact AHCI DMA layout revocation lifecycle
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment adds conventional linear ownership and exact retryable cleanup around
+the already reviewed fixed DMA layout. It introduces no command format, PRDT,
+queue or scheduling algorithm, port programming, interrupt mechanism, NCQ,
+aggregation, ATA/ATAPI operation, PHY/controller hardware, or block I/O. The
+existing Canadian exclusions and outside-Canada review requirement remain
+unchanged. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Writable COFF SELECT_ANY winners
 
 Patent review: **NOT_TRIGGERED**. This increment applies the conventional COFF

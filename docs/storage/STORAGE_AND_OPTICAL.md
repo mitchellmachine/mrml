@@ -317,9 +317,13 @@ controller slot count and rejects zero generations, wrong objects, missing
 rights, malformed size/alignment, wrapping ranges, physical overlap, memory-
 object aliasing, or backend refusal before publishing a layout. The backend
 must atomically pin, verify zeroed state, and install exactly the complete
-layout, leaving no device mapping on failure. Storage passes 161 tests on
-Windows and Arch Linux. No port register is written and no IOMMU, engine,
-interrupt, ATA/ATAPI, NCQ, block-I/O, OVMF, or physical evidence is claimed.
+layout, leaving no device mapping on failure. The installed layout is retained
+by a non-copyable owner. Exact teardown consumes it only after the backend
+confirms removal and all required device/IOMMU invalidation; uncertainty returns
+the same owner for retry, while completed removal cannot be replayed. Storage
+passes 163 tests on Windows and Arch Linux. No port register is written and no
+IOMMU, engine, interrupt, ATA/ATAPI, NCQ, block-I/O, OVMF, or physical evidence
+is claimed.
 
 The configuration service now **PARTIALLY IMPLEMENTS** an atomic
 correlate/register/reacquire operation for this route. It admits the descriptor
