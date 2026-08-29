@@ -9981,3 +9981,14 @@ checks, and borrowed-slice selection, and introduces no new object encoding,
 duplicate-selection algorithm, relocation mechanism, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not legal
 advice or patent clearance.
+
+# 2026-08-29 — Named COFF read-only COMDAT selection
+
+Patent review: **NOT_TRIGGERED**. This increment represents conventional
+PE/COFF read-only COMDAT sections as named static-link inputs and applies the
+already documented `ANY`, `SAME_SIZE`, `EXACT_MATCH`, and `LARGEST` rules to
+their raw payloads. It uses bounded symbol-table traversal, ordinary byte and
+size comparison, and existing relocation resolution; it introduces no new
+object encoding, selection algorithm, compression, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent
+clearance.

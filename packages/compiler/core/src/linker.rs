@@ -535,9 +535,25 @@ pub struct CoffComdatSection {
 pub struct CoffComdatSections {
     sections: [CoffComdatSection; MAX_COFF_SECTIONS],
     len: usize,
+    object_address: usize,
+    object_length: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoffReadonlyLinkInput<'data, 'definitions> {
+    pub input: LinkInput<'data, 'data, 'definitions>,
+    pub selection: CoffTextComdatSelection,
 }
 
 impl CoffComdatSections {
+    fn validate_object(&self, object: &[u8]) -> Result<(), LinkerError> {
+        if self.object_address == object.as_ptr() as usize && self.object_length == object.len() {
+            Ok(())
+        } else {
+            Err(LinkerError::InvalidCoffAssociation)
+        }
+    }
+
     pub fn sections(&self) -> &[CoffComdatSection] {
         &self.sections[..self.len]
     }
@@ -2872,6 +2888,74 @@ pub fn decode_x86_64_coff_readonly_writable_relocation<'a>(
     selected.ok_or(LinkerError::InvalidCoff)
 }
 
+pub fn decode_x86_64_coff_readonly_writable_relocation_for_fragment(
+    object: &[u8],
+    relocation_index: usize,
+) -> Result<PeReadonlyWritableRelocation<'_>, LinkerError> {
+    let section_count = usize::from(read_u16(object, 2)?);
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let strings_offset = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size = usize::try_from(read_u32(object, strings_offset)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut ordinal = 0usize;
+    for section in 0..section_count {
+        let header = 20usize + section * 40;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            strings_offset,
+            string_size,
+        )?;
+        if !name.starts_with(".rdata$.refptr.") || read_u32(object, header + 16)? == 0 {
+            continue;
+        }
+        if ordinal == relocation_index {
+            let selected_section =
+                i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+            let mut owner = None;
+            let mut symbol_index = 0usize;
+            while symbol_index < symbol_count {
+                let symbol = symbol_offset + symbol_index * 18;
+                let auxiliary =
+                    usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
+                if read_i16(object, symbol + 12)? == selected_section
+                    && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 2
+                    && read_u32(object, symbol + 8)? == 0
+                {
+                    let candidate = coff_symbol_name(object, symbol, strings_offset, string_size)?;
+                    if owner.replace(candidate).is_some() {
+                        return Err(LinkerError::UnsupportedCoff);
+                    }
+                }
+                symbol_index = symbol_index
+                    .checked_add(auxiliary + 1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            let owner = owner.ok_or(LinkerError::UnsupportedCoff)?;
+            let decoded =
+                decode_x86_64_coff_readonly_writable_relocation(object, relocation_index, owner)?;
+            return Ok(PeReadonlyWritableRelocation {
+                readonly_owner: decoded.readonly_owner,
+                readonly_offset: 0,
+                target_writable_symbol: decoded.target_writable_symbol,
+            });
+        }
+        ordinal += 1;
+    }
+    Err(LinkerError::InvalidCoff)
+}
+
 pub fn decode_x86_64_coff_writable_data<'data, 'relocations>(
     object: &'data [u8],
     readonly_owner: &'data str,
@@ -3433,6 +3517,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
     relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
+    inventory.validate_object(object)?;
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
@@ -3555,8 +3640,8 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
         }
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
         if inventory.section(section_number).is_some_and(|metadata| {
-            metadata.selection == CoffTextComdatSelection::Associative
-                && inventory.root_section(section_number) != Some(text_section_u16)
+            metadata.selection != CoffTextComdatSelection::Associative
+                || inventory.root_section(section_number) != Some(text_section_u16)
         }) {
             readonly_sections[section + 1] = false;
             discarded_readonly_sections[section + 1] = true;
@@ -3779,6 +3864,31 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             }
             (LinkRelocationTarget::ReadonlyData(data_offset), -4)
         } else if target_section > 0
+            && discarded_readonly_sections
+                .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
+                .copied()
+                .unwrap_or(false)
+            && inventory
+                .section(u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
+                .is_some_and(|metadata| metadata.selection != CoffTextComdatSelection::Associative)
+        {
+            if *object
+                .get(target_offset + 16)
+                .ok_or(LinkerError::InvalidCoff)?
+                != 2
+            {
+                return Err(LinkerError::UnsupportedCoff);
+            }
+            (
+                LinkRelocationTarget::Symbol(coff_symbol_name(
+                    object,
+                    target_offset,
+                    symbols_end,
+                    string_size,
+                )?),
+                i64::from(field_addend) - 4,
+            )
+        } else if target_section > 0
             && writable_sections
                 .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
                 .copied()
@@ -3818,6 +3928,156 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
         text,
         readonly_data,
         relocations: &relocation_storage[..relocation_table.1],
+    })
+}
+
+pub fn x86_64_coff_standalone_readonly_fragment_count(
+    object: &[u8],
+    inventory: &CoffComdatSections,
+) -> Result<usize, LinkerError> {
+    inventory.validate_object(object)?;
+    let section_count = usize::from(read_u16(object, 2)?);
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let strings_offset = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size = usize::try_from(read_u32(object, strings_offset)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut count = 0usize;
+    for section in 0..section_count {
+        let header = 20usize + section * 40;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            strings_offset,
+            string_size,
+        )?;
+        let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+        if (name == ".rdata" || name.starts_with(".rdata$"))
+            && read_u32(object, header + 16)? != 0
+            && inventory
+                .section(section_number)
+                .is_some_and(|metadata| metadata.selection != CoffTextComdatSelection::Associative)
+        {
+            count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    Ok(count)
+}
+
+pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
+    object: &'data [u8],
+    fragment_index: usize,
+    inventory: &CoffComdatSections,
+    definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
+) -> Result<CoffReadonlyLinkInput<'data, 'definitions>, LinkerError> {
+    inventory.validate_object(object)?;
+    let section_count = usize::from(read_u16(object, 2)?);
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let strings_offset = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size = usize::try_from(read_u32(object, strings_offset)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut selected = None;
+    let mut ordinal = 0usize;
+    for section in 0..section_count {
+        let header = 20usize + section * 40;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            strings_offset,
+            string_size,
+        )?;
+        let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+        let Some(metadata) = inventory.section(section_number) else {
+            continue;
+        };
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if size == 0
+            || !(name == ".rdata" || name.starts_with(".rdata$"))
+            || metadata.selection == CoffTextComdatSelection::Associative
+        {
+            continue;
+        }
+        if ordinal == fragment_index {
+            let raw = usize::try_from(read_u32(object, header + 20)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let contents = object
+                .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
+                .ok_or(LinkerError::InvalidCoff)?;
+            let relocations = usize::from(read_u16(object, header + 32)?);
+            if relocations != 0 && (!name.starts_with(".rdata$.refptr.") || relocations != 1) {
+                return Err(LinkerError::UnsupportedCoff);
+            }
+            selected = Some((section_number, contents, metadata.selection));
+            break;
+        }
+        ordinal += 1;
+    }
+    let (selected_section, contents, selection) = selected.ok_or(LinkerError::InvalidCoff)?;
+    let mut primary = None;
+    let mut definition_count = 0usize;
+    let mut symbol_index = 0usize;
+    while symbol_index < symbol_count {
+        let symbol = symbol_offset + symbol_index * 18;
+        let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
+        if read_i16(object, symbol + 12)?
+            == i16::try_from(selected_section).map_err(|_| LinkerError::OffsetOverflow)?
+            && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 2
+        {
+            let value = usize::try_from(read_u32(object, symbol + 8)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            if value > contents.len() {
+                return Err(LinkerError::InvalidCoff);
+            }
+            let name = coff_symbol_name(object, symbol, strings_offset, string_size)?;
+            if primary.is_none() && value == 0 {
+                primary = Some(name);
+            } else {
+                if definition_count == definition_storage.len() {
+                    return Err(LinkerError::TooManyDefinitions);
+                }
+                definition_storage[definition_count] = LinkDefinition {
+                    symbol: name,
+                    target: LinkDefinitionTarget::ReadonlyData(value),
+                };
+                definition_count += 1;
+            }
+        }
+        symbol_index = symbol_index
+            .checked_add(auxiliary + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(CoffReadonlyLinkInput {
+        input: LinkInput {
+            symbol: primary.ok_or(LinkerError::UnsupportedCoff)?,
+            symbol_target: LinkDefinitionTarget::ReadonlyData(0),
+            additional_definitions: &definition_storage[..definition_count],
+            text: &[],
+            readonly_data: contents,
+            relocations: &[],
+        },
+        selection,
     })
 }
 
@@ -3947,6 +4207,8 @@ pub fn inventory_x86_64_coff_comdat_sections(
     let mut output = CoffComdatSections {
         sections: [empty; MAX_COFF_SECTIONS],
         len: 0,
+        object_address: object.as_ptr() as usize,
+        object_length: object.len(),
     };
     for section in 1..=section_count {
         if !is_comdat[section] {
@@ -3992,6 +4254,7 @@ pub fn x86_64_coff_text_fragment_comdat_selection_from_inventory(
     fragment_index: usize,
     inventory: &CoffComdatSections,
 ) -> Result<CoffTextComdatSelection, LinkerError> {
+    inventory.validate_object(object)?;
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
@@ -7735,6 +7998,48 @@ mod tests {
         object
     }
 
+    fn coff_with_standalone_readonly_comdat() -> std::vec::Vec<u8> {
+        let mut object = std::vec![0u8; 227];
+        object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[2..4].copy_from_slice(&2u16.to_le_bytes());
+        object[8..12].copy_from_slice(&115u32.to_le_bytes());
+        object[12..16].copy_from_slice(&6u32.to_le_bytes());
+
+        object[20..27].copy_from_slice(b".text$a");
+        object[36..40].copy_from_slice(&4u32.to_le_bytes());
+        object[40..44].copy_from_slice(&100u32.to_le_bytes());
+        object[44..48].copy_from_slice(&105u32.to_le_bytes());
+        object[52..54].copy_from_slice(&1u16.to_le_bytes());
+        object[56..60].copy_from_slice(&0x6050_1020u32.to_le_bytes());
+        object[60..68].copy_from_slice(b".rdata$a");
+        object[76..80].copy_from_slice(&1u32.to_le_bytes());
+        object[80..84].copy_from_slice(&104u32.to_le_bytes());
+        object[96..100].copy_from_slice(&0x4030_1040u32.to_le_bytes());
+        object[104] = b'R';
+        object[105..109].copy_from_slice(&0u32.to_le_bytes());
+        object[109..113].copy_from_slice(&5u32.to_le_bytes());
+        object[113..115].copy_from_slice(&4u16.to_le_bytes());
+
+        for (symbol_index, section) in [(0usize, 1i16), (3, 2)] {
+            let symbol = 115 + symbol_index * 18;
+            object[symbol + 12..symbol + 14].copy_from_slice(&section.to_le_bytes());
+            object[symbol + 16] = 3;
+            object[symbol + 17] = 1;
+            object[symbol + 18 + 14] = 2;
+        }
+        for (symbol_index, name, section) in [
+            (2usize, b"entry".as_slice(), 1i16),
+            (5, b"literal".as_slice(), 2),
+        ] {
+            let symbol = 115 + symbol_index * 18;
+            object[symbol..symbol + name.len()].copy_from_slice(name);
+            object[symbol + 12..symbol + 14].copy_from_slice(&section.to_le_bytes());
+            object[symbol + 16] = 2;
+        }
+        object[223..227].copy_from_slice(&4u32.to_le_bytes());
+        object
+    }
+
     fn coff_with_one_runtime_function() -> std::vec::Vec<u8> {
         let mut object = std::vec![0u8; 317];
         object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
@@ -8895,6 +9200,69 @@ mod tests {
             .readonly_data,
             b""
         );
+    }
+
+    #[test]
+    fn decodes_nonassociative_readonly_comdats_as_named_link_inputs() {
+        let object = coff_with_standalone_readonly_comdat();
+        let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
+        assert_eq!(
+            x86_64_coff_standalone_readonly_fragment_count(&object, &inventory),
+            Ok(1)
+        );
+        let substituted = object.clone();
+        assert_eq!(
+            x86_64_coff_standalone_readonly_fragment_count(&substituted, &inventory),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut text_definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let mut readonly_definitions = text_definitions;
+        let text = decode_x86_64_coff_text_fragment_from_inventory(
+            &object,
+            0,
+            &inventory,
+            &mut relocations,
+            &mut text_definitions,
+        )
+        .unwrap();
+        assert!(text.readonly_data.is_empty());
+        assert_eq!(
+            text.relocations,
+            &[LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("literal"),
+                addend: -4,
+            }]
+        );
+        let readonly = decode_x86_64_coff_standalone_readonly_fragment(
+            &object,
+            0,
+            &inventory,
+            &mut readonly_definitions,
+        )
+        .unwrap();
+        assert_eq!(readonly.selection, CoffTextComdatSelection::Any);
+        assert_eq!(readonly.input.symbol, "literal");
+        assert_eq!(
+            readonly.input.symbol_target,
+            LinkDefinitionTarget::ReadonlyData(0)
+        );
+        assert_eq!(readonly.input.readonly_data, b"R");
+        let linked = link_x86_64_static::<64>(&[text, readonly.input], "entry").unwrap();
+        assert_eq!(linked.readonly_offset(), 16);
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            12
+        );
+        assert_eq!(linked.bytes()[16], b'R');
     }
 
     #[test]

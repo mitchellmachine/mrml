@@ -1124,6 +1124,27 @@ median/22.926 ms mean for rust-lld on this host and workload. Non-associative
 read-only COMDAT duplicate selection and arbitrary discontiguous read-only
 section packing remain incomplete.
 
+Non-associative read-only COMDATs are now independent named link inputs rather
+than repeated object-wide payload attached to every text fragment. The bounded
+decoder requires an external definition at offset zero, retains additional
+bounded definitions, and converts text references to the section's external
+symbol so duplicate selection can rebind every reference to the winner. The
+same `ANY`, `SAME_SIZE`, `EXACT_MATCH`, and `LARGEST` policy pass used for text
+now compares the appropriate read-only payload and replaces source-object,
+archive, and member origin atomically. Selected `.rdata$.refptr...` relocations
+are emitted only for the exact source object that supplied the surviving
+read-only definition, with section-local offset zero. Prepared COMDAT
+inventories are bound to the exact admitted slice address and length before any
+fast-path reuse. Synthetic tests prove named text-to-read-only relocation and
+final layout, leftmost `ANY`, size and content rejection, larger-later
+replacement, winning-origin propagation, and inventory-substitution failure.
+The exact stateful gnullvm probe still returns 42 through both linkers with
+2,560 MRML bytes, 3,584 rust-lld bytes, 1,028 bytes of zero fill, and two
+forwarding pointers. Fifty measured links after five warmups produced 6.778 ms
+median/6.927 ms mean for MRML and 21.757 ms median/22.271 ms mean for rust-lld
+on this host and workload. General read-only relocations originating inside
+COMDAT payloads and non-COMDAT discontiguous packing remain incomplete.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

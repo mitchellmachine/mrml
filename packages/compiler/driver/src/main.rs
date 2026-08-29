@@ -16,15 +16,16 @@ use mrml_rustc::{
     ObjectFormat, PeReadonlyWritableRelocation, PeRuntimeFunction, PeWritableData,
     PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
-    decode_x86_64_coff_readonly_writable_relocation, decode_x86_64_coff_runtime_functions,
-    decode_x86_64_coff_text_fragment, decode_x86_64_coff_text_fragment_from_inventory,
-    decode_x86_64_coff_writable_data_fragment,
+    decode_x86_64_coff_readonly_writable_relocation_for_fragment,
+    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_standalone_readonly_fragment,
+    decode_x86_64_coff_text_fragment_from_inventory, decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
     inventory_x86_64_elf_symbols, link_x86_64_elf_selected_executable,
     link_x86_64_pe_with_data_unwind_and_readonly_relocations, select_ordered_static_link_members,
     select_x86_64_elf_link_sections_detailed, x86_64_coff_readonly_writable_relocation_count,
+    x86_64_coff_standalone_readonly_fragment_count,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
     x86_64_coff_writable_section_count,
 };
@@ -87,7 +88,7 @@ struct DecodedLinkInputs<'data, 'relocations, 'definitions> {
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
     source_object: Vector<usize>,
-    text_comdat_selection: Vector<CoffTextComdatSelection>,
+    comdat_selection: Vector<CoffTextComdatSelection>,
 }
 
 struct SelectedLinkInputs<'data, 'relocations, 'definitions> {
@@ -569,11 +570,15 @@ fn scan_link_object_symbols<'a>(
         }
         return Ok(());
     }
-    let fragment_count = match format {
-        ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
-            .map_err(|_| anyhow!("could not count COFF archive member fragments"))?,
-        ObjectFormat::Elf64 => 1,
-    };
+    let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?;
+    let text_fragment_count = x86_64_coff_text_fragment_count(object)
+        .map_err(|_| anyhow!("could not count COFF archive member fragments"))?;
+    let fragment_count = text_fragment_count
+        .checked_add(
+            x86_64_coff_standalone_readonly_fragment_count(object, &inventory)
+                .map_err(mrml_error::message)?,
+        )
+        .ok_or_else(|| anyhow!("expanded archive member fragment count overflow"))?;
     for fragment_index in 0..fragment_count {
         let mut relocations = [LinkRelocation {
             offset: 0,
@@ -584,16 +589,25 @@ fn scan_link_object_symbols<'a>(
             symbol: "unused",
             target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
-        let input = match format {
-            ObjectFormat::Coff => decode_x86_64_coff_text_fragment(
+        let input = if fragment_index < text_fragment_count {
+            decode_x86_64_coff_text_fragment_from_inventory(
                 object,
                 fragment_index,
+                &inventory,
                 &mut relocations,
                 &mut definitions,
-            ),
-            ObjectFormat::Elf64 => unreachable!(),
-        }
-        .map_err(mrml_error::message)?;
+            )
+            .map_err(mrml_error::message)?
+        } else {
+            decode_x86_64_coff_standalone_readonly_fragment(
+                object,
+                fragment_index - text_fragment_count,
+                &inventory,
+                &mut definitions,
+            )
+            .map_err(mrml_error::message)?
+            .input
+        };
         for symbol in core::iter::once(input.symbol).chain(
             input
                 .additional_definitions
@@ -644,8 +658,15 @@ fn scan_link_object_symbols_owned(
         }
         return Ok(());
     }
-    let fragment_count = x86_64_coff_text_fragment_count(object)
+    let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?;
+    let text_fragment_count = x86_64_coff_text_fragment_count(object)
         .map_err(|_| anyhow!("could not count COFF archive member fragments"))?;
+    let fragment_count = text_fragment_count
+        .checked_add(
+            x86_64_coff_standalone_readonly_fragment_count(object, &inventory)
+                .map_err(mrml_error::message)?,
+        )
+        .ok_or_else(|| anyhow!("expanded archive member fragment count overflow"))?;
     for fragment_index in 0..fragment_count {
         let mut relocations = [LinkRelocation {
             offset: 0,
@@ -656,13 +677,25 @@ fn scan_link_object_symbols_owned(
             symbol: "unused",
             target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
-        let input = decode_x86_64_coff_text_fragment(
-            object,
-            fragment_index,
-            &mut relocations,
-            &mut definitions,
-        )
-        .map_err(mrml_error::message)?;
+        let input = if fragment_index < text_fragment_count {
+            decode_x86_64_coff_text_fragment_from_inventory(
+                object,
+                fragment_index,
+                &inventory,
+                &mut relocations,
+                &mut definitions,
+            )
+            .map_err(mrml_error::message)?
+        } else {
+            decode_x86_64_coff_standalone_readonly_fragment(
+                object,
+                fragment_index - text_fragment_count,
+                &inventory,
+                &mut definitions,
+            )
+            .map_err(mrml_error::message)?
+            .input
+        };
         for symbol in core::iter::once(input.symbol).chain(
             input
                 .additional_definitions
@@ -712,8 +745,8 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
         .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
     let mut source_object = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
-    let mut text_comdat_selection = Vector::with_capacity(MAX_LINK_INPUTS)
-        .map_err(|_| anyhow!("could not allocate decoded text COMDAT list"))?;
+    let mut comdat_selection = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate decoded COMDAT list"))?;
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
@@ -723,11 +756,24 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             }
             ObjectFormat::Elf64 => None,
         };
-        let fragment_count = match format {
+        let text_fragment_count = match format {
             ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
                 .map_err(|_| anyhow!("could not count COFF text fragments"))?,
             ObjectFormat::Elf64 => 1,
         };
+        let readonly_fragment_count = match format {
+            ObjectFormat::Coff => x86_64_coff_standalone_readonly_fragment_count(
+                object,
+                coff_comdat_sections
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
+            )
+            .map_err(mrml_error::message)?,
+            ObjectFormat::Elf64 => 0,
+        };
+        let fragment_count = text_fragment_count
+            .checked_add(readonly_fragment_count)
+            .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?;
         if inputs
             .len()
             .checked_add(fragment_count)
@@ -743,21 +789,46 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             let (definitions, definition_rest) = remaining_definitions
                 .split_first_mut()
                 .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
-            let input = match format {
-                ObjectFormat::Coff => decode_x86_64_coff_text_fragment_from_inventory(
-                    object,
-                    fragment_index,
-                    coff_comdat_sections
+            let (input, selection_policy) = match format {
+                ObjectFormat::Coff if fragment_index < text_fragment_count => {
+                    let inventory = coff_comdat_sections
                         .as_ref()
-                        .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
-                    arena,
-                    definitions,
-                ),
-                ObjectFormat::Elf64 => {
-                    decode_x86_64_elf_with_definitions(object, arena, definitions)
+                        .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?;
+                    (
+                        decode_x86_64_coff_text_fragment_from_inventory(
+                            object,
+                            fragment_index,
+                            inventory,
+                            arena,
+                            definitions,
+                        )
+                        .map_err(mrml_error::message)?,
+                        x86_64_coff_text_fragment_comdat_selection_from_inventory(
+                            object,
+                            fragment_index,
+                            inventory,
+                        )
+                        .map_err(mrml_error::message)?,
+                    )
                 }
-            }
-            .map_err(|_| anyhow!("could not decode link input"))?;
+                ObjectFormat::Coff => {
+                    let decoded = decode_x86_64_coff_standalone_readonly_fragment(
+                        object,
+                        fragment_index - text_fragment_count,
+                        coff_comdat_sections
+                            .as_ref()
+                            .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
+                        definitions,
+                    )
+                    .map_err(mrml_error::message)?;
+                    (decoded.input, decoded.selection)
+                }
+                ObjectFormat::Elf64 => (
+                    decode_x86_64_elf_with_definitions(object, arena, definitions)
+                        .map_err(mrml_error::message)?,
+                    CoffTextComdatSelection::None,
+                ),
+            };
             inputs
                 .try_push(input)
                 .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
@@ -770,21 +841,9 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             source_object
                 .try_push(object_index)
                 .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
-            text_comdat_selection
-                .try_push(match format {
-                    ObjectFormat::Coff => {
-                        x86_64_coff_text_fragment_comdat_selection_from_inventory(
-                            object,
-                            fragment_index,
-                            coff_comdat_sections
-                                .as_ref()
-                                .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
-                        )
-                        .map_err(mrml_error::message)?
-                    }
-                    ObjectFormat::Elf64 => CoffTextComdatSelection::None,
-                })
-                .map_err(|_| anyhow!("could not allocate decoded text COMDAT list"))?;
+            comdat_selection
+                .try_push(selection_policy)
+                .map_err(|_| anyhow!("could not allocate decoded COMDAT list"))?;
             remaining_arenas = rest;
             remaining_definitions = definition_rest;
         }
@@ -794,7 +853,7 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
         archive_group,
         archive_member,
         source_object,
-        text_comdat_selection,
+        comdat_selection,
     })
 }
 
@@ -839,8 +898,17 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
     let mut count = 0usize;
     for object in objects {
         let object_fragments = match format {
-            ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
-                .map_err(|_| anyhow!("could not count expanded COFF text fragments"))?,
+            ObjectFormat::Coff => {
+                let inventory =
+                    inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?;
+                x86_64_coff_text_fragment_count(object)
+                    .map_err(|_| anyhow!("could not count expanded COFF text fragments"))?
+                    .checked_add(
+                        x86_64_coff_standalone_readonly_fragment_count(object, &inventory)
+                            .map_err(mrml_error::message)?,
+                    )
+                    .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?
+            }
             ObjectFormat::Elf64 => 1,
         };
         count = count
@@ -858,10 +926,10 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     source_object: &[usize],
-    text_comdat_selection: &[CoffTextComdatSelection],
+    comdat_selection: &[CoffTextComdatSelection],
     entry: &str,
 ) -> Result<SelectedLinkInputs<'data, 'relocations, 'definitions>> {
-    if inputs.len() != source_object.len() || inputs.len() != text_comdat_selection.len() {
+    if inputs.len() != source_object.len() || inputs.len() != comdat_selection.len() {
         return Err(anyhow!("decoded source-object count mismatch"));
     }
     let selection =
@@ -875,7 +943,7 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     let mut selected_member = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link member list"))?;
     let mut selected_comdat = Vector::with_capacity(selection.indices().len())
-        .map_err(|_| anyhow!("could not allocate selected text COMDAT list"))?;
+        .map_err(|_| anyhow!("could not allocate selected COMDAT list"))?;
     let mut selected_source_object = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     for index in selection.indices() {
@@ -884,25 +952,38 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
             .position(|earlier| earlier.symbol == inputs[*index].symbol)
         {
             let earlier_selection = selected_comdat[earlier];
-            let current_selection = text_comdat_selection[*index];
+            let current_selection = comdat_selection[*index];
             let mut effective_selection = earlier_selection;
             let mut replace = false;
+            let (earlier_payload, current_payload) = match (
+                selected[earlier].symbol_target,
+                inputs[*index].symbol_target,
+            ) {
+                (LinkDefinitionTarget::Text(0), LinkDefinitionTarget::Text(0)) => {
+                    (selected[earlier].text, inputs[*index].text)
+                }
+                (LinkDefinitionTarget::ReadonlyData(0), LinkDefinitionTarget::ReadonlyData(0)) => (
+                    selected[earlier].readonly_data,
+                    inputs[*index].readonly_data,
+                ),
+                _ => return Err(anyhow!("incompatible duplicate COFF definition kinds")),
+            };
             let compatible = match (earlier_selection, current_selection) {
                 (CoffTextComdatSelection::Any, CoffTextComdatSelection::Any) => true,
                 (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::SameSize)
                 | (CoffTextComdatSelection::Any, CoffTextComdatSelection::SameSize)
                 | (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::Any) => {
                     effective_selection = CoffTextComdatSelection::SameSize;
-                    selected[earlier].text.len() == inputs[*index].text.len()
+                    earlier_payload.len() == current_payload.len()
                 }
                 (CoffTextComdatSelection::ExactMatch, CoffTextComdatSelection::ExactMatch) => {
-                    selected[earlier].text == inputs[*index].text
+                    earlier_payload == current_payload
                 }
                 (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Largest)
                 | (CoffTextComdatSelection::Any, CoffTextComdatSelection::Largest)
                 | (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Any) => {
                     effective_selection = CoffTextComdatSelection::Largest;
-                    replace = inputs[*index].text.len() > selected[earlier].text.len();
+                    replace = current_payload.len() > earlier_payload.len();
                     true
                 }
                 _ => false,
@@ -929,8 +1010,8 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
             .try_push(archive_member[*index])
             .map_err(|_| anyhow!("could not allocate selected link member list"))?;
         selected_comdat
-            .try_push(text_comdat_selection[*index])
-            .map_err(|_| anyhow!("could not allocate selected text COMDAT list"))?;
+            .try_push(comdat_selection[*index])
+            .map_err(|_| anyhow!("could not allocate selected COMDAT list"))?;
         selected_source_object
             .try_push(source_object[*index])
             .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
@@ -1077,29 +1158,18 @@ fn selected_writable_data<'data, 'relocations>(
 
 fn selected_readonly_writable_relocations<'data>(
     objects: &[&'data [u8]],
-    archive_group: &[u16],
-    archive_member: &[u16],
+    _archive_group: &[u16],
+    _archive_member: &[u16],
     selected: &SelectedLinkInputs<'data, '_, '_>,
 ) -> Result<Vector<PeReadonlyWritableRelocation<'data>>> {
     let mut output = Vector::with_capacity(MAX_LINK_RELOCATIONS)
         .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
     for object_index in 0..objects.len() {
-        let group = archive_group[object_index];
-        let member = archive_member[object_index];
-        let owner = selected
-            .inputs
+        let selected_object = selected
+            .source_object
             .iter()
-            .zip(
-                selected
-                    .archive_group
-                    .iter()
-                    .zip(selected.archive_member.iter()),
-            )
-            .find(|(_, (selected_group, selected_member))| {
-                **selected_group == group && **selected_member == member
-            })
-            .map(|(input, _)| input.symbol);
-        if let Some(owner) = owner {
+            .any(|source| *source == object_index);
+        if selected_object {
             let object = objects[object_index];
             let relocation_count =
                 x86_64_coff_readonly_writable_relocation_count(object).map_err(|error| {
@@ -1117,10 +1187,9 @@ fn selected_readonly_writable_relocations<'data>(
                 return Err(anyhow!("too many selected COFF refptr relocations"));
             }
             for relocation_index in 0..relocation_count {
-                let relocation = decode_x86_64_coff_readonly_writable_relocation(
+                let relocation = decode_x86_64_coff_readonly_writable_relocation_for_fragment(
                     object,
                     relocation_index,
-                    owner,
                 )
                 .map_err(|error| {
                     anyhow!(
@@ -1128,9 +1197,18 @@ fn selected_readonly_writable_relocations<'data>(
                         error
                     )
                 })?;
-                output
-                    .try_push(relocation)
-                    .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
+                let retained = selected
+                    .inputs
+                    .iter()
+                    .zip(selected.source_object.iter())
+                    .any(|(input, source)| {
+                        *source == object_index && input.symbol == relocation.readonly_owner
+                    });
+                if retained {
+                    output
+                        .try_push(relocation)
+                        .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
+                }
             }
         }
     }
@@ -1160,7 +1238,7 @@ fn write_linked_pe(
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
-        &decoded.text_comdat_selection,
+        &decoded.comdat_selection,
         entry,
     )?;
     let mut runtime_arena = [PeRuntimeFunction {
@@ -1631,6 +1709,102 @@ mod tests {
         .unwrap();
         assert_eq!(selected.inputs[0].text, &[0x63, 0xc3]);
         assert_eq!(selected.source_object[0], 7);
+    }
+
+    #[test]
+    fn selects_readonly_comdat_winners_by_payload_and_rebinds_origin() {
+        let first = LinkInput {
+            symbol: "literal",
+            symbol_target: LinkDefinitionTarget::ReadonlyData(0),
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: b"A",
+            relocations: &[],
+        };
+        let second = LinkInput {
+            readonly_data: b"BB",
+            ..first
+        };
+        let any = [CoffTextComdatSelection::Any; 2];
+        let selected =
+            selected_link_inputs(&[first, second], &[0, 0], &[0, 0], &[3, 7], &any, "literal")
+                .unwrap();
+        assert_eq!(selected.inputs.len(), 1);
+        assert_eq!(selected.inputs[0].readonly_data, b"A");
+        assert_eq!(selected.source_object[0], 3);
+
+        let largest = [CoffTextComdatSelection::Largest; 2];
+        let selected = selected_link_inputs(
+            &[first, second],
+            &[0, 0],
+            &[0, 0],
+            &[3, 7],
+            &largest,
+            "literal",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs[0].readonly_data, b"BB");
+        assert_eq!(selected.source_object[0], 7);
+
+        let same_size = [CoffTextComdatSelection::SameSize; 2];
+        assert!(
+            selected_link_inputs(
+                &[first, second],
+                &[0, 0],
+                &[0, 0],
+                &[3, 7],
+                &same_size,
+                "literal",
+            )
+            .is_err()
+        );
+        let exact = [CoffTextComdatSelection::ExactMatch; 2];
+        assert!(
+            selected_link_inputs(
+                &[first, second],
+                &[0, 0],
+                &[0, 0],
+                &[3, 7],
+                &exact,
+                "literal",
+            )
+            .is_err()
+        );
+
+        let entry_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("literal"),
+            addend: -4,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &entry_relocations,
+        };
+        let policies = [
+            CoffTextComdatSelection::None,
+            CoffTextComdatSelection::Any,
+            CoffTextComdatSelection::Any,
+        ];
+        let selected = selected_link_inputs(
+            &[entry, first, second],
+            &[0, 0, 0],
+            &[0, 0, 0],
+            &[1, 3, 7],
+            &policies,
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs.len(), 2);
+        let linked = mrml_rustc::link_x86_64_static::<64>(&selected.inputs, "entry").unwrap();
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            12
+        );
+        assert_eq!(linked.bytes()[16], b'A');
     }
 
     #[test]
