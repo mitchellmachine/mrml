@@ -1,0 +1,54 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.library.storage.fat32"
+kind = "library"
+name = "mrml-storage-fat32"
+profile = "library"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+must_run = true
+runtime_class = "microvm-eligible"
+supported = ["native-service", "microvm"]
+
+[[provides]]
+binding = "dynamic"
+fingerprint = "58b11da30dcaa7eac23bf94ec176e2cd14e642b9c8449c6639c4383782346fbc"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.storage.filesystem"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_storage_fat32"
+
+[rust]
+crate_name = "mrml_storage_fat32"
+crate_type = "lib"
+source = "packages/libraries/storage-fat32/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_interface_storage_filesystem_v1"
+compile_name = "mrml-interface-storage-filesystem-v1"
+package = "org.mrml.interface.storage.filesystem"
+scope = "compile"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

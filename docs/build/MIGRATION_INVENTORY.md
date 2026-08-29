@@ -511,6 +511,13 @@ service tests on Windows and Arch Linux. This is source/package/interface graph
 evidence; no live provider process, restart, AHCI hardware, IOMMU, OVMF, or
 physical disk was exercised.
 
+The new `packages/libraries/storage-fat32` semantic package declares the isolated
+generation-1 filesystem provider independently of AHCI. Its bounded FAT32 boot-
+sector/geometry parser passes four `mrml test` cases on Windows and Arch Linux;
+storage with both exact dynamic requirements passes 135 on each. No live
+provider, FAT file operation, formatting, recovery boot, interoperability oracle,
+or physical media was exercised.
+
 The shared UEFI-library move from `crates/mrml-uefi` to
 `packages/libraries/uefi` was checked on a Windows host without changing source
 behavior:

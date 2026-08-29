@@ -21,6 +21,13 @@ form = "isolated-service"
 generation = 1
 interface = "org.mrml.interface.storage.block-provider"
 
+[[requires]]
+binding = "dynamic"
+fingerprint = "58b11da30dcaa7eac23bf94ec176e2cd14e642b9c8449c6639c4383782346fbc"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.storage.filesystem"
+
 [[target]]
 arch = "x86_64"
 environment = "mrml"

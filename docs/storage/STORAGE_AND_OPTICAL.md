@@ -472,6 +472,15 @@ each pass 50 AHCI-library tests and 135 storage-service tests. The AHCI service
 entry/IPC adapter, FAT32 provider, and live supervised restart evidence remain
 **PLANNED**.
 
+The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
+`org.mrml.library.storage.fat32`. It advertises the exact generation-1 filesystem
+interface as an isolated service, and `mrml-storage` requires that dynamic
+binding separately from the block provider. Its initial read-only boot-sector
+parser validates FAT32 geometry, checked extents/FAT capacity, root-cluster and
+reserved-sector bounds, and volume identity. Four tests pass on Windows and Arch
+Linux; storage remains 135 on both. This does not implement mount, directories,
+LFN, file I/O, check/repair, format, live IPC, or interoperability evidence.
+
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never
 silently repairs. GPT checking covers protective MBR, primary and backup

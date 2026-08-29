@@ -421,6 +421,11 @@ on both hosts while the lean service passes 135. No service entry or live IPC
 route exists yet, so this proves package separation and interface-graph shape,
 not dynamic execution.
 
+`org.mrml.library.storage.fat32` now provides the matching isolated filesystem
+interface generation. Its first bounded read-only geometry parser passes four
+tests on both hosts, and storage requires this binding separately from AHCI.
+This is package/parser evidence, not a live endpoint, mount, or hot replacement.
+
 ```text
 download -> authenticate -> validate ABI/evidence/policy
   -> resolve typed requirements -> construct candidate generation

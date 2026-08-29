@@ -418,6 +418,13 @@ supervisor composition remain planned. This reuses canonical package resolution 
 service restart, so compatible replacement needs no kernel reboot and cannot
 silently retain stale authority.
 
+`org.mrml.library.storage.fat32` is now a second **PARTIALLY IMPLEMENTED**
+isolated provider. It supplies the filesystem-interface graph edge and a bounded
+read-only FAT32 geometry parser with four passing tests on Windows and Arch
+Linux. It grants no authority from a FAT signature and does not mount or mutate
+media. Storage requires block and filesystem providers as independently
+replaceable generations.
+
 ## Authority model
 
 Values must resolve into mechanisms and tests, not remain slogans:

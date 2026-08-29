@@ -1,6 +1,13 @@
 # Patent review log
 
-# 2026-08-29 — Cleanup-gated storage module registry
+# 2026-08-29 — Bounded FAT32 boot-sector geometry parser
+
+Patent review: **NOT_TRIGGERED**. This increment parses conventional published
+FAT32 BPB/extended-BPB geometry and validates bounded arithmetic, FAT capacity,
+and reserved locations. It implements no long-file-name mechanism, allocation
+or directory algorithm, formatting/repair, write behavior, caching, storage
+optimization, or interoperability extension. This technical screen is not legal
+advice or patent clearance.
 
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 

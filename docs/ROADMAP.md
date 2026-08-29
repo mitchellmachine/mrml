@@ -34,6 +34,13 @@ the storage policy service has no static AHCI module. Windows and Arch Linux eac
 pass 50 provider tests and 135 storage tests. The AHCI service entry/IPC adapter,
 then FAT32 provider extraction/implementation, remain next.
 
+The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
+`org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
+and bounded read-only FAT32 boot-sector/geometry parser pass four tests on
+Windows and Arch Linux; storage with both dynamic requirements passes 135.
+FSInfo parsing, FAT traversal, directory/LFN and file reads, checking, formatting,
+writes, service IPC, and live replacement remain next in dependency order.
+
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block
 sessions, repeats principal and `READ` authorization, reads and validates block

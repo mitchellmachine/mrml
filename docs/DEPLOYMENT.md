@@ -412,6 +412,12 @@ volume owns the content-addressed store, release manifests, generation metadata,
 and recovery generations. Bring-up may temporarily place more on FAT32; FAT32 is
 not the permanent package database.
 
+The separately serviced FAT32 compatibility provider is now **PARTIALLY
+IMPLEMENTED** only through bounded read-only boot-sector geometry validation.
+Its isolated package/interface binding permits compatible replacement without
+making FAT metadata authoritative. ESP mount, lookup, file I/O, format/check,
+installer composition, and live update remain unimplemented.
+
 Bootloader update uses A/B, previous/current, or equivalent staging: verify and
 write inactive state, flush and read-back verify, select a candidate, boot it,
 and only then mark it known good. Every interruption retains a defined recovery
