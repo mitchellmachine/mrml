@@ -1,5 +1,11 @@
 #![no_std]
 
+#[unsafe(no_mangle)]
+pub static mut EXPORTED_INITIALIZED: i32 = 40;
+
+#[unsafe(no_mangle)]
+pub static mut EXPORTED_ZERO_FILL: i32 = 0;
+
 macro_rules! state_group {
     ($module:ident, $function:ident, $initial:expr) => {
         mod $module {
@@ -31,12 +37,17 @@ state_group!(group_7, state_part_7, 14);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn state_answer() -> i32 {
-    group_0::state_part_0(0)
-        + group_1::state_part_1(0)
-        + group_2::state_part_2(0)
-        + group_3::state_part_3(0)
-        + group_4::state_part_4(0)
-        + group_5::state_part_5(0)
-        + group_6::state_part_6(0)
-        + group_7::state_part_7(0)
+    unsafe {
+        group_0::state_part_0(0)
+            + group_1::state_part_1(0)
+            + group_2::state_part_2(0)
+            + group_3::state_part_3(0)
+            + group_4::state_part_4(0)
+            + group_5::state_part_5(0)
+            + group_6::state_part_6(0)
+            + group_7::state_part_7(0)
+            + EXPORTED_INITIALIZED
+            + EXPORTED_ZERO_FILL
+            - 40
+    }
 }

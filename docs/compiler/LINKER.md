@@ -979,6 +979,17 @@ MRML and pinned rust-lld consume identical entry/archive inputs and both return
 definitions, writable COMDAT selection, TLS, PE base relocations, and general
 COFF data-section compatibility remain unsupported.
 
+The next bounded PE increment admits externally visible storage-class-2
+definitions in selected `.data$` and `.bss$` sections. The same eight-CGU probe
+now reads one exported initialized global and one exported zero-fill global from
+the defining codegen unit, alongside its object-local state. Exact unreferenced
+gnullvm `.data$\u0001__imp_` forwarding slots are excluded; cross-object Rust
+global access through those slots remains unsupported and fails closed. MRML
+reports 1,028 zero-fill bytes, emits 2,560 bytes, and returns 42; pinned rust-lld
+consumes the identical inputs, emits 2,048 bytes, and also returns 42. This is
+external-definition compatibility evidence, not import-table or general global
+data support.
+
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes
 the indexed but unreferenced object before the MRML link; MRML reaches the leaf

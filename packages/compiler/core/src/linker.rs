@@ -2632,6 +2632,7 @@ pub fn x86_64_coff_writable_section_count(object: &[u8]) -> Result<usize, Linker
             string_size,
         )?;
         if (name.starts_with(".data$") || name.starts_with(".bss$"))
+            && !name.starts_with(".data$\u{1}__imp_")
             && read_u32(object, header + 16)? != 0
         {
             count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
@@ -2727,7 +2728,9 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
                 Some((start, previous_end)) if previous_end == raw => (start, end),
                 Some(_) => return Err(LinkerError::UnsupportedCoff),
             });
-        } else if name.starts_with(".data$") || name.starts_with(".bss$") {
+        } else if (name.starts_with(".data$") || name.starts_with(".bss$"))
+            && !name.starts_with(".data$\u{1}__imp_")
+        {
             let characteristics = read_u32(object, header + 36)?;
             let zeroed = name.starts_with(".bss$");
             let expected = if zeroed { 0xc000_0080 } else { 0xc000_0040 };
@@ -2761,18 +2764,25 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
     }
     let (bytes, zeroed_size, relocation_offset, relocation_count, writable_section, section_name) =
         writable.ok_or(LinkerError::InvalidCoff)?;
-    let mut writable_symbol = None;
+    let mut local_writable_symbol = None;
+    let mut external_writable_symbol = None;
     let mut symbol_index = 0usize;
     while symbol_index < symbol_count {
         let symbol = symbol_offset + symbol_index * 18;
         let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
+        let storage_class = *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)?;
         if read_i16(object, symbol + 12)? == writable_section
-            && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 3
+            && (storage_class == 2 || storage_class == 3)
             && auxiliary == 0
             && read_u32(object, symbol + 8)? == 0
         {
             let name = coff_symbol_name(object, symbol, symbols_end, string_size)?;
-            if writable_symbol.replace(name).is_some() {
+            let slot = if storage_class == 2 {
+                &mut external_writable_symbol
+            } else {
+                &mut local_writable_symbol
+            };
+            if slot.replace(name).is_some() {
                 return Err(LinkerError::UnsupportedCoff);
             }
         }
@@ -2780,7 +2790,9 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
             .checked_add(auxiliary + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    let writable_symbol = writable_symbol.unwrap_or(section_name);
+    let writable_symbol = external_writable_symbol
+        .or(local_writable_symbol)
+        .unwrap_or(section_name);
     if relocation_count > relocation_storage.len() {
         return Err(LinkerError::TooManyRelocations);
     }
@@ -3196,6 +3208,8 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
             readonly_data = object.get(start..end).ok_or(LinkerError::InvalidCoff)?;
         } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
             unwind_sections[section + 1] = true;
+        } else if name.starts_with(".data$\u{1}__imp_") {
+            metadata_sections[section + 1] = true;
         } else if (name.starts_with(".data$") || name.starts_with(".bss$")) && size != 0 {
             writable_sections[section + 1] = true;
         } else if name == ".llvmbc" || name == ".llvmcmd" {
@@ -3400,7 +3414,9 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
             let storage_class = *object
                 .get(target_offset + 16)
                 .ok_or(LinkerError::InvalidCoff)?;
-            if storage_class != 3 || read_u32(object, target_offset + 8)? != 0 {
+            if (storage_class != 2 && storage_class != 3)
+                || read_u32(object, target_offset + 8)? != 0
+            {
                 return Err(LinkerError::UnsupportedCoff);
             }
             (

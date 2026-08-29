@@ -10,6 +10,15 @@ startup-runtime conventions and adds no novel ordering, graph, deduplication,
 folding, compression, cryptographic, or loader mechanism. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-29 — External COFF writable definitions
+
+Patent review: **NOT_TRIGGERED**. This increment recognizes conventional COFF
+external storage-class definitions in already supported writable sections and
+excludes unreferenced gnullvm import-forwarding slots from the bounded static
+image. It introduces no new symbol-resolution policy, object encoding,
+relocation arithmetic, compression, cryptographic mechanism, or loader
+behavior. This technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF initializer-array retention
 
 Patent review: **NOT_TRIGGERED**. This increment retains and lays out one

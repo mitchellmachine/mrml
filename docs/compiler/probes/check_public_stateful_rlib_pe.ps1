@@ -32,8 +32,8 @@ try {
     $peOffset = [BitConverter]::ToUInt32($mrmlImage, 0x3c)
     $optionalOffset = $peOffset + 24
     $uninitializedBytes = [BitConverter]::ToUInt32($mrmlImage, $optionalOffset + 12)
-    if ($uninitializedBytes -ne 1024) {
-        throw "MRML PE reports $uninitializedBytes uninitialized bytes instead of 1024"
+    if ($uninitializedBytes -ne 1028) {
+        throw "MRML PE reports $uninitializedBytes uninitialized bytes instead of 1028"
     }
 
     $numberOfSections = [BitConverter]::ToUInt16($mrmlImage, $peOffset + 6)
