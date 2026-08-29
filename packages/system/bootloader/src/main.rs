@@ -1288,7 +1288,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                                 | HostResourceIoError::StaleHandle,
                             ),
                         )
-                        | SharedBufferSyscallError::User(ActiveTaskUserCopyError::Buffer(_)),
+                        | SharedBufferSyscallError::UserValidation(
+                            ActiveTaskUserCopyError::Buffer(_),
+                        ),
                     ) => frame.complete_error(),
                     Err(_) => halt(),
                 }

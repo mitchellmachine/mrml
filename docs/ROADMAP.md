@@ -2120,6 +2120,9 @@ live composition remains pending.
    Its kernel executor now types user validation and post-delivery copy failure
    separately, with a focused test proving the former preserves one-use
    authority and the latter follows consumption.
+   The shared-buffer executor likewise types initial user validation separately
+   from user copy failure, so the boot boundary admits only the former as a
+   scrubbed precommit denial.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

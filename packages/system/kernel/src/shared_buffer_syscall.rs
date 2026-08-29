@@ -42,7 +42,8 @@ pub enum SharedBufferSyscallError<S, U> {
     Runtime(TaskRuntimeError),
     Authorization(IpcSharedBufferError),
     Buffer(IpcSharedBufferIoError<S>),
-    User(U),
+    UserValidation(U),
+    UserCopy(U),
     ScratchTooSmall,
 }
 
@@ -131,7 +132,7 @@ impl SharedBufferSyscallExecutor {
             return Err(SharedBufferSyscallError::ScratchTooSmall);
         }
         user.validate(task, address, length, user_access)
-            .map_err(SharedBufferSyscallError::User)?;
+            .map_err(SharedBufferSyscallError::UserValidation)?;
         let capabilities = runtime
             .capabilities(task)
             .map_err(SharedBufferSyscallError::Runtime)?;
@@ -154,7 +155,7 @@ impl SharedBufferSyscallExecutor {
         let scratch = &mut scratch[..length];
         if service_writes {
             user.read(task, address, scratch)
-                .map_err(SharedBufferSyscallError::User)?;
+                .map_err(SharedBufferSyscallError::UserCopy)?;
             message
                 .write_selected_shared_buffer(
                     capabilities,
@@ -183,7 +184,7 @@ impl SharedBufferSyscallExecutor {
                 )
                 .map_err(SharedBufferSyscallError::Buffer)?;
             user.write(task, address, scratch)
-                .map_err(SharedBufferSyscallError::User)
+                .map_err(SharedBufferSyscallError::UserCopy)
         }
     }
 }
@@ -537,7 +538,7 @@ mod tests {
                 &mut user,
                 &mut scratch,
             ),
-            Err(SharedBufferSyscallError::User(()))
+            Err(SharedBufferSyscallError::UserValidation(()))
         );
         assert_eq!((user.copies, shared.calls), (0, 0));
         assert_eq!(scratch, [0; 8]);

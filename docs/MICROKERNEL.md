@@ -6700,6 +6700,11 @@ distinct typed phases instead of a shared user-copy error. Its focused test
 proves validation preserves the one-use capability while copy uncertainty
 follows consumption; the bootloader no longer infers that distinction from a
 backend-specific nested error.
+The shared-buffer syscall executor now makes the same validation-versus-copy
+phase distinction. Initial user-range rejection remains a scrubbed precommit
+denial, while ticket or copy uncertainty cannot be accidentally admitted by
+matching a generic user error. Its focused tests and both service UEFI profiles
+pass under the 595-test kernel gate.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6724,7 +6729,8 @@ review. Buffered userspace-range denial follows that existing boundary and does
 not introduce a new mechanism; the matching initial receive-range denial has
 the same classification. Boot-recovery precommit denial classification likewise
 uses the existing one-use delivery boundary, and typing its existing phases does
-not trigger review.
+not trigger review. Shared-buffer copy-phase typing is the same conventional
+boundary hardening and also does not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

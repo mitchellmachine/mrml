@@ -181,6 +181,8 @@ access. The security/acceptance gate is canonical in
 - The boot-recovery executor reports user-range validation and post-consumption
   copy failure as distinct typed phases; callers need not infer commit state
   from backend-specific errors.
+- The shared-buffer executor also separates user validation from copy failure;
+  only the typed validation phase is admitted as a caller denial.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.
