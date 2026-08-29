@@ -410,7 +410,10 @@ mod tests {
         }
     }
 
-    fn make_request(operation: IdePioOperation, rights: Rights) -> (CapabilitySpace<2>, IdePioRequest) {
+    fn make_request(
+        operation: IdePioOperation,
+        rights: Rights,
+    ) -> (CapabilitySpace<2>, IdePioRequest) {
         let mut caps = CapabilitySpace::new();
         let device_capability = caps.insert(ObjectId(20), rights).unwrap();
         let buffer = if operation == IdePioOperation::Flush {
