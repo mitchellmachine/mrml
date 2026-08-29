@@ -23,8 +23,11 @@ gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
 schemas define bounded opaque-handle operations for isolated library providers;
 each passes one focused test on Windows and Arch Linux. The storage service will
 bind exact admitted generations and restart through complete cleanup rather than
-load path-selected code or reboot. The runtime module registry, AHCI provider
-extraction, and FAT32 provider remain next; current AHCI code is preserved.
+load path-selected code or reboot. The fixed-capacity registry is now
+**PARTIALLY IMPLEMENTED** with separate authorities, exact generation changes,
+cleanup-before-launch, health-check-before-publication, quarantine, unavailable
+state, and explicit retry. Storage passes 181 tests on Windows and Arch Linux.
+AHCI extraction and FAT32 remain next; current AHCI code is preserved.
 
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block

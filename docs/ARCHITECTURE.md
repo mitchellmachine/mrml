@@ -406,8 +406,11 @@ interface-schema layer. Block transports and filesystems are immutable library
 packages dynamically bound as isolated supervised services to `mrml-storage`;
 they are not ambient in-process plugins. Generation-1 block-provider and
 filesystem interfaces define bounded generational operations and pass focused
-Windows/Arch Linux tests. Runtime rebinding and concrete AHCI/FAT32 providers
-remain planned. This reuses canonical package resolution and cleanup-gated
+Windows/Arch Linux tests. A fixed-capacity registry now models authority-bound
+binding and cleanup/launch/health-check replacement; failure quarantines or
+leaves the provider unavailable rather than falling back. Storage passes 181
+tests on both hosts. Concrete providers and live supervisor composition remain
+planned. This reuses canonical package resolution and cleanup-gated
 service restart, so compatible replacement needs no kernel reboot and cannot
 silently retain stale authority.
 

@@ -410,6 +410,10 @@ because transports own device/DMA state and filesystems parse hostile media.
 AHCI and FAT32 packages may be libraries, but runtime composition is a supervised
 exact-generation endpoint rather than DLL/SO path search. Compatible updates use
 cleanup-gated restart without reboot; names and manifests grant no authority.
+The storage-side fixed registry exercises cleanup before candidate launch,
+health-check before publication, quarantine on cleanup uncertainty, and an
+unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
+model evidence, not yet a live supervisor/provider restart.
 
 ```text
 download -> authenticate -> validate ABI/evidence/policy

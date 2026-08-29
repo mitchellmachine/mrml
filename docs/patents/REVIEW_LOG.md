@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Cleanup-gated storage module registry
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
+capability, exact-generation, quarantine, service cleanup, launch, health-check,
+and retry patterns to a bounded storage-provider registry. It introduces no new
+loading algorithm, filesystem format, device command, storage optimization, or
+persistent recovery mechanism. This technical screen is not legal advice or
+patent clearance.
+
 # 2026-08-29 — Versioned modular storage interfaces
 
 Patent review: **NOT_TRIGGERED**. This increment defines conventional bounded

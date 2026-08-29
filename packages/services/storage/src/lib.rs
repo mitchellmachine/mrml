@@ -35,6 +35,7 @@ mod recovery;
 mod recovery_journal;
 mod release_journal;
 mod service_loop;
+mod storage_module;
 mod transaction;
 
 pub use ahci_cleanup::{AhciCleanupError, AhciCleanupFailure, reclaim_stopped_ahci_port_dma};
@@ -180,6 +181,10 @@ pub use release_journal::{
 };
 pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,
+};
+pub use storage_module::{
+    StorageModuleBackend, StorageModuleBinding, StorageModuleClass, StorageModuleError,
+    StorageModuleRegistry, StorageModuleState,
 };
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,
