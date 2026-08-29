@@ -6960,6 +6960,13 @@ the delegation table, observes only `DelegationTableFull`, restores valid state,
 and completes the next delivery at sequence five. The total remains 627.
 Patent review: `NOT_TRIGGERED` — this only reorders a conventional fixed-table
 capacity check in the existing IPC transaction.
+Delegation publication now prepares the exact bounded empty-slot indices before
+receiver capability mutation. After transfer, each derived edge is written to
+its reserved slot without a fallible search. A focused fragmented-table test
+proves the plan selects indices `0, 2, 4` and rejects an impossible over-bound
+internal request, raising the Linux kernel total to 628.
+Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
+and commit for the existing IPC bookkeeping mechanism.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

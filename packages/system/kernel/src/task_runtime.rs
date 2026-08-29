@@ -994,7 +994,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .validate_derivation_capacity(requested.len())
             .map_err(IpcError::from)
             .map_err(TaskRuntimeError::Ipc)?;
-        self.validate_delegation_capacity(requested.len())?;
+        let delegation_slots = self.prepare_delegation_slots(requested.len())?;
         self.validate_delegation_graph()?;
         let (source, destination) = two_domains_mut(&mut self.domains, sender_slot, receiver_slot)
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
@@ -1005,13 +1005,12 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             &mut destination.capabilities,
         )
         .map_err(TaskRuntimeError::Ipc)?;
-        for ((source, _), destination) in requested.iter().zip(message.capabilities()) {
-            let slot = self
-                .delegations
-                .iter_mut()
-                .find(|edge| edge.is_none())
-                .ok_or(TaskRuntimeError::IntegrityFailure)?;
-            *slot = Some(Delegation {
+        for (((source, _), destination), slot) in requested
+            .iter()
+            .zip(message.capabilities())
+            .zip(delegation_slots)
+        {
+            self.delegations[slot] = Some(Delegation {
                 source_task: sender,
                 source: *source,
                 destination_task: receiver,
@@ -1073,7 +1072,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .validate_derivation_capacity(requested.len())
             .map_err(IpcError::from)
             .map_err(TaskRuntimeError::Ipc)?;
-        self.validate_delegation_capacity(requested.len())?;
+        let _ = self.prepare_delegation_slots(requested.len())?;
         Self::validate_inbox_state(
             self.domains[receiver_slot]
                 .as_ref()
@@ -1463,17 +1462,26 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(())
     }
 
-    fn validate_delegation_capacity(&self, requested: usize) -> Result<(), TaskRuntimeError> {
-        if self
-            .delegations
-            .iter()
-            .filter(|edge| edge.is_none())
-            .count()
-            < requested
-        {
+    fn prepare_delegation_slots(
+        &self,
+        requested: usize,
+    ) -> Result<[usize; crate::MAX_CAPABILITIES], TaskRuntimeError> {
+        if requested > crate::MAX_CAPABILITIES {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let mut slots = [0; crate::MAX_CAPABILITIES];
+        let mut count = 0;
+        for (index, edge) in self.delegations.iter().enumerate() {
+            if edge.is_some() || count == requested {
+                continue;
+            }
+            slots[count] = index;
+            count += 1;
+        }
+        if count != requested {
             return Err(TaskRuntimeError::DelegationTableFull);
         }
-        Ok(())
+        Ok(slots)
     }
 
     fn validate_delegation_graph(&self) -> Result<(), TaskRuntimeError> {
@@ -2193,6 +2201,30 @@ mod tests {
                 )
                 .unwrap(),
             5
+        );
+    }
+
+    #[test]
+    fn delegation_slot_plan_selects_exact_fragmented_capacity() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let capability = Capability::from_token(1);
+        let occupied = Delegation {
+            source_task: task,
+            source: capability,
+            destination_task: task,
+            destination: capability,
+        };
+        runtime.delegations[1] = Some(occupied);
+        runtime.delegations[3] = Some(occupied);
+
+        let slots = runtime.prepare_delegation_slots(3).unwrap();
+        assert_eq!(&slots[..3], &[0, 2, 4]);
+        assert_eq!(
+            runtime.prepare_delegation_slots(crate::MAX_CAPABILITIES + 1),
+            Err(TaskRuntimeError::IntegrityFailure)
         );
     }
 
