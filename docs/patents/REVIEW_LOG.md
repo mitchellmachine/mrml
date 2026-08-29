@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical NVMe provider catalog endpoint
+
+Patent review: **NOT_TRIGGERED**. This increment publishes caller-supplied,
+generation-bound NVMe namespace metadata through the already screened canonical
+enumeration operation. It adds no NVMe register, queue, command, discovery,
+storage scheduling, caching, allocation, naming, encoding, data-layout, or
+optimization behavior. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — Canonical AHCI provider catalog endpoint
 
 Patent review: **NOT_TRIGGERED**. This increment publishes caller-supplied,

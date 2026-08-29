@@ -502,7 +502,10 @@ three generations before mutation, deletes the I/O submission and completion
 queues, removes their DMA layout, disables the controller, removes the admin
 DMA layout, and finally unmaps the BAR. An initial identity mismatch returns all
 live owners untouched; any later failure reports the exact completed phase and
-retains the remaining layouts as quarantined ownership. Sixty-three focused
+retains the remaining layouts as quarantined ownership. The NVMe library now
+publishes caller-supplied namespace sessions and media generations through the
+same canonical block-provider catalog as AHCI, without exposing admin-command
+authority. Sixty-four focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
@@ -601,7 +604,7 @@ generations. Encoding validates every record and zeroes the exact output extent
 before publication. The AHCI library implements enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
 51 AHCI-library tests pass on Windows and Arch Linux. Provider-side isolated
-IPC, NVMe/IDE endpoints, and read/write/flush/reset transport calls remain
+IPC, the IDE endpoint, and read/write/flush/reset transport calls remain
 **PLANNED**.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays

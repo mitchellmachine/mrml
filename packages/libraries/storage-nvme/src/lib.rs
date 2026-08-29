@@ -19,6 +19,12 @@ mod nvme_queue_dma;
 mod nvme_queue_program;
 mod nvme_shutdown;
 
+use mrml_interface_storage_block_provider_v1::{
+    decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
+    BlockProviderDevice, BlockProviderTransport, EnumerateError, ProtocolError,
+    ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
+};
+
 pub use nvme_admin_command::{
     execute_nvme_identify_controller, execute_nvme_identify_namespace,
     negotiate_nvme_io_queue_count, NvmeAdminCommandError, NvmeAdminCommandFailure,
@@ -80,3 +86,56 @@ pub use nvme_queue_program::{
 pub use nvme_shutdown::{
     shutdown_nvme_provider, NvmeShutdownError, NvmeShutdownFailure, NvmeShutdownReceipt,
 };
+
+pub struct NvmeBlockProvider<'a> {
+    devices: &'a [BlockProviderDevice],
+}
+
+impl<'a> NvmeBlockProvider<'a> {
+    pub const fn new(devices: &'a [BlockProviderDevice]) -> Self {
+        Self { devices }
+    }
+}
+
+impl BlockProviderTransport for NvmeBlockProvider<'_> {
+    fn enumerate(
+        &mut self,
+        request: &[u8; ENUMERATE_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; ENUMERATE_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_enumerate_request(request, memory.len() as u64)?;
+        let result = encode_block_device_catalog(self.devices, request.output, memory)
+            .map_err(|_| EnumerateError::InvalidRequest);
+        Ok(encode_enumerate_response(result))
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use mrml_interface_storage_block_provider_v1::{
+        decode_enumerate_response, encode_enumerate_request, BorrowedWriteView, OpaqueHandle,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+    };
+
+    #[test]
+    fn provider_enumerates_exact_namespace_and_media_generations() {
+        let devices = [BlockProviderDevice {
+            session: OpaqueHandle::new(6, 14).unwrap(),
+            logical_block_bytes: 4096,
+            flags: BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET,
+            logical_block_count: 262_144,
+            media_generation: 21,
+        }];
+        let mut provider = NvmeBlockProvider::new(&devices);
+        let output = BorrowedWriteView::within(16, 48, 64).unwrap();
+        let request = encode_enumerate_request(output).unwrap();
+        let mut memory = [0xa5; 64];
+        let response = provider.enumerate(&request, &mut memory).unwrap();
+        assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(48)));
+        assert_eq!(&memory[16..24], b"MRMLBLK\0");
+        assert_eq!(u32::from_le_bytes(memory[32..36].try_into().unwrap()), 6);
+        assert_eq!(u32::from_le_bytes(memory[36..40].try_into().unwrap()), 14);
+        assert_eq!(u64::from_le_bytes(memory[56..64].try_into().unwrap()), 21);
+    }
+}
