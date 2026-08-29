@@ -588,6 +588,17 @@ AHCI. Requirements without this explicit multiplicity remain exactly-one and
 fail on ambiguity. PCI enumeration order never selects release membership or
 grants device authority.
 
+The generation-1 block-provider interface now **PARTIALLY IMPLEMENTS** its
+canonical isolated-service transport at the enumeration gate. The call frame
+binds the ABI magic and schema, exact interface fingerprint and generation,
+operation number, and fixed request/response sizes. The transport routes through
+one opaque endpoint generation and validates the borrowed catalog range before
+IPC; response decoding rejects reserved bytes, unknown status values, and byte
+counts beyond both the caller's output and the 64-KiB interface limit. Three
+focused interface tests pass on Windows and Arch Linux. Provider catalog format,
+provider-side AHCI/NVMe/IDE endpoints, and read/write/flush/reset transport calls
+remain **PLANNED**.
+
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
 sequential by provider and each parser/register/queue gate is independently
 bounded and tested.

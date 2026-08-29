@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical block-provider enumeration boundary
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the existing
+generation-1 enumeration operation, preserves an exact isolated endpoint
+generation, and validates a caller-bounded result buffer and byte count. It adds
+no device command, storage scheduling, caching, allocation, naming, encoding,
+data-layout, or discovery-optimization algorithm. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-29 — Ordered full NVMe provider shutdown
 
 Patent review: **NOT_TRIGGERED**. This increment composes the already reviewed
