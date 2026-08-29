@@ -10245,6 +10245,17 @@ interoperability work; this gate is an independently expressed defensive PCI
 snapshot validator. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-29 — Authority-free classic PCI IDE discovery
+
+Patent review: **NOT_TRIGGERED**. This increment defensively decodes the
+conventional PCI mass-storage/IDE programming-interface bits and ordinary I/O
+BAR encodings into compatibility/native channel port geometry. It does not
+implement ATA commands, identify data, PIO transfer, bus-master DMA, interrupts,
+reset, caching, scheduling, or another storage algorithm. Fixed compatibility
+ports and PCI BAR decoding are longstanding interface facts and are expressed
+independently here. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

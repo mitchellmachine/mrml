@@ -431,6 +431,17 @@ later register and queue work will use the current
 [NVM Express specifications](https://nvmexpress.org/specifications/) as its
 interoperability reference.
 
+The opt-in classic IDE disk provider is **PARTIALLY IMPLEMENTED** at the same
+authority-free discovery level. It validates an exact PCI mass-storage/IDE
+function and configuration generation, rejects reserved programming-interface
+bits, distinguishes compatibility and native primary/secondary channels, uses
+the architectural fixed compatibility ports without trusting ignored BARs, and
+validates native command/control and optional bus-master I/O BARs within the
+x86 port space. It returns port geometry only; port capabilities, device select,
+PIO commands, ATA identify, media generations, interrupts, bus-master DMA,
+reset, service IPC, runtime publication, and physical-device evidence remain
+**PLANNED**. Six focused tests pass on Windows and Arch Linux.
+
 ## Disk checking and images
 
 ## Dynamically serviced storage modules
@@ -586,8 +597,10 @@ One common bounded optical/MMC service owns profile discovery, readiness,
 capacity, reads, eject/load, write/erase, synchronization, finalization, sense
 mapping, timeout policy, and progress. Initial native transports are only
 AHCI/SATA ATAPI and applicable USB Mass Storage SCSI/MMC. AHCI and USB provide
-transport; neither duplicates Blu-ray policy. IDE/PATA, FireWire, general SCSI
-HBA, and other transports remain out of scope.
+transport; neither duplicates Blu-ray policy. The optional isolated IDE/PATA
+disk provider described above does not add IDE/ATAPI to the optical stack;
+IDE/ATAPI optical, FireWire, general SCSI HBA, and other transports remain out
+of scope.
 
 Errors are semantic—no media, media changed/read-only/not blank/full, drive not
 ready, unsupported media/command, sense error, device removed, write/power-
