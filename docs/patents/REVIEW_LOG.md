@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Cleanup-gated validated block-provider replacement
+
+Patent review: **NOT_TRIGGERED**. This increment composes MRML's existing module
+cleanup, fresh-domain launch, catalog health-check, failed-candidate teardown,
+unavailable state, and explicit retry rules. It adds no device discovery,
+command, storage scheduling, caching, allocation, naming, encoding, data-layout,
+indexing, or optimization algorithm. This technical screen is not legal advice
+or patent clearance.
+
 # 2026-08-29 — Block-provider launch catalog health check
 
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing exact

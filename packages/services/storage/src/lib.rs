@@ -64,6 +64,7 @@ pub use block_protocol::{
 };
 pub use block_provider_health::{
     healthcheck_block_provider, BlockProviderHealthError, BlockProviderHealthReceipt,
+    BlockProviderModuleSupervisor, ValidatedBlockProviderBackend,
 };
 pub use block_service::{
     canonical_uefi_block_stable_id, parse_canonical_uefi_sata_block_route, BlockDeviceDescriptor,

@@ -707,7 +707,7 @@ slot unavailable until explicit retry and never falls back. Storage passes
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
 the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
-each pass 55 AHCI-library tests. The storage service now passes 140 tests with a
+each pass 55 AHCI-library tests. The storage service now passes 142 tests with a
 hosted cleanup-gated FAT32 generation replacement that invalidates the old
 endpoint, health-checks the candidate through canonical probe bytes, and leaves
 the modeled kernel epoch unchanged. A production block-provider health-check now
@@ -746,8 +746,13 @@ register-level syscall adapter erase transient buffers on every path; the
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Thirty-three tests pass
 on Windows and Arch Linux, and the MRML-native release binary builds on Windows
-as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. Storage
-passes 140 tests on both hosts. This does not implement mount, lookup/open policy,
+as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. The
+validated backend now makes the block-provider health check mandatory during
+replacement:
+it cleans and erases the old generation, launches the candidate, publishes only
+after a valid catalog, and explicitly cleans a failed candidate before the slot
+becomes unavailable. Retry therefore launches fresh state. Storage passes 142
+tests on both hosts. This does not implement mount, lookup/open policy,
 check/repair, format, writes, installed-kernel launch, or physical interoperability
 evidence.
 
