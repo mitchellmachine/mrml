@@ -938,6 +938,16 @@ Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.
 
+The same explicit experimental mode now exposes `compile-elf`, which sends one
+supported source function through `mrml-rustc` code generation and the
+MRML-owned ELF serializer in a single canonical frontend operation. It never
+invokes rust-lld and never falls back to upstream compilation. The frontend
+sets the declared compiler driver's bounded 32 MiB Linux child stack before
+execution. A durable source probe compiled a terminal `int3` entry, emitted a
+4,097-byte ELF, and produced the expected hosted Linux `SIGTRAP` status 133.
+This proves source-to-owned-linker frontend integration for one supported
+function, not production compiler admission or general crate compilation.
+
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes
 the indexed but unreferenced object before the MRML link; MRML reaches the leaf

@@ -289,6 +289,9 @@ fn print_help() {
     println!(
         "       mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o OUTPUT [--release]"
     );
+    println!(
+        "       mrml compiler mrml-rustc-experimental compile-elf INPUT --function NAME -o OUTPUT [--release]"
+    );
     println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT [OUTPUT] [--compress] [--private-key KEY]"
@@ -334,24 +337,34 @@ struct ExperimentalElfLinkRequest<'a> {
     release: bool,
 }
 
-fn parse_experimental_elf_link_request(
-    args: &[String],
-) -> Result<ExperimentalElfLinkRequest<'_>, String> {
+#[derive(Debug, Eq, PartialEq)]
+struct ExperimentalElfCompileRequest<'a> {
+    input: &'a str,
+    function: &'a str,
+    output: &'a str,
+    release: bool,
+}
+
+fn validate_experimental_compiler_mode(args: &[String], operation: &str) -> Result<(), String> {
     let Some(mode) = args.first().map(String::as_str) else {
         return Err("CompilerModeMissing".into());
     };
     match mode {
-        "mrml-rustc-experimental" => {}
+        "mrml-rustc-experimental" => Ok(()),
         "mrml-rustc-production" => {
-            return Err("CompilerModeUnavailable { mode: MrmlRustcProduction }".into());
+            Err("CompilerModeUnavailable { mode: MrmlRustcProduction }".into())
         }
-        "upstream-rustc" => {
-            return Err(
-                "CompilerOperationUnsupported { mode: UpstreamRustc, operation: link-elf }".into(),
-            );
-        }
-        other => return Err(format!("CompilerModeInvalid {{ mode: {other} }}")),
+        "upstream-rustc" => Err(format!(
+            "CompilerOperationUnsupported {{ mode: UpstreamRustc, operation: {operation} }}"
+        )),
+        other => Err(format!("CompilerModeInvalid {{ mode: {other} }}")),
     }
+}
+
+fn parse_experimental_elf_link_request(
+    args: &[String],
+) -> Result<ExperimentalElfLinkRequest<'_>, String> {
+    validate_experimental_compiler_mode(args, "link-elf")?;
     if args.get(1).map(String::as_str) != Some("link-elf") {
         return Err("CompilerOperationInvalid { expected: link-elf }".into());
     }
@@ -398,12 +411,88 @@ fn parse_experimental_elf_link_request(
     })
 }
 
+fn parse_experimental_elf_compile_request(
+    args: &[String],
+) -> Result<ExperimentalElfCompileRequest<'_>, String> {
+    validate_experimental_compiler_mode(args, "compile-elf")?;
+    if args.get(1).map(String::as_str) != Some("compile-elf") {
+        return Err("CompilerOperationInvalid { expected: compile-elf }".into());
+    }
+    let release = args.iter().any(|argument| argument == "--release");
+    if args
+        .iter()
+        .filter(|argument| *argument == "--release")
+        .count()
+        > 1
+    {
+        return Err("InvalidOption { option: --release }".into());
+    }
+    let filtered = args
+        .iter()
+        .skip(2)
+        .filter(|argument| argument.as_str() != "--release")
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if filtered.len() != 5 || filtered[1] != "--function" || filtered[3] != "-o" {
+        return Err("CompilerCompileSyntaxError".into());
+    }
+    let input = filtered[0];
+    let function = filtered[2];
+    let output = filtered[4];
+    if input.is_empty()
+        || input.starts_with('-')
+        || function.is_empty()
+        || function.starts_with('-')
+        || output.is_empty()
+        || output.starts_with('-')
+    {
+        return Err("CompilerCompileSyntaxError".into());
+    }
+    Ok(ExperimentalElfCompileRequest {
+        input,
+        function,
+        output,
+        release,
+    })
+}
+
 fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
-    let request = parse_experimental_elf_link_request(args)?;
+    let operation = args.get(1).map(String::as_str);
+    let (release, driver_arguments, failure) = match operation {
+        Some("link-elf") => {
+            let request = parse_experimental_elf_link_request(args)?;
+            let mut arguments = vec!["--link-elf".to_owned()];
+            arguments.extend(request.inputs.into_iter().map(str::to_owned));
+            arguments.extend([
+                "--entry".to_owned(),
+                request.entry.to_owned(),
+                "-o".to_owned(),
+                request.output.to_owned(),
+            ]);
+            (request.release, arguments, "CompilerLinkFailed")
+        }
+        Some("compile-elf") => {
+            let request = parse_experimental_elf_compile_request(args)?;
+            (
+                request.release,
+                vec![
+                    "--emit".to_owned(),
+                    "elf-executable".to_owned(),
+                    "--function".to_owned(),
+                    request.function.to_owned(),
+                    request.input.to_owned(),
+                    "-o".to_owned(),
+                    request.output.to_owned(),
+                ],
+                "CompilerCompileFailed",
+            )
+        }
+        _ => return Err("CompilerOperationInvalid { expected: link-elf|compile-elf }".into()),
+    };
     let host = host_family()?;
     let compile_target = default_rust_target(host)?;
     let mut build_args = vec!["build".to_owned(), "mrml-rustc-driver".to_owned()];
-    if request.release {
+    if release {
         build_args.push("--release".to_owned());
     }
     build_or_test(workspace, &build_args)?;
@@ -417,16 +506,15 @@ fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String
         .iter()
         .find(|binary| binary.output == "mrml-rustc")
         .ok_or("CompilerDriverBinaryMissing")?;
-    let driver = native_output_dir(workspace, host, compile_target, request.release)?.join(
-        format!("{}{}", binary.output, rust_binary_extension(compile_target)),
-    );
+    let driver = native_output_dir(workspace, host, compile_target, release)?.join(format!(
+        "{}{}",
+        binary.output,
+        rust_binary_extension(compile_target)
+    ));
     let mut command = Command::new(&driver);
-    command.current_dir(&workspace.root).arg("--link-elf");
-    for input in request.inputs {
-        command.arg(input);
-    }
+    command.current_dir(&workspace.root).args(driver_arguments);
+    configure_process_stack(&mut command, Some(32 * 1024 * 1024))?;
     let status = command
-        .args(["--entry", request.entry, "-o", request.output])
         .status()
         .map_err(|error| {
             format!(
@@ -436,12 +524,13 @@ fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String
         })?;
     if !status.success() {
         return Err(format!(
-            "CompilerLinkFailed {{ mode: MrmlRustcExperimental, format: ELF64, status: {:?} }}",
+            "{failure} {{ mode: MrmlRustcExperimental, format: ELF64, status: {:?} }}",
             status.code()
         ));
     }
     println!(
-        "mrml compiler: mode=MrmlRustcExperimental linker=mrml-rustc format=ELF64 status=PASS"
+        "mrml compiler: mode=MrmlRustcExperimental operation={} linker=mrml-rustc format=ELF64 status=PASS",
+        operation.unwrap_or("invalid")
     );
     Ok(())
 }
@@ -4450,7 +4539,7 @@ fn execute_test(
     stack_bytes: Option<usize>,
 ) -> Result<(), String> {
     let mut command = Command::new(output);
-    configure_test_process_stack(&mut command, stack_bytes)?;
+    configure_process_stack(&mut command, stack_bytes)?;
     let status = command
         .status()
         .map_err(|error| format!("TestExecutionUnavailable {{ detail: {error} }}"))?;
@@ -4466,7 +4555,7 @@ fn execute_test(
 }
 
 #[cfg(target_os = "linux")]
-fn configure_test_process_stack(
+fn configure_process_stack(
     command: &mut Command,
     stack_bytes: Option<usize>,
 ) -> Result<(), String> {
@@ -4505,7 +4594,7 @@ fn configure_test_process_stack(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn configure_test_process_stack(
+fn configure_process_stack(
     _command: &mut Command,
     _stack_bytes: Option<usize>,
 ) -> Result<(), String> {
@@ -5556,6 +5645,52 @@ mod tests {
                 "start".into(),
                 "-o".into(),
                 "image".into(),
+            ])
+            .is_err()
+        );
+        let compile_arguments = [
+            "mrml-rustc-experimental",
+            "compile-elf",
+            "source.rs",
+            "--function",
+            "start",
+            "-o",
+            "image",
+            "--release",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            parse_experimental_elf_compile_request(&compile_arguments).unwrap(),
+            ExperimentalElfCompileRequest {
+                input: "source.rs",
+                function: "start",
+                output: "image",
+                release: true,
+            }
+        );
+        assert_eq!(
+            parse_experimental_elf_compile_request(&[
+                "upstream-rustc".into(),
+                "compile-elf".into(),
+                "source.rs".into(),
+                "--function".into(),
+                "start".into(),
+                "-o".into(),
+                "image".into(),
+            ]),
+            Err(
+                "CompilerOperationUnsupported { mode: UpstreamRustc, operation: compile-elf }"
+                    .into()
+            )
+        );
+        assert!(
+            parse_experimental_elf_compile_request(&[
+                "mrml-rustc-experimental".into(),
+                "compile-elf".into(),
+                "source.rs".into(),
+                "--function".into(),
+                "start".into(),
+                "-o".into(),
             ])
             .is_err()
         );

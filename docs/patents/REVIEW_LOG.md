@@ -9322,6 +9322,15 @@ the existing bounded queues. It introduces no new archive, selection, mapping,
 compression, cryptographic, or loading mechanism. This technical screen is not
 legal advice or patent clearance.
 
+# 2026-08-28 — Experimental source-to-owned-linker frontend route
+
+Patent review: **NOT_TRIGGERED**. This increment exposes the existing custom
+compiler and MRML-owned ELF serializer through one explicit build-frontend
+operation and applies an existing bounded child-stack mechanism. It introduces
+no new compilation, linking, object-format, compression, cryptographic, or
+loading mechanism. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
