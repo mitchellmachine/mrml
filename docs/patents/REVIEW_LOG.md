@@ -10731,6 +10731,16 @@ introduces no new object encoding, relocation kind, compression, cryptographic
 mechanism, or loader behavior. This technical screen is not legal advice or
 patent clearance.
 
+# 2026-08-29 — Typed COFF source-object and section identities
+
+Patent review: **NOT_TRIGGERED**. This increment represents an already
+validated COFF section with a bounded source-object number and section number,
+then applies ordinary exact equality and checked-offset resolution. It preserves
+existing PE/COFF parsing, relocation encoding, archive rules, COMDAT policy,
+and output layout. It introduces no object format, compression, cryptographic
+mechanism, loader behavior, or novel symbol-resolution algorithm. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded discardable COFF debug-section admission
 
 Patent review: **NOT_TRIGGERED**. This increment validates and omits

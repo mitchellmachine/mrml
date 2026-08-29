@@ -1366,3 +1366,20 @@ general discontiguous packing or full `libcore` support. A compiler-core run
 executed 809 unit tests and exposed four focused expectation/setup failures,
 which were corrected. Its rerun lost generated rustc inputs before final
 linking, so a complete package-pass result is not claimed.
+
+The format-neutral link core now has a typed non-global COFF section identity:
+one nonzero bounded source-object number plus one nonzero section number.
+Internal definitions do not participate in archive eligibility, global symbol
+lookup, or duplicate-name checks. Relocations resolve only the exact identity
+and a checked offset within its read-only payload. Two source objects may
+therefore retain identically named `.rdata` sections without inventing unique
+strings or risking cross-object resolution. Synthetic coverage checks exact
+resolution to the second same-named section, invalid zero identities, and
+non-selection of an archive member that exposes only an internal section.
+
+The actual Linux release driver build passes. The complete compiler-core gate
+again failed at final `rust-lld` because its generated object inputs were
+absent; it did not execute the unit binary, so no package-pass result is
+claimed. COFF decoder and driver transport of the typed identity remain the
+next milestone before associative read-only fragments can replace the current
+single-slice representation.

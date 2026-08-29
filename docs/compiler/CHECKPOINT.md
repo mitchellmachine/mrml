@@ -124,6 +124,19 @@ objects were absent at final `rust-lld` invocation, so no complete package-pass
 claim is made. Patent review: **NOT_TRIGGERED**; see
 `docs/patents/REVIEW_LOG.md`.
 
+Commit `70da7783` introduces a bounded `CoffSectionIdentity` containing one
+nonzero source-object identity and one nonzero section identity. Definitions
+using it are deliberately non-global: names cannot trigger archive extraction,
+collide across objects, or satisfy entry/global relocation lookup. A typed
+relocation resolves only an exact identity and checked read-only offset.
+Synthetic coverage uses two objects with the same `.rdata` label, resolves the
+second identity exactly, rejects zero identities, and proves an internal-only
+archive member remains unselected. The actual Linux release driver build
+passes. The compiler-core package gate again reached final `rust-lld` and failed
+because generated input objects were absent, so no package-pass claim is made.
+Decoder/driver adoption remains the next gate. Patent review:
+**NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
 Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
 fallible external-symbol inventory over validated symbol and string tables.
 Structural metadata admits at most 4,096 sections, covering the pinned
