@@ -34,6 +34,19 @@ pub enum TaskRuntimeError {
     DelegationTableFull,
 }
 
+impl TaskRuntimeError {
+    pub const fn is_precommit_send_denial(self) -> bool {
+        matches!(
+            self,
+            Self::MissingTask
+                | Self::SameTaskIpc
+                | Self::Ipc(_)
+                | Self::InboxFull
+                | Self::DelegationTableFull
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountedTaskRuntimeError {
     Runtime(TaskRuntimeError),
@@ -1150,6 +1163,28 @@ mod tests {
     }
 
     const KERNEL_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    #[test]
+    fn send_denial_classification_excludes_integrity_and_unrelated_failures() {
+        for error in [
+            TaskRuntimeError::MissingTask,
+            TaskRuntimeError::SameTaskIpc,
+            TaskRuntimeError::Ipc(IpcError::Unauthorized),
+            TaskRuntimeError::InboxFull,
+            TaskRuntimeError::DelegationTableFull,
+        ] {
+            assert!(error.is_precommit_send_denial());
+        }
+        for error in [
+            TaskRuntimeError::Full,
+            TaskRuntimeError::NoCurrentTask,
+            TaskRuntimeError::AddressSpaceMismatch,
+            TaskRuntimeError::IntegrityFailure,
+            TaskRuntimeError::ActiveDelegations,
+        ] {
+            assert!(!error.is_precommit_send_denial());
+        }
+    }
 
     #[test]
     fn accounted_runtime_charges_complete_fixed_ipc_footprint_until_release() {

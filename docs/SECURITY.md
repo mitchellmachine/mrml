@@ -162,6 +162,8 @@ access. The security/acceptance gate is canonical in
   pending safe task-scoped retirement rather than an unsafe `iret`.
 - Boot-recovery operation 13 preserves the same distinction through an explicit
   `InvalidReturn` decoder result instead of conflating it with bad arguments.
+- Service sends return scrubbed failure only for a kernel-classified precommit
+  denial or malformed descriptor; scheduler and integrity failures fail-stop.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

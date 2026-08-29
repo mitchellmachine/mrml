@@ -1010,16 +1010,21 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
-                let sequence = runtime
-                    .deliver_ipc(
+                let sequence = match runtime.deliver_ipc(
                         current,
                         receiver,
                         endpoint_object,
                         endpoint,
                         &payload[..usize::from(length)],
                         &[],
-                    )
-                    .unwrap_or_else(|_| halt());
+                    ) {
+                    Ok(sequence) => sequence,
+                    Err(error) if error.is_precommit_send_denial() => {
+                        frame.complete_error();
+                        return;
+                    }
+                    Err(_) => halt(),
+                };
                 frame.complete(sequence);
                 asm!(
                     "out dx, eax",
@@ -1054,8 +1059,16 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     copy_from_active_user(root, current, capabilities_address, descriptor_bytes);
                 }
                 let mut descriptors = [None; MAX_CAPABILITIES];
-                decode_capability_transfers(descriptor_bytes, capability_count, &mut descriptors)
-                    .unwrap_or_else(|_| halt());
+                if decode_capability_transfers(
+                    descriptor_bytes,
+                    capability_count,
+                    &mut descriptors,
+                )
+                .is_err()
+                {
+                    frame.complete_error();
+                    return;
+                }
                 let mut requested = [(Capability::from_token(0), Rights::NONE); MAX_CAPABILITIES];
                 for (slot, descriptor) in requested
                     .iter_mut()
@@ -1066,16 +1079,21 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
-                let sequence = runtime
-                    .deliver_ipc(
+                let sequence = match runtime.deliver_ipc(
                         current,
                         receiver,
                         endpoint_object,
                         endpoint,
                         payload,
                         &requested[..capability_count],
-                    )
-                    .unwrap_or_else(|_| halt());
+                    ) {
+                    Ok(sequence) => sequence,
+                    Err(error) if error.is_precommit_send_denial() => {
+                        frame.complete_error();
+                        return;
+                    }
+                    Err(_) => halt(),
+                };
                 frame.complete(sequence);
                 asm!(
                     "out dx, eax",

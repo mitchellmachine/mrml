@@ -6565,7 +6565,7 @@ Buffered completion now retains its receive-bound proof as a typed
 values after copy. Construction requires payload and capability counts to fit
 both the exact pending capacities and the kernel global maxima. The immediate
 trap-frame path and scheduler-wakeup `UserContext` path accept only that witness.
-The focused Linux kernel suite passes 594 tests and the UEFI `service_probe`
+The focused Linux kernel suite passes 595 tests and the UEFI `service_probe`
 profile cross-builds. This is kernel/service mechanism evidence, not a new IPC
 authority or physical execution claim.
 
@@ -6625,12 +6625,12 @@ or stale task-local capability from runtime integrity failures. Only the former
 returns a detail-free denial; missing runtime state, delegation-graph
 inconsistency, or any other unexpected failure halts instead of continuing with
 uncertain revocation. Both ordinary and accounted component-service profiles
-cross-build and the Linux kernel suite passes 594 tests.
+cross-build and the Linux kernel suite passes 595 tests.
 Operation 11 now follows the same distinction for restart-policy replacement:
 an unknown service or unauthorized capability returns a detail-free denial,
 while policy-generation exhaustion or any other impossible lifecycle error is
 fail-stop rather than being flattened into denial. The same two profiles and
-594-test Linux kernel suite pass.
+595-test Linux kernel suite pass.
 Operation 9 now explicitly maps only unknown-service and authorization errors
 to its detail-free absent result; any future or impossible lifecycle error is
 fail-stop. The enabled operation-10 split path likewise returns denial only for
@@ -6638,24 +6638,31 @@ documented prepare/revalidation policy states or runtime-capacity unavailability
 Generation exhaustion, object/policy inconsistency, and unexpected runtime
 errors halt. A canonical `service_restart_request_probe` feature profile now
 builds this branch with `service-probe`; that profile, the ordinary service
-profile, and the 594-test Linux kernel suite pass.
+profile, and the 595-test Linux kernel suite pass.
 Operation 6 now returns detail-free authorization failure only for an IPC/
 capability error. Missing current-task state or any other unexpected runtime
 failure halts rather than being mistaken for ordinary denial. Ordinary and
-accounted component-service profiles cross-build and 594 Linux kernel tests
+accounted component-service profiles cross-build and 595 Linux kernel tests
 pass.
 Malformed service syscall arguments now complete with one generic nonzero
 status and zeroed result registers rather than halting the whole hosted image.
 Return-frame privilege, instruction, stack, or flags failures remain fail-stop
 because returning through the forged frame is unsafe; scoped service fault
 retirement for that case remains pending. A focused test covers the scrubbed
-completion, the Linux kernel suite passes 594 tests, and ordinary plus
+completion, the Linux kernel suite passes 595 tests, and ordinary plus
 restart-request UEFI service profiles cross-build.
 The custom boot-recovery operation-13 decoder now preserves that distinction:
 `InvalidReturn` is separate from malformed operation arguments. Invalid return
 state remains fail-stop, while a malformed capability, output range, or reserved
 field returns the same scrubbed generic error. The Linux kernel suite remains
-594 tests; ordinary and block-service UEFI profiles cross-build.
+595 tests; ordinary and block-service UEFI profiles cross-build.
+Inline and buffered service sends now return that scrubbed error for the exact
+precommit denial set: missing receiver, same-task send, IPC/capability denial,
+full inbox, or full delegation table. Malformed transfer descriptors are also
+denied before delivery. Scheduler and integrity failures remain fail-stop. The
+classification lives on `TaskRuntimeError` and a focused test proves unrelated
+or integrity errors are excluded; 595 Linux kernel tests and ordinary/accounted
+service UEFI profiles pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6671,7 +6678,8 @@ and makes existing revocation/policy integrity failure paths fail-stop; it
 also classifies existing query/restart errors without introducing a new IPC
 algorithm or mechanism, and applies the same fail-stop distinction to existing
 capability authorization plus a conventional scrubbed error completion for
-malformed arguments. See [the patent review log](patents/REVIEW_LOG.md).
+malformed arguments and precommit send denial. See [the patent review
+log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

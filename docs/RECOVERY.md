@@ -477,7 +477,7 @@ explicitly and downgrade the status rather than guessing.
   Its frame decoder now distinguishes unsafe return state from malformed
   capability/address/reserved arguments. The former remains fail-stop; the
   latter returns one generic scrubbed syscall error without consuming the
-  delivery. Linux passes 594 kernel tests and ordinary plus block-service UEFI
+  delivery. Linux passes 595 kernel tests and ordinary plus block-service UEFI
   profiles cross-build.
   The kernel-image service dispatcher now recognizes operation 13 before the
   generic decoder, revalidates the complete user return frame and active CR3,
