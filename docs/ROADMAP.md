@@ -2032,7 +2032,7 @@ live composition remains pending.
    Buffered receive completion now carries a typed proof that returned payload
    and capability counts fit both the exact pending buffers and global kernel
    maxima. Immediate and scheduler-wakeup completion paths cannot publish loose
-   scalar counts. The focused Linux kernel suite passes 593 tests and the UEFI
+   scalar counts. The focused Linux kernel suite passes 594 tests and the UEFI
    `service_probe` profile cross-builds.
    Send and receive capability buffers now have separate full-range validators:
    16-byte attenuation descriptors for send and 8-byte returned tokens for
@@ -2073,7 +2073,7 @@ live composition remains pending.
    configuration suite passes 53 tests.
    Operation 12 returns ordinary denial only for an invalid task-local
    capability; unexpected runtime or delegation-integrity failure is fail-stop.
-   Ordinary and accounted service profiles build and 593 kernel tests pass.
+   Ordinary and accounted service profiles build and 594 kernel tests pass.
    Operation 11 returns ordinary denial only for an unknown service or
    unauthorized capability; policy-generation exhaustion and other impossible
    lifecycle failures are fail-stop under the same passing gates.
@@ -2082,10 +2082,14 @@ live composition remains pending.
    capacity exhaustion, while terminal identity, generation, policy, and
    unexpected runtime failures halt. A new canonical
    `service_restart_request_probe` profile builds the enabled branch; it, the
-   ordinary service profile, and 593 Linux kernel tests pass.
+   ordinary service profile, and 594 Linux kernel tests pass.
    Operation 6 now maps only IPC/capability errors to authorization denial;
    missing current-task state and unexpected runtime failures halt. Ordinary
-   and accounted service profiles build and 593 kernel tests pass.
+   and accounted service profiles build and 594 kernel tests pass.
+   Malformed service syscall arguments now return one scrubbed generic failure
+   instead of halting the hosted image. Forged return-frame state remains
+   fail-stop pending scoped service retirement. Ordinary and restart-request
+   profiles build and 594 Linux kernel tests pass.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

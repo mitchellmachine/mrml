@@ -945,7 +945,19 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             frame.complete(0);
             return;
         }
-        let request = frame.request().unwrap_or_else(|_| halt());
+        let request = match frame.request() {
+            Ok(request) => request,
+            Err(
+                mrml_kernel::SyscallError::InvalidPrivilege
+                | mrml_kernel::SyscallError::InvalidInstruction
+                | mrml_kernel::SyscallError::InvalidStack
+                | mrml_kernel::SyscallError::InvalidFlags,
+            ) => halt(),
+            Err(_) => {
+                frame.complete_error();
+                return;
+            }
+        };
         let runtime = (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
             .as_mut()
             .unwrap_or_else(|| halt());

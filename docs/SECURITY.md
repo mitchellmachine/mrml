@@ -157,6 +157,9 @@ access. The security/acceptance gate is canonical in
   terminal identity, generation, policy, or runtime errors fail-stop.
 - Capability authorization maps only task-local IPC/capability errors to
   denial; missing task state or unexpected runtime errors fail-stop.
+- Malformed service syscall arguments return a generic error with scrubbed
+  result registers. Invalid privilege/return-frame state remains fail-stop
+  pending safe task-scoped retirement rather than an unsafe `iret`.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

@@ -195,6 +195,14 @@ impl UserCallFrame {
         self.r9 = 0;
     }
 
+    pub fn complete_error(&mut self) {
+        self.rax = 1;
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
     pub fn complete_service_state(&mut self, state: Option<crate::ServiceState>) {
         self.rax = u64::from(state.is_none());
         self.rdx = match state {
@@ -704,6 +712,20 @@ mod tests {
         assert_eq!(
             (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
             (0, 0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn generic_error_completion_is_detail_free() {
+        let mut frame = valid_yield_frame();
+        frame.rdx = u64::MAX;
+        frame.r10 = u64::MAX;
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_error();
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (1, 0, 0, 0, 0)
         );
     }
 
