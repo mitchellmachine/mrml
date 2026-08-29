@@ -7,6 +7,7 @@
 
 mod ide_discovery;
 mod ide_identify;
+mod ide_pio;
 mod ide_ports;
 
 pub use ide_discovery::{
@@ -16,6 +17,10 @@ pub use ide_discovery::{
 pub use ide_identify::{
     identify_ide_device, IdeDevice, IdeDeviceIdentity, IdeIdentifyError, IdeIdentifyFailure,
     IdePortIo,
+};
+pub use ide_pio::{
+    execute_ide_pio, CompletedIdePio, IdePioBuffer, IdePioError, IdePioFailure, IdePioIo,
+    IdePioOperation, IdePioRequest,
 };
 pub use ide_ports::{
     prepare_ide_channel_ports, IdeChannel, IdeChannelPortGrant, IdePortGrantBackend,
