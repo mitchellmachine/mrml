@@ -1287,6 +1287,13 @@ incomplete reset failure. AHCI passes 69 tests on Windows and Arch Linux.
 Concrete ATA flush/reset, syscall wiring, installed recovery, and physical
 execution remain unverified.
 
+AHCI durability flush is **PARTIALLY IMPLEMENTED IN SOURCE** through a bounded
+no-data `FLUSH CACHE EXT` command. Recovery may accept the nonzero durability
+serial only after verified completion and complete slot restoration; every
+post-mutation uncertainty quarantines the active port. AHCI passes 71 tests on
+Windows and Arch Linux. Installed recovery and physical execution remain
+unverified.
+
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,
 verified base-register clearing, and verified zeroing of all retained extents.

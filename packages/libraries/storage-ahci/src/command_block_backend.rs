@@ -6,9 +6,10 @@
 //! those mechanisms to the storage service.
 
 use crate::{
-    execute_ahci_dma_command, prepare_ahci_dma_command, recycle_ahci_command_slot, ActiveAhciPort,
-    AhciAtaCommand, AhciBlockIoBackend, AhciBlockIoError, AhciCommandBuildFailure,
-    AhciCommandMemoryIo, AhciDataDmaRegion, AhciRegisterIo,
+    execute_ahci_dma_command, flush_ahci_cache, prepare_ahci_dma_command,
+    recycle_ahci_command_slot, ActiveAhciPort, AhciAtaCommand, AhciBlockControlBackend,
+    AhciBlockControlError, AhciBlockIoBackend, AhciBlockIoError, AhciCommandBuildFailure,
+    AhciCommandMemoryIo, AhciDataDmaRegion, AhciFlushFailure, AhciRegisterIo,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 use mrml_kernel::{Capability, CapabilitySpace, Rights};
@@ -37,6 +38,7 @@ pub struct AhciCommandBlockBackend<'a, const N: usize, R, M, D> {
     registers: R,
     memory: M,
     data_io: D,
+    durability_serial: u64,
 }
 
 impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
@@ -80,6 +82,7 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
             registers,
             memory,
             data_io,
+            durability_serial: 0,
         })
     }
 
@@ -89,6 +92,36 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
 
     pub fn into_parts(self) -> (Option<ActiveAhciPort>, R, M, D) {
         (self.owner, self.registers, self.memory, self.data_io)
+    }
+}
+
+impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
+    AhciBlockControlBackend for AhciCommandBlockBackend<'_, N, R, M, D>
+{
+    fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+        if device.session != self.session || device.media_generation != self.media_generation {
+            return Err(AhciBlockControlError::IoFailure);
+        }
+        let owner = self.owner.take().ok_or(AhciBlockControlError::IoFailure)?;
+        match flush_ahci_cache(owner, &mut self.registers, &mut self.memory) {
+            Ok(owner) => self.owner = Some(owner),
+            Err(AhciFlushFailure::Untouched { owner, .. }) => {
+                self.owner = Some(owner);
+                return Err(AhciBlockControlError::IoFailure);
+            }
+            Err(AhciFlushFailure::Quarantined { .. }) => {
+                return Err(AhciBlockControlError::IoFailure);
+            }
+        }
+        self.durability_serial = self.durability_serial.checked_add(1).ok_or_else(|| {
+            self.owner = None;
+            AhciBlockControlError::IoFailure
+        })?;
+        Ok(self.durability_serial)
+    }
+
+    fn reset(&mut self, _: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+        Err(AhciBlockControlError::CleanupIncomplete)
     }
 }
 
@@ -295,7 +328,7 @@ mod tests {
     impl AhciCommandMemoryIo for Memory {
         fn read_u32(&mut self, region: AhciDmaRegion, offset: u64) -> Result<u32, ()> {
             if region.memory_object == ObjectId(20) && offset == 4 {
-                let value = if self.prdbc_reads % 4 == 2 {
+                let value = if self.list[0] & (1 << 16) != 0 && self.prdbc_reads % 4 == 2 {
                     512
                 } else {
                     self.list[1]
@@ -440,6 +473,8 @@ mod tests {
         backend
             .write(device(session, 12), 4, 1, &[0xa5; 512])
             .unwrap();
+        assert_eq!(backend.flush(device(session, 12)), Ok(1));
+        assert_eq!(backend.flush(device(session, 12)), Ok(2));
         assert!(backend.is_available());
         let (_, _, _, data_io) = backend.into_parts();
         assert_eq!(

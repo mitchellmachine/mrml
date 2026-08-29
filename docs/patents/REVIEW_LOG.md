@@ -308,6 +308,19 @@ storage optimization. Future concrete AHCI control mechanisms require their own
 review under the recorded Canadian scope. This technical screen is not legal
 advice or patent clearance.
 
+# 2026-08-29 — Bounded AHCI FLUSH CACHE EXT durability
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment performs one conventional no-data ATA `FLUSH CACHE EXT` command using
+the standard AHCI command header/table and `PxCI` polling path, followed by
+bounded status checks and slot restoration. MRML adds linear ownership,
+verification, quarantine, and monotonic durability receipts. It adds no NCQ,
+scheduling, aggregation, interrupt-driven termination/re-receipt, inline
+cryptography, controller circuitry, or device-controller concurrency behavior
+excluded by the recorded scope. Existing Canadian conditions and outside-
+Canada review requirements remain unchanged. This technical screen is not legal
+advice or patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This

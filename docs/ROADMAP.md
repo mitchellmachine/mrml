@@ -344,6 +344,12 @@ backend; nonzero receipts are mandatory; every transferred capability causes
 rejection without reply. AHCI passes 69 tests on Windows and Arch Linux.
 Concrete ATA flush/reset mechanism and raw syscall wiring remain planned.
 
+ATA `FLUSH CACHE EXT` durability is now **PARTIALLY IMPLEMENTED IN SOURCE** as
+a verified no-data command with bounded polling, error checks, exact slot
+restoration, fail-closed ownership, and monotonic nonzero durability serials.
+AHCI passes 71 tests on Windows and Arch Linux. Device reset and raw syscall
+wiring remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

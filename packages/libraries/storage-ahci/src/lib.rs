@@ -14,6 +14,7 @@ mod ahci_controller;
 mod ahci_discovery;
 mod ahci_dma;
 mod ahci_engine;
+mod ahci_flush;
 mod ahci_mapping;
 mod ahci_port;
 mod ahci_port_program;
@@ -66,6 +67,9 @@ pub use ahci_dma::{
 pub use ahci_engine::{
     start_ahci_port_engine, stop_ahci_port_engine, ActiveAhciPort, AhciEngineError,
     AhciEngineFailure, StoppedAhciPort, AHCI_ENGINE_STOP_POLL_LIMIT,
+};
+pub use ahci_flush::{
+    flush_ahci_cache, AhciFlushError, AhciFlushFailure, AHCI_FLUSH_COMPLETION_POLL_LIMIT,
 };
 pub use ahci_mapping::{
     map_ahci_abar, AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError,

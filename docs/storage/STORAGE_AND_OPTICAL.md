@@ -394,6 +394,17 @@ authority, and wipes request/token/response buffers. The AHCI library passes 69
 tests on Windows and Arch Linux. Concrete ATA flush and device-reset mechanisms
 plus raw syscall wiring remain **PLANNED**.
 
+Concrete AHCI durability flush is now **PARTIALLY IMPLEMENTED IN SOURCE**. It
+builds the conventional no-data, zero-PRDT ATA `FLUSH CACHE EXT` FIS in clean
+slot zero, verifies every mutation, publishes only that `PxCI` bit, bounds
+completion to 1,000,000 reads, rejects task-file/SATA/interrupt errors and any
+nonzero transferred-byte count, then zeroes and verifies the command table and
+restores the initialized header. Preflight failure preserves the owner; every
+post-mutation uncertainty quarantines it. The reusable backend issues monotonic
+nonzero durability serials only after full success. AHCI passes 71 tests on
+Windows and Arch Linux. Device reset, raw syscall wiring, cache-coherence/IOMMU
+implementations, and physical hardware remain **PLANNED**.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised
