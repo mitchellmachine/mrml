@@ -422,7 +422,7 @@ route exists yet, so this proves package separation and interface-graph shape,
 not dynamic execution.
 
 `org.mrml.library.storage.fat32` now provides the matching isolated filesystem
-interface generation. Its first bounded read-only geometry parser passes four
+interface generation. Its bounded read-only geometry and FSInfo parser passes seven
 tests on both hosts, and storage requires this binding separately from AHCI.
 This is package/parser evidence, not a live endpoint, mount, or hot replacement.
 

@@ -26,6 +26,12 @@ pub struct Fat32Geometry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fat32FsInfo {
+    pub free_cluster_count: Option<u32>,
+    pub next_free_cluster: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fat32Error {
     InvalidJump,
     InvalidSignature,
@@ -38,6 +44,10 @@ pub enum Fat32Error {
     InvalidExtent,
     InvalidRootCluster,
     FatTooSmall,
+    MissingFsInfo,
+    WrongFsInfoSector,
+    InvalidFsInfoSignature,
+    InvalidFsInfoHint,
 }
 
 pub fn parse_fat32_boot_sector(
@@ -136,6 +146,47 @@ pub fn parse_fat32_boot_sector(
     })
 }
 
+pub fn parse_fat32_fs_info(
+    geometry: Fat32Geometry,
+    sector_index: u16,
+    sector: &[u8; FAT32_BOOT_SECTOR_BYTES],
+) -> Result<Fat32FsInfo, Fat32Error> {
+    let expected = geometry.fs_info_sector.ok_or(Fat32Error::MissingFsInfo)?;
+    if sector_index != expected {
+        return Err(Fat32Error::WrongFsInfoSector);
+    }
+    if read_u32(sector, 0) != 0x4161_5252
+        || read_u32(sector, 484) != 0x6141_7272
+        || read_u32(sector, 508) != 0xaa55_0000
+    {
+        return Err(Fat32Error::InvalidFsInfoSignature);
+    }
+    let free = read_u32(sector, 488);
+    let next = read_u32(sector, 492);
+    let free_cluster_count = if free == u32::MAX {
+        None
+    } else if free <= geometry.cluster_count {
+        Some(free)
+    } else {
+        return Err(Fat32Error::InvalidFsInfoHint);
+    };
+    let last_cluster = geometry
+        .cluster_count
+        .checked_add(1)
+        .ok_or(Fat32Error::InvalidExtent)?;
+    let next_free_cluster = if next == u32::MAX {
+        None
+    } else if (2..=last_cluster).contains(&next) {
+        Some(next)
+    } else {
+        return Err(Fat32Error::InvalidFsInfoHint);
+    };
+    Ok(Fat32FsInfo {
+        free_cluster_count,
+        next_free_cluster,
+    })
+}
+
 fn optional_reserved_sector(value: u16, reserved: u16) -> Result<Option<u16>, Fat32Error> {
     if value == 0 || value == u16::MAX {
         return Ok(None);
@@ -172,6 +223,16 @@ mod tests {
         sector[50..52].copy_from_slice(&6_u16.to_le_bytes());
         sector[67..71].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
         sector[510..512].copy_from_slice(&[0x55, 0xaa]);
+        sector
+    }
+
+    fn fs_info() -> [u8; FAT32_BOOT_SECTOR_BYTES] {
+        let mut sector = [0; FAT32_BOOT_SECTOR_BYTES];
+        sector[0..4].copy_from_slice(&0x4161_5252_u32.to_le_bytes());
+        sector[484..488].copy_from_slice(&0x6141_7272_u32.to_le_bytes());
+        sector[488..492].copy_from_slice(&1000_u32.to_le_bytes());
+        sector[492..496].copy_from_slice(&3_u32.to_le_bytes());
+        sector[508..512].copy_from_slice(&0xaa55_0000_u32.to_le_bytes());
         sector
     }
 
@@ -240,6 +301,61 @@ mod tests {
                     sector
                 })
                 .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn parses_fs_info_only_at_the_boot_bound_reserved_sector() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        assert_eq!(
+            parse_fat32_fs_info(geometry, 1, &fs_info()),
+            Ok(Fat32FsInfo {
+                free_cluster_count: Some(1000),
+                next_free_cluster: Some(3),
+            })
+        );
+        assert_eq!(
+            parse_fat32_fs_info(geometry, 2, &fs_info()),
+            Err(Fat32Error::WrongFsInfoSector)
+        );
+    }
+
+    #[test]
+    fn accepts_unknown_hints_but_rejects_out_of_range_values() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut unknown = fs_info();
+        unknown[488..496].fill(0xff);
+        assert_eq!(
+            parse_fat32_fs_info(geometry, 1, &unknown),
+            Ok(Fat32FsInfo {
+                free_cluster_count: None,
+                next_free_cluster: None,
+            })
+        );
+        let mut invalid = fs_info();
+        invalid[488..492].copy_from_slice(&(geometry.cluster_count + 1).to_le_bytes());
+        assert_eq!(
+            parse_fat32_fs_info(geometry, 1, &invalid),
+            Err(Fat32Error::InvalidFsInfoHint)
+        );
+        invalid = fs_info();
+        invalid[492..496].copy_from_slice(&1_u32.to_le_bytes());
+        assert_eq!(
+            parse_fat32_fs_info(geometry, 1, &invalid),
+            Err(Fat32Error::InvalidFsInfoHint)
+        );
+    }
+
+    #[test]
+    fn rejects_each_fs_info_signature_independently() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        for offset in [0, 484, 508] {
+            let mut sector = fs_info();
+            sector[offset] ^= 1;
+            assert_eq!(
+                parse_fat32_fs_info(geometry, 1, &sector),
+                Err(Fat32Error::InvalidFsInfoSignature)
             );
         }
     }

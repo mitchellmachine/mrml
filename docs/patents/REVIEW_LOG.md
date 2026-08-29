@@ -1,5 +1,13 @@
 # Patent review log
 
+# 2026-08-29 — Bounded FAT32 FSInfo hint parser
+
+Patent review: **NOT_TRIGGERED**. This increment parses the conventional FAT32
+FSInfo signatures and bounds its optional free-count and next-free hints to the
+already validated geometry. Hints grant no allocation authority. It implements
+no allocation, directory/LFN, caching, formatting/repair, write, or optimization
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded FAT32 boot-sector geometry parser
 
 Patent review: **NOT_TRIGGERED**. This increment parses conventional published

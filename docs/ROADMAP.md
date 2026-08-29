@@ -36,9 +36,9 @@ then FAT32 provider extraction/implementation, remain next.
 
 The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
-and bounded read-only FAT32 boot-sector/geometry parser pass four tests on
+and bounded read-only FAT32 boot-sector/geometry plus FSInfo parser pass seven tests on
 Windows and Arch Linux; storage with both dynamic requirements passes 135.
-FSInfo parsing, FAT traversal, directory/LFN and file reads, checking, formatting,
+FAT traversal, directory/LFN and file reads, checking, formatting,
 writes, service IPC, and live replacement remain next in dependency order.
 
 Recovery discovery now has a capability-backed service source. The bounded

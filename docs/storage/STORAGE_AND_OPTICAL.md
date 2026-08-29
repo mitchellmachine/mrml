@@ -477,8 +477,11 @@ The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
 interface as an isolated service, and `mrml-storage` requires that dynamic
 binding separately from the block provider. Its initial read-only boot-sector
 parser validates FAT32 geometry, checked extents/FAT capacity, root-cluster and
-reserved-sector bounds, and volume identity. Four tests pass on Windows and Arch
-Linux; storage remains 135 on both. This does not implement mount, directories,
+reserved-sector bounds, and volume identity. The provider also exact-binds the
+declared FSInfo sector, validates all three signatures, accepts unknown free/
+next hints, and bounds known hints to the parsed cluster domain; hints remain
+data and never allocation authority. Seven tests pass on Windows and Arch Linux;
+storage remains 135 on both. This does not implement mount, directories,
 LFN, file I/O, check/repair, format, live IPC, or interoperability evidence.
 
 Checking has distinct result types for block-device health, partition-table
