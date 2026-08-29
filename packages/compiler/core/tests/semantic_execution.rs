@@ -1845,6 +1845,56 @@ fn mrml_v1_wide_shift_methods_match_both_oracle_words() {
 }
 
 #[test]
+fn mrml_v1_wide_strict_shift_distances_trap() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_STRICT_SHIFT_CHILD";
+    let code = compile(MRML_V1_WIDE_SIGNED_STRICT_SHIFT_RIGHT_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    for distance in [128u32, u32::MAX] {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_with_u32(code.pointer, (-17i128) as u128, distance) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(mode) = std::env::var_os(CHILD) {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let distance = if mode == "maximum" { u32::MAX } else { 128 };
+        let _ = unsafe { call_mrml_v1_wide_with_u32(code.pointer, (-17i128) as u128, distance) };
+        panic!("wide strict-shift overflow unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for mode in ["width", "maximum"] {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args([
+                "--exact",
+                "mrml_v1_wide_strict_shift_distances_trap",
+                "--nocapture",
+            ])
+            .env(CHILD, mode)
+            .output()
+            .expect("launch isolated wide strict-shift trap probe");
+        assert!(!output.status.success(), "generated strict-shift trap returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status for {mode}; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn mrml_v1_wide_wrapping_division_and_remainder_match_both_oracle_words() {
     let inputs = [0u128, 1, (-1i128) as u128, i128::MIN as u128, i128::MAX as u128];
     for (source, driver) in [
