@@ -1,4 +1,4 @@
-name: Kernel and VMM security
+name: Kernel and VMM security (Gitea)
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - "packages/libraries/runtime/**"
       - "packages/libraries/linux/**"
       - "packages/libraries/windows/**"
-      - ".github/workflows/kernel-vmm-security.yml"
+      - ".gitea/workflows/kernel-vmm-security.yml"
   pull_request:
     branches: [main]
     paths:
@@ -18,7 +18,7 @@ on:
       - "packages/libraries/runtime/**"
       - "packages/libraries/linux/**"
       - "packages/libraries/windows/**"
-      - ".github/workflows/kernel-vmm-security.yml"
+      - ".gitea/workflows/kernel-vmm-security.yml"
   workflow_dispatch:
 
 permissions:
@@ -38,8 +38,8 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install nightly-2026-08-29 --profile minimal --component rust-src
+      - name: Install and verify pinned Rust oracle
+        run: bash tools/toolchain/setup-oracle.sh
       - name: Build locked stage-zero frontend
         run: cargo build --locked
       - name: Test kernel security state machines

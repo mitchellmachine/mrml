@@ -1,4 +1,4 @@
-# Security Policy
+# MRML Security Policy
 
 ## Supported versions
 

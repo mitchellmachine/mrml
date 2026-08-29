@@ -32,7 +32,7 @@ incomplete.
   compile edges are excluded from that package graph.
 - The only remaining `Cargo.toml` and `Cargo.lock` are the clean-source
   stage-zero bootstrap for `mrml`; package-local Cargo manifests are gone.
-- The current `.github/workflows/ci.yml` owns stage-zero, manifest, lock,
+- The current `.gitea/workflows/ci.yml` owns stage-zero, manifest, lock,
   exact-input audit, assurance, and full host-test gates. The earlier proposed
   standalone `manifest-v2.yml` file was not retained as a current workflow.
 - On Windows GNU/LLVM, 20 warm process invocations of `mrml manifest check`

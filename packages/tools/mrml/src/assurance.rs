@@ -340,11 +340,11 @@ fn graph_inventory(root: &Path) -> Result<GraphInventory, String> {
 }
 
 fn workflow_inventory(root: &Path) -> Result<WorkflowInventory, String> {
-    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).map_err(|error| {
+    let ci = fs::read_to_string(root.join(".gitea/workflows/ci.yml")).map_err(|error| {
         format!("AssuranceWorkflowRead {{ workflow: ci.yml, detail: {error} }}")
     })?;
     let sanitizers =
-        fs::read_to_string(root.join(".github/workflows/sanitizers.yml")).map_err(|error| {
+        fs::read_to_string(root.join(".gitea/workflows/sanitizers.yml")).map_err(|error| {
             format!("AssuranceWorkflowRead {{ workflow: sanitizers.yml, detail: {error} }}")
         })?;
     let ci_commands = workflow_commands(&ci);

@@ -1,4 +1,4 @@
-name: MRML CodeQL configuration
+name: MRML CodeQL configuration for Gitea Actions
 
 queries:
   - uses: security-and-quality

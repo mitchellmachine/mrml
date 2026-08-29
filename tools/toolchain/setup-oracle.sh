@@ -4,13 +4,31 @@ set -euo pipefail
 script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 toolchain_file="$repo_root/rust-toolchain.toml"
+rustup_version=1.28.2
+rustup_x86_64_linux_sha256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
 
 die() {
     printf 'setup-oracle: %s\n' "$*" >&2
     return 1 2>/dev/null || exit 1
 }
 
-command -v rustup >/dev/null 2>&1 || die "rustup is required"
+export PATH="$HOME/.cargo/bin:$PATH"
+if ! command -v rustup >/dev/null 2>&1; then
+    [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] ||
+        die "automatic rustup bootstrap supports only x86_64 Linux; install rustup first"
+    command -v curl >/dev/null 2>&1 || die "curl is required to bootstrap rustup"
+    command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify rustup"
+    installer_dir=$(mktemp -d)
+    trap 'rm -rf -- "$installer_dir"' EXIT
+    installer="$installer_dir/rustup-init"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+        "https://static.rust-lang.org/rustup/archive/$rustup_version/x86_64-unknown-linux-gnu/rustup-init" \
+        -o "$installer"
+    printf '%s  %s\n' "$rustup_x86_64_linux_sha256" "$installer" | sha256sum --check --status ||
+        die "rustup-init checksum verification failed"
+    chmod +x "$installer"
+    "$installer" -y --no-modify-path --profile minimal --default-toolchain none
+fi
 
 channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$toolchain_file")
 [ -n "$channel" ] || die "could not read one pinned channel from rust-toolchain.toml"
@@ -49,7 +67,6 @@ actual_commit=$(rustup run "$channel" rustc -Vv | sed -n 's/^commit-hash: //p')
 [ "$actual_commit" = "$expected_commit" ] || die "rustc commit $actual_commit does not match $oracle_file ($expected_commit)"
 
 export RUSTUP_TOOLCHAIN="$channel"
-export PATH="$HOME/.cargo/bin:$PATH"
 
 printf 'MRML oracle ready: %s (%s)\n' "$channel" "$actual_commit"
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
