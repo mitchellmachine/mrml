@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `7eb2fdd3`
-  (`compiler: relocate COFF readonly relative fields`)
+- Compiler checkpoint commit: `319444a5`
+  (`compiler: discard validated COFF debug sections`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,25 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `319444a5` validates and discards conventionally named COFF `.debug`,
+`.debug$...`, and `.debug_...` sections only when they are discardable,
+initialized data and are neither writable nor executable. The bounded pass
+checks relocation-table extent, symbol indices, known AMD64 relocation kinds,
+and complete field widths before omission; retained or malformed debug sections
+fail closed, and no debug-emission support is claimed. Synthetic coverage
+accepts a bounded `SECREL` record and rejects a retained section, invalid symbol,
+unknown kind, out-of-range field, and truncated field. Exact detached Windows
+gnullvm and Arch Linux runs each passed 780 compiler-core unit tests, both
+component probes, 10 conformance tests, 351 replacement tests, 85 semantic-
+execution tests, and eight driver tests. The durable pinned gnullvm debug-rlib
+probe produced identical-size 1,024-byte executables through MRML and rust-lld;
+both returned 42. Fifty measured links after five warmups recorded MRML at
+5.549 ms median/6.714 ms mean versus rust-lld at 22.794 ms median/24.226 ms mean
+on this narrow Windows workload. This is not representative-library or general
+superiority evidence. `mrml doctor` passed; audit retains unrelated fingerprint
+`fnv1a64:9c883880f091489a` at `semantic_execution.rs:1710`. Patent review:
+**NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `7eb2fdd3` admits the complete AMD64 COFF read-only PC-relative family,
 `REL32` through `REL32_5`. A typed zero-through-five trailing-byte bias is
