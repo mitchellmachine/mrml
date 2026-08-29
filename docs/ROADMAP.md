@@ -2051,6 +2051,10 @@ live composition remains pending.
    consumption or output, making the hosted pending-receive slot one-use.
    Pending lookup requires one unambiguous generational-task match; duplicate
    internal records halt rather than silently selecting the first slot.
+   The MRML-native service-image generic and block-service receive adapters now
+   reject returned payload or capability counts beyond their supplied slices
+   before slicing or envelope construction. Both service-image profiles
+   cross-build and the Linux storage-service suite passes 142 tests.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

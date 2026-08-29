@@ -6592,10 +6592,17 @@ therefore cannot observe and replay the same pending receive.
 Pending lookup scans the bounded table for exactly one matching generational
 task. Duplicate internal records fail closed instead of selecting an arbitrary
 first slot, and lookup no longer copies the table's live records.
+The MRML-native service-image buffered-receive helper now converts and checks
+kernel-returned payload and capability counts against the exact caller-provided
+slices before returning them. Its concrete block-service adapter applies the
+same check and returns an error before constructing a received envelope. Both
+the default and `block_service_loop` MRML-native profiles cross-build, and the
+focused Linux storage-service suite passes 142 tests.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
 reuses the existing active-user-copy ticket on an existing syscall path; it
+also adds ordinary result-capacity checks in existing userspace adapters and
 introduces no new IPC algorithm or mechanism. See [the patent review
 log](patents/REVIEW_LOG.md).
 

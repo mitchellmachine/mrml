@@ -139,6 +139,8 @@ access. The security/acceptance gate is canonical in
   message, so duplicate or re-entrant completion cannot replay the same slot.
 - Pending-record lookup requires a unique generational-task match and fails
   closed on duplicate internal state.
+- Service-image receive adapters reject kernel-returned payload or capability
+  counts beyond their exact supplied slices before exposing the result.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

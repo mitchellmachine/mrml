@@ -2143,7 +2143,12 @@ unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize
     if status != 0 {
         halt();
     }
-    (payload_length as usize, capability_count as usize)
+    let payload_length = usize::try_from(payload_length).unwrap_or_else(|_| halt());
+    let capability_count = usize::try_from(capability_count).unwrap_or_else(|_| halt());
+    if payload_length > payload.len() || capability_count > capabilities.len() {
+        halt();
+    }
+    (payload_length, capability_count)
 }
 
 /// Concrete x86-64 syscall boundary for the block-service loop. The endpoint,
@@ -2185,9 +2190,14 @@ unsafe impl BlockServiceSyscalls for UserspaceBlockSyscalls {
         if status != 0 {
             return Err(status);
         }
+        let payload_length = usize::try_from(payload_length).map_err(|_| u64::MAX)?;
+        let capability_count = usize::try_from(capability_count).map_err(|_| u64::MAX)?;
+        if payload_length > payload.len() || capability_count > capability_tokens.len() {
+            return Err(u64::MAX);
+        }
         Ok(ReceivedBlockEnvelope {
-            payload_length: usize::try_from(payload_length).map_err(|_| u64::MAX)?,
-            capability_count: usize::try_from(capability_count).map_err(|_| u64::MAX)?,
+            payload_length,
+            capability_count,
         })
     }
 

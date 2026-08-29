@@ -841,6 +841,11 @@ malformed catalogs fail before registry publication. The AHCI library now has a
 canonical catalog
 enumeration endpoint, capability-cleanup-gated service loop, and raw userspace
 syscall adapter; installed supervisor execution remains **PLANNED**.
+The service-image block adapter now rejects kernel-returned payload or
+capability counts beyond its exact fixed receive arrays before constructing a
+`ReceivedBlockEnvelope`; the MRML-native block profile cross-builds and the
+Linux storage-service suite passes 142 tests. This is compile and unit-test
+evidence, not a live installed-service or physical-device result.
 
 The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
 `org.mrml.library.storage.fat32`. It advertises the exact generation-1 filesystem
