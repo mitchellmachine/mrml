@@ -6880,6 +6880,10 @@ The acyclicity gate precomputes each edge's unique parent once, then performs
 bounded index walks. Worst-case validation is quadratic in the fixed 256-edge
 table rather than repeatedly searching ancestry at every step; the same 621
 tests pass.
+Buffered-send capability descriptor decoding now parses into bounded scratch and
+publishes the caller output only after every token, right, and reserved byte is
+valid. A late-invalid-descriptor test proves prior output remains unchanged and
+raises the Linux kernel total to 622.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

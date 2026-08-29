@@ -115,11 +115,11 @@ pub fn decode_capability_transfers(
     {
         return Err(SyscallError::InvalidBuffer);
     }
-    *output = [None; MAX_CAPABILITIES];
     let (chunks, remainder) = input.as_chunks::<CAPABILITY_TRANSFER_DESCRIPTOR_BYTES>();
     if !remainder.is_empty() {
         return Err(SyscallError::InvalidBuffer);
     }
+    let mut decoded = [None; MAX_CAPABILITIES];
     for (index, chunk) in chunks.iter().enumerate() {
         if chunk[10..].iter().any(|byte| *byte != 0) {
             return Err(SyscallError::ReservedArgument);
@@ -130,11 +130,12 @@ pub fn decode_capability_transfers(
         }
         let rights = Rights::from_bits(u16::from_le_bytes([chunk[8], chunk[9]]))
             .map_err(|_| SyscallError::InvalidCapability)?;
-        output[index] = Some(CapabilityTransferDescriptor {
+        decoded[index] = Some(CapabilityTransferDescriptor {
             capability: Capability::from_token(token),
             rights,
         });
     }
+    *output = decoded;
     Ok(())
 }
 
@@ -1170,10 +1171,33 @@ mod tests {
         );
         wire[10] = 0;
         wire[8..10].copy_from_slice(&0x8000u16.to_le_bytes());
+        let preserved = decoded;
         assert_eq!(
             decode_capability_transfers(&wire, 2, &mut decoded),
             Err(SyscallError::InvalidCapability)
         );
+        assert_eq!(decoded, preserved);
+    }
+
+    #[test]
+    fn capability_transfer_decode_failure_preserves_complete_output() {
+        let seed = CapabilityTransferDescriptor {
+            capability: Capability::from_token((7u64 << 32) | 1),
+            rights: Rights::CONTROL,
+        };
+        let mut output = [Some(seed); MAX_CAPABILITIES];
+        let mut wire = [0u8; CAPABILITY_TRANSFER_DESCRIPTOR_BYTES * 2];
+        wire[..8].copy_from_slice(&((2u64 << 32) | 1).to_le_bytes());
+        wire[8..10].copy_from_slice(&Rights::READ.bits().to_le_bytes());
+        wire[16..24].copy_from_slice(&((3u64 << 32) | 1).to_le_bytes());
+        wire[24..26].copy_from_slice(&Rights::WRITE.bits().to_le_bytes());
+        wire[31] = 1;
+
+        assert_eq!(
+            decode_capability_transfers(&wire, 2, &mut output),
+            Err(SyscallError::ReservedArgument)
+        );
+        assert_eq!(output, [Some(seed); MAX_CAPABILITIES]);
     }
 
     #[test]

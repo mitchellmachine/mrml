@@ -2235,6 +2235,9 @@ live composition remains pending.
    and raises the kernel total to 621.
    The cycle gate now precomputes unique parent indices, reducing its bounded
    worst case from cubic to quadratic while retaining the same evidence.
+   Capability-transfer descriptor decoding now publishes output only after the
+   complete bounded array validates. A late-error atomicity test raises the
+   kernel total to 622.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

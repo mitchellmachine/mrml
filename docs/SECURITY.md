@@ -269,6 +269,8 @@ access. The security/acceptance gate is canonical in
   scheduled or owns a live task domain.
 - Delegation ancestry is acyclic; bounded validation rejects any child that is
   already an ancestor of its source before graph use.
+- Buffered-send capability descriptor parsing is transactional; late invalid
+  tokens, rights, or reserved bytes cannot publish a partial decoded prefix.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
