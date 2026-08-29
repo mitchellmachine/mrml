@@ -299,6 +299,8 @@ access. The security/acceptance gate is canonical in
   mutation, eliminating fallible slot discovery after authority publication.
 - Endpoint sequence advances only after the exclusively enclosed capability and
   delegation publication succeeds; publication failure leaves it reusable.
+- Queued delivery reserves exact inbox publication state before authority
+  transfer, eliminating fallible tail discovery after transfer commits.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

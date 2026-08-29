@@ -6970,6 +6970,11 @@ already-preflighted capability/delegation publication closure and advances the
 sequence only after that closure succeeds. A focused injected-publication-error
 test proves sequence one remains available for the next valid send, raising the
 Linux kernel total to 629.
+Queued delivery now prepares the exact inbox slot, next tail, and next count
+before invoking the transfer transaction. After transfer it publishes directly
+through that plan with no fallible tail search. The multi-client test now
+dequeues one full-ring entry, wraps a third delivery into the freed slot, and
+proves sender/sequence/FIFO order through sequence three; the total remains 629.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
 and transactional commit for the existing IPC bookkeeping mechanism.
 The service buffered-receive path now resolves one exact empty pending-table

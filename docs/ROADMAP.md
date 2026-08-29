@@ -2281,6 +2281,9 @@ live composition remains pending.
    table coverage raises the kernel total to 628.
    Endpoint sequence commit now encloses publication and advances only after it
    succeeds. Injected publication failure coverage raises the total to 629.
+   Queued delivery now reserves exact inbox slot/tail/count state before
+   transfer and publishes without a fallible post-transfer search. Wrapped FIFO
+   coverage passes; the total remains 629.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

@@ -193,6 +193,12 @@ struct Delegation {
     destination: Capability,
 }
 
+struct InboxDeliveryPlan {
+    slot: usize,
+    next_tail: u8,
+    next_count: u8,
+}
+
 type DelegationSet = [Option<(TaskId, Capability)>; MAX_TASK_DELEGATIONS + 1];
 
 pub struct DetachedTaskDomain<const CAPS: usize> {
@@ -1078,17 +1084,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .map_err(IpcError::from)
             .map_err(TaskRuntimeError::Ipc)?;
         let _ = self.prepare_delegation_slots(requested.len())?;
-        Self::validate_inbox_state(
-            self.domains[receiver_slot]
-                .as_ref()
-                .ok_or(TaskRuntimeError::IntegrityFailure)?,
-        )?;
-        if self.domains[receiver_slot]
-            .as_ref()
-            .is_none_or(|domain| usize::from(domain.inbox_count) == TASK_INBOX_MESSAGES)
-        {
-            return Err(TaskRuntimeError::InboxFull);
-        }
+        let inbox_plan = self.prepare_inbox_delivery(receiver_slot)?;
         let (sequence, message) = self.send_ipc_prepared(
             sender,
             receiver,
@@ -1101,17 +1097,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[receiver_slot]
             .as_mut()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        let tail = usize::from(domain.inbox_tail);
-        if domain.inbox[tail].is_some() {
-            return Err(TaskRuntimeError::IntegrityFailure);
-        }
-        domain.inbox[tail] = Some(ReceivedMessage {
+        domain.inbox[inbox_plan.slot] = Some(ReceivedMessage {
             sender,
             sequence,
             message,
         });
-        domain.inbox_tail = ((tail + 1) % TASK_INBOX_MESSAGES) as u8;
-        domain.inbox_count += 1;
+        domain.inbox_tail = inbox_plan.next_tail;
+        domain.inbox_count = inbox_plan.next_count;
         self.scheduler
             .wake(receiver)
             .map_err(TaskRuntimeError::Scheduler)?;
@@ -1197,6 +1189,25 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             }
         }
         Ok(())
+    }
+
+    fn prepare_inbox_delivery(
+        &self,
+        receiver_slot: usize,
+    ) -> Result<InboxDeliveryPlan, TaskRuntimeError> {
+        let domain = self.domains[receiver_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        Self::validate_inbox_state(domain)?;
+        if usize::from(domain.inbox_count) == TASK_INBOX_MESSAGES {
+            return Err(TaskRuntimeError::InboxFull);
+        }
+        let slot = usize::from(domain.inbox_tail);
+        Ok(InboxDeliveryPlan {
+            slot,
+            next_tail: ((slot + 1) % TASK_INBOX_MESSAGES) as u8,
+            next_count: domain.inbox_count + 1,
+        })
     }
 
     /// Links two live domains for typed lifecycle notification. The relation is
@@ -3618,6 +3629,9 @@ mod tests {
         assert_eq!(first_message.sender(), first);
         assert_eq!(first_message.sequence(), 1);
         assert_eq!(first_message.message().payload(), b"a");
+        runtime
+            .deliver_ipc(first, receiver, &mut endpoint, first_capability, b"c", &[])
+            .unwrap();
         let ControlEvent::Message(second_message) = runtime.receive_control(receiver).unwrap()
         else {
             panic!("expected second message");
@@ -3625,6 +3639,13 @@ mod tests {
         assert_eq!(second_message.sender(), second);
         assert_eq!(second_message.sequence(), 2);
         assert_eq!(second_message.message().payload(), b"b");
+        let ControlEvent::Message(third_message) = runtime.receive_control(receiver).unwrap()
+        else {
+            panic!("expected wrapped third message");
+        };
+        assert_eq!(third_message.sender(), first);
+        assert_eq!(third_message.sequence(), 3);
+        assert_eq!(third_message.message().payload(), b"c");
     }
 
     #[test]
