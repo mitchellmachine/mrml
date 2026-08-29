@@ -8,7 +8,7 @@ use crate::{
     IpcError, KernelScheduleError, KernelScheduler, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, OwnershipMailbox,
     PAGE_SIZE, PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId,
-    TaskMigration,
+    TaskMigration, UserReturnError,
 };
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
@@ -75,7 +75,7 @@ pub enum PeerDeathReason {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskProtocolViolation {
-    InvalidUserReturn,
+    InvalidUserReturn(UserReturnError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2054,7 +2054,9 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == source));
 
         assert_eq!(
-            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn(
+                UserReturnError::InvalidStack,
+            )),
             Err(TaskRuntimeError::IntegrityFailure)
         );
         assert_eq!(runtime.current(), Some(source));
@@ -2332,13 +2334,15 @@ mod tests {
         ));
 
         let retirement = runtime
-            .terminate_current_violation(TaskProtocolViolation::InvalidUserReturn)
+            .terminate_current_violation(TaskProtocolViolation::InvalidUserReturn(
+                UserReturnError::InvalidStack,
+            ))
             .unwrap();
         assert_eq!(retirement.task, violated);
         assert_eq!(retirement.context, violated_context);
         assert_eq!(
             retirement.violation,
-            TaskProtocolViolation::InvalidUserReturn
+            TaskProtocolViolation::InvalidUserReturn(UserReturnError::InvalidStack)
         );
         assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == observer));
         assert_eq!(
@@ -2351,7 +2355,9 @@ mod tests {
         assert_eq!(death.peer(), violated);
         assert_eq!(
             death.reason(),
-            PeerDeathReason::ProtocolViolation(TaskProtocolViolation::InvalidUserReturn)
+            PeerDeathReason::ProtocolViolation(TaskProtocolViolation::InvalidUserReturn(
+                UserReturnError::InvalidStack,
+            ))
         );
     }
 
@@ -2396,7 +2402,9 @@ mod tests {
             .peers
             .fill(None);
         assert_eq!(
-            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn(
+                UserReturnError::InvalidStack,
+            )),
             Err(TaskRuntimeError::IntegrityFailure)
         );
         assert_eq!(runtime.current(), Some(violated));
@@ -2410,7 +2418,9 @@ mod tests {
         let violated_slot = runtime.domain_slot(violated).unwrap();
         runtime.domains[violated_slot].as_mut().unwrap().peers[1] = Some(observer);
         assert_eq!(
-            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn(
+                UserReturnError::InvalidStack,
+            )),
             Err(TaskRuntimeError::IntegrityFailure)
         );
         assert_eq!(runtime.current(), Some(violated));
@@ -2454,7 +2464,9 @@ mod tests {
 
         runtime.scheduler.detach(observer).unwrap();
         assert_eq!(
-            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn(
+                UserReturnError::InvalidStack,
+            )),
             Err(TaskRuntimeError::IntegrityFailure)
         );
         assert_eq!(runtime.current(), Some(violated));

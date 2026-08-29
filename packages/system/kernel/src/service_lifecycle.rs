@@ -1186,7 +1186,7 @@ mod tests {
         let violation = supervisor
             .violate_current(
                 &mut runtime,
-                TaskProtocolViolation::InvalidUserReturn,
+                TaskProtocolViolation::InvalidUserReturn(crate::UserReturnError::InvalidStack),
             )
             .unwrap();
 
@@ -1195,11 +1195,14 @@ mod tests {
         assert_eq!(violation.retirement.context, task_context);
         assert_eq!(
             violation.retirement.violation,
-            TaskProtocolViolation::InvalidUserReturn
+            TaskProtocolViolation::InvalidUserReturn(crate::UserReturnError::InvalidStack)
         );
         assert_eq!(violation.retirement.next, ScheduleOutcome::Idle);
         assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
-        assert_eq!(supervisor.pending_cleanup(service), Ok(Some(violation.cleanup)));
+        assert_eq!(
+            supervisor.pending_cleanup(service),
+            Ok(Some(violation.cleanup))
+        );
         complete(&mut supervisor, violation.cleanup);
         assert_eq!(supervisor.pending_cleanup(service), Ok(None));
     }

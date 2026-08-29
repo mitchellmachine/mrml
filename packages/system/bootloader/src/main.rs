@@ -923,8 +923,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         if frame.rax == BOOT_RECOVERY_SYSCALL_OPERATION {
             let request = match BootRecoverySyscallRequest::decode_frame(frame) {
                 Ok(request) => request,
-                Err(mrml_kernel::BootRecoverySyscallError::InvalidReturn(_)) => {
-                    retire_invalid_service_return()
+                Err(mrml_kernel::BootRecoverySyscallError::InvalidReturn(error)) => {
+                    retire_invalid_service_return(error)
                 }
                 Err(_) => {
                     frame.complete_error();
@@ -969,8 +969,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         }
         let request = match frame.decode_request() {
             Ok(request) => request,
-            Err(mrml_kernel::UserCallDecodeError::Return(_)) => {
-                retire_invalid_service_return()
+            Err(mrml_kernel::UserCallDecodeError::Return(error)) => {
+                retire_invalid_service_return(error)
             }
             Err(mrml_kernel::UserCallDecodeError::Request(_)) => {
                 frame.complete_error();
@@ -4330,7 +4330,7 @@ unsafe fn service_resource_mapping(virtual_address: u64) -> Mapping {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn retire_invalid_service_return() -> ! {
+unsafe fn retire_invalid_service_return(error: mrml_kernel::UserReturnError) -> ! {
     let runtime = unsafe {
         (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
             .as_mut()
@@ -4346,10 +4346,10 @@ unsafe fn retire_invalid_service_return() -> ! {
             .unwrap_or_else(|| halt())
     };
     let violation = supervisor
-        .violate_current(runtime, TaskProtocolViolation::InvalidUserReturn)
+        .violate_current(runtime, TaskProtocolViolation::InvalidUserReturn(error))
         .unwrap_or_else(|_| halt());
     if violation.retirement.task != current
-        || violation.retirement.violation != TaskProtocolViolation::InvalidUserReturn
+        || violation.retirement.violation != TaskProtocolViolation::InvalidUserReturn(error)
         || runtime.context(current).is_ok()
     {
         halt();
@@ -4367,7 +4367,7 @@ unsafe fn retire_invalid_service_return() -> ! {
                 if death.peer() != current
                     || death.reason()
                         != PeerDeathReason::ProtocolViolation(
-                            TaskProtocolViolation::InvalidUserReturn,
+                            TaskProtocolViolation::InvalidUserReturn(error),
                         )
                 {
                     halt();

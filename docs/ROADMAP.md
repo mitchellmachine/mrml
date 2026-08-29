@@ -2153,6 +2153,9 @@ live composition remains pending.
    Generic service decoding now consumes a typed return-versus-request envelope
    directly. The compatibility `request()` API remains exhaustive, while live
    retirement no longer reconstructs control-state faults from request errors.
+   Protocol-violation retirement, supervisor state, and the authorized
+   peer-death record now preserve the exact return cause. The probe requires
+   `InvalidStack`; 600 kernel tests and both probe images pass.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

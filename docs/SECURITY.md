@@ -198,6 +198,9 @@ access. The security/acceptance gate is canonical in
 - Generic live service decoding distinguishes typed return faults from request
   errors at the API boundary, preventing future request-error additions from
   silently changing retirement policy.
+- The scoped protocol-violation and peer-death records preserve the exact typed
+  return cause; the authorized observer can distinguish privilege, instruction,
+  stack, and flags failures without receiving unrelated task state.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
