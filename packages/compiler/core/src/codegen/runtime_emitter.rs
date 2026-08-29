@@ -7559,6 +7559,27 @@ impl<
             };
             return value.ok_or(self.error(CodegenErrorKind::ValueOutOfRange));
         }
+        if let ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } = expression.kind
+        {
+            let condition = tree.evaluate_at(condition, self.resolver).map_err(|error| {
+                self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
+                    error,
+                )))
+            })?;
+            return self.evaluate_wide_const_call_argument(
+                tree,
+                if condition == 0 {
+                    else_branch
+                } else {
+                    then_branch
+                },
+                expected_type,
+            );
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {
