@@ -235,6 +235,9 @@ access. The security/acceptance gate is canonical in
   authorizing or publishing either side of the relation.
 - The non-queued direct transfer primitive enforces the same two-endpoint
   scheduler identity requirement, preventing wrapper bypass.
+- New transfer and retirement validate every delegation edge's exact live
+  endpoints and unique destination before mutation, so stale graph state cannot
+  be extended or partially revoked.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

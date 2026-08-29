@@ -6815,6 +6815,11 @@ total to 608.
 The lower-level direct IPC transfer primitive now owns the same two-endpoint
 scheduler preflight, so callers that do not enqueue cannot bypass it. A focused
 stale-endpoint test raises the Linux kernel total to 609.
+Direct transfer and task retirement now validate the complete bounded
+delegation graph first: both task identities must be scheduled, every source and
+destination handle must retain its exact generation, and destination nodes must
+be unique. A stale-derived-handle send test proves endpoint sequence remains
+unchanged, raising the Linux kernel total to 610.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6891,7 +6896,8 @@ Combined control-topology validation is also conventional bounded-state
 hardening and does not trigger review. Sender scheduler preflight is the same
 transactional integrity validation; control connection preflight has the same
 classification. Moving the endpoint check into direct transfer is the same
-integrity hardening.
+integrity hardening. Delegation-graph preflight is conventional
+exact-generation validation on the existing graph and does not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

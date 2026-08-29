@@ -755,6 +755,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn revoke_task_delegations(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
+        self.validate_delegation_graph()?;
         let mut descendants = [None; MAX_TASK_DELEGATIONS + 1];
         let mut count = 0usize;
         for edge in self.delegations.iter().flatten().copied() {
@@ -940,6 +941,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if !self.scheduler.contains(sender) || !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        self.validate_delegation_graph()?;
         if self
             .delegations
             .iter()
@@ -1346,6 +1348,31 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
+        }
+        Ok(())
+    }
+
+    fn validate_delegation_graph(&self) -> Result<(), TaskRuntimeError> {
+        for (index, edge) in self.delegations.iter().enumerate() {
+            let Some(edge) = *edge else {
+                continue;
+            };
+            if edge.source_task == edge.destination_task
+                || !self.scheduler.contains(edge.source_task)
+                || !self.scheduler.contains(edge.destination_task)
+                || self.delegations[..index].iter().flatten().any(|prior| {
+                    prior.destination_task == edge.destination_task
+                        && prior.destination == edge.destination
+                })
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+            self.capabilities(edge.source_task)?
+                .authorize(edge.source, Rights::NONE)
+                .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+            self.capabilities(edge.destination_task)?
+                .authorize(edge.destination, Rights::NONE)
+                .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         }
         Ok(())
     }
@@ -2457,6 +2484,73 @@ mod tests {
             ),
             Err(TaskRuntimeError::IntegrityFailure)
         ));
+    }
+
+    #[test]
+    fn direct_transfer_rejects_stale_delegation_before_sequence_mutation() {
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x4b);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x4c), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let (sequence, message) = runtime
+            .send_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"first",
+                &[(root, Rights::READ)],
+            )
+            .unwrap();
+        assert_eq!(sequence, 1);
+        let derived = message.capabilities().next().unwrap();
+        runtime
+            .capabilities_mut(receiver)
+            .unwrap()
+            .revoke(derived)
+            .unwrap();
+
+        assert!(matches!(
+            runtime.send_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"rejected",
+                &[],
+            ),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        runtime.delegations.fill(None);
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"second",
+                    &[],
+                )
+                .unwrap()
+                .0,
+            2
+        );
     }
 
     #[test]
