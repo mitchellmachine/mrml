@@ -310,6 +310,9 @@ access. The security/acceptance gate is canonical in
   by a fallible publication lookup.
 - Control-peer connection reserves both exact reciprocal slots before either
   relation is written, preventing a one-sided partial connection.
+- Scheduler attach/migration creates a destination directly in its final state;
+  detach/migration consume a prevalidated exact source generation, avoiding
+  fallible post-publication state changes and best-effort rollback.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact

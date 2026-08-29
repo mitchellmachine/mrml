@@ -2296,6 +2296,10 @@ live composition remains pending.
    Control-peer connection reserves both reciprocal relation slots before
    either table is mutated. Existing topology coverage passes; the total
    remains 630.
+   Scheduler attach/migration now constructs the destination in its final
+   runnable or blocked state, while detach/migration consume an exact prepared
+   source-removal generation without rollback-only late lookups. Existing
+   lifecycle coverage passes; the total remains 630.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.

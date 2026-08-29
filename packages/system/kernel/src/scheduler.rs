@@ -215,6 +215,10 @@ pub(crate) struct CurrentTerminationPlan {
     task: TaskId,
 }
 
+struct TaskRemovalPlan {
+    task: TaskId,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct DetachedTask {
     source: TaskId,
@@ -385,6 +389,14 @@ impl<const TASKS: usize> Scheduler<TASKS> {
     }
 
     pub fn create(&mut self, priority: Priority) -> Result<TaskId, SchedulerError> {
+        self.create_with_state(priority, TaskState::Runnable)
+    }
+
+    fn create_with_state(
+        &mut self,
+        priority: Priority,
+        state: TaskState,
+    ) -> Result<TaskId, SchedulerError> {
         let (slot, task) = self
             .tasks
             .iter_mut()
@@ -392,9 +404,13 @@ impl<const TASKS: usize> Scheduler<TASKS> {
             .find(|(_, task)| !task.occupied && task.generation != 0)
             .ok_or(SchedulerError::Full)?;
         task.occupied = true;
-        task.state = TaskState::Runnable;
+        task.state = state;
         task.priority = priority;
-        task.budget = priority.budget();
+        task.budget = if state == TaskState::Runnable {
+            priority.budget()
+        } else {
+            0
+        };
         Ok(TaskId {
             slot: slot as u32,
             generation: task.generation,
@@ -411,12 +427,24 @@ impl<const TASKS: usize> Scheduler<TASKS> {
     }
 
     pub fn remove(&mut self, id: TaskId) -> Result<(), SchedulerError> {
-        let task = self.task_mut(id)?;
+        let plan = self.prepare_remove(id)?;
+        self.commit_remove(plan);
+        Ok(())
+    }
+
+    fn prepare_remove(&self, id: TaskId) -> Result<TaskRemovalPlan, SchedulerError> {
+        self.task(id)?;
+        Ok(TaskRemovalPlan { task: id })
+    }
+
+    fn commit_remove(&mut self, plan: TaskRemovalPlan) {
+        let task = self
+            .task_mut(plan.task)
+            .expect("exclusively owned scheduler preserves prepared removal identity");
         task.occupied = false;
         task.state = TaskState::Blocked;
         task.budget = 0;
         task.generation = task.generation.checked_add(1).unwrap_or(0);
-        Ok(())
     }
 
     pub fn schedule(&mut self) -> Option<TaskId> {
@@ -660,22 +688,16 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
             .map_err(KernelScheduleError::Scheduler)?;
         let state = source.state;
         let priority = source.priority;
+        let removal = self
+            .scheduler
+            .prepare_remove(task)
+            .map_err(KernelScheduleError::Scheduler)?;
 
-        let destination_task = destination.create(priority)?;
-        if state == TaskState::Blocked {
-            let state_result = destination
-                .scheduler
-                .set_state(destination_task, TaskState::Blocked);
-            if let Err(error) = state_result {
-                let _ = destination.scheduler.remove(destination_task);
-                return Err(KernelScheduleError::Scheduler(error));
-            }
-        }
-
-        if let Err(error) = self.scheduler.remove(task) {
-            let _ = destination.scheduler.remove(destination_task);
-            return Err(KernelScheduleError::Scheduler(error));
-        }
+        let destination_task = destination
+            .scheduler
+            .create_with_state(priority, state)
+            .map_err(KernelScheduleError::Scheduler)?;
+        self.scheduler.commit_remove(removal);
 
         Ok(TaskMigration {
             source: task,
@@ -715,14 +737,16 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
             .scheduler
             .task(task)
             .map_err(KernelScheduleError::Scheduler)?;
+        let removal = self
+            .scheduler
+            .prepare_remove(task)
+            .map_err(KernelScheduleError::Scheduler)?;
         let detached = DetachedTask {
             source: task,
             state: source.state,
             priority: source.priority,
         };
-        self.scheduler
-            .remove(task)
-            .map_err(KernelScheduleError::Scheduler)?;
+        self.scheduler.commit_remove(removal);
         Ok(detached)
     }
 
@@ -760,20 +784,14 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
     /// Admits an exclusively owned migration ticket. Failure returns the same
     /// ticket so the caller can retry, route elsewhere, or restore it.
     pub fn attach(&mut self, task: DetachedTask) -> Result<TaskMigration, TaskAttachError> {
-        let destination = match self.create(task.priority) {
+        let destination = match self
+            .scheduler
+            .create_with_state(task.priority, task.state)
+            .map_err(KernelScheduleError::Scheduler)
+        {
             Ok(destination) => destination,
             Err(error) => return Err(TaskAttachError { error, task }),
         };
-        if task.state == TaskState::Blocked {
-            let state_result = self.scheduler.set_state(destination, TaskState::Blocked);
-            if let Err(error) = state_result {
-                let _ = self.scheduler.remove(destination);
-                return Err(TaskAttachError {
-                    error: KernelScheduleError::Scheduler(error),
-                    task,
-                });
-            }
-        }
         Ok(TaskMigration {
             source: task.source,
             destination,

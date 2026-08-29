@@ -6994,6 +6994,13 @@ Control-peer connection now resolves both exact empty reciprocal-table slots
 after authorization and capacity validation but before writing either relation.
 The two writes therefore have no fallible search between them. Existing
 connection and topology coverage passes; the total remains 630.
+Scheduler migration and attach now create the destination directly in its exact
+runnable or blocked state instead of performing a second fallible state lookup.
+Detach and migration prepare the exact source generation before destination
+mutation and consume that removal plan without a repeated lookup, eliminating
+the former best-effort rollback branches. Existing scheduler migration,
+capacity, blocked-state, and stale-identity coverage passes; the total remains
+630.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second
