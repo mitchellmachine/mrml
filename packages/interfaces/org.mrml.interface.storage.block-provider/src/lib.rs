@@ -37,9 +37,8 @@ pub struct BlockProviderDevice {
 pub const BLOCK_DEVICE_FLAG_READ_ONLY: u32 = 1 << 0;
 pub const BLOCK_DEVICE_FLAG_FLUSH: u32 = 1 << 1;
 pub const BLOCK_DEVICE_FLAG_RESET: u32 = 1 << 2;
-const BLOCK_DEVICE_KNOWN_FLAGS: u32 = BLOCK_DEVICE_FLAG_READ_ONLY
-    | BLOCK_DEVICE_FLAG_FLUSH
-    | BLOCK_DEVICE_FLAG_RESET;
+const BLOCK_DEVICE_KNOWN_FLAGS: u32 =
+    BLOCK_DEVICE_FLAG_READ_ONLY | BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET;
 
 pub fn encode_block_device_catalog(
     devices: &[BlockProviderDevice],
@@ -78,8 +77,7 @@ pub fn encode_block_device_catalog(
     destination.fill(0);
     destination[0..8].copy_from_slice(&BLOCK_DEVICE_CATALOG_MAGIC);
     destination[8..10].copy_from_slice(&BLOCK_DEVICE_CATALOG_VERSION.to_le_bytes());
-    destination[10..12]
-        .copy_from_slice(&(BLOCK_DEVICE_CATALOG_RECORD_BYTES as u16).to_le_bytes());
+    destination[10..12].copy_from_slice(&(BLOCK_DEVICE_CATALOG_RECORD_BYTES as u16).to_le_bytes());
     destination[12..16].copy_from_slice(&count.to_le_bytes());
     for (index, device) in devices.iter().enumerate() {
         let offset = BLOCK_DEVICE_CATALOG_HEADER_BYTES + index * BLOCK_DEVICE_CATALOG_RECORD_BYTES;
@@ -95,6 +93,101 @@ pub fn encode_block_device_catalog(
             .copy_from_slice(&device.media_generation.to_le_bytes());
     }
     Ok(written as u64)
+}
+
+pub fn validate_block_device_catalog(bytes: &[u8]) -> Result<u32, ProtocolError> {
+    if bytes.len() < BLOCK_DEVICE_CATALOG_HEADER_BYTES
+        || bytes.len() > MAX_DEVICE_CATALOG_BYTES as usize
+        || bytes[0..8] != BLOCK_DEVICE_CATALOG_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != BLOCK_DEVICE_CATALOG_VERSION
+        || u16::from_le_bytes(bytes[10..12].try_into().unwrap())
+            != BLOCK_DEVICE_CATALOG_RECORD_BYTES as u16
+    {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+    let records = usize::try_from(count)
+        .map_err(|_| ProtocolError::InvalidResponse)?
+        .checked_mul(BLOCK_DEVICE_CATALOG_RECORD_BYTES)
+        .ok_or(ProtocolError::InvalidResponse)?;
+    let expected = BLOCK_DEVICE_CATALOG_HEADER_BYTES
+        .checked_add(records)
+        .ok_or(ProtocolError::InvalidResponse)?;
+    if bytes.len() != expected {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    for index in 0..count {
+        decode_catalog_record_after_header(bytes, index)?;
+    }
+    Ok(count)
+}
+
+pub fn decode_block_device_catalog_record(
+    bytes: &[u8],
+    index: u32,
+) -> Result<BlockProviderDevice, ProtocolError> {
+    let count = validate_catalog_header_and_length(bytes)?;
+    if index >= count {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    decode_catalog_record_after_header(bytes, index)
+}
+
+fn decode_catalog_record_after_header(
+    bytes: &[u8],
+    index: u32,
+) -> Result<BlockProviderDevice, ProtocolError> {
+    let offset = BLOCK_DEVICE_CATALOG_HEADER_BYTES
+        + usize::try_from(index).map_err(|_| ProtocolError::InvalidRequest)?
+            * BLOCK_DEVICE_CATALOG_RECORD_BYTES;
+    let session = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()),
+        u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidResponse)?;
+    let device = BlockProviderDevice {
+        session,
+        logical_block_bytes: u32::from_le_bytes(bytes[offset + 8..offset + 12].try_into().unwrap()),
+        flags: u32::from_le_bytes(bytes[offset + 12..offset + 16].try_into().unwrap()),
+        logical_block_count: u64::from_le_bytes(
+            bytes[offset + 16..offset + 24].try_into().unwrap(),
+        ),
+        media_generation: u64::from_le_bytes(bytes[offset + 24..offset + 32].try_into().unwrap()),
+    };
+    if device.logical_block_bytes < 512
+        || device.logical_block_bytes > 65_536
+        || !device.logical_block_bytes.is_power_of_two()
+        || device.flags & !BLOCK_DEVICE_KNOWN_FLAGS != 0
+        || device.logical_block_count == 0
+        || device.media_generation == 0
+    {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    Ok(device)
+}
+
+fn validate_catalog_header_and_length(bytes: &[u8]) -> Result<u32, ProtocolError> {
+    if bytes.len() < BLOCK_DEVICE_CATALOG_HEADER_BYTES
+        || bytes.len() > MAX_DEVICE_CATALOG_BYTES as usize
+        || bytes[0..8] != BLOCK_DEVICE_CATALOG_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != BLOCK_DEVICE_CATALOG_VERSION
+        || u16::from_le_bytes(bytes[10..12].try_into().unwrap())
+            != BLOCK_DEVICE_CATALOG_RECORD_BYTES as u16
+    {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+    let expected = BLOCK_DEVICE_CATALOG_HEADER_BYTES
+        .checked_add(
+            usize::try_from(count)
+                .map_err(|_| ProtocolError::InvalidResponse)?
+                .checked_mul(BLOCK_DEVICE_CATALOG_RECORD_BYTES)
+                .ok_or(ProtocolError::InvalidResponse)?,
+        )
+        .ok_or(ProtocolError::InvalidResponse)?;
+    (bytes.len() == expected)
+        .then_some(count)
+        .ok_or(ProtocolError::InvalidResponse)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -311,8 +404,7 @@ pub fn decode_enumerate_request(
         || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
         || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_ENUMERATE
         || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 16
-        || u64::from_le_bytes(bytes[64..72].try_into().unwrap())
-            != ENUMERATE_RESPONSE_BYTES as u64
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != ENUMERATE_RESPONSE_BYTES as u64
     {
         return Err(ProtocolError::InvalidHeader);
     }
@@ -452,7 +544,10 @@ pub fn decode_read_response(
     match status {
         0 if transferred != 0
             && transferred <= output_length
-            && transferred <= MAX_BLOCK_TRANSFER_BYTES => Ok(Ok(transferred)),
+            && transferred <= MAX_BLOCK_TRANSFER_BYTES =>
+        {
+            Ok(Ok(transferred))
+        }
         1 if transferred == 0 => Ok(Err(ReadError::InvalidRequest)),
         2 if transferred == 0 => Ok(Err(ReadError::StaleObject)),
         3 if transferred == 0 => Ok(Err(ReadError::PermissionDenied)),
@@ -557,7 +652,10 @@ pub fn decode_write_response(
     match status {
         0 if transferred != 0
             && transferred <= input_length
-            && transferred <= MAX_BLOCK_TRANSFER_BYTES => Ok(Ok(transferred)),
+            && transferred <= MAX_BLOCK_TRANSFER_BYTES =>
+        {
+            Ok(Ok(transferred))
+        }
         1 if transferred == 0 => Ok(Err(WriteError::InvalidRequest)),
         2 if transferred == 0 => Ok(Err(WriteError::StaleObject)),
         3 if transferred == 0 => Ok(Err(WriteError::PermissionDenied)),
@@ -568,10 +666,7 @@ pub fn decode_write_response(
     }
 }
 
-fn encode_control_request(
-    session: OpaqueHandle,
-    operation: u32,
-) -> [u8; FLUSH_REQUEST_BYTES] {
+fn encode_control_request(session: OpaqueHandle, operation: u32) -> [u8; FLUSH_REQUEST_BYTES] {
     let mut bytes = [0; FLUSH_REQUEST_BYTES];
     bytes[0..8].copy_from_slice(&ABI_MAGIC);
     bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
@@ -699,10 +794,28 @@ mod tests {
     fn views_and_handles_are_bounded_and_generational() {
         assert!(OpaqueHandle::new(4, 0).is_none());
         let session = OpaqueHandle::new(4, 7).unwrap();
-        let output = BorrowedWriteView::within(0, MAX_BLOCK_TRANSFER_BYTES, MAX_BLOCK_TRANSFER_BYTES).unwrap();
-        assert!(ReadRequest { session, lba: 9, sector_count: 2048, output }.validate());
-        assert!(BorrowedWriteView::within(0, MAX_BLOCK_TRANSFER_BYTES + 1, MAX_BLOCK_TRANSFER_BYTES + 1)
-            .is_some_and(|output| !ReadRequest { session, lba: 9, sector_count: 2048, output }.validate()));
+        let output =
+            BorrowedWriteView::within(0, MAX_BLOCK_TRANSFER_BYTES, MAX_BLOCK_TRANSFER_BYTES)
+                .unwrap();
+        assert!(ReadRequest {
+            session,
+            lba: 9,
+            sector_count: 2048,
+            output
+        }
+        .validate());
+        assert!(BorrowedWriteView::within(
+            0,
+            MAX_BLOCK_TRANSFER_BYTES + 1,
+            MAX_BLOCK_TRANSFER_BYTES + 1
+        )
+        .is_some_and(|output| !ReadRequest {
+            session,
+            lba: 9,
+            sector_count: 2048,
+            output
+        }
+        .validate()));
     }
 
     struct Endpoint {
@@ -796,9 +909,9 @@ mod tests {
         ) -> Result<[u8; RESET_RESPONSE_BYTES], ProtocolError> {
             self.seen = Some(endpoint);
             let request = decode_reset_request(request)?;
-            Ok(encode_reset_response(Ok(
-                u64::from(request.session.generation()) + 1,
-            )))
+            Ok(encode_reset_response(Ok(u64::from(
+                request.session.generation(),
+            ) + 1)))
         }
     }
 
@@ -807,7 +920,10 @@ mod tests {
         let endpoint = OpaqueHandle::new(7, 11).unwrap();
         let output = BorrowedWriteView::within(8, 512, 520).unwrap();
         let request = encode_enumerate_request(output).unwrap();
-        assert_eq!(decode_enumerate_request(&request, 520).unwrap().output, output);
+        assert_eq!(
+            decode_enumerate_request(&request, 520).unwrap().output,
+            output
+        );
         let service = Endpoint { seen: None };
         let mut transport = IsolatedBlockProviderTransport::new(endpoint, 520, service).unwrap();
         assert_eq!(
@@ -861,6 +977,52 @@ mod tests {
         assert_eq!(u32::from_le_bytes(memory[24..28].try_into().unwrap()), 3);
         assert_eq!(u32::from_le_bytes(memory[28..32].try_into().unwrap()), 7);
         assert_eq!(u64::from_le_bytes(memory[48..56].try_into().unwrap()), 9);
+        let catalog = &memory[8..56];
+        assert_eq!(validate_block_device_catalog(catalog), Ok(1));
+        assert_eq!(
+            decode_block_device_catalog_record(catalog, 0),
+            Ok(devices[0])
+        );
+        assert_eq!(
+            decode_block_device_catalog_record(catalog, 1),
+            Err(ProtocolError::InvalidRequest)
+        );
+    }
+
+    #[test]
+    fn catalog_decoder_rejects_truncation_counts_flags_and_stale_handles() {
+        let devices = [BlockProviderDevice {
+            session: OpaqueHandle::new(3, 7).unwrap(),
+            logical_block_bytes: 4096,
+            flags: BLOCK_DEVICE_FLAG_FLUSH,
+            logical_block_count: 128,
+            media_generation: 9,
+        }];
+        let output = BorrowedWriteView::within(0, 48, 48).unwrap();
+        let mut catalog = [0; 48];
+        encode_block_device_catalog(&devices, output, &mut catalog).unwrap();
+        assert_eq!(
+            validate_block_device_catalog(&catalog[..47]),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut hostile = catalog;
+        hostile[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(
+            validate_block_device_catalog(&hostile),
+            Err(ProtocolError::InvalidResponse)
+        );
+        hostile = catalog;
+        hostile[20..24].fill(0);
+        assert_eq!(
+            validate_block_device_catalog(&hostile),
+            Err(ProtocolError::InvalidResponse)
+        );
+        hostile = catalog;
+        hostile[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            validate_block_device_catalog(&hostile),
+            Err(ProtocolError::InvalidResponse)
+        );
     }
 
     #[test]
@@ -869,7 +1031,10 @@ mod tests {
         let session = OpaqueHandle::new(4, 7).unwrap();
         let output = BorrowedWriteView::within(16, 1024, 1040).unwrap();
         let request = encode_read_request(session, 33, 2, output).unwrap();
-        assert_eq!(decode_read_request(&request, 1040).unwrap().session, session);
+        assert_eq!(
+            decode_read_request(&request, 1040).unwrap().session,
+            session
+        );
         let service = Endpoint { seen: None };
         let mut transport = IsolatedBlockProviderTransport::new(endpoint, 1040, service).unwrap();
         let mut memory = [0; 1040];
@@ -914,7 +1079,10 @@ mod tests {
         let session = OpaqueHandle::new(5, 8).unwrap();
         let input = BorrowedReadView::within(16, 1024, 1040).unwrap();
         let request = encode_write_request(session, 44, 2, input).unwrap();
-        assert_eq!(decode_write_request(&request, 1040).unwrap().session, session);
+        assert_eq!(
+            decode_write_request(&request, 1040).unwrap().session,
+            session
+        );
         let service = Endpoint { seen: None };
         let mut transport = IsolatedBlockProviderTransport::new(endpoint, 1040, service).unwrap();
         let mut memory = [0; 1040];
@@ -970,10 +1138,16 @@ mod tests {
     fn control_codecs_reject_cross_operation_stale_and_zero_success() {
         let session = OpaqueHandle::new(6, 10).unwrap();
         let flush = encode_flush_request(session);
-        assert_eq!(decode_reset_request(&flush), Err(ProtocolError::InvalidHeader));
+        assert_eq!(
+            decode_reset_request(&flush),
+            Err(ProtocolError::InvalidHeader)
+        );
         let mut reset = encode_reset_request(session);
         reset[16] ^= 1;
-        assert_eq!(decode_reset_request(&reset), Err(ProtocolError::InvalidHeader));
+        assert_eq!(
+            decode_reset_request(&reset),
+            Err(ProtocolError::InvalidHeader)
+        );
         assert_eq!(
             decode_flush_response(&encode_flush_response(Ok(0))),
             Err(ProtocolError::InvalidResponse)

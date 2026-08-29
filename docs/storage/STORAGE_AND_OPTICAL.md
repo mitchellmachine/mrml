@@ -613,7 +613,11 @@ counts beyond both the caller's output and the 64-KiB interface limit. The
 canonical catalog header and fixed-size records carry only opaque session
 generations, checked block geometry, explicit feature facts, and media
 generations. Encoding validates every record and zeroes the exact output extent
-before publication. The AHCI library implements enumeration over that catalog
+before publication. The hostile decoder exact-matches header version, record
+size, count-derived total length, generational handles, known flags, bounded
+power-of-two block sizes, nonzero capacities, and media generations before
+exposing any record to storage-service admission. The AHCI library implements
+enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
 55 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
 each implement this same enumeration contract independently. Provider-side
@@ -638,7 +642,7 @@ provider-side write adapters remain **PLANNED**. Flush and reset now use separat
 buffer-free calls through the exact endpoint: flush accepts only a nonzero
 durability serial, while reset accepts only a nonzero successor generation and
 preserves cleanup-incomplete failure separately. Cross-operation frames fail
-closed. Ten focused interface tests pass on Windows and Arch Linux. Provider-side
+closed. Eleven focused interface tests pass on Windows and Arch Linux. Provider-side
 control adapters remain **PLANNED**.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
@@ -689,7 +693,7 @@ PCI classes, and manifests do not authorize.
 - Existing-object reuse: **HIGH**
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
-interface passes ten focused tests and the filesystem interface's canonical probe
+interface passes eleven focused tests and the filesystem interface's canonical probe
 codec and exact-generation isolated transport pass three on Windows and Arch
 Linux. The fixed-capacity module registry is also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
