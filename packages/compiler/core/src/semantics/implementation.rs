@@ -213,7 +213,11 @@ pub fn analyze_constants<
             || tree.nodes().iter().flatten().any(|expression| {
                 matches!(
                     expression.kind,
-                    ExprKind::WrappingArithmetic { .. }
+                    ExprKind::Binary {
+                        operator: BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight,
+                        ..
+                    }
+                        | ExprKind::WrappingArithmetic { .. }
                         | ExprKind::SaturatingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerFunnelShift { .. }
