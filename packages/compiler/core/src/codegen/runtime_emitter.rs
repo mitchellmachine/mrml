@@ -7563,6 +7563,66 @@ impl<
         if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
             && matches!(
                 transform,
+                crate::expression::IntegerBitTransform::NextPowerOfTwo
+                    | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
+            )
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let calculate = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x48, 0x83, 0xf8, 1])?;
+            let calculate_low = self.emit_forward_branch(0x87)?;
+            self.emit(&[0xb8, 1, 0, 0, 0, 0x31, 0xd2])?;
+            let done_small = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(calculate)?;
+            self.emit(&[0x48, 0x83, 0xe8, 1, 0x48, 0x83, 0xda, 0])?;
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let low_word = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x48, 0x0f, 0xbd, 0xca, 0x83, 0xf9, 63])?;
+            let overflow = self.emit_forward_branch(0x84)?;
+            self.emit(&[0xff, 0xc1, 0xba, 1, 0, 0, 0, 0x48, 0xd3, 0xe2, 0x31, 0xc0])?;
+            let done_high = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(overflow)?;
+            self.emit(&[0x31, 0xc0])?;
+            if transform == crate::expression::IntegerBitTransform::NextPowerOfTwo
+                && self.overflow_checks
+            {
+                self.emit_trap_branch(0x84)?;
+            }
+            self.emit(&[0x31, 0xd2])?;
+            let done_overflow = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(calculate_low)?;
+            self.emit(&[0x48, 0x83, 0xe8, 1, 0x48, 0x83, 0xda, 0])?;
+            self.patch_forward_branch(low_word)?;
+            self.emit(&[0x48, 0x0f, 0xbd, 0xc8, 0x83, 0xf9, 63])?;
+            let crosses_word = self.emit_forward_branch(0x84)?;
+            self.emit(&[0xff, 0xc1, 0xb8, 1, 0, 0, 0, 0x48, 0xd3, 0xe0, 0x31, 0xd2])?;
+            let done_low = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(crosses_word)?;
+            self.emit(&[0x31, 0xc0, 0xba, 1, 0, 0, 0])?;
+            self.patch_forward_branch(done_low)?;
+            self.patch_forward_branch(done_overflow)?;
+            self.patch_forward_branch(done_high)?;
+            self.patch_forward_branch(done_small)?;
+            return Ok(());
+        }
+        if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
+            && matches!(
+                transform,
                 crate::expression::IntegerBitTransform::SwapBytes
                     | crate::expression::IntegerBitTransform::ToBigEndian
                     | crate::expression::IntegerBitTransform::ToLittleEndian

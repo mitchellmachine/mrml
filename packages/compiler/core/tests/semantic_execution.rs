@@ -119,6 +119,14 @@ const MRML_V1_WIDE_UNSIGNED_LEADING_ONES_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.leading_ones() }";
 const MRML_V1_WIDE_SIGNED_TRAILING_ONES_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u32 { input.trailing_ones() }";
+const MRML_V1_WIDE_UNSIGNED_NEXT_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.next_power_of_two() }";
+const MRML_V1_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }";
+const RUSTC_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str = concat!(
+    "#![feature(wrapping_next_power_of_two)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }"
+);
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1469,6 +1477,40 @@ fn mrml_v1_wide_population_counts_match_the_oracle() {
             "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { println!(\"{}\", probe(input)); }"
         };
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_next_powers_of_two_match_both_oracle_words() {
+    for (source, inputs) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_NEXT_POWER_SOURCE,
+            [0u128, 1, 3, (1u128 << 64) + 1, 1u128 << 127],
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE,
+            [0u128, 1, 3, (1u128 << 127) + 1, u128::MAX],
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        let driver = if source == MRML_V1_WIDE_UNSIGNED_NEXT_POWER_SOURCE {
+            "for input in [0u128, 1, 3, (1u128 << 64) + 1, 1u128 << 127] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"
+        } else {
+            "for input in [0u128, 1, 3, (1u128 << 127) + 1, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"
+        };
+        let oracle_source = if source == MRML_V1_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE {
+            RUSTC_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE
+        } else {
+            source
+        };
+        assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, driver));
     }
 }
 

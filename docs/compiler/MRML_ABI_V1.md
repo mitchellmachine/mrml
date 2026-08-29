@@ -200,6 +200,9 @@ Wide population and leading/trailing bit counts consume both words and return
 the Rust-defined `u32`, including the full-width result for zero or all ones.
 Unsigned wide `bit_width` returns zero for zero and otherwise offsets a set bit
 in the high word by 64.
+Unsigned wide next-power operations distinguish the low/high-word crossover;
+overflow traps for checked `next_power_of_two` and wraps to zero for the
+wrapping form.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
