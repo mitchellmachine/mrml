@@ -386,11 +386,11 @@ mod tests {
     #[test]
     fn evaluates_typed_shift_distances_in_named_wide_constants() {
         let module = Parser::new(
-            "const DISTANCE: u32 = 65; const UNSIGNED: u128 = 1512366075204170947332355369683137040u128 >> DISTANCE; const SIGNED: i128 = -1512366075204170947332355369683137040i128 >> DISTANCE;",
+            "const DISTANCE: u32 = 65; const UNSIGNED: u128 = 1512366075204170947332355369683137040u128 >> DISTANCE; const SIGNED: i128 = -1512366075204170947332355369683137040i128 >> DISTANCE; const UNSIGNED_MATCH: bool = (1512366075204170947332355369683137040u128 >> DISTANCE) == UNSIGNED; const SIGNED_MATCH: bool = (-1512366075204170947332355369683137040i128 >> DISTANCE) == SIGNED;",
         )
-        .parse_module::<6, 2>()
+        .parse_module::<8, 2>()
         .unwrap();
-        let values = analyze_constants::<4, 48, 6, 2>(&module, TargetLayout::X86_64).unwrap();
+        let values = analyze_constants::<8, 64, 8, 2>(&module, TargetLayout::X86_64).unwrap();
         assert_eq!(
             values.resolve("UNSIGNED"),
             Some(1512366075204170947332355369683137040u128 >> 65)
@@ -399,6 +399,8 @@ mod tests {
             values.resolve("SIGNED"),
             Some((-1512366075204170947332355369683137040i128 >> 65) as u128)
         );
+        assert_eq!(values.resolve("UNSIGNED_MATCH"), Some(1));
+        assert_eq!(values.resolve("SIGNED_MATCH"), Some(1));
     }
 
     #[test]

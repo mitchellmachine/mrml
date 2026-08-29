@@ -159,7 +159,7 @@ Const calls may independently type and evaluate multiple wide parameters in
 source order alongside ordinary one-word parameters. Wide const-function bodies
 retain the declared integer type of a shift distance instead of forcing it to
 the shifted value's type in named constants and const functions, including for
-compound shift assignments.
+compound shift assignments and boolean comparisons of shifted values.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.

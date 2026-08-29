@@ -156,7 +156,9 @@ pub fn analyze_constants<
                         end: constant.initializer_span.start + error.span.end,
                     },
                 })?;
-            let value = if expression_contains_call(&tree, tree.root(), 0) {
+            let value = if expression_contains_call(&tree, tree.root(), 0)
+                || expression_requires_typed_integer_evaluation(&tree)
+            {
                 let resolver =
                     ConstCallResolver::from_constants(&table).map_err(|kind| SemanticError {
                         kind,
@@ -210,33 +212,7 @@ pub fn analyze_constants<
                 },
             })?;
         let requires_typed_evaluation = expression_contains_call(&tree, tree.root(), 0)
-            || tree.nodes().iter().flatten().any(|expression| {
-                matches!(
-                    expression.kind,
-                    ExprKind::Binary {
-                        operator: BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight,
-                        ..
-                    }
-                        | ExprKind::WrappingArithmetic { .. }
-                        | ExprKind::SaturatingArithmetic { .. }
-                        | ExprKind::IntegerRotate { .. }
-                        | ExprKind::IntegerFunnelShift { .. }
-                        | ExprKind::IntegerSignCast { .. }
-                        | ExprKind::IntegerWidthCast { .. }
-                        | ExprKind::IntegerClampMagnitude { .. }
-                        | ExprKind::IntegerEndianFrom { .. }
-                        | ExprKind::IntegerFromBytes { .. }
-                        | ExprKind::IntegerAssociatedConstant { .. }
-                        | ExprKind::IntegerWrappingShift { .. }
-                        | ExprKind::IntegerWrappingPower { .. }
-                        | ExprKind::IntegerBitTransform { .. }
-                        | ExprKind::IntegerUnsignedAbsolute { .. }
-                        | ExprKind::IntegerPairTransform { .. }
-                        | ExprKind::IntegerClamp { .. }
-                        | ExprKind::IntegerBitCount { .. }
-                        | ExprKind::IntegerLogarithm { .. }
-                )
-            });
+            || expression_requires_typed_integer_evaluation(&tree);
         let call_value = if requires_typed_evaluation {
             let resolver =
                 ConstCallResolver::from_constants(&table).map_err(|kind| SemanticError {
@@ -2095,7 +2071,31 @@ fn evaluate_integer_const_expression<
     if expression_contains_call(tree, id, 0) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
     }
-    if tree.nodes().iter().flatten().any(|expression| {
+    if expression_requires_typed_integer_evaluation(tree) {
+        return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
+    }
+    if ty.is_signed() {
+        evaluate_signed_integer(tree, id, ty, context.target, constants, 0)
+            .map_err(SemanticErrorKind::Execution)
+    } else if id != tree.root() {
+        tree.evaluate_at(id, constants)
+            .map_err(|error| SemanticErrorKind::Execution(ExecutionError::Arithmetic(error)))
+    } else {
+        let program = lower_expression_with_pointer_bits::<
+            MAX_CONSTANT_IR_INSTRUCTIONS,
+            MAX_EXPRESSION_NODES,
+        >(tree, context.target.pointer_bits())
+        .map_err(|error| SemanticErrorKind::Lowering(error.kind))?;
+        program
+            .execute::<_, MAX_CONSTANT_STACK_VALUES>(constants)
+            .map_err(SemanticErrorKind::Execution)
+    }
+}
+
+fn expression_requires_typed_integer_evaluation<const MAX_NODES: usize>(
+    tree: &ExpressionTree<'_, MAX_NODES>,
+) -> bool {
+    tree.nodes().iter().flatten().any(|expression| {
         matches!(
             expression.kind,
             ExprKind::Binary {
@@ -2121,25 +2121,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerBitCount { .. }
                 | ExprKind::IntegerLogarithm { .. }
         )
-    }) {
-        return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
-    }
-    if ty.is_signed() {
-        evaluate_signed_integer(tree, id, ty, context.target, constants, 0)
-            .map_err(SemanticErrorKind::Execution)
-    } else if id != tree.root() {
-        tree.evaluate_at(id, constants)
-            .map_err(|error| SemanticErrorKind::Execution(ExecutionError::Arithmetic(error)))
-    } else {
-        let program = lower_expression_with_pointer_bits::<
-            MAX_CONSTANT_IR_INSTRUCTIONS,
-            MAX_EXPRESSION_NODES,
-        >(tree, context.target.pointer_bits())
-        .map_err(|error| SemanticErrorKind::Lowering(error.kind))?;
-        program
-            .execute::<_, MAX_CONSTANT_STACK_VALUES>(constants)
-            .map_err(SemanticErrorKind::Execution)
-    }
+    })
 }
 
 fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
