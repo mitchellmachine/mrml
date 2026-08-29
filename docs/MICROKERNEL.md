@@ -8851,3 +8851,9 @@ is disabled and boundedly quiesced before FIS receive is disabled and boundedly
 quiesced. Writes are read-verified; timeout or uncertainty quarantines the DMA
 layout. Storage passes 174 tests on Windows and Arch Linux. This is host register-model evidence,
 not command, transfer, interrupt, IOMMU, OVMF, or physical-device evidence.
+
+Stopped AHCI DMA reclamation is now **PARTIALLY IMPLEMENTED IN SOURCE**. The
+kernel-facing service restores the backend-revocable owner only after exact
+generation/quiescence checks, verified clearing of all port DMA bases, and
+verified sanitization of each exact retained extent. All uncertainty remains a
+quarantine. Storage passes 177 tests on Windows and Arch Linux; no native IOMMU or device was used.

@@ -344,6 +344,14 @@ waits to 1024 reads. Exact read-back is required, and all uncertainty retains a
 quarantined DMA layout. Storage passes 174 tests on Windows and Arch Linux. Register-base clearing,
 DMA sanitization/reclamation, command issue, and data transfer remain unimplemented.
 
+The stopped-port reclamation gate is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+It exact-matches generations and quiescence, clears and verifies all DMA base
+registers, then zeroes and verifies exactly the retained command-list,
+received-FIS, and command-table extents. Only complete success recreates the
+installed owner accepted by exact backend revocation; every failure quarantines
+the layout. Storage passes 177 tests on Windows and Arch Linux. No command, transfer, interrupt,
+IOMMU hardware, OVMF, or physical device was exercised.
+
 The following DMA-memory ownership boundary is **PARTIALLY IMPLEMENTED IN
 SOURCE**. One safe transaction binds a quiescent discovered SATA port and exact
 controller generations to explicit controller `CONTROL` plus separate

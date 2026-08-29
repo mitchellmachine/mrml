@@ -267,6 +267,14 @@ read-verified; any mismatch, timeout, or access uncertainty quarantines the DMA
 layout. Storage passes 174 tests on Windows and Arch Linux. Base clearing, memory sanitization,
 reclamation, and command/data paths remain **PLANNED**.
 
+Stopped-port DMA reclamation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`reclaim_stopped_ahci_port_dma` rechecks exact ABAR generations and quiescence,
+clears and read-verifies command-list and received-FIS base registers, then
+zeroes and verifies every word of only the retained DMA extents. It restores the
+revocable installed owner only after the complete transition; all uncertainty
+remains quarantined. Storage passes 177 tests on Windows and Arch Linux. Command construction,
+data transfer, interrupt handling, and native hardware execution remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

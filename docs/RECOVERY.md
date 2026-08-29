@@ -1257,6 +1257,12 @@ bounded command/FIS quiescence polling. Any uncertainty remains quarantined;
 recovery cannot infer that DMA is reclaimable from a requested stop. Storage
 passes 174 tests on Windows and Arch Linux. Base clearing and sanitizing reclamation remain next.
 
+Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
+may regain the revocable installed owner only after exact-generation quiescence,
+verified base-register clearing, and verified zeroing of all retained extents.
+Any incomplete or uncertain transition remains quarantined. Storage passes 177
+tests on Windows and Arch Linux; installed recovery and hardware execution are not claimed.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

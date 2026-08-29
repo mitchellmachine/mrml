@@ -65,6 +65,10 @@ impl InstalledAhciPortDma {
     pub(crate) const fn into_layout(self) -> AhciPortDmaLayout {
         self.layout
     }
+
+    pub(crate) const fn from_reclaimed_layout(layout: AhciPortDmaLayout) -> Self {
+        Self { layout }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
