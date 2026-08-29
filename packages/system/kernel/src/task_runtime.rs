@@ -499,18 +499,25 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn context(&self, task: TaskId) -> Result<&UserContext, TaskRuntimeError> {
-        self.domain(task)
+        let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        self.domains[slot]
+            .as_ref()
             .map(|domain| &domain.context)
-            .ok_or(TaskRuntimeError::MissingTask)
+            .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
     pub fn context_mut(&mut self, task: TaskId) -> Result<&mut UserContext, TaskRuntimeError> {
-        self.domains
-            .iter_mut()
-            .flatten()
-            .find(|domain| domain.task == task)
+        let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        self.domains[slot]
+            .as_mut()
             .map(|domain| &mut domain.context)
-            .ok_or(TaskRuntimeError::MissingTask)
+            .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
     pub const fn current(&self) -> Option<TaskId> {
@@ -2541,6 +2548,14 @@ mod tests {
         ));
         assert!(matches!(
             runtime.capabilities_mut(receiver),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert!(matches!(
+            runtime.context(receiver),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert!(matches!(
+            runtime.context_mut(receiver),
             Err(TaskRuntimeError::IntegrityFailure)
         ));
         assert_eq!(

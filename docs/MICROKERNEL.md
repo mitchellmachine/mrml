@@ -6837,7 +6837,8 @@ Message shape inspection, direct dequeue, bounded dequeue, and control receive
 now require the domain's exact scheduler identity before observing or consuming
 inbox state. A focused unscheduled-domain test proves all receive projections
 and mutable, immutable, or exact capability authorization access fail closed
-while the queued message remains present, raising the Linux kernel total to 612.
+as do immutable and mutable saved-context access, while the queued message
+remains present. The Linux kernel total is 612.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

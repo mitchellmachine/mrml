@@ -250,6 +250,8 @@ access. The security/acceptance gate is canonical in
 - Task capability-space access and exact authorization require the same live
   scheduler generation, so an orphaned domain record cannot retain an authority
   path through runtime accessors.
+- Immutable and mutable saved-context access requires the domain's exact live
+  scheduler generation as well.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

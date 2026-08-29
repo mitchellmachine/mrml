@@ -2206,8 +2206,8 @@ live composition remains pending.
    failures leave the destination completely reusable; the total remains 611.
    Shape inspection and message/control dequeue now require the domain's exact
    scheduler identity, as do mutable/immutable capability-space access and exact
-   capability authorization. An unscheduled-domain test preserves the queued
-   message and raises the kernel total to 612.
+   capability authorization and saved-context access. An unscheduled-domain
+   test preserves the queued message; the kernel total remains 612.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
