@@ -1010,6 +1010,18 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if !self.scheduler.contains(sender) || !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        let sender_slot = self
+            .domain_slot(sender)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        endpoint
+            .authorize_member(
+                &self.domains[sender_slot]
+                    .as_ref()
+                    .ok_or(TaskRuntimeError::IntegrityFailure)?
+                    .capabilities,
+                endpoint_capability,
+            )
+            .map_err(TaskRuntimeError::Ipc)?;
         Self::validate_inbox_state(
             self.domains[receiver_slot]
                 .as_ref()
@@ -2417,6 +2429,67 @@ mod tests {
         assert_eq!(
             runtime.peek_ipc_shape(receiver),
             Err(TaskRuntimeError::InboxEmpty)
+        );
+    }
+
+    #[test]
+    fn unauthorized_delivery_cannot_observe_full_receiver_inbox() {
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x56);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let wrong_endpoint = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x57), Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        for payload in [b"one".as_slice(), b"two".as_slice()] {
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    payload,
+                    &[],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                wrong_endpoint,
+                b"probe",
+                &[],
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        runtime.receive_ipc(receiver).unwrap();
+        assert_eq!(
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"three",
+                    &[],
+                )
+                .unwrap(),
+            3
         );
     }
 

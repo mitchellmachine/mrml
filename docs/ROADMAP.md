@@ -2244,6 +2244,9 @@ live composition remains pending.
    Direct send now uses unique domain resolution after scheduler confirmation;
    missing/duplicate domain state is integrity failure. Existing corruption
    coverage is extended; the total remains 622.
+   Queued delivery now authorizes the endpoint before observing receiver inbox
+   state. A full-inbox non-disclosure test preserves sequence and raises the
+   kernel total to 623.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.
