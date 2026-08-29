@@ -12748,7 +12748,7 @@ mod tests {
                     .then_some(crate::IntegerType::U128)
             }
         }
-        let source = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select(1512366075204170947332355369683137040) }";
+        let source = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select(select(1512366075204170947332355369683137040)) }";
         let module = Parser::new(source).parse_module::<4, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[1] else {
             panic!("expected function")

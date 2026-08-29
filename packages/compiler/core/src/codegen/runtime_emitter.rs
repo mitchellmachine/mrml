@@ -7145,40 +7145,11 @@ impl<
                 }
                 return self.emit_runtime_call(tree, &arguments, target, 1);
             }
-            let mut values = [0u128; MAX_CALL_ARGUMENTS];
-            for (index, argument) in arguments[..argument_count].iter().enumerate() {
-                let argument = argument
-                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                values[index] = match self.resolver.resolve_call_parameter_type(
-                    callee,
-                    argument_count,
-                    index,
-                ) {
-                    Some(parameter_type @ (crate::IntegerType::U128 | crate::IntegerType::I128)) => {
-                        self.evaluate_wide_const_call_argument(tree, argument, parameter_type)?
-                    }
-                    _ => tree
-                        .evaluate_at(argument, self.resolver)
-                        .map_err(|error| {
-                            self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
-                                error,
-                            )))
-                        })?,
-                };
-            }
-            let resolved_type = self.resolver.resolve_call_type(callee, argument_count);
-            if resolved_type
-                != match expected_type {
-                    RuntimeExpressionType::Integer(integer_type) => integer_type,
-                    _ => None,
-                }
-            {
+            let RuntimeExpressionType::Integer(Some(expected_integer_type)) = expected_type else {
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
-            }
-            let value = self
-                .resolver
-                .resolve_call(callee, &values[..argument_count])
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            };
+            let value =
+                self.evaluate_wide_const_call_argument(tree, id, expected_integer_type)?;
             return self.emit_wide_integer_immediate(value);
         }
         if let ExprKind::If {
@@ -7482,6 +7453,41 @@ impl<
                 .resolver
                 .resolve(name)
                 .ok_or(self.error(CodegenErrorKind::UnknownRuntimeName));
+        }
+        if let ExprKind::Call {
+            callee,
+            arguments,
+            argument_count,
+        } = expression.kind
+        {
+            if self.resolver.resolve_call_type(callee, argument_count) != Some(expected_type) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            let mut values = [0u128; MAX_CALL_ARGUMENTS];
+            for (index, argument) in arguments[..argument_count].iter().enumerate() {
+                let argument = argument
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                values[index] = match self.resolver.resolve_call_parameter_type(
+                    callee,
+                    argument_count,
+                    index,
+                ) {
+                    Some(parameter_type @ (crate::IntegerType::U128 | crate::IntegerType::I128)) => {
+                        self.evaluate_wide_const_call_argument(tree, argument, parameter_type)?
+                    }
+                    _ => tree
+                        .evaluate_at(argument, self.resolver)
+                        .map_err(|error| {
+                            self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
+                                error,
+                            )))
+                        })?,
+                };
+            }
+            return self
+                .resolver
+                .resolve_call(callee, &values[..argument_count])
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
         }
         Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))
     }
