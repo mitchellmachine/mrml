@@ -443,11 +443,15 @@ dwords before the submission doorbell, bounds phase-tagged completion polling,
 validates command ID, queue ID/head and status, and acknowledges the completion
 head. Pre-mutation failures return the active queue owner; uncertainty after
 mutation quarantines it; an explicit controller error advances and returns the
-reusable queue with decoded status. Native PCI enumeration, concrete MMIO
-installation, identify-data parsing, namespace discovery, and I/O queues,
+reusable queue with decoded status. Hostile Identify Controller data is now
+parsed into fixed-capacity printable serial/model/firmware labels, exact
+controller generations, bounded namespace count, checked/capped maximum
+transfer size, and optional-command/cache feature facts. Labels and feature
+bits remain non-authorizing data. Native PCI enumeration, concrete MMIO
+installation, namespace discovery, and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Twenty-five focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. Twenty-nine focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current

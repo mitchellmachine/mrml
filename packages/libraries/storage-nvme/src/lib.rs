@@ -8,6 +8,7 @@
 mod nvme_admin_command;
 mod nvme_controller;
 mod nvme_discovery;
+mod nvme_identify;
 mod nvme_mapping;
 mod nvme_queue_dma;
 mod nvme_queue_program;
@@ -25,6 +26,10 @@ pub use nvme_discovery::{
     NvmeControllerBarDescriptor, NvmeDiscoveryError, NvmePciFunctionSnapshot, PciFunctionLocation,
     NVME_CONTROLLER_BAR_MINIMUM_BYTES, NVME_PCI_CLASS, NVME_PCI_PROGRAMMING_INTERFACE,
     NVME_PCI_SUBCLASS,
+};
+pub use nvme_identify::{
+    parse_nvme_controller_identity, NvmeControllerIdentity, NvmeIdentifyError,
+    NVME_BLOCK_INTERFACE_MAX_TRANSFER_BYTES, NVME_NAMESPACE_LIMIT,
 };
 pub use nvme_mapping::{
     map_nvme_controller_bar, NvmeControllerBarMapping, NvmeControllerBarMappingBackend,

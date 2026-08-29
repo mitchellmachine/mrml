@@ -10319,6 +10319,16 @@ admin-command escape hatch. It does not interpret identify data, discover
 namespaces, create I/O queues, or implement a storage scheduling or caching
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded NVMe Identify Controller parsing
+
+Patent review: **NOT_TRIGGERED**. This increment parses conventional fixed
+Identify Controller fields with ordinary little-endian decoding, printable
+fixed-capacity label validation, checked shift arithmetic, namespace-count
+bounds, and the existing block-interface transfer cap. It retains optional
+command and cache flags only as non-authorizing facts. It does not introduce a
+storage command, namespace algorithm, scheduling policy, cache policy, or data
+encoding. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
@@ -10327,3 +10337,13 @@ uses bounded table traversal and checked signed displacement arithmetic, and
 introduces no new object encoding, relocation kind, compression, cryptographic
 mechanism, or loader behavior. This technical screen is not legal advice or
 patent clearance.
+
+# 2026-08-29 — Bounded discardable COFF debug-section admission
+
+Patent review: **NOT_TRIGGERED**. This increment validates and omits
+conventionally named discardable COFF debug metadata using bounded table
+traversal, known AMD64 relocation field widths, checked arithmetic, and exact
+symbol-table bounds. It does not introduce an object encoding, debug format,
+linking algorithm, compression method, cryptographic mechanism, or loader
+behavior, and it does not emit or preserve debug information. This technical
+screen is not legal advice or patent clearance.
