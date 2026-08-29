@@ -1016,6 +1016,21 @@ and 9.850 ms mean versus rust-lld at 27.215 ms median and 27.585 ms mean. This
 does not implement arbitrary COFF COMDAT winner selection, associative COMDAT,
 DLL imports, or broad linker superiority.
 
+Writable section-definition auxiliaries now carry a typed COMDAT policy. Plain
+and NODUPLICATES definitions still reject duplicate symbols; two `SELECT_ANY`
+definitions keep the deterministic leftmost payload and every relocation binds
+to that winner. The parser accepts only selection bytes 0, 1, and 2 for this
+bounded path and rejects associative and all other policies before layout.
+Adversarial unit coverage mutates an independently built COFF fixture to ANY,
+verifies that the first of two distinct eight-byte payloads is emitted, and
+proves that changing either duplicate to NODUPLICATES fails. The exact stateful
+gnullvm archive remains compatible: both linkers return 42, MRML emits 2,560
+bytes with two valid forwarding pointers, and rust-lld emits 3,584 bytes. Fifty
+measured direct-driver links after five warmups produced 9.047 ms median/9.239
+ms mean for MRML versus 27.601 ms median/27.599 ms mean for rust-lld. Text and
+readonly COMDAT winner selection, associative groups, SAME_SIZE, EXACT_MATCH,
+LARGEST, and NEWEST remain unsupported.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

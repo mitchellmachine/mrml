@@ -46,6 +46,16 @@ no new COMDAT policy, indirection scheme, symbol authority, object encoding,
 relocation arithmetic, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Writable COFF SELECT_ANY winners
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional COFF
+`SELECT_ANY` rule by retaining the deterministic leftmost writable definition,
+while continuing to reject duplicate ordinary/NODUPLICATES definitions and
+unsupported selection kinds. It introduces no new deduplication heuristic,
+content folding, object encoding, relocation arithmetic, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not legal
+advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF initializer-array retention
 
 Patent review: **NOT_TRIGGERED**. This increment retains and lays out one

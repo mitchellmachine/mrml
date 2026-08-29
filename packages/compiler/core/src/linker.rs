@@ -503,8 +503,16 @@ pub struct PeWritableRelocation<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeWritableComdatSelection {
+    None,
+    NoDuplicates,
+    Any,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeWritableData<'a, 'relocations> {
     pub symbol: &'a str,
+    pub selection: PeWritableComdatSelection,
     pub initialized: &'a [u8],
     pub zeroed_size: usize,
     pub relocations: &'relocations [PeWritableRelocation<'a>],
@@ -2937,11 +2945,24 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
         writable.ok_or(LinkerError::InvalidCoff)?;
     let mut local_writable_symbol = None;
     let mut external_writable_symbol = None;
+    let mut comdat_selection = PeWritableComdatSelection::None;
     let mut symbol_index = 0usize;
     while symbol_index < symbol_count {
         let symbol = symbol_offset + symbol_index * 18;
         let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
         let storage_class = *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)?;
+        if read_i16(object, symbol + 12)? == writable_section
+            && storage_class == 3
+            && auxiliary == 1
+            && read_u32(object, symbol + 8)? == 0
+        {
+            comdat_selection = match *object.get(symbol + 32).ok_or(LinkerError::InvalidCoff)? {
+                0 => PeWritableComdatSelection::None,
+                1 => PeWritableComdatSelection::NoDuplicates,
+                2 => PeWritableComdatSelection::Any,
+                _ => return Err(LinkerError::UnsupportedCoff),
+            };
+        }
         if read_i16(object, symbol + 12)? == writable_section
             && (storage_class == 2 || storage_class == 3)
             && auxiliary == 0
@@ -3049,6 +3070,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
     }
     Ok(PeWritableData {
         symbol: writable_symbol,
+        selection: comdat_selection,
         initialized: bytes,
         zeroed_size,
         relocations: &relocation_storage[..relocation_count],
@@ -5691,18 +5713,34 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     if writable_data.len() > MAX_LINK_INPUTS {
         return Err(LinkerError::TooManyInputs);
     }
+    let mut writable_kept = [false; MAX_LINK_INPUTS];
+    for (index, data) in writable_data.iter().enumerate() {
+        validate_symbol(data.symbol)?;
+        if let Some((_, earlier)) =
+            writable_data[..index]
+                .iter()
+                .enumerate()
+                .find(|(earlier_index, earlier)| {
+                    writable_kept[*earlier_index] && earlier.symbol == data.symbol
+                })
+        {
+            if earlier.selection != PeWritableComdatSelection::Any
+                || data.selection != PeWritableComdatSelection::Any
+            {
+                return Err(LinkerError::DuplicateSymbol);
+            }
+        } else {
+            writable_kept[index] = true;
+        }
+    }
     let mut writable_offsets = [0usize; MAX_LINK_INPUTS];
     let mut writable_size = 0usize;
     for (index, data) in writable_data.iter().enumerate() {
-        validate_symbol(data.symbol)?;
-        if data.initialized.is_empty() || data.zeroed_size != 0 {
+        if !writable_kept[index] {
             continue;
         }
-        if writable_data[..index]
-            .iter()
-            .any(|earlier| earlier.symbol == data.symbol)
-        {
-            return Err(LinkerError::DuplicateSymbol);
+        if data.initialized.is_empty() || data.zeroed_size != 0 {
+            continue;
         }
         writable_size = align(writable_size, 8)?;
         writable_offsets[index] = writable_size;
@@ -5724,18 +5762,14 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     let writable_file_size = writable_size;
     let mut zeroed_total = 0usize;
     for (index, data) in writable_data.iter().enumerate() {
+        if !writable_kept[index] {
+            continue;
+        }
         if !data.initialized.is_empty() {
             continue;
         }
         if data.zeroed_size == 0 || !data.relocations.is_empty() {
             return Err(LinkerError::InvalidCoff);
-        }
-        validate_symbol(data.symbol)?;
-        if writable_data[..index]
-            .iter()
-            .any(|earlier| earlier.symbol == data.symbol)
-        {
-            return Err(LinkerError::DuplicateSymbol);
         }
         writable_size = align(writable_size, 8)?;
         writable_offsets[index] = writable_size;
@@ -5946,8 +5980,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             to_u32_link(readonly_rva + unwind_offsets[*function_index])?,
         )?;
     }
+    let writable_index = |symbol: &str| {
+        writable_data
+            .iter()
+            .enumerate()
+            .find(|(index, data)| writable_kept[*index] && data.symbol == symbol)
+            .map(|(index, _)| index)
+            .ok_or(LinkerError::UndefinedSymbol)
+    };
     for (index, data) in writable_data.iter().enumerate() {
-        if data.initialized.is_empty() {
+        if !writable_kept[index] || data.initialized.is_empty() {
             continue;
         }
         let output = writable_raw + writable_offsets[index];
@@ -5963,10 +6005,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                     offset,
                 )?,
                 PeWritableRelocationTarget::WritableSymbol(symbol) => {
-                    let target_index = writable_data
-                        .iter()
-                        .position(|data| data.symbol == symbol)
-                        .ok_or(LinkerError::UndefinedSymbol)?;
+                    let target_index = writable_index(symbol)?;
                     writable_rva
                         .checked_add(writable_offsets[target_index])
                         .ok_or(LinkerError::OffsetOverflow)?
@@ -5985,10 +6024,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     for relocation in readonly_writable_relocations {
         validate_symbol(relocation.readonly_owner)?;
         validate_symbol(relocation.target_writable_symbol)?;
-        let target_index = writable_data
-            .iter()
-            .position(|data| data.symbol == relocation.target_writable_symbol)
-            .ok_or(LinkerError::UndefinedSymbol)?;
+        let target_index = writable_index(relocation.target_writable_symbol)?;
         let pointer_rva = resolve_readonly_symbol(
             inputs,
             &linked.layouts,
@@ -6019,10 +6055,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             let LinkRelocationTarget::PeWritableSymbol(symbol) = relocation.target else {
                 continue;
             };
-            let writable_index = writable_data
-                .iter()
-                .position(|data| data.symbol == symbol)
-                .ok_or(LinkerError::UndefinedSymbol)?;
+            let writable_index = writable_index(symbol)?;
             let place = layout
                 .text
                 .checked_add(relocation.offset)
@@ -7334,6 +7367,21 @@ mod tests {
         object
     }
 
+    fn coff_with_any_writable_comdat() -> std::vec::Vec<u8> {
+        let mut object = coff_with_readonly_and_writable_data();
+        object.resize(239, 0);
+        object.copy_within(199..203, 235);
+        object[12..16].copy_from_slice(&4u32.to_le_bytes());
+        object[199..206].copy_from_slice(b".data$a");
+        object[211..213].copy_from_slice(&3i16.to_le_bytes());
+        object[215] = 3;
+        object[216] = 1;
+        object[217..221].copy_from_slice(&8u32.to_le_bytes());
+        object[221..223].copy_from_slice(&1u16.to_le_bytes());
+        object[231] = 2;
+        object
+    }
+
     #[test]
     fn decodes_ordinary_gnu_and_bsd_archive_member_names() {
         let mut archive = b"!<arch>\n".to_vec();
@@ -8375,6 +8423,7 @@ mod tests {
             .unwrap();
         assert_eq!(writable.initialized, &[0; 8]);
         assert_eq!(writable.zeroed_size, 0);
+        assert_eq!(writable.selection, PeWritableComdatSelection::None);
         assert_eq!(
             writable.relocations,
             &[PeWritableRelocation {
@@ -8414,6 +8463,81 @@ mod tests {
         assert_eq!(
             decode_x86_64_coff_writable_data(&invalid, "entry", &mut invalid_storage),
             Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn decodes_any_writable_comdat_and_rejects_unsupported_selection() {
+        let object = coff_with_any_writable_comdat();
+        let mut unsupported = object.clone();
+        unsupported[231] = 5;
+        let mut storage = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::Readonly {
+                owner: "unused",
+                offset: 0,
+            },
+        }; MAX_LINK_RELOCATIONS];
+        let writable = decode_x86_64_coff_writable_data(&object, "entry", &mut storage)
+            .unwrap()
+            .unwrap();
+        assert_eq!(writable.selection, PeWritableComdatSelection::Any);
+
+        let mut unsupported_storage = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::Readonly {
+                owner: "unused",
+                offset: 0,
+            },
+        }; MAX_LINK_RELOCATIONS];
+        assert_eq!(
+            decode_x86_64_coff_writable_data(&unsupported, "entry", &mut unsupported_storage,),
+            Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn selects_leftmost_any_writable_comdat_and_rejects_other_duplicates() {
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let first = PeWritableData {
+            symbol: "shared",
+            selection: PeWritableComdatSelection::Any,
+            initialized: &[1; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let second = PeWritableData {
+            initialized: &[2; 8],
+            ..first
+        };
+        let pe = link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+            &[input],
+            "entry",
+            &[],
+            &[first, second],
+        )
+        .unwrap();
+        assert_eq!(&pe.bytes()[0x400..0x408], &[1; 8]);
+
+        let duplicate = PeWritableData {
+            selection: PeWritableComdatSelection::NoDuplicates,
+            ..second
+        };
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[first, duplicate],
+            ),
+            Err(LinkerError::DuplicateSymbol)
         );
     }
 
@@ -8548,6 +8672,7 @@ mod tests {
         };
         let writable = PeWritableData {
             symbol: "writable",
+            selection: PeWritableComdatSelection::None,
             initialized: &[0; 8],
             zeroed_size: 0,
             relocations: &[relocation],
