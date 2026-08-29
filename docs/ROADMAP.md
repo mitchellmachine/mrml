@@ -2047,6 +2047,8 @@ live composition remains pending.
    Pending buffered receives retain their admitted page-table root and reject
    completion after context-root substitution, alongside generational task and
    exact-range validation.
+   Wakeup completion takes and clears the exact pending record before inbox
+   consumption or output, making the hosted pending-receive slot one-use.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

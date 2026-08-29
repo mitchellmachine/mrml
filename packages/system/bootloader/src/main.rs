@@ -4729,7 +4729,7 @@ unsafe fn complete_buffer_current(
 
 #[cfg(feature = "service-probe")]
 unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 9>, task: mrml_kernel::TaskId) {
-    let Some((slot, pending)) = (unsafe { pending_buffer(task) }) else {
+    let Some(pending) = (unsafe { take_pending_buffer(task) }) else {
         return;
     };
     let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
@@ -4751,7 +4751,6 @@ unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 9>, task: mrml_ke
         .context_mut(task)
         .unwrap_or_else(|_| halt())
         .complete_buffer(completion);
-    unsafe { (*core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS))[slot] = None };
 }
 
 #[cfg(feature = "service-probe")]
@@ -4764,6 +4763,15 @@ unsafe fn pending_buffer(task: mrml_kernel::TaskId) -> Option<(usize, PendingBuf
                 .filter(|pending| pending.task == task)
                 .map(|pending| (slot, pending))
         })
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn take_pending_buffer(task: mrml_kernel::TaskId) -> Option<PendingBufferReceive> {
+    let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
+    let slot = buffers
+        .iter_mut()
+        .find(|pending| pending.is_some_and(|pending| pending.task == task))?;
+    slot.take()
 }
 
 #[cfg(feature = "service-probe")]

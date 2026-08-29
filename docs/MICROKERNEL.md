@@ -6586,6 +6586,9 @@ Each pending buffered receive also retains the exact page-table root under
 which its output regions were admitted. Immediate and resumed completion fail
 closed unless the active completion root matches that retained root, in
 addition to the generational task and exact-range ticket checks.
+Resumed completion atomically removes the exact pending record before consuming
+its inbox message or mutating output. A duplicate or re-entrant completion
+therefore cannot observe and replay the same pending receive.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
