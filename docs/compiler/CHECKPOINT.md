@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `08e05e53`
-  (`compiler: lazily extract GNU thin archives`)
+- Compiler checkpoint commit: `4bcd7f6c`
+  (`compiler: retain selected thin archive mappings`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -79,6 +79,16 @@ semantic-execution command fingerprint `fnv1a64:0fe5cf1836d3e0dc`; no audit
 success is claimed. General `.rlib` compatibility, production linker selection,
 and broad performance superiority remain unproven. Patent review:
 **NOT_TRIGGERED**.
+
+Follow-up `4bcd7f6c` retains each selected external mapping through ordered
+materialization instead of opening the file again, and copies inventoried names
+directly into the owned bounded queues without intermediate borrowed vectors.
+The Linux driver suite and differential exit-42 probe passed. A durable
+50-iteration/five-warmup process benchmark measured MRML at 5.055 ms median and
+5.109 ms mean versus pinned rust-lld at 4.592 ms median and 4.614 ms mean on the
+tiny three-member archive. This records a negative speed result: reduced I/O
+did not overcome remaining startup and parsing overhead, and no superiority is
+claimed. Patent review: **NOT_TRIGGERED**.
 
 Commit `21f59d59` admits exact allocated `.tdata.*` and `.tbss.*` sections,
 retains typed `STT_TLS` definitions, applies checked local-exec
