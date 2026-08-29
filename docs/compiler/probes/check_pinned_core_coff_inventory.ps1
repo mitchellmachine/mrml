@@ -23,11 +23,11 @@ try {
     if ($LASTEXITCODE -eq 0) {
         throw "pinned core probe unexpectedly linked; update this recovery probe"
     }
-    $expected = "COFF object 1 text fragment 3: unsupported discontiguous COFF read-only layout"
+    $expected = "selected code relocation target is undefined: memcpy"
     if ($diagnostic -notmatch [regex]::Escape($expected)) {
-        throw "pinned core probe did not reach the expected content boundary: $diagnostic"
+        throw "pinned core probe did not reach the expected runtime boundary: $diagnostic"
     }
-    Write-Output "pinned-core-coff-inventory archive=$($core.Name) result=EXPECTED_DISCONTIGUOUS_READONLY_BOUNDARY"
+    Write-Output "pinned-core-coff-inventory archive=$($core.Name) result=EXPECTED_MEMCPY_RUNTIME_BOUNDARY"
 } finally {
     if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Recurse }
 }
