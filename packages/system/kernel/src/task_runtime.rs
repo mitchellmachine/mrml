@@ -478,10 +478,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .scheduler
             .current()
             .ok_or(TaskRuntimeError::NoCurrentTask)?;
-        let domain = self
-            .domain(current)
-            .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        if domain.context.page_table() != interrupted.page_table() {
+        if self.context(current)?.page_table() != interrupted.page_table() {
             return Err(TaskRuntimeError::AddressSpaceMismatch);
         }
         let outcome = self
@@ -531,11 +528,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         task: TaskId,
     ) -> Result<DetachedTaskDomain<CAPS>, TaskRuntimeError> {
-        let slot = self
-            .domains
-            .iter()
-            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == task))
-            .ok_or(TaskRuntimeError::MissingTask)?;
+        let slot = self.domain_slot(task)?;
         if self.domains[slot].as_ref().is_some_and(|domain| {
             domain.peers.iter().any(Option::is_some)
                 || domain.peer_deaths.iter().any(Option::is_some)
@@ -573,9 +566,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         else {
             return Ok(None);
         };
-        if self.domain(candidate).is_none() {
-            return Err(TaskRuntimeError::IntegrityFailure);
-        }
+        self.domain_slot(candidate)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         self.detach_domain(candidate).map(Some)
     }
 
@@ -809,10 +801,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .current()
             .ok_or(TaskRuntimeError::NoCurrentTask)?;
         let slot = self
-            .domains
-            .iter()
-            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
-            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            .domain_slot(current)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
 
         self.validate_peer_death_publication(
             self.domains[slot]
@@ -854,10 +844,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .current()
             .ok_or(TaskRuntimeError::NoCurrentTask)?;
         let slot = self
-            .domains
-            .iter()
-            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
-            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            .domain_slot(current)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
 
         self.validate_peer_death_publication(
             self.domains[slot]
@@ -897,10 +885,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .current()
             .ok_or(TaskRuntimeError::NoCurrentTask)?;
         let slot = self
-            .domains
-            .iter()
-            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
-            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            .domain_slot(current)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         self.validate_peer_death_publication(
             self.domains[slot]
                 .as_ref()
@@ -1246,10 +1232,21 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn domain_slot(&self, task: TaskId) -> Result<usize, TaskRuntimeError> {
-        self.domains
+        let mut matches = self
+            .domains
             .iter()
-            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == task))
-            .ok_or(TaskRuntimeError::MissingTask)
+            .enumerate()
+            .filter_map(|(slot, domain)| {
+                domain
+                    .as_ref()
+                    .is_some_and(|domain| domain.task == task)
+                    .then_some(slot)
+            });
+        let slot = matches.next().ok_or(TaskRuntimeError::MissingTask)?;
+        if matches.next().is_some() {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        Ok(slot)
     }
 
     fn publish_peer_death(
@@ -1394,13 +1391,6 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 .map_err(TaskRuntimeError::Scheduler),
             Err(error) => Err(error),
         }
-    }
-
-    fn domain(&self, task: TaskId) -> Option<&TaskDomain<CAPS>> {
-        self.domains
-            .iter()
-            .flatten()
-            .find(|domain| domain.task == task)
     }
 }
 
@@ -2569,6 +2559,34 @@ mod tests {
         );
         let slot = runtime.domain_slot(receiver).unwrap();
         assert_eq!(runtime.domains[slot].as_ref().unwrap().inbox_count, 1);
+    }
+
+    #[test]
+    fn duplicate_domain_identity_fails_before_task_resource_access() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let second_slot = runtime.domain_slot(second).unwrap();
+        runtime.domains[second_slot].as_mut().unwrap().task = first;
+
+        assert!(matches!(
+            runtime.context(first),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert!(matches!(
+            runtime.capabilities_mut(first),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert_eq!(
+            runtime.detach_domain(first).err(),
+            Some(TaskRuntimeError::IntegrityFailure)
+        );
+        assert!(runtime.scheduler.contains(first));
+        assert!(runtime.scheduler.contains(second));
     }
 
     #[test]

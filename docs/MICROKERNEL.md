@@ -6839,11 +6839,17 @@ inbox state. A focused unscheduled-domain test proves all receive projections
 and mutable, immutable, or exact capability authorization access fail closed
 as do immutable and mutable saved-context access, while the queued message
 remains present. The Linux kernel total is 612.
+All task-domain slot resolution now requires exactly one matching generational
+identity. Detach, rebalance admission checks, fault/protocol/voluntary
+retirement, context, capability, and receive paths reject duplicate domain
+records before mutation. A focused corruption test preserves both scheduler
+identities and raises the Linux kernel total to 613.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it
 also applies the existing generational scheduler check to receive. It introduces
-no new external protocol, algorithm, or device mechanism. See
+no new external protocol, algorithm, or device mechanism; exact-unique bounded
+domain lookup is part of the same conventional validation. See
 `docs/patents/REVIEW_LOG.md`.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before

@@ -2208,6 +2208,9 @@ live composition remains pending.
    scheduler identity, as do mutable/immutable capability-space access and exact
    capability authorization and saved-context access. An unscheduled-domain
    test preserves the queued message; the kernel total remains 612.
+   Task-domain lookup now rejects duplicate generational identities before
+   resource access, detach, rebalance, or retirement. A focused corruption test
+   preserves both scheduler identities and raises the kernel total to 613.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

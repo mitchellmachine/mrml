@@ -252,6 +252,8 @@ access. The security/acceptance gate is canonical in
   path through runtime accessors.
 - Immutable and mutable saved-context access requires the domain's exact live
   scheduler generation as well.
+- Every task-domain lookup requires one unique generational identity; duplicate
+  records fail before authority access, migration, dequeue, or retirement.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
