@@ -235,6 +235,8 @@ Whole-value mutable wide-local assignments are compared word-for-word.
 Supported wide compound assignments are compared word-for-word as one sequence.
 Discarded wide-expression prefixes are compared against the retained tail value.
 Wide helper arguments and returns are compared word-for-word after inlining.
+Both paths through an inlined helper's conditional wide early return are also
+compared, including cleanup of a mixed two-word and one-word argument frame.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.
