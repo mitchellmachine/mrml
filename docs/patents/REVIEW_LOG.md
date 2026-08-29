@@ -10826,3 +10826,11 @@ relocation encoding, output layout, and archive semantics. It introduces no
 object format, symbol-resolution algorithm, compression method, cryptographic
 mechanism, or loader behavior. This technical screen is not legal advice or
 patent clearance.
+
+# 2026-08-29 — Typed COFF runtime and writable targets
+
+Patent review: **NOT_TRIGGERED**. This increment preserves existing bounded
+PE/COFF section identities through conventional runtime-function and writable
+relocation resolution. It introduces no object encoding, archive format,
+symbol-resolution algorithm, compression method, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent clearance.

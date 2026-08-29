@@ -1413,3 +1413,23 @@ Wine loaded and returned from the image, but the temporary entry is not a
 Windows process-entry ABI wrapper, so its process code is not semantic evidence.
 Platform memory and panic shims remain external; full runtime closure and native
 Windows execution are not claimed.
+
+The next typed-runtime checkpoint retains exact COFF section identities in PE
+runtime-function begin/end targets and resolves selected writable references
+only after the global text/read-only definition set is fixed. An unresolved
+ordinary symbol is reclassified as writable only when exactly one selected
+writable definition owns it; a selected text definition keeps precedence.
+This closes the pinned archive's object-local runtime and allocator-marker
+references without exposing those identities through global archive selection.
+
+The exact ORACLE-0003 `alloc` and `core` archives, pinned
+`compiler_builtins`, and independently assembled temporary platform shims linked
+to a deterministic 519,168-byte PE on the normal 8 MiB Linux stack. A separate
+enlarged-stack run was byte-identical, with SHA-256
+`405fa6655cc94d39fd5dcd89629cf9688dcc9e0ce81270e58e8456df4ff73fef`.
+`objdump` reported an RX `.text` of `0x294b4` bytes, an R/NX `.rdata` of
+`0x551b4` bytes, and an RW/NX `.data` of `0xb8` bytes. The isolated canonical
+compiler-core package gate passed 815 unit tests and 122 semantic-execution
+tests. The platform shims are diagnostic inputs rather than production
+authority, and this is link/structure evidence rather than allocator execution,
+native Windows, or general Rust-library conformance.
