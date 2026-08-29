@@ -6804,6 +6804,10 @@ topology check before connection, publication, or control receive. Duplicate
 identities, live/dead overlap, and aggregate capacity amplification fail before
 mutation. A duplicate-death test preserves both events and raises the Linux
 kernel total to 606.
+IPC delivery now requires exact scheduler identities for both sender and
+receiver before endpoint authorization or capability transfer. A stale-sender
+test proves no message reaches the receiver and raises the Linux kernel total to
+607.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6877,7 +6881,8 @@ Bounded ring-topology preflight is the same conventional transactional
 validation and does not trigger review.
 Applying it to control receive is the same integrity hardening.
 Combined control-topology validation is also conventional bounded-state
-hardening and does not trigger review.
+hardening and does not trigger review. Sender scheduler preflight is the same
+transactional integrity validation.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

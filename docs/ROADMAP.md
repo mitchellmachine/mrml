@@ -2187,6 +2187,9 @@ live composition remains pending.
    Live peers and pending deaths now share one validated topology before
    connection, publication, or receive. Duplicate/overlapping identities and
    aggregate over-capacity fail unchanged; the kernel total rises to 606.
+   Delivery now preflights exact scheduler identity for both endpoints before
+   authority transfer. A stale-sender test leaves the receiver empty and raises
+   the kernel total to 607.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

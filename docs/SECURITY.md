@@ -229,6 +229,8 @@ access. The security/acceptance gate is canonical in
   event, so unrelated corruption cannot suppress or destroy peer-death evidence.
 - Live control peers and pending death results are unique, disjoint, and bound
   by one aggregate capacity before any control-state mutation.
+- Both IPC endpoints must retain exact scheduler identities before endpoint
+  sequencing, capability transfer, enqueue, or wake can begin.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
