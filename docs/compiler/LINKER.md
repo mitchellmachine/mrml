@@ -995,12 +995,22 @@ payload, one AMD64 `ADDR64` relocation, and one undefined external target per
 record. Ordered gaps occupied by COFF relocation records remain part of the
 non-executable readonly input extent, and the PE serializer patches each
 pointer only after final writable layout. The entry object in the durable probe
-reads both exported globals through two refptr records while the archive's
-defining codegen unit also reads them directly. MRML emits 2,560 bytes and
+writes both exported globals through two refptr records, and the archive's
+defining codegen unit observes the shared updated state. MRML emits 2,560 bytes and
 pinned rust-lld emits 3,584 bytes from identical inputs; both return 42 and the
 MRML image still reports exactly 1,028 zero-fill bytes. This proves the bounded
 static refptr form, not arbitrary COFF import pointers, DLL imports, writable
 COMDAT selection, or general PE relocation support.
+
+Refptr admission no longer performs an all-object count pass, and decoding one
+requested ordinal no longer recursively pre-counts the same object's records.
+The driver allocates the fixed 4,096-record bound once, scans selected objects,
+and rejects the exact aggregate before insertion. On 50 direct-driver iterations
+after five warmups, this stateful eight-CGU workload measured MRML at 9.067 ms
+median and 9.267 ms mean versus pinned rust-lld at 26.240 ms median and 26.410
+ms mean. This is a strong narrow process-level advantage for this exact archive
+and host state, not broad linker superiority or a controlled attribution of the
+timing difference to one optimization.
 
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes

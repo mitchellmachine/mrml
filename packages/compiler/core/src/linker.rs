@@ -2704,11 +2704,13 @@ pub fn decode_x86_64_coff_readonly_writable_relocation<'a>(
     readonly_owner: &'a str,
 ) -> Result<PeReadonlyWritableRelocation<'a>, LinkerError> {
     validate_symbol(readonly_owner)?;
-    let count = x86_64_coff_readonly_writable_relocation_count(object)?;
-    if relocation_index >= count {
-        return Err(LinkerError::InvalidCoff);
+    if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
+        return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
+        return Err(LinkerError::UnsupportedCoff);
+    }
     let symbol_offset =
         usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
     let symbol_count =

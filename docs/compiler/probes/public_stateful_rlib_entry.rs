@@ -8,5 +8,9 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn start() -> i32 {
-    unsafe { state_answer() + EXPORTED_INITIALIZED + EXPORTED_ZERO_FILL - 40 }
+    unsafe {
+        EXPORTED_INITIALIZED = 41;
+        EXPORTED_ZERO_FILL = 1;
+        state_answer() - 2
+    }
 }

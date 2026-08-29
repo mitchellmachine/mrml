@@ -62,6 +62,35 @@ try {
     if ($mrmlStatus -ne 42 -or $lldStatus -ne 42) {
         throw "public stateful rlib outputs did not both return 42"
     }
+
+    $driver = Resolve-Path ".\target\mrml-native\windows\release\mrml-rustc.exe"
+    function Measure-Link($name, $output, [scriptblock]$link) {
+        $samples = @()
+        for ($iteration = 0; $iteration -lt 55; $iteration++) {
+            if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output }
+            $timer = [System.Diagnostics.Stopwatch]::StartNew()
+            & $link
+            $timer.Stop()
+            if ($LASTEXITCODE -ne 0) { throw "$name benchmark link failed" }
+            if ($iteration -ge 5) { $samples += $timer.Elapsed.TotalMilliseconds }
+        }
+        $ordered = $samples | Sort-Object
+        $median = ($ordered[24] + $ordered[25]) / 2
+        $mean = ($samples | Measure-Object -Average).Average
+        Write-Output ("public-stateful-rlib-pe-benchmark linker={0} median_ms={1:N3} mean_ms={2:N3} iterations=50 warmups=5" -f $name, $median, $mean)
+    }
+    $mrmlBenchmark = Join-Path $probe "mrml-benchmark.exe"
+    $lldBenchmark = Join-Path $probe "rust-lld-benchmark.exe"
+    Measure-Link "mrml" $mrmlBenchmark {
+        & $driver --link-coff (Join-Path $probe "entry.obj") `
+            (Join-Path $probe "library.rlib") --entry start `
+            -o $mrmlBenchmark *> $null
+    }
+    Measure-Link "rust-lld" $lldBenchmark {
+        & $lld -flavor link /entry:start /subsystem:console /nodefaultlib `
+            "/out:$lldBenchmark" (Join-Path $probe "entry.obj") `
+            (Join-Path $probe "library.rlib") *> $null
+    }
 } finally {
     if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Recurse }
 }

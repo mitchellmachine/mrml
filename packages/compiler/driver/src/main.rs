@@ -979,20 +979,7 @@ fn selected_readonly_writable_relocations<'data>(
     archive_member: &[u16],
     selected: &SelectedLinkInputs<'data, '_, '_>,
 ) -> Result<Vector<PeReadonlyWritableRelocation<'data>>> {
-    let mut count = 0usize;
-    for object in objects {
-        count = count
-            .checked_add(
-                x86_64_coff_readonly_writable_relocation_count(object).map_err(|error| {
-                    anyhow!("could not count COFF refptr relocations: {}", error)
-                })?,
-            )
-            .ok_or_else(|| anyhow!("COFF refptr relocation count overflow"))?;
-    }
-    if count > MAX_LINK_RELOCATIONS {
-        return Err(anyhow!("too many COFF refptr relocations: {}", count));
-    }
-    let mut output = Vector::with_capacity(count)
+    let mut output = Vector::with_capacity(MAX_LINK_RELOCATIONS)
         .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
     for object_index in 0..objects.len() {
         let group = archive_group[object_index];
@@ -1019,6 +1006,14 @@ fn selected_readonly_writable_relocations<'data>(
                         error
                     )
                 })?;
+            if output
+                .len()
+                .checked_add(relocation_count)
+                .filter(|count| *count <= MAX_LINK_RELOCATIONS)
+                .is_none()
+            {
+                return Err(anyhow!("too many selected COFF refptr relocations"));
+            }
             for relocation_index in 0..relocation_count {
                 let relocation = decode_x86_64_coff_readonly_writable_relocation(
                     object,

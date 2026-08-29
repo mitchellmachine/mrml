@@ -28,6 +28,15 @@ indirection scheme, symbol-resolution policy, object encoding, relocation
 arithmetic, compression, cryptographic mechanism, or loader behavior. This
 technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded refptr scan-pass reduction
+
+Patent review: **NOT_TRIGGERED**. This increment removes redundant inventory
+passes from the conventional bounded COFF refptr decoder and fills an existing
+fixed-capacity selected-record list directly. It introduces no new parsing,
+indexing, layout, symbol-resolution, relocation, compression, cryptographic, or
+loader mechanism. This technical screen is not legal advice or patent
+clearance.
+
 ## 2026-08-28 — Bounded ELF initializer-array retention
 
 Patent review: **NOT_TRIGGERED**. This increment retains and lays out one
