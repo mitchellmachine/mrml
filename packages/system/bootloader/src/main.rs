@@ -4939,7 +4939,7 @@ unsafe fn copy_to_active_user(
 
 #[cfg(feature = "service-probe")]
 unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive) -> bool {
-    if root != pending.page_table {
+    if root != pending.page_table || pending.payload_capacity == 0 {
         return false;
     }
     if !unsafe {
@@ -4953,22 +4953,34 @@ unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive)
     } {
         return false;
     }
-    if pending.capability_capacity != 0 {
-        let length = pending
-            .capability_capacity
-            .checked_mul(core::mem::size_of::<u64>())
-            .unwrap_or_else(|| halt());
-        if !unsafe {
-            service_user_range_is_valid(
-                root,
-                pending.capabilities_address,
-                length,
-                MAX_CAPABILITIES * core::mem::size_of::<u64>(),
-                UserBufferAccess::Write,
-            )
-        } {
-            return false;
-        }
+    if pending.capability_capacity == 0 {
+        return pending.capabilities_address == 0;
+    }
+    let length = pending
+        .capability_capacity
+        .checked_mul(core::mem::size_of::<u64>())
+        .unwrap_or_else(|| halt());
+    if !unsafe {
+        service_user_range_is_valid(
+            root,
+            pending.capabilities_address,
+            length,
+            MAX_CAPABILITIES * core::mem::size_of::<u64>(),
+            UserBufferAccess::Write,
+        )
+    } {
+        return false;
+    }
+    let payload_end = pending
+        .payload_address
+        .checked_add(u64::try_from(pending.payload_capacity).unwrap_or_else(|_| halt()))
+        .unwrap_or_else(|| halt());
+    let capabilities_end = pending
+        .capabilities_address
+        .checked_add(u64::try_from(length).unwrap_or_else(|_| halt()))
+        .unwrap_or_else(|| halt());
+    if pending.payload_address < capabilities_end && pending.capabilities_address < payload_end {
+        return false;
     }
     true
 }

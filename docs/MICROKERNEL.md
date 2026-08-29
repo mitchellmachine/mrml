@@ -6889,6 +6889,10 @@ slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot
 substitution, or intervening occupancy fail closed. This path is service-image
 cross-build evidence, not a newly executed backend probe.
+Pending buffered-receive completion now rechecks that zero capability capacity
+has a zero address and that nonempty payload/capability output ranges remain
+disjoint, in addition to exact root and writable mapping validation. Both
+service profiles cross-build; backend execution remains pending.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

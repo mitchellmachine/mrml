@@ -273,6 +273,8 @@ access. The security/acceptance gate is canonical in
   tokens, rights, or reserved bytes cannot publish a partial decoded prefix.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
+- Pending buffered completion revalidates zero-capacity address canonicality and
+  payload/capability output disjointness before dequeue or user writes.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
