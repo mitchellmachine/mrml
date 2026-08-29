@@ -9264,14 +9264,77 @@ impl<
                     crate::IntegerType::U128 | crate::IntegerType::I128
                 ))
             ) {
-                if place.access.reads_previous_value() {
-                    return Err(CodegenError {
-                        kind: CodegenErrorKind::UnsupportedRuntimeOperator,
-                        span: translate_span(body_start, assignment.name_span),
-                    });
-                }
-                self.emit_wide_integer_return(&tree, tree.root(), target.ty)?;
                 let high_slot = self.local_stack_slots_from(index + 1)?;
+                if place.access.reads_previous_value() {
+                    let RuntimeExpressionType::Integer(Some(integer_type)) = target.ty else {
+                        return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                    };
+                    if !matches!(
+                        assignment.operator,
+                        crate::AssignmentOperator::Add
+                            | crate::AssignmentOperator::Subtract
+                            | crate::AssignmentOperator::BitAnd
+                            | crate::AssignmentOperator::BitOr
+                            | crate::AssignmentOperator::BitXor
+                    ) {
+                        return Err(CodegenError {
+                            kind: CodegenErrorKind::UnsupportedRuntimeOperator,
+                            span: translate_span(body_start, assignment.name_span),
+                        });
+                    }
+                    self.emit_stack_slot(
+                        high_slot
+                            .checked_add(1)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                    )?;
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                    self.emit_stack_slot(
+                        high_slot
+                            .checked_add(1)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                    )?;
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                    self.emit_wide_integer_return(&tree, tree.root(), target.ty)?;
+                    self.emit(&[0x59, 0x41, 0x58])?;
+                    self.evaluation_depth -= 2;
+                    match assignment.operator {
+                        crate::AssignmentOperator::BitAnd => {
+                            self.emit(&[0x4c, 0x21, 0xc0, 0x48, 0x21, 0xca])?
+                        }
+                        crate::AssignmentOperator::BitOr => {
+                            self.emit(&[0x4c, 0x09, 0xc0, 0x48, 0x09, 0xca])?
+                        }
+                        crate::AssignmentOperator::BitXor => {
+                            self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
+                        }
+                        crate::AssignmentOperator::Add => {
+                            self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+                            if self.overflow_checks {
+                                self.emit_trap_branch(if integer_type.is_signed() {
+                                    0x80
+                                } else {
+                                    0x82
+                                })?;
+                            }
+                        }
+                        crate::AssignmentOperator::Subtract => {
+                            self.emit(&[0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1])?;
+                            if self.overflow_checks {
+                                self.emit_trap_branch(if integer_type.is_signed() {
+                                    0x80
+                                } else {
+                                    0x82
+                                })?;
+                            }
+                            self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    self.emit_wide_integer_return(&tree, tree.root(), target.ty)?;
+                }
                 self.emit(&[0x48, 0x89, 0xc1, 0x48, 0x89, 0xd0])?;
                 self.emit_store_stack_slot(high_slot)?;
                 self.emit(&[0x48, 0x89, 0xc8])?;
