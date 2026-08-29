@@ -63,11 +63,11 @@ const MRML_V1_WIDE_CAST_UNSIGNED_METHOD_SOURCE: &str =
 const MRML_V1_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }";
 const MRML_V1_WIDE_SATURATING_CAST_UNSIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.saturating_cast_unsigned() }";
 const RUSTC_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = concat!(
-    "#![feature(integer_sign_cast)]\n",
+    "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }",
 );
 const RUSTC_WIDE_SATURATING_CAST_UNSIGNED_SOURCE: &str = concat!(
-    "#![feature(integer_sign_cast)]\n",
+    "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.saturating_cast_unsigned() }",
 );
 const MRML_V1_WIDE_UNSIGNED_NOT_SOURCE: &str =

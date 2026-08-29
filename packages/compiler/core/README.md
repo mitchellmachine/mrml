@@ -6058,6 +6058,8 @@ Modern same-width wide sign-cast methods now reuse the two-word emitter.
 an out-of-range unsigned value to `i128::MAX` or a negative signed value to zero,
 and strict variants trap on that same high-word sign-bit boundary. Unit coverage
 compiles all six method/direction combinations for both x86-64 ABIs. The native
-Linux gate passes 814 unit tests and every integration group, including 351
-replacement and 121 semantic-execution tests. Direct execution evidence for the
-new wide paths remains pending. Windows gnullvm was not run.
+Linux gate passes 815 unit tests and every integration group, including 351
+replacement and 122 semantic-execution tests. Controlled Linux execution matches
+exact ORACLE-0003 results across both words for stable and saturating paths at
+zero, signed boundaries, and all-ones input; isolated strict trap execution
+remains pending. Windows gnullvm was not run.
