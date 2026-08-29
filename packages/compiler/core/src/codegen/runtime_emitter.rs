@@ -8162,6 +8162,27 @@ impl<
         if let ExprKind::WrappingArithmetic {
             base,
             argument,
+            operator: operator @ (crate::BinaryOperator::Add | crate::BinaryOperator::Subtract),
+            euclidean: false,
+            euclidean_wrapping: false,
+            strict: false,
+            mixed_signedness: true,
+        } = expression.kind
+        {
+            self.emit_wide_mixed_binary_operands(tree, base, argument, expected_type)?;
+            if operator == crate::BinaryOperator::Add {
+                self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+            } else {
+                self.emit(&[
+                    0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48, 0x89,
+                    0xca,
+                ])?;
+            }
+            return Ok(());
+        }
+        if let ExprKind::WrappingArithmetic {
+            base,
+            argument,
             operator: operator @ (crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder),
             euclidean: false,
             euclidean_wrapping: false,
@@ -8876,6 +8897,52 @@ impl<
         self.emit(&[0x50, 0x52])?;
         self.evaluation_depth += 2;
         self.emit_wide_integer_return(tree, right, expected_type)?;
+        self.emit(&[0x59, 0x41, 0x58])?;
+        self.evaluation_depth -= 2;
+        Ok(())
+    }
+
+    fn emit_wide_mixed_binary_operands<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        left: crate::ExprId,
+        right: crate::ExprId,
+        expected_type: RuntimeExpressionType,
+    ) -> Result<(), CodegenError> {
+        let left_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            left,
+            1,
+        )
+        .map_err(|kind| self.error(kind))?;
+        let right_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            right,
+            1,
+        )
+        .map_err(|kind| self.error(kind))?;
+        let opposite_type = match expected_type {
+            RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)) => {
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+            }
+            RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)) => {
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+            }
+            _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
+        };
+        if left_type != expected_type || right_type != opposite_type {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        }
+        self.emit_wide_integer_return(tree, left, left_type)?;
+        self.emit(&[0x50, 0x52])?;
+        self.evaluation_depth += 2;
+        self.emit_wide_integer_return(tree, right, right_type)?;
         self.emit(&[0x59, 0x41, 0x58])?;
         self.evaluation_depth -= 2;
         Ok(())

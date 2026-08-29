@@ -313,6 +313,10 @@ Wide `strict_div` and `strict_rem` reuse the bounded 128-round divider and never
 inherit wrapping behavior. Zero divisors and the signed `i128::MIN / -1`
 overflow fail closed; successful unsigned division and signed remainder results
 are checked against the pinned strict-overflow oracle.
+Wide mixed-signedness wrapping addition and subtraction require an exact
+opposite-signed 128-bit argument. The operand loader preserves each declared
+type, then the lowering performs modulo-2^128 two-word arithmetic; signed and
+unsigned extrema and cross-word negative operands match the pinned oracle.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

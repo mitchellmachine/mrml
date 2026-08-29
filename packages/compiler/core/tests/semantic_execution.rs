@@ -233,6 +233,10 @@ const MRML_V1_WIDE_UNSIGNED_STRICT_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.strict_div(right) }";
 const MRML_V1_WIDE_SIGNED_STRICT_REMAINDER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.strict_rem(right) }";
+const MRML_V1_WIDE_UNSIGNED_WRAPPING_ADD_SIGNED_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: i128) -> u128 { left.wrapping_add_signed(right) }";
+const MRML_V1_WIDE_SIGNED_WRAPPING_SUBTRACT_UNSIGNED_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: u128) -> i128 { left.wrapping_sub_unsigned(right) }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -2875,6 +2879,44 @@ fn mrml_v1_wide_strict_division_matches_both_oracle_words() {
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_SIGNED_STRICT_REMAINDER_SOURCE, "for (left, right) in [(0i128, 1i128), (i128::MIN, 1), (i128::MIN, 17), (i128::MAX, -17), (-((1i128 << 126) + 3), (1i128 << 64) + 1)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
+}
+
+#[test]
+fn mrml_v1_wide_wrapping_mixed_signedness_matches_both_oracle_words() {
+    let unsigned_inputs = [
+        (0u128, -1i128),
+        (u128::MAX, 1),
+        (1u128 << 127, i128::MIN),
+        (1u128 << 64, -((1i128 << 64) + 1)),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_WRAPPING_ADD_SIGNED_SOURCE);
+    let actual = unsigned_inputs
+        .into_iter()
+        .flat_map(|(left, right)| {
+            let returned = unsafe {
+                call_mrml_v1_two_wide_return(code.pointer, left, right as u128)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_UNSIGNED_WRAPPING_ADD_SIGNED_SOURCE, "for (left, right) in [(0u128, -1i128), (u128::MAX, 1), (1u128 << 127, i128::MIN), (1u128 << 64, -((1i128 << 64) + 1))] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
+    let signed_inputs = [
+        (0i128, 1u128),
+        (i128::MIN, 1),
+        (i128::MAX, u128::MAX),
+        (-1, 1u128 << 127),
+    ];
+    let code = compile(MRML_V1_WIDE_SIGNED_WRAPPING_SUBTRACT_UNSIGNED_SOURCE);
+    let actual = signed_inputs
+        .into_iter()
+        .flat_map(|(left, right)| {
+            let returned = unsafe {
+                call_mrml_v1_two_wide_return(code.pointer, left as u128, right)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_SIGNED_WRAPPING_SUBTRACT_UNSIGNED_SOURCE, "for (left, right) in [(0i128, 1u128), (i128::MIN, 1), (i128::MAX, u128::MAX), (-1, 1u128 << 127)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
 }
 
 #[test]
