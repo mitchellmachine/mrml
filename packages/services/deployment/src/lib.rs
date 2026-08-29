@@ -449,7 +449,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         capability: Capability,
         rights: Rights,
     ) -> Result<(), DeploymentError> {
-        if capabilities.authorize(capability, rights).ok() != Some(self.root) {
+        if capabilities.authorize_exact(capability, rights).ok() != Some(self.root) {
             return Err(DeploymentError::Unauthorized);
         }
         Ok(())
@@ -2387,8 +2387,22 @@ mod tests {
 
     #[test]
     fn activation_is_capability_authorized_two_phase_and_one_use() {
-        let (capabilities, control, inspect) = authority();
+        let (mut capabilities, control, inspect) = authority();
+        let overbroad = capabilities
+            .insert(
+                ObjectId(0x4445_504c_4f59),
+                Rights::CONTROL.union(Rights::READ),
+            )
+            .unwrap();
         let mut service = DeploymentService::<2>::new(ObjectId(0x4445_504c_4f59)).unwrap();
+        assert_eq!(
+            service.stage(&capabilities, overbroad, candidate(7, 0x41)),
+            Err(DeploymentError::Unauthorized)
+        );
+        assert_eq!(
+            service.active(&capabilities, overbroad),
+            Err(DeploymentError::Unauthorized)
+        );
         let id = service
             .stage(&capabilities, control, candidate(8, 0x51))
             .unwrap();

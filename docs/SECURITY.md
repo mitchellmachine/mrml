@@ -999,3 +999,8 @@ rights supersets as well as missing rights, preventing a combined capability
 from crossing a read-, write-, or control-only gate. Recovery and policy code
 therefore retain separate operation-scoped handles and revalidate the exact live
 handle at each use; object identity still does not authorize the operation.
+
+DeploymentService likewise requires exact operation-scoped authority. Control
+cannot double as inspection authority, inspection cannot mutate generations,
+and a combined control/read handle satisfies neither narrow boundary. These
+checks precede candidate mutation and active-release storage reads.

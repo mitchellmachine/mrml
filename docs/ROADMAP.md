@@ -4025,3 +4025,9 @@ checkpoint, restart-policy, and isolation-policy tests use separate read,
 write, and control capabilities, and explicitly reject a combined-right handle
 at an exact-read boundary. Installed service execution and hosted VMM execution
 are not claimed by this increment.
+
+Deployment control and inspection now **IMPLEMENT** the same exact-rights gate:
+staging and activation require only `CONTROL`, while active-generation and
+runtime-assignment reads require only `READ`. A combined authority is rejected
+before state or storage access. Hosted VMM and installed-media execution remain
+outside this evidence.

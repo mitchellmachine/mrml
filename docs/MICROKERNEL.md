@@ -7071,6 +7071,17 @@ no new external protocol, algorithm, or device mechanism; exact-unique bounded
 domain lookup is part of the same conventional validation. See
 `docs/patents/REVIEW_LOG.md`.
 
+The deployment service now applies the same exact-rights rule to generation
+staging, activation preparation, active-generation inspection, and runtime
+assignment. Control and read remain distinct operation-scoped capabilities; a
+combined `CONTROL|READ` handle is rejected by both paths before deployment
+state or release storage is touched. Deployment passes its focused hosted
+suite. This adds no UEFI, KVM, WHP, installed-media, or physical evidence.
+
+Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
+at an existing capability check and introduces no new mechanism. See
+`docs/patents/REVIEW_LOG.md`.
+
 The kernel runtime regression now distinguishes subset authorization from the
 exact service boundary directly: a combined `READ|WRITE` handle still satisfies
 the general subset API, but the exact API rejects it while accepting a distinct
