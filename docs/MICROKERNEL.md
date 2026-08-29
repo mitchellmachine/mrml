@@ -6949,6 +6949,13 @@ total remains 626.
 Patent review: `NOT_TRIGGERED` — this factors and reorders conventional
 capability validation and capacity checks in the existing bounded transfer
 path.
+Delegation-table capacity is now checked after request and receiver-capability
+preflight but before delegation-graph inspection. An adversarial test fills the
+table with duplicate live edges and proves the ordinary `DelegationTableFull`
+denial takes precedence without consuming endpoint sequence; restoring the one
+valid edge permits sequence two. The Linux kernel total rises to 627.
+Patent review: `NOT_TRIGGERED` — this only reorders a conventional fixed-table
+capacity check in the existing IPC transaction.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

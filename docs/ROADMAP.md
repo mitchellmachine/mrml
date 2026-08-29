@@ -2270,6 +2270,9 @@ live composition remains pending.
    Receiver capability capacity now preflights before delegation graph/table or
    queued inbox inspection and is reused by batch derivation. Full-inbox/full-
    capability-space coverage passes; the total remains 626.
+   Delegation-table capacity now precedes graph inspection after all caller and
+   receiver preflights. A full-table/corrupt-graph ordering test raises the
+   kernel total to 627 without consuming sequence.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

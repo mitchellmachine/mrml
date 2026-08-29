@@ -994,7 +994,6 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .validate_derivation_capacity(requested.len())
             .map_err(IpcError::from)
             .map_err(TaskRuntimeError::Ipc)?;
-        self.validate_delegation_graph()?;
         if self
             .delegations
             .iter()
@@ -1004,6 +1003,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         {
             return Err(TaskRuntimeError::DelegationTableFull);
         }
+        self.validate_delegation_graph()?;
         let (source, destination) = two_domains_mut(&mut self.domains, sender_slot, receiver_slot)
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         let message = Message::transfer(
@@ -2074,6 +2074,78 @@ mod tests {
                     &[(root, Rights::READ)],
                 )
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn delegation_capacity_denial_precedes_graph_inspection() {
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x87);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x88), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        runtime
+            .send_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"first",
+                &[(root, Rights::READ)],
+            )
+            .unwrap();
+        let edge = runtime
+            .delegations
+            .iter()
+            .flatten()
+            .copied()
+            .next()
+            .unwrap();
+        runtime.delegations.fill(Some(edge));
+
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"full",
+                    &[(root, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::DelegationTableFull)
+        );
+
+        runtime.delegations.fill(None);
+        runtime.delegations[0] = Some(edge);
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"second",
+                    &[(root, Rights::READ)],
+                )
+                .unwrap()
+                .0,
+            2
         );
     }
 
