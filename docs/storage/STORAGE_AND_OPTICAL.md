@@ -416,6 +416,19 @@ only a checked successor media generation; old catalog state becomes stale.
 AHCI passes 73 tests on Windows and Arch Linux. This is modeled register,
 memory, and timing-contract evidence, not physical SATA reset evidence.
 
+The AHCI raw userspace syscall adapter now carries the existing isolated
+enumeration, read/write, flush, and reset loops through canonical buffered IPC
+and shared-buffer operations. The launch binding fixes the reply endpoint/task;
+request bytes cannot redirect it. Read/write accepts exactly one transferred
+capability and releases it before reply, while flush/reset accepts none. The
+focused Linux suite passes 74 tests. No installed service entry, supervisor
+launch, hardware I/O, or physical evidence is claimed.
+
+Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
+service operations to the existing kernel syscall ABI; it introduces no new
+storage, AHCI, scheduling, or device mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised

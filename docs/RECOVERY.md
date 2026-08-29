@@ -1301,6 +1301,13 @@ successor media generation. Recovery must treat every failed or uncertain reset
 as unavailable and the prior catalog generation as stale after success. AHCI
 passes 73 tests on Windows and Arch Linux; physical reset remains unverified.
 
+The isolated AHCI provider's raw userspace adapter now covers enumeration,
+read/write, flush, and reset without creating a second recovery authority path.
+The reply route is launch-bound, data access requires the exact transferred
+shared-memory capability and releases it before reply, and reset/flush reject
+capability transfer. The focused Linux suite passes 74 tests. Installed launch,
+durable recovery, and physical-device execution remain unverified.
+
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,
 verified base-register clearing, and verified zeroing of all retained extents.

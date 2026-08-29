@@ -8869,3 +8869,12 @@ kernel-facing service restores the backend-revocable owner only after exact
 generation/quiescence checks, verified clearing of all port DMA bases, and
 verified sanitization of each exact retained extent. All uncertainty remains a
 quarantine. Storage passes 177 tests on Windows and Arch Linux; no native IOMMU or device was used.
+
+The extracted AHCI provider's raw userspace adapter now **PARTIALLY IMPLEMENTS
+IN SOURCE** enumeration, read/write, flush, and reset. It maps only the fixed
+buffered IPC, shared-buffer, and capability-release syscall numbers; launch
+state fixes the reply endpoint and task. Data requests retain exactly one
+transferred capability through copy and release-before-reply, while control
+requests accept none. AHCI passes 74 focused tests on Linux. This is syscall-
+frame and hostile-model evidence, not installed service execution, supervisor
+launch, or hardware evidence.

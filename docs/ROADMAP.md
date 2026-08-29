@@ -356,6 +356,14 @@ contract, bounded link/signature recovery, error clearing, DMA-memory checks,
 and a checked successor media generation that stales old catalog state. AHCI
 passes 73 tests on Windows and Arch Linux; physical reset is unverified.
 
+The isolated AHCI userspace adapter now **PARTIALLY IMPLEMENTS IN SOURCE** the
+raw kernel ABI for enumeration, read/write, flush, and reset through the same
+launch-bound reply endpoint. Data requests use only the exact transferred
+shared-memory capability, preserve read/write direction, and release it before
+reply; control requests accept no capability. Focused Linux tests cover all
+seven syscall mappings, bringing AHCI to 74 passing tests. Installed service
+entry and supervisor launch remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

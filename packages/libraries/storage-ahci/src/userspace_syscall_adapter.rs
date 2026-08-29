@@ -1,9 +1,16 @@
-use crate::{AhciServiceSyscalls, ReceivedAhciEnvelope};
-use mrml_interface_storage_block_provider_v1::{ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES};
+use crate::{
+    AhciControlServiceSyscalls, AhciDataServiceSyscalls, AhciServiceSyscalls,
+    ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope, ReceivedAhciEnvelope,
+};
+use mrml_interface_storage_block_provider_v1::{
+    ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES,
+    READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
+};
 use mrml_kernel::Capability;
 
 const SEND_BUFFER: u64 = 4;
 const RECEIVE_BUFFER: u64 = 5;
+const READ_SHARED_BUFFER: u64 = 7;
 const WRITE_SHARED_BUFFER: u64 = 8;
 const RELEASE_CAPABILITY: u64 = 12;
 
@@ -145,6 +152,117 @@ unsafe impl<R: AhciRawSyscall> AhciServiceSyscalls for AhciUserspaceSyscalls<R> 
     }
 }
 
+unsafe impl<R: AhciRawSyscall> AhciDataServiceSyscalls for AhciUserspaceSyscalls<R> {
+    type Error = AhciUserspaceSyscallError;
+
+    fn receive(
+        &mut self,
+        request: &mut [u8; READ_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+    ) -> Result<ReceivedAhciDataEnvelope, Self::Error> {
+        let mut frame = AhciSyscallFrame {
+            rax: RECEIVE_BUFFER,
+            rdi: request.as_mut_ptr() as u64,
+            rsi: request.len() as u64,
+            rdx: capability_tokens.as_mut_ptr() as u64,
+            r10: capability_tokens.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)?;
+        Ok(ReceivedAhciDataEnvelope {
+            payload_length: usize::try_from(frame.rdx)
+                .map_err(|_| AhciUserspaceSyscallError::Range)?,
+            capability_count: usize::try_from(frame.r10)
+                .map_err(|_| AhciUserspaceSyscallError::Range)?,
+        })
+    }
+
+    fn read_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        let mut frame = AhciSyscallFrame {
+            rax: READ_SHARED_BUFFER,
+            rdi: capability.token(),
+            rsi: offset,
+            rdx: output.as_mut_ptr() as u64,
+            r10: output.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)
+    }
+
+    fn write_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        <Self as AhciServiceSyscalls>::write_shared(self, capability, offset, input)
+    }
+
+    fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
+        <Self as AhciServiceSyscalls>::release_received(self, capability)
+    }
+
+    fn send_response(&mut self, response: &[u8; READ_RESPONSE_BYTES]) -> Result<(), Self::Error> {
+        let mut frame = AhciSyscallFrame {
+            rax: SEND_BUFFER,
+            rdi: self.reply_endpoint,
+            rsi: self.reply_task,
+            rdx: response.as_ptr() as u64,
+            r10: response.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)
+    }
+}
+
+unsafe impl<R: AhciRawSyscall> AhciControlServiceSyscalls for AhciUserspaceSyscalls<R> {
+    type Error = AhciUserspaceSyscallError;
+
+    fn receive(
+        &mut self,
+        request: &mut [u8; FLUSH_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+    ) -> Result<ReceivedAhciControlEnvelope, Self::Error> {
+        let mut frame = AhciSyscallFrame {
+            rax: RECEIVE_BUFFER,
+            rdi: request.as_mut_ptr() as u64,
+            rsi: request.len() as u64,
+            rdx: capability_tokens.as_mut_ptr() as u64,
+            r10: capability_tokens.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)?;
+        Ok(ReceivedAhciControlEnvelope {
+            payload_length: usize::try_from(frame.rdx)
+                .map_err(|_| AhciUserspaceSyscallError::Range)?,
+            capability_count: usize::try_from(frame.r10)
+                .map_err(|_| AhciUserspaceSyscallError::Range)?,
+        })
+    }
+
+    fn send_response(&mut self, response: &[u8; FLUSH_RESPONSE_BYTES]) -> Result<(), Self::Error> {
+        let mut frame = AhciSyscallFrame {
+            rax: SEND_BUFFER,
+            rdi: self.reply_endpoint,
+            rsi: self.reply_task,
+            rdx: response.as_ptr() as u64,
+            r10: response.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +371,87 @@ mod tests {
         );
         assert_eq!(&raw.memory[32..40], b"MRMLBLK\0");
         assert_eq!(decode_enumerate_response(&raw.response, 48), Ok(Ok(48)));
+    }
+
+    struct OperationRaw {
+        operations: [u64; 7],
+        count: usize,
+        received_capabilities: u64,
+    }
+
+    unsafe impl AhciRawSyscall for OperationRaw {
+        unsafe fn invoke(&mut self, frame: &mut AhciSyscallFrame) {
+            self.operations[self.count] = frame.rax;
+            self.count += 1;
+            match frame.rax {
+                RECEIVE_BUFFER => {
+                    frame.rdx = frame.rsi;
+                    frame.r10 = self.received_capabilities;
+                }
+                READ_SHARED_BUFFER => unsafe {
+                    assert_eq!(frame.rdi, TOKEN);
+                    core::ptr::write_bytes(frame.rdx as *mut u8, 0x5a, frame.r10 as usize);
+                },
+                WRITE_SHARED_BUFFER | RELEASE_CAPABILITY | SEND_BUFFER => {}
+                _ => panic!("unexpected syscall"),
+            }
+            frame.rax = 0;
+        }
+    }
+
+    #[test]
+    fn data_and_control_adapters_map_only_the_canonical_syscalls() {
+        let raw = OperationRaw {
+            operations: [0; 7],
+            count: 0,
+            received_capabilities: 1,
+        };
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut request = [0; READ_REQUEST_BYTES];
+        let mut tokens = [0; 1];
+        let envelope =
+            AhciDataServiceSyscalls::receive(&mut syscalls, &mut request, &mut tokens).unwrap();
+        assert_eq!(
+            envelope,
+            ReceivedAhciDataEnvelope {
+                payload_length: READ_REQUEST_BYTES,
+                capability_count: 1,
+            }
+        );
+        let capability = Capability::from_token(TOKEN);
+        let mut output = [0; 8];
+        AhciDataServiceSyscalls::read_shared(&mut syscalls, capability, 4, &mut output).unwrap();
+        assert_eq!(output, [0x5a; 8]);
+        AhciDataServiceSyscalls::write_shared(&mut syscalls, capability, 8, &[0xa5; 8]).unwrap();
+        AhciDataServiceSyscalls::release_received(&mut syscalls, capability).unwrap();
+        AhciDataServiceSyscalls::send_response(&mut syscalls, &[0; READ_RESPONSE_BYTES]).unwrap();
+
+        syscalls.raw.received_capabilities = 0;
+        let mut control_request = [0; FLUSH_REQUEST_BYTES];
+        let control =
+            AhciControlServiceSyscalls::receive(&mut syscalls, &mut control_request, &mut tokens)
+                .unwrap();
+        assert_eq!(
+            control,
+            ReceivedAhciControlEnvelope {
+                payload_length: FLUSH_REQUEST_BYTES,
+                capability_count: 0,
+            }
+        );
+        AhciControlServiceSyscalls::send_response(&mut syscalls, &[0; FLUSH_RESPONSE_BYTES])
+            .unwrap();
+        let raw = syscalls.into_raw();
+        assert_eq!(
+            raw.operations,
+            [
+                RECEIVE_BUFFER,
+                READ_SHARED_BUFFER,
+                WRITE_SHARED_BUFFER,
+                RELEASE_CAPABILITY,
+                SEND_BUFFER,
+                RECEIVE_BUFFER,
+                SEND_BUFFER,
+            ]
+        );
     }
 }
