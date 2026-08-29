@@ -225,6 +225,8 @@ access. The security/acceptance gate is canonical in
 - Inbox indices, occupied count, head, and tail topology are validated before
   delivery or receive mutation, preventing corrupt ring state from causing
   partial capability transfer or endpoint sequencing.
+- Control receive validates message-ring integrity before consuming a lifecycle
+  event, so unrelated corruption cannot suppress or destroy peer-death evidence.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

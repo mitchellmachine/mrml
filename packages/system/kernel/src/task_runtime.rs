@@ -1199,6 +1199,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[slot]
             .as_mut()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        Self::validate_inbox_state(domain)?;
         if let Some(death) = domain.peer_deaths.iter_mut().find_map(Option::take) {
             return Ok(ControlEvent::PeerDied(death));
         }
@@ -2459,6 +2460,27 @@ mod tests {
         assert_eq!(second_message.sender(), second);
         assert_eq!(second_message.sequence(), 2);
         assert_eq!(second_message.message().payload(), b"b");
+    }
+
+    #[test]
+    fn control_receive_rejects_corrupt_inbox_before_consuming_peer_death() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let slot = runtime.domain_slot(task).unwrap();
+        let domain = runtime.domains[slot].as_mut().unwrap();
+        domain.inbox_count = 1;
+        domain.peer_deaths[0] = Some(PeerDeath {
+            peer: task,
+            reason: PeerDeathReason::Exited,
+        });
+
+        assert!(matches!(
+            runtime.receive_control(task),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert!(runtime.domains[slot].as_ref().unwrap().peer_deaths[0].is_some());
     }
 
     #[test]
