@@ -53,6 +53,10 @@ impl InstalledNvmeAdminQueueDma {
         self.layout
     }
 
+    pub(crate) const fn from_disabled_layout(layout: NvmeAdminQueueDmaLayout) -> Self {
+        Self { layout }
+    }
+
     #[cfg(test)]
     pub(crate) const fn from_layout(layout: NvmeAdminQueueDmaLayout) -> Self {
         Self { layout }

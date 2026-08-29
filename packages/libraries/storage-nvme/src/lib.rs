@@ -70,7 +70,8 @@ pub use nvme_queue_dma::{
     NVME_QUEUE_PAGE_BYTES,
 };
 pub use nvme_queue_program::{
-    enable_nvme_admin_queues, ActiveNvmeAdminQueues, NvmeAdminQueueRegisterIo,
+    disable_nvme_admin_queues, enable_nvme_admin_queues, ActiveNvmeAdminQueues,
+    NvmeAdminQueueRegisterIo, NvmeQueueDisableError, NvmeQueueDisableFailure,
     NvmeQueueProgramError, NvmeQueueProgramFailure, NVME_ACQ_OFFSET, NVME_AQA_OFFSET,
     NVME_ASQ_OFFSET,
 };

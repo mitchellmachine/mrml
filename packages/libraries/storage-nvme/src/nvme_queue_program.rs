@@ -90,6 +90,20 @@ pub enum NvmeQueueProgramFailure {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NvmeQueueDisableError {
+    RegisterRead,
+    RegisterWrite,
+    FatalStatus,
+    DisableTimeout,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NvmeQueueDisableFailure {
+    pub layout: NvmeAdminQueueDmaLayout,
+    pub error: NvmeQueueDisableError,
+}
+
 impl NvmeQueueProgramFailure {
     pub const fn error(&self) -> NvmeQueueProgramError {
         match self {
@@ -206,11 +220,51 @@ pub fn enable_nvme_admin_queues<I: NvmeAdminQueueRegisterIo>(
     Err(quarantined(layout, NvmeQueueProgramError::EnableTimeout))
 }
 
+/// Disables an active controller and recovers admin-DMA ownership only after
+/// the controller proves that it can no longer access either queue page.
+pub fn disable_nvme_admin_queues<I: NvmeAdminQueueRegisterIo>(
+    queues: ActiveNvmeAdminQueues,
+    io: &mut I,
+) -> Result<InstalledNvmeAdminQueueDma, NvmeQueueDisableFailure> {
+    let layout = queues.layout();
+    let cc = io
+        .read_u32(NVME_CC_OFFSET)
+        .map_err(|_| disable_failure(layout, NvmeQueueDisableError::RegisterRead))?;
+    if cc & CC_ENABLE != 0 {
+        io.write_u32(NVME_CC_OFFSET, cc & !CC_ENABLE)
+            .map_err(|_| disable_failure(layout, NvmeQueueDisableError::RegisterWrite))?;
+    }
+    let polls = u32::from(layout.timeout_500ms_units) * POLLS_PER_500_MS;
+    for _ in 0..polls {
+        let status = io
+            .read_u32(NVME_CSTS_OFFSET)
+            .map_err(|_| disable_failure(layout, NvmeQueueDisableError::RegisterRead))?;
+        if status & CSTS_FATAL != 0 {
+            return Err(disable_failure(layout, NvmeQueueDisableError::FatalStatus));
+        }
+        if status & CSTS_READY == 0 {
+            return Ok(InstalledNvmeAdminQueueDma::from_disabled_layout(layout));
+        }
+        io.delay_500_micros();
+    }
+    Err(disable_failure(
+        layout,
+        NvmeQueueDisableError::DisableTimeout,
+    ))
+}
+
 const fn quarantined(
     layout: NvmeAdminQueueDmaLayout,
     error: NvmeQueueProgramError,
 ) -> NvmeQueueProgramFailure {
     NvmeQueueProgramFailure::Quarantined { layout, error }
+}
+
+const fn disable_failure(
+    layout: NvmeAdminQueueDmaLayout,
+    error: NvmeQueueDisableError,
+) -> NvmeQueueDisableFailure {
+    NvmeQueueDisableFailure { layout, error }
 }
 
 #[cfg(test)]
@@ -389,6 +443,56 @@ mod tests {
                 .unwrap_err()
                 .error(),
             NvmeQueueProgramError::EnableTimeout
+        );
+        assert_eq!(timeout.delays, 1000);
+    }
+
+    #[test]
+    fn disable_clears_enable_waits_for_not_ready_and_recovers_dma_owner() {
+        let layout = owner().layout();
+        let queues = ActiveNvmeAdminQueues::from_state(layout);
+        let mut io = registers();
+        io.cc = CC_IO_SUBMISSION_ENTRY_SIZE | CC_IO_COMPLETION_ENTRY_SIZE | CC_ENABLE;
+        io.status = [CSTS_READY, CSTS_READY, 0];
+        let recovered = disable_nvme_admin_queues(queues, &mut io).unwrap();
+        assert_eq!(recovered.layout(), layout);
+        assert_eq!(io.cc & CC_ENABLE, 0);
+        assert_eq!(io.writes, 1);
+        assert_eq!(io.delays, 2);
+    }
+
+    #[test]
+    fn disable_uncertainty_or_fatal_status_quarantines_exact_layout() {
+        let layout = owner().layout();
+        let mut rejected = registers();
+        rejected.cc = CC_ENABLE;
+        rejected.reject_write = Some(0);
+        assert_eq!(
+            disable_nvme_admin_queues(ActiveNvmeAdminQueues::from_state(layout), &mut rejected),
+            Err(NvmeQueueDisableFailure {
+                layout,
+                error: NvmeQueueDisableError::RegisterWrite,
+            })
+        );
+        let mut fatal = registers();
+        fatal.cc = CC_ENABLE;
+        fatal.status = [CSTS_FATAL; 3];
+        assert_eq!(
+            disable_nvme_admin_queues(ActiveNvmeAdminQueues::from_state(layout), &mut fatal),
+            Err(NvmeQueueDisableFailure {
+                layout,
+                error: NvmeQueueDisableError::FatalStatus,
+            })
+        );
+        let mut timeout = registers();
+        timeout.cc = CC_ENABLE;
+        timeout.status = [CSTS_READY; 3];
+        assert_eq!(
+            disable_nvme_admin_queues(ActiveNvmeAdminQueues::from_state(layout), &mut timeout),
+            Err(NvmeQueueDisableFailure {
+                layout,
+                error: NvmeQueueDisableError::DisableTimeout,
+            })
         );
         assert_eq!(timeout.delays, 1000);
     }

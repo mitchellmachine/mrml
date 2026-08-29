@@ -491,8 +491,11 @@ quarantines admin, I/O, and data ownership. Provider teardown now deletes the
 submission queue
 before its dependent completion queue, then releases the exact IOMMU/DMA layout
 only after both device deletions complete. Any command rejection, uncertainty,
-or DMA-removal failure retains both layouts as quarantined ownership. Fifty-eight
-focused tests pass on Windows and Arch Linux. The class tuple
+or DMA-removal failure retains both layouts as quarantined ownership. Active
+admin-queue teardown now clears `CC.EN`, bounds readiness-clear polling, and
+reconstructs the exclusive admin-DMA owner only after `CSTS.RDY` is zero.
+Register uncertainty, fatal status, or timeout retains the exact layout for
+quarantine. Sixty focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current
