@@ -9246,6 +9246,29 @@ impl<
                         .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
                 );
             }
+            if matches!(
+                target.ty,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) {
+                if place.access.reads_previous_value() {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::UnsupportedRuntimeOperator,
+                        span: translate_span(body_start, assignment.name_span),
+                    });
+                }
+                self.emit_wide_integer_return(&tree, tree.root(), target.ty)?;
+                let high_slot = self.local_stack_slots_from(index + 1)?;
+                self.emit(&[0x48, 0x89, 0xc1, 0x48, 0x89, 0xd0])?;
+                self.emit_store_stack_slot(high_slot)?;
+                self.emit(&[0x48, 0x89, 0xc8])?;
+                return self.emit_store_stack_slot(
+                    high_slot
+                        .checked_add(1)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                );
+            }
             if !place.access.reads_previous_value() {
                 self.emit_expression(&tree, tree.root(), 0)?;
             } else {

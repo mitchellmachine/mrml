@@ -162,6 +162,8 @@ Block sequences may evaluate supported one-word prefix expressions before a
 compatible two-word integer tail expression.
 Immutable `u128` and `i128` locals preserve both words in bounded stack slots;
 their initializer and later reads retain the declared wide type.
+Mutable wide locals support whole-value assignment through the same typed place
+and ownership checks; wide compound assignment remains fail-closed.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -224,6 +226,7 @@ must take isolated traps.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
 Wide values returned through a block sequence are also compared word-for-word.
 Immutable wide-local round trips are compared word-for-word.
+Whole-value mutable wide-local assignments are compared word-for-word.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.
