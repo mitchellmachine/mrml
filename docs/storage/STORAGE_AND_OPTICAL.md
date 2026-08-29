@@ -507,8 +507,9 @@ publishes caller-supplied namespace sessions and media generations through the
 same canonical block-provider catalog as AHCI, without exposing admin-command
 authority. Its isolated enumeration loop uses one transferred shared-memory
 leaf, bounded local scratch, validated copy-back, release on every post-receive
-path, reply-after-release ordering, and complete transient-buffer wiping.
-Sixty-six focused
+path, reply-after-release ordering, and complete transient-buffer wiping. Its
+concrete userspace adapter validates immutable reply bindings and emits exact
+receive, shared-write, release, and send register frames. Sixty-seven focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
@@ -615,7 +616,7 @@ isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI and NVMe enumeration.
 Each service loop accepts one exact transferred shared-memory leaf, rebuilds the catalog in
 bounded local scratch, copies back only the validated response extent, releases
 the leaf on success or failure, replies only after release, and wipes request,
-token, scratch, and response buffers. The AHCI concrete userspace adapter validates
+token, scratch, and response buffers. The AHCI and NVMe concrete userspace adapters validate
 immutable reply bindings and emits the exact receive, shared-write, release, and
 send register frames. Malformed envelopes fail before copy-back.
 The read
