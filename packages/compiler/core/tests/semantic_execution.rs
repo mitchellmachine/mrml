@@ -161,6 +161,8 @@ const RUSTC_WIDE_SIGNED_UNBOUNDED_SHIFT_RIGHT_SOURCE: &str = concat!(
     "#![feature(unbounded_shifts)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.unbounded_shr(distance) }"
 );
+const MRML_V1_WIDE_UNSIGNED_POWER_OF_TWO_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { input.is_power_of_two() as u64 }";
 const RUSTC_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str = concat!(
     "#![feature(wrapping_next_power_of_two)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }"
@@ -1892,6 +1894,33 @@ fn mrml_v1_wide_strict_shift_distances_trap() {
             "missing Windows illegal-instruction status for {mode}; stdout: {stdout}; stderr: {stderr}"
         );
     }
+}
+
+#[test]
+fn mrml_v1_wide_power_of_two_predicate_matches_the_oracle() {
+    let source = MRML_V1_WIDE_UNSIGNED_POWER_OF_TWO_SOURCE;
+    let code = compile(source);
+    let inputs = [
+        0u128,
+        1,
+        3,
+        1u128 << 63,
+        1u128 << 64,
+        (1u128 << 64) + 1,
+        1u128 << 127,
+        u128::MAX,
+    ];
+    let actual = inputs
+        .into_iter()
+        .map(|input| unsafe { call_mrml_v1_wide_return(code.pointer, input) as u64 })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            source,
+            "for input in [0u128, 1, 3, 1u128 << 63, 1u128 << 64, (1u128 << 64) + 1, 1u128 << 127, u128::MAX] { println!(\"{}\", probe(input)); }",
+        )
+    );
 }
 
 #[test]

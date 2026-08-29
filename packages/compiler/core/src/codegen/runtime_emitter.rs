@@ -1632,6 +1632,47 @@ impl<
             depth,
         )
         .map_err(|kind| self.error(kind))?;
+        if let Some(ExprKind::UnsignedIntegerPredicate {
+            base,
+            argument: None,
+            power_of_two: true,
+        }) = tree.expression(id).map(|expression| expression.kind)
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type == RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)) {
+                self.emit_wide_integer_return(tree, base, base_type)?;
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                let high_word = self.emit_forward_branch(0x85)?;
+                self.emit(&[
+                    0x48, 0x89, 0xc1, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc2, 0x48, 0xff, 0xc9,
+                    0x48, 0x21, 0xc8, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0, 0x0f, 0xb6, 0xd2,
+                    0x21, 0xd0,
+                ])?;
+                let done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(high_word)?;
+                self.emit(&[0x48, 0x85, 0xc0])?;
+                let false_result = self.emit_forward_branch(0x85)?;
+                self.emit(&[
+                    0x48, 0x89, 0xd1, 0x48, 0xff, 0xc9, 0x48, 0x21, 0xca, 0x0f, 0x94, 0xc0,
+                    0x0f, 0xb6, 0xc0,
+                ])?;
+                let high_done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(false_result)?;
+                self.emit(&[0x31, 0xc0])?;
+                self.patch_forward_branch(high_done)?;
+                self.patch_forward_branch(done)?;
+                self.width = previous_width;
+                return Ok(());
+            }
+        }
         let operation_type = if expression_type == RuntimeExpressionType::Bool {
             match tree.expression(id).map(|expression| expression.kind) {
                 Some(ExprKind::Binary { left, .. }) => runtime_expression_type_with_locals(
