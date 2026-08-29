@@ -569,7 +569,10 @@ then stops and verifies the engine before returning live DMA cleanup ownership.
 Any post-mutation error, missing interrupt, or timeout quarantines the channel
 and DMA layout. The IDE library now publishes caller-supplied device sessions
 and media generations through the canonical block-provider catalog without
-granting raw port or DMA authority to the storage service. Twenty-four focused
+granting raw port or DMA authority to the storage service. Its isolated
+enumeration loop uses a transferred shared-memory leaf, bounded scratch,
+validated copy-back, mandatory release, reply-after-release ordering, and
+transient-buffer wiping. Twenty-six focused
 tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
@@ -612,7 +615,7 @@ before publication. The AHCI library implements enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
 55 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
 each implement this same enumeration contract independently. Provider-side
-isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI and NVMe enumeration.
+isolated IPC is now **PARTIALLY IMPLEMENTED** for AHCI, NVMe, and IDE enumeration.
 Each service loop accepts one exact transferred shared-memory leaf, rebuilds the catalog in
 bounded local scratch, copies back only the validated response extent, releases
 the leaf on success or failure, replies only after release, and wipes request,

@@ -1,5 +1,15 @@
 # Patent review log
 
+# 2026-08-29 — Isolated classic IDE enumeration service loop
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing
+authenticated IPC, transferred-capability release, bounded scratch, copy-back,
+reply-ordering, and transient-wipe patterns to the already screened classic IDE
+catalog operation. It adds no ATA register, port, DMA, command, discovery,
+storage scheduling, caching, allocation, naming, encoding, data-layout, or
+optimization behavior. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — NVMe userspace syscall adapter
 
 Patent review: **NOT_TRIGGERED**. This increment maps the already screened NVMe

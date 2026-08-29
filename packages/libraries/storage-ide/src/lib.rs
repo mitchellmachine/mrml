@@ -12,6 +12,7 @@ mod ide_identify;
 mod ide_pio;
 mod ide_ports;
 mod ide_reset;
+mod service_loop;
 
 use mrml_interface_storage_block_provider_v1::{
     decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
@@ -46,6 +47,9 @@ pub use ide_ports::{
     IdePortRevocationError,
 };
 pub use ide_reset::{reset_ide_channel, IdeResetError, IdeResetFailure};
+pub use service_loop::{
+    IdeEnumerationServiceLoop, IdeServiceLoopError, IdeServiceSyscalls, ReceivedIdeEnvelope,
+};
 
 pub struct IdeBlockProvider<'a> {
     devices: &'a [BlockProviderDevice],
