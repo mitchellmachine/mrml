@@ -331,6 +331,9 @@ same two-word machine arithmetic used by wrapping operations, but remain
 admitted only in an unsafe function or block. Oracle execution uses exclusively
 valid non-overflowing inputs; violating an unchecked method precondition remains
 Rust undefined behavior and is never presented as a safe MRML-v1 contract.
+Unsafe wide signed `unchecked_neg` performs a two-word two's-complement negate
+without an overflow branch. Oracle execution excludes `i128::MIN`, whose use
+violates the Rust precondition; semantic admission still requires unsafe scope.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

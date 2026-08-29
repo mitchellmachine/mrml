@@ -8161,6 +8161,25 @@ impl<
         }
         if let ExprKind::UncheckedIntegerOperation {
             base,
+            argument: None,
+            second_argument: None,
+            operator: crate::BinaryOperator::Subtract,
+            unary: true,
+            disjoint: false,
+            funnel: false,
+        } = expression.kind
+        {
+            if expected_type
+                != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda])?;
+            return Ok(());
+        }
+        if let ExprKind::UncheckedIntegerOperation {
+            base,
             argument: Some(argument),
             second_argument: None,
             operator:

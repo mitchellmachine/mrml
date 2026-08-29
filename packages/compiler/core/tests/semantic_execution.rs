@@ -259,6 +259,8 @@ const MRML_V1_WIDE_SIGNED_UNCHECKED_SUBTRACT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: i128, right: i128) -> i128 { left.unchecked_sub(right) }";
 const MRML_V1_WIDE_UNSIGNED_UNCHECKED_MULTIPLY_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub unsafe fn probe(left: u128, right: u128) -> u128 { left.unchecked_mul(right) }";
+const MRML_V1_WIDE_SIGNED_UNCHECKED_NEGATE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub unsafe fn probe(input: i128) -> i128 { input.unchecked_neg() }";
 const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
@@ -683,6 +685,7 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     let oracle_features = if source.contains(".unchecked_add(")
         || source.contains(".unchecked_sub(")
         || source.contains(".unchecked_mul(")
+        || source.contains(".unchecked_neg(")
     {
         "#![feature(unchecked_math)]\n"
     } else if source.contains(".strict_add(")
@@ -3051,6 +3054,20 @@ fn mrml_v1_wide_unchecked_arithmetic_matches_valid_oracle_inputs() {
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
     }
+}
+
+#[test]
+fn mrml_v1_wide_unchecked_negation_matches_valid_oracle_inputs() {
+    let inputs = [0i128, 1, -1, i128::MIN + 1, i128::MAX, 1i128 << 96, -(1i128 << 96)];
+    let code = compile(MRML_V1_WIDE_SIGNED_UNCHECKED_NEGATE_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input as u128) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(MRML_V1_WIDE_SIGNED_UNCHECKED_NEGATE_SOURCE, "for input in [0i128, 1, -1, i128::MIN + 1, i128::MAX, 1i128 << 96, -(1i128 << 96)] { let returned = unsafe { probe(input) }; println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
 }
 
 #[test]
