@@ -998,28 +998,33 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.validate_delegation_graph()?;
         let (source, destination) = two_domains_mut(&mut self.domains, sender_slot, receiver_slot)
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        let message = Message::transfer(
-            payload,
-            requested,
-            &source.capabilities,
-            &mut destination.capabilities,
-        )
-        .map_err(TaskRuntimeError::Ipc)?;
-        for (((source, _), destination), slot) in requested
-            .iter()
-            .zip(message.capabilities())
-            .zip(delegation_slots)
-        {
-            self.delegations[slot] = Some(Delegation {
-                source_task: sender,
-                source: *source,
-                destination_task: receiver,
-                destination,
-            });
-        }
-        let sequence = endpoint
-            .commit_send(send_plan, endpoint_capability)
-            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let delegations = &mut self.delegations;
+        let (sequence, message) = endpoint
+            .commit_send_with(send_plan, endpoint_capability, || {
+                let message = Message::transfer(
+                    payload,
+                    requested,
+                    &source.capabilities,
+                    &mut destination.capabilities,
+                )?;
+                for (((source, _), destination), slot) in requested
+                    .iter()
+                    .zip(message.capabilities())
+                    .zip(delegation_slots)
+                {
+                    delegations[slot] = Some(Delegation {
+                        source_task: sender,
+                        source: *source,
+                        destination_task: receiver,
+                        destination,
+                    });
+                }
+                Ok(message)
+            })
+            .map_err(|error| match error {
+                IpcError::InvalidSequencePlan => TaskRuntimeError::IntegrityFailure,
+                error => TaskRuntimeError::Ipc(error),
+            })?;
         Ok((sequence, message))
     }
 

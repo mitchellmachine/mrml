@@ -297,6 +297,8 @@ access. The security/acceptance gate is canonical in
   avoiding integrity-detail and inbox-capacity disclosure.
 - Exact delegation tracking slots are reserved before receiver capability
   mutation, eliminating fallible slot discovery after authority publication.
+- Endpoint sequence advances only after the exclusively enclosed capability and
+  delegation publication succeeds; publication failure leaves it reusable.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

@@ -624,14 +624,30 @@ impl Endpoint {
         plan: EndpointSendPlan,
         endpoint: Capability,
     ) -> Result<u64, IpcError> {
+        self.commit_send_with(plan, endpoint, || Ok(()))
+            .map(|(sequence, ())| sequence)
+    }
+
+    pub(crate) fn commit_send_with<T, F>(
+        &mut self,
+        plan: EndpointSendPlan,
+        endpoint: Capability,
+        publish: F,
+    ) -> Result<(u64, T), IpcError>
+    where
+        F: FnOnce() -> Result<T, IpcError>,
+    {
         if plan.object != self.object
             || plan.authority != endpoint
             || plan.sequence != self.next_sequence
         {
             return Err(IpcError::InvalidSequencePlan);
         }
+        let value = publish()?;
+        // The endpoint remains exclusively borrowed across publication, so
+        // the validated object and sequence cannot change before commit.
         self.next_sequence = plan.next_sequence;
-        Ok(plan.sequence)
+        Ok((plan.sequence, value))
     }
 
     pub(crate) fn authorize_member<const N: usize>(
@@ -730,6 +746,23 @@ mod tests {
             Err(IpcError::SequenceExhausted)
         ));
         assert_eq!(endpoint.next_sequence, u64::MAX);
+    }
+
+    #[test]
+    fn endpoint_sequence_commits_only_after_publication_succeeds() {
+        let mut space = CapabilitySpace::<1>::new();
+        let allowed = space.insert(ObjectId(11), Rights::SIGNAL).unwrap();
+        let mut endpoint = Endpoint::new(ObjectId(11));
+        let plan = endpoint.prepare_send(&space, allowed).unwrap();
+
+        assert_eq!(
+            endpoint.commit_send_with(plan, allowed, || Err::<(), _>(IpcError::Malformed)),
+            Err(IpcError::Malformed)
+        );
+        assert_eq!(
+            endpoint.authorize_send(&space, allowed, &Message::new(b"next", &[]).unwrap()),
+            Ok(1)
+        );
     }
 
     #[test]

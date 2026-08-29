@@ -2279,6 +2279,8 @@ live composition remains pending.
    Delegation publication now reserves exact empty tracking slots before
    receiver mutation and performs no fallible post-transfer search. Fragmented-
    table coverage raises the kernel total to 628.
+   Endpoint sequence commit now encloses publication and advances only after it
+   succeeds. Injected publication failure coverage raises the total to 629.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.
