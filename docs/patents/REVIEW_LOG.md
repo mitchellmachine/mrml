@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical block-provider read boundary
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the existing bounded
+generation-1 read operation and validates exact endpoint/session identities,
+caller-owned output bounds, reserved framing, and result byte counts. It adds no
+device command, storage scheduling, caching, allocation, naming, encoding,
+data-layout, prefetch, or optimization algorithm. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-29 — Canonical classic IDE provider catalog endpoint
 
 Patent review: **NOT_TRIGGERED**. This increment publishes caller-supplied,
