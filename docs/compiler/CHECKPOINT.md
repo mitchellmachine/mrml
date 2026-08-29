@@ -3539,6 +3539,26 @@ tests per host. Projection terms in binders, clause heads, and premise type
 positions, concrete/rigid projection-premise proof, backtracking, caching,
 coinduction, and source syntax remain unsupported.
 
+The typed COFF local-section checkpoint projects both code and read-only COMDAT
+definitions through exact nonzero source-object and section identities. It
+adds independently bounded object-wide read-only and aggregate code relocation
+tables, exact missing-target diagnostics, and a narrow removable `.drectve`
+validator. A 512 KiB payload tier removes the pinned probe's dependence on an
+externally enlarged Linux stack. The exact ORACLE-0003 `libcore` probe linked
+464,896 deterministic PE bytes with temporary platform/runtime shims and
+465,920 bytes with pinned `compiler_builtins` plus only platform memory/panic
+shims. The normal- and enlarged-stack 464,896-byte outputs were byte-identical:
+SHA-256 `4625f6fc3e8c98ec8dd9648761f54826f65399bd64bcb38027bad32e543769af`.
+
+`./target/debug/mrml build org.mrml.compiler.driver --target linux --release`
+passed. `./target/debug/mrml test org.mrml.compiler.driver --target linux
+--release` passed eight tests. `./target/debug/mrml test
+org.mrml.compiler.core --target linux --release` passed 813 unit tests, 351
+replacement tests, 121 semantic-execution tests, and all other reported
+integration groups. The Wine run is hosted loader evidence only; the probe is
+not a process-entry semantic test, and native Windows, physical hardware,
+general `.rlib` closure, and production linker readiness are not claimed.
+
 The concrete projection-premise entry point validates a fully concrete goal and
 reuses the same fixed projection-aware constraint state, proof stack, associated-
 value environment, and mixed predicate scheduler as existential proof. Matching

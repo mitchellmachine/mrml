@@ -190,6 +190,16 @@ filesystem algorithm, discovery optimization, mount, name lookup, allocation,
 write, or authority mechanism. This technical screen is not legal advice or
 patent clearance.
 
+# 2026-08-29 — Typed COFF local-section resolution and bounded PE tiers
+
+Patent review: **NOT_TRIGGERED**. This increment distinguishes conventional
+COFF text and read-only section identities, resolves them by exact equality and
+checked offsets, validates conventional non-loadable `LNK_INFO | LNK_REMOVE`
+exclusion directives, and chooses among fixed serializer capacities. It
+introduces no object encoding, archive format, symbol-selection algorithm,
+compression method, cryptographic mechanism, or loader behavior. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Atomic bounded FAT32 file-range reads
 
 Patent review: **NOT_TRIGGERED**. This increment maps a caller-bounded byte range

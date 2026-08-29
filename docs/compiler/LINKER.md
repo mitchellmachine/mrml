@@ -1393,3 +1393,23 @@ absent; it did not execute the unit binary, so no package-pass result is
 claimed. COFF decoder and driver transport of the typed identity remain the
 next milestone before associative read-only fragments can replace the current
 single-slice representation.
+
+Local COFF text and read-only COMDATs now carry distinct exact
+`(source object, section)` definition targets. Read-only absolute relocations
+may resolve a local section symbol into either the final text RVA or read-only
+RVA without relying on a repeated section name. Independent bounded tables
+cover object-wide read-only relocations and aggregate selected text
+relocations. A 512 KiB linked-payload tier before the multi-megabyte fallback
+allows the pinned `libcore` probe to serialize on the normal 8 MiB Linux stack.
+
+The exact ORACLE-0003 gnullvm `libcore` probe plus independently assembled
+Windows-ABI memory/panic shims produced a deterministic 464,896-byte PE on the
+normal stack. Replacing arithmetic helper shims with the pinned
+`compiler_builtins` archive produced a deterministic 465,920-byte PE. Its
+non-loadable `.drectve` metadata is admitted only as a bounded
+`LNK_INFO | LNK_REMOVE` exclusion list; library, executable, writable, or other
+directives fail closed. `objdump` recognized three bounded PE sections, and
+Wine loaded and returned from the image, but the temporary entry is not a
+Windows process-entry ABI wrapper, so its process code is not semantic evidence.
+Platform memory and panic shims remain external; full runtime closure and native
+Windows execution are not claimed.
