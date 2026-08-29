@@ -1094,6 +1094,28 @@ impl LaunchMode {
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
+fn require_invalid_return_stage(exit: VmExit, expected: u32) -> Result<()> {
+    if !matches!(expected, 0x26 | 0x27) {
+        return Err(anyhow!("invalid-return expected stage is not canonical"));
+    }
+    if exit
+        != (VmExit::Io {
+            port: SERVICE_PROBE_PORT,
+            size: 4,
+            write: true,
+            value: expected,
+        })
+    {
+        return Err(anyhow!(
+            "invalid-return stage {:#x} mismatch: {:?}",
+            expected,
+            exit
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 struct DriverProbeBlock([u8; 8192], usize);
 
@@ -4166,34 +4188,10 @@ fn application_main() -> Result<()> {
         }
         return Err(anyhow!("KVM block-service probe exceeded its stage bound"));
     } else if mode == LaunchMode::InvalidReturnProbe {
-        if exit
-            != (VmExit::Io {
-                port: SERVICE_PROBE_PORT,
-                size: 4,
-                write: true,
-                value: 0x26,
-            })
-        {
-            return Err(anyhow!(
-                "KVM invalid-return typed retirement mismatch: {:?}",
-                exit
-            ));
-        }
+        require_invalid_return_stage(exit, 0x26)?;
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM invalid-return peer execution failed: {:?}", error))?;
-        if exit
-            != (VmExit::Io {
-                port: SERVICE_PROBE_PORT,
-                size: 4,
-                write: true,
-                value: 0x27,
-            })
-        {
-            return Err(anyhow!(
-                "KVM invalid-return terminal state mismatch: {:?}",
-                exit
-            ));
-        }
+        require_invalid_return_stage(exit, 0x27)?;
         exit = VmExit::Halted;
     } else if matches!(
         mode,
@@ -5693,6 +5691,22 @@ mod tests {
             LaunchMode::parse("smp-ipi-probe").unwrap(),
             LaunchMode::SmpIpiProbe
         );
+    }
+
+    #[test]
+    fn invalid_return_stage_validation_is_exact_and_order_bounded() {
+        let stage = |value| VmExit::Io {
+            port: SERVICE_PROBE_PORT,
+            size: 4,
+            write: true,
+            value,
+        };
+        assert!(require_invalid_return_stage(stage(0x26), 0x26).is_ok());
+        assert!(require_invalid_return_stage(stage(0x27), 0x27).is_ok());
+        assert!(require_invalid_return_stage(stage(0x27), 0x26).is_err());
+        assert!(require_invalid_return_stage(stage(0x26), 0x27).is_err());
+        assert!(require_invalid_return_stage(stage(0x26), 0x25).is_err());
+        assert!(require_invalid_return_stage(VmExit::Halted, 0x26).is_err());
     }
 
     #[test]
