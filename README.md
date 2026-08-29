@@ -2,8 +2,19 @@
 
 MRML—the **Mitchell Renouf Machine Learning Library**—is an AI-led,
 human-directed experimental computing stack, implemented from first principles
-in dependency-free Rust and validated incrementally across UEFI, KVM, Hyper-V,
-Windows, and Linux.
+in dependency-free Rust and validated incrementally across UEFI, KVM, Linux,
+and historically Hyper-V/WHP on Windows.
+
+> **Current local Windows status:** Native Windows and local Windows VMM/WHP
+> testing are suspended for now. Codex and local contributors must not attempt
+> WHP, WHPX, Hyper-V, or VBS tests from the current Wine environment. The
+> Windows-target toolchain is currently exercised locally only under Wine; that
+> is toolchain coverage, not native Windows, Windows ABI, WHP, Hyper-V, VBS, or
+> Windows hardware evidence. Keep the configured GitHub Actions native-Windows
+> and WHP gates: a passing GitHub-hosted Windows job is current native evidence
+> for exactly what that job exercised. Existing dated Windows/WHP ledger results
+> remain historical and do not authorize a local VMM attempt. Keep the
+> backend-neutral design and WHP source intact.
 
 The project began as a native local-LLM runtime and is growing into a sovereign
 software stack: inference, media codecs, development tools, cryptography,
@@ -30,8 +41,8 @@ reference CPUs are targets, not current physical-hardware support claims.
 | Area | Repository-owned implementation | Current maturity |
 | --- | --- | --- |
 | Local inference | GGUF loading, tokenizer, Gemma-family execution, CPU kernels, Rust-to-PTX CUDA kernels, KV cache, sampling, CLI, JSONL automation, and HTTPS/SSE service | Functional but narrower and less tuned than established runtimes |
-| Microkernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU, KVM, and WHP probes; not production ready |
-| Virtualization | Common VM policy plus native KVM and Hyper-V/WHP launchers, signed launch manifests, isolated guest memory, interrupt handling, and authenticated queues | Development and benchmark harnesses; a compromised host remains authoritative |
+| Microkernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU and KVM probes plus historical and CI-scoped WHP evidence; local Windows VMM testing is suspended; not production ready |
+| Virtualization | Common VM policy plus native KVM and Hyper-V/WHP launchers, signed launch manifests, isolated guest memory, interrupt handling, and authenticated queues | KVM development and benchmark harnesses; Windows VMM/WHP testing is CI-only for now; a compromised host remains authoritative |
 | Mediated GPU | Authenticated rings, signed kernels, capabilities, quotas, watchdogs, reset, CPU fallback, fail-stop EPT/VT-d, checked DMAR/MCFG, complete-route proofs, one-shot MMIO ownership, generation-checked domain authority, root-race-checked direct tables, and fail-closed all-unit assembly | Register and benchmark plumbing exist; physical execution and hardware IOMMU validation, plus near-native in-VM CUDA, remain unfinished |
 | Rust compiler | Original forward-looking Rust lexer, parser, semantic analysis, constant evaluation, code generation, and source-to-object driver for a documented subset | Experimental contemporary/future-Rust subset, not a complete `rustc` replacement |
 | Git | Original repository, index, object, pack, ref, diff, checkout, commit, SSH transport, and signing functionality | Useful native client with documented unsupported Git features |
@@ -67,8 +78,9 @@ are not completion claims.
   input as untrusted.
 - Enforce W^X, least privilege, capability-mediated access, generational
   identities, authenticated artifacts, and fail-closed state transitions.
-- Measure claims on both Windows and Linux and distinguish controlled probes
-  from production guarantees.
+- Measure claims on currently supported test environments and distinguish
+  native Linux/KVM evidence, Wine-hosted Windows-toolchain coverage, historical
+  Windows/WHP evidence, and production guarantees.
 - State unsupported behavior and incomplete conformance explicitly.
 
 All repository libraries and applications use `#![no_std]` and repository-owned
@@ -93,9 +105,12 @@ violates any rule must not be merged.
 - Keep code modular, cohesive, and easy to audit wherever that does not
   conflict with security or measured performance. Document non-obvious trust
   boundaries and invariants.
-- Build and test every change on Windows and Linux. Windows supports only
-  Rust's MinGW-based `x86_64-pc-windows-gnullvm` toolchain; do not require
-  MSVC, Visual Studio, the Windows SDK, or a separate LLVM installation.
+- Build and test every change on Linux. Where relevant, exercise the Windows
+  target toolchain under Wine using Rust's MinGW-based
+  `x86_64-pc-windows-gnullvm` toolchain; do not require local native Windows,
+  MSVC, Visual Studio, the Windows SDK, or a separate LLVM installation. Do not
+  run Windows VMM/WHP locally; retain and use the native GitHub Actions Windows
+  and WHP gates when available.
 - Review unsafe code, FFI, integer and buffer arithmetic, parsers, filesystem
   and process operations, network input, concurrency, and failure paths. Add
   adversarial and regression tests appropriate to the change.
@@ -104,8 +119,10 @@ violates any rule must not be merged.
   the functional change remains independently reviewable.
 - Reject and rework security or measured performance regressions. Never waive
   a regression merely to make a feature pass.
-- Record Windows and Linux test commands, security checks, and relevant
-  benchmarks. Never claim a property or platform was verified when it was not.
+- Record Linux, any Wine-hosted toolchain, and relevant GitHub Actions test
+  commands, security checks, and benchmarks. Label Wine results as Wine
+  toolchain coverage, not native Windows or Windows VMM evidence. Never claim a
+  property or platform was verified when it was not.
 - Compiler and codec work must clearly identify its supported subset and pass
   independent differential, conformance, malformed-input, and interoperability
   testing before broader compatibility is claimed.
@@ -233,7 +250,9 @@ The current x86_64 kernel has demonstrated:
 - multiprocessor startup, per-CPU state, IPIs, migration, and load balancing;
 - controlled signed nested-KVM execution of VMX-root entry, a minimal non-root
   guest, an exact EPT-denied monitor-private-page read exit, and VMXOFF teardown;
-- signed execution probes under QEMU/UEFI, nested Linux KVM, and Windows WHP.
+- signed execution probes under QEMU/UEFI and nested Linux KVM, plus historical
+  and GitHub-CI-scoped Windows WHP probes; local Windows VMM testing is
+  suspended.
 
 The kernel remains experimental. Storage, network, tool, inference, and GPU
 service VMs; physical-hardware coverage; production rollback storage; complete
@@ -292,9 +311,11 @@ mrml manifest lock --check
 mrml audit --all --target native --output structured
 mrml assurance check
 
-# Full host suites
+# Locally available host/toolchain suites
 mrml test --all --target linux --release
-mrml test --all --target windows --release
+
+# Optional Windows-target toolchain coverage under Wine; not native Windows or WHP
+wine ./target/debug/mrml.exe test --all --target windows --release
 
 # Linux host-testable graph under AddressSanitizer
 mrml test --all --target linux --sanitizer address
@@ -326,13 +347,17 @@ mrml manifest lock --check
 mrml audit --all --target native --output structured
 mrml assurance check
 mrml test --all --target linux --release
-mrml test --all --target windows --release
 ```
 
 Run AddressSanitizer on the full Linux-compatible native graph and run
-feature- or hardware-specific suites for CUDA, KVM, WHP, UEFI, codecs, network
+feature- or hardware-specific suites for CUDA, KVM, UEFI, codecs, network
 protocols, and the compiler whenever those areas change. A workflow definition
 is not proof that a revision passed; retain the exact CI result and artifacts.
+Do not run WHP, WHPX, Hyper-V, VBS, or other Windows VMM suites locally while
+local Windows VMM testing is suspended. Retain those suites in GitHub Actions;
+a passing native-Windows job is evidence only for the operations that job
+actually exercised. Optional local Windows-target execution under Wine covers
+only the toolchain and must be labeled accordingly.
 Performance results must identify the artifact, backend, hardware,
 configuration, warm-up policy, measurement boundary, and variation across
 runs. Codec and compiler compatibility require independent conformance or
@@ -358,8 +383,10 @@ the repository or undoing its invariants.
 6. Update this overview when project scope changes. Put detailed experimental
    traces, threat analysis, and milestone evidence in the relevant document
    under `docs/`, not in an ever-growing README status narrative.
-7. Commit and push only after proportional Windows and Linux testing and an
-   explicit review of security and performance impact.
+7. Commit and push only after proportional Linux testing, optional relevant
+   Wine-hosted Windows-toolchain coverage, and an explicit review of security
+   and performance impact. Do not test the Windows VMM locally; use the retained
+   native GitHub Actions gate where relevant.
 8. For compiler work, read [COMPILER.md](docs/COMPILER.md), preserve the prior
    oracle records, and use the [current oracle](docs/compiler/oracles/ORACLE-0002.md).
    Rust 2024 is the

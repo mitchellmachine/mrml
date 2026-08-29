@@ -2105,11 +2105,20 @@ and must wait or be split.
 
 ## 5. Verify and report
 
-Use the README's exact Windows gnullvm requirements. Run focused tests first,
-then the strongest relevant platform-independent and platform-specific suites.
-Record exact commands, toolchain, backend, artifact versions, configuration,
-outcomes, and benchmark boundaries. Label evidence as unit test, simulated,
-QEMU TCG, hosted WHP, hosted/nested KVM, VTL1, or physical hardware.
+Use the README's current platform-testing policy. Local native Windows and
+Windows VMM/WHP testing are suspended for now: Codex must not attempt WHP,
+WHPX, Hyper-V, VBS, or other Windows VMM tests from the Wine environment. The
+Windows-target gnullvm toolchain is currently exercised locally only under Wine;
+label that result as Wine-hosted toolchain coverage, never native Windows,
+Windows ABI, WHP, VBS, or hardware evidence. Preserve the configured native
+Windows and WHP GitHub Actions gates; when a GitHub-hosted job passes, record it
+as current native evidence only for what that job actually exercised. Earlier
+dated Windows/WHP entries remain historical evidence. Run focused Linux tests
+first, then the strongest relevant supported platform-independent and Linux/KVM
+suites. Record exact commands, toolchain, backend, artifact versions,
+configuration, outcomes, and benchmark boundaries. Label evidence as unit test,
+simulated, Wine-hosted toolchain, GitHub-hosted native Windows, QEMU TCG,
+hosted/nested KVM, or physical hardware.
 
 Do not recreate missing private signing keys or hardware evidence by assertion.
 Generate development-only keys only when the documented workflow permits it,
