@@ -1145,6 +1145,21 @@ median/6.927 ms mean for MRML and 21.757 ms median/22.271 ms mean for rust-lld
 on this host and workload. General read-only relocations originating inside
 COMDAT payloads and non-COMDAT discontiguous packing remain incomplete.
 
+The selected `.rdata$.refptr...` path now preserves the in-place signed addend
+of each validated `IMAGE_REL_AMD64_ADDR64` record and resolves its named target
+after final PE layout. Targets may be selected text, selected read-only data,
+or selected writable data; checked address construction rejects underflow and
+overflow. The serializer remains allocation-free and bounded by
+`MAX_LINK_RELOCATIONS`. Windows and Arch Linux each passed 757 compiler-core
+unit tests and eight compiler-driver tests; Arch Linux also passed all compiler
+integration groups. The exact pinned gnullvm stateful archive returned 42
+through both linkers with 2,560 MRML bytes, 3,584 rust-lld bytes, 1,028 bytes of
+zero fill, and two forwarding pointers. Fifty measured links after five
+warmups produced 9.620 ms median/9.896 ms mean for MRML versus 26.746 ms
+median/26.899 ms mean for rust-lld on this exact Windows host and workload.
+This does not yet admit arbitrary relocation kinds or discontiguous
+non-COMDAT read-only packing, and it is not a claim of general superiority.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

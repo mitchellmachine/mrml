@@ -9992,3 +9992,13 @@ size comparison, and existing relocation resolution; it introduces no new
 object encoding, selection algorithm, compression, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-29 — COFF read-only absolute relocation resolution
+
+Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
+conventional PE/COFF AMD64 64-bit absolute relocation already emitted by the
+pinned gnullvm toolchain. It uses bounded table traversal, ordinary checked
+integer address arithmetic, and existing symbol resolution; it introduces no
+new object encoding, relocation kind, compression, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent
+clearance.
