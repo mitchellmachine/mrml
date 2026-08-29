@@ -45,6 +45,7 @@ pub enum ServiceError {
     InvalidService,
     InvalidObject,
     TaskMismatch,
+    TaskAlreadyRegistered,
     StillRunning,
     GenerationExhausted,
     InvalidRestartPolicy,
@@ -462,6 +463,13 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .enumerate()
             .find(|(_, entry)| !entry.occupied)
             .ok_or(ServiceError::Full)?;
+        if self
+            .slots
+            .iter()
+            .any(|entry| entry.occupied && entry.task == Some(task))
+        {
+            return Err(ServiceError::TaskAlreadyRegistered);
+        }
         Ok(ServiceRegistrationPlan {
             slot: slot as u32,
             generation: entry.generation,
@@ -477,11 +485,19 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     ) -> Result<ServiceId, ServiceError> {
         let entry = self
             .slots
-            .get_mut(plan.slot as usize)
+            .get(plan.slot as usize)
             .ok_or(ServiceError::InvalidService)?;
         if entry.occupied || entry.generation != plan.generation {
             return Err(ServiceError::InvalidService);
         }
+        if self
+            .slots
+            .iter()
+            .any(|entry| entry.occupied && entry.task == Some(plan.task))
+        {
+            return Err(ServiceError::TaskAlreadyRegistered);
+        }
+        let entry = &mut self.slots[plan.slot as usize];
         entry.object = plan.object;
         entry.task = Some(plan.task);
         entry.state = ServiceState::Running;
@@ -943,12 +959,15 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     }
 
     fn running_task_slot(&self, task: TaskId) -> Result<usize, ServiceError> {
-        self.slots
-            .iter()
-            .position(|entry| {
-                entry.occupied && entry.state == ServiceState::Running && entry.task == Some(task)
-            })
-            .ok_or(ServiceError::TaskMismatch)
+        let mut matches = self.slots.iter().enumerate().filter_map(|(slot, entry)| {
+            (entry.occupied && entry.state == ServiceState::Running && entry.task == Some(task))
+                .then_some(slot)
+        });
+        let slot = matches.next().ok_or(ServiceError::TaskMismatch)?;
+        if matches.next().is_some() {
+            return Err(ServiceError::TaskMismatch);
+        }
+        Ok(slot)
     }
 
     fn id(&self, slot: usize) -> ServiceId {
@@ -1267,6 +1286,29 @@ mod tests {
         assert_eq!(
             supervisor.plan_registration(ObjectId(0x62), task, policy),
             Err(ServiceError::Full)
+        );
+    }
+
+    #[test]
+    fn registration_rejects_duplicate_task_before_publication() {
+        let task = TaskId::from_token((9u64 << 32) | 1);
+        let unrelated = TaskId::from_token((9u64 << 32) | 2);
+        let policy = RestartPolicy::ONCE_IMMEDIATE;
+        let mut supervisor = ServiceSupervisor::<2>::new();
+        supervisor.register(ObjectId(0x63), unrelated).unwrap();
+        let plan = supervisor
+            .plan_registration(ObjectId(0x64), task, policy)
+            .unwrap();
+        supervisor.slots[0].task = Some(task);
+
+        assert_eq!(
+            supervisor.commit_registration(plan),
+            Err(ServiceError::TaskAlreadyRegistered)
+        );
+        assert!(!supervisor.slots[1].occupied);
+        assert_eq!(
+            supervisor.plan_registration(ObjectId(0x64), task, policy),
+            Err(ServiceError::TaskAlreadyRegistered)
         );
     }
 

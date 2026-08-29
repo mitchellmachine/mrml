@@ -7012,6 +7012,12 @@ generations as one typed result. Fault recovery and the restart-request service
 probe consume that task directly instead of performing a fallible supervisor
 lookup after task creation. The reprovision-boundary test checks the returned
 task's fresh context and exact supervisor binding; the total remains 630.
+Service registration now rejects an already-supervised exact task generation
+both when planning and again after prepared-slot validation at commit. Vacant
+capacity and stale-plan denials retain precedence, avoiding task-membership
+disclosure through full or invalid plans. Retirement also requires a unique
+running-task match. A focused duplicate-target test preserves the vacant slot
+and raises the Linux kernel total to 631.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second
@@ -7029,8 +7035,8 @@ domain or capability lookup; this applies to explicit revocation and task-death
 cleanup. Existing stale-descendant and transitive-revocation coverage passes;
 duplicate-target preflight coverage raises the Linux kernel total to 630.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
-and transactional commit for the existing IPC and scheduler bookkeeping
-mechanisms.
+and transactional commit for the existing IPC, scheduler, and service
+bookkeeping mechanisms.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot
