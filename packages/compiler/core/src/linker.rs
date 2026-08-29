@@ -7581,7 +7581,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
         u16::try_from(section_count).map_err(|_| LinkerError::OffsetOverflow)?,
     )?;
     patch_u16(&mut bytes, 0x94, 240)?;
-    patch_u16(&mut bytes, 0x96, 0x0023)?;
+    patch_u16(&mut bytes, 0x96, 0x022f)?;
 
     let optional = 0x98;
     patch_u16(&mut bytes, optional, 0x20b)?;
@@ -11403,6 +11403,7 @@ mod tests {
         assert_eq!(&pe.bytes()[..2], b"MZ");
         assert_eq!(&pe.bytes()[0x80..0x84], b"PE\0\0");
         assert_eq!(read_u16(pe.bytes(), 0x84).unwrap(), 0x8664);
+        assert_eq!(read_u16(pe.bytes(), 0x96).unwrap(), 0x022f);
         assert_eq!(read_u16(pe.bytes(), 0x98).unwrap(), 0x20b);
         assert_eq!(read_u32(pe.bytes(), 0xa8).unwrap(), 0x1000);
         assert_eq!(&pe.bytes()[0x188..0x190], b".text\0\0\0");
