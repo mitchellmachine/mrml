@@ -10,6 +10,7 @@ mod nvme_controller;
 mod nvme_discovery;
 mod nvme_identify;
 mod nvme_io_queue_dma;
+mod nvme_io_queue_program;
 mod nvme_mapping;
 mod nvme_namespace;
 mod nvme_queue_dma;
@@ -37,6 +38,9 @@ pub use nvme_identify::{
 pub use nvme_io_queue_dma::{
     prepare_nvme_io_queue_dma, NvmeIoQueueDmaBackend, NvmeIoQueueDmaError, NvmeIoQueueDmaFailure,
     NvmeIoQueueDmaLayout, NvmeIoQueueDmaRequest, PreparedNvmeIoQueueDma, NVME_IO_QUEUE_DEPTH_LIMIT,
+};
+pub use nvme_io_queue_program::{
+    create_nvme_io_queue_pair, ActiveNvmeIoQueues, NvmeIoQueueCreateError, NvmeIoQueueCreateFailure,
 };
 pub use nvme_mapping::{
     map_nvme_controller_bar, NvmeControllerBarMapping, NvmeControllerBarMappingBackend,

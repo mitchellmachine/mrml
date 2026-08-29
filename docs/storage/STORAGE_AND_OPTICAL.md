@@ -467,7 +467,13 @@ the live admin queue owner while exact controller-control and separate
 pin/map/read/write capabilities authorize two distinct zero-verified 4 KiB
 pages. Queue ID must be nonzero and within both grants, depth is bounded to two
 through 64 entries, admin/I/O regions may not overlap, and backend rejection
-returns the complete grant for retry. Forty-one focused
+returns the complete grant for retry. Queue creation now consumes that owner,
+creates and verifies the completion queue before its associated submission
+queue, and publishes active cursors only after both commands complete. A
+rejected completion queue removes the DMA layout; a rejected submission queue
+first deletes the already-created completion queue and then removes DMA. Any
+uncertain command, cleanup, or device/IOMMU removal quarantines both admin and
+I/O layouts. Forty-five focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);

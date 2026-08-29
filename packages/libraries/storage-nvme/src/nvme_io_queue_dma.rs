@@ -45,6 +45,10 @@ impl PreparedNvmeIoQueueDma {
     pub const fn layout(&self) -> NvmeIoQueueDmaLayout {
         self.layout
     }
+
+    pub(crate) fn into_parts(self) -> (ActiveNvmeAdminQueues, NvmeIoQueueDmaLayout) {
+        (self.admin_queues, self.layout)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

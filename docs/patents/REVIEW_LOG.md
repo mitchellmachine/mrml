@@ -10319,6 +10319,16 @@ admin-command escape hatch. It does not interpret identify data, discover
 namespaces, create I/O queues, or implement a storage scheduling or caching
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Ordered NVMe I/O-queue creation and cleanup
+
+Patent review: **NOT_TRIGGERED**. This increment encodes the conventional fixed
+Create I/O Completion Queue, Create I/O Submission Queue, and Delete I/O
+Completion Queue commands through the existing bounded admin executor. It uses
+ordinary ordered construction, explicit rollback, exact DMA removal, and
+quarantine on uncertainty. It does not issue block commands, schedule requests,
+cache data, or introduce another storage algorithm. This technical screen is
+not legal advice or patent clearance.
+
 # 2026-08-29 — Capability-bound NVMe I/O-queue DMA ownership
 
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing exact

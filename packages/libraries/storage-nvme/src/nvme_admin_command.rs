@@ -279,12 +279,12 @@ fn execute_nvme_identify<const N: usize, I: NvmeAdminCommandMemoryIo>(
     execute_prepared_admin(queues, command, io).map(|completion| completion.queues)
 }
 
-struct CompletedAdminCommand {
-    queues: ActiveNvmeAdminQueues,
-    result: u32,
+pub(crate) struct CompletedAdminCommand {
+    pub(crate) queues: ActiveNvmeAdminQueues,
+    pub(crate) result: u32,
 }
 
-fn execute_prepared_admin<I: NvmeAdminCommandMemoryIo>(
+pub(crate) fn execute_prepared_admin<I: NvmeAdminCommandMemoryIo>(
     queues: ActiveNvmeAdminQueues,
     mut command: [u32; 16],
     io: &mut I,
