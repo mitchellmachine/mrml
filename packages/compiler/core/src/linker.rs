@@ -407,6 +407,21 @@ pub struct LinkRelocation<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoffSectionIdentity {
+    object: u16,
+    section: u16,
+}
+
+impl CoffSectionIdentity {
+    pub fn new(object: u16, section: u16) -> Result<Self, LinkerError> {
+        if object == 0 || section == 0 {
+            return Err(LinkerError::InvalidCoff);
+        }
+        Ok(Self { object, section })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkRelocationTarget<'a> {
     Symbol(&'a str),
     /// A named dependency discovered outside text. It participates in archive
@@ -418,6 +433,11 @@ pub enum LinkRelocationTarget<'a> {
     /// A COFF section-scoped code target. It participates in relocation
     /// resolution but never makes an archive member eligible for selection.
     LocalSymbol(&'a str),
+    /// An exact non-global COFF section in one decoded source object.
+    CoffSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
     /// A COFF object-local writable definition whose final RVA is assigned by
     /// the PE serializer after the generic text/read-only layout is frozen.
     PeWritableSymbol(&'a str),
@@ -432,6 +452,11 @@ pub enum LinkRelocationTarget<'a> {
 pub enum LinkDefinitionTarget {
     Text(usize),
     ReadonlyData(usize),
+    /// Defines an exact non-global COFF read-only section without inventing a name.
+    CoffSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2616,6 +2641,7 @@ pub fn select_static_link_inputs(
                 target: inputs[candidate].symbol_target,
             })
             .chain(inputs[candidate].additional_definitions.iter().copied())
+            .filter(|definition| definition_is_global(definition.target))
             .any(|definition| {
                 !symbol_is_defined(inputs, &selected, definition.symbol)
                     && (definition.symbol == entry_symbol
@@ -2723,6 +2749,7 @@ pub fn select_ordered_static_link_members(
                     target: inputs[candidate].symbol_target,
                 })
                 .chain(inputs[candidate].additional_definitions.iter().copied())
+                .filter(|definition| definition_is_global(definition.target))
                 .any(|definition| {
                     !symbol_is_defined(inputs, &selected, definition.symbol)
                         && (definition.symbol == entry_symbol
@@ -2772,13 +2799,17 @@ fn input_definition_target(
     symbol: &str,
 ) -> Option<LinkDefinitionTarget> {
     if input.symbol == symbol {
-        return Some(input.symbol_target);
+        return definition_is_global(input.symbol_target).then_some(input.symbol_target);
     }
     input
         .additional_definitions
         .iter()
         .find(|definition| definition.symbol == symbol)
-        .map(|definition| definition.target)
+        .and_then(|definition| definition_is_global(definition.target).then_some(definition.target))
+}
+
+fn definition_is_global(target: LinkDefinitionTarget) -> bool {
+    !matches!(target, LinkDefinitionTarget::CoffSection { .. })
 }
 
 fn symbol_is_referenced(
@@ -8037,10 +8068,14 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
         for (definition_index, definition) in input.additional_definitions.iter().enumerate() {
             validate_symbol(definition.symbol)?;
             validate_definition_target(input, definition.target)?;
-            if definition.symbol == input.symbol
-                || input.additional_definitions[..definition_index]
-                    .iter()
-                    .any(|earlier| earlier.symbol == definition.symbol)
+            if definition_is_global(definition.target)
+                && (definition_is_global(input.symbol_target) && definition.symbol == input.symbol
+                    || input.additional_definitions[..definition_index]
+                        .iter()
+                        .any(|earlier| {
+                            definition_is_global(earlier.target)
+                                && earlier.symbol == definition.symbol
+                        }))
             {
                 return Err(LinkerError::DuplicateSymbol);
             }
@@ -8056,6 +8091,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
             target: input.symbol_target,
         })
         .chain(input.additional_definitions.iter().copied())
+        .filter(|definition| definition_is_global(definition.target))
         {
             if inputs[..index]
                 .iter()
@@ -8083,6 +8119,12 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 }
                 LinkRelocationTarget::ReadonlyData(_)
                 | LinkRelocationTarget::GotPcRelativeReadonlyData(_) => {}
+                LinkRelocationTarget::CoffSection { identity, .. }
+                    if identity.object == 0 || identity.section == 0 =>
+                {
+                    return Err(LinkerError::InvalidCoff);
+                }
+                LinkRelocationTarget::CoffSection { .. } => {}
             }
             if !matches!(
                 relocation.target,
@@ -8169,6 +8211,9 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     .readonly
                     .checked_add(offset)
                     .ok_or(LinkerError::OffsetOverflow)?,
+                LinkRelocationTarget::CoffSection { identity, offset } => {
+                    resolve_coff_section(inputs, &layouts, identity, offset)?
+                }
             };
             let displacement = i64::try_from(target)
                 .map_err(|_| LinkerError::OffsetOverflow)?
@@ -8314,6 +8359,9 @@ fn validate_definition_target(
     let valid = match target {
         LinkDefinitionTarget::Text(offset) => offset <= input.text.len(),
         LinkDefinitionTarget::ReadonlyData(offset) => offset <= input.readonly_data.len(),
+        LinkDefinitionTarget::CoffSection { identity, offset } => {
+            identity.object != 0 && identity.section != 0 && offset <= input.readonly_data.len()
+        }
     };
     if valid {
         Ok(())
@@ -8332,11 +8380,51 @@ fn resolve_symbol(
             return match target {
                 LinkDefinitionTarget::Text(offset) => layout.text.checked_add(offset),
                 LinkDefinitionTarget::ReadonlyData(offset) => layout.readonly.checked_add(offset),
+                LinkDefinitionTarget::CoffSection { .. } => None,
             }
             .ok_or(LinkerError::OffsetOverflow);
         }
     }
     Err(LinkerError::UndefinedSymbol)
+}
+
+fn resolve_coff_section(
+    inputs: &[LinkInput<'_, '_, '_>],
+    layouts: &[InputLayout; MAX_LINK_FRAGMENTS],
+    identity: CoffSectionIdentity,
+    offset: usize,
+) -> Result<usize, LinkerError> {
+    let mut resolved = None;
+    for (input, layout) in inputs.iter().zip(layouts.iter()) {
+        let definitions = core::iter::once(input.symbol_target).chain(
+            input
+                .additional_definitions
+                .iter()
+                .map(|definition| definition.target),
+        );
+        for definition in definitions {
+            if let LinkDefinitionTarget::CoffSection {
+                identity: candidate,
+                offset: base,
+            } = definition
+                && candidate == identity
+            {
+                if resolved.is_some()
+                    || base
+                        .checked_add(offset)
+                        .filter(|end| *end <= input.readonly_data.len())
+                        .is_none()
+                {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                resolved = layout
+                    .readonly
+                    .checked_add(base)
+                    .and_then(|target| target.checked_add(offset));
+            }
+        }
+    }
+    resolved.ok_or(LinkerError::UndefinedSymbol)
 }
 
 fn resolve_readonly_symbol(
@@ -8596,9 +8684,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        emit_elf64_x86_64, emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation,
-        emit_x86_64_coff, emit_x86_64_coff_with_relocation, MachineCode,
-        X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
+        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_elf64_x86_64,
+        emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
+        emit_x86_64_coff_with_relocation,
     };
 
     fn append_archive_member(archive: &mut std::vec::Vec<u8>, name: &str, bytes: &[u8]) {
@@ -9060,10 +9148,12 @@ mod tests {
 
     #[test]
     fn rejects_truncated_and_unresolved_archive_members() {
-        assert!(decode_unix_archive(b"!<thin>\n")
-            .unwrap()
-            .members()
-            .is_empty());
+        assert!(
+            decode_unix_archive(b"!<thin>\n")
+                .unwrap()
+                .members()
+                .is_empty()
+        );
         assert_eq!(
             decode_unix_archive(b"!<arch>\nshort"),
             Err(LinkerError::InvalidArchive)
@@ -9447,6 +9537,68 @@ mod tests {
     }
 
     #[test]
+    fn resolves_exact_non_global_coff_section_identities() {
+        assert_eq!(
+            CoffSectionIdentity::new(0, 1),
+            Err(LinkerError::InvalidCoff)
+        );
+        assert_eq!(
+            CoffSectionIdentity::new(1, 0),
+            Err(LinkerError::InvalidCoff)
+        );
+        let first_identity = CoffSectionIdentity::new(1, 7).unwrap();
+        let second_identity = CoffSectionIdentity::new(2, 7).unwrap();
+        let relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::CoffSection {
+                identity: second_identity,
+                offset: 0,
+            },
+            addend: -4,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &relocation,
+        };
+        let first = LinkInput {
+            symbol: ".rdata",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: first_identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: b"A",
+            relocations: &[],
+        };
+        let second = LinkInput {
+            symbol: ".rdata",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: second_identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: b"B",
+            relocations: &[],
+        };
+        let linked = link_x86_64_static::<64>(&[entry, first, second], "entry").unwrap();
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            28
+        );
+        assert_eq!(linked.bytes()[32], b'B');
+
+        let selection =
+            select_static_link_inputs(&[entry, first], &[false, true], "entry").unwrap();
+        assert_eq!(selection.indices(), &[0]);
+    }
+
+    #[test]
     fn resolves_multiple_definitions_at_checked_text_offsets() {
         let definitions = [LinkDefinition {
             symbol: "secondary",
@@ -9819,7 +9971,7 @@ mod tests {
 
     #[test]
     fn decodes_and_links_coff_readonly_section_relocations() {
-        use crate::{emit_x86_64_coff_with_readonly_data, X86_64ReadonlyRelocation};
+        use crate::{X86_64ReadonlyRelocation, emit_x86_64_coff_with_readonly_data};
 
         let code = MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
         let object = emit_x86_64_coff_with_readonly_data::<256, 8>(
