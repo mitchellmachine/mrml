@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `447af934`
-  (`compiler: inventory COFF archive symbols directly`)
+- Compiler checkpoint commit: `b03f61cb`
+  (`compiler: compact large COFF section state`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,16 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `b03f61cb` replaces fixed per-section COFF COMDAT metadata and boolean
+arrays with an exact-object borrowed view and compact 4,096-bit classification
+sets. Association chains remain bounded and cycle-checked. The exact pinned
+`libcore` probe now advances to `expanded link fragment count exceeds 256` in
+627 ms instead of failing at content-section tracking. Detached Windows runs
+passed all 801 compiler-core unit tests, the package integration groups, and
+eight driver tests. Linux and comparative performance were not rerun for this
+owner-requested stop point; full `libcore` support is not claimed. Patent
+review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
 fallible external-symbol inventory over validated symbol and string tables.
