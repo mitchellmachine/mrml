@@ -12723,6 +12723,40 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_returns_typed_wide_const_calls() {
+        struct WideConstCallResolver;
+        impl crate::ConstantResolver for WideConstCallResolver {
+            fn resolve(&self, _: &str) -> Option<u128> {
+                None
+            }
+
+            fn resolve_call(&self, name: &str, arguments: &[u128]) -> Option<u128> {
+                (name == "select" && arguments.is_empty())
+                    .then_some(1512366075204170947332355369683137040)
+            }
+
+            fn resolve_call_type(&self, name: &str, argument_count: usize) -> Option<crate::IntegerType> {
+                (name == "select" && argument_count == 0).then_some(crate::IntegerType::U128)
+            }
+        }
+        let source = "const fn select() -> u128 { 1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select() }";
+        let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[1] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            let code = compile_x86_64_function::<_, 64, 4, 16>(
+                &function,
+                &WideConstCallResolver,
+                abi,
+            )
+            .unwrap();
+            assert!(code.bytes().windows(10).any(|bytes| bytes
+                == [0x48, 0xb8, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]));
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",

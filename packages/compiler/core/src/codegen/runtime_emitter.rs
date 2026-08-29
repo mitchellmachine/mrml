@@ -7133,15 +7133,35 @@ impl<
             argument_count,
         } = expression.kind
         {
-            let target = self
+            if let Some(target) = self
                 .resolver
                 .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-            if !runtime_types_compatible(runtime_type_from_scalar(target.return_type), expected_type)
+            {
+                if !runtime_types_compatible(
+                    runtime_type_from_scalar(target.return_type),
+                    expected_type,
+                ) {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                }
+                return self.emit_runtime_call(tree, &arguments, target, 1);
+            }
+            let values =
+                evaluate_runtime_call_arguments(tree, arguments, argument_count, self.resolver)
+                    .map_err(|kind| self.error(kind))?;
+            let resolved_type = self.resolver.resolve_call_type(callee, argument_count);
+            if resolved_type
+                != match expected_type {
+                    RuntimeExpressionType::Integer(integer_type) => integer_type,
+                    _ => None,
+                }
             {
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
             }
-            return self.emit_runtime_call(tree, &arguments, target, 1);
+            let value = self
+                .resolver
+                .resolve_call(callee, &values[..argument_count])
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            return self.emit_wide_integer_immediate(value);
         }
         if let ExprKind::If {
             condition,

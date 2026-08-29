@@ -103,6 +103,8 @@ const MRML_V1_WIDE_UNSIGNED_SHIFT_ASSIGN_SOURCE: &str = "#[mrml_abi::export(vers
 const MRML_V1_WIDE_SIGNED_SHIFT_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, shift: u32) -> i128 { let mut value: i128 = input; value >>= shift; value <<= 2; value }";
 const MRML_V1_WIDE_UNSIGNED_CONSTANT_SOURCE: &str = "const WIDE: u128 = 1512366075204170947332355369683137040; #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { WIDE }";
 const MRML_V1_WIDE_SIGNED_CONSTANT_SOURCE: &str = "const WIDE: i128 = -1512366075204170947332355369683137040; #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { WIDE }";
+const MRML_V1_WIDE_UNSIGNED_CONST_CALL_SOURCE: &str = "const fn select() -> u128 { 1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { select() }";
+const MRML_V1_WIDE_SIGNED_CONST_CALL_SOURCE: &str = "const fn select() -> i128 { -1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select() }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1856,6 +1858,25 @@ fn mrml_v1_wide_named_constants_match_oracle_words() {
     for source in [
         MRML_V1_WIDE_UNSIGNED_CONSTANT_SOURCE,
         MRML_V1_WIDE_SIGNED_CONSTANT_SOURCE,
+    ] {
+        let code = compile(source);
+        let returned = unsafe { call_mrml_v1_wide_return(code.pointer, 0) };
+        let actual = vec![returned as u64, (returned >> 64) as u64];
+        assert_eq!(
+            actual,
+            rustc_mrml_v1_observations(
+                source,
+                "let returned = probe() as u128; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64);",
+            )
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_const_calls_match_oracle_words() {
+    for source in [
+        MRML_V1_WIDE_UNSIGNED_CONST_CALL_SOURCE,
+        MRML_V1_WIDE_SIGNED_CONST_CALL_SOURCE,
     ] {
         let code = compile(source);
         let returned = unsafe { call_mrml_v1_wide_return(code.pointer, 0) };
