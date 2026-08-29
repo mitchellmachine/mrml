@@ -131,6 +131,8 @@ const MRML_V1_WIDE_UNSIGNED_COMPARE_CONST_CALL_SOURCE: &str = "const fn select(v
 const MRML_V1_WIDE_SIGNED_COMPARE_CONST_CALL_SOURCE: &str = "const fn select(value: i128) -> i128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select(if select(-1512366075204170947332355369683137040) < select(17) { select(-1512366075204170947332355369683137040) } else { select(17) }) }";
 const MRML_V1_WIDE_UNSIGNED_LOGICAL_CONST_CALL_SOURCE: &str = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { select(if select(1512366075204170947332355369683137040) > select(17) && !(select(17) == select(19)) { select(1512366075204170947332355369683137040) } else { select(17) }) }";
 const MRML_V1_WIDE_SIGNED_LOGICAL_CONST_CALL_SOURCE: &str = "const fn select(value: i128) -> i128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select(if select(-1512366075204170947332355369683137040) > select(17) || select(-17) != select(17) { select(-1512366075204170947332355369683137040) } else { select(17) }) }";
+const MRML_V1_WIDE_UNSIGNED_MULTI_ARGUMENT_CONST_CALL_SOURCE: &str = "const fn select(value: u128) -> u128 { value } const fn choose(left: u128, right: u128, take_left: bool) -> u128 { if take_left { left } else { right } } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { choose(select(1512366075204170947332355369683137040), select(170141183460469231731687303715884105727), false) }";
+const MRML_V1_WIDE_SIGNED_MULTI_ARGUMENT_CONST_CALL_SOURCE: &str = "const fn select(value: i128) -> i128 { value } const fn choose(left: i128, right: i128, take_left: bool) -> i128 { if take_left { left } else { right } } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { choose(select(-1512366075204170947332355369683137040), select(18446744073709551617), true) }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1929,6 +1931,8 @@ fn mrml_v1_wide_const_calls_match_oracle_words() {
         MRML_V1_WIDE_SIGNED_COMPARE_CONST_CALL_SOURCE,
         MRML_V1_WIDE_UNSIGNED_LOGICAL_CONST_CALL_SOURCE,
         MRML_V1_WIDE_SIGNED_LOGICAL_CONST_CALL_SOURCE,
+        MRML_V1_WIDE_UNSIGNED_MULTI_ARGUMENT_CONST_CALL_SOURCE,
+        MRML_V1_WIDE_SIGNED_MULTI_ARGUMENT_CONST_CALL_SOURCE,
     ] {
         let code = compile(source);
         let returned = unsafe { call_mrml_v1_wide_return(code.pointer, 0) };
