@@ -6808,6 +6808,10 @@ IPC delivery now requires exact scheduler identities for both sender and
 receiver before endpoint authorization or capability transfer. A stale-sender
 test proves no message reaches the receiver and raises the Linux kernel total to
 607.
+Symmetric control-peer connection now applies the same exact scheduler check to
+both tasks before endpoint authorization or either reciprocal slot changes. A
+stale-peer test proves neither relation is published and raises the Linux kernel
+total to 608.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6882,7 +6886,8 @@ validation and does not trigger review.
 Applying it to control receive is the same integrity hardening.
 Combined control-topology validation is also conventional bounded-state
 hardening and does not trigger review. Sender scheduler preflight is the same
-transactional integrity validation.
+transactional integrity validation; control connection preflight has the same
+classification.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

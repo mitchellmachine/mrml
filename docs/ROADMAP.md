@@ -2190,6 +2190,8 @@ live composition remains pending.
    Delivery now preflights exact scheduler identity for both endpoints before
    authority transfer. A stale-sender test leaves the receiver empty and raises
    the kernel total to 607.
+   Control-peer connection now requires both scheduler identities before either
+   reciprocal relation changes; a stale-peer test raises the total to 608.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

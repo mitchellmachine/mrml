@@ -1155,6 +1155,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if first == second {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
+        if !self.scheduler.contains(first) || !self.scheduler.contains(second) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
         let first_slot = self.domain_slot(first)?;
         let second_slot = self.domain_slot(second)?;
         let (first_domain, second_domain) =
@@ -2929,6 +2932,56 @@ mod tests {
         ));
         assert!(runtime.context(first).is_ok());
         assert!(runtime.context(second).is_ok());
+    }
+
+    #[test]
+    fn control_connection_rejects_unscheduled_peer_before_publication() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x78);
+        let first_capability = runtime
+            .capabilities_mut(first)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let second_capability = runtime
+            .capabilities_mut(second)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime.scheduler.detach(second).unwrap();
+
+        assert_eq!(
+            runtime.connect_control_peers(
+                first,
+                second,
+                &Endpoint::new(object),
+                first_capability,
+                second_capability,
+            ),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert!(
+            runtime.domains[runtime.domain_slot(first).unwrap()]
+                .as_ref()
+                .unwrap()
+                .peers
+                .iter()
+                .all(Option::is_none)
+        );
+        assert!(
+            runtime.domains[runtime.domain_slot(second).unwrap()]
+                .as_ref()
+                .unwrap()
+                .peers
+                .iter()
+                .all(Option::is_none)
+        );
     }
 
     #[test]
