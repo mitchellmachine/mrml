@@ -4307,9 +4307,15 @@ fn validate_discardable_coff_exclude_directives(
     object: &[u8],
     header: usize,
     contents: &[u8],
-    symbol_count: usize,
+    _symbol_count: usize,
 ) -> Result<(), LinkerError> {
-    validate_discardable_coff_debug_section(object, header, contents.len(), symbol_count)?;
+    let characteristics = read_u32(object, header + 36)?;
+    if characteristics & 0x0000_0a00 != 0x0000_0a00
+        || characteristics & !0x00f0_0a00 != 0
+        || read_u16(object, header + 32)? != 0
+    {
+        return Err(LinkerError::UnsupportedCoffSection);
+    }
     if contents.is_empty() || contents.len() > 4096 {
         return Err(LinkerError::UnsupportedCoffSection);
     }
@@ -10909,6 +10915,41 @@ mod tests {
         assert_eq!(
             i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
             12
+        );
+    }
+
+    #[test]
+    fn accepts_only_non_loadable_remove_directives_with_bounded_exclusions() {
+        let mut object = [0u8; 64];
+        let header = 20;
+        object[header + 36..header + 40].copy_from_slice(&0x0010_0a00u32.to_le_bytes());
+        assert_eq!(
+            validate_discardable_coff_exclude_directives(
+                &object,
+                header,
+                b"-exclude-symbols:__divmoddi4 ",
+                0,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_discardable_coff_exclude_directives(
+                &object,
+                header,
+                b"-defaultlib:legacy.lib",
+                0,
+            ),
+            Err(LinkerError::UnsupportedCoffSection)
+        );
+        object[header + 36..header + 40].copy_from_slice(&0x2010_0a00u32.to_le_bytes());
+        assert_eq!(
+            validate_discardable_coff_exclude_directives(
+                &object,
+                header,
+                b"-exclude-symbols:__divmoddi4",
+                0,
+            ),
+            Err(LinkerError::UnsupportedCoffSection)
         );
     }
 
