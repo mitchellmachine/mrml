@@ -6833,10 +6833,16 @@ first destination entry is published; the commit pass contains no fallible
 allocation or revocation rollback. The focused transfer test covers both a late
 invalid source and insufficient destination capacity while proving the receiver
 space remains completely reusable. The Linux kernel total remains 611.
+Message shape inspection, direct dequeue, bounded dequeue, and control receive
+now require the domain's exact scheduler identity before observing or consuming
+inbox state. A focused unscheduled-domain test proves all receive projections
+fail closed while the queued message remains present, raising the Linux kernel
+total to 612.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it
-introduces no new external protocol, algorithm, or device mechanism. See
+also applies the existing generational scheduler check to receive. It introduces
+no new external protocol, algorithm, or device mechanism. See
 `docs/patents/REVIEW_LOG.md`.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before

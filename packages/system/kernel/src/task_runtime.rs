@@ -1066,12 +1066,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn receive_ipc(&mut self, task: TaskId) -> Result<Message, TaskRuntimeError> {
-        let domain = self
-            .domains
-            .iter_mut()
-            .flatten()
-            .find(|domain| domain.task == task)
-            .ok_or(TaskRuntimeError::MissingTask)?;
+        let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let domain = self.domains[slot]
+            .as_mut()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
         Self::validate_inbox_state(domain)?;
         if domain.inbox_count == 0 {
             return Err(TaskRuntimeError::InboxEmpty);
@@ -1103,12 +1104,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     /// Returns only the bounded shape of the next queued message without
     /// exposing its contents, capabilities, or consuming the inbox entry.
     pub fn peek_ipc_shape(&self, task: TaskId) -> Result<QueuedMessageShape, TaskRuntimeError> {
-        let domain = self
-            .domains
-            .iter()
-            .flatten()
-            .find(|domain| domain.task == task)
-            .ok_or(TaskRuntimeError::MissingTask)?;
+        let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
         Self::validate_inbox_state(domain)?;
         if domain.inbox_count == 0 {
             return Err(TaskRuntimeError::InboxEmpty);
@@ -1201,6 +1203,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
 
     pub fn receive_control(&mut self, task: TaskId) -> Result<ControlEvent, TaskRuntimeError> {
         let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
         let domain = self.domains[slot]
             .as_mut()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
@@ -2426,8 +2431,10 @@ mod tests {
         );
         assert_eq!(
             runtime.peek_ipc_shape(receiver),
-            Err(TaskRuntimeError::InboxEmpty)
+            Err(TaskRuntimeError::IntegrityFailure)
         );
+        let slot = runtime.domain_slot(receiver).unwrap();
+        assert_eq!(runtime.domains[slot].as_ref().unwrap().inbox_count, 0);
     }
 
     #[test]
@@ -2493,6 +2500,49 @@ mod tests {
             ),
             Err(TaskRuntimeError::IntegrityFailure)
         ));
+    }
+
+    #[test]
+    fn receive_boundaries_reject_unscheduled_domain_without_consuming_message() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x4d);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                receiver,
+                &mut Endpoint::new(object),
+                endpoint_capability,
+                b"retained",
+                &[],
+            )
+            .unwrap();
+        runtime.scheduler.detach(receiver).unwrap();
+
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(
+            runtime.receive_ipc(receiver).err(),
+            Some(TaskRuntimeError::IntegrityFailure)
+        );
+        assert!(matches!(
+            runtime.receive_control(receiver),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        let slot = runtime.domain_slot(receiver).unwrap();
+        assert_eq!(runtime.domains[slot].as_ref().unwrap().inbox_count, 1);
     }
 
     #[test]
