@@ -8341,15 +8341,23 @@ impl<
             base,
             argument,
             operator:
-                operator @ (crate::BinaryOperator::Add | crate::BinaryOperator::Subtract),
+                operator @ (crate::BinaryOperator::Add
+                | crate::BinaryOperator::Subtract
+                | crate::BinaryOperator::Multiply),
             mixed_signedness: false,
         } = expression.kind
         {
             self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
-            return if operator == crate::BinaryOperator::Add {
-                self.emit_wide_saturating_add(layout)
-            } else {
-                self.emit_wide_saturating_subtract(layout)
+            return match operator {
+                crate::BinaryOperator::Add => self.emit_wide_saturating_add(layout),
+                crate::BinaryOperator::Subtract => self.emit_wide_saturating_subtract(layout),
+                crate::BinaryOperator::Multiply if layout.signed => {
+                    self.emit_wide_signed_saturating_multiply()
+                }
+                crate::BinaryOperator::Multiply => {
+                    self.emit_wide_unsigned_saturating_multiply()
+                }
+                _ => unreachable!(),
             };
         }
         if let ExprKind::IntegerRotate {

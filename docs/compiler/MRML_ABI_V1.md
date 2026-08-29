@@ -301,6 +301,10 @@ the magnitude multiplication. Overflow selects `i128::MIN` for a negative
 result and `i128::MAX` for a positive result, while the exact `-2^127` boundary
 remains representable. Odd and even overflowing powers and both signed endpoints
 are checked independently against the pinned oracle.
+Direct wide `saturating_mul` reuses the same unsigned discarded-product checks
+and signed sign/magnitude endpoint selection as saturating powers. Oracle cases
+cover exact products, unsigned overflow, both signed overflow endpoints, and
+the asymmetric `i128::MIN * -1` boundary.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
