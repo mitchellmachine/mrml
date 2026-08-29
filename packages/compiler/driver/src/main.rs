@@ -18,7 +18,8 @@ use mrml_rustc::{
     PeWritableRelocationTarget,
     TargetLayout, compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
-    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_section_identity_readonly_fragment,
+    decode_x86_64_coff_runtime_functions_with_section_identities,
+    decode_x86_64_coff_section_identity_readonly_fragment,
     decode_x86_64_coff_text_fragment_with_section_identities_from_inventory,
     decode_x86_64_coff_writable_data_fragment_with_section_identities,
     decode_x86_64_elf_selected_definitions_from_sections,
@@ -1035,7 +1036,12 @@ fn selected_runtime_functions<'data>(
             .iter()
             .any(|source| *source == object_index);
         if selected_object {
-            for function in decode_x86_64_coff_runtime_functions(objects[object_index], arena)
+            for function in decode_x86_64_coff_runtime_functions_with_section_identities(
+                objects[object_index],
+                u16::try_from(object_index + 1)
+                    .map_err(|_| anyhow!("COFF source-object identity overflow"))?,
+                arena,
+            )
                 .map_err(|error| {
                     anyhow!(
                         "COFF object {} archive group {} member {} runtime-function decode: {}",
@@ -1051,12 +1057,30 @@ fn selected_runtime_functions<'data>(
                     .iter()
                     .zip(selected.source_object.iter())
                     .any(|(input, source)| {
-                        *source == object_index
-                            && (input.symbol == function.begin_symbol
-                                || input
-                                    .additional_definitions
-                                    .iter()
-                                    .any(|definition| definition.symbol == function.begin_symbol))
+                        if *source != object_index {
+                            return false;
+                        }
+                        match function.begin_identity {
+                            Some(identity) => matches!(
+                                input.symbol_target,
+                                LinkDefinitionTarget::CoffTextSection {
+                                    identity: candidate,
+                                    ..
+                                } if candidate == identity
+                            ) || input.additional_definitions.iter().any(|definition| {
+                                matches!(
+                                    definition.target,
+                                    LinkDefinitionTarget::CoffTextSection {
+                                        identity: candidate,
+                                        ..
+                                    } if candidate == identity
+                                )
+                            }),
+                            None => input.symbol == function.begin_symbol
+                                || input.additional_definitions.iter().any(|definition| {
+                                    definition.symbol == function.begin_symbol
+                                }),
+                        }
                     });
                 if !retained {
                     continue;
@@ -1246,6 +1270,71 @@ fn selected_readonly_absolute_relocations<'data>(
     Ok(output)
 }
 
+fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
+    inputs: &[LinkInput<'data, '_, 'definitions>],
+    writable_data: &[PeWritableData<'data, '_>],
+    arenas: &'relocations mut [[LinkRelocation<'data>; MAX_LINK_RELOCATIONS]],
+) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
+    if inputs.len() != arenas.len() {
+        return Err(anyhow!("contextual relocation arena count mismatch"));
+    }
+    let link_target_defined = |symbol: &str| {
+        inputs.iter().any(|input| {
+            (!matches!(
+                input.symbol_target,
+                LinkDefinitionTarget::CoffTextSection { .. }
+                    | LinkDefinitionTarget::CoffSection { .. }
+            ) && input.symbol == symbol)
+                || input.additional_definitions.iter().any(|definition| {
+                    !matches!(
+                        definition.target,
+                        LinkDefinitionTarget::CoffTextSection { .. }
+                            | LinkDefinitionTarget::CoffSection { .. }
+                    ) && definition.symbol == symbol
+                })
+        })
+    };
+    let writable_target_defined = |symbol: &str| {
+        writable_data.iter().any(|data| data.symbol == symbol)
+    };
+    let mut contextual = Vector::with_capacity(inputs.len())
+        .map_err(|_| anyhow!("could not allocate contextual PE link inputs"))?;
+    let mut remaining = arenas;
+    for input in inputs {
+        let (arena, rest) = remaining
+            .split_first_mut()
+            .ok_or_else(|| anyhow!("contextual relocation arena count mismatch"))?;
+        if input.relocations.len() > arena.len() {
+            return Err(anyhow!("contextual relocation capacity exceeded"));
+        }
+        for (index, relocation) in input.relocations.iter().copied().enumerate() {
+            arena[index] = match relocation.target {
+                LinkRelocationTarget::Symbol(symbol)
+                    if !link_target_defined(symbol) && writable_target_defined(symbol) =>
+                {
+                    LinkRelocation {
+                        target: LinkRelocationTarget::PeWritableSymbol(symbol),
+                        ..relocation
+                    }
+                }
+                _ => relocation,
+            };
+        }
+        contextual
+            .try_push(LinkInput {
+                symbol: input.symbol,
+                symbol_target: input.symbol_target,
+                additional_definitions: input.additional_definitions,
+                text: input.text,
+                readonly_data: input.readonly_data,
+                relocations: &arena[..input.relocations.len()],
+            })
+            .map_err(|_| anyhow!("could not allocate contextual PE link inputs"))?;
+        remaining = rest;
+    }
+    Ok(contextual)
+}
+
 fn write_linked_pe(
     objects: &[&[u8]],
     archive_group: &[u16],
@@ -1274,8 +1363,10 @@ fn write_linked_pe(
     )?;
     let mut runtime_arena = [PeRuntimeFunction {
         begin_symbol: "unused",
+        begin_identity: None,
         begin_offset: 0,
         end_symbol: "unused",
+        end_identity: None,
         end_offset: 0,
         unwind_info: &[],
     }; MAX_PE_RUNTIME_FUNCTIONS];
@@ -1296,10 +1387,16 @@ fn write_linked_pe(
     )?;
     let readonly_absolute_relocations =
         selected_readonly_absolute_relocations(objects, archive_group, archive_member, &selected)?;
-    let payload = selected_payload_bound(&selected.inputs, &runtime_functions, &writable_data)?;
+    let mut contextual_arenas = relocation_arenas(selected.inputs.len())?;
+    let contextual_inputs = contextualize_pe_writable_relocations(
+        &selected.inputs,
+        &writable_data,
+        &mut contextual_arenas,
+    )?;
+    let payload = selected_payload_bound(&contextual_inputs, &runtime_functions, &writable_data)?;
     if payload <= 16 * 1024 {
         return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(
-            &selected.inputs,
+            &contextual_inputs,
             &runtime_functions,
             &writable_data,
             &readonly_absolute_relocations,
@@ -1309,7 +1406,7 @@ fn write_linked_pe(
     }
     if payload <= 256 * 1024 {
         return write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(
-            &selected.inputs,
+            &contextual_inputs,
             &runtime_functions,
             &writable_data,
             &readonly_absolute_relocations,
@@ -1319,7 +1416,17 @@ fn write_linked_pe(
     }
     if payload <= 512 * 1024 {
         return write_pe_image::<{ 1024 * 1024 }, { 512 * 1024 }>(
-            &selected.inputs,
+            &contextual_inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        );
+    }
+    if payload <= 1024 * 1024 {
+        return write_pe_image::<{ 768 * 1024 }, { 768 * 1024 }>(
+            &contextual_inputs,
             &runtime_functions,
             &writable_data,
             &readonly_absolute_relocations,
@@ -1328,7 +1435,7 @@ fn write_linked_pe(
         );
     }
     write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(
-        &selected.inputs,
+        &contextual_inputs,
         &runtime_functions,
         &writable_data,
         &readonly_absolute_relocations,
@@ -1345,7 +1452,7 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let named_target_defined = |symbol: &str| {
+    let link_target_defined = |symbol: &str| {
         inputs.iter().any(|input| {
             (!matches!(
                 input.symbol_target,
@@ -1361,7 +1468,13 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                     )
                         && definition.symbol == symbol
                 })
-        }) || writable_data.iter().any(|data| data.symbol == symbol)
+        })
+    };
+    let writable_target_defined = |symbol: &str| {
+        writable_data.iter().any(|data| data.symbol == symbol)
+    };
+    let named_target_defined = |symbol: &str| {
+        link_target_defined(symbol) || writable_target_defined(symbol)
     };
     let section_identity_defined = |identity: CoffSectionIdentity| {
         inputs.iter().any(|input| {
@@ -1413,10 +1526,18 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
             | LinkRelocationTarget::RequiredSymbol(symbol)
             | LinkRelocationTarget::LocalSymbol(symbol) = relocation.target
-                && !named_target_defined(symbol)
+                && !link_target_defined(symbol)
             {
                 return Err(anyhow!(
                     "selected code relocation target is undefined: {}",
+                    symbol
+                ));
+            }
+            if let LinkRelocationTarget::PeWritableSymbol(symbol) = relocation.target
+                && !writable_target_defined(symbol)
+            {
+                return Err(anyhow!(
+                    "selected code relocation writable target is undefined: {}",
                     symbol
                 ));
             }
@@ -1432,12 +1553,25 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
         }
     }
     for function in runtime_functions {
-        for symbol in [function.begin_symbol, function.end_symbol] {
-            if !named_target_defined(symbol) {
-                return Err(anyhow!(
-                    "selected runtime-function target is undefined: {}",
-                    symbol
-                ));
+        for (identity, symbol) in [
+            (function.begin_identity, function.begin_symbol),
+            (function.end_identity, function.end_symbol),
+        ] {
+            match identity {
+                Some(identity) if !section_identity_defined(identity) => {
+                    return Err(anyhow!(
+                        "selected runtime-function target section is undefined: object {}, section {}",
+                        identity.object(),
+                        identity.section()
+                    ));
+                }
+                None if !named_target_defined(symbol) => {
+                    return Err(anyhow!(
+                        "selected runtime-function target is undefined: {}",
+                        symbol
+                    ));
+                }
+                _ => {}
             }
         }
     }
@@ -1754,6 +1888,57 @@ mod tests {
         assert_eq!(
             selected_payload_bound(&inputs, &[], &[]).unwrap(),
             4096 + 3 + 5 + 7 + 64
+        );
+    }
+
+    #[test]
+    fn contextualizes_only_unresolved_pe_writable_code_targets() {
+        let relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("marker"),
+            addend: -4,
+        }];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &relocation,
+        };
+        let writable = [PeWritableData {
+            symbol: "marker",
+            selection: mrml_rustc::PeWritableComdatSelection::NoDuplicates,
+            initialized: &[0],
+            zeroed_size: 0,
+            relocations: &[],
+        }];
+        let mut arenas = relocation_arenas(1).unwrap();
+        let contextual =
+            contextualize_pe_writable_relocations(&[input], &writable, &mut arenas).unwrap();
+        assert_eq!(
+            contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeWritableSymbol("marker")
+        );
+
+        let definition = [LinkDefinition {
+            symbol: "marker",
+            target: LinkDefinitionTarget::Text(0),
+        }];
+        let defined = LinkInput {
+            additional_definitions: &definition,
+            ..input
+        };
+        let mut defined_arenas = relocation_arenas(1).unwrap();
+        let defined_contextual = contextualize_pe_writable_relocations(
+            &[defined],
+            &writable,
+            &mut defined_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            defined_contextual[0].relocations[0].target,
+            LinkRelocationTarget::Symbol("marker")
         );
     }
 

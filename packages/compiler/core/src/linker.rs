@@ -551,8 +551,10 @@ pub struct ElfWritableData<'data, 'relocations> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeRuntimeFunction<'a> {
     pub begin_symbol: &'a str,
+    pub begin_identity: Option<CoffSectionIdentity>,
     pub begin_offset: usize,
     pub end_symbol: &'a str,
+    pub end_identity: Option<CoffSectionIdentity>,
     pub end_offset: usize,
     pub unwind_info: &'a [u8],
 }
@@ -3971,6 +3973,27 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
     object: &'data [u8],
     record_storage: &'records mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
 ) -> Result<&'records [PeRuntimeFunction<'data>], LinkerError> {
+    decode_x86_64_coff_runtime_functions_for_object(object, None, record_storage)
+}
+
+pub fn decode_x86_64_coff_runtime_functions_with_section_identities<'data, 'records>(
+    object: &'data [u8],
+    object_identity: u16,
+    record_storage: &'records mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
+) -> Result<&'records [PeRuntimeFunction<'data>], LinkerError> {
+    CoffSectionIdentity::new(object_identity, 1)?;
+    decode_x86_64_coff_runtime_functions_for_object(
+        object,
+        Some(object_identity),
+        record_storage,
+    )
+}
+
+fn decode_x86_64_coff_runtime_functions_for_object<'data, 'records>(
+    object: &'data [u8],
+    object_identity: Option<u16>,
+    record_storage: &'records mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
+) -> Result<&'records [PeRuntimeFunction<'data>], LinkerError> {
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
@@ -4176,8 +4199,14 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
             }
             record_storage[record_count] = PeRuntimeFunction {
                 begin_symbol: text_targets[0].0,
+                begin_identity: object_identity
+                    .map(|object| CoffSectionIdentity::new(object, text_sections[0]))
+                    .transpose()?,
                 begin_offset: text_targets[0].1,
                 end_symbol: text_targets[1].0,
+                end_identity: object_identity
+                    .map(|object| CoffSectionIdentity::new(object, text_sections[1]))
+                    .transpose()?,
                 end_offset: text_targets[1].1,
                 unwind_info: unwind_info.ok_or(LinkerError::UnsupportedCoffSection)?,
             };
@@ -4747,18 +4776,31 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     string_size,
                 )?)
             } else if storage_class == 3 {
-                let target_header = 20
-                    + (usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?
-                        - 1)
-                        * 40;
-                LinkRelocationTarget::LocalSymbol(coff_section_name(
-                    object
-                        .get(target_header..target_header + 8)
-                        .ok_or(LinkerError::InvalidCoff)?,
-                    object,
-                    symbols_end,
-                    string_size,
-                )?)
+                let section = u16::try_from(target_section)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let target_header = 20 + (usize::from(section) - 1) * 40;
+                if let Some(object_identity) = object_identity {
+                    let section_size = usize::try_from(read_u32(object, target_header + 16)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let offset = usize::try_from(read_u32(object, target_offset + 8)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    if offset > section_size {
+                        return Err(LinkerError::InvalidRelocationOffset);
+                    }
+                    LinkRelocationTarget::CoffSection {
+                        identity: CoffSectionIdentity::new(object_identity, section)?,
+                        offset,
+                    }
+                } else {
+                    LinkRelocationTarget::LocalSymbol(coff_section_name(
+                        object
+                            .get(target_header..target_header + 8)
+                            .ok_or(LinkerError::InvalidCoff)?,
+                        object,
+                        symbols_end,
+                        string_size,
+                    )?)
+                }
             } else {
                 return Err(LinkerError::UnsupportedCoffRelocationTarget);
             };
@@ -7439,8 +7481,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     let mut unwind_offsets = [0usize; MAX_PE_RUNTIME_FUNCTIONS];
     let mut readonly_size = linked_readonly_size;
     for (index, function) in runtime_functions.iter().enumerate() {
-        validate_symbol(function.begin_symbol)?;
-        validate_symbol(function.end_symbol)?;
+        if function.begin_identity.is_none() {
+            validate_symbol(function.begin_symbol)?;
+        }
+        if function.end_identity.is_none() {
+            validate_symbol(function.end_symbol)?;
+        }
         if function.unwind_info.is_empty() {
             return Err(LinkerError::InvalidCoff);
         }
@@ -7691,13 +7737,31 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     let mut end_rvas = [0u32; MAX_PE_RUNTIME_FUNCTIONS];
     let mut order = [0usize; MAX_PE_RUNTIME_FUNCTIONS];
     for (index, function) in runtime_functions.iter().enumerate() {
-        let begin = resolve_symbol(inputs, &linked.layouts, function.begin_symbol)?
-            .checked_add(function.begin_offset)
-            .and_then(|offset| offset.checked_add(TEXT_RVA))
+        let begin = match function.begin_identity {
+            Some(identity) => resolve_coff_section(
+                inputs,
+                &linked.layouts,
+                identity,
+                function.begin_offset,
+            )?,
+            None => resolve_symbol(inputs, &linked.layouts, function.begin_symbol)?
+                .checked_add(function.begin_offset)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        }
+            .checked_add(TEXT_RVA)
             .ok_or(LinkerError::OffsetOverflow)?;
-        let end = resolve_symbol(inputs, &linked.layouts, function.end_symbol)?
-            .checked_add(function.end_offset)
-            .and_then(|offset| offset.checked_add(TEXT_RVA))
+        let end = match function.end_identity {
+            Some(identity) => resolve_coff_section(
+                inputs,
+                &linked.layouts,
+                identity,
+                function.end_offset,
+            )?,
+            None => resolve_symbol(inputs, &linked.layouts, function.end_symbol)?
+                .checked_add(function.end_offset)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        }
+            .checked_add(TEXT_RVA)
             .ok_or(LinkerError::OffsetOverflow)?;
         if end <= begin {
             return Err(LinkerError::InvalidRelocationOffset);
@@ -11208,8 +11272,10 @@ mod tests {
         assert_eq!(x86_64_coff_unwind_section_count(&object), Ok(2));
         let mut storage = [PeRuntimeFunction {
             begin_symbol: "unused",
+            begin_identity: None,
             begin_offset: 0,
             end_symbol: "unused",
+            end_identity: None,
             end_offset: 0,
             unwind_info: &[],
         }; MAX_PE_RUNTIME_FUNCTIONS];
@@ -11218,19 +11284,35 @@ mod tests {
             records,
             &[PeRuntimeFunction {
                 begin_symbol: "entry",
+                begin_identity: None,
                 begin_offset: 0,
                 end_symbol: "entry",
+                end_identity: None,
                 end_offset: 1,
                 unwind_info: &[1, 2, 3, 4],
             }]
         );
+        let mut identity_storage = storage;
+        let identified = decode_x86_64_coff_runtime_functions_with_section_identities(
+            &object,
+            9,
+            &mut identity_storage,
+        )
+        .unwrap();
+        assert_eq!(
+            identified[0].begin_identity,
+            Some(CoffSectionIdentity::new(9, 1).unwrap())
+        );
+        assert_eq!(identified[0].end_identity, identified[0].begin_identity);
 
         let mut invalid = object.clone();
         invalid[157 + 8..157 + 10].copy_from_slice(&4u16.to_le_bytes());
         let mut invalid_storage = [PeRuntimeFunction {
             begin_symbol: "unused",
+            begin_identity: None,
             begin_offset: 0,
             end_symbol: "unused",
+            end_identity: None,
             end_offset: 0,
             unwind_info: &[],
         }; MAX_PE_RUNTIME_FUNCTIONS];
@@ -11259,8 +11341,10 @@ mod tests {
         detached[67] = b'b';
         let mut detached_storage = [PeRuntimeFunction {
             begin_symbol: "unused",
+            begin_identity: None,
             begin_offset: 0,
             end_symbol: "unused",
+            end_identity: None,
             end_offset: 0,
             unwind_info: &[],
         }; MAX_PE_RUNTIME_FUNCTIONS];
@@ -11491,15 +11575,19 @@ mod tests {
         let runtime_functions = [
             PeRuntimeFunction {
                 begin_symbol: "helper",
+                begin_identity: None,
                 begin_offset: 0,
                 end_symbol: "helper",
+                end_identity: None,
                 end_offset: 1,
                 unwind_info: &[1, 2, 3, 4],
             },
             PeRuntimeFunction {
                 begin_symbol: "entry",
+                begin_identity: None,
                 begin_offset: 0,
                 end_symbol: "entry",
+                end_identity: None,
                 end_offset: 1,
                 unwind_info: &[5, 6, 7, 8],
             },
