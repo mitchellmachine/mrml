@@ -305,6 +305,10 @@ Direct wide `saturating_mul` reuses the same unsigned discarded-product checks
 and signed sign/magnitude endpoint selection as saturating powers. Oracle cases
 cover exact products, unsigned overflow, both signed overflow endpoints, and
 the asymmetric `i128::MIN * -1` boundary.
+Wide `strict_add`, `strict_sub`, and `strict_mul` force overflow checking even
+when the surrounding compilation mode disables ordinary debug overflow checks.
+Their successful two-word results match the pinned strict-overflow oracle; an
+overflow reaches the same fail-closed trap used by checked MRML-v1 arithmetic.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

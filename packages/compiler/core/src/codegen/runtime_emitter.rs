@@ -8165,6 +8165,32 @@ impl<
             operator:
                 operator @ (crate::BinaryOperator::Add
                 | crate::BinaryOperator::Subtract
+                | crate::BinaryOperator::Multiply),
+            euclidean: false,
+            euclidean_wrapping: false,
+            strict: true,
+            mixed_signedness: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            let overflow_checks = self.overflow_checks;
+            self.overflow_checks = true;
+            let result = match operator {
+                crate::BinaryOperator::Add => self.emit_wide_add(layout),
+                crate::BinaryOperator::Subtract => self.emit_wide_subtract(layout),
+                crate::BinaryOperator::Multiply => self.emit_wide_multiply(layout),
+                _ => unreachable!(),
+            };
+            self.overflow_checks = overflow_checks;
+            result?;
+            return Ok(());
+        }
+        if let ExprKind::WrappingArithmetic {
+            base,
+            argument,
+            operator:
+                operator @ (crate::BinaryOperator::Add
+                | crate::BinaryOperator::Subtract
                 | crate::BinaryOperator::Multiply
                 | crate::BinaryOperator::Divide
                 | crate::BinaryOperator::Remainder),
