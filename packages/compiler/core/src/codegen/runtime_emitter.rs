@@ -7217,35 +7217,7 @@ impl<
             right,
         } = expression.kind
         {
-            let left_type = runtime_expression_type_with_locals(
-                self.function,
-                self.resolver,
-                &self.locals[..self.saved_locals],
-                tree,
-                left,
-                1,
-            )
-            .map_err(|kind| self.error(kind))?;
-            let right_type = runtime_expression_type_with_locals(
-                self.function,
-                self.resolver,
-                &self.locals[..self.saved_locals],
-                tree,
-                right,
-                1,
-            )
-            .map_err(|kind| self.error(kind))?;
-            if !runtime_types_compatible(left_type, expected_type)
-                || !runtime_types_compatible(right_type, expected_type)
-            {
-                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
-            }
-            self.emit_wide_integer_return(tree, left, expected_type)?;
-            self.emit(&[0x50, 0x52])?;
-            self.evaluation_depth += 2;
-            self.emit_wide_integer_return(tree, right, expected_type)?;
-            self.emit(&[0x59, 0x41, 0x58])?;
-            self.evaluation_depth -= 2;
+            self.emit_wide_binary_operands(tree, left, right, expected_type)?;
             return self.emit_wide_divide_or_remainder(
                 layout,
                 operator == crate::BinaryOperator::Remainder,
@@ -7307,35 +7279,7 @@ impl<
             right,
         } = expression.kind
         {
-            let left_type = runtime_expression_type_with_locals(
-                self.function,
-                self.resolver,
-                &self.locals[..self.saved_locals],
-                tree,
-                left,
-                1,
-            )
-            .map_err(|kind| self.error(kind))?;
-            let right_type = runtime_expression_type_with_locals(
-                self.function,
-                self.resolver,
-                &self.locals[..self.saved_locals],
-                tree,
-                right,
-                1,
-            )
-            .map_err(|kind| self.error(kind))?;
-            if !runtime_types_compatible(left_type, expected_type)
-                || !runtime_types_compatible(right_type, expected_type)
-            {
-                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
-            }
-            self.emit_wide_integer_return(tree, left, expected_type)?;
-            self.emit(&[0x50, 0x52])?;
-            self.evaluation_depth += 2;
-            self.emit_wide_integer_return(tree, right, expected_type)?;
-            self.emit(&[0x59, 0x41, 0x58])?;
-            self.evaluation_depth -= 2;
+            self.emit_wide_binary_operands(tree, left, right, expected_type)?;
             match operator {
                 crate::BinaryOperator::BitAnd => self.emit_wide_bitwise(0x21)?,
                 crate::BinaryOperator::BitOr => self.emit_wide_bitwise(0x09)?,
@@ -7454,6 +7398,45 @@ impl<
             .checked_add(1)
             .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
         self.emit_stack_slot(low_slot)
+    }
+
+    fn emit_wide_binary_operands<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        left: crate::ExprId,
+        right: crate::ExprId,
+        expected_type: RuntimeExpressionType,
+    ) -> Result<(), CodegenError> {
+        let left_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            left,
+            1,
+        )
+        .map_err(|kind| self.error(kind))?;
+        let right_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            right,
+            1,
+        )
+        .map_err(|kind| self.error(kind))?;
+        if !runtime_types_compatible(left_type, expected_type)
+            || !runtime_types_compatible(right_type, expected_type)
+        {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        }
+        self.emit_wide_integer_return(tree, left, expected_type)?;
+        self.emit(&[0x50, 0x52])?;
+        self.evaluation_depth += 2;
+        self.emit_wide_integer_return(tree, right, expected_type)?;
+        self.emit(&[0x59, 0x41, 0x58])?;
+        self.evaluation_depth -= 2;
+        Ok(())
     }
 
     fn emit_wide_integer_immediate(&mut self, value: u128) -> Result<(), CodegenError> {

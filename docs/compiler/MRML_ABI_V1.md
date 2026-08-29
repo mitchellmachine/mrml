@@ -138,6 +138,8 @@ when ordinary overflow checks are enabled.
 Typed `&`, `|`, and `^` expressions evaluate left-to-right and combine both words
 independently for matching wide integer types. Binary and wide-local compound
 forms share the same two-word lowering.
+All matching-type wide binary arithmetic, bitwise, division, and remainder
+expressions use one typed left-to-right two-word operand-staging path.
 Matching-type `u128` and `i128` addition evaluates left-to-right, propagates the
 low-word carry into the high word, and uses unsigned-carry or signed-overflow
 branches respectively when ordinary overflow checks are enabled.
