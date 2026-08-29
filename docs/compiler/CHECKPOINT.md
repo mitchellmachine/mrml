@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `57a82bd5`
-  (`compiler: retain associative COFF readonly data`)
+- Compiler checkpoint commit: `7390417a`
+  (`compiler: select COFF readonly definitions`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,28 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `7390417a` expands every non-associative read-only COFF COMDAT into an
+independent named link input. Text relocations target its external definition,
+so `ANY`, `SAME_SIZE`, `EXACT_MATCH`, and `LARGEST` winner selection compares
+the read-only payload and rebinds references while replacing exact source,
+archive, and member origin. Refptr relocation retention now follows only the
+winning definition's source object and uses its section-local offset. Prepared
+COMDAT inventories are bound to the exact admitted slice address and length.
+Synthetic tests cover final text-to-read-only relocation layout, leftmost ANY,
+size/content mismatch, larger-later replacement, origin propagation, and
+inventory substitution. An isolated worktree preserved concurrent compiler
+changes while Windows and Arch Linux each passed 756 core tests, all four
+integration groups, eight driver tests, and the full dependent-package graph.
+The exact stateful gnullvm probe returns 42 through both linkers: MRML emits
+2,560 bytes versus rust-lld's 3,584, with 1,028 bytes of zero fill and two
+forwarding pointers. Fifty links after five warmups measured 6.778 ms
+median/6.927 ms mean for MRML versus 21.757 ms median/22.271 ms mean for
+rust-lld on this narrow workload. General relocations originating inside
+read-only COMDAT payloads and non-COMDAT discontiguous packing remain
+incomplete. `mrml doctor` passed; audit retains the unrelated fingerprint
+`fnv1a64:0fe5cf1836d3e0dc` at `semantic_execution.rs:1252`. Patent review:
+**NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `57a82bd5` makes explicit associative read-only COFF COMDATs follow the
 exact text fragment at their validated association root. Fragment decoding
