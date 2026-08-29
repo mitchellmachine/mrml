@@ -6059,7 +6059,8 @@ an out-of-range unsigned value to `i128::MAX` or a negative signed value to zero
 and strict variants trap on that same high-word sign-bit boundary. Unit coverage
 compiles all six method/direction combinations for both x86-64 ABIs. The native
 Linux gate passes 815 unit tests and every integration group, including 351
-replacement and 122 semantic-execution tests. Controlled Linux execution matches
+replacement and 123 semantic-execution tests. Controlled Linux execution matches
 exact ORACLE-0003 results across both words for stable and saturating paths at
-zero, signed boundaries, and all-ones input; isolated strict trap execution
-remains pending. Windows gnullvm was not run.
+zero, signed boundaries, and all-ones input. Isolated Linux children also confirm
+strict conversions trap at both invalid boundary classes. Windows gnullvm was
+not run.

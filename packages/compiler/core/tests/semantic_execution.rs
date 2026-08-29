@@ -62,6 +62,8 @@ const MRML_V1_WIDE_CAST_UNSIGNED_METHOD_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.cast_unsigned() }";
 const MRML_V1_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }";
 const MRML_V1_WIDE_SATURATING_CAST_UNSIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.saturating_cast_unsigned() }";
+const MRML_V1_WIDE_STRICT_CAST_SIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.strict_cast_signed() }";
+const MRML_V1_WIDE_STRICT_CAST_UNSIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.strict_cast_unsigned() }";
 const RUSTC_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }",
@@ -1448,6 +1450,67 @@ fn mrml_v1_wide_sign_cast_methods_match_both_oracle_words() {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_strict_sign_cast_boundaries_trap() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_STRICT_SIGN_CAST_CHILD";
+
+    #[cfg(not(target_os = "windows"))]
+    for (source, input) in [
+        (MRML_V1_WIDE_STRICT_CAST_SIGNED_SOURCE, i128::MIN as u128),
+        (MRML_V1_WIDE_STRICT_CAST_SIGNED_SOURCE, u128::MAX),
+        (MRML_V1_WIDE_STRICT_CAST_UNSIGNED_SOURCE, i128::MIN as u128),
+        (MRML_V1_WIDE_STRICT_CAST_UNSIGNED_SOURCE, (-1i128) as u128),
+    ] {
+        let code = compile(source);
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(mode) = std::env::var_os(CHILD) {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let (source, input) = match mode.to_str() {
+            Some("signed-min") => (MRML_V1_WIDE_STRICT_CAST_SIGNED_SOURCE, i128::MIN as u128),
+            Some("signed-max") => (MRML_V1_WIDE_STRICT_CAST_SIGNED_SOURCE, u128::MAX),
+            Some("unsigned-min") => (MRML_V1_WIDE_STRICT_CAST_UNSIGNED_SOURCE, i128::MIN as u128),
+            _ => (MRML_V1_WIDE_STRICT_CAST_UNSIGNED_SOURCE, (-1i128) as u128),
+        };
+        let code = compile(source);
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+        panic!("wide strict sign cast unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for mode in ["signed-min", "signed-max", "unsigned-min", "unsigned-negative-one"] {
+        let output = current_semantic_test_command()
+            .args([
+                "--exact",
+                "mrml_v1_wide_strict_sign_cast_boundaries_trap",
+                "--nocapture",
+            ])
+            .env(CHILD, mode)
+            .output()
+            .expect("launch isolated wide strict-sign-cast trap probe");
+        assert!(!output.status.success(), "generated strict-sign-cast trap returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status for {mode}; stdout: {stdout}; stderr: {stderr}"
+        );
     }
 }
 
