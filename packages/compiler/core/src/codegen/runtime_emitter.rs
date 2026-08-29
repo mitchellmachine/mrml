@@ -7514,17 +7514,44 @@ impl<
                 1,
             )
             .map_err(|kind| self.error(kind))?;
-            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
-                || expected_type != base_type
+            if !matches!(
+                base_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) || expected_type != base_type
             {
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
             }
             self.emit_wide_binary_operands(tree, base, other, expected_type)?;
             self.emit(&[
                 0x4d, 0x89, 0xc1, 0x49, 0x21, 0xc1, 0x49, 0x89, 0xca, 0x49, 0x21, 0xd2,
-                0x49, 0x31, 0xc0, 0x48, 0x31, 0xd1, 0x49, 0x0f, 0xac, 0xc8, 1, 0x48, 0xd1,
-                0xe9, 0x4d, 0x01, 0xc1, 0x49, 0x11, 0xca, 0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xd2,
+                0x49, 0x31, 0xc0, 0x48, 0x31, 0xd1,
             ])?;
+            if base_type == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)) {
+                self.emit(&[0x4d, 0x89, 0xc3, 0x41, 0x83, 0xe3, 1])?;
+            }
+            self.emit(&[0x49, 0x0f, 0xac, 0xc8, 1])?;
+            self.emit(&[
+                0x48,
+                0xd1,
+                if base_type == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)) {
+                    0xf9
+                } else {
+                    0xe9
+                },
+            ])?;
+            self.emit(&[0x4d, 0x01, 0xc1, 0x49, 0x11, 0xca])?;
+            if base_type == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)) {
+                self.emit(&[0x4d, 0x85, 0xd2])?;
+                let nonnegative = self.emit_forward_branch(0x89)?;
+                self.emit(&[0x4d, 0x85, 0xdb])?;
+                let even = self.emit_forward_branch(0x84)?;
+                self.emit(&[0x49, 0x83, 0xc1, 1, 0x49, 0x83, 0xd2, 0])?;
+                self.patch_forward_branch(even)?;
+                self.patch_forward_branch(nonnegative)?;
+            }
+            self.emit(&[0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xd2])?;
             return Ok(());
         } else if let ExprKind::Binary {
             operator:

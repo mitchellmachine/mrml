@@ -167,6 +167,8 @@ const MRML_V1_WIDE_UNSIGNED_IS_MULTIPLE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, divisor: u128) -> u64 { input.is_multiple_of(divisor) as u64 }";
 const MRML_V1_WIDE_UNSIGNED_MIDPOINT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.midpoint(right) }";
+const MRML_V1_WIDE_SIGNED_MIDPOINT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.midpoint(right) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -2051,6 +2053,36 @@ fn mrml_v1_wide_unsigned_midpoints_match_both_oracle_words() {
         rustc_mrml_v1_observations(
             source,
             "for (left, right) in [(0u128, 0u128), (0, 1), (1, 2), (u64::MAX as u128, (u64::MAX as u128) + 1), (1u128 << 127, u128::MAX), (0, u128::MAX)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_signed_midpoints_match_both_oracle_words() {
+    let source = MRML_V1_WIDE_SIGNED_MIDPOINT_SOURCE;
+    let code = compile(source);
+    let inputs = [
+        (i128::MIN, i128::MAX),
+        (-2, -1),
+        (-1, 0),
+        (0, 1),
+        (1, 2),
+        (i128::MAX - 1, i128::MAX),
+    ];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(left, right)| {
+            let returned = unsafe {
+                call_mrml_v1_two_wide_return(code.pointer, left as u128, right as u128)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            source,
+            "for (left, right) in [(i128::MIN, i128::MAX), (-2, -1), (-1, 0), (0, 1), (1, 2), (i128::MAX - 1, i128::MAX)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         )
     );
 }
