@@ -4103,3 +4103,7 @@ Durable storage-authority checkpoint publication now uses the same authorized
 commit, completing the planned stable configuration, deployment, and authority
 checkpoint migrations. A revoked staged-file handle cannot publish a durable
 grant generation or consume its transaction receipt.
+
+The old receipt-only prepared-file commit is removed. All service publication
+and storage-internal composition paths are forced through commit-time
+storage-authority revalidation.

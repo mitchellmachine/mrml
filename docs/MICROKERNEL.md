@@ -7231,6 +7231,15 @@ Patent review: `NOT_TRIGGERED` — this reuses conventional generational handle
 reauthorization at the existing authority-checkpoint commit boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+The legacy receipt-only `PreparedFileWrite` commit has been removed. Consumers
+can publish a prepared successor only through the exact authority-revalidating
+commit. This prevents future services or storage-internal composition from
+bypassing the completed configuration, deployment, and durable
+authority-checkpoint rule.
+
+Patent review: `NOT_TRIGGERED` — this narrows an existing API surface and adds
+no mechanism. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

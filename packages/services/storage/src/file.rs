@@ -471,14 +471,6 @@ impl<const N: usize> PreparedFileWrite<N> {
         [self.file_metadata, self.extent_metadata]
     }
 
-    pub fn commit_transaction<const P: usize>(
-        self,
-        receipt: &mut TransactionReceipt<P>,
-    ) -> Result<FileState<N>, TransactionError> {
-        receipt.consume(self.transaction_participant()?)?;
-        Ok(self.state)
-    }
-
     /// Revalidates the exact retained file authority immediately before the
     /// one-use transaction receipt is consumed. Revocation or rebinding leaves
     /// both the receipt and prepared successor untouched for explicit policy.

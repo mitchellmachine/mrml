@@ -1081,3 +1081,8 @@ Durable authority checkpoint bytes likewise cannot preserve the authority used
 to stage their stable file. Commit revalidates the retained generational file
 binding before consuming the receipt, so revocation prevents publication of the
 grant checkpoint even though its bytes and metadata were already prepared.
+
+Neither external services nor storage-internal composition can select the
+legacy receipt-only file commit after preparation. It has been removed; the
+prepared-file publication boundary always requires the retained live storage
+authority table.
