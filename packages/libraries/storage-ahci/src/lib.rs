@@ -139,7 +139,7 @@ pub use native_port_reconstruction::{
 };
 pub use native_service_state::{
     AhciNativeServicePreparationError, AhciNativeServiceState, AhciNativeServiceStateError,
-    prepare_installed_ahci_service_state,
+    bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
 };
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,

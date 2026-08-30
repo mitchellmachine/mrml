@@ -4,8 +4,10 @@ use crate::{
     ActiveAhciPort, AhciCommandBlockBackend, AhciDataBufferSync, AhciDataCapabilityAuthorizer,
     AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls, AhciMappedCommandMemory,
     AhciMappedDataBuffer, AhciNativeMappedMemory, AhciNativeMappedMemoryError,
-    AhciNativePortReconstructionError, AhciRegisterIo, AhciResetIo, InstalledAhciServiceLaunch,
-    AHCI_DISPATCH_REQUEST_BYTES, reconstruct_installed_ahci_port,
+    AhciNativePortReconstructionError, AhciRawSyscall, AhciRegisterIo, AhciResetIo,
+    AhciServiceBootstrapError, AhciServiceEntryRegisters, AhciUserspaceSyscalls,
+    InstalledAhciServiceLaunch, AHCI_DISPATCH_REQUEST_BYTES, AHCI_SERVICE_LAUNCH_BYTES,
+    bootstrap_installed_ahci_entry, reconstruct_installed_ahci_port,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 
@@ -16,9 +18,36 @@ pub enum AhciNativeServiceStateError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciNativeServicePreparationError {
+    Bootstrap(AhciServiceBootstrapError),
     MappedMemory(AhciNativeMappedMemoryError),
     ActivePort(AhciNativePortReconstructionError),
     ServiceState(AhciNativeServiceStateError),
+}
+
+/// Authenticates the native entry projection, wipes its copied bytes, and then
+/// prepares the complete installed service state.
+///
+/// # Safety
+///
+/// `entry` must come from [`AhciServiceEntryRegisters::from_installed_registers`]
+/// at the kernel-installed entry point. The mapping and ABAR requirements of
+/// [`prepare_installed_ahci_service_state`] also apply.
+pub unsafe fn bootstrap_and_prepare_installed_ahci_service<'a, 'm, A, B, R, S>(
+    syscalls: &mut AhciUserspaceSyscalls<B>,
+    entry: AhciServiceEntryRegisters,
+    launch_scratch: &mut [u8; AHCI_SERVICE_LAUNCH_BYTES],
+    capabilities: &'a mut A,
+    registers: R,
+    sync: S,
+) -> Result<AhciNativeServiceState<'a, 'm, A, R, S>, AhciNativeServicePreparationError>
+where
+    A: AhciDataCapabilityAuthorizer,
+    B: AhciRawSyscall,
+    R: AhciRegisterIo,
+{
+    let launch = bootstrap_installed_ahci_entry(syscalls, entry, launch_scratch)
+        .map_err(AhciNativeServicePreparationError::Bootstrap)?;
+    unsafe { prepare_installed_ahci_service_state(capabilities, launch, registers, sync) }
 }
 
 /// Launch-bound catalog and command backend owned by one native AHCI service.
@@ -176,6 +205,25 @@ mod tests {
         }
         fn write_u32(&mut self, _: u32, _: u32) -> Result<(), ()> {
             panic!("preparation must not write a non-idle port")
+        }
+    }
+
+    struct BootRaw {
+        bytes: [u8; AHCI_SERVICE_LAUNCH_BYTES],
+        calls: usize,
+    }
+    unsafe impl AhciRawSyscall for BootRaw {
+        unsafe fn invoke(&mut self, frame: &mut crate::AhciSyscallFrame) {
+            self.calls += 1;
+            assert_eq!(frame.rax, 7);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.bytes.as_ptr(),
+                    frame.rdx as *mut u8,
+                    self.bytes.len(),
+                )
+            };
+            frame.rax = 0;
         }
     }
 
@@ -496,5 +544,60 @@ mod tests {
             ))
         ));
         assert_eq!(denied_authorizer.calls, 0);
+    }
+
+    #[test]
+    fn authenticated_entry_wipes_launch_copy_before_state_publication() {
+        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
+        let installed = launch_with_mappings(bases);
+        let entry = unsafe {
+            AhciServiceEntryRegisters::from_installed_registers(
+                1,
+                2,
+                3,
+                (10 << 32) | 1,
+                AHCI_SERVICE_LAUNCH_BYTES as u64,
+                9,
+                installed.device().token(),
+                installed.command_list().token(),
+                installed.received_fis().token(),
+                installed.command_tables().token(),
+                installed.device_write_data().token(),
+                installed.device_read_data().token(),
+            )
+        }
+        .unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(
+            BootRaw {
+                bytes: installed.record().encode(),
+                calls: 0,
+            },
+            1,
+            2,
+        )
+        .unwrap();
+        let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
+        let mut authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
+        let state = unsafe {
+            bootstrap_and_prepare_installed_ahci_service(
+                &mut syscalls,
+                entry,
+                &mut launch_scratch,
+                &mut authorizer,
+                Registers,
+                Sync,
+            )
+        }
+        .unwrap();
+        assert_eq!(launch_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
+        assert_eq!(state.device(), installed.record().device());
+        drop(state);
+        assert_eq!(authorizer.calls, 2);
+        assert_eq!(syscalls.into_raw().calls, 1);
     }
 }

@@ -1010,6 +1010,33 @@ mapping, register-validation, capability, and backend constructors is
 conventional service-startup plumbing. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The authenticated AHCI entry bootstrap now composes directly with installed
+state preparation **PARTIALLY IMPLEMENTED IN SOURCE**. One transition consumes
+the already captured fixed entry registers, copies the canonical 384-byte
+record only through its launch-data capability, validates and binds all six
+separately installed authorities, erases the copy, and only then enters mapped
+memory, live-port, authorization, and service-state preparation. Bootstrap
+failure is a distinct typed preparation stage. The integrated test proves one
+copy syscall, exact catalog publication, two data-authority checks, and zeroed
+launch scratch before the state is returned. The focused Linux suite passes all
+120 tests and both Linux release and `MRML_NATIVE` release builds pass. The raw
+syscall and register backends are controlled models; assembly register capture,
+an executable image/entry symbol, concrete cache/IOMMU operations, installed
+supervision, and physical hardware remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Sequencing an existing authenticated bootstrap,
+mandatory scratch erasure, and existing preparation transition is conventional
+service-entry plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
