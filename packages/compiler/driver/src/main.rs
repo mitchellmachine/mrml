@@ -1363,22 +1363,67 @@ fn retain_exact_readonly_relocation_targets<'data, 'relocations, 'definitions>(
         }) else {
             continue;
         };
+        changed |= retain_input_archive_member(
+            inputs,
+            archive_group,
+            archive_member,
+            source_object,
+            selected,
+            index,
+        )?;
+    }
+    Ok(changed)
+}
+
+fn retain_input_archive_member<'data, 'relocations, 'definitions>(
+    inputs: &[LinkInput<'data, 'relocations, 'definitions>],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    source_object: &[usize],
+    selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
+    target_index: usize,
+) -> Result<bool> {
+    let group = archive_group[target_index];
+    let member = archive_member[target_index];
+    let mut changed = false;
+    for index in 0..inputs.len() {
+        if if group == 0 {
+            index != target_index
+        } else {
+            archive_group[index] != group || archive_member[index] != member
+        } {
+            continue;
+        }
+        if selected
+            .inputs
+            .iter()
+            .zip(selected.source_object.iter())
+            .any(|(selected_input, selected_source)| {
+                *selected_source == source_object[index]
+                    && selected_input.symbol == inputs[index].symbol
+                    && selected_input.symbol_target == inputs[index].symbol_target
+                    && selected_input.text.as_ptr() == inputs[index].text.as_ptr()
+                    && selected_input.text.len() == inputs[index].text.len()
+            })
+        {
+            continue;
+        }
         selected
             .inputs
             .try_push(inputs[index])
-            .map_err(|_| anyhow!("selected exact-section dependency capacity exceeded"))?;
+            .map_err(|_| anyhow!("selected archive dependency capacity exceeded"))?;
         selected
             .archive_group
             .try_push(archive_group[index])
-            .map_err(|_| anyhow!("selected exact-section origin capacity exceeded"))?;
+            .map_err(|_| anyhow!("selected archive origin capacity exceeded"))?;
         selected
             .archive_member
             .try_push(archive_member[index])
-            .map_err(|_| anyhow!("selected exact-section member capacity exceeded"))?;
+            .map_err(|_| anyhow!("selected archive member capacity exceeded"))?;
         selected
             .source_object
             .try_push(source_object[index])
-            .map_err(|_| anyhow!("selected exact-section source capacity exceeded"))?;
+            .map_err(|_| anyhow!("selected archive source capacity exceeded"))?;
         changed = true;
     }
     Ok(changed)
@@ -1412,29 +1457,14 @@ fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
             }) else {
                 continue;
             };
-            let group = archive_group[target_index];
-            let member = archive_member[target_index];
-            for index in 0..inputs.len() {
-                if archive_group[index] != group || archive_member[index] != member {
-                    continue;
-                }
-                selected.inputs.try_push(inputs[index]).map_err(|_| {
-                    anyhow!("selected writable section dependency capacity exceeded")
-                })?;
-                selected
-                    .archive_group
-                    .try_push(group)
-                    .map_err(|_| anyhow!("selected writable section origin capacity exceeded"))?;
-                selected
-                    .archive_member
-                    .try_push(member)
-                    .map_err(|_| anyhow!("selected writable section member capacity exceeded"))?;
-                selected
-                    .source_object
-                    .try_push(source_object[index])
-                    .map_err(|_| anyhow!("selected writable section source capacity exceeded"))?;
-            }
-            changed = true;
+            changed |= retain_input_archive_member(
+                inputs,
+                archive_group,
+                archive_member,
+                source_object,
+                selected,
+                target_index,
+            )?;
         }
     }
     Ok(changed)
@@ -2131,9 +2161,17 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             | LinkRelocationTarget::LocalSymbol(symbol) = relocation.target
                 && !link_target_defined(symbol)
             {
+                let kind = match relocation.target {
+                    LinkRelocationTarget::Symbol(_) => "symbol",
+                    LinkRelocationTarget::GotPcRelativeSymbol(_) => "GOT-relative symbol",
+                    LinkRelocationTarget::RequiredSymbol(_) => "required symbol",
+                    LinkRelocationTarget::LocalSymbol(_) => "local symbol",
+                    _ => unreachable!(),
+                };
                 return Err(anyhow!(
-                    "selected code relocation target is undefined: {}",
-                    symbol
+                    "selected code relocation {} target is undefined: {}",
+                    kind,
+                    symbol,
                 ));
             }
             if let LinkRelocationTarget::PeWritableSymbol(symbol) = relocation.target
@@ -2934,13 +2972,25 @@ mod tests {
             readonly_data: &[],
             relocations: &[],
         };
-        let inputs = [entry, target];
+        let definitions = [LinkDefinition {
+            symbol: "callback",
+            target: LinkDefinitionTarget::Text(4),
+        }];
+        let sibling = LinkInput {
+            symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &definitions,
+            text: &[0; 8],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let inputs = [entry, target, sibling];
         let mut selected = selected_link_inputs(
             &inputs,
-            &[0, 4],
-            &[0, 7],
-            &[0, 8],
-            &[CoffTextComdatSelection::None; 2],
+            &[0, 4, 4],
+            &[0, 7, 7],
+            &[0, 8, 8],
+            &[CoffTextComdatSelection::None; 3],
             "entry",
         )
         .unwrap();
@@ -2958,24 +3008,25 @@ mod tests {
         assert!(
             retain_exact_readonly_relocation_targets(
                 &inputs,
-                &[0, 4],
-                &[0, 7],
-                &[0, 8],
+                &[0, 4, 4],
+                &[0, 7, 7],
+                &[0, 8, 8],
                 &mut selected,
                 &relocation,
             )
             .unwrap()
         );
-        assert_eq!(selected.inputs.len(), 2);
+        assert_eq!(selected.inputs.len(), 3);
         assert_eq!(selected.archive_group[1], 4);
         assert_eq!(selected.archive_member[1], 7);
         assert_eq!(selected.source_object[1], 8);
+        assert_eq!(selected.inputs[2].additional_definitions, &definitions);
         assert!(
             !retain_exact_readonly_relocation_targets(
                 &inputs,
-                &[0, 4],
-                &[0, 7],
-                &[0, 8],
+                &[0, 4, 4],
+                &[0, 7, 7],
+                &[0, 8, 8],
                 &mut selected,
                 &relocation,
             )
