@@ -74,15 +74,17 @@ impl<'a> AhciEnumerationServiceLoop<'a> {
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
+        let mut received_capability = None;
         let result = self.serve_one_inner(
             syscalls,
             request_buffer,
             capability_tokens,
             scratch,
             response_buffer,
+            &mut received_capability,
         );
-        let release = (capability_tokens[0] != 0)
-            .then(|| syscalls.release_received(Capability::from_token(capability_tokens[0])))
+        let release = received_capability
+            .map(|capability| syscalls.release_received(capability))
             .transpose()
             .map(|_| ())
             .map_err(AhciServiceLoopError::Syscall);
@@ -106,6 +108,7 @@ impl<'a> AhciEnumerationServiceLoop<'a> {
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response_buffer: &mut [u8; ENUMERATE_RESPONSE_BYTES],
+        received_capability: &mut Option<Capability>,
     ) -> Result<(), AhciServiceLoopError<S::Error>> {
         let envelope = syscalls
             .receive(request_buffer, capability_tokens)
@@ -117,6 +120,7 @@ impl<'a> AhciEnumerationServiceLoop<'a> {
         {
             return Err(AhciServiceLoopError::InvalidEnvelope);
         }
+        *received_capability = Some(Capability::from_token(capability_tokens[0]));
         let request = decode_enumerate_request(request_buffer, u64::MAX)
             .map_err(AhciServiceLoopError::Protocol)?;
         let length = usize::try_from(request.output.length())
@@ -167,6 +171,7 @@ mod tests {
         writes: usize,
         releases: usize,
         fail_write: bool,
+        capability_count: usize,
     }
 
     unsafe impl AhciServiceSyscalls for Syscalls {
@@ -181,7 +186,7 @@ mod tests {
             capability_tokens[0] = self.token;
             Ok(ReceivedAhciEnvelope {
                 payload_length: ENUMERATE_REQUEST_BYTES,
-                capability_count: 1,
+                capability_count: self.capability_count,
             })
         }
 
@@ -239,6 +244,7 @@ mod tests {
             writes: 0,
             releases: 0,
             fail_write: false,
+            capability_count: 1,
         }
     }
 
@@ -288,9 +294,14 @@ mod tests {
     #[test]
     fn rejects_untransferred_capability_before_copy_back() {
         let devices = devices();
-        for token in [0, 7] {
+        for (token, capability_count) in [
+            (0, 1),
+            (7, 1),
+            ((9_u64 << 32) | 4, 0),
+        ] {
             let mut syscalls = syscalls();
             syscalls.token = token;
+            syscalls.capability_count = capability_count;
             let result = AhciEnumerationServiceLoop::new(&devices).serve_one(
                 &mut syscalls,
                 &mut [0; ENUMERATE_REQUEST_BYTES],
@@ -300,6 +311,7 @@ mod tests {
             );
             assert_eq!(result, Err(AhciServiceLoopError::InvalidEnvelope));
             assert_eq!(syscalls.writes, 0);
+            assert_eq!(syscalls.releases, 0);
             assert_eq!(syscalls.response, None);
         }
     }

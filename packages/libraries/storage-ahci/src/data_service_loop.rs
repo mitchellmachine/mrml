@@ -89,15 +89,17 @@ impl<B: AhciBlockIoBackend> AhciReadWriteServiceLoop<'_, B> {
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
+        let mut received_capability = None;
         let result = self.serve_one_inner(
             syscalls,
             request_buffer,
             capability_tokens,
             scratch,
             response_buffer,
+            &mut received_capability,
         );
-        let release = (capability_tokens[0] != 0)
-            .then(|| syscalls.release_received(Capability::from_token(capability_tokens[0])))
+        let release = received_capability
+            .map(|capability| syscalls.release_received(capability))
             .transpose()
             .map(|_| ())
             .map_err(AhciDataServiceLoopError::Syscall);
@@ -121,6 +123,7 @@ impl<B: AhciBlockIoBackend> AhciReadWriteServiceLoop<'_, B> {
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response_buffer: &mut [u8; READ_RESPONSE_BYTES],
+        received_capability: &mut Option<Capability>,
     ) -> Result<(), AhciDataServiceLoopError<S::Error>> {
         let envelope = syscalls
             .receive(request_buffer, capability_tokens)
@@ -133,6 +136,7 @@ impl<B: AhciBlockIoBackend> AhciReadWriteServiceLoop<'_, B> {
             return Err(AhciDataServiceLoopError::InvalidEnvelope);
         }
         let capability = Capability::from_token(capability_tokens[0]);
+        *received_capability = Some(capability);
 
         if let Ok(request) = decode_read_request(request_buffer, u64::MAX) {
             let length = exact_scratch_length(request.output.length(), scratch.len())?;
@@ -245,6 +249,8 @@ mod tests {
         reads: usize,
         writes: usize,
         releases: usize,
+        token: u64,
+        capability_count: usize,
     }
     unsafe impl AhciDataServiceSyscalls for Syscalls {
         type Error = ();
@@ -254,10 +260,10 @@ mod tests {
             tokens: &mut [u64; 1],
         ) -> Result<ReceivedAhciDataEnvelope, ()> {
             *request = self.request;
-            tokens[0] = TOKEN;
+            tokens[0] = self.token;
             Ok(ReceivedAhciDataEnvelope {
                 payload_length: READ_REQUEST_BYTES,
-                capability_count: 1,
+                capability_count: self.capability_count,
             })
         }
         fn read_shared(
@@ -322,6 +328,8 @@ mod tests {
             reads: 0,
             writes: 0,
             releases: 0,
+            token: TOKEN,
+            capability_count: 1,
         };
         let mut request_buffer = [0xaa; READ_REQUEST_BYTES];
         let mut tokens = [0xbb];
@@ -368,6 +376,8 @@ mod tests {
             reads: 0,
             writes: 0,
             releases: 0,
+            token: TOKEN,
+            capability_count: 1,
         };
         let mut service = AhciReadWriteServiceLoop::new(&devices, Backend::default());
         service
@@ -385,5 +395,38 @@ mod tests {
         );
         let backend = service.into_backend();
         assert_eq!((backend.reads, backend.writes), (0, 1));
+    }
+
+    #[test]
+    fn invalid_envelope_never_releases_unadmitted_token() {
+        let devices = [device()];
+        for (token, capability_count) in [(0, 1), (7, 1), (TOKEN, 0)] {
+            let mut syscalls = Syscalls {
+                request: encode_read_request(
+                    device().session,
+                    4,
+                    1,
+                    BorrowedWriteView::within(0, 512, 1024).unwrap(),
+                )
+                .unwrap(),
+                shared: [0; 1024],
+                response: None,
+                reads: 0,
+                writes: 0,
+                releases: 0,
+                token,
+                capability_count,
+            };
+            let result = AhciReadWriteServiceLoop::new(&devices, Backend::default()).serve_one(
+                &mut syscalls,
+                &mut [0; READ_REQUEST_BYTES],
+                &mut [0; 1],
+                &mut [0; 512],
+                &mut [0; READ_RESPONSE_BYTES],
+            );
+            assert_eq!(result, Err(AhciDataServiceLoopError::InvalidEnvelope));
+            assert_eq!((syscalls.reads, syscalls.writes, syscalls.releases), (0, 0, 0));
+            assert!(syscalls.response.is_none());
+        }
     }
 }

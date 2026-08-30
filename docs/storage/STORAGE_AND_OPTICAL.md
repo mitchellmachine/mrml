@@ -422,13 +422,22 @@ and shared-buffer operations. The launch binding fixes the reply endpoint/task;
 request bytes cannot redirect it. Read/write accepts exactly one transferred
 capability and releases it before reply, while flush/reset accepts none. The
 adapter rejects returned lengths/counts beyond the supplied buffers before
-publishing an envelope. The focused Linux suite passes 75 tests. No installed service entry, supervisor
-launch, hardware I/O, or physical evidence is claimed.
+publishing an envelope. Enumeration and data cleanup now retain a received leaf
+only after the envelope declares exactly one capability and the token has a
+nonzero generation. Missing, malformed, or undeclared token bytes cannot trigger
+revocation; any later copy or protocol failure still releases the admitted leaf
+before returning. The focused Linux suite passes 76 tests and its release build
+passes. No installed service entry, supervisor launch, hardware I/O, or physical
+evidence is claimed.
 
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
 [the patent review log](../patents/REVIEW_LOG.md).
+
+Patent review: **NOT_TRIGGERED**. Binding cleanup eligibility to the already
+validated capability envelope is conventional fail-closed resource handling.
+See [the patent review log](../patents/REVIEW_LOG.md).
 
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-

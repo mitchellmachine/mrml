@@ -508,9 +508,16 @@ launch-bound reply endpoint. Data requests use only the exact transferred
 shared-memory capability, preserve read/write direction, and release it before
 reply; control requests accept no capability. The adapter also rejects kernel-
 reported payload or capability counts beyond the exact supplied buffers before
-returning a typed envelope. Focused Linux tests cover all seven syscall mappings
-and hostile returned counts, bringing AHCI to 75 passing tests. Installed service
-entry and supervisor launch remain planned.
+returning a typed envelope. Cleanup records a received data capability only
+after the envelope declares exactly one capability and its token carries a
+nonzero generation; malformed or undeclared token bytes therefore cannot cause
+a revocation attempt. Focused Linux tests cover all seven syscall mappings,
+hostile returned counts, and rejected cleanup metadata, bringing AHCI to 76
+passing tests. Installed service entry and supervisor launch remain planned.
+
+Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
+capability envelope is conventional fail-closed resource handling. See
+`docs/patents/REVIEW_LOG.md`.
 
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
