@@ -1288,6 +1288,7 @@ pub struct NativeComponentServiceCopyReadTransferTeardown {
     retired_context: Option<UserContext>,
     authority_revoked: bool,
     mapping_removed: bool,
+    dispatch_issued: bool,
     backing_released: bool,
 }
 
@@ -1299,6 +1300,7 @@ impl NativeComponentServiceCopyReadTransferTeardown {
             retired_context: None,
             authority_revoked: false,
             mapping_removed: false,
+            dispatch_issued: false,
             backing_released: false,
         }
     }
@@ -1312,6 +1314,7 @@ impl NativeComponentServiceCopyReadTransferTeardown {
             retired_context: Some(retirement.context),
             authority_revoked: false,
             mapping_removed: false,
+            dispatch_issued: false,
             backing_released: false,
         }
     }
@@ -1325,6 +1328,7 @@ impl NativeComponentServiceCopyReadTransferTeardown {
             retired_context: Some(retirement.context),
             authority_revoked: false,
             mapping_removed: true,
+            dispatch_issued: false,
             backing_released: false,
         }
     }
@@ -1345,6 +1349,16 @@ impl NativeComponentServiceCopyReadTransferTeardown {
     }
     pub const fn mapping_removed(self) -> bool {
         self.mapping_removed
+    }
+    pub const fn dispatch_issued(self) -> bool {
+        self.dispatch_issued
+    }
+    pub const fn with_dispatch_issued(mut self) -> Option<Self> {
+        if self.termination.is_none() || !self.mapping_removed || self.dispatch_issued {
+            return None;
+        }
+        self.dispatch_issued = true;
+        Some(self)
     }
     pub const fn backing_released(self) -> bool {
         self.backing_released

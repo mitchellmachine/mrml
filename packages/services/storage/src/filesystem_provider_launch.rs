@@ -236,6 +236,27 @@ pub fn retire_current_native_filesystem_provider<
     mapping_backend: &mut M,
 ) -> Result<NativeFilesystemProviderRetirement, NativeFilesystemProviderRetirementError<M::Error>> {
     if let NativeFilesystemProviderInstance::Teardown(state) = receipt.instance {
+        if let Some(termination) = state.retired_termination()
+            && state.mapping_removed()
+            && !state.dispatch_issued()
+            && !state.authority_revoked()
+            && !state.backing_released()
+        {
+            let dispatch = runtime
+                .dispatch_after_termination(termination)
+                .map_err(|error| NativeFilesystemProviderRetirementError::Dispatch {
+                    termination,
+                    error,
+                })?;
+            let Some(state) = state.with_dispatch_issued() else {
+                return Err(NativeFilesystemProviderRetirementError::TeardownProgressed);
+            };
+            receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
+            return Ok(NativeFilesystemProviderRetirement {
+                termination,
+                dispatch,
+            });
+        }
         if state.retired_termination().is_some()
             && !state.mapping_removed()
             && !state.authority_revoked()
@@ -256,6 +277,10 @@ pub fn retire_current_native_filesystem_provider<
                                 termination,
                                 error,
                             })?;
+                    let Some(state) = state.with_dispatch_issued() else {
+                        return Err(NativeFilesystemProviderRetirementError::TeardownProgressed);
+                    };
+                    receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
                     Ok(NativeFilesystemProviderRetirement {
                         termination,
                         dispatch,
@@ -292,6 +317,10 @@ pub fn retire_current_native_filesystem_provider<
                     termination,
                     error,
                 })?;
+            let Some(state) = state.with_dispatch_issued() else {
+                return Err(NativeFilesystemProviderRetirementError::TeardownProgressed);
+            };
+            receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
             Ok(NativeFilesystemProviderRetirement {
                 termination,
                 dispatch,
@@ -328,6 +357,29 @@ pub unsafe fn retire_current_native_filesystem_provider_on_active_x86_64<
     memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
 ) -> Result<NativeFilesystemProviderRetirement, NativeFilesystemProviderActiveRetirementError> {
     if let NativeFilesystemProviderInstance::Teardown(state) = receipt.instance {
+        if let Some(termination) = state.retired_termination()
+            && state.mapping_removed()
+            && !state.dispatch_issued()
+            && !state.authority_revoked()
+            && !state.backing_released()
+        {
+            let dispatch = runtime
+                .dispatch_after_termination(termination)
+                .map_err(
+                    |error| NativeFilesystemProviderActiveRetirementError::Dispatch {
+                        termination,
+                        error,
+                    },
+                )?;
+            let Some(state) = state.with_dispatch_issued() else {
+                return Err(NativeFilesystemProviderActiveRetirementError::TeardownProgressed);
+            };
+            receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
+            return Ok(NativeFilesystemProviderRetirement {
+                termination,
+                dispatch,
+            });
+        }
         if state.retired_termination().is_some()
             && !state.mapping_removed()
             && !state.authority_revoked()
@@ -349,6 +401,12 @@ pub unsafe fn retire_current_native_filesystem_provider_on_active_x86_64<
                                     error,
                                 }
                             })?;
+                    let Some(state) = state.with_dispatch_issued() else {
+                        return Err(
+                            NativeFilesystemProviderActiveRetirementError::TeardownProgressed,
+                        );
+                    };
+                    receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
                     Ok(NativeFilesystemProviderRetirement {
                         termination,
                         dispatch,
@@ -386,6 +444,10 @@ pub unsafe fn retire_current_native_filesystem_provider_on_active_x86_64<
                         error,
                     },
                 )?;
+            let Some(state) = state.with_dispatch_issued() else {
+                return Err(NativeFilesystemProviderActiveRetirementError::TeardownProgressed);
+            };
+            receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
             Ok(NativeFilesystemProviderRetirement {
                 termination,
                 dispatch,
@@ -1421,6 +1483,30 @@ mod tests {
         assert!(!retained.mapping_removed());
         let successor = runtime.current().unwrap();
         let successor_context = *runtime.context(successor).unwrap();
+        runtime.yield_current().unwrap();
+        assert_ne!(runtime.current(), Some(successor));
+        assert!(matches!(
+            retire_current_native_filesystem_provider(
+                &mut receipt,
+                &mut runtime,
+                &mut memory,
+                &mut local_mapping,
+            ),
+            Err(NativeFilesystemProviderRetirementError::Dispatch {
+                termination,
+                error: TaskTerminationDispatchError::CurrentMismatch,
+            }) if termination.task == target
+        ));
+        let awaiting_dispatch = receipt.instance().teardown().unwrap();
+        assert!(awaiting_dispatch.mapping_removed());
+        assert!(!awaiting_dispatch.dispatch_issued());
+        for _ in 0..3 {
+            if runtime.current() == Some(successor) {
+                break;
+            }
+            runtime.yield_current().unwrap();
+        }
+        assert_eq!(runtime.current(), Some(successor));
         let retirement = retire_current_native_filesystem_provider(
             &mut receipt,
             &mut runtime,
@@ -1431,7 +1517,18 @@ mod tests {
         let (termination, dispatch) = retirement.into_parts();
         assert_eq!(termination.task, target);
         assert_eq!(dispatch.user(), Some((successor, successor_context)));
-        assert!(receipt.instance().teardown().unwrap().mapping_removed());
+        let completed = receipt.instance().teardown().unwrap();
+        assert!(completed.mapping_removed());
+        assert!(completed.dispatch_issued());
+        assert!(matches!(
+            retire_current_native_filesystem_provider(
+                &mut receipt,
+                &mut runtime,
+                &mut memory,
+                &mut local_mapping,
+            ),
+            Err(NativeFilesystemProviderRetirementError::TeardownProgressed)
+        ));
         let mut teardown = NativeFilesystemProviderTeardownBackend::new(
             &mut runtime,
             &mut memory,

@@ -10771,3 +10771,18 @@ physical-hardware evidence.
 Patent review: `NOT_TRIGGERED` — reconstructing an exact authorized page-table
 revoker for retry is conventional privileged lifecycle recovery. See
 `docs/patents/REVIEW_LOG.md`.
+
+Provider teardown state now records whether its opaque successor dispatch has
+been issued. After mapping withdrawal, failed dispatch validation leaves the
+retained termination unissued and retryable; successful validation atomically
+marks issuance before returning the non-copyable token. Both generic and active
+provider entry points reject later replay. The Linux-host release kernel suite
+passes 653 tests, storage passes 163 tests, and both release builds pass. The
+storage test forces mapping failure, then scheduler mismatch after successful
+withdrawal, restores the exact successor, proves one successful issuance, and
+rejects a second attempt. This remains in-memory scheduler and inactive-page-
+table evidence.
+
+Patent review: `NOT_TRIGGERED` — one-use issuance tracking for a validated
+dispatch token is conventional replay-resistant lifecycle state. See
+`docs/patents/REVIEW_LOG.md`.
