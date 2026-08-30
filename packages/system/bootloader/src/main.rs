@@ -1042,6 +1042,49 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     frame.complete_error();
                 }
             }
+            SyscallRequest::CancelReceive {
+                capability,
+                service,
+            } => {
+                #[cfg(feature = "deadline-receive-probe")]
+                {
+                    let supervisor = (*core::ptr::addr_of!(SERVICE_SUPERVISOR))
+                        .as_ref()
+                        .unwrap_or_else(|| halt());
+                    let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    match supervisor.cancel_escrowed_deadline_receive_for_requester(
+                        service,
+                        current,
+                        capability,
+                        runtime,
+                        executor,
+                        deadline_cancellation_escrow(),
+                    ) {
+                        Ok(()) => frame.complete(0),
+                        Err(
+                            mrml_kernel::ServiceDeadlineCancellationError::Service(
+                                mrml_kernel::ServiceError::InvalidService
+                                | mrml_kernel::ServiceError::TaskMismatch
+                                | mrml_kernel::ServiceError::Unauthorized(_)
+                                | mrml_kernel::ServiceError::Runtime(
+                                    mrml_kernel::TaskRuntimeError::Ipc(_),
+                                ),
+                            )
+                            | mrml_kernel::ServiceDeadlineCancellationError::Deadline(
+                                mrml_kernel::DeadlineReceiveSyscallError::OwnerMismatch,
+                            ),
+                        ) => frame.complete_error(),
+                        Err(_) => halt(),
+                    }
+                }
+                #[cfg(not(feature = "deadline-receive-probe"))]
+                {
+                    let _ = (capability, service);
+                    frame.complete_error();
+                }
+            }
             SyscallRequest::Receive => {
                 #[cfg(feature = "deadline-receive-probe")]
                 frame.complete_error();

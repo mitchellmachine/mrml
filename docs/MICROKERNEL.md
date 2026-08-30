@@ -11759,3 +11759,36 @@ hosted/physical execution is claimed yet.
 Patent review: `NOT_TRIGGERED` — fixed-capacity escrow of opaque one-use
 cancellation tokens with exact retirement is conventional lifecycle ownership.
 See `docs/patents/REVIEW_LOG.md`.
+
+The pointer-free syscall decoder now assigns operation 14 to
+`CancelReceive { capability, service }`. Only the task-local service `CONTROL`
+capability token in `rdi` and generational service ID in `rsi` are admitted;
+both must be nonzero valid-shaped handles and every other argument register must
+be zero. The opaque cancellation token remains kernel-internal and is never
+serialized into the syscall ABI.
+
+`ServiceSupervisor` now provides a requester-bound escrow composition. It
+resolves the live service object, requires the requesting task's capability to
+carry exactly `CONTROL` for that object, requires a running exact task, then
+looks up and consumes the escrowed wait through the deadline executor. Escrow
+retirement follows successful cancellation as a fail-stop invariant. An
+overbroad `CONTROL|READ` handle is rejected before escrow mutation; exact
+requester authority succeeds. Wrong authority and replay retain their typed
+detail-free error paths.
+
+The timer-backed deadline dispatcher routes operation 14 through this composed
+path. Existing non-deadline service profiles decode the canonical operation but
+return generic error because they have no deadline executor or escrow; they do
+not reinterpret it. No service image invokes operation 14 yet, so live
+cancellation proof remains the next separate integration gate.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes 679
+tests, and the native kernel release build passes. The default service and both
+deadline UEFI bootloader release profiles cross-build with only their existing
+unreachable-pattern warning. This is decode, authorization, unit, and
+cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — decoding two opaque handles and composing exact
+task-local capability authorization with kernel-owned cancellation escrow is
+conventional capability-based syscall dispatch. See
+`docs/patents/REVIEW_LOG.md`.

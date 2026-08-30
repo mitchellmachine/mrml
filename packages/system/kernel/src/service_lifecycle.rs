@@ -5,10 +5,10 @@ use core::ops::{Deref, DerefMut};
 use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
     Capability, CapabilityError, CapabilitySpace, DeadlineReceiveCancellation,
-    DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor, FaultRetirement,
-    MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
-    ObjectId, PAGE_SIZE, Priority, Rights, TaskId, TaskProtocolViolation, TaskRuntime,
-    TaskRuntimeError, TaskTerminationDispatch, TaskTerminationDispatchError,
+    DeadlineReceiveCancellationEscrow, DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor,
+    FaultRetirement, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, ObjectId, PAGE_SIZE, Priority, Rights, TaskId, TaskProtocolViolation,
+    TaskRuntime, TaskRuntimeError, TaskTerminationDispatch, TaskTerminationDispatchError,
     TaskViolationRetirement,
 };
 
@@ -673,6 +673,89 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         executor
             .cancel(runtime, cancellation)
             .map_err(ServiceDeadlineCancellationError::Deadline)
+    }
+
+    /// Resolves the opaque wait token only after exact service CONTROL
+    /// authorization, then consumes both the executor owner and escrow entry.
+    pub fn cancel_escrowed_deadline_receive<
+        const TASKS: usize,
+        const CAPS: usize,
+        const MANAGEMENT_CAPS: usize,
+    >(
+        &self,
+        service: ServiceId,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        control: Capability,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        executor: &mut DeadlineReceiveSyscallExecutor<TASKS>,
+        escrow: &mut DeadlineReceiveCancellationEscrow<TASKS>,
+    ) -> Result<(), ServiceDeadlineCancellationError> {
+        let entry = self
+            .slot(service)
+            .map_err(ServiceDeadlineCancellationError::Service)?;
+        let authorized = management
+            .authorize_exact(control, Rights::CONTROL)
+            .map_err(ServiceError::Unauthorized)
+            .map_err(ServiceDeadlineCancellationError::Service)?;
+        if authorized != entry.object {
+            return Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::Unauthorized(CapabilityError::PermissionDenied),
+            ));
+        }
+        let task = entry
+            .task
+            .filter(|_| entry.state == ServiceState::Running)
+            .ok_or(ServiceDeadlineCancellationError::Service(
+                ServiceError::TaskMismatch,
+            ))?;
+        let cancellation = escrow
+            .get(task)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
+        executor
+            .cancel(runtime, cancellation)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
+        escrow
+            .retire(cancellation)
+            .expect("successful exact cancellation preserves its prevalidated escrow owner");
+        Ok(())
+    }
+
+    /// Request-bound variant for syscall dispatchers. The requester must hold
+    /// an exact task-local CONTROL handle for the live service object; the
+    /// service token and escrowed wait remain independent matching inputs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cancel_escrowed_deadline_receive_for_requester<const TASKS: usize, const CAPS: usize>(
+        &self,
+        service: ServiceId,
+        requester: TaskId,
+        control: Capability,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        executor: &mut DeadlineReceiveSyscallExecutor<TASKS>,
+        escrow: &mut DeadlineReceiveCancellationEscrow<TASKS>,
+    ) -> Result<(), ServiceDeadlineCancellationError> {
+        let entry = self
+            .slot(service)
+            .map_err(ServiceDeadlineCancellationError::Service)?;
+        runtime
+            .authorize_capability_exact(requester, control, Rights::CONTROL, entry.object)
+            .map_err(ServiceError::Runtime)
+            .map_err(ServiceDeadlineCancellationError::Service)?;
+        let task = entry
+            .task
+            .filter(|_| entry.state == ServiceState::Running)
+            .ok_or(ServiceDeadlineCancellationError::Service(
+                ServiceError::TaskMismatch,
+            ))?;
+        let cancellation = escrow
+            .get(task)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
+        executor
+            .cancel(runtime, cancellation)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
+        escrow
+            .retire(cancellation)
+            .expect("successful requester cancellation preserves its escrow owner");
+        Ok(())
     }
 
     pub fn exit_current<const TASKS: usize, const CAPS: usize>(
@@ -2366,6 +2449,128 @@ mod tests {
             Err(ServiceDeadlineCancellationError::Deadline(
                 DeadlineReceiveSyscallError::OwnerMismatch
             ))
+        );
+    }
+
+    #[test]
+    fn supervised_escrow_resolves_only_after_control_authorization() {
+        let object = ObjectId(0x7e);
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, receiver).unwrap();
+        let mut management = CapabilitySpace::<2>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let wrong = management.insert(ObjectId(0x7f), Rights::CONTROL).unwrap();
+        let requester_control = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::CONTROL)
+            .unwrap();
+        let requester_overbroad = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::CONTROL.union(Rights::READ))
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let cancellation = match executor
+            .start(&mut runtime, crate::ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            crate::DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                cancellation,
+            } if to == sender => cancellation,
+            _ => panic!("expected escrowed supervised deadline receive"),
+        };
+        let mut escrow = DeadlineReceiveCancellationEscrow::new();
+        escrow.retain(cancellation).unwrap();
+
+        assert_eq!(
+            supervisor.cancel_escrowed_deadline_receive(
+                service,
+                &management,
+                wrong,
+                &mut runtime,
+                &mut executor,
+                &mut escrow,
+            ),
+            Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::Unauthorized(CapabilityError::PermissionDenied)
+            ))
+        );
+        assert_eq!(escrow.get(receiver), Ok(cancellation));
+        assert_eq!(
+            supervisor.cancel_escrowed_deadline_receive(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                &mut executor,
+                &mut escrow,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            escrow.get(receiver),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert_eq!(
+            supervisor.cancel_escrowed_deadline_receive(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                &mut executor,
+                &mut escrow,
+            ),
+            Err(ServiceDeadlineCancellationError::Deadline(
+                DeadlineReceiveSyscallError::OwnerMismatch
+            ))
+        );
+
+        assert!(matches!(
+            runtime.yield_current().unwrap(),
+            ScheduleOutcome::Switch { to, .. } if to == receiver
+        ));
+        let requester_cancellation = match executor
+            .start(&mut runtime, crate::ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            crate::DeadlineReceiveStart::Blocked { cancellation, .. } => cancellation,
+            _ => panic!("expected second escrowed deadline receive"),
+        };
+        escrow.retain(requester_cancellation).unwrap();
+        assert!(matches!(
+            supervisor.cancel_escrowed_deadline_receive_for_requester(
+                service,
+                sender,
+                requester_overbroad,
+                &mut runtime,
+                &mut executor,
+                &mut escrow,
+            ),
+            Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::Runtime(_)
+            ))
+        ));
+        assert_eq!(escrow.get(receiver), Ok(requester_cancellation));
+        assert_eq!(
+            supervisor.cancel_escrowed_deadline_receive_for_requester(
+                service,
+                sender,
+                requester_control,
+                &mut runtime,
+                &mut executor,
+                &mut escrow,
+            ),
+            Ok(())
         );
     }
 }

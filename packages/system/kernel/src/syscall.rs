@@ -304,6 +304,10 @@ pub enum SyscallRequest {
     ReceiveFor {
         timeout: ReceiveTimeout,
     },
+    CancelReceive {
+        capability: Capability,
+        service: crate::ServiceId,
+    },
     Exit,
     SendInline {
         endpoint: Capability,
@@ -589,6 +593,21 @@ impl SyscallRequest {
                 let timeout = ReceiveTimeout::new(rdi).ok_or(SyscallError::InvalidTimeout)?;
                 Ok(Self::ReceiveFor { timeout })
             }
+            14 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi == 0 || rsi >> 32 == 0 {
+                    return Err(SyscallError::InvalidObject);
+                }
+                if rdx | r10 | r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                Ok(Self::CancelReceive {
+                    capability: Capability::from_token(rdi),
+                    service: crate::ServiceId::from_token(rsi),
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -598,6 +617,7 @@ impl SyscallRequest {
             Self::Yield
             | Self::Receive
             | Self::ReceiveFor { .. }
+            | Self::CancelReceive { .. }
             | Self::Exit
             | Self::SendBuffer { .. }
             | Self::ReceiveBuffer { .. }
@@ -739,6 +759,41 @@ mod tests {
                     arguments[3],
                     arguments[4],
                     arguments[5],
+                ),
+                Err(SyscallError::ReservedArgument)
+            );
+        }
+    }
+
+    #[test]
+    fn receive_cancellation_requires_capability_service_and_zero_reserved_registers() {
+        let capability = Capability::from_token((3u64 << 32) | 4);
+        let service = crate::ServiceId::from_token((5u64 << 32) | 6);
+        assert_eq!(
+            SyscallRequest::decode(14, capability.token(), service.token(), 0, 0, 0, 0,),
+            Ok(SyscallRequest::CancelReceive {
+                capability,
+                service,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(14, 0, service.token(), 0, 0, 0, 0),
+            Err(SyscallError::InvalidCapability)
+        );
+        assert_eq!(
+            SyscallRequest::decode(14, capability.token(), 0, 0, 0, 0, 0),
+            Err(SyscallError::InvalidObject)
+        );
+        for arguments in [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] {
+            assert_eq!(
+                SyscallRequest::decode(
+                    14,
+                    capability.token(),
+                    service.token(),
+                    arguments[0],
+                    arguments[1],
+                    arguments[2],
+                    arguments[3],
                 ),
                 Err(SyscallError::ReservedArgument)
             );
