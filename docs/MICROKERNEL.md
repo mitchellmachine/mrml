@@ -10422,3 +10422,13 @@ backend.
 Patent review: `NOT_TRIGGERED` — exact typed-record matching and rollback of a
 consumed capability pair are conventional authority-boundary composition. See
 `docs/patents/REVIEW_LOG.md`.
+
+Mapped-transfer teardown errors now expose the exact retained teardown state
+through one variant-independent accessor. This lets a service lifecycle owner
+persist task-retirement, authority, mapping, backing, and object-release
+progress without re-decoding backend-specific error variants. The Linux-host
+release kernel suite passes 649 tests and the release build passes.
+
+Patent review: `NOT_TRIGGERED` — exposing already retained retry state through a
+typed accessor is conventional lifecycle plumbing. See
+`docs/patents/REVIEW_LOG.md`.

@@ -1166,6 +1166,20 @@ pub enum NativeComponentServiceMappedReadTransferTeardownError<F, S, B> {
     },
 }
 
+impl<F, S, B> NativeComponentServiceMappedReadTransferTeardownError<F, S, B> {
+    pub const fn state(&self) -> NativeComponentServiceMappedReadTransferTeardown {
+        match self {
+            Self::TaskStillLive { state, .. }
+            | Self::Authority { state, .. }
+            | Self::Runtime { state, .. }
+            | Self::ProviderMapping { state, .. }
+            | Self::LocalMapping { state, .. }
+            | Self::Backing { state, .. }
+            | Self::Object { state, .. } => *state,
+        }
+    }
+}
+
 impl NativeComponentServiceMappedReadTransferTask {
     pub const fn construction(self) -> NativeComponentServiceReadTransferTask {
         self.construction
@@ -4603,6 +4617,14 @@ mod tests {
                 task,
             }) => {
                 assert_eq!(task, local_task);
+                assert_eq!(
+                    NativeComponentServiceMappedReadTransferTeardownError::<(), (), ()>::TaskStillLive {
+                        state,
+                        task,
+                    }
+                    .state(),
+                    state
+                );
                 state
             }
             other => panic!("unexpected live-task teardown result: {other:?}"),
