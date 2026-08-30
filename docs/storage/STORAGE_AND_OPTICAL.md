@@ -816,8 +816,10 @@ PCI classes, and manifests do not authorize.
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
 interface passes eleven focused tests and the filesystem interface's canonical probe
-codec, exact-generation isolated transport, and canonical lookup codec pass five
-focused Linux-host tests. Lookup frames bind exact volume, mount, and directory
+probe, mount, and lookup codecs plus exact-generation isolated transports pass
+six focused Linux-host tests. Mount binds the volume generation and bounded
+options range and returns only a nonzero mount generation or typed failure.
+Lookup frames bind exact volume, mount, and directory
 generations and a bounded borrowed name; responses expose only a nonzero object
 identity or a typed error, never authority. The isolated lookup transport retains
 the exact provider endpoint generation and rejects memory beyond its admitted

@@ -1154,3 +1154,9 @@ request binds exact volume, mount, and directory generations and one bounded
 borrowed name range. A successful response carries only a nonzero object
 identity; it cannot encode a capability, and every typed failure requires the
 identity field to remain zero.
+
+Filesystem mount framing likewise carries state identity, not authority. A
+canonical request binds one exact volume handle and bounded options view; a
+successful response carries only a nonzero mount generation, while typed errors
+must carry zero. Exact endpoint routing and the runtime's separately delivered
+capabilities remain the authorization boundary.

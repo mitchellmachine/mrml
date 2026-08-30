@@ -10,6 +10,8 @@ pub const MAX_FILESYSTEM_REPORT_BYTES: u64 = 64 * 1024;
 pub const ABI_CALL_HEADER_BYTES: usize = 72;
 pub const PROBE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
 pub const PROBE_RESPONSE_BYTES: usize = 16;
+pub const MOUNT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
+pub const MOUNT_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
@@ -55,6 +57,23 @@ pub trait FilesystemLookupEndpoint {
         request: &[u8; LOOKUP_REQUEST_BYTES],
         memory: &mut [u8],
     ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemMountTransport {
+    fn mount(
+        &mut self,
+        request: &[u8; MOUNT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemMountEndpoint {
+    fn invoke_mount(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; MOUNT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError>;
 }
 
 pub struct IsolatedFilesystemTransport<E> {
@@ -115,6 +134,20 @@ impl<E: FilesystemLookupEndpoint> FilesystemLookupTransport for IsolatedFilesyst
         }
         decode_lookup_request(request, memory.len() as u64)?;
         self.service.invoke_lookup(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemMountEndpoint> FilesystemMountTransport for IsolatedFilesystemTransport<E> {
+    fn mount(
+        &mut self,
+        request: &[u8; MOUNT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_mount_request(request, memory.len() as u64)?;
+        self.service.invoke_mount(self.endpoint, request, memory)
     }
 }
 
@@ -199,6 +232,91 @@ pub fn decode_probe_response(
         0 if confidence <= 100 => Ok(Ok(confidence)),
         1 if confidence == 0 => Ok(Err(ProbeError::InvalidRequest)),
         2 if confidence == 0 => Ok(Err(ProbeError::UnsupportedFilesystem)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
+pub fn encode_mount_request(
+    volume: OpaqueHandle,
+    options: BorrowedReadView,
+) -> Result<[u8; MOUNT_REQUEST_BYTES], ProtocolError> {
+    let request = MountRequest { volume, options };
+    if !request.validate() {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; MOUNT_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_MOUNT.to_le_bytes());
+    bytes[56..64].copy_from_slice(&24_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(MOUNT_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&options.offset().to_le_bytes());
+    bytes[88..96].copy_from_slice(&options.length().to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_mount_request(
+    bytes: &[u8; MOUNT_REQUEST_BYTES],
+    memory_length: u64,
+) -> Result<MountRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_MOUNT
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 24
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != MOUNT_RESPONSE_BYTES as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let options = BorrowedReadView::within(
+        u64::from_le_bytes(bytes[80..88].try_into().unwrap()),
+        u64::from_le_bytes(bytes[88..96].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let request = MountRequest { volume, options };
+    request
+        .validate()
+        .then_some(request)
+        .ok_or(ProtocolError::InvalidRequest)
+}
+
+pub fn encode_mount_response(result: Result<MountResponse, MountError>) -> [u8; 16] {
+    let mut bytes = [0; MOUNT_RESPONSE_BYTES];
+    let (status, generation) = match result {
+        Ok(generation) => (0, generation),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&generation.to_le_bytes());
+    bytes
+}
+
+pub fn decode_mount_response(
+    bytes: &[u8; MOUNT_RESPONSE_BYTES],
+) -> Result<Result<MountResponse, MountError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let generation = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if generation != 0 => Ok(Ok(generation)),
+        1 if generation == 0 => Ok(Err(MountError::InvalidRequest)),
+        2 if generation == 0 => Ok(Err(MountError::StaleObject)),
+        3 if generation == 0 => Ok(Err(MountError::PermissionDenied)),
+        4 if generation == 0 => Ok(Err(MountError::InconsistentFilesystem)),
         _ => Err(ProtocolError::InvalidResponse),
     }
 }
@@ -457,6 +575,59 @@ mod tests {
         assert_eq!(
             transport.lookup(&request, &mut [0; 33]),
             Err(ProtocolError::InvalidRequest)
+        );
+    }
+
+    struct MountEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemMountEndpoint for MountEndpoint {
+        fn invoke_mount(
+            &mut self,
+            endpoint: OpaqueHandle,
+            _request: &[u8; MOUNT_REQUEST_BYTES],
+            _memory: &mut [u8],
+        ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            Ok(encode_mount_response(Ok(12)))
+        }
+    }
+
+    #[test]
+    fn mount_codec_and_transport_bind_volume_options_and_endpoint_generations() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let options = BorrowedReadView::within(8, 8, 32).unwrap();
+        let request = encode_mount_request(volume, options).unwrap();
+        assert_eq!(
+            decode_mount_request(&request, 32),
+            Ok(MountRequest { volume, options })
+        );
+        let service = MountEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_mount_response(&transport.mount(&request, &mut [0; 32]).unwrap()),
+            Ok(Ok(12))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        assert_eq!(
+            transport.mount(&request, &mut [0; 33]),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_mount_request(&request, 15),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_mount_response(&encode_mount_response(Ok(0))),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut invalid = encode_mount_response(Err(MountError::PermissionDenied));
+        invalid[8] = 1;
+        assert_eq!(
+            decode_mount_response(&invalid),
+            Err(ProtocolError::InvalidResponse)
         );
     }
 }
