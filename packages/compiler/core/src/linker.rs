@@ -584,6 +584,10 @@ pub enum PeWritableRelocationTarget<'a> {
         offset: usize,
     },
     TextSymbol(&'a str),
+    TlsSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
     WritableSymbol(&'a str),
 }
 
@@ -3892,6 +3896,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
     };
     let mut readonly_sections = CoffSectionSet::empty();
     let mut text_sections = CoffSectionSet::empty();
+    let mut tls_sections = CoffSectionSet::empty();
     let mut writable_sections = CoffSectionSet::empty();
     let mut readonly_span = None;
     let mut writable = None;
@@ -3913,6 +3918,8 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
         }
         if name == ".text" || name.starts_with(".text$") {
             text_sections.insert(section + 1)?;
+        } else if name.starts_with(".tls$") {
+            tls_sections.insert(section + 1)?;
         } else if name == ".rdata" || name.starts_with(".rdata$") {
             let raw = usize::try_from(read_u32(object, header + 20)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -4089,6 +4096,27 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                 symbols_end,
                 string_size,
             )?)
+        } else if tls_sections.contains(target_section_index) {
+            let object_identity = object_identity.ok_or(LinkerError::UnsupportedCoffTls)?;
+            let target_header = 20 + (target_section_index - 1) * 40;
+            let target_size = usize::try_from(read_u32(object, target_header + 16)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let target_value = usize::try_from(read_u32(object, target + 8)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let addend = usize::try_from(read_u64_coff(bytes, field_offset)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let offset = target_value
+                .checked_add(addend)
+                .filter(|offset| *offset <= target_size)
+                .ok_or(LinkerError::InvalidRelocationOffset)?;
+            PeWritableRelocationTarget::TlsSection {
+                identity: CoffSectionIdentity::new(
+                    object_identity,
+                    u16::try_from(target_section_index)
+                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                )?,
+                offset,
+            }
         } else if writable_sections.contains(target_section_index) {
             let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
             if (storage_class != 2 && storage_class != 3)
@@ -7742,6 +7770,9 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                 PeWritableRelocationTarget::Readonly { owner, .. } => validate_symbol(owner)?,
                 PeWritableRelocationTarget::CoffSection { .. } => {}
                 PeWritableRelocationTarget::TextSymbol(symbol) => validate_symbol(symbol)?,
+                PeWritableRelocationTarget::TlsSection { .. } => {
+                    return Err(LinkerError::UnsupportedCoffTls);
+                }
                 PeWritableRelocationTarget::WritableSymbol(symbol) => validate_symbol(symbol)?,
             }
             relocation
@@ -8027,6 +8058,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                 PeWritableRelocationTarget::TextSymbol(symbol) => TEXT_RVA
                     .checked_add(resolve_symbol(inputs, &linked.layouts, symbol)?)
                     .ok_or(LinkerError::OffsetOverflow)?,
+                PeWritableRelocationTarget::TlsSection { .. } => unreachable!(),
                 PeWritableRelocationTarget::WritableSymbol(symbol) => {
                     let target_index = writable_index(symbol)?;
                     writable_rva
@@ -11756,6 +11788,32 @@ mod tests {
             &[PeWritableRelocation {
                 offset: 0,
                 target: PeWritableRelocationTarget::TextSymbol("entry"),
+            }]
+        );
+
+        let mut tls_target = object.clone();
+        tls_target[56..60].copy_from_slice(&0x6000_0020u32.to_le_bytes());
+        tls_target[60..68].fill(0);
+        tls_target[60..66].copy_from_slice(b".tls$a");
+        tls_target[96..100].copy_from_slice(&0xc000_0040u32.to_le_bytes());
+        tls_target[136..140].copy_from_slice(&0xc040_0040u32.to_le_bytes());
+        let mut tls_storage = storage;
+        let tls_writable = decode_x86_64_coff_writable_data_fragment_with_section_identities(
+            &tls_target,
+            0,
+            "entry",
+            9,
+            &mut tls_storage,
+        )
+        .unwrap();
+        assert_eq!(
+            tls_writable.relocations,
+            &[PeWritableRelocation {
+                offset: 0,
+                target: PeWritableRelocationTarget::TlsSection {
+                    identity: CoffSectionIdentity::new(9, 2).unwrap(),
+                    offset: 0,
+                },
             }]
         );
         let mut missing_storage = [PeWritableRelocation {
