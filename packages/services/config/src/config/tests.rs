@@ -2223,6 +2223,95 @@ mod tests {
             )
             .unwrap();
 
+        let next = match runtime.receive_or_block_current().unwrap() {
+            Err(wait) => wait,
+            Ok(_) => panic!("manager must block after replying"),
+        };
+        match next.outcome() {
+            ScheduleOutcome::Switch { to, .. } if to == sender => {}
+            ScheduleOutcome::Switch { to, .. } if to == receiver => assert!(matches!(
+                runtime.yield_current().unwrap(),
+                ScheduleOutcome::Switch { to, .. } if to == sender
+            )),
+            _ => panic!("response must schedule the sender directly or after the receiver"),
+        }
+        let accepted_response = runtime.receive_ipc(sender).unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(accepted_response.payload()),
+            SupervisionResponse::decode(&response_wire)
+        );
+
+        let replay_request = SupervisionRequest {
+            request_id: 59,
+            ..accepted_request
+        };
+        replay_request.encode_message(&mut request_wire).unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                manager,
+                &mut endpoint,
+                sender_endpoint,
+                &request_wire,
+                &[(source_control, Rights::CONTROL)],
+            )
+            .unwrap();
+        let next = match runtime.receive_or_block_current().unwrap() {
+            Err(wait) => wait,
+            Ok(_) => panic!("sender must block for the replay response"),
+        };
+        match next.outcome() {
+            ScheduleOutcome::Switch { to, .. } if to == manager => {}
+            ScheduleOutcome::Switch { to, .. } if to == receiver => assert!(matches!(
+                runtime.yield_current().unwrap(),
+                ScheduleOutcome::Switch { to, .. } if to == manager
+            )),
+            _ => panic!("replay must schedule the manager directly or after the receiver"),
+        }
+        let replay_message = runtime.receive_ipc(manager).unwrap();
+        let replay_control = replay_message.capabilities().next().unwrap();
+        {
+            let authorizer = KernelCancellationAuthorizer {
+                supervisor: &supervisor,
+                requester: manager,
+                state: RefCell::new(CancellationState {
+                    runtime: &mut runtime,
+                    executor: &mut executor,
+                    escrow: &mut escrow,
+                }),
+            };
+            dispatch_supervision_cancel_receive_envelope(
+                &authorizer,
+                replay_message.payload(),
+                &[replay_control],
+                &mut response_wire,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            SupervisionResponse::decode(&response_wire),
+            Ok(SupervisionResponse {
+                request_id: 59,
+                status: ResponseStatus::Rejected,
+                service: receiver_service,
+                state: SupervisionState::Exited,
+                detail: 0,
+            })
+        );
+        assert!(!executor.has_pending(receiver).unwrap());
+        assert_eq!(executor.validate_escrow(&escrow), Ok(()));
+        runtime.revoke_capability(manager, replay_control).unwrap();
+        runtime
+            .deliver_ipc(
+                manager,
+                sender,
+                &mut endpoint,
+                manager_endpoint,
+                &response_wire,
+                &[],
+            )
+            .unwrap();
+
         let retirement = supervisor.exit_current(&mut runtime).unwrap();
         assert_eq!(retirement.service, manager_service);
         assert!(retirement.dispatch.user().is_some());

@@ -12060,6 +12060,13 @@ Only a second independently delivered request carrying exact `CONTROL` may then
 cancel the same wait. This makes denial non-destructive and proves that a later
 success cannot reuse or broaden the rejected authority.
 
+After that success, the sender consumes the canonical successful response and
+transfers a fresh exact `CONTROL` derivation for a replay request. The manager
+receives valid authority but returns a canonical rejection because the executor
+owner and escrow entry are already absent, releases the fresh handle, and leaves
+the empty tables coherent. Thus a live service identity plus newly delegated
+authority cannot recreate or replay a consumed cancellation transition.
+
 The test requires cancellation to wake the receiver with the distinct
 `Cancelled` completion, retire both executor and escrow state coherently, and
 leave the sender's `CONTROL | DELEGATE` source handle authorized. It explicitly
@@ -12070,9 +12077,9 @@ values in different task spaces are not treated as shared identity or authority.
 
 All 55 native configuration-service tests pass, including the complete
 three-domain scheduling, denial, fresh capability transfer, cancellation,
-response, release, and manager-cleanup simulation. This is deterministic unit
-simulation evidence; it does not add KVM, WHP, hosted guest, proof-port, or
-physical-hardware execution evidence.
+response consumption, replay rejection, release, and manager-cleanup
+simulation. This is deterministic unit simulation evidence; it does not add
+KVM, WHP, hosted guest, proof-port, or physical-hardware execution evidence.
 
 Patent review: `NOT_TRIGGERED` — composing existing bounded scheduling,
 capability transfer, cancellation, and supervised cleanup mechanisms in a
