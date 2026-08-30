@@ -4088,3 +4088,8 @@ The shared prepared-file-write primitive now retains its exact handle,
 principal, and requested write/resize rights and offers commit-time authority
 revalidation before receipt consumption. Revocation leaves both the prepared
 successor and receipt unconsumed; service-specific migrations follow this gate.
+
+Stable configuration is the first service-specific migration to that primitive.
+Checkpoint commit now requires both the retained exact configuration `READ`
+capability and the retained exact storage write/resize authority; revocation of
+the storage handle after staging leaves the publication receipt unconsumed.

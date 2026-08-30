@@ -7199,6 +7199,17 @@ Patent review: `NOT_TRIGGERED` — this is conventional generational handle
 reauthorization at an existing storage transaction boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+Stable configuration publication now uses that authorized file-write commit.
+After revalidating the exact configuration-root `READ` capability, commit also
+rechecks the retained storage handle, principal, file kind, and write/resize
+rights before consuming the transaction receipt. Revocation after checkpoint
+staging leaves the receipt untouched and publishes no stable generation.
+Configuration passes 53 focused tests and storage remains 142 focused tests.
+
+Patent review: `NOT_TRIGGERED` — this composes conventional exact capability
+and generational storage-handle reauthorization at an existing transaction
+commit boundary. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

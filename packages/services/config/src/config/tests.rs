@@ -25,10 +25,11 @@ mod tests {
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
         BlockServiceError, BlockSessionGrant, BlockVolume, BootRecoveryAdmission, CowMetadataImage,
         CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend,
-        FileWriteBackend, OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor,
-        PlatformBlockDeviceIdentity, PlatformBlockTransport, ServicedBlockDevice, StorageObjectId,
-        StorageObjectKind, StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock,
-        VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+        FileWriteBackend, FileWriteCommitError, OwnerApprovedAuthorityCheckpoint,
+        PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
+        ServicedBlockDevice, StorageAuthorityError, StorageObjectId, StorageObjectKind,
+        StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
+        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
         recover_validate_and_commit_stable_authorities,
     };
     use std::vec;
@@ -3552,7 +3553,9 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared.commit(&authorizer, &mut receipt).unwrap();
+        let stable = prepared
+            .commit(&authorizer, &authority, &mut receipt)
+            .unwrap();
         assert_eq!(authorizer.calls.get(), 2);
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.file().generation(), 2);
@@ -3827,7 +3830,9 @@ mod tests {
                 StorageTransaction::<1, 2>::new(StorageTransactionId::new(72).unwrap(), 2).unwrap();
             prepared.admit(&mut transaction).unwrap();
             let mut receipt = transaction.publish(&plan, &mut volume).unwrap();
-            let stable = prepared.commit(&capabilities, &mut receipt).unwrap();
+            let stable = prepared
+                .commit(&capabilities, &storage_authority, &mut receipt)
+                .unwrap();
             assert_eq!(receipt.remaining(), 0);
 
             let grants = [StorageRecoveryGrant::root(
@@ -4540,7 +4545,53 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared.commit(&capabilities, &mut receipt).unwrap();
+        authority.revoke(file, stable_principal()).unwrap();
+        assert_eq!(receipt.remaining(), 1);
+        assert!(matches!(
+            prepared.commit(&capabilities, &authority, &mut receipt),
+            Err(StableConfigurationCommitError::Storage(
+                FileWriteCommitError::Authority(StorageAuthorityError::InvalidHandle)
+            ))
+        ));
+        assert_eq!(receipt.remaining(), 1);
+
+        let file = authority
+            .insert(
+                stable_object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                stable_principal(),
+            )
+            .unwrap();
+        let (_, next, metadata, _) = stable_layout(&expected[..checkpoint.length]);
+        let prepared = prepare_stable_configuration(
+            &service,
+            &capabilities,
+            root,
+            &current,
+            &authority,
+            file,
+            stable_principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut output,
+            &mut backend,
+        )
+        .unwrap();
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(73).unwrap(), 2).unwrap();
+        prepared.admit(&mut transaction).unwrap();
+        let (_, _, _, images) = stable_layout(&expected[..checkpoint.length]);
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let stable = prepared
+            .commit(&capabilities, &authority, &mut receipt)
+            .unwrap();
 
         let mut recovered_bytes = [0xa5; 512];
         assert!(matches!(

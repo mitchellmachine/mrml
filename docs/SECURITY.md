@@ -1064,3 +1064,9 @@ Prepared file data and metadata are not authority. The authorized file-write
 commit retains and rechecks the exact storage handle, principal, object kind,
 and write/resize rights before consuming its transaction receipt. Revocation
 returns the prepared state and does not advance the receipt.
+
+Stable configuration checkpoint commit uses the authorized file-write boundary
+after its independent exact root/read check. Thus neither checkpoint bytes nor
+successful staging preserve storage authority: revoking the retained file
+handle before commit prevents publication and leaves the one-use receipt
+unconsumed.

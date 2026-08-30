@@ -29,15 +29,15 @@ use mrml_storage::{
     AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
     BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
     BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
-    FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
-    InstalledRecoverySessionError, MetadataError, MetadataPointer, NativeBlockCorrelationError,
-    NativeSataBlockRoute, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
-    PlatformBlockTransport, PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
-    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
-    SataNativeBlockCorrelationError, SataNativeBlockCorrelationVerifier, ServicedBlockDevice,
-    StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal,
-    StorageTransaction, TransactionError, TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader,
-    VolumeId, recover_reachable_state,
+    FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteCommitError,
+    FileWriteError, InstalledRecoverySessionError, MetadataError, MetadataPointer,
+    NativeBlockCorrelationError, NativeSataBlockRoute, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, PreparedFileWrite, ReachableFileSelection,
+    RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend,
+    SUPERBLOCK_BYTES, SataNativeBlockCorrelationError, SataNativeBlockCorrelationVerifier,
+    ServicedBlockDevice, StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId,
+    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1189,7 +1189,7 @@ pub struct PreparedStableConfiguration<const EXTENTS: usize> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StableConfigurationCommitError {
     Configuration(ConfigError),
-    Transaction(TransactionError),
+    Storage(FileWriteCommitError),
 }
 
 impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
@@ -1208,9 +1208,14 @@ impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
         transaction.admit_file(&self.file)
     }
 
-    pub fn commit<A: CapabilityAuthorizer + ?Sized, const PARTICIPANTS: usize>(
+    pub fn commit<
+        A: CapabilityAuthorizer + ?Sized,
+        const PARTICIPANTS: usize,
+        const AUTHORITIES: usize,
+    >(
         self,
         capabilities: &A,
+        storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
     ) -> Result<StableConfiguration<EXTENTS>, StableConfigurationCommitError> {
         capabilities
@@ -1218,8 +1223,8 @@ impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
             .map_err(StableConfigurationCommitError::Configuration)?;
         let file = self
             .file
-            .commit_transaction(receipt)
-            .map_err(StableConfigurationCommitError::Transaction)?;
+            .commit_transaction_authorized(storage_authority, receipt)
+            .map_err(|(_, error)| StableConfigurationCommitError::Storage(error))?;
         Ok(StableConfiguration {
             file,
             checkpoint: self.checkpoint,
