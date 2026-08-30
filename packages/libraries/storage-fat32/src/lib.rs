@@ -8,8 +8,8 @@ mod service_loop;
 mod userspace_syscall_adapter;
 
 use mrml_interface_storage_filesystem_v2::{
-    decode_probe_request, encode_probe_response, FilesystemTransport, ProbeError, ProtocolError,
-    PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+    decode_probe_request, encode_probe_response, FilesystemTransport, MountResponse, OpaqueHandle,
+    ProbeError, ProtocolError, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
 };
 
 pub use service_loop::{
@@ -71,6 +71,128 @@ pub struct Fat32Geometry {
     pub fs_info_sector: Option<u16>,
     pub backup_boot_sector: Option<u16>,
     pub volume_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32MountError {
+    AlreadyMounted,
+    Capacity,
+    GenerationExhausted,
+    StaleMount,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Fat32Mount {
+    volume: OpaqueHandle,
+    generation: u64,
+    root: OpaqueHandle,
+    geometry: Fat32Geometry,
+}
+
+pub struct Fat32MountTable<const N: usize> {
+    mounts: [Option<Fat32Mount>; N],
+    next_mount_generation: Option<u64>,
+    next_root_generation: Option<u32>,
+}
+
+impl<const N: usize> Fat32MountTable<N> {
+    pub const fn new() -> Self {
+        Self {
+            mounts: [None; N],
+            next_mount_generation: Some(1),
+            next_root_generation: Some(1),
+        }
+    }
+
+    pub fn mount(
+        &mut self,
+        volume: OpaqueHandle,
+        geometry: Fat32Geometry,
+    ) -> Result<MountResponse, Fat32MountError> {
+        if self
+            .mounts
+            .iter()
+            .flatten()
+            .any(|mount| mount.volume == volume)
+        {
+            return Err(Fat32MountError::AlreadyMounted);
+        }
+        let slot = self
+            .mounts
+            .iter()
+            .position(Option::is_none)
+            .ok_or(Fat32MountError::Capacity)?;
+        let generation = self
+            .next_mount_generation
+            .ok_or(Fat32MountError::GenerationExhausted)?;
+        let root_generation = self
+            .next_root_generation
+            .ok_or(Fat32MountError::GenerationExhausted)?;
+        let root_index = u32::try_from(slot).map_err(|_| Fat32MountError::Capacity)?;
+        let root = OpaqueHandle::new(root_index, root_generation)
+            .ok_or(Fat32MountError::GenerationExhausted)?;
+        self.next_mount_generation = generation.checked_add(1);
+        self.next_root_generation = root_generation.checked_add(1);
+        self.mounts[slot] = Some(Fat32Mount {
+            volume,
+            generation,
+            root,
+            geometry,
+        });
+        Ok(MountResponse { generation, root })
+    }
+
+    pub fn geometry(
+        &self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+    ) -> Result<Fat32Geometry, Fat32MountError> {
+        self.mounts
+            .iter()
+            .flatten()
+            .find(|mount| {
+                mount.volume == volume && mount.generation == generation && mount.root == root
+            })
+            .map(|mount| mount.geometry)
+            .ok_or(Fat32MountError::StaleMount)
+    }
+
+    pub fn unmount(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+    ) -> Result<OpaqueHandle, Fat32MountError> {
+        let slot = self
+            .mounts
+            .iter()
+            .position(|mount| {
+                mount.is_some_and(|mount| {
+                    mount.volume == volume && mount.generation == generation
+                })
+            })
+            .ok_or(Fat32MountError::StaleMount)?;
+        let root = self.mounts[slot]
+            .take()
+            .ok_or(Fat32MountError::StaleMount)?
+            .root;
+        Ok(root)
+    }
+
+    #[cfg(test)]
+    const fn with_next_generations(mount: u64, root: u32) -> Self {
+        Self {
+            mounts: [None; N],
+            next_mount_generation: Some(mount),
+            next_root_generation: Some(root),
+        }
+    }
+}
+
+impl<const N: usize> Default for Fat32MountTable<N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -975,6 +1097,57 @@ mod tests {
         assert_eq!(geometry.fs_info_sector, Some(1));
         assert_eq!(geometry.backup_boot_sector, Some(6));
         assert_eq!(geometry.volume_id, 0x1234_5678);
+    }
+
+    #[test]
+    fn mount_table_issues_exact_root_identity_and_invalidates_it_on_unmount() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let other = OpaqueHandle::new(5, 7).unwrap();
+        let mut mounts = Fat32MountTable::<1>::new();
+        let first = mounts.mount(volume, geometry).unwrap();
+        assert_eq!(first.generation, 1);
+        assert_eq!(first.root, OpaqueHandle::new(0, 1).unwrap());
+        assert_eq!(
+            mounts.geometry(volume, first.generation, first.root),
+            Ok(geometry)
+        );
+        assert_eq!(
+            mounts.mount(volume, geometry),
+            Err(Fat32MountError::AlreadyMounted)
+        );
+        assert_eq!(
+            mounts.mount(other, geometry),
+            Err(Fat32MountError::Capacity)
+        );
+        assert_eq!(
+            mounts.geometry(volume, first.generation + 1, first.root),
+            Err(Fat32MountError::StaleMount)
+        );
+        assert_eq!(mounts.unmount(volume, first.generation), Ok(first.root));
+        assert_eq!(
+            mounts.geometry(volume, first.generation, first.root),
+            Err(Fat32MountError::StaleMount)
+        );
+        let second = mounts.mount(volume, geometry).unwrap();
+        assert_eq!(second.generation, 2);
+        assert_eq!(second.root, OpaqueHandle::new(0, 2).unwrap());
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn mount_generation_exhaustion_never_reuses_lifecycle_or_root_identity() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let mut mounts = Fat32MountTable::<1>::with_next_generations(u64::MAX, u32::MAX);
+        let final_mount = mounts.mount(volume, geometry).unwrap();
+        assert_eq!(final_mount.generation, u64::MAX);
+        assert_eq!(final_mount.root.generation(), u32::MAX);
+        mounts.unmount(volume, final_mount.generation).unwrap();
+        assert_eq!(
+            mounts.mount(volume, geometry),
+            Err(Fat32MountError::GenerationExhausted)
+        );
     }
 
     #[test]

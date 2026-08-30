@@ -901,17 +901,22 @@ register-level syscall adapter erase transient buffers on every path. Cleanup
 records a received leaf only after the envelope declares exactly one capability
 and its token is structurally valid, so absent or malformed token bytes cannot
 revoke an untransferred object; later failures still release the validated leaf. The
+provider now also has a fixed-capacity mount/root lifecycle table. It accepts
+only parsed `Fat32Geometry`, allocates fresh independent mount and root
+generations, exact-matches volume/mount/root on access, and atomically invalidates
+the pair on unmount. Duplicate, capacity, stale, and permanent generation-
+exhaustion failures preserve state. The table grants no capability and is not yet
+wired to the syscall loop. Thirty-seven focused Linux-host tests pass. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
-serves calls until fail-stop or supervised replacement. Thirty-five focused
-tests pass on Linux; prior Windows evidence covered thirty-three tests. The
-MRML-native release binary builds on Windows
+serves calls until fail-stop or supervised replacement. Prior Windows evidence
+covered thirty-three tests. The MRML-native release binary builds on Windows
 as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. The
 validated backend now makes the block-provider health check mandatory during
 replacement:
 it cleans and erases the old generation, launches the candidate, publishes only
 after a valid catalog, and explicitly cleans a failed candidate before the slot
 becomes unavailable. Retry therefore launches fresh state. Storage passes 142
-tests on both hosts. This does not implement mount, lookup/open policy,
+tests on both hosts. This does not implement syscall-dispatched mount, lookup/open policy,
 check/repair, format, writes, installed-kernel launch, or physical interoperability
 evidence.
 

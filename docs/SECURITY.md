@@ -1162,6 +1162,12 @@ structurally valid root identity, while typed errors must carry zero for both.
 The root identity cannot encode a capability. Exact endpoint routing and the
 runtime's separately delivered capabilities remain the authorization boundary.
 
+The FAT32 mount table likewise stores identity and validated geometry only. It
+requires exact volume, mount generation, and root handle equality; unmount removes
+the record so both identities become stale. Slot reuse advances independent
+generations, and exhaustion fails permanently rather than wrapping. The table
+does not create an open capability or authorize block access.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

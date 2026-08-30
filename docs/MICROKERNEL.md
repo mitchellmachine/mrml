@@ -7402,6 +7402,18 @@ Patent review: `NOT_TRIGGERED` — a bounded named mount response containing
 separate lifecycle and root identities is a conventional IPC/filesystem contract
 mechanism. See `docs/patents/REVIEW_LOG.md`.
 
+The FAT32 provider now has a fixed-capacity mount/root lifecycle table above its
+validated geometry parser. Admission issues fresh independent lifecycle and root
+generations, exact-matches volume/mount/root on every geometry lookup, and removes
+the complete record on unmount. Duplicate, capacity, stale, and generation-
+exhaustion paths preserve state; maximum generations are issued once and never
+wrap. This is provider-local identity state, not an open capability or live
+syscall dispatch. The focused Linux-host provider suite passes thirty-seven tests.
+
+Patent review: `NOT_TRIGGERED` — bounded slots, monotonic generations, exact
+identity matching, and atomic record removal are conventional resource-lifecycle
+mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Canonical unmount framing closes the same exact lifecycle without accepting a
 zero or stale-by-construction mount generation. It routes through the retained
 provider endpoint and returns either one nonzero completion serial or a typed
