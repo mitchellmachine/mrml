@@ -7401,6 +7401,16 @@ provider endpoint and returns either one nonzero completion serial or a typed
 zero-serial failure; cross-operation and status/data mixtures fail closed. The
 focused Linux-host interface suite passes seven tests.
 
+Canonical filesystem read framing binds the exact volume, mount, file, endpoint,
+file offset, and nonempty writable range. Checked offset arithmetic fails before
+invocation; completion cannot exceed the borrowed range or 1 MiB interface bound.
+Zero-byte EOF is a valid success, while every typed failure carries zero bytes.
+The focused Linux-host interface suite passes eight tests.
+
+Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
+completion-count validation, and typed read errors are conventional IPC and file
+I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — exact lifecycle generations, typed completion
 serials, canonical framing, and status/data exclusion are conventional IPC and
 resource-lifecycle checks. See `docs/patents/REVIEW_LOG.md`.

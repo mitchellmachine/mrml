@@ -815,17 +815,20 @@ PCI classes, and manifests do not authorize.
 - Existing-object reuse: **HIGH**
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
-interface passes eleven focused tests and the filesystem interface's canonical probe
-probe, mount/unmount, and lookup codecs plus exact-generation isolated transports
-pass seven focused Linux-host tests. Mount binds the volume generation and bounded
-options range and returns only a nonzero mount generation or typed failure.
+interface passes eleven focused tests and the filesystem interface's canonical
+probe, mount/unmount, lookup, and read codecs plus exact-generation isolated
+transports pass eight focused Linux-host tests. Mount binds the volume generation
+and bounded options range and returns only a nonzero mount generation or typed failure.
 Unmount consumes the exact nonzero mount generation through the same endpoint
 and returns a nonzero completion serial or typed zero-serial failure.
 Lookup frames bind exact volume, mount, and directory
 generations and a bounded borrowed name; responses expose only a nonzero object
 identity or a typed error, never authority. The isolated lookup transport retains
 the exact provider endpoint generation and rejects memory beyond its admitted
-bound before invocation. The fixed-capacity module registry is
+bound before invocation. Filesystem read binds the exact volume, mount, file,
+offset, and nonempty writable
+range; zero-byte EOF success remains valid, while completion over-counts and
+error/data mixtures fail closed. The fixed-capacity module registry is
 also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
 endpoint signal authorities separately; exact-matches all generations; permits

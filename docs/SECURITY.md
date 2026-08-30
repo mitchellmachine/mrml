@@ -1165,3 +1165,9 @@ Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode
 zero.
+
+Filesystem reads bind the exact volume, mount, file, provider endpoint, file
+offset, and writable memory range before invocation. Checked arithmetic prevents
+offset wrapping; successful byte counts cannot exceed caller authority, and
+typed failures carry no byte count. A zero-byte success represents EOF rather
+than an I/O grant.

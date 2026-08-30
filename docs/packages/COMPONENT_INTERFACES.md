@@ -428,7 +428,13 @@ options range, rejects status/generation mixtures, and routes through the exact
 endpoint with the same memory bound. The complete focused interface suite passes
 six Linux-host tests. Canonical unmount framing now binds the exact nonzero mount
 generation and endpoint; success carries one nonzero completion serial and typed
-failure carries zero. The complete suite passes seven Linux-host tests. The FAT32 provider now consumes the probe boundary through
+failure carries zero. The complete suite passes seven Linux-host tests.
+Canonical read framing now binds exact volume, mount, and file generations,
+checked file-offset arithmetic, and one bounded writable range. The isolated
+transport preserves the endpoint and memory bound; response decoding permits
+zero-byte EOF but rejects over-counts and error/data mixtures. The complete suite
+passes eight Linux-host tests. The FAT32 provider now consumes the probe boundary
+through
 an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
 existing AHCI code was moved intact out of `mrml-storage`, the package advertises

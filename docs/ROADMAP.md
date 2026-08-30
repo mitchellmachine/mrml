@@ -22,12 +22,15 @@ Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
 schemas define bounded opaque-handle operations for isolated library providers.
 The block interface passes one focused test; the filesystem interface's canonical
-probe, mount/unmount, and lookup codecs plus exact-generation isolated transports
-pass seven focused tests on Linux. Mount returns only a nonzero generation or typed
-zero-generation error; mount and lookup invocations preserve the exact provider
+probe, mount/unmount, lookup, and read codecs plus exact-generation isolated
+transports pass eight focused tests on Linux. Mount returns only a nonzero
+generation or typed zero-generation error; mount and lookup invocations preserve the exact provider
 endpoint generation and reject memory beyond its admitted bound. Unmount binds
 that exact nonzero generation and returns only a nonzero completion serial or
-typed zero-serial failure. The storage service will
+typed zero-serial failure. The read boundary binds exact volume, mount, file,
+offset, and writable range, permits zero-byte EOF success, and rejects completion
+beyond the caller's range.
+The storage service will
 bind exact admitted generations and restart through complete cleanup rather than
 load path-selected code or reboot. The fixed-capacity registry is now
 **PARTIALLY IMPLEMENTED** with separate authorities, exact generation changes,
