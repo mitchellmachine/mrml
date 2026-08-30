@@ -1628,44 +1628,56 @@ fn mrml_v1_wide_checked_sign_cast_fallback_matches_both_oracle_words() {
 }
 
 #[test]
-fn mrml_v1_wide_checked_sign_cast_unwrap_overflow_traps() {
+fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
     #[cfg(target_os = "windows")]
-    const CHILD: &str = "MRML_SEMANTIC_WIDE_CHECKED_SIGN_CAST_UNWRAP_CHILD";
-    let code = compile(MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE);
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_CHECKED_SIGN_CAST_TRAP_CHILD";
 
     #[cfg(not(target_os = "windows"))]
-    for input in [i128::MIN as u128, u128::MAX] {
-        let pid = unsafe { fork() };
-        assert!(pid >= 0, "fork failed");
-        if pid == 0 {
-            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
-            unsafe { _exit(120) }
+    for source in [
+        MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE,
+        MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE,
+    ] {
+        let code = compile(source);
+        for input in [i128::MIN as u128, u128::MAX] {
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+            assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
         }
-        let mut status = 0;
-        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
-        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
     }
 
     #[cfg(target_os = "windows")]
     if let Some(mode) = std::env::var_os(CHILD) {
         unsafe { SetErrorMode(0x0001 | 0x0002) };
-        let input = if mode == "maximum" { u128::MAX } else { i128::MIN as u128 };
+        let mode = mode.to_string_lossy();
+        let source = if mode.starts_with("expect") {
+            MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE
+        } else {
+            MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE
+        };
+        let code = compile(source);
+        let input = if mode.ends_with("maximum") { u128::MAX } else { i128::MIN as u128 };
         let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
-        panic!("wide checked sign-cast unwrap unexpectedly returned");
+        panic!("wide checked sign-cast trapping consumer unexpectedly returned");
     }
 
     #[cfg(target_os = "windows")]
-    for mode in ["minimum", "maximum"] {
+    for mode in ["unwrap-minimum", "unwrap-maximum", "expect-minimum", "expect-maximum"] {
         let output = current_semantic_test_command()
             .args([
                 "--exact",
-                "mrml_v1_wide_checked_sign_cast_unwrap_overflow_traps",
+                "mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap",
                 "--nocapture",
             ])
             .env(CHILD, mode)
             .output()
-            .expect("launch isolated wide checked-sign-cast unwrap trap probe");
-        assert!(!output.status.success(), "generated checked-sign-cast unwrap trap returned");
+            .expect("launch isolated wide checked-sign-cast consumer trap probe");
+        assert!(!output.status.success(), "generated checked-sign-cast consumer trap returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
