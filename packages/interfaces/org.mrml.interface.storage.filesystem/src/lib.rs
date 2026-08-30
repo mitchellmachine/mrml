@@ -12,6 +12,8 @@ pub const PROBE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
 pub const PROBE_RESPONSE_BYTES: usize = 16;
 pub const MOUNT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
 pub const MOUNT_RESPONSE_BYTES: usize = 16;
+pub const UNMOUNT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
+pub const UNMOUNT_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
@@ -74,6 +76,21 @@ pub trait FilesystemMountEndpoint {
         request: &[u8; MOUNT_REQUEST_BYTES],
         memory: &mut [u8],
     ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemUnmountTransport {
+    fn unmount(
+        &mut self,
+        request: &[u8; UNMOUNT_REQUEST_BYTES],
+    ) -> Result<[u8; UNMOUNT_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemUnmountEndpoint {
+    fn invoke_unmount(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; UNMOUNT_REQUEST_BYTES],
+    ) -> Result<[u8; UNMOUNT_RESPONSE_BYTES], ProtocolError>;
 }
 
 pub struct IsolatedFilesystemTransport<E> {
@@ -148,6 +165,16 @@ impl<E: FilesystemMountEndpoint> FilesystemMountTransport for IsolatedFilesystem
         }
         decode_mount_request(request, memory.len() as u64)?;
         self.service.invoke_mount(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemUnmountEndpoint> FilesystemUnmountTransport for IsolatedFilesystemTransport<E> {
+    fn unmount(
+        &mut self,
+        request: &[u8; UNMOUNT_REQUEST_BYTES],
+    ) -> Result<[u8; UNMOUNT_RESPONSE_BYTES], ProtocolError> {
+        decode_unmount_request(request)?;
+        self.service.invoke_unmount(self.endpoint, request)
     }
 }
 
@@ -317,6 +344,82 @@ pub fn decode_mount_response(
         2 if generation == 0 => Ok(Err(MountError::StaleObject)),
         3 if generation == 0 => Ok(Err(MountError::PermissionDenied)),
         4 if generation == 0 => Ok(Err(MountError::InconsistentFilesystem)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
+pub fn encode_unmount_request(
+    volume: OpaqueHandle,
+    generation: u64,
+) -> Result<[u8; UNMOUNT_REQUEST_BYTES], ProtocolError> {
+    let request = UnmountRequest { volume, generation };
+    if !request.validate() || generation == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; UNMOUNT_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_UNMOUNT.to_le_bytes());
+    bytes[56..64].copy_from_slice(&16_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(UNMOUNT_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&generation.to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_unmount_request(
+    bytes: &[u8; UNMOUNT_REQUEST_BYTES],
+) -> Result<UnmountRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_UNMOUNT
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 16
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != UNMOUNT_RESPONSE_BYTES as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let generation = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+    if generation == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    Ok(UnmountRequest { volume, generation })
+}
+
+pub fn encode_unmount_response(result: Result<UnmountResponse, UnmountError>) -> [u8; 16] {
+    let mut bytes = [0; UNMOUNT_RESPONSE_BYTES];
+    let (status, serial) = match result {
+        Ok(serial) => (0, serial),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&serial.to_le_bytes());
+    bytes
+}
+
+pub fn decode_unmount_response(
+    bytes: &[u8; UNMOUNT_RESPONSE_BYTES],
+) -> Result<Result<UnmountResponse, UnmountError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let serial = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if serial != 0 => Ok(Ok(serial)),
+        1 if serial == 0 => Ok(Err(UnmountError::StaleObject)),
+        2 if serial == 0 => Ok(Err(UnmountError::Busy)),
+        3 if serial == 0 => Ok(Err(UnmountError::IoFailure)),
         _ => Err(ProtocolError::InvalidResponse),
     }
 }
@@ -627,6 +730,62 @@ mod tests {
         invalid[8] = 1;
         assert_eq!(
             decode_mount_response(&invalid),
+            Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    struct UnmountEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemUnmountEndpoint for UnmountEndpoint {
+        fn invoke_unmount(
+            &mut self,
+            endpoint: OpaqueHandle,
+            _request: &[u8; UNMOUNT_REQUEST_BYTES],
+        ) -> Result<[u8; UNMOUNT_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            Ok(encode_unmount_response(Ok(13)))
+        }
+    }
+
+    #[test]
+    fn unmount_codec_and_transport_bind_exact_lifecycle_generation() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let request = encode_unmount_request(volume, 12).unwrap();
+        assert_eq!(
+            decode_unmount_request(&request),
+            Ok(UnmountRequest {
+                volume,
+                generation: 12,
+            })
+        );
+        let service = UnmountEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_unmount_response(&transport.unmount(&request).unwrap()),
+            Ok(Ok(13))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        assert_eq!(
+            encode_unmount_request(volume, 0),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut stale = request;
+        stale[52..56].copy_from_slice(&OP_MOUNT.to_le_bytes());
+        assert_eq!(
+            decode_unmount_request(&stale),
+            Err(ProtocolError::InvalidHeader)
+        );
+        assert_eq!(
+            decode_unmount_response(&encode_unmount_response(Ok(0))),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut invalid = encode_unmount_response(Err(UnmountError::Busy));
+        invalid[8] = 1;
+        assert_eq!(
+            decode_unmount_response(&invalid),
             Err(ProtocolError::InvalidResponse)
         );
     }

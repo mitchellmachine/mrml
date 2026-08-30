@@ -1160,3 +1160,8 @@ canonical request binds one exact volume handle and bounded options view; a
 successful response carries only a nonzero mount generation, while typed errors
 must carry zero. Exact endpoint routing and the runtime's separately delivered
 capabilities remain the authorization boundary.
+
+Filesystem unmount is bound to the exact nonzero mount generation and provider
+endpoint. Its completion serial is lifecycle evidence rather than authority;
+typed errors cannot smuggle a serial, and a successful response cannot encode
+zero.

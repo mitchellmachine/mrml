@@ -7395,6 +7395,16 @@ every typed failure carries zero. The isolated transport retains the exact
 provider endpoint and rejects oversized memory before invocation. The focused
 Linux-host interface suite passes six tests.
 
+Canonical unmount framing closes the same exact lifecycle without accepting a
+zero or stale-by-construction mount generation. It routes through the retained
+provider endpoint and returns either one nonzero completion serial or a typed
+zero-serial failure; cross-operation and status/data mixtures fail closed. The
+focused Linux-host interface suite passes seven tests.
+
+Patent review: `NOT_TRIGGERED` — exact lifecycle generations, typed completion
+serials, canonical framing, and status/data exclusion are conventional IPC and
+resource-lifecycle checks. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — fixed canonical framing, bounded borrowed
 ranges, typed statuses, and reserved-byte validation are conventional IPC codec
 mechanisms. See `docs/patents/REVIEW_LOG.md`.
