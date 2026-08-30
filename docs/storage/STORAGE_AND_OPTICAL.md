@@ -1037,6 +1037,33 @@ Patent review: **NOT_TRIGGERED**. Sequencing an existing authenticated bootstrap
 mandatory scratch erasure, and existing preparation transition is conventional
 service-entry plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
 
+The AHCI data path now has an x86-64 platform-coherent visibility adapter
+**PARTIALLY IMPLEMENTED IN SOURCE**. Its unsafe constructor admits only one
+valid exact data extent and requires the caller to prove that the pinned
+physical mapping is hardware cache coherent for only the authorized AHCI
+requester. Every transition rejects object, allocation-generation, physical-
+base, zero-length, and oversized substitution before applying release ordering
+for CPU publication or acquire ordering for device completion. The adapter
+explicitly performs compiler ordering only: it does not flush cache lines,
+install or revoke IOMMU state, authorize a device, or infer coherence from the
+x86-64 target. The focused Linux suite passes all 122 tests and both Linux
+release and `MRML_NATIVE` release builds pass. A kernel-issued coherence proof,
+installed DMA/IOMMU integration, and physical-platform validation remain
+unimplemented.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Exact descriptor validation and conventional
+compiler acquire/release fences for an already proven coherent DMA mapping are
+ordinary driver plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

@@ -38,6 +38,8 @@ mod service_launch_record;
 mod service_mapping_lifecycle;
 mod service_loop;
 mod userspace_syscall_adapter;
+#[cfg(target_arch = "x86_64")]
+mod x86_coherent_data_sync;
 
 use mrml_interface_storage_block_provider_v1::{
     decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
@@ -188,6 +190,8 @@ pub use userspace_syscall_adapter::{
 };
 #[cfg(target_arch = "x86_64")]
 pub use userspace_syscall_adapter::NativeAhciRawSyscall;
+#[cfg(target_arch = "x86_64")]
+pub use x86_coherent_data_sync::AhciX86CoherentDataSync;
 
 pub struct AhciBlockProvider<'a> {
     devices: &'a [BlockProviderDevice],
