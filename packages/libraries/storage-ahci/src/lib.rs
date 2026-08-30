@@ -25,6 +25,7 @@ mod control_service_loop;
 mod data_service_loop;
 mod dispatch_service;
 mod mapped_command_memory;
+mod mapped_data_buffer;
 mod service_loop;
 mod userspace_syscall_adapter;
 
@@ -113,6 +114,7 @@ pub use dispatch_service::{
     ReceivedAhciDispatchEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
 pub use mapped_command_memory::AhciMappedCommandMemory;
+pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };

@@ -583,6 +583,22 @@ Patent review: `NOT_TRIGGERED` — exact descriptor-to-slice bounds checking for
 already-mapped command memory is conventional memory-safety plumbing and adds no
 new storage or device algorithm. See `docs/patents/REVIEW_LOG.md`.
 
+The matching data-DMA prerequisite is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+One safe adapter binds an exact, at-most-1-MiB mapped DMA extent and admits only
+same-object, same-allocation, same-base bounded prefixes. Its explicit state
+machine separates device-write reads from device-read writes, requires distinct
+platform prepare/complete visibility callbacks, and will not become reusable
+until the exact active bytes are zeroed and their sanitized visibility is
+confirmed. Descriptor substitution, length mismatch, operation reordering, and
+cache-synchronization uncertainty fail closed; uncertain state remains
+unavailable but retains an exact cleanup retry. All 86 focused Linux tests and
+the release build pass. A concrete platform cache backend, IOMMU lifecycle,
+mapping construction, installed entry, and supervisor launch remain unverified.
+
+Patent review: `NOT_TRIGGERED` — directional cache-visibility callbacks and a
+bounded DMA-buffer state machine are conventional driver safety plumbing and
+introduce no new storage algorithm. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

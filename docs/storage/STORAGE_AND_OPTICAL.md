@@ -463,6 +463,24 @@ already-mapped command memory is conventional memory-safety plumbing and adds
 no new storage or device algorithm. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The matching mapped data-DMA prerequisite is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. One safe adapter binds an exact, at-most-1-MiB DMA extent and accepts
+only same-object, same-allocation, same-base bounded prefixes. Its state machine
+keeps device-write reads separate from device-read writes, invokes distinct
+platform prepare/complete visibility callbacks, and cannot return to reusable
+state until it zeroes the exact active bytes and the platform confirms sanitized
+visibility. Descriptor substitution, length mismatch, operation reordering, and
+cache-synchronization uncertainty fail closed; uncertain state retains the exact
+cleanup retry. The focused Linux suite passes 86 tests and the release build
+passes. A concrete platform cache backend, IOMMU lifecycle, mapping construction,
+installed entry, supervisor launch, and physical-device execution remain
+unverified.
+
+Patent review: **NOT_TRIGGERED**. Directional cache-visibility callbacks and a
+bounded DMA-buffer state machine are conventional driver safety plumbing and
+introduce no new storage algorithm. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
