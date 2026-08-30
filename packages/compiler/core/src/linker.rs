@@ -3265,9 +3265,6 @@ pub fn x86_64_coff_text_fragment_count(object: &[u8]) -> Result<usize, LinkerErr
                 .ok_or(LinkerError::OffsetOverflow)?;
         }
     }
-    if fragments == 0 {
-        return Err(LinkerError::InvalidCoff);
-    }
     Ok(fragments)
 }
 
@@ -12086,6 +12083,10 @@ mod tests {
     fn decodes_typed_addr64_writable_coff_data() {
         let object = coff_with_readonly_and_writable_data();
         assert_eq!(x86_64_coff_writable_section_count(&object), Ok(1));
+        let mut data_only = object.clone();
+        data_only[36..40].copy_from_slice(&0u32.to_le_bytes());
+        data_only[76..80].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(x86_64_coff_text_fragment_count(&data_only), Ok(0));
         let mut storage = [PeWritableRelocation {
             offset: 0,
             target: PeWritableRelocationTarget::Readonly {

@@ -69,6 +69,7 @@ struct LinkObjectRefs<'a> {
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
     import_alias: Vector<Option<&'a str>>,
+    archive_indexed: Vector<bool>,
 }
 
 enum LinkFile {
@@ -139,6 +140,7 @@ fn application_main() -> Result<()> {
             &object_refs.archive_group,
             &object_refs.archive_member,
             &object_refs.import_alias,
+            &object_refs.archive_indexed,
             &arguments[arguments.len() - 3],
             output,
         );
@@ -230,7 +232,15 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            write_linked_pe(&[object.bytes()], &[0], &[0], &[None], function, output)?;
+            write_linked_pe(
+                &[object.bytes()],
+                &[0],
+                &[0],
+                &[None],
+                &[true],
+                function,
+                output,
+            )?;
         }
         EmitKind::ElfExecutable => {
             write_linked_elf(&[object.bytes()], &[0], &[0], function, output)?;
@@ -429,6 +439,8 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
         .map_err(|_| anyhow!("could not allocate link member origin list"))?;
     let mut import_alias = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
+    let mut archive_indexed = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate link index-presence list"))?;
     if !objects
         .iter()
         .any(|object| object.as_ref().get(..8) == Some(b"!<arch>\n"))
@@ -445,6 +457,9 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             import_alias
                 .try_push(None)
                 .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
+            archive_indexed
+                .try_push(true)
+                .map_err(|_| anyhow!("could not allocate link index-presence list"))?;
         }
         if refs.is_empty() {
             return Err(anyhow!("link input list contains no object members"));
@@ -454,6 +469,7 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             archive_group,
             archive_member,
             import_alias,
+            archive_indexed,
         });
     }
     let mut referenced = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
@@ -562,6 +578,9 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                         member_index,
                     )?)
                     .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
+                archive_indexed
+                    .try_push(archive.has_symbol_index())
+                    .map_err(|_| anyhow!("could not allocate link index-presence list"))?;
             }
             next_archive_group = next_archive_group
                 .checked_add(1)
@@ -578,6 +597,9 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             import_alias
                 .try_push(None)
                 .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
+            archive_indexed
+                .try_push(true)
+                .map_err(|_| anyhow!("could not allocate link index-presence list"))?;
             if indexed_selection_safe && indexed_selection_initialized {
                 scan_link_object_symbols(object, format, &mut referenced, &mut defined)?;
             }
@@ -591,6 +613,7 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
         archive_group,
         archive_member,
         import_alias,
+        archive_indexed,
     })
 }
 
@@ -1277,9 +1300,13 @@ fn selected_writable_data<'data, 'relocations>(
     objects: &[&'data [u8]],
     archive_group: &[u16],
     archive_member: &[u16],
+    archive_indexed: &[bool],
     selected: &SelectedLinkInputs<'data, '_, '_>,
     arenas: &'relocations mut [[PeWritableRelocation<'data>; MAX_LINK_RELOCATIONS]],
 ) -> Result<Vector<PeWritableData<'data, 'relocations>>> {
+    if objects.len() != archive_indexed.len() {
+        return Err(anyhow!("link index-presence count mismatch"));
+    }
     let mut output = Vector::with_capacity(arenas.len())
         .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
     let mut remaining = arenas;
@@ -1298,7 +1325,7 @@ fn selected_writable_data<'data, 'relocations>(
         }
         let group = archive_group[object_index];
         let member = archive_member[object_index];
-        let owner = selected
+        let mut owner = selected
             .inputs
             .iter()
             .zip(
@@ -1311,6 +1338,19 @@ fn selected_writable_data<'data, 'relocations>(
                 **selected_group == group && **selected_member == member
             })
             .map(|(input, _)| input.symbol);
+        if owner.is_none() && archive_indexed[object_index] {
+            let inventory = inventory_x86_64_coff_symbols(objects[object_index])
+                .map_err(|error| anyhow!("COFF object {} symbol inventory: {}", object_index, error))?;
+            for symbol in inventory.symbols() {
+                let symbol = symbol.map_err(|error| {
+                    anyhow!("COFF object {} symbol inventory: {}", object_index, error)
+                })?;
+                if symbol.kind == CoffObjectSymbolKind::Definition {
+                    owner = Some(symbol.name);
+                    break;
+                }
+            }
+        }
         if let Some(owner) = owner {
             let fragment_count = x86_64_coff_writable_section_count(objects[object_index])
                 .map_err(|error| {
@@ -1526,6 +1566,7 @@ fn write_linked_pe(
     archive_group: &[u16],
     archive_member: &[u16],
     import_alias: &[Option<&str>],
+    archive_indexed: &[bool],
     entry: &str,
     output: &str,
 ) -> Result<()> {
@@ -1575,6 +1616,7 @@ fn write_linked_pe(
         objects,
         archive_group,
         archive_member,
+        archive_indexed,
         &selected,
         &mut writable_arenas,
     )?;
