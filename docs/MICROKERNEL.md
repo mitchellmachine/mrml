@@ -10393,3 +10393,16 @@ execution.
 Patent review: `NOT_TRIGGERED` — requiring task retirement before revocation and
 unmapping is conventional safe resource-lifecycle ordering. See
 `docs/patents/REVIEW_LOG.md`.
+
+The coherent mapped-transfer task can now reconstruct and revalidate the exact
+source-owned launch attachment needed by a service coordinator. Reconstruction
+uses the retained source ancestry handles plus the bound provider task, shared
+object generation, and byte count; it never substitutes the attenuated handles
+installed in the target task. The lifecycle test exact-matches every field
+before supervision and teardown. The Linux-host release kernel suite passes 649
+tests and the release build passes. Installed storage placement remains
+**PLANNED**.
+
+Patent review: `NOT_TRIGGERED` — reconstructing a validated typed view from
+already retained capability and identity records is conventional boundary
+checking. See `docs/patents/REVIEW_LOG.md`.

@@ -1178,6 +1178,29 @@ impl NativeComponentServiceMappedReadTransferTask {
     pub const fn binding(self) -> ComponentServiceReadTransferTaskBinding {
         self.binding
     }
+
+    /// Revalidates and reconstructs the source-owned attachment consumed by a
+    /// service launch coordinator. Target-task handles are never substituted.
+    pub fn source_attachment<const TASKS: usize, const CAPABILITIES: usize>(
+        self,
+        runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    ) -> Result<ComponentServiceReadTransferAttachment, ComponentServiceReadTransferPreparationError>
+    {
+        let construction = self.construction();
+        let capabilities = runtime
+            .capabilities(construction.source_task())
+            .map_err(ComponentServiceReadTransferPreparationError::Root)?;
+        ComponentServiceReadTransferAttachment::new(
+            self.binding().provider_task(),
+            self.memory().shared_object(),
+            self.memory().generation(),
+            self.memory().bytes(),
+            construction.source_local_read(),
+            construction.source_provider_write(),
+            capabilities,
+        )
+        .map_err(ComponentServiceReadTransferPreparationError::Attachment)
+    }
 }
 
 impl NativeComponentServiceReadTransferTask {
@@ -4437,6 +4460,25 @@ mod tests {
         assert_eq!(constructed.memory(), reservation);
         assert_eq!(constructed.binding(), binding);
         assert_eq!(constructed.construction().task(), local_task);
+        let source_attachment = constructed.source_attachment(&runtime).unwrap();
+        assert_eq!(source_attachment.provider_task(), provider_task);
+        assert_eq!(
+            source_attachment.shared_object(),
+            reservation.shared_object()
+        );
+        assert_eq!(
+            source_attachment.shared_generation(),
+            reservation.generation()
+        );
+        assert_eq!(source_attachment.shared_bytes(), reservation.bytes());
+        assert_eq!(
+            source_attachment.local_read(),
+            constructed.construction().source_local_read()
+        );
+        assert_eq!(
+            source_attachment.provider_write(),
+            constructed.construction().source_provider_write()
+        );
         assert_eq!(
             local_mapping.installed.unwrap().mapping().access(),
             Rights::READ
