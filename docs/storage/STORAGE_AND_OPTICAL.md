@@ -922,19 +922,24 @@ state. A dedicated mount receive/reply loop requires the exact canonical payload
 size and zero transferred capabilities while options remain undefined, then
 dispatches through the already bound provider and erases local buffers. Its
 register adapter uses a null/zero capability receive pair, rejects any reported
-capability transfer, and emits the exact mount response. Fifty-seven
-focused Linux-host tests pass. Canonical unmount transport now removes the exact
+capability transfer, and emits the exact mount response. Canonical unmount transport now removes the exact
 volume/generation record, returns its nonzero completion serial, and makes replay
 typed stale. Its dedicated loop and register adapter require the exact request
 size and zero capability transfer, reject kernel over-counts without reply, erase
-local buffers, and send the exact completion response. The storage service
+local buffers, and send the exact completion response. The same exact
+volume/session client now assembles bounded unaligned byte ranges
+from canonical single-block reads. Every block must complete exactly; a later
+failure erases already assembled output and full-block scratch. Concrete adapters
+derive FAT-entry and data-cluster offsets with checked arithmetic and validated
+geometry. Sixty focused Linux-host tests pass; root-directory loading through
+these adapters remains next. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the
 512-byte FAT boot sector, and erases scratch after success, denial, mismatch, or
 backend failure. It grants no new right and makes no device call for a mismatched
-volume. Runtime installation of the proven association and syscall-dispatched
-mount remain **PLANNED**. The
+volume. Installed runtime construction of the proven association and dispatch
+from the service entry remain **PLANNED**. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows

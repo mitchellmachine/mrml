@@ -297,6 +297,7 @@ impl Fat32BlockBinding {
 pub enum Fat32BlockMountError {
     VolumeMismatch,
     InvalidScratch,
+    InvalidRange,
     Protocol(BlockProtocolError),
     Read(BlockReadError),
     ShortRead,
@@ -331,6 +332,75 @@ impl<'a, T> Fat32BlockMountBackend<'a, T> {
     }
 }
 
+impl<T: BlockProviderReadTransport> Fat32BlockMountBackend<'_, T> {
+    pub fn read_volume_bytes(
+        &mut self,
+        volume: OpaqueHandle,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Fat32BlockMountError> {
+        output.fill(0);
+        if volume != self.binding.volume {
+            return Err(Fat32BlockMountError::VolumeMismatch);
+        }
+        let length = u64::try_from(output.len()).map_err(|_| Fat32BlockMountError::InvalidRange)?;
+        offset
+            .checked_add(length)
+            .ok_or(Fat32BlockMountError::InvalidRange)?;
+        let logical_block_bytes = u64::from(self.binding.logical_block_bytes);
+        let mut completed = 0_u64;
+        let result = (|| {
+            while completed < length {
+                let absolute = offset
+                    .checked_add(completed)
+                    .ok_or(Fat32BlockMountError::InvalidRange)?;
+                let lba = absolute / logical_block_bytes;
+                let within = absolute % logical_block_bytes;
+                let remaining = length - completed;
+                let copied = remaining.min(logical_block_bytes - within);
+                self.scratch.fill(0);
+                let view = BlockBorrowedWriteView::within(
+                    0,
+                    logical_block_bytes,
+                    logical_block_bytes,
+                )
+                .ok_or(Fat32BlockMountError::InvalidScratch)?;
+                let request = encode_block_read_request(self.binding.session, lba, 1, view)
+                    .map_err(Fat32BlockMountError::Protocol)?;
+                let response = self
+                    .transport
+                    .read(&request, self.scratch)
+                    .map_err(Fat32BlockMountError::Protocol)?;
+                let transferred = decode_block_read_response(&response, logical_block_bytes)
+                    .map_err(Fat32BlockMountError::Protocol)?
+                    .map_err(Fat32BlockMountError::Read)?;
+                if transferred != logical_block_bytes {
+                    return Err(Fat32BlockMountError::ShortRead);
+                }
+                let source_start = usize::try_from(within)
+                    .map_err(|_| Fat32BlockMountError::InvalidRange)?;
+                let source_end = usize::try_from(within + copied)
+                    .map_err(|_| Fat32BlockMountError::InvalidRange)?;
+                let destination_start = usize::try_from(completed)
+                    .map_err(|_| Fat32BlockMountError::InvalidRange)?;
+                let destination_end = usize::try_from(completed + copied)
+                    .map_err(|_| Fat32BlockMountError::InvalidRange)?;
+                output[destination_start..destination_end]
+                    .copy_from_slice(&self.scratch[source_start..source_end]);
+                completed = completed
+                    .checked_add(copied)
+                    .ok_or(Fat32BlockMountError::InvalidRange)?;
+            }
+            Ok(())
+        })();
+        self.scratch.fill(0);
+        if result.is_err() {
+            output.fill(0);
+        }
+        result
+    }
+}
+
 unsafe impl<T: BlockProviderReadTransport> Fat32MountBackend for Fat32BlockMountBackend<'_, T> {
     type Error = Fat32BlockMountError;
 
@@ -339,39 +409,82 @@ unsafe impl<T: BlockProviderReadTransport> Fat32MountBackend for Fat32BlockMount
         volume: OpaqueHandle,
         output: &mut [u8; FAT32_BOOT_SECTOR_BYTES],
     ) -> Result<(), Self::Error> {
-        output.fill(0);
-        if volume != self.binding.volume {
-            return Err(Fat32BlockMountError::VolumeMismatch);
+        self.read_volume_bytes(volume, 0, output)
+    }
+}
+
+pub struct Fat32BlockFilesystemReader<'a, 'b, T> {
+    volume: OpaqueHandle,
+    geometry: Fat32Geometry,
+    backend: &'a mut Fat32BlockMountBackend<'b, T>,
+}
+
+impl<'a, 'b, T> Fat32BlockFilesystemReader<'a, 'b, T> {
+    pub const fn new(
+        volume: OpaqueHandle,
+        geometry: Fat32Geometry,
+        backend: &'a mut Fat32BlockMountBackend<'b, T>,
+    ) -> Self {
+        Self {
+            volume,
+            geometry,
+            backend,
         }
-        self.scratch.fill(0);
-        let result = (|| {
-            let view = BlockBorrowedWriteView::within(
-                0,
-                u64::from(self.binding.logical_block_bytes),
-                u64::from(self.binding.logical_block_bytes),
+    }
+}
+
+impl<T: BlockProviderReadTransport> Fat32EntryReader for Fat32BlockFilesystemReader<'_, '_, T> {
+    fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()> {
+        if fat_index >= self.geometry.fat_count
+            || cluster > self.geometry.cluster_count.checked_add(1).ok_or(())?
+        {
+            return Err(());
+        }
+        let bytes_per_sector = u64::from(self.geometry.bytes_per_sector);
+        let fat_start = u64::from(self.geometry.reserved_sectors)
+            .checked_add(
+                u64::from(fat_index)
+                    .checked_mul(u64::from(self.geometry.sectors_per_fat))
+                    .ok_or(())?,
             )
-            .ok_or(Fat32BlockMountError::InvalidScratch)?;
-            let request = encode_block_read_request(self.binding.session, 0, 1, view)
-                .map_err(Fat32BlockMountError::Protocol)?;
-            let response = self
-                .transport
-                .read(&request, self.scratch)
-                .map_err(Fat32BlockMountError::Protocol)?;
-            let transferred =
-                decode_block_read_response(&response, u64::from(self.binding.logical_block_bytes))
-                    .map_err(Fat32BlockMountError::Protocol)?
-                    .map_err(Fat32BlockMountError::Read)?;
-            if transferred != u64::from(self.binding.logical_block_bytes) {
-                return Err(Fat32BlockMountError::ShortRead);
-            }
-            output.copy_from_slice(&self.scratch[..FAT32_BOOT_SECTOR_BYTES]);
-            Ok(())
-        })();
-        self.scratch.fill(0);
-        if result.is_err() {
-            output.fill(0);
-        }
+            .and_then(|sector| sector.checked_mul(bytes_per_sector))
+            .ok_or(())?;
+        let offset = fat_start
+            .checked_add(u64::from(cluster).checked_mul(4).ok_or(())?)
+            .ok_or(())?;
+        let mut bytes = [0; 4];
+        let result = self
+            .backend
+            .read_volume_bytes(self.volume, offset, &mut bytes)
+            .map_err(|_| ())
+            .map(|()| u32::from_le_bytes(bytes));
+        bytes.fill(0);
         result
+    }
+}
+
+impl<T: BlockProviderReadTransport> Fat32ClusterReader for Fat32BlockFilesystemReader<'_, '_, T> {
+    fn read_cluster(&mut self, cluster: u32, destination: &mut [u8]) -> Result<(), ()> {
+        let last_cluster = self.geometry.cluster_count.checked_add(1).ok_or(())?;
+        let cluster_bytes = usize::from(self.geometry.bytes_per_sector)
+            .checked_mul(usize::from(self.geometry.sectors_per_cluster))
+            .ok_or(())?;
+        if !(2..=last_cluster).contains(&cluster) || destination.len() != cluster_bytes {
+            destination.fill(0);
+            return Err(());
+        }
+        let relative_sector = u64::from(cluster - 2)
+            .checked_mul(u64::from(self.geometry.sectors_per_cluster))
+            .ok_or(())?;
+        let sector = u64::from(self.geometry.data_start_sector)
+            .checked_add(relative_sector)
+            .ok_or(())?;
+        let offset = sector
+            .checked_mul(u64::from(self.geometry.bytes_per_sector))
+            .ok_or(())?;
+        self.backend
+            .read_volume_bytes(self.volume, offset, destination)
+            .map_err(|_| ())
     }
 }
 
@@ -1520,6 +1633,43 @@ mod tests {
         calls: u8,
     }
 
+    struct PatternBlockTransport {
+        session: BlockOpaqueHandle,
+        calls: [u64; 16],
+        count: usize,
+        short_at: Option<usize>,
+    }
+
+    impl BlockProviderReadTransport for PatternBlockTransport {
+        fn read(
+            &mut self,
+            request: &[u8; mrml_interface_storage_block_provider_v1::READ_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<
+            [u8; mrml_interface_storage_block_provider_v1::READ_RESPONSE_BYTES],
+            BlockProtocolError,
+        > {
+            use mrml_interface_storage_block_provider_v1::{
+                decode_read_request, encode_read_response,
+            };
+
+            let request = decode_read_request(request, memory.len() as u64)?;
+            assert_eq!(request.session, self.session);
+            assert_eq!(request.sector_count, 1);
+            self.calls[self.count] = request.lba;
+            for (index, byte) in memory.iter_mut().enumerate() {
+                *byte = (request.lba as u8).wrapping_add(index as u8);
+            }
+            let transferred = if self.short_at == Some(self.count) {
+                memory.len() as u64 / 2
+            } else {
+                memory.len() as u64
+            };
+            self.count += 1;
+            Ok(encode_read_response(Ok(transferred)))
+        }
+    }
+
     impl BlockProviderReadTransport for BlockReadTransport {
         fn read(
             &mut self,
@@ -1657,6 +1807,89 @@ mod tests {
             Err(Fat32BlockMountError::InvalidScratch)
         ));
         assert_eq!(scratch, [0; 512]);
+    }
+
+    #[test]
+    fn bound_volume_reader_composes_unaligned_cross_block_bytes_atomically() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = PatternBlockTransport {
+            session,
+            calls: [0; 16],
+            count: 0,
+            short_at: None,
+        };
+        let mut scratch = [0xaa; 4096];
+        let mut output = [0xbb; 20];
+        let returned = {
+            let mut backend =
+                Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch)
+                    .unwrap();
+            backend
+                .read_volume_bytes(volume, 4090, &mut output)
+                .unwrap();
+            backend.into_transport()
+        };
+        assert_eq!(&returned.calls[..returned.count], &[0, 1]);
+        assert_eq!(&output[..6], &[250, 251, 252, 253, 254, 255]);
+        assert_eq!(&output[6..], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn bound_volume_reader_erases_partial_output_after_short_later_block() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = PatternBlockTransport {
+            session,
+            calls: [0; 16],
+            count: 0,
+            short_at: Some(1),
+        };
+        let mut scratch = [0xaa; 4096];
+        let mut output = [0xbb; 20];
+        {
+            let mut backend =
+                Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch)
+                    .unwrap();
+            assert_eq!(
+                backend.read_volume_bytes(volume, 4090, &mut output),
+                Err(Fat32BlockMountError::ShortRead)
+            );
+        }
+        assert_eq!(output, [0; 20]);
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn block_filesystem_reader_derives_checked_fat_and_cluster_offsets() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = PatternBlockTransport {
+            session,
+            calls: [0; 16],
+            count: 0,
+            short_at: None,
+        };
+        let mut scratch = [0xaa; 4096];
+        let returned = {
+            let mut backend =
+                Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch)
+                    .unwrap();
+            let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+            let mut reader = Fat32BlockFilesystemReader::new(volume, geometry, &mut backend);
+            assert_eq!(reader.read_entry(0, 2), Ok(u32::from_le_bytes([12, 13, 14, 15])));
+            let mut cluster = [0; 4096];
+            reader.read_cluster(2, &mut cluster).unwrap();
+            assert_eq!(&cluster[..4], &[4, 5, 6, 7]);
+            assert_eq!(&cluster[4092..], &[0, 1, 2, 3]);
+            assert_eq!(reader.read_entry(2, 2), Err(()));
+            assert_eq!(reader.read_cluster(1, &mut cluster), Err(()));
+            assert_eq!(cluster, [0; 4096]);
+            backend.into_transport()
+        };
+        assert_eq!(&returned.calls[..returned.count], &[4, 260]);
+        assert_eq!(scratch, [0; 4096]);
     }
 
     #[test]

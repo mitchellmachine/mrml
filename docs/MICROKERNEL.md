@@ -7441,6 +7441,19 @@ kernel over-counts before dispatch, erase local buffers, and send the exact
 16-byte completion response. The focused provider suite passes fifty-seven
 tests.
 
+The FAT32 block client now supplies a bounded byte-range primitive above its
+exact session binding. It composes unaligned ranges from canonical one-block
+reads, requires exact completion per block, and clears partially assembled
+output plus scratch after any failure. Checked adapters derive FAT-entry and
+data-cluster offsets only from validated geometry. The focused Linux-host suite
+passes sixty tests; this is hosted protocol/unit evidence, not physical-media
+evidence.
+
+Patent review: `NOT_TRIGGERED` — checked filesystem offset derivation, exact
+single-block reads, failure-atomic range assembly, and scratch erasure are
+conventional storage-parser boundary mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and
 resource-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.

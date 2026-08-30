@@ -1216,6 +1216,12 @@ advertises zero capability capacity and rejects any kernel-reported transfer
 before lifecycle state can change. Request and response buffers are erased after
 each attempt.
 
+Bound FAT metadata/data reads never turn offsets into authority. The provider
+derives them from already validated geometry and the runtime-proven volume/session
+binding, issues canonical one-block requests, and requires exact completion for
+each. Unaligned cross-block assembly is failure-atomic: if any later read fails,
+all previously copied caller output and the full scratch block are erased.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode
