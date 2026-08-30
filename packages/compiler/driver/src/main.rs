@@ -102,6 +102,47 @@ struct SelectedLinkInputs<'data, 'relocations, 'definitions> {
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
     source_object: Vector<usize>,
+    comdat_selection: Vector<CoffTextComdatSelection>,
+}
+
+fn resolve_duplicate_coff_definition(
+    earlier: LinkInput<'_, '_, '_>,
+    earlier_selection: CoffTextComdatSelection,
+    current: LinkInput<'_, '_, '_>,
+    current_selection: CoffTextComdatSelection,
+) -> Option<(CoffTextComdatSelection, bool)> {
+    let mut effective_selection = earlier_selection;
+    let mut replace = false;
+    let (earlier_payload, current_payload) = match (earlier.symbol_target, current.symbol_target) {
+        (LinkDefinitionTarget::Text(0), LinkDefinitionTarget::Text(0)) => {
+            (earlier.text, current.text)
+        }
+        (LinkDefinitionTarget::ReadonlyData(0), LinkDefinitionTarget::ReadonlyData(0)) => {
+            (earlier.readonly_data, current.readonly_data)
+        }
+        _ => return None,
+    };
+    let compatible = match (earlier_selection, current_selection) {
+        (CoffTextComdatSelection::Any, CoffTextComdatSelection::Any) => true,
+        (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::SameSize)
+        | (CoffTextComdatSelection::Any, CoffTextComdatSelection::SameSize)
+        | (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::Any) => {
+            effective_selection = CoffTextComdatSelection::SameSize;
+            earlier_payload.len() == current_payload.len()
+        }
+        (CoffTextComdatSelection::ExactMatch, CoffTextComdatSelection::ExactMatch) => {
+            earlier_payload == current_payload
+        }
+        (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Largest)
+        | (CoffTextComdatSelection::Any, CoffTextComdatSelection::Largest)
+        | (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Any) => {
+            effective_selection = CoffTextComdatSelection::Largest;
+            replace = current_payload.len() > earlier_payload.len();
+            true
+        }
+        _ => false,
+    };
+    compatible.then_some((effective_selection, replace))
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -1249,42 +1290,12 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         {
             let earlier_selection = selected_comdat[earlier];
             let current_selection = comdat_selection[*index];
-            let mut effective_selection = earlier_selection;
-            let mut replace = false;
-            let (earlier_payload, current_payload) = match (
-                selected[earlier].symbol_target,
-                inputs[*index].symbol_target,
+            if let Some((effective_selection, replace)) = resolve_duplicate_coff_definition(
+                selected[earlier],
+                earlier_selection,
+                inputs[*index],
+                current_selection,
             ) {
-                (LinkDefinitionTarget::Text(0), LinkDefinitionTarget::Text(0)) => {
-                    (selected[earlier].text, inputs[*index].text)
-                }
-                (LinkDefinitionTarget::ReadonlyData(0), LinkDefinitionTarget::ReadonlyData(0)) => (
-                    selected[earlier].readonly_data,
-                    inputs[*index].readonly_data,
-                ),
-                _ => return Err(anyhow!("incompatible duplicate COFF definition kinds")),
-            };
-            let compatible = match (earlier_selection, current_selection) {
-                (CoffTextComdatSelection::Any, CoffTextComdatSelection::Any) => true,
-                (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::SameSize)
-                | (CoffTextComdatSelection::Any, CoffTextComdatSelection::SameSize)
-                | (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::Any) => {
-                    effective_selection = CoffTextComdatSelection::SameSize;
-                    earlier_payload.len() == current_payload.len()
-                }
-                (CoffTextComdatSelection::ExactMatch, CoffTextComdatSelection::ExactMatch) => {
-                    earlier_payload == current_payload
-                }
-                (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Largest)
-                | (CoffTextComdatSelection::Any, CoffTextComdatSelection::Largest)
-                | (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Any) => {
-                    effective_selection = CoffTextComdatSelection::Largest;
-                    replace = current_payload.len() > earlier_payload.len();
-                    true
-                }
-                _ => false,
-            };
-            if compatible {
                 if replace {
                     selected[earlier] = inputs[*index];
                     selected_group[earlier] = archive_group[*index];
@@ -1324,6 +1335,7 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         archive_group: selected_group,
         archive_member: selected_member,
         source_object: selected_source_object,
+        comdat_selection: selected_comdat,
     })
 }
 
@@ -1332,12 +1344,14 @@ fn retain_exact_readonly_relocation_targets<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     source_object: &[usize],
+    comdat_selection: &[CoffTextComdatSelection],
     selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
     relocations: &[PeReadonlyAbsoluteRelocation<'_>],
 ) -> Result<bool> {
     if inputs.len() != archive_group.len()
         || inputs.len() != archive_member.len()
         || inputs.len() != source_object.len()
+        || inputs.len() != comdat_selection.len()
     {
         return Err(anyhow!("decoded exact-section origin count mismatch"));
     }
@@ -1368,6 +1382,7 @@ fn retain_exact_readonly_relocation_targets<'data, 'relocations, 'definitions>(
             archive_group,
             archive_member,
             source_object,
+            comdat_selection,
             selected,
             index,
         )?;
@@ -1380,9 +1395,17 @@ fn retain_input_archive_member<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     source_object: &[usize],
+    comdat_selection: &[CoffTextComdatSelection],
     selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
     target_index: usize,
 ) -> Result<bool> {
+    if inputs.len() != archive_group.len()
+        || inputs.len() != archive_member.len()
+        || inputs.len() != source_object.len()
+        || inputs.len() != comdat_selection.len()
+    {
+        return Err(anyhow!("decoded archive member projection count mismatch"));
+    }
     let group = archive_group[target_index];
     let member = archive_member[target_index];
     let mut changed = false;
@@ -1408,6 +1431,49 @@ fn retain_input_archive_member<'data, 'relocations, 'definitions>(
         {
             continue;
         }
+        let current_is_internal = matches!(
+            inputs[index].symbol_target,
+            LinkDefinitionTarget::CoffTextSection { .. } | LinkDefinitionTarget::CoffSection { .. }
+        );
+        if let Some(earlier) = (!current_is_internal)
+            .then(|| {
+                selected.inputs.iter().position(|candidate| {
+                    !matches!(
+                        candidate.symbol_target,
+                        LinkDefinitionTarget::CoffTextSection { .. }
+                            | LinkDefinitionTarget::CoffSection { .. }
+                    ) && candidate.symbol == inputs[index].symbol
+                })
+            })
+            .flatten()
+        {
+            let earlier_selection = selected.comdat_selection[earlier];
+            let current_selection = comdat_selection[index];
+            let Some((effective_selection, replace)) = resolve_duplicate_coff_definition(
+                selected.inputs[earlier],
+                earlier_selection,
+                inputs[index],
+                current_selection,
+            ) else {
+                return Err(anyhow!(
+                    "incompatible retained COFF definition {}: source object {} uses {:?}, source object {} uses {:?}",
+                    inputs[index].symbol,
+                    selected.source_object[earlier],
+                    earlier_selection,
+                    source_object[index],
+                    current_selection
+                ));
+            };
+            if replace {
+                selected.inputs[earlier] = inputs[index];
+                selected.archive_group[earlier] = archive_group[index];
+                selected.archive_member[earlier] = archive_member[index];
+                selected.source_object[earlier] = source_object[index];
+                changed = true;
+            }
+            selected.comdat_selection[earlier] = effective_selection;
+            continue;
+        }
         selected
             .inputs
             .try_push(inputs[index])
@@ -1424,6 +1490,10 @@ fn retain_input_archive_member<'data, 'relocations, 'definitions>(
             .source_object
             .try_push(source_object[index])
             .map_err(|_| anyhow!("selected archive source capacity exceeded"))?;
+        selected
+            .comdat_selection
+            .try_push(comdat_selection[index])
+            .map_err(|_| anyhow!("selected archive COMDAT capacity exceeded"))?;
         changed = true;
     }
     Ok(changed)
@@ -1434,6 +1504,7 @@ fn retain_named_code_targets<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     source_object: &[usize],
+    comdat_selection: &[CoffTextComdatSelection],
     selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
     frontier_start: usize,
 ) -> Result<bool> {
@@ -1510,6 +1581,7 @@ fn retain_named_code_targets<'data, 'relocations, 'definitions>(
             archive_group,
             archive_member,
             source_object,
+            comdat_selection,
             selected,
             target,
         )?;
@@ -1522,6 +1594,7 @@ fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     source_object: &[usize],
+    comdat_selection: &[CoffTextComdatSelection],
     selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
     writable_data: &[PeWritableData<'_, '_>],
 ) -> Result<bool> {
@@ -1550,6 +1623,7 @@ fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
                 archive_group,
                 archive_member,
                 source_object,
+                comdat_selection,
                 selected,
                 target_index,
             )?;
@@ -2040,6 +2114,7 @@ fn write_linked_pe(
             &decoded.archive_group,
             &decoded.archive_member,
             &decoded.source_object,
+            &decoded.comdat_selection,
             &mut selected,
             &readonly_absolute_relocations,
         )? {
@@ -2062,6 +2137,7 @@ fn write_linked_pe(
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
+        &decoded.comdat_selection,
         &mut selected,
         &probe_writable_data,
     )?;
@@ -2072,6 +2148,7 @@ fn write_linked_pe(
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
+        &decoded.comdat_selection,
         &mut selected,
         writable_frontier_start,
     )?;
@@ -2080,6 +2157,7 @@ fn write_linked_pe(
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
+        &decoded.comdat_selection,
         &mut selected,
         named_frontier_start,
     )?;
@@ -2095,6 +2173,7 @@ fn write_linked_pe(
             &decoded.archive_group,
             &decoded.archive_member,
             &decoded.source_object,
+            &decoded.comdat_selection,
             &mut selected,
             &readonly_absolute_relocations,
         )? {
@@ -3222,6 +3301,7 @@ mod tests {
                 &[0, 4, 4, 5, 6, 7],
                 &[0, 7, 7, 9, 11, 13],
                 &[0, 8, 8, 10, 12, 14],
+                &[CoffTextComdatSelection::None; 6],
                 &mut selected,
                 &relocation,
             )
@@ -3238,6 +3318,7 @@ mod tests {
                 &[0, 4, 4, 5, 6, 7],
                 &[0, 7, 7, 9, 11, 13],
                 &[0, 8, 8, 10, 12, 14],
+                &[CoffTextComdatSelection::None; 6],
                 &mut selected,
                 1,
             )
@@ -3258,6 +3339,7 @@ mod tests {
                 &[0, 4, 4, 5, 6, 7],
                 &[0, 7, 7, 9, 11, 13],
                 &[0, 8, 8, 10, 12, 14],
+                &[CoffTextComdatSelection::None; 6],
                 &mut selected,
                 3,
             )
@@ -3271,6 +3353,7 @@ mod tests {
                 &[0, 4, 4, 5, 6, 7],
                 &[0, 7, 7, 9, 11, 13],
                 &[0, 8, 8, 10, 12, 14],
+                &[CoffTextComdatSelection::None; 6],
                 &mut selected,
                 &relocation,
             )
@@ -3332,6 +3415,109 @@ mod tests {
         assert_eq!(
             duplicate_global_link_symbol(&[first, second]),
             Some("entry")
+        );
+    }
+
+    #[test]
+    fn retains_archive_member_siblings_without_comdat_losers() {
+        let entry_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("shared"),
+            addend: -4,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &entry_relocations,
+        };
+        let winner = LinkInput {
+            symbol: "shared",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let identity = CoffSectionIdentity::new(3, 11).unwrap();
+        let typed_target = LinkInput {
+            symbol: ".text$late",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let loser = LinkInput {
+            symbol: "shared",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xcc],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let sibling = LinkInput {
+            symbol: "late_helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let inputs = [entry, winner, typed_target, loser, sibling];
+        let groups = [0, 1, 2, 2, 2];
+        let members = [0, 7, 9, 9, 9];
+        let sources = [0, 1, 3, 3, 3];
+        let policies = [
+            CoffTextComdatSelection::None,
+            CoffTextComdatSelection::Any,
+            CoffTextComdatSelection::None,
+            CoffTextComdatSelection::Any,
+            CoffTextComdatSelection::None,
+        ];
+        let mut selected =
+            selected_link_inputs(&inputs, &groups, &members, &sources, &policies, "entry").unwrap();
+        assert_eq!(selected.inputs.len(), 2);
+        assert!(
+            retain_input_archive_member(
+                &inputs,
+                &groups,
+                &members,
+                &sources,
+                &policies,
+                &mut selected,
+                2,
+            )
+            .unwrap()
+        );
+        assert_eq!(selected.inputs.len(), 4);
+        assert_eq!(
+            selected
+                .inputs
+                .iter()
+                .filter(|input| input.symbol == "shared")
+                .count(),
+            1
+        );
+        assert!(selected.inputs.iter().any(|input| {
+            matches!(
+                input.symbol_target,
+                LinkDefinitionTarget::CoffTextSection {
+                    identity: candidate,
+                    ..
+                } if candidate == identity
+            )
+        }));
+        assert!(
+            selected
+                .inputs
+                .iter()
+                .any(|input| input.symbol == "late_helper")
         );
     }
 
