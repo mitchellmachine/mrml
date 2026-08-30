@@ -151,6 +151,7 @@ pub struct ArchiveMembers<'a> {
     length: usize,
     symbols: [ArchiveSymbol<'a>; MAX_ARCHIVE_SYMBOLS],
     symbol_length: usize,
+    has_symbol_index: bool,
 }
 
 impl<'a> ArchiveMembers<'a> {
@@ -160,6 +161,10 @@ impl<'a> ArchiveMembers<'a> {
 
     pub fn symbols(&self) -> &[ArchiveSymbol<'a>] {
         &self.symbols[..self.symbol_length]
+    }
+
+    pub fn has_symbol_index(&self) -> bool {
+        self.has_symbol_index
     }
 
     pub fn member_for_symbol(&self, symbol: &str) -> Option<&ArchiveMember<'a>> {
@@ -194,6 +199,7 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         length: 0,
         symbols: [empty_symbol; MAX_ARCHIVE_SYMBOLS],
         symbol_length: 0,
+        has_symbol_index: false,
     };
     let mut string_table = None;
     let mut gnu_index = None;
@@ -267,6 +273,7 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         }
     }
     if let Some((index, wide)) = gnu_index {
+        decoded.has_symbol_index = true;
         decoded.symbol_length = decode_gnu_archive_index(
             index,
             wide,
@@ -9986,6 +9993,7 @@ mod tests {
         append_archive_member(&mut archive, "#1/10", &bsd);
 
         let members = decode_unix_archive(&archive).unwrap();
+        assert!(!members.has_symbol_index());
         assert_eq!(members.members().len(), 3);
         assert_eq!(
             members.members()[0],
@@ -10037,6 +10045,7 @@ mod tests {
         append_archive_member(&mut archive, "#1/16", &bsd_index);
 
         let members = decode_unix_archive(&archive).unwrap();
+        assert!(members.has_symbol_index());
         assert_eq!(
             members.members(),
             &[ArchiveMember {
@@ -10085,11 +10094,9 @@ mod tests {
         append_archive_member(&mut empty_padded_archive, "/", &[0; 8]);
         append_archive_member(&mut empty_padded_archive, "empty.o/", b"object");
         assert!(
-            decode_unix_archive(&empty_padded_archive)
-                .unwrap()
-                .symbols()
-                .is_empty()
+            decode_unix_archive(&empty_padded_archive).unwrap().has_symbol_index()
         );
+        assert!(decode_unix_archive(&empty_padded_archive).unwrap().symbols().is_empty());
 
         let mut excessive_padding_archive = b"!<arch>\n".to_vec();
         append_archive_member(&mut excessive_padding_archive, "/", &[0; 12]);

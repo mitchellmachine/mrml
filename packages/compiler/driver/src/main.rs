@@ -271,7 +271,7 @@ fn read_link_objects(
             let mut selected = [false; MAX_ARCHIVE_MEMBERS];
             let mut selected_files = Vector::with_capacity(MAX_LINK_INPUTS)
                 .map_err(|_| anyhow!("could not allocate selected thin-member list"))?;
-            if archive.symbols().is_empty() || !thin_index_selection_safe {
+            if !archive.has_symbol_index() || !thin_index_selection_safe {
                 selected[..archive.members().len()].fill(true);
                 thin_index_selection_safe = false;
             } else {
@@ -463,7 +463,7 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
             let mut selected = [false; MAX_ARCHIVE_MEMBERS];
-            if archive.symbols().is_empty() || !indexed_selection_safe {
+            if !archive.has_symbol_index() || !indexed_selection_safe {
                 selected[..archive.members().len()].fill(true);
                 indexed_selection_safe = false;
             } else {
@@ -503,7 +503,11 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                     })?;
                     if !defined.iter().any(|defined| *defined == candidate.symbol) {
                         return Err(anyhow!(
-                            "archive symbol index does not match its object member"
+                            "archive group {} member {} ({}) symbol index for {} does not match its object member",
+                            next_archive_group,
+                            candidate.member_index + 1,
+                            archive.members()[candidate.member_index].name,
+                            candidate.symbol,
                         ));
                     }
                 }
@@ -2345,6 +2349,38 @@ mod tests {
     #[test]
     fn indexed_archive_skips_hundreds_of_unreferenced_non_object_members() {
         run_with_linker_stack(indexed_archive_skips_hundreds_on_linker_stack);
+    }
+
+    #[test]
+    fn empty_archive_index_does_not_poison_later_index_selection() {
+        run_with_linker_stack(empty_archive_index_does_not_poison_later_index_selection_on_stack);
+    }
+
+    fn empty_archive_index_does_not_poison_later_index_selection_on_stack() {
+        let entry = compile_source_function_with_options::<4096, 4096, 8, 8, 8, 32>(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn entry() -> i32 { 42 }",
+            "entry",
+            ObjectFormat::Elf64,
+            TargetLayout::X86_64,
+            CodegenOptions::CHECKED,
+        )
+        .unwrap();
+        let mut empty = Vector::with_capacity(1024).unwrap();
+        empty.try_extend_from_slice(b"!<arch>\n").unwrap();
+        append_archive_member(&mut empty, "/", &[0; 8]);
+        append_archive_member(&mut empty, "unused.o/", b"not an object");
+
+        let mut indexed = Vector::with_capacity(8 * 1024).unwrap();
+        indexed.try_extend_from_slice(b"!<arch>\n").unwrap();
+        let index = [0, 0, 0, 1, 0, 0, 0, 82, b'e', b'n', b't', b'r', b'y', 0];
+        append_archive_member(&mut indexed, "/", &index);
+        append_archive_member(&mut indexed, "entry.o/", entry.bytes());
+
+        let archives = [empty, indexed];
+        let refs = link_object_refs(&archives, ObjectFormat::Elf64, "entry").unwrap();
+        assert_eq!(&refs.bytes[..], &[entry.bytes()]);
+        assert_eq!(&refs.archive_group[..], &[2]);
+        assert_eq!(&refs.archive_member[..], &[1]);
     }
 
     fn indexed_archive_skips_hundreds_on_linker_stack() {
