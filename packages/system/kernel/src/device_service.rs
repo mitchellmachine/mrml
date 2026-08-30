@@ -250,6 +250,10 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
         self.attachment
     }
 
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+
     pub fn install(
         self,
         mut context: UserContext,

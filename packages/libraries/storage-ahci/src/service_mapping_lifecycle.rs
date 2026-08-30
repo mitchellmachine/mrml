@@ -176,7 +176,12 @@ mod tests {
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
-    use mrml_kernel::{ObjectId, Rights};
+    use mrml_kernel::{
+        prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
+        IsolationPlacement, IsolationServiceSpec, ObjectId, PhysAddr, Priority, Rights,
+        TaskRuntime, TotalMicrovmClass,
+    };
+    use mrml_kernel::arch::x86_64::UserContext;
 
     #[derive(Default)]
     struct AbarBackend {
@@ -392,6 +397,104 @@ mod tests {
         (capabilities, map, control, cpu)
     }
 
+    fn service() -> IsolationServiceSpec {
+        IsolationServiceSpec::new(
+            ObjectId(1),
+            ObjectId(2),
+            1,
+            3,
+            4,
+            5,
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::NativeService,
+        )
+        .unwrap()
+    }
+
+    fn native_tasks() -> (
+        TaskRuntime<3, 8>,
+        mrml_kernel::TaskId,
+        mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        crate::BoundAhciServiceLaunch,
+    ) {
+        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let context = |root| {
+            UserContext::new(
+                PhysAddr::new(root).unwrap(),
+                0x40_0000,
+                0x7000_0000,
+            )
+            .unwrap()
+        };
+        let source = runtime.create(Priority::NORMAL, context(0x50_0000)).unwrap();
+        let target = runtime.create(Priority::NORMAL, context(0x60_0000)).unwrap();
+        let wrong_target = runtime.create(Priority::NORMAL, context(0x70_0000)).unwrap();
+        let launch_data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(30), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let roles = [
+            (ObjectId(10), Rights::CONTROL),
+            (ObjectId(20), Rights::MAP.union(Rights::READ).union(Rights::WRITE)),
+            (ObjectId(21), Rights::MAP.union(Rights::READ).union(Rights::WRITE)),
+            (ObjectId(22), Rights::MAP.union(Rights::READ).union(Rights::WRITE)),
+            (ObjectId(23), Rights::PIN.union(Rights::MAP).union(Rights::WRITE)),
+            (ObjectId(23), Rights::PIN.union(Rights::MAP).union(Rights::READ)),
+        ];
+        let mut handles = [Capability::from_token(0); crate::AHCI_SERVICE_AUTHORITY_COUNT];
+        let authority_specs = core::array::from_fn(|index| {
+            handles[index] = runtime
+                .capabilities_mut(source)
+                .unwrap()
+                .insert(roles[index].0, roles[index].1.union(Rights::DELEGATE))
+                .unwrap();
+            (roles[index].0, handles[index], roles[index].1)
+        });
+        let (correct_attachment, wrong_attachment) = {
+            let capabilities = runtime.capabilities(source).unwrap();
+            let create = |generation| {
+                DeviceServiceLaunchAttachment::new(
+                    service(),
+                    generation,
+                    ObjectId(30),
+                    9,
+                    crate::AHCI_SERVICE_LAUNCH_BYTES as u32,
+                    launch_data,
+                    authority_specs,
+                    capabilities,
+                )
+                .unwrap()
+            };
+            (create(8), create(9))
+        };
+        let correct = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            service(),
+            correct_attachment,
+            ObjectId(40),
+            ObjectId(41),
+            ObjectId(42),
+        )
+        .unwrap();
+        let wrong = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            wrong_target,
+            service(),
+            wrong_attachment,
+            ObjectId(43),
+            ObjectId(41),
+            ObjectId(42),
+        )
+        .unwrap();
+        let bound = record().bind(service(), correct_attachment).unwrap();
+        (runtime, source, correct, wrong, bound)
+    }
+
     #[test]
     fn complete_install_and_teardown_follow_reverse_dependency_order() {
         let (capabilities, map, control, cpu) = authorities();
@@ -552,7 +655,33 @@ mod tests {
         assert_eq!(dma_backend.removals, 0);
         let quiesced = crate::resume_ahci_command_backend_teardown(error, &mut dma_backend)
             .unwrap_or_else(|_| panic!("retry must complete"));
-        let (quiesced, _, _, data) = quiesced.into_parts();
+        let (mut runtime, source, task, wrong_task, launch) = native_tasks();
+        let (binding, _, launch, quiesced) =
+            match crate::bind_quiesced_ahci_service_task(wrong_task, launch, quiesced) {
+                Ok(_) => panic!("wrong attachment generation must not bind"),
+                Err(error) => error,
+            };
+        assert_eq!(binding, crate::AhciServiceTaskBindingError::TaskAttachmentMismatch);
+        let owner = crate::bind_quiesced_ahci_service_task(task, launch, quiesced)
+            .unwrap_or_else(|_| panic!("exact task and launch must bind"));
+        assert!(matches!(
+            runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        let error = match crate::retire_quiesced_ahci_service_task(owner, &mut runtime) {
+            Ok(_) => panic!("wrong current task must not retire"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.error(),
+            mrml_kernel::NativeDeviceServiceRetirementError::NotCurrent
+        );
+        runtime.yield_current().unwrap();
+        let retired = crate::retire_quiesced_ahci_service_task(error.into_owner(), &mut runtime)
+            .unwrap_or_else(|_| panic!("exact current task must retire"));
+        assert_eq!(retired.retirement().task(), task);
+        let (_, _, quiesced) = retired.into_parts();
+        let (quiesced, _, _, _, data) = quiesced.into_parts();
         assert_eq!(data.sanitizations, 2);
         assert_eq!(dma_backend.removals, 1);
         let state = crate::remove_quiesced_ahci_service_mappings(

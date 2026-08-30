@@ -75,6 +75,10 @@ impl AhciInstalledCpuMappings {
     pub fn complete(&self) -> bool {
         self.installed.iter().all(|installed| !installed)
     }
+
+    pub fn fully_installed(&self) -> bool {
+        self.installed.iter().all(|installed| *installed)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

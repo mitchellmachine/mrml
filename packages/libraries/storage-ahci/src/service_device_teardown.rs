@@ -5,10 +5,14 @@ use crate::{
     stop_ahci_port_engine, ActiveAhciPort, AhciAbarMapping, AhciAbarRemovalBackend,
     AhciCleanupFailure, AhciCommandBackendTeardown, AhciCommandMemoryIo, AhciDataBufferIo,
     AhciDataDmaRegion, AhciEngineFailure, AhciPortDmaBackend, AhciRegisterIo,
-    AhciServiceCpuMappingBackend, AhciServiceMappingRemovalError, AhciServiceMappingTeardown,
-    InstalledAhciPortDma,
+    AhciServiceCpuMappingBackend, AhciServiceLaunchRecord, AhciServiceMappingRemovalError,
+    AhciServiceMappingTeardown, BoundAhciServiceLaunch, InstalledAhciPortDma,
 };
-use mrml_kernel::{Capability, CapabilitySpace};
+use mrml_kernel::{
+    retire_current_native_device_service_task, Capability, CapabilitySpace,
+    NativeDeviceServiceRetirement, NativeDeviceServiceRetirementError, NativeDeviceServiceTask,
+    TaskRuntime,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum PendingAhciServiceDeviceTeardown {
@@ -75,6 +79,7 @@ impl<R, M, D> AhciCommandBackendQuiesceError<R, M, D> {
 
 pub struct QuiescedAhciCommandBackend<R, M, D> {
     mappings: QuiescedAhciServiceMappings,
+    data_region: AhciDataDmaRegion,
     registers: R,
     command_memory: M,
     data_io: D,
@@ -85,9 +90,14 @@ impl<R, M, D> QuiescedAhciCommandBackend<R, M, D> {
         self.mappings
     }
 
-    pub fn into_parts(self) -> (QuiescedAhciServiceMappings, R, M, D) {
+    pub const fn data_region(&self) -> AhciDataDmaRegion {
+        self.data_region
+    }
+
+    pub fn into_parts(self) -> (QuiescedAhciServiceMappings, AhciDataDmaRegion, R, M, D) {
         (
             self.mappings,
+            self.data_region,
             self.registers,
             self.command_memory,
             self.data_io,
@@ -119,6 +129,7 @@ pub fn quiesce_ahci_command_backend<
     ) {
         Ok(mappings) => Ok(QuiescedAhciCommandBackend {
             mappings,
+            data_region,
             registers,
             command_memory,
             data_io,
@@ -161,6 +172,7 @@ pub fn resume_ahci_command_backend_teardown<D: AhciDataBufferIo, B: AhciPortDmaB
     ) {
         Ok(mappings) => Ok(QuiescedAhciCommandBackend {
             mappings,
+            data_region,
             registers,
             command_memory,
             data_io,
@@ -171,6 +183,161 @@ pub fn resume_ahci_command_backend_teardown<D: AhciDataBufferIo, B: AhciPortDmaB
             registers,
             command_memory,
             data_io,
+        }),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciServiceTaskBindingError {
+    InvalidBoundLaunch,
+    TaskAttachmentMismatch,
+    ProviderGenerationMismatch,
+    MappingMismatch,
+    CpuMappingsMismatch,
+    DataRegionMismatch,
+}
+
+pub struct QuiescedAhciServiceTask<R, M, D> {
+    task: NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    backend: QuiescedAhciCommandBackend<R, M, D>,
+}
+
+impl<R, M, D> QuiescedAhciServiceTask<R, M, D> {
+    pub const fn task(
+        &self,
+    ) -> NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
+        self.task
+    }
+
+    pub const fn launch(&self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+}
+
+pub fn bind_quiesced_ahci_service_task<R, M, D>(
+    task: NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    backend: QuiescedAhciCommandBackend<R, M, D>,
+) -> Result<
+    QuiescedAhciServiceTask<R, M, D>,
+    (
+        AhciServiceTaskBindingError,
+        NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        BoundAhciServiceLaunch,
+        QuiescedAhciCommandBackend<R, M, D>,
+    ),
+> {
+    let spec = launch.spec();
+    let entry = task.entry();
+    let failure = if entry.attachment() != spec.attachment() {
+        Some(AhciServiceTaskBindingError::TaskAttachmentMismatch)
+    } else if entry.provider_generation() != spec.service().provider_generation() {
+        Some(AhciServiceTaskBindingError::ProviderGenerationMismatch)
+    } else if backend.mappings().mappings().abar().map(|abar| abar.mapping())
+        != Some(spec.mapping())
+    {
+        Some(AhciServiceTaskBindingError::MappingMismatch)
+    } else if backend.data_region() != spec.data() {
+        Some(AhciServiceTaskBindingError::DataRegionMismatch)
+    } else {
+        let record = AhciServiceLaunchRecord::new(
+            spec.service().system_generation(),
+            spec.service().provider_generation(),
+            spec.attachment().attachment_generation(),
+            spec.device(),
+            spec.mapping(),
+            spec.layout(),
+            spec.data(),
+            launch.cpu_mappings(),
+        );
+        match record {
+            Ok(record) => {
+                let cpu = backend.mappings().mappings().cpu();
+                (!cpu.fully_installed()
+                    || cpu.requests() != crate::service_cpu_mapping::mapping_requests(record))
+                    .then_some(AhciServiceTaskBindingError::CpuMappingsMismatch)
+            }
+            Err(_) => Some(AhciServiceTaskBindingError::InvalidBoundLaunch),
+        }
+    };
+    if let Some(error) = failure {
+        return Err((error, task, launch, backend));
+    }
+    Ok(QuiescedAhciServiceTask {
+        task,
+        launch,
+        backend,
+    })
+}
+
+pub struct RetiredAhciServiceTask<R, M, D> {
+    retirement: NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    backend: QuiescedAhciCommandBackend<R, M, D>,
+}
+
+impl<R, M, D> RetiredAhciServiceTask<R, M, D> {
+    pub const fn retirement(
+        &self,
+    ) -> NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
+        self.retirement
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        BoundAhciServiceLaunch,
+        QuiescedAhciCommandBackend<R, M, D>,
+    ) {
+        (self.retirement, self.launch, self.backend)
+    }
+}
+
+pub struct AhciServiceTaskRetirementError<R, M, D> {
+    error: NativeDeviceServiceRetirementError,
+    owner: QuiescedAhciServiceTask<R, M, D>,
+}
+
+impl<R, M, D> AhciServiceTaskRetirementError<R, M, D> {
+    pub const fn error(&self) -> NativeDeviceServiceRetirementError {
+        self.error
+    }
+
+    pub fn into_owner(self) -> QuiescedAhciServiceTask<R, M, D> {
+        self.owner
+    }
+}
+
+pub fn retire_quiesced_ahci_service_task<
+    R,
+    M,
+    D,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    owner: QuiescedAhciServiceTask<R, M, D>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<RetiredAhciServiceTask<R, M, D>, AhciServiceTaskRetirementError<R, M, D>> {
+    let QuiescedAhciServiceTask {
+        task,
+        launch,
+        backend,
+    } = owner;
+    match retire_current_native_device_service_task(task, runtime) {
+        Ok((_, retirement)) => Ok(RetiredAhciServiceTask {
+            retirement,
+            launch,
+            backend,
+        }),
+        Err(error) => Err(AhciServiceTaskRetirementError {
+            error,
+            owner: QuiescedAhciServiceTask {
+                task,
+                launch,
+                backend,
+            },
         }),
     }
 }

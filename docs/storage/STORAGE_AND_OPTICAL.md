@@ -747,6 +747,34 @@ Patent review: **NOT_TRIGGERED**. Exact-owner typestate and dependency-ordered
 device/DMA/mapping cleanup are conventional resource-lifecycle controls. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+AHCI quiescence and generic native-task retirement now form one exact
+supervisor-owned transition **IMPLEMENTED IN SOURCE**. Binding requires the
+task's launch attachment and provider generation, retained ABAR mapping, all
+four still-installed CPU mappings, and data-DMA region to match one bound AHCI
+launch generation. Mismatch returns the task, launch, adapters, and quiesced
+mappings unchanged. Retirement consumes only that composite owner; wrong-
+current failure preserves it for retry, while exact success retains the retired
+context with the launch and quiesced resources. The lifecycle test rejects a
+different attachment generation, retries after a wrong-current attempt,
+retires the exact task, and only then withdraws CPU and ABAR mappings. The
+focused Linux AHCI suite passes all 109 tests, the Linux kernel suite passes all
+686 tests, and both release builds pass. Successor-dispatch consumption,
+concrete page-table/IOMMU invalidation, the native service binary, active
+execution, and physical-device evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Exact generational binding of already-owned
+cleanup state to conventional task retirement is ordinary lifecycle
+composition. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
