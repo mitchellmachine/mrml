@@ -10207,3 +10207,15 @@ separate unfinished gates.
 Patent review: `NOT_TRIGGERED` — this is conventional exact-rights validation,
 attenuation, and rollback composition over the existing capability mechanism.
 See `docs/patents/REVIEW_LOG.md`.
+
+Root-based read-transfer preparation now composes with native task construction
+as one rollback-complete authority transaction. If entry validation or target
+projection fails, the target leaves no capabilities or register payload and the
+new source split is revoked, while the exact controlling memory root remains
+live for explicit backing/mapping cleanup or retry. The Linux-host kernel suite
+passes 647 tests. This still does not claim a physical mapping backend or
+installed invocation.
+
+Patent review: `NOT_TRIGGERED` — this only composes existing capability
+attenuation, target construction, and transitive rollback paths. See
+`docs/patents/REVIEW_LOG.md`.

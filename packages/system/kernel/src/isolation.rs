@@ -812,6 +812,77 @@ pub enum NativeComponentServiceTaskError {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceReadTransferRootError {
+    Preparation(ComponentServiceReadTransferPreparationError),
+    Task(NativeComponentServiceTaskError),
+    Rollback {
+        task: NativeComponentServiceTaskError,
+        cleanup: TaskRuntimeError,
+    },
+}
+
+/// Prepares the direction-scoped source attachment and constructs the native
+/// target as one rollback-complete authority transaction. The broad root stays
+/// with the caller for mapping/resource cleanup and later transitive revocation.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_native_component_service_task_from_read_transfer_root<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    spec: IsolationServiceSpec,
+    launch_attachment: ComponentServiceLaunchAttachment,
+    provider_task: TaskId,
+    shared_object: ObjectId,
+    shared_generation: u64,
+    shared_bytes: u32,
+    shared_root: Capability,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    consumer_module_object: ObjectId,
+) -> Result<NativeComponentServiceReadTransferTask, NativeComponentServiceReadTransferRootError> {
+    let transfer = prepare_component_service_read_transfer_attachment(
+        runtime,
+        source_task,
+        provider_task,
+        shared_object,
+        shared_generation,
+        shared_bytes,
+        shared_root,
+    )
+    .map_err(NativeComponentServiceReadTransferRootError::Preparation)?;
+    match prepare_native_component_service_task_with_read_transfer(
+        runtime,
+        source_task,
+        target_task,
+        spec,
+        launch_attachment,
+        transfer,
+        service_endpoint_object,
+        supervisor_task_object,
+        consumer_module_object,
+    ) {
+        Ok(task) => Ok(task),
+        Err(task) => {
+            let first = runtime
+                .revoke_capability(source_task, transfer.local_read())
+                .err();
+            let second = runtime
+                .revoke_capability(source_task, transfer.provider_write())
+                .err();
+            match first.or(second) {
+                Some(cleanup) => {
+                    Err(NativeComponentServiceReadTransferRootError::Rollback { task, cleanup })
+                }
+                None => Err(NativeComponentServiceReadTransferRootError::Task(task)),
+            }
+        }
+    }
+}
+
 /// Constructs a native component with a receive-only shared-memory path to its
 /// dependency. The target keeps local read authority and may delegate only
 /// write authority to the provider named by the separately projected endpoint.
@@ -3694,6 +3765,121 @@ mod tests {
                 .unwrap()
                 .authorize_exact(prepared.local_read(), Rights::MAP.union(Rights::READ),),
             Ok(ObjectId(0xa0))
+        );
+    }
+
+    #[test]
+    fn rooted_read_transfer_construction_rolls_back_both_domains_on_entry_failure() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut runtime = TaskRuntime::<3, 5>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let target = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x30_0000).unwrap(),
+                    0x50_0000,
+                    0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let provider = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x40_0000).unwrap(),
+                    0x60_0000,
+                    0x7200_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let source_capabilities = runtime.capabilities_mut(source).unwrap();
+        let data = source_capabilities
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = source_capabilities
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let root_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let root = source_capabilities
+            .insert(ObjectId(0xa0), root_rights)
+            .unwrap();
+        let launch = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_native_component_service_task_from_read_transfer_root(
+                &mut runtime,
+                source,
+                target,
+                spec,
+                launch,
+                provider,
+                ObjectId(0xa0),
+                9,
+                4096,
+                root,
+                ObjectId(0x90),
+                ObjectId(0x90),
+                ObjectId(0x92),
+            ),
+            Err(NativeComponentServiceReadTransferRootError::Task(
+                NativeComponentServiceTaskError::Entry(
+                    NativeComponentServiceEntryError::InvalidIdentity
+                )
+            ))
+        );
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize_exact(root, root_rights),
+            Ok(ObjectId(0xa0))
+        );
+        let target_capabilities = runtime.capabilities_mut(target).unwrap();
+        for object in 1..=5 {
+            assert!(
+                target_capabilities
+                    .insert(ObjectId(object), Rights::READ)
+                    .is_ok()
+            );
+        }
+        let source_capabilities = runtime.capabilities_mut(source).unwrap();
+        assert!(
+            source_capabilities
+                .insert(ObjectId(0xb0), Rights::READ)
+                .is_ok()
+        );
+        assert!(
+            source_capabilities
+                .insert(ObjectId(0xb1), Rights::WRITE)
+                .is_ok()
         );
     }
 
