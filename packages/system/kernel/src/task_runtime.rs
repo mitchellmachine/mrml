@@ -180,6 +180,13 @@ pub struct TaskTermination {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingRetirement {
+    Termination(TaskTermination),
+    Fault(FaultRetirement),
+    Violation(TaskViolationRetirement),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TaskTerminationDispatchTarget {
     Idle,
     User { task: TaskId, context: UserContext },
@@ -447,9 +454,7 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     scheduler: KernelScheduler<TASKS>,
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
-    pending_termination: Option<TaskTermination>,
-    pending_fault: Option<FaultRetirement>,
-    pending_violation: Option<TaskViolationRetirement>,
+    pending_retirement: Option<PendingRetirement>,
 }
 
 /// A task runtime whose complete fixed-capacity kernel footprint has one exact
@@ -548,9 +553,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             scheduler,
             domains: array::from_fn(|_| None),
             delegations: [None; MAX_TASK_DELEGATIONS],
-            pending_termination: None,
-            pending_fault: None,
-            pending_violation: None,
+            pending_retirement: None,
         })
     }
 
@@ -1046,7 +1049,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             address,
             next,
         };
-        self.pending_fault = Some(retirement);
+        self.pending_retirement = Some(PendingRetirement::Fault(retirement));
         Ok(retirement)
     }
 
@@ -1093,7 +1096,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             violation,
             next,
         };
-        self.pending_violation = Some(retirement);
+        self.pending_retirement = Some(PendingRetirement::Violation(retirement));
         Ok(retirement)
     }
 
@@ -1124,13 +1127,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         retirement: FaultRetirement,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
         let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
-        let pending = self
-            .pending_fault
-            .ok_or(TaskTerminationDispatchError::NoPendingFault)?;
-        if pending != retirement {
-            return Err(TaskTerminationDispatchError::FaultMismatch);
+        match self.pending_retirement {
+            Some(PendingRetirement::Fault(pending)) if pending == retirement => {}
+            Some(PendingRetirement::Fault(_)) => {
+                return Err(TaskTerminationDispatchError::FaultMismatch);
+            }
+            _ => return Err(TaskTerminationDispatchError::NoPendingFault),
         }
-        self.pending_fault = None;
+        self.pending_retirement = None;
         Ok(TaskTerminationDispatch { target })
     }
 
@@ -1141,13 +1145,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         retirement: TaskViolationRetirement,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
         let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
-        let pending = self
-            .pending_violation
-            .ok_or(TaskTerminationDispatchError::NoPendingViolation)?;
-        if pending != retirement {
-            return Err(TaskTerminationDispatchError::ViolationMismatch);
+        match self.pending_retirement {
+            Some(PendingRetirement::Violation(pending)) if pending == retirement => {}
+            Some(PendingRetirement::Violation(_)) => {
+                return Err(TaskTerminationDispatchError::ViolationMismatch);
+            }
+            _ => return Err(TaskTerminationDispatchError::NoPendingViolation),
         }
-        self.pending_violation = None;
+        self.pending_retirement = None;
         Ok(TaskTerminationDispatch { target })
     }
 
@@ -1188,21 +1193,19 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         termination: TaskTermination,
     ) -> Result<(), TaskTerminationDispatchError> {
-        let pending = self
-            .pending_termination
-            .ok_or(TaskTerminationDispatchError::NoPendingTermination)?;
-        if pending != termination {
-            return Err(TaskTerminationDispatchError::TerminationMismatch);
+        match self.pending_retirement {
+            Some(PendingRetirement::Termination(pending)) if pending == termination => {}
+            Some(PendingRetirement::Termination(_)) => {
+                return Err(TaskTerminationDispatchError::TerminationMismatch);
+            }
+            _ => return Err(TaskTerminationDispatchError::NoPendingTermination),
         }
-        self.pending_termination = None;
+        self.pending_retirement = None;
         Ok(())
     }
 
     fn ensure_no_pending_retirement(&self) -> Result<(), TaskRuntimeError> {
-        if self.pending_termination.is_some()
-            || self.pending_fault.is_some()
-            || self.pending_violation.is_some()
-        {
+        if self.pending_retirement.is_some() {
             Err(TaskRuntimeError::RetirementDispatchPending)
         } else {
             Ok(())
@@ -1212,10 +1215,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub(crate) fn terminate_current_with_context(
         &mut self,
     ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
-        if self.pending_termination.is_some()
-            || self.pending_fault.is_some()
-            || self.pending_violation.is_some()
-        {
+        if self.pending_retirement.is_some() {
             return Err(TaskRuntimeError::RetirementDispatchPending);
         }
         let current = self
@@ -1244,7 +1244,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             task: current,
             next,
         };
-        self.pending_termination = Some(termination);
+        self.pending_retirement = Some(PendingRetirement::Termination(termination));
         Ok((termination, domain.context))
     }
 

@@ -10921,3 +10921,19 @@ under QEMU, WHP, KVM, or physical hardware in this increment.
 Patent review: `NOT_TRIGGERED` — consuming an existing linear scheduler token
 at an existing context-entry boundary is conventional control-flow integrity.
 See `docs/patents/REVIEW_LOG.md`.
+
+`TaskRuntime` now represents its mutually exclusive pending voluntary exit,
+recoverable fault, or protocol violation as one private `PendingRetirement`
+enum. Impossible simultaneous pending states are no longer representable, and
+the fixed-capacity runtime reserves storage for only the largest active record
+plus its discriminant rather than three independent optional records. Existing
+exact-match, freeze, failed-validation retention, successful issuance, and
+replay-denial behavior is unchanged. The Linux-host kernel suite passes 653
+tests and its release build passes; the configuration-service suite passes 53
+tests. User, invalid-return, and service-preemption UEFI release profiles cross-
+build with one pre-existing unused-variable warning. This is in-memory and
+cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — encoding mutually exclusive lifecycle states
+as one tagged union is conventional bounded state-machine representation. See
+`docs/patents/REVIEW_LOG.md`.
