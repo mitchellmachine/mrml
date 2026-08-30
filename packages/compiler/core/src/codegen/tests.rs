@@ -19532,25 +19532,37 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or_default(|| 1u32) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, mapper: u32) -> u32 { a.checked_add(b).map_or_default(mapper) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, fallback: u32) -> &u32 { a.checked_add(b).map_or_default(|_| &fallback) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or_default() }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or_default(|| 1u32) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, mapper: u32) -> u32 { a.checked_add(b).map_or_default(mapper) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, fallback: u32) -> &u32 { a.checked_add(b).map_or_default(|_| &fallback) }",
+                CodegenErrorKind::UnsupportedLifetimeElision,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or_default() }",
+                CodegenErrorKind::Expression(ExpressionErrorKind::ExpectedExpression),
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 3072, 4, 176>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 3072, 4, 176>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::SystemV,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, expected, "{source}");
+            }
         }
     }
 
