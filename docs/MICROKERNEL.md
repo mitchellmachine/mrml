@@ -11469,3 +11469,29 @@ a host with the corresponding backend.
 Patent review: `NOT_TRIGGERED` — selecting an existing hosted launch path and
 exact-matching its bounded proof output is conventional test-harness routing.
 See `docs/patents/REVIEW_LOG.md`.
+
+The deadline-enabled UEFI service dispatcher now closes the message-versus-
+timer race at the IPC publication boundary. After a successful inline or
+buffered send wakes a receiver, the dispatcher checks the exact generational
+deadline owner and, when present, consumes that owner and completes the saved
+receiver context with the queued message before completing the sender. A timer
+interrupt therefore cannot resume a newly runnable receiver with its original
+syscall registers, and the later sender yield refuses any still-pending owner
+instead of guessing a completion order.
+
+This interrupt-capable profile also rejects the legacy indefinite receive
+operation. That operation's older probe-only completion path defers context
+completion until cooperative yield and is not safe to admit under timer
+preemption. Other service profiles retain their existing behavior; the bounded
+deadline operation remains the only blocking receive admitted by this profile.
+
+The Linux-host kernel suite passes 666 tests, including the executor test that
+publishes a message, consumes the exact retained owner, and verifies the saved
+payload completion. The default service, component-service, and deadline UEFI
+release profiles cross-build through `mrml` with only their existing
+configuration-specific warnings. This is unit and cross-build evidence; no
+hosted or physical interrupt/message race was exercised.
+
+Patent review: `NOT_TRIGGERED` — completing a retained pending syscall before a
+woken task becomes preemptible is conventional interrupt-safe event delivery.
+See `docs/patents/REVIEW_LOG.md`.

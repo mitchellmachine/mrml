@@ -1029,36 +1029,41 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     frame.complete_error();
                 }
             }
-            SyscallRequest::Receive => match runtime
-                .receive_or_block_current()
-                .unwrap_or_else(|_| halt())
-            {
-                Ok(message) => frame.complete_message(message.payload()),
-                Err(blocked) if matches!(blocked.outcome(), ScheduleOutcome::Switch { .. }) => {
-                    let ScheduleOutcome::Switch { to, .. } = blocked.outcome() else {
-                        halt()
-                    };
-                    insert_pending_inline_wait(blocked);
-                    asm!(
-                        "out dx, eax",
-                        in("dx") SERVICE_CALL_PORT,
-                        in("eax") 1u32,
-                        options(nomem, nostack)
-                    );
-                    if core::ptr::addr_of!(SERVICE_RESTARTED).read()
-                        && root.get() == SERVICE_B_ROOT
-                        && !has_pending_buffer(current)
-                    {
-                        commit_pending_inline_wait(to);
-                        let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
-                        runtime
-                            .context_mut(to)
-                            .unwrap_or_else(|_| halt())
-                            .complete_message(message.payload());
+            SyscallRequest::Receive => {
+                #[cfg(feature = "deadline-receive-probe")]
+                frame.complete_error();
+                #[cfg(not(feature = "deadline-receive-probe"))]
+                match runtime
+                    .receive_or_block_current()
+                    .unwrap_or_else(|_| halt())
+                {
+                    Ok(message) => frame.complete_message(message.payload()),
+                    Err(blocked) if matches!(blocked.outcome(), ScheduleOutcome::Switch { .. }) => {
+                        let ScheduleOutcome::Switch { to, .. } = blocked.outcome() else {
+                            halt()
+                        };
+                        insert_pending_inline_wait(blocked);
+                        asm!(
+                            "out dx, eax",
+                            in("dx") SERVICE_CALL_PORT,
+                            in("eax") 1u32,
+                            options(nomem, nostack)
+                        );
+                        if core::ptr::addr_of!(SERVICE_RESTARTED).read()
+                            && root.get() == SERVICE_B_ROOT
+                            && !has_pending_buffer(current)
+                        {
+                            commit_pending_inline_wait(to);
+                            let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
+                            runtime
+                                .context_mut(to)
+                                .unwrap_or_else(|_| halt())
+                                .complete_message(message.payload());
+                        }
+                        enter_service_task(runtime, to)
                     }
-                    enter_service_task(runtime, to)
+                    _ => halt(),
                 }
-                _ => halt(),
             },
             SyscallRequest::SendInline {
                 endpoint,
@@ -1084,6 +1089,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     }
                     Err(_) => halt(),
                 };
+                #[cfg(feature = "deadline-receive-probe")]
+                complete_deadline_receive_if_ready(runtime, receiver);
                 frame.complete(sequence);
                 asm!(
                     "out dx, eax",
@@ -1169,6 +1176,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     }
                     Err(_) => halt(),
                 };
+                #[cfg(feature = "deadline-receive-probe")]
+                complete_deadline_receive_if_ready(runtime, receiver);
                 frame.complete(sequence);
                 asm!(
                     "out dx, eax",
@@ -1426,6 +1435,16 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
+                    #[cfg(feature = "deadline-receive-probe")]
+                    {
+                        let executor = (*core::ptr::addr_of!(SERVICE_DEADLINE_RECEIVES))
+                            .as_ref()
+                            .unwrap_or_else(|| halt());
+                        if executor.has_pending(to).unwrap_or_else(|_| halt()) {
+                            halt();
+                        }
+                    }
+                    #[cfg(not(feature = "deadline-receive-probe"))]
                     if !has_pending_buffer(to) {
                         commit_pending_inline_wait(to);
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
@@ -5293,7 +5312,22 @@ unsafe fn pending_inline_wait_slot(task: mrml_kernel::TaskId) -> Option<usize> {
     found
 }
 
-#[cfg(feature = "service-probe")]
+#[cfg(feature = "deadline-receive-probe")]
+unsafe fn complete_deadline_receive_if_ready(
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    receiver: mrml_kernel::TaskId,
+) {
+    let executor = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES) }
+        .as_mut()
+        .unwrap_or_else(|| halt());
+    if executor.has_pending(receiver).unwrap_or_else(|_| halt()) {
+        executor
+            .complete_ready(runtime, receiver)
+            .unwrap_or_else(|_| halt());
+    }
+}
+
+#[cfg(all(feature = "service-probe", not(feature = "deadline-receive-probe")))]
 unsafe fn insert_pending_inline_wait(wait: mrml_kernel::BlockedReceive) {
     if wait.is_control()
         || unsafe { pending_inline_wait_slot(wait.task()) }.is_some()
@@ -5309,7 +5343,7 @@ unsafe fn insert_pending_inline_wait(wait: mrml_kernel::BlockedReceive) {
     waits[slot] = Some(wait);
 }
 
-#[cfg(feature = "service-probe")]
+#[cfg(all(feature = "service-probe", not(feature = "deadline-receive-probe")))]
 unsafe fn commit_pending_inline_wait(task: mrml_kernel::TaskId) {
     let slot = unsafe { pending_inline_wait_slot(task) }.unwrap_or_else(|| halt());
     let waits = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_INLINE_WAITS) };
