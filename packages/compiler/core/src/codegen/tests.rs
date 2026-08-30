@@ -19025,15 +19025,15 @@ mod tests {
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 3072, 4, 176>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 3072, 4, 176>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::SystemV,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, CodegenErrorKind::RuntimeTypeMismatch, "{source}");
+            }
         }
     }
 
