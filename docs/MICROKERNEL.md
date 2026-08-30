@@ -11209,3 +11209,22 @@ was performed for this increment.
 Patent review: `NOT_TRIGGERED` — binding an absolute monotonic deadline to an
 exact generational wait token is conventional timeout state-machine handling.
 See `docs/patents/REVIEW_LOG.md`.
+
+Typed control-stream receives now accept the same optional absolute
+`ReceiveDeadline` as ordinary IPC receives. Both paths mint the same opaque
+runtime/task/generation/wait-kind/deadline identity and converge on the same
+expiry operation. Expiring a control wait makes its task runnable but neither
+fabricates nor consumes a control event; a later peer death or message remains a
+separate typed publication.
+
+The Linux-host kernel suite passes 659 tests. New coverage proves early control
+expiry is non-mutating, exact-boundary expiry wakes the intended task, and the
+control queue remains empty rather than receiving a synthetic timeout event.
+The affected Linux kernel release build and service plus component-service UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+This is in-memory and cross-build evidence only; no QEMU or physical-hardware
+execution was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — applying one existing exact deadline mechanism
+to a second typed receive class is conventional event-loop parity. See
+`docs/patents/REVIEW_LOG.md`.

@@ -1997,6 +1997,20 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn receive_control_or_block_current(
         &mut self,
     ) -> Result<Result<ControlEvent, BlockedReceive>, TaskRuntimeError> {
+        self.receive_control_or_block_current_with_deadline(None)
+    }
+
+    pub fn receive_control_or_block_current_until(
+        &mut self,
+        deadline: ReceiveDeadline,
+    ) -> Result<Result<ControlEvent, BlockedReceive>, TaskRuntimeError> {
+        self.receive_control_or_block_current_with_deadline(Some(deadline))
+    }
+
+    fn receive_control_or_block_current_with_deadline(
+        &mut self,
+        deadline: Option<ReceiveDeadline>,
+    ) -> Result<Result<ControlEvent, BlockedReceive>, TaskRuntimeError> {
         self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
@@ -2005,7 +2019,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         match self.receive_control(current) {
             Ok(event) => Ok(Ok(event)),
             Err(TaskRuntimeError::InboxEmpty) => self
-                .block_current_for_receive(current, BlockedReceiveKind::Control, None)
+                .block_current_for_receive(current, BlockedReceiveKind::Control, deadline)
                 .map(Err),
             Err(error) => Err(error),
         }
@@ -5271,6 +5285,42 @@ mod tests {
         );
         assert_eq!(runtime.context(faulted), Err(TaskRuntimeError::MissingTask));
         assert!(runtime.context(unrelated).is_ok());
+    }
+
+    #[test]
+    fn control_receive_deadline_uses_the_same_exact_expiry_owner() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let peer = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        let deadline = ReceiveDeadline::new(75).unwrap();
+        let blocked = match runtime
+            .receive_control_or_block_current_until(deadline)
+            .unwrap()
+        {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty control receive must retain its deadline owner"),
+        };
+        assert!(blocked.is_control());
+        assert_eq!(blocked.deadline(), Some(deadline));
+        assert_eq!(runtime.current(), Some(peer));
+        assert_eq!(
+            runtime.expire_blocked_receive(blocked, 74),
+            Err(TaskRuntimeError::ReceiveDeadlineNotReached)
+        );
+        assert_eq!(runtime.expire_blocked_receive(blocked, 75), Ok(()));
+        assert!(matches!(
+            runtime.yield_current(),
+            Ok(ScheduleOutcome::Switch { to, .. }) if to == observer
+        ));
+        assert!(matches!(
+            runtime.receive_control(observer),
+            Err(TaskRuntimeError::InboxEmpty)
+        ));
     }
 
     #[test]
