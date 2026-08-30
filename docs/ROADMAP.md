@@ -626,6 +626,23 @@ Patent review: `NOT_TRIGGERED` — bounded attenuation through the existing atom
 capability-projection graph and fixed native entry registers is conventional
 least-authority service construction. See `docs/patents/REVIEW_LOG.md`.
 
+AHCI now **PARTIALLY IMPLEMENTS IN SOURCE** the typed role binding above that
+provider-neutral attachment. Exactly six roles are required in fixed order:
+device `CONTROL`; independent command-list, received-FIS, and command-table
+`MAP|READ|WRITE`; data device-write `PIN|MAP|WRITE`; and data device-read
+`PIN|MAP|READ`. The binder exact-matches those objects to one validated ABAR,
+port layout, data extent, and generation-bound 512-byte block catalog record. It
+rejects generation/geometry mismatch, unknown device flags, swapped or widened
+roles, memory-object aliasing, and every command/data/MMIO physical overlap.
+The Linux AHCI suite passes all 89 tests and the kernel suite all 685. This is a
+typed pre-encoding boundary only: canonical hostile launch bytes, CPU virtual
+mapping records for DMA memory, active-port reconstruction, the service binary,
+supervised teardown, and execution remain unimplemented.
+
+Patent review: `NOT_TRIGGERED` — exact role/object/right matching and physical
+range disjointness checks are conventional least-authority driver launch
+validation. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

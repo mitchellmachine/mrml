@@ -160,7 +160,7 @@ impl<const N: usize> DeviceServiceLaunchAttachment<N> {
         self.authorities
     }
 
-    fn matches(self, spec: IsolationServiceSpec) -> bool {
+    pub fn matches_spec(self, spec: IsolationServiceSpec) -> bool {
         self.domain == spec.domain()
             && self.system_generation == spec.system_generation()
             && self.policy_generation == spec.policy_generation()
@@ -210,7 +210,7 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
         {
             return Err(NativeDeviceServiceEntryError::InvalidIdentity);
         }
-        if !attachment.matches(spec) {
+        if !attachment.matches_spec(spec) {
             return Err(NativeDeviceServiceEntryError::AttachmentMismatch);
         }
         let actual_data = target_capabilities

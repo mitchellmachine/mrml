@@ -510,6 +510,23 @@ atomic capability-projection graph and fixed native entry registers is
 conventional least-authority service construction. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+AHCI now **PARTIALLY IMPLEMENTS IN SOURCE** the typed binding from that generic
+attachment to six exact roles: device `CONTROL`; separate command-list,
+received-FIS, and command-table `MAP|READ|WRITE`; data device-write
+`PIN|MAP|WRITE`; and data device-read `PIN|MAP|READ`. The binding exact-matches
+each object to one validated ABAR, active-port layout identity, bounded data
+extent, and generation-bound 512-byte block catalog record. Wrong generations,
+geometry, flags, role order/rights, memory-object aliasing, and any physical
+overlap among MMIO, command memory, and data memory fail before publication. The
+focused Linux AHCI suite passes 89 tests and the kernel suite passes 685. This is
+a typed pre-encoding boundary: canonical hostile launch bytes, DMA CPU-mapping
+records, active-port reconstruction, the service binary, supervised teardown,
+active execution, and physical-device evidence remain unverified.
+
+Patent review: **NOT_TRIGGERED**. Exact role/object/right matching and physical
+range disjointness checks are conventional least-authority driver launch
+validation. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
