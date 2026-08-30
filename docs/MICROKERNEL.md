@@ -11636,3 +11636,20 @@ evidence, not KVM, WHP, or physical-hardware execution.
 Patent review: `NOT_TRIGGERED` — exact one-use cancellation of a retained wait
 owner and deterministic error completion are conventional asynchronous syscall
 lifecycle handling. See `docs/patents/REVIEW_LOG.md`.
+
+Cancellation arbitration now has explicit coverage for both competing winners.
+A copied cancellation token presented after compatible message delivery returns
+`OwnerMismatch` and cannot replace the saved successful payload completion.
+The same token presented after exact timer expiry returns `OwnerMismatch` and
+cannot replace the saved detail-free timeout completion. In both cases the
+winner consumes the sole retained executor owner before the stale cancellation
+is considered.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes 674
+tests, and the native kernel release build passes through `mrml`. These are
+deterministic in-memory race-order tests; they do not claim simultaneous hosted
+interrupt execution or physical timer evidence.
+
+Patent review: `NOT_TRIGGERED` — proving that one-use cancellation loses after
+message or timeout completion is conventional event-race regression testing.
+See `docs/patents/REVIEW_LOG.md`.

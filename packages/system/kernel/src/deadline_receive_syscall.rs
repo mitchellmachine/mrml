@@ -571,6 +571,89 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_loses_to_message_completion_without_overwriting_it() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x97);
+        let capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(object);
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked { cancellation, .. } => cancellation,
+            _ => panic!("expected blocked deadline receive"),
+        };
+        executor
+            .deliver(
+                &mut runtime,
+                sender,
+                receiver,
+                &mut endpoint,
+                capability,
+                b"ready",
+                &[],
+            )
+            .unwrap();
+        let completed = *runtime.context(receiver).unwrap();
+
+        assert_eq!(
+            executor.cancel(&mut runtime, cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert_eq!(*runtime.context(receiver).unwrap(), completed);
+        assert_eq!(
+            completed.rax,
+            crate::SyscallCompletionStatus::Success.code()
+        );
+        assert_eq!(completed.rdx, 5);
+    }
+
+    #[test]
+    fn cancellation_loses_to_timeout_completion_without_overwriting_it() {
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(1).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked { cancellation, .. } => cancellation,
+            _ => panic!("expected blocked deadline receive"),
+        };
+        executor.timer_tick(&mut runtime).unwrap();
+        let completed = *runtime.context(receiver).unwrap();
+
+        assert_eq!(
+            executor.cancel(&mut runtime, cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert_eq!(*runtime.context(receiver).unwrap(), completed);
+        assert_eq!(
+            completed.rax,
+            crate::SyscallCompletionStatus::TimedOut.code()
+        );
+        assert_eq!(
+            (completed.rdx, completed.r10, completed.r8, completed.r9),
+            (0, 0, 0, 0)
+        );
+    }
+
+    #[test]
     fn rejected_delivery_preserves_every_prepublication_state() {
         let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
         let receiver = runtime
