@@ -1003,8 +1003,11 @@ to later teardown. Teardown passes that retained instance back to its placement
 backend by mutable reference; a failure returns the complete generation-bound
 receipt with any exact backend progress preserved for retry, while only
 confirmed success consumes it. This is a service-lifecycle contract; a concrete
-installed placement backend remains **PLANNED**. Storage passes 158 focused
-Linux-host tests. The
+native launch specification now also exact-matches the selected native-service
+placement, filesystem interface/provider/SystemRelease generations, launch
+policy, association generation, canonical handoff length, and block endpoint
+before construction. A concrete installed placement backend remains
+**PLANNED**. Storage passes 159 focused Linux-host tests. The
 `mrml-fat32-service.efi` entry first copies and validates the exact 144-byte
 filesystem/block launch attachment through the kernel-projected read-only
 capability, retains the separately projected block endpoint capability, erases

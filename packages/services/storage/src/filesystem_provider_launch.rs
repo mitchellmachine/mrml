@@ -3,7 +3,8 @@ use crate::{
     FilesystemBlockAssociationHandoff,
 };
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, ComponentServiceReadTransferAttachment, Rights,
+    Capability, CapabilityError, CapabilitySpace, ComponentServiceLaunchAttachment,
+    ComponentServiceReadTransferAttachment, IsolationPlacement, IsolationServiceSpec, Rights,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +49,79 @@ pub enum FilesystemProviderLaunchError<E> {
     WrongTransferAuthority,
     TransferTooSmall,
     Backend(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderLaunchSpecError {
+    WrongPlacement,
+    WrongInterface,
+    WrongInterfaceGeneration,
+    WrongProviderGeneration,
+    WrongSystemGeneration,
+    WrongLaunchPolicy,
+    WrongAssociationGeneration,
+    WrongLaunchDataLength,
+    WrongDependencyEndpoint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeFilesystemProviderLaunchSpec {
+    service: IsolationServiceSpec,
+    attachment: ComponentServiceLaunchAttachment,
+}
+
+impl NativeFilesystemProviderLaunchSpec {
+    pub fn new(
+        association: FilesystemBlockAssociation,
+        service: IsolationServiceSpec,
+        attachment: ComponentServiceLaunchAttachment,
+        block_endpoint: Capability,
+    ) -> Result<Self, NativeFilesystemProviderLaunchSpecError> {
+        if service.placement() != IsolationPlacement::NativeService {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongPlacement);
+        }
+        if service.interface() != association.filesystem_binding.interface_object {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongInterface);
+        }
+        if service.interface_generation() != association.filesystem_binding.interface_generation {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongInterfaceGeneration);
+        }
+        if service.provider_generation() != association.filesystem_binding.provider_generation {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongProviderGeneration);
+        }
+        if service.system_generation() != association.filesystem_binding.system_generation {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongSystemGeneration);
+        }
+        if attachment.domain() != service.domain()
+            || attachment.system_generation() != service.system_generation()
+            || attachment.policy_generation() != service.policy_generation()
+        {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongLaunchPolicy);
+        }
+        if attachment.association_generation() != association.association_generation {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongAssociationGeneration);
+        }
+        if attachment.launch_data_bytes() as usize != FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongLaunchDataLength);
+        }
+        if attachment.dependency_endpoint_object() != association.block_binding.endpoint_object
+            || attachment.dependency_endpoint() != block_endpoint
+        {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongDependencyEndpoint);
+        }
+        Ok(Self {
+            service,
+            attachment,
+        })
+    }
+
+    pub const fn service(self) -> IsolationServiceSpec {
+        self.service
+    }
+
+    pub const fn attachment(self) -> ComponentServiceLaunchAttachment {
+        self.attachment
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,6 +258,7 @@ mod tests {
     use mrml_interface_storage_filesystem_v3::OpaqueHandle as FilesystemOpaqueHandle;
     use mrml_kernel::ObjectId;
     use mrml_kernel::arch::x86_64::UserContext;
+    use mrml_kernel::{IsolationServiceSpec, TotalMicrovmClass};
 
     struct Backend {
         fail: bool,
@@ -296,6 +371,53 @@ mod tests {
         .unwrap()
     }
 
+    fn native_launch_spec(
+        association_generation: u64,
+        launch_data_bytes: u32,
+    ) -> (
+        CapabilitySpace<2>,
+        Capability,
+        IsolationServiceSpec,
+        ComponentServiceLaunchAttachment,
+    ) {
+        let association = association();
+        let service = IsolationServiceSpec::new(
+            association.filesystem_binding.provider_object,
+            association.filesystem_binding.interface_object,
+            association.filesystem_binding.interface_generation,
+            association.filesystem_binding.provider_generation,
+            association.filesystem_binding.system_generation,
+            2,
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::NativeService,
+        )
+        .unwrap();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let data = capabilities
+            .insert(ObjectId(0x90), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = capabilities
+            .insert(
+                association.block_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            service,
+            association_generation,
+            ObjectId(0x90),
+            3,
+            launch_data_bytes,
+            data,
+            association.block_binding.endpoint_object,
+            association.block_binding.binding_generation,
+            endpoint,
+            &capabilities,
+        )
+        .unwrap();
+        (capabilities, endpoint, service, attachment)
+    }
+
     #[test]
     fn exact_endpoint_launches_with_canonical_handoff_and_returns_bound_receipt() {
         let association = association();
@@ -333,6 +455,42 @@ mod tests {
         assert_eq!(receipt.system_generation(), 9);
         assert_eq!(*receipt.instance(), 0xfeed);
         assert_eq!(receipt.into_instance(), 0xfeed);
+    }
+
+    #[test]
+    fn native_launch_spec_exact_matches_service_handoff_and_endpoint() {
+        let association = association();
+        let (_capabilities, endpoint, service, attachment) =
+            native_launch_spec(association.association_generation, 144);
+        let plan =
+            NativeFilesystemProviderLaunchSpec::new(association, service, attachment, endpoint)
+                .unwrap();
+        assert_eq!(plan.service(), service);
+        assert_eq!(plan.attachment(), attachment);
+
+        let mut wrong_provider = association;
+        wrong_provider.filesystem_binding.provider_generation += 1;
+        assert_eq!(
+            NativeFilesystemProviderLaunchSpec::new(wrong_provider, service, attachment, endpoint,),
+            Err(NativeFilesystemProviderLaunchSpecError::WrongProviderGeneration)
+        );
+        let (_capabilities, endpoint, service, wrong_association) =
+            native_launch_spec(association.association_generation + 1, 144);
+        assert_eq!(
+            NativeFilesystemProviderLaunchSpec::new(
+                association,
+                service,
+                wrong_association,
+                endpoint,
+            ),
+            Err(NativeFilesystemProviderLaunchSpecError::WrongAssociationGeneration)
+        );
+        let (_capabilities, endpoint, service, wrong_length) =
+            native_launch_spec(association.association_generation, 143);
+        assert_eq!(
+            NativeFilesystemProviderLaunchSpec::new(association, service, wrong_length, endpoint,),
+            Err(NativeFilesystemProviderLaunchSpecError::WrongLaunchDataLength)
+        );
     }
 
     #[test]

@@ -123,7 +123,9 @@ pub use filesystem_open::{
 pub use filesystem_provider_launch::{
     FilesystemProviderLaunchBackend, FilesystemProviderLaunchError,
     FilesystemProviderLaunchReceipt, FilesystemProviderTeardownBackend,
-    FilesystemProviderTeardownError, launch_filesystem_provider, teardown_filesystem_provider,
+    FilesystemProviderTeardownError, NativeFilesystemProviderLaunchSpec,
+    NativeFilesystemProviderLaunchSpecError, launch_filesystem_provider,
+    teardown_filesystem_provider,
 };
 pub use format::{
     DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, DirectoryEntry, DirectoryMetadata,
