@@ -36,8 +36,8 @@ pub use service_loop::{
     Fat32ServiceLoop, Fat32ServiceLoopError, Fat32ServiceSyscalls, ReceivedFat32Envelope,
 };
 pub use dispatch_service::{
-    Fat32DispatchSyscalls, ReceivedFat32DispatchEnvelope, FAT32_DISPATCH_REQUEST_BYTES,
-    FAT32_DISPATCH_RESPONSE_BYTES,
+    Fat32DispatchService, Fat32DispatchServiceError, Fat32DispatchSyscalls,
+    ReceivedFat32DispatchEnvelope, FAT32_DISPATCH_REQUEST_BYTES, FAT32_DISPATCH_RESPONSE_BYTES,
 };
 pub use mount_service_loop::{
     Fat32MountServiceLoop, Fat32MountServiceLoopError, Fat32MountServiceSyscalls,

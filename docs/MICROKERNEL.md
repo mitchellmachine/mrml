@@ -7515,7 +7515,10 @@ kernel-returned counts and preserves receive/write/release/reply order. The
 unified entry adapter now receives one maximum-sized bounded envelope,
 preserves the kernel-returned payload and capability counts for canonical
 dispatch, supports both shared-buffer directions, and bounds variable replies.
-The focused FAT32 suite passes ninety-two Linux-host tests.
+One router owns the mounted provider state across probe, mount, unmount, lookup,
+open, and read calls; it rejects unsupported write-side operations and releases
+a structurally valid transferred leaf even when later header validation fails.
+The focused FAT32 suite passes ninety-five Linux-host tests.
 
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
