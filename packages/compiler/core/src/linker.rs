@@ -5,10 +5,11 @@
 //! validation and relocation scanning later without changing link semantics.
 
 pub const MAX_LINK_INPUTS: usize = 256;
-/// Decoded code/read-only fragments retained after bounded object expansion.
-/// This is distinct from the source-input bound so large COFF members do not
-/// inflate archive, path, or source-object workspaces.
-pub const MAX_LINK_FRAGMENTS: usize = 4096;
+/// Aggregate decoded code/read-only fragments retained after bounded object
+/// expansion. Each COFF object remains independently capped at 4,096 sections;
+/// the exact ORACLE-0003 `std` plus `gimli` path reaches 5,701 fragments across
+/// two selected objects. Hosted decode arenas allocate only the measured count.
+pub const MAX_LINK_FRAGMENTS: usize = 8192;
 /// Pinned ORACLE-0003 Windows `std` peaks at 305 relocations in one text
 /// fragment. Keep a power-of-two per-fragment arena that admits that exact
 /// family while the aggregate selected-relocation bound remains independent.
@@ -10338,6 +10339,25 @@ mod tests {
         let selection =
             select_ordered_static_link_members(&inputs, &groups, &members, "entry").unwrap();
         assert_eq!(selection.indices().len(), MAX_LINK_INPUTS + 1);
+    }
+
+    #[test]
+    fn ordered_archive_selection_separates_object_and_aggregate_fragment_bounds() {
+        let fragment = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let inputs = [fragment; MAX_COFF_SECTIONS + 1];
+        let groups = [1; MAX_COFF_SECTIONS + 1];
+        let members = [7; MAX_COFF_SECTIONS + 1];
+
+        let selection =
+            select_ordered_static_link_members(&inputs, &groups, &members, "entry").unwrap();
+        assert_eq!(selection.indices().len(), MAX_COFF_SECTIONS + 1);
     }
 
     #[test]
