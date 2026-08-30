@@ -567,6 +567,22 @@ Patent review: `NOT_TRIGGERED` — routing existing canonical operations by exac
 bounded message shape through their existing adapters is conventional service
 dispatch. See `docs/patents/REVIEW_LOG.md`.
 
+The first installed-entry command-memory prerequisite is now **PARTIALLY
+IMPLEMENTED IN SOURCE**. A safe mapped-memory adapter binds the exact retained
+command-list, received-FIS, and command-table descriptors to three caller-owned
+CPU mappings. Construction rejects malformed generations, geometry, lengths,
+object aliasing, and physical overlap; every little-endian word access separately
+rejects descriptor substitution, misalignment, overflow, and out-of-range bytes.
+The production command-memory initializer runs through this adapter and programs
+only the exact per-slot table bases. All 83 focused Linux tests and the release
+build pass. Allocation, pinning, cache synchronization, IOMMU installation,
+mapping construction/revocation, the installed entry, and supervisor launch
+remain separate unverified gates.
+
+Patent review: `NOT_TRIGGERED` — exact descriptor-to-slice bounds checking for
+already-mapped command memory is conventional memory-safety plumbing and adds no
+new storage or device algorithm. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

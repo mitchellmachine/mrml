@@ -446,6 +446,23 @@ Patent review: **NOT_TRIGGERED**. Exact bounded message-shape routing through
 existing operation adapters is conventional service dispatch. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The first command-memory prerequisite for that installed entry is now
+**PARTIALLY IMPLEMENTED IN SOURCE**. One safe adapter exact-binds the retained
+command-list, received-FIS, and command-table descriptors to three caller-owned
+CPU mappings. Construction rejects malformed generations, geometry, mapping
+lengths, object aliasing, and physical overlap. Each little-endian word access
+then rejects descriptor substitution, misalignment, overflow, and out-of-range
+bytes before touching memory. The production initializer composes through the
+adapter and programs only the expected per-slot table bases. The focused Linux
+suite passes 83 tests and the release build passes. Allocation, pinning, cache
+synchronization, IOMMU installation, mapping construction/revocation, installed
+entry, supervisor launch, and physical-device execution remain unverified.
+
+Patent review: **NOT_TRIGGERED**. Exact descriptor-to-slice bounds checking for
+already-mapped command memory is conventional memory-safety plumbing and adds
+no new storage or device algorithm. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
