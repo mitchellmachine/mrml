@@ -48,6 +48,7 @@ pub enum TaskRuntimeError {
     ReceiveWaitMismatch,
     ReceiveWaitHasNoDeadline,
     ReceiveDeadlineNotReached,
+    ReceiveDeadlineExhausted,
 }
 
 impl TaskRuntimeError {
@@ -353,6 +354,26 @@ impl ReceiveDeadline {
     }
 
     pub const fn tick(self) -> u64 {
+        self.0
+    }
+
+    pub const fn after(now: u64, timeout: ReceiveTimeout) -> Option<Self> {
+        match now.checked_add(timeout.ticks()) {
+            Some(deadline) => Self::new(deadline),
+            None => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiveTimeout(u64);
+
+impl ReceiveTimeout {
+    pub const fn new(ticks: u64) -> Option<Self> {
+        if ticks == 0 { None } else { Some(Self(ticks)) }
+    }
+
+    pub const fn ticks(self) -> u64 {
         self.0
     }
 }
@@ -2094,6 +2115,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
     }
 
+    pub fn receive_control_or_block_current_for(
+        &mut self,
+        timeout: ReceiveTimeout,
+    ) -> Result<DeadlineReceive<ControlEvent>, TaskRuntimeError> {
+        let deadline = ReceiveDeadline::after(self.scheduler.ticks(), timeout)
+            .ok_or(TaskRuntimeError::ReceiveDeadlineExhausted)?;
+        self.receive_control_or_block_current_until(deadline)
+    }
+
     fn receive_control_or_block_current_with_deadline(
         &mut self,
         deadline: Option<ReceiveDeadline>,
@@ -2383,6 +2413,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 .map(DeadlineReceive::Blocked),
             Err(error) => Err(error),
         }
+    }
+
+    pub fn receive_or_block_current_for(
+        &mut self,
+        timeout: ReceiveTimeout,
+    ) -> Result<DeadlineReceive<Message>, TaskRuntimeError> {
+        let deadline = ReceiveDeadline::after(self.scheduler.ticks(), timeout)
+            .ok_or(TaskRuntimeError::ReceiveDeadlineExhausted)?;
+        self.receive_or_block_current_until(deadline)
     }
 
     fn receive_or_block_current_with_deadline(
@@ -4250,6 +4289,30 @@ mod tests {
             runtime.receive_or_block_current().unwrap(),
             Err(blocked) if matches!(blocked.outcome(), ScheduleOutcome::Idle)
         ));
+    }
+
+    #[test]
+    fn relative_receive_timeout_binds_checked_runtime_epoch() {
+        assert_eq!(ReceiveTimeout::new(0), None);
+        let timeout = ReceiveTimeout::new(2).unwrap();
+        assert_eq!(ReceiveDeadline::after(40, timeout).unwrap().tick(), 42);
+        assert_eq!(ReceiveDeadline::after(u64::MAX - 1, timeout), None);
+
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == task));
+        let wait = match runtime.receive_or_block_current_for(timeout).unwrap() {
+            DeadlineReceive::Blocked(wait) => wait,
+            _ => panic!("empty relative-timeout receive must block"),
+        };
+        assert_eq!(wait.deadline().unwrap().tick(), 2);
+        let first = runtime.timer_tick_and_expire_receives().unwrap();
+        assert!(first.expired().iter().all(Option::is_none));
+        let second = runtime.timer_tick_and_expire_receives().unwrap();
+        let expired = second.expired().iter().flatten().next().unwrap();
+        assert!(expired.matches(&wait));
     }
 
     #[test]

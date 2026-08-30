@@ -295,10 +295,10 @@ pub use task_runtime::{
     AccountedTaskRuntime, AccountedTaskRuntimeError, BlockedReceive, ControlEvent, DeadlineReceive,
     DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, ExpiredReceive, FaultRetirement,
     MAX_TASK_DELEGATIONS, PeerDeath, PeerDeathReason, PeriodicDomainBalancer, QueuedMessageShape,
-    ReceiveDeadline, ReceiveDeadlineTick, ReceivedMessage, TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES,
-    TaskProtocolViolation, TaskRuntime, TaskRuntimeError, TaskTermination, TaskTerminationDispatch,
-    TaskTerminationDispatchError, TaskTerminationIdle, TaskViolationRetirement,
-    TimerDomainBalanceOutcome,
+    ReceiveDeadline, ReceiveDeadlineTick, ReceiveTimeout, ReceivedMessage, TASK_CONTROL_PEERS,
+    TASK_INBOX_MESSAGES, TaskProtocolViolation, TaskRuntime, TaskRuntimeError, TaskTermination,
+    TaskTerminationDispatch, TaskTerminationDispatchError, TaskTerminationIdle,
+    TaskViolationRetirement, TimerDomainBalanceOutcome,
 };
 pub use virtual_block::{
     AdmittedVirtualBlockRequest, CapabilitySelectedVirtualBlockBackend,

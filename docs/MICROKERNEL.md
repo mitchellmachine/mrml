@@ -11323,3 +11323,25 @@ only; no QEMU or physical-hardware execution was performed for this increment.
 Patent review: `NOT_TRIGGERED` — rejecting an already elapsed timeout before
 creating wait state is conventional deadline admission handling. See
 `docs/patents/REVIEW_LOG.md`.
+
+Callers can now express receive limits as a nonzero `ReceiveTimeout` duration
+instead of naming the kernel's absolute scheduler epoch. IPC and control
+`receive_*_for` entry points checked-add that duration to the runtime's current
+tick and then use the same typed deadline admission and exact wait identity.
+Zero durations are unrepresentable, arithmetic overflow returns the typed
+`ReceiveDeadlineExhausted` error before inbox or scheduler mutation, and the
+resulting opaque token retains only the checked absolute deadline needed by the
+trusted timer path.
+
+The Linux-host kernel suite passes 663 tests. New coverage rejects zero and
+overflowing duration construction, binds a two-tick relative request to the
+runtime epoch, proves the first tick leaves it blocked, and exact-matches its
+expiration on the second tick. The affected Linux kernel release build and
+service plus component-service UEFI release profiles cross-build with the
+existing configuration-specific warnings. This is in-memory and cross-build
+evidence only; no QEMU or physical-hardware execution was performed for this
+increment.
+
+Patent review: `NOT_TRIGGERED` — checked conversion from a relative timeout to
+an internal absolute deadline is conventional bounded timer arithmetic. See
+`docs/patents/REVIEW_LOG.md`.
