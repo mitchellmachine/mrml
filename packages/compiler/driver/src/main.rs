@@ -1708,6 +1708,11 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     let writable_target_defined = |symbol: &str| {
         writable_data.iter().any(|data| data.symbol == symbol)
     };
+    let writable_section_defined = |identity: CoffSectionIdentity| {
+        writable_data
+            .iter()
+            .any(|data| data.identity == Some(identity))
+    };
     let named_target_defined = |symbol: &str| {
         link_target_defined(symbol) || writable_target_defined(symbol)
     };
@@ -1774,6 +1779,15 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                 return Err(anyhow!(
                     "selected code relocation writable target is undefined: {}",
                     symbol
+                ));
+            }
+            if let LinkRelocationTarget::PeWritableSection { identity, .. } = relocation.target
+                && !writable_section_defined(identity)
+            {
+                return Err(anyhow!(
+                    "selected code relocation writable section is undefined: object {}, section {}",
+                    identity.object(),
+                    identity.section()
                 ));
             }
             if let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target {
@@ -2213,6 +2227,7 @@ mod tests {
         };
         let writable = [PeWritableData {
             symbol: "marker",
+            identity: None,
             selection: mrml_rustc::PeWritableComdatSelection::NoDuplicates,
             initialized: &[0],
             zeroed_size: 0,
