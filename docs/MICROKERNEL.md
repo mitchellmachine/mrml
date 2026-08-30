@@ -10665,3 +10665,16 @@ execute the privileged context-loading assembly.
 Patent review: `NOT_TRIGGERED` — exact matching of scheduler outcomes to saved
 contexts is conventional task-dispatch lifecycle validation. See
 `docs/patents/REVIEW_LOG.md`.
+
+Filesystem provider retirement now returns a typed result that binds the exact
+task-termination record to its validated successor dispatch. The provider
+receipt transitions to retained teardown state before dispatch validation, so
+a post-retirement scheduler mismatch cannot leave an active provider receipt or
+discard the retired context. The Linux-host release kernel suite passes 653
+tests, storage passes 162 tests, and both release builds pass. This evidence
+covers the in-memory scheduler and inactive page-table hierarchy only; it does
+not execute privileged context loading or active-CR3 mutation.
+
+Patent review: `NOT_TRIGGERED` — composing typed termination, retained teardown,
+and successor dispatch records is conventional fail-closed lifecycle state
+management. See `docs/patents/REVIEW_LOG.md`.

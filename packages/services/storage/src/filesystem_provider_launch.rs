@@ -12,7 +12,7 @@ use mrml_kernel::{
     NativeComponentServiceCopyReadTransferRetirementMappingError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
     NativeComponentServiceCopyReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
-    TaskRuntimeError, TaskTermination,
+    TaskRuntimeError, TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError,
     prepare_native_component_service_task_from_copy_read_transfer_attachment,
     retire_current_native_component_service_copy_read_transfer_on_active_x86_64,
     retire_current_native_component_service_copy_read_transfer_with_mapping_revocation,
@@ -184,12 +184,36 @@ impl NativeFilesystemProviderInstance {
 pub enum NativeFilesystemProviderRetirementError<M> {
     TeardownProgressed,
     RetirementMapping(NativeComponentServiceCopyReadTransferRetirementMappingError<M>),
+    Dispatch {
+        termination: TaskTermination,
+        error: TaskTerminationDispatchError,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeFilesystemProviderRetirement {
+    termination: TaskTermination,
+    dispatch: TaskTerminationDispatch,
+}
+
+impl NativeFilesystemProviderRetirement {
+    pub const fn termination(self) -> TaskTermination {
+        self.termination
+    }
+
+    pub const fn dispatch(self) -> TaskTerminationDispatch {
+        self.dispatch
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeFilesystemProviderActiveRetirementError {
     TeardownProgressed,
     Retirement(NativeComponentServiceCopyReadTransferActiveRetirementError),
+    Dispatch {
+        termination: TaskTermination,
+        error: TaskTerminationDispatchError,
+    },
 }
 
 pub fn retire_current_native_filesystem_provider<
@@ -204,7 +228,7 @@ pub fn retire_current_native_filesystem_provider<
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
     memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
     mapping_backend: &mut M,
-) -> Result<TaskTermination, NativeFilesystemProviderRetirementError<M::Error>> {
+) -> Result<NativeFilesystemProviderRetirement, NativeFilesystemProviderRetirementError<M::Error>> {
     let active = match receipt.instance {
         NativeFilesystemProviderInstance::Active(active) => active,
         NativeFilesystemProviderInstance::Teardown(state)
@@ -224,7 +248,16 @@ pub fn retire_current_native_filesystem_provider<
     ) {
         Ok((termination, state)) => {
             receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
-            Ok(termination)
+            let dispatch = runtime
+                .dispatch_after_termination(termination)
+                .map_err(|error| NativeFilesystemProviderRetirementError::Dispatch {
+                    termination,
+                    error,
+                })?;
+            Ok(NativeFilesystemProviderRetirement {
+                termination,
+                dispatch,
+            })
         }
         Err(error) => {
             if let Some(state) = error.state() {
@@ -255,7 +288,7 @@ pub unsafe fn retire_current_native_filesystem_provider_on_active_x86_64<
     receipt: &mut FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
     memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
-) -> Result<TaskTermination, NativeFilesystemProviderActiveRetirementError> {
+) -> Result<NativeFilesystemProviderRetirement, NativeFilesystemProviderActiveRetirementError> {
     let active = match receipt.instance {
         NativeFilesystemProviderInstance::Active(active) => active,
         NativeFilesystemProviderInstance::Teardown(state)
@@ -274,7 +307,18 @@ pub unsafe fn retire_current_native_filesystem_provider_on_active_x86_64<
     } {
         Ok((termination, state)) => {
             receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
-            Ok(termination)
+            let dispatch = runtime
+                .dispatch_after_termination(termination)
+                .map_err(
+                    |error| NativeFilesystemProviderActiveRetirementError::Dispatch {
+                        termination,
+                        error,
+                    },
+                )?;
+            Ok(NativeFilesystemProviderRetirement {
+                termination,
+                dispatch,
+            })
         }
         Err(error) => {
             if let Some(state) = error.state() {

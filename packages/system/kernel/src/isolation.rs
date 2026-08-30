@@ -5693,6 +5693,18 @@ mod tests {
             .unwrap();
         assert_eq!(termination.task, target);
         assert_eq!(
+            runtime.dispatch_after_termination(termination),
+            Ok(crate::TaskTerminationDispatch::User {
+                task: provider,
+                context: UserContext::new(
+                    crate::PhysAddr::new(0x40_0000).unwrap(),
+                    0x60_0000,
+                    0x7200_0000,
+                )
+                .unwrap(),
+            })
+        );
+        assert_eq!(
             state.retired_context().unwrap().page_table(),
             active.page_table_root()
         );
