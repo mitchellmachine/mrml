@@ -6,10 +6,10 @@ use mrml_package_format::{
 
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
-    CpuResourceError, MemoryBackingKind, MemoryBackingOperationError, MemoryObjectBackingBackend,
-    MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
-    ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId,
-    arch::x86_64::UserContext,
+    CpuResourceError, MemoryBackingKind, MemoryBackingOperationError, MemoryMappingBackend,
+    MemoryMappingPair, MemoryMappingPairOperationError, MemoryObjectBackingBackend, MemoryObjectId,
+    MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
+    Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId, arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -527,6 +527,47 @@ pub enum ComponentServiceReadTransferBackingError<E> {
     Backing(MemoryBackingOperationError<E>),
 }
 
+const COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS: Rights = Rights::MAP.union(Rights::CONTROL);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceReadTransferMappings {
+    mappings: MemoryMappingPair,
+    local_target: ObjectId,
+    provider_target: ObjectId,
+    local_virtual_page: u64,
+    provider_virtual_page: u64,
+}
+
+impl ComponentServiceReadTransferMappings {
+    pub const fn mappings(self) -> MemoryMappingPair {
+        self.mappings
+    }
+
+    pub const fn local_target(self) -> ObjectId {
+        self.local_target
+    }
+
+    pub const fn provider_target(self) -> ObjectId {
+        self.provider_target
+    }
+
+    pub const fn local_virtual_page(self) -> u64 {
+        self.local_virtual_page
+    }
+
+    pub const fn provider_virtual_page(self) -> u64 {
+        self.provider_virtual_page
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferMappingError<F, S> {
+    Runtime(TaskRuntimeError),
+    Target(CapabilityError),
+    TargetAlias,
+    Mapping(MemoryMappingPairOperationError<F, S>),
+}
+
 /// Charges one exact shared page into the source task before backing, mapping,
 /// or provider construction can begin.
 pub fn reserve_component_service_read_transfer_memory<
@@ -596,6 +637,74 @@ pub fn bind_component_service_read_transfer_backing<
             backend,
         )
         .map_err(ComponentServiceReadTransferBackingError::Backing)
+}
+
+/// Installs the charged page read-only into the local target and write-only
+/// into the exact provider target as one rollback-aware transaction.
+#[allow(clippy::too_many_arguments)]
+pub fn install_component_service_read_transfer_mappings<
+    F: MemoryMappingBackend,
+    S: MemoryMappingBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    reservation: ComponentServiceReadTransferMemoryRoot,
+    local_target_capability: Capability,
+    local_virtual_page: u64,
+    local_backend: &mut F,
+    provider_target_capability: Capability,
+    provider_virtual_page: u64,
+    provider_backend: &mut S,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+) -> Result<
+    ComponentServiceReadTransferMappings,
+    ComponentServiceReadTransferMappingError<F::Error, S::Error>,
+> {
+    let capabilities = runtime
+        .capabilities(source_task)
+        .map_err(ComponentServiceReadTransferMappingError::Runtime)?;
+    let local_target = capabilities
+        .authorize_exact(
+            local_target_capability,
+            COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS,
+        )
+        .map_err(ComponentServiceReadTransferMappingError::Target)?;
+    let provider_target = capabilities
+        .authorize_exact(
+            provider_target_capability,
+            COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS,
+        )
+        .map_err(ComponentServiceReadTransferMappingError::Target)?;
+    if local_target == provider_target {
+        return Err(ComponentServiceReadTransferMappingError::TargetAlias);
+    }
+    let mappings = memory
+        .install_backed_mapping_pair(
+            reservation.memory_object(),
+            reservation.root(),
+            local_target_capability,
+            local_virtual_page,
+            Rights::READ,
+            local_backend,
+            provider_target_capability,
+            provider_virtual_page,
+            Rights::WRITE,
+            provider_backend,
+            capabilities,
+        )
+        .map_err(ComponentServiceReadTransferMappingError::Mapping)?;
+    Ok(ComponentServiceReadTransferMappings {
+        mappings,
+        local_target,
+        provider_target,
+        local_virtual_page,
+        provider_virtual_page,
+    })
 }
 
 impl ComponentServiceReadTransferAttachment {
@@ -2630,7 +2739,7 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MemoryBackingBackendRequest;
+    use crate::{MemoryBackingBackendRequest, MemoryMappingBackendRequest};
 
     const SYSTEM_GENERATION: u64 = 108;
 
@@ -2672,6 +2781,32 @@ mod tests {
                 return Err("substitution");
             }
             self.claimed = None;
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TransferMappingBackend {
+        installed: Option<MemoryMappingBackendRequest>,
+    }
+
+    // SAFETY: the test backend publishes and removes only the exact request it
+    // records, with no aliases or partial state.
+    unsafe impl MemoryMappingBackend for TransferMappingBackend {
+        type Error = &'static str;
+
+        fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            if self.installed.replace(request).is_some() {
+                return Err("occupied");
+            }
+            Ok(())
+        }
+
+        fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            if self.installed != Some(request) {
+                return Err("substitution");
+            }
+            self.installed = None;
             Ok(())
         }
     }
@@ -3716,7 +3851,7 @@ mod tests {
 
     #[test]
     fn read_transfer_memory_reservation_charges_one_exact_shared_page() {
-        let mut runtime = TaskRuntime::<1, 2>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<1, 4>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -3797,6 +3932,82 @@ mod tests {
         )
         .unwrap();
         assert!(backend.claimed.is_some());
+        let local_target = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                ObjectId(0x7100),
+                COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS,
+            )
+            .unwrap();
+        let provider_target = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                ObjectId(0x7200),
+                COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS,
+            )
+            .unwrap();
+        let mut local_mapping = TransferMappingBackend::default();
+        let mut provider_mapping = TransferMappingBackend::default();
+        assert_eq!(
+            install_component_service_read_transfer_mappings(
+                &mut memory,
+                reservation,
+                local_target,
+                0x300,
+                &mut local_mapping,
+                local_target,
+                0x400,
+                &mut provider_mapping,
+                &runtime,
+                source,
+            ),
+            Err(ComponentServiceReadTransferMappingError::TargetAlias)
+        );
+        assert!(local_mapping.installed.is_none());
+        assert!(provider_mapping.installed.is_none());
+        let mappings = install_component_service_read_transfer_mappings(
+            &mut memory,
+            reservation,
+            local_target,
+            0x300,
+            &mut local_mapping,
+            provider_target,
+            0x400,
+            &mut provider_mapping,
+            &runtime,
+            source,
+        )
+        .unwrap();
+        assert_eq!(mappings.local_target(), ObjectId(0x7100));
+        assert_eq!(mappings.provider_target(), ObjectId(0x7200));
+        assert_eq!(mappings.local_virtual_page(), 0x300);
+        assert_eq!(mappings.provider_virtual_page(), 0x400);
+        assert_eq!(
+            local_mapping.installed.unwrap().mapping().access(),
+            Rights::READ
+        );
+        assert_eq!(
+            provider_mapping.installed.unwrap().mapping().access(),
+            Rights::WRITE
+        );
+        memory
+            .remove_mapping(
+                mappings.mappings().second(),
+                provider_target,
+                runtime.capabilities(source).unwrap(),
+                &mut provider_mapping,
+            )
+            .unwrap();
+        memory
+            .remove_mapping(
+                mappings.mappings().first(),
+                local_target,
+                runtime.capabilities(source).unwrap(),
+                &mut local_mapping,
+            )
+            .unwrap();
         assert_eq!(
             memory
                 .release_physical_backing(

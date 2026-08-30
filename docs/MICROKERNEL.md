@@ -10265,3 +10265,18 @@ service-specific directional binding or physical page-table evidence.
 Patent review: `NOT_TRIGGERED` — two-phase mapping publication with explicit
 rollback retention is conventional transactional resource management. See
 `docs/patents/REVIEW_LOG.md`.
+
+The charged transfer page now **PARTIALLY IMPLEMENTS IN SOURCE** its exact
+service-role mapping contract. Construction requires two distinct, exact
+`MAP|CONTROL` target capabilities held by the source coordinator, installs one
+non-executable read-only page into the local consumer target and the same
+physical page non-executable write-only into the provider target, and returns
+both generational mapping identities and virtual pages for ordered teardown.
+Target aliasing fails before either backend is invoked. The Linux-host release
+kernel suite passes 649 tests and the release kernel build passes. The test uses
+recording backends; it does not prove active native page tables, installed
+service launch, KVM, WHP, IOMMU, or physical execution.
+
+Patent review: `NOT_TRIGGERED` — direction-specific shared-page mappings and
+exact target preflight are conventional least-authority memory projection. See
+`docs/patents/REVIEW_LOG.md`.
