@@ -68,6 +68,16 @@ pub enum AhciAbarRemovalError {
     },
 }
 
+impl AhciAbarRemovalError {
+    pub const fn retained(self) -> InstalledAhciAbarMapping {
+        match self {
+            Self::Capability { retained, .. }
+            | Self::WrongDeviceObject { retained }
+            | Self::BackendRejected { retained } => retained,
+        }
+    }
+}
+
 pub fn map_ahci_abar<const N: usize, B: AhciAbarMappingBackend>(
     capabilities: &CapabilitySpace<N>,
     capability: Capability,

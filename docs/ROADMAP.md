@@ -812,6 +812,31 @@ Patent review: `NOT_TRIGGERED` — separately authorized exact MMIO installation
 and retryable withdrawal are conventional device-mapping lifecycle controls. See
 `docs/patents/REVIEW_LOG.md`.
 
+ABAR and CPU mappings now form one combined launch-owned lifecycle **IMPLEMENTED
+IN SOURCE**. Construction exact-matches the discovered ABAR generation and range
+to the canonical launch record, installs ABAR before the four CPU mappings, and
+rolls ABAR back after any clean CPU-side failure. If CPU rollback is uncertain,
+both the exact retained CPU set and ABAR owner remain together. Teardown always
+withdraws CPU mappings in reverse order before ABAR; CPU or ABAR uncertainty
+returns one resumable combined state and never reports completion early. The
+Linux AHCI suite passes all 108 tests. Active-port quiescence must still precede
+this mapping teardown; concrete page-table/IOMMU invalidation, task termination
+integration, the native binary, active execution, and physical-device evidence
+remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — dependency-ordered construction, reverse
+rollback, and resumable combined cleanup are conventional resource transaction
+controls. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

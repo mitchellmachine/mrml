@@ -97,6 +97,15 @@ pub enum AhciServiceCpuMappingError<E> {
     },
 }
 
+impl<E> AhciServiceCpuMappingError<E> {
+    pub const fn retained(&self) -> Option<AhciInstalledCpuMappings> {
+        match self {
+            Self::Rollback { retained, .. } => Some(*retained),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciServiceCpuMappingRemovalError<E> {
     pub index: usize,

@@ -695,6 +695,30 @@ Patent review: **NOT_TRIGGERED**. Separately authorized exact MMIO installation
 and retryable withdrawal are conventional device-mapping lifecycle controls. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+ABAR and CPU mappings now form one combined launch-owned lifecycle **IMPLEMENTED
+IN SOURCE**. Construction exact-matches discovered ABAR generation/range to the
+canonical record, installs ABAR before all four CPU mappings, and rolls ABAR back
+after clean CPU-side failure. Uncertain CPU rollback retains its exact installed
+set together with ABAR. Teardown withdraws CPU mappings in reverse order before
+ABAR, and either uncertainty returns one resumable state without reporting early
+completion. The Linux AHCI suite passes all 108 tests. Active-port quiescence
+must still precede this teardown; concrete page-table/IOMMU invalidation, task-
+termination integration, the native binary, active execution, and physical-
+device evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Dependency-ordered construction, reverse
+rollback, and resumable combined cleanup are conventional resource transaction
+controls. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

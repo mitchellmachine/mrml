@@ -31,6 +31,7 @@ mod service_bootstrap;
 mod service_cpu_mapping;
 mod service_launch;
 mod service_launch_record;
+mod service_mapping_lifecycle;
 mod service_loop;
 mod userspace_syscall_adapter;
 
@@ -145,6 +146,10 @@ pub use service_launch::{
 pub use service_launch_record::{
     AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
     BoundAhciServiceLaunch, InstalledAhciServiceLaunch,
+};
+pub use service_mapping_lifecycle::{
+    AhciServiceMappingInstallError, AhciServiceMappingRemovalError,
+    AhciServiceMappingTeardown, install_ahci_service_mappings, remove_ahci_service_mappings,
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
