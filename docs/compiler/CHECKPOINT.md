@@ -84,11 +84,13 @@ Valid values preserve both words, invalid values select the exact wide fallback
 or zero default, and trapping consumers use the shared illegal-instruction
 path. Lazy and compositional wide option consumers remain unsupported and fail
 closed. Both x86-64 ABIs compile the terminal forms. The canonical Linux gate
-passes 816 unit tests, 351 replacement tests, and 126 semantic-execution tests;
+passes 817 unit tests, 351 replacement tests, and 127 semantic-execution tests;
 defaulting in both directions and custom signed fallbacks match exact
 ORACLE-0003 results across both words at zero, signed boundaries, and all-ones
 input. Isolated Linux children confirm checked `unwrap` traps at both invalid
-unsigned boundaries. Windows gnullvm was not run. Patent review:
+unsigned boundaries. Scoped-unsafe `unwrap_unchecked` also matches both oracle
+words for valid inputs while safe use fails closed; invalid unchecked input is
+Rust UB and was not executed. Windows gnullvm was not run. Patent review:
 **NOT_TRIGGERED**; this reuses the existing bounded option
 consumer and integer conversion mechanisms. See `docs/patents/REVIEW_LOG.md`.
 

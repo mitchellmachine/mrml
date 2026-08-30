@@ -12278,6 +12278,7 @@ mod tests {
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().unwrap_or_default() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().expect(\"nonnegative\") }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { unsafe { input.checked_cast_signed().unwrap_unchecked() } }",
         ] {
             let module = Parser::new(source).parse_module::<3, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -12288,19 +12289,24 @@ mod tests {
             }
         }
 
-        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or_else(|| fallback) }";
-        let module = Parser::new(source).parse_module::<3, 2>().unwrap();
-        let Some(Item::Function(function)) = module.items()[0] else {
-            panic!("expected function")
-        };
-        assert!(
-            compile_x86_64_function::<_, 768, 2, 32>(
-                &function,
-                &NoConstants,
-                X86_64Abi::SystemV,
-            )
-            .is_err()
-        );
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or_else(|| fallback) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap_unchecked() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 768, 2, 32>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

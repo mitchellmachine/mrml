@@ -80,6 +80,11 @@ const RUSTC_WIDE_CHECKED_CAST_FALLBACK_SOURCE: &str = concat!(
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or(fallback) }",
 );
 const MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.checked_cast_signed().unwrap() }";
+const MRML_V1_WIDE_CHECKED_CAST_UNCHECKED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { unsafe { input.checked_cast_signed().unwrap_unchecked() } }";
+const RUSTC_WIDE_CHECKED_CAST_UNCHECKED_SOURCE: &str = concat!(
+    "#![feature(integer_cast_extras)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { unsafe { input.checked_cast_signed().unwrap_unchecked() } }",
+);
 const RUSTC_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }",
@@ -1649,6 +1654,20 @@ fn mrml_v1_wide_checked_sign_cast_unwrap_overflow_traps() {
             "missing Windows illegal-instruction status for {mode}; stdout: {stdout}; stderr: {stderr}"
         );
     }
+}
+
+#[test]
+fn mrml_v1_wide_checked_sign_cast_unwrap_unchecked_matches_valid_oracle_words() {
+    let inputs = [0u128, 1, 17, 1u128 << 64, i128::MAX as u128];
+    let code = compile(MRML_V1_WIDE_CHECKED_CAST_UNCHECKED_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(RUSTC_WIDE_CHECKED_CAST_UNCHECKED_SOURCE, "for input in [0u128, 1, 17, 1u128 << 64, i128::MAX as u128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
 }
 
 #[test]
