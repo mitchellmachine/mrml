@@ -10363,3 +10363,18 @@ physical execution evidence.
 Patent review: `NOT_TRIGGERED` — exact identity composition and ordered
 capability/resource teardown are conventional lifecycle mechanisms. See
 `docs/patents/REVIEW_LOG.md`.
+
+Mapped native transfer teardown now **PARTIALLY IMPLEMENTS IN SOURCE** one
+retryable composed operation. Its retained state advances only after atomic
+revocation of both source ancestry trees, confirmed provider then consumer
+mapping removal, scrubbed backing release, and final object/accounting release.
+Injected provider-unmap, consumer-unmap, and backing-release failures each
+return the exact completed-stage and remaining-mapping state; retries skip every
+completed operation and ultimately return the single charged page. The
+Linux-host release kernel suite passes 649 tests. This proves bounded policy and
+recording-backend lifecycle behavior, not installed service or physical mapping
+execution.
+
+Patent review: `NOT_TRIGGERED` — a staged retry state over conventional
+revocation, unmapping, scrubbing, and accounting operations introduces no new
+algorithm or compatibility mechanism. See `docs/patents/REVIEW_LOG.md`.

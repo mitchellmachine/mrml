@@ -7,9 +7,11 @@ use mrml_package_format::{
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
     CpuResourceError, MemoryBackingKind, MemoryBackingOperationError, MemoryMappingBackend,
-    MemoryMappingPair, MemoryMappingPairOperationError, MemoryObjectBackingBackend, MemoryObjectId,
-    MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
-    Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId, arch::x86_64::UserContext,
+    MemoryMappingOperationError, MemoryMappingPair, MemoryMappingPairOperationError,
+    MemoryMappingPairRemovalError, MemoryMappingPairRemovalState, MemoryObjectBackingBackend,
+    MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
+    ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId,
+    arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1081,6 +1083,7 @@ pub struct NativeComponentServiceTask {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeComponentServiceReadTransferTask {
+    source_task: TaskId,
     task: TaskId,
     entry: NativeComponentServiceEntry,
     local_read: Capability,
@@ -1094,6 +1097,69 @@ pub struct NativeComponentServiceMappedReadTransferTask {
     construction: NativeComponentServiceReadTransferTask,
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferTaskBinding,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceMappedReadTransferTeardown {
+    active: NativeComponentServiceMappedReadTransferTask,
+    authority_revoked: bool,
+    mappings: MemoryMappingPairRemovalState,
+    backing_released: bool,
+}
+
+impl NativeComponentServiceMappedReadTransferTeardown {
+    pub const fn new(active: NativeComponentServiceMappedReadTransferTask) -> Self {
+        Self {
+            active,
+            authority_revoked: false,
+            mappings: MemoryMappingPairRemovalState::new(active.binding().mappings().mappings()),
+            backing_released: false,
+        }
+    }
+
+    pub const fn active(self) -> NativeComponentServiceMappedReadTransferTask {
+        self.active
+    }
+
+    pub const fn authority_revoked(self) -> bool {
+        self.authority_revoked
+    }
+
+    pub const fn mappings(self) -> MemoryMappingPairRemovalState {
+        self.mappings
+    }
+
+    pub const fn backing_released(self) -> bool {
+        self.backing_released
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceMappedReadTransferTeardownError<F, S, B> {
+    Authority {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        error: TaskRuntimeError,
+    },
+    Runtime {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        error: TaskRuntimeError,
+    },
+    ProviderMapping {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        error: MemoryMappingOperationError<S>,
+    },
+    LocalMapping {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        error: MemoryMappingOperationError<F>,
+    },
+    Backing {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        error: MemoryBackingOperationError<B>,
+    },
+    Object {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        error: MemoryResourceError,
+    },
 }
 
 impl NativeComponentServiceMappedReadTransferTask {
@@ -1111,6 +1177,9 @@ impl NativeComponentServiceMappedReadTransferTask {
 }
 
 impl NativeComponentServiceReadTransferTask {
+    pub const fn source_task(self) -> TaskId {
+        self.source_task
+    }
     pub const fn task(self) -> TaskId {
         self.task
     }
@@ -1129,6 +1198,115 @@ impl NativeComponentServiceReadTransferTask {
     pub const fn source_provider_write(self) -> Capability {
         self.source_provider_write
     }
+}
+
+/// Tears down one mapped transfer in authority, mapping, backing, and object
+/// order. Every failure returns the exact progress state for a safe retry.
+pub fn teardown_native_component_service_mapped_read_transfer<
+    F: MemoryMappingBackend,
+    S: MemoryMappingBackend,
+    B: MemoryObjectBackingBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    mut state: NativeComponentServiceMappedReadTransferTeardown,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    local_backend: &mut F,
+    provider_backend: &mut S,
+    backing_backend: &mut B,
+) -> Result<u64, NativeComponentServiceMappedReadTransferTeardownError<F::Error, S::Error, B::Error>>
+{
+    let construction = state.active().construction();
+    if !state.authority_revoked {
+        if let Err(error) = runtime.revoke_capability_pair(
+            construction.source_task(),
+            construction.source_local_read(),
+            construction.source_provider_write(),
+        ) {
+            return Err(
+                NativeComponentServiceMappedReadTransferTeardownError::Authority { state, error },
+            );
+        }
+        state.authority_revoked = true;
+    }
+    if !state.mappings.complete() {
+        let capabilities =
+            runtime
+                .capabilities(construction.source_task())
+                .map_err(|error| {
+                    NativeComponentServiceMappedReadTransferTeardownError::Runtime { state, error }
+                })?;
+        let mapping = state.active().binding().mappings();
+        match memory.remove_mapping_pair(
+            state.mappings,
+            mapping.local_target_capability(),
+            local_backend,
+            mapping.provider_target_capability(),
+            provider_backend,
+            capabilities,
+        ) {
+            Ok(mappings) => state.mappings = mappings,
+            Err(MemoryMappingPairRemovalError::Second {
+                state: mappings,
+                error,
+            }) => {
+                state.mappings = mappings;
+                return Err(
+                    NativeComponentServiceMappedReadTransferTeardownError::ProviderMapping {
+                        state,
+                        error,
+                    },
+                );
+            }
+            Err(MemoryMappingPairRemovalError::First {
+                state: mappings,
+                error,
+            }) => {
+                state.mappings = mappings;
+                return Err(
+                    NativeComponentServiceMappedReadTransferTeardownError::LocalMapping {
+                        state,
+                        error,
+                    },
+                );
+            }
+        }
+    }
+    if !state.backing_released {
+        let capabilities =
+            runtime
+                .capabilities(construction.source_task())
+                .map_err(|error| {
+                    NativeComponentServiceMappedReadTransferTeardownError::Runtime { state, error }
+                })?;
+        let root = state.active().memory();
+        if let Err(error) = memory.release_physical_backing(
+            root.memory_object(),
+            root.root(),
+            capabilities,
+            backing_backend,
+        ) {
+            return Err(
+                NativeComponentServiceMappedReadTransferTeardownError::Backing { state, error },
+            );
+        }
+        state.backing_released = true;
+    }
+    let root = state.active().memory();
+    let capabilities = runtime
+        .capabilities_mut(construction.source_task())
+        .map_err(
+            |error| NativeComponentServiceMappedReadTransferTeardownError::Runtime { state, error },
+        )?;
+    memory
+        .release_object(root.memory_object(), root.root(), capabilities)
+        .map_err(
+            |error| NativeComponentServiceMappedReadTransferTeardownError::Object { state, error },
+        )
 }
 
 impl NativeComponentServiceTask {
@@ -1396,6 +1574,7 @@ pub fn prepare_native_component_service_task_with_read_transfer<
         .context_mut(target_task)
         .expect("successful projection preserves the target context") = installed;
     Ok(NativeComponentServiceReadTransferTask {
+        source_task,
         task: target_task,
         entry,
         local_read,
@@ -2917,6 +3096,7 @@ mod tests {
     struct TransferBackingBackend {
         claimed: Option<MemoryBackingBackendRequest>,
         fail_claim: bool,
+        fail_release: bool,
     }
 
     // SAFETY: the test backend records only an exact successful claim, leaves
@@ -2941,6 +3121,9 @@ mod tests {
             &mut self,
             request: MemoryBackingBackendRequest,
         ) -> Result<(), Self::Error> {
+            if self.fail_release {
+                return Err("release");
+            }
             if self.claimed != Some(request) {
                 return Err("substitution");
             }
@@ -2952,6 +3135,7 @@ mod tests {
     #[derive(Default)]
     struct TransferMappingBackend {
         installed: Option<MemoryMappingBackendRequest>,
+        fail_remove: bool,
     }
 
     // SAFETY: the test backend publishes and removes only the exact request it
@@ -2967,6 +3151,9 @@ mod tests {
         }
 
         fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            if self.fail_remove {
+                return Err("remove");
+            }
             if self.installed != Some(request) {
                 return Err("substitution");
             }
@@ -4228,13 +4415,6 @@ mod tests {
         assert_eq!(constructed.memory(), reservation);
         assert_eq!(constructed.binding(), binding);
         assert_eq!(constructed.construction().task(), local_task);
-        runtime
-            .revoke_capability_pair(
-                source,
-                constructed.construction().source_local_read(),
-                constructed.construction().source_provider_write(),
-            )
-            .unwrap();
         assert_eq!(
             local_mapping.installed.unwrap().mapping().access(),
             Rights::READ
@@ -4243,43 +4423,74 @@ mod tests {
             provider_mapping.installed.unwrap().mapping().access(),
             Rights::WRITE
         );
-        memory
-            .remove_mapping(
-                mappings.mappings().second(),
-                provider_target,
-                runtime.capabilities(source).unwrap(),
-                &mut provider_mapping,
-            )
-            .unwrap();
-        memory
-            .remove_mapping(
-                mappings.mappings().first(),
-                local_target,
-                runtime.capabilities(source).unwrap(),
-                &mut local_mapping,
-            )
-            .unwrap();
+        provider_mapping.fail_remove = true;
+        let state = match teardown_native_component_service_mapped_read_transfer(
+            NativeComponentServiceMappedReadTransferTeardown::new(constructed),
+            &mut runtime,
+            &mut memory,
+            &mut local_mapping,
+            &mut provider_mapping,
+            &mut backend,
+        ) {
+            Err(NativeComponentServiceMappedReadTransferTeardownError::ProviderMapping {
+                state,
+                error: MemoryMappingOperationError::Backend("remove"),
+            }) => state,
+            other => panic!("unexpected provider teardown result: {other:?}"),
+        };
+        assert!(state.authority_revoked());
+        assert_eq!(state.mappings().first(), Some(mappings.mappings().first()));
         assert_eq!(
-            memory
-                .release_physical_backing(
-                    reservation.memory_object(),
-                    reservation.root(),
-                    runtime.capabilities(source).unwrap(),
-                    &mut backend,
-                )
-                .unwrap(),
-            physical
+            state.mappings().second(),
+            Some(mappings.mappings().second())
         );
-
+        provider_mapping.fail_remove = false;
+        local_mapping.fail_remove = true;
+        let state = match teardown_native_component_service_mapped_read_transfer(
+            state,
+            &mut runtime,
+            &mut memory,
+            &mut local_mapping,
+            &mut provider_mapping,
+            &mut backend,
+        ) {
+            Err(NativeComponentServiceMappedReadTransferTeardownError::LocalMapping {
+                state,
+                error: MemoryMappingOperationError::Backend("remove"),
+            }) => state,
+            other => panic!("unexpected local teardown result: {other:?}"),
+        };
+        assert_eq!(state.mappings().first(), Some(mappings.mappings().first()));
+        assert_eq!(state.mappings().second(), None);
+        local_mapping.fail_remove = false;
+        backend.fail_release = true;
+        let state = match teardown_native_component_service_mapped_read_transfer(
+            state,
+            &mut runtime,
+            &mut memory,
+            &mut local_mapping,
+            &mut provider_mapping,
+            &mut backend,
+        ) {
+            Err(NativeComponentServiceMappedReadTransferTeardownError::Backing {
+                state,
+                error: MemoryBackingOperationError::Backend("release"),
+            }) => state,
+            other => panic!("unexpected backing teardown result: {other:?}"),
+        };
+        assert!(state.mappings().complete());
+        assert!(!state.backing_released());
+        backend.fail_release = false;
         assert_eq!(
-            memory
-                .release_object(
-                    reservation.memory_object(),
-                    reservation.root(),
-                    runtime.capabilities_mut(source).unwrap(),
-                )
-                .unwrap(),
-            1
+            teardown_native_component_service_mapped_read_transfer(
+                state,
+                &mut runtime,
+                &mut memory,
+                &mut local_mapping,
+                &mut provider_mapping,
+                &mut backend,
+            ),
+            Ok(1)
         );
         let usage = memory
             .usage(pool, pool_capability, runtime.capabilities(source).unwrap())
