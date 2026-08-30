@@ -149,9 +149,10 @@ pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,
 };
 pub use storage_module::{
-    FilesystemBlockAssociation, FilesystemBlockAssociationError, StorageModuleBackend,
-    StorageModuleBinding, StorageModuleClass, StorageModuleError, StorageModuleRegistry,
-    StorageModuleState,
+    FilesystemBlockAssociation, FilesystemBlockAssociationError,
+    FilesystemBlockAssociationHandoff, FilesystemBlockAssociationHandoffError,
+    StorageModuleBackend, StorageModuleBinding, StorageModuleClass, StorageModuleError,
+    StorageModuleRegistry, StorageModuleState, FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES,
 };
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,

@@ -1,11 +1,13 @@
 //! Exact-generation runtime bindings for isolated storage module providers.
 
-use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 use mrml_interface_storage_block_provider_v1::OpaqueHandle as BlockOpaqueHandle;
 use mrml_interface_storage_filesystem_v3::OpaqueHandle as FilesystemOpaqueHandle;
+use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 
 pub const STORAGE_BLOCK_PROVIDER_INTERFACE_GENERATION: u32 = 1;
 pub const STORAGE_FILESYSTEM_INTERFACE_GENERATION: u32 = 3;
+pub const FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES: usize = 144;
+const FILESYSTEM_BLOCK_ASSOCIATION_MAGIC: [u8; 8] = *b"MRMLFBA1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesystemBlockAssociation {
@@ -15,6 +17,194 @@ pub struct FilesystemBlockAssociation {
     pub block_session: BlockOpaqueHandle,
     pub logical_block_bytes: u32,
     pub association_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemBlockAssociationHandoff {
+    association_generation: u64,
+    system_generation: u64,
+    filesystem_module_object: u64,
+    filesystem_binding_generation: u64,
+    filesystem_provider_generation: u64,
+    block_module_object: u64,
+    block_binding_generation: u64,
+    block_provider_generation: u64,
+    block_endpoint_object: u64,
+    volume: FilesystemOpaqueHandle,
+    block_session: BlockOpaqueHandle,
+    logical_block_bytes: u32,
+    filesystem_interface_object: u64,
+    filesystem_interface_generation: u32,
+    block_interface_object: u64,
+    block_interface_generation: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemBlockAssociationHandoffError {
+    Format,
+    Reserved,
+    InvalidIdentity,
+    InvalidGeneration,
+    InvalidGeometry,
+    WrongInterfaceGeneration,
+}
+
+impl FilesystemBlockAssociation {
+    pub fn handoff(self) -> FilesystemBlockAssociationHandoff {
+        FilesystemBlockAssociationHandoff {
+            association_generation: self.association_generation,
+            system_generation: self.filesystem_binding.system_generation,
+            filesystem_module_object: self.filesystem_binding.module_object.0,
+            filesystem_binding_generation: self.filesystem_binding.binding_generation,
+            filesystem_provider_generation: self.filesystem_binding.provider_generation,
+            block_module_object: self.block_binding.module_object.0,
+            block_binding_generation: self.block_binding.binding_generation,
+            block_provider_generation: self.block_binding.provider_generation,
+            block_endpoint_object: self.block_binding.endpoint_object.0,
+            volume: self.volume,
+            block_session: self.block_session,
+            logical_block_bytes: self.logical_block_bytes,
+            filesystem_interface_object: self.filesystem_binding.interface_object.0,
+            filesystem_interface_generation: self.filesystem_binding.interface_generation,
+            block_interface_object: self.block_binding.interface_object.0,
+            block_interface_generation: self.block_binding.interface_generation,
+        }
+    }
+}
+
+impl FilesystemBlockAssociationHandoff {
+    pub fn encode(self) -> [u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES] {
+        let mut bytes = [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES];
+        bytes[0..8].copy_from_slice(&FILESYSTEM_BLOCK_ASSOCIATION_MAGIC);
+        bytes[8..16].copy_from_slice(&self.association_generation.to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.system_generation.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.filesystem_module_object.to_le_bytes());
+        bytes[32..40].copy_from_slice(&self.filesystem_binding_generation.to_le_bytes());
+        bytes[40..48].copy_from_slice(&self.filesystem_provider_generation.to_le_bytes());
+        bytes[48..56].copy_from_slice(&self.block_module_object.to_le_bytes());
+        bytes[56..64].copy_from_slice(&self.block_binding_generation.to_le_bytes());
+        bytes[64..72].copy_from_slice(&self.block_provider_generation.to_le_bytes());
+        bytes[72..80].copy_from_slice(&self.block_endpoint_object.to_le_bytes());
+        bytes[80..84].copy_from_slice(&self.volume.index().to_le_bytes());
+        bytes[84..88].copy_from_slice(&self.volume.generation().to_le_bytes());
+        bytes[88..92].copy_from_slice(&self.block_session.index().to_le_bytes());
+        bytes[92..96].copy_from_slice(&self.block_session.generation().to_le_bytes());
+        bytes[96..100].copy_from_slice(&self.logical_block_bytes.to_le_bytes());
+        bytes[104..112].copy_from_slice(&self.filesystem_interface_object.to_le_bytes());
+        bytes[112..116].copy_from_slice(&self.filesystem_interface_generation.to_le_bytes());
+        bytes[120..128].copy_from_slice(&self.block_interface_object.to_le_bytes());
+        bytes[128..132].copy_from_slice(&self.block_interface_generation.to_le_bytes());
+        bytes
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, FilesystemBlockAssociationHandoffError> {
+        if bytes.len() != FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES
+            || bytes[0..8] != FILESYSTEM_BLOCK_ASSOCIATION_MAGIC
+        {
+            return Err(FilesystemBlockAssociationHandoffError::Format);
+        }
+        if bytes[100..104] != [0; 4] || bytes[116..120] != [0; 4] || bytes[132..144] != [0; 12] {
+            return Err(FilesystemBlockAssociationHandoffError::Reserved);
+        }
+        let volume = FilesystemOpaqueHandle::new(read_u32(bytes, 80)?, read_u32(bytes, 84)?)
+            .ok_or(FilesystemBlockAssociationHandoffError::InvalidIdentity)?;
+        let block_session = BlockOpaqueHandle::new(read_u32(bytes, 88)?, read_u32(bytes, 92)?)
+            .ok_or(FilesystemBlockAssociationHandoffError::InvalidIdentity)?;
+        let handoff = Self {
+            association_generation: read_u64(bytes, 8)?,
+            system_generation: read_u64(bytes, 16)?,
+            filesystem_module_object: read_u64(bytes, 24)?,
+            filesystem_binding_generation: read_u64(bytes, 32)?,
+            filesystem_provider_generation: read_u64(bytes, 40)?,
+            block_module_object: read_u64(bytes, 48)?,
+            block_binding_generation: read_u64(bytes, 56)?,
+            block_provider_generation: read_u64(bytes, 64)?,
+            block_endpoint_object: read_u64(bytes, 72)?,
+            volume,
+            block_session,
+            logical_block_bytes: read_u32(bytes, 96)?,
+            filesystem_interface_object: read_u64(bytes, 104)?,
+            filesystem_interface_generation: read_u32(bytes, 112)?,
+            block_interface_object: read_u64(bytes, 120)?,
+            block_interface_generation: read_u32(bytes, 128)?,
+        };
+        handoff.validate()?;
+        Ok(handoff)
+    }
+
+    fn validate(self) -> Result<(), FilesystemBlockAssociationHandoffError> {
+        if self.association_generation == 0
+            || self.system_generation == 0
+            || self.filesystem_binding_generation == 0
+            || self.filesystem_provider_generation == 0
+            || self.block_binding_generation == 0
+            || self.block_provider_generation == 0
+        {
+            return Err(FilesystemBlockAssociationHandoffError::InvalidGeneration);
+        }
+        if self.filesystem_module_object == 0
+            || self.block_module_object == 0
+            || self.filesystem_interface_object == 0
+            || self.block_interface_object == 0
+            || self.block_endpoint_object == 0
+            || self.filesystem_module_object == self.block_module_object
+        {
+            return Err(FilesystemBlockAssociationHandoffError::InvalidIdentity);
+        }
+        if self.logical_block_bytes < 512
+            || self.logical_block_bytes > 65_536
+            || !self.logical_block_bytes.is_power_of_two()
+        {
+            return Err(FilesystemBlockAssociationHandoffError::InvalidGeometry);
+        }
+        if self.filesystem_interface_generation != STORAGE_FILESYSTEM_INTERFACE_GENERATION
+            || self.block_interface_generation != STORAGE_BLOCK_PROVIDER_INTERFACE_GENERATION
+        {
+            return Err(FilesystemBlockAssociationHandoffError::WrongInterfaceGeneration);
+        }
+        Ok(())
+    }
+
+    pub const fn association_generation(self) -> u64 {
+        self.association_generation
+    }
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
+    }
+    pub const fn filesystem_provider_generation(self) -> u64 {
+        self.filesystem_provider_generation
+    }
+    pub const fn block_provider_generation(self) -> u64 {
+        self.block_provider_generation
+    }
+    pub const fn block_endpoint_object(self) -> u64 {
+        self.block_endpoint_object
+    }
+    pub const fn volume(self) -> FilesystemOpaqueHandle {
+        self.volume
+    }
+    pub const fn block_session(self) -> BlockOpaqueHandle {
+        self.block_session
+    }
+    pub const fn logical_block_bytes(self) -> u32 {
+        self.logical_block_bytes
+    }
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, FilesystemBlockAssociationHandoffError> {
+    bytes
+        .get(offset..offset + 4)
+        .and_then(|value| value.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or(FilesystemBlockAssociationHandoffError::Format)
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, FilesystemBlockAssociationHandoffError> {
+    bytes
+        .get(offset..offset + 8)
+        .and_then(|value| value.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or(FilesystemBlockAssociationHandoffError::Format)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -394,9 +584,9 @@ fn authorize_binding<const C: usize>(
 mod tests {
     use super::*;
     use mrml_interface_storage_filesystem_v3::{
-        decode_probe_response, encode_probe_request, BorrowedReadView, FilesystemServiceEndpoint,
-        FilesystemTransport, IsolatedFilesystemTransport, OpaqueHandle, ProtocolError,
-        PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+        BorrowedReadView, FilesystemServiceEndpoint, FilesystemTransport,
+        IsolatedFilesystemTransport, OpaqueHandle, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+        ProtocolError, decode_probe_response, encode_probe_request,
     };
     use mrml_storage_fat32::Fat32Provider;
 
@@ -408,19 +598,11 @@ mod tests {
     impl StorageModuleBackend for Backend {
         fn revoke_cleanup_and_erase(&mut self, _: StorageModuleBinding) -> Result<(), ()> {
             self.calls[0] += 1;
-            if self.cleanup {
-                Ok(())
-            } else {
-                Err(())
-            }
+            if self.cleanup { Ok(()) } else { Err(()) }
         }
         fn launch_and_healthcheck(&mut self, _: StorageModuleBinding) -> Result<(), ()> {
             self.calls[1] += 1;
-            if self.launch {
-                Ok(())
-            } else {
-                Err(())
-            }
+            if self.launch { Ok(()) } else { Err(()) }
         }
     }
 
@@ -940,19 +1122,39 @@ mod tests {
 
     fn association_fixture(
         block_system_generation: u64,
-    ) -> (StorageModuleRegistry<2>, CapabilitySpace<8>, [Capability; 8]) {
+    ) -> (
+        StorageModuleRegistry<2>,
+        CapabilitySpace<8>,
+        [Capability; 8],
+    ) {
         let filesystem = association_filesystem_binding(9);
         let block = binding_in(11, 20, 7, block_system_generation, 4);
         let mut capabilities = CapabilitySpace::new();
         let handles = [
-            capabilities.insert(filesystem.module_object, Rights::CONTROL).unwrap(),
-            capabilities.insert(filesystem.interface_object, Rights::INSPECT).unwrap(),
-            capabilities.insert(filesystem.provider_object, Rights::CONTROL).unwrap(),
-            capabilities.insert(filesystem.endpoint_object, Rights::SIGNAL).unwrap(),
-            capabilities.insert(block.module_object, Rights::CONTROL).unwrap(),
-            capabilities.insert(block.interface_object, Rights::INSPECT).unwrap(),
-            capabilities.insert(block.provider_object, Rights::CONTROL).unwrap(),
-            capabilities.insert(block.endpoint_object, Rights::SIGNAL).unwrap(),
+            capabilities
+                .insert(filesystem.module_object, Rights::CONTROL)
+                .unwrap(),
+            capabilities
+                .insert(filesystem.interface_object, Rights::INSPECT)
+                .unwrap(),
+            capabilities
+                .insert(filesystem.provider_object, Rights::CONTROL)
+                .unwrap(),
+            capabilities
+                .insert(filesystem.endpoint_object, Rights::SIGNAL)
+                .unwrap(),
+            capabilities
+                .insert(block.module_object, Rights::CONTROL)
+                .unwrap(),
+            capabilities
+                .insert(block.interface_object, Rights::INSPECT)
+                .unwrap(),
+            capabilities
+                .insert(block.provider_object, Rights::CONTROL)
+                .unwrap(),
+            capabilities
+                .insert(block.endpoint_object, Rights::SIGNAL)
+                .unwrap(),
         ];
         let mut registry = StorageModuleRegistry::new();
         registry
@@ -1004,6 +1206,18 @@ mod tests {
         assert_eq!(association.logical_block_bytes, 4096);
         assert_eq!(association.association_generation, 12);
         assert_eq!(association.filesystem_binding.interface_generation, 3);
+        let handoff = association.handoff();
+        let encoded = handoff.encode();
+        assert_eq!(
+            FilesystemBlockAssociationHandoff::decode(&encoded),
+            Ok(handoff)
+        );
+        assert_eq!(handoff.volume(), volume);
+        assert_eq!(handoff.block_session(), session);
+        assert_eq!(handoff.block_endpoint_object(), 21);
+        assert_eq!(handoff.filesystem_provider_generation(), 5);
+        assert_eq!(handoff.block_provider_generation(), 7);
+        assert_eq!(handoff.system_generation(), 9);
     }
 
     #[test]
@@ -1057,6 +1271,59 @@ mod tests {
                 )
             },
             Err(FilesystemBlockAssociationError::InvalidGeometry)
+        );
+    }
+
+    #[test]
+    fn association_handoff_rejects_truncation_reserved_data_and_identity_substitution() {
+        let (registry, capabilities, handles) = association_fixture(9);
+        let association = unsafe {
+            registry.bind_filesystem_block_association(
+                &capabilities,
+                handles[0],
+                handles[4],
+                ObjectId(41),
+                3,
+                ObjectId(11),
+                4,
+                FilesystemOpaqueHandle::new(2, 6).unwrap(),
+                BlockOpaqueHandle::new(8, 10).unwrap(),
+                4096,
+                12,
+            )
+        }
+        .unwrap();
+        let bytes = association.handoff().encode();
+        for length in [0, 8, FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES - 1] {
+            assert_eq!(
+                FilesystemBlockAssociationHandoff::decode(&bytes[..length]),
+                Err(FilesystemBlockAssociationHandoffError::Format)
+            );
+        }
+        let mut reserved = bytes;
+        reserved[100] = 1;
+        assert_eq!(
+            FilesystemBlockAssociationHandoff::decode(&reserved),
+            Err(FilesystemBlockAssociationHandoffError::Reserved)
+        );
+        let mut zero_generation = bytes;
+        zero_generation[64..72].fill(0);
+        assert_eq!(
+            FilesystemBlockAssociationHandoff::decode(&zero_generation),
+            Err(FilesystemBlockAssociationHandoffError::InvalidGeneration)
+        );
+        let mut same_module = bytes;
+        let filesystem_module: [u8; 8] = same_module[24..32].try_into().unwrap();
+        same_module[48..56].copy_from_slice(&filesystem_module);
+        assert_eq!(
+            FilesystemBlockAssociationHandoff::decode(&same_module),
+            Err(FilesystemBlockAssociationHandoffError::InvalidIdentity)
+        );
+        let mut wrong_interface = bytes;
+        wrong_interface[112..116].copy_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(
+            FilesystemBlockAssociationHandoff::decode(&wrong_interface),
+            Err(FilesystemBlockAssociationHandoffError::WrongInterfaceGeneration)
         );
     }
 }

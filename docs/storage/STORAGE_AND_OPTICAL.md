@@ -986,7 +986,11 @@ The storage module registry now exact-matches active generation-3 filesystem and
 block-provider bindings under separate `CONTROL` capabilities before producing
 an unsafe runtime-proven volume/session association. It rejects stale bindings,
 authority substitution, cross-SystemRelease pairing, invalid block geometry,
-and zero association generations. Storage passes 154 focused Linux-host tests. The
+and zero association generations. The resulting non-authorizing launch handoff
+has one canonical zero-reserved encoding that binds both module, provider,
+interface, endpoint, volume, session, SystemRelease, and association generations;
+malformed or substituted records fail closed. Storage passes 155 focused
+Linux-host tests. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows
