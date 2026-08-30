@@ -680,18 +680,41 @@ mod tests {
         let retired = crate::retire_quiesced_ahci_service_task(error.into_owner(), &mut runtime)
             .unwrap_or_else(|_| panic!("exact current task must retire"));
         assert_eq!(retired.retirement().task(), task);
-        let (_, _, quiesced) = retired.into_parts();
-        let (quiesced, _, _, _, data) = quiesced.into_parts();
-        assert_eq!(data.sanitizations, 2);
-        assert_eq!(dma_backend.removals, 1);
-        let state = crate::remove_quiesced_ahci_service_mappings(
-            quiesced,
+        cpu_backend.fail_remove_object = Some(22);
+        let error = match crate::remove_retired_ahci_service_mappings(
+            retired,
+            control,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        ) {
+            Ok(_) => panic!("injected CPU mapping removal must fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error.error(),
+            AhciServiceMappingRemovalError::Cpu { .. }
+        ));
+        assert_eq!(
+            runtime.yield_current(),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
+        );
+        cpu_backend.fail_remove_object = None;
+        let removed = crate::remove_retired_ahci_service_mappings(
+            error.into_owner(),
             control,
             &capabilities,
             &mut abar_backend,
             &mut cpu_backend,
         )
-        .unwrap();
-        assert!(state.complete());
+        .unwrap_or_else(|_| panic!("mapping-removal retry must complete"));
+        assert!(abar_backend.mapping.is_none());
+        assert!(cpu_backend.installed.iter().all(Option::is_none));
+        let dispatched = crate::dispatch_retired_ahci_service_task(removed, &mut runtime)
+            .unwrap_or_else(|_| panic!("exact retained termination must dispatch"));
+        assert_eq!(dispatched.dispatch().user().map(|(task, _)| task), Some(wrong_task.task()));
+        let (_, _, _, _, _, data) = dispatched.into_parts();
+        assert_eq!(data.sanitizations, 2);
+        assert_eq!(dma_backend.removals, 1);
     }
 }

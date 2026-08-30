@@ -775,6 +775,36 @@ Patent review: **NOT_TRIGGERED**. Exact generational binding of already-owned
 cleanup state to conventional task retirement is ordinary lifecycle
 composition. See [the patent review log](../patents/REVIEW_LOG.md).
 
+Retired AHCI task cleanup now preserves the scheduler termination through
+retryable mapping withdrawal and gates successor dispatch **IMPLEMENTED IN
+SOURCE**. The composite retired owner removes all four CPU mappings in reverse
+order and then ABAR; uncertainty reconstructs the exact retained mapping state,
+launch binding, retired context, scheduler termination, and I/O adapters for
+retry. No dispatch API accepts that state. Only confirmed complete mapping
+withdrawal creates the distinct owner that can exact-match the pending
+termination and mint the runtime's opaque successor dispatch. The lifecycle
+test injects CPU-unmap failure, proves scheduling remains blocked by pending
+retirement, retries cleanup, verifies every mapping absent, and then issues the
+selected successor dispatch. The focused Linux AHCI suite remains at 109 tests
+and its release build passes; the Linux kernel suite remains at 686 tests and
+its release build passes. Concrete page-table/IOMMU invalidation, installation
+and completion of the issued hardware dispatch, the native service binary,
+active execution, and physical-device evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Retaining a scheduler result across ordered
+retryable unmapping and releasing dispatch only after completion is conventional
+resource-lifecycle sequencing. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

@@ -11,7 +11,7 @@ use crate::{
 use mrml_kernel::{
     retire_current_native_device_service_task, Capability, CapabilitySpace,
     NativeDeviceServiceRetirement, NativeDeviceServiceRetirementError, NativeDeviceServiceTask,
-    TaskRuntime,
+    TaskRuntime, TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -272,12 +272,17 @@ pub fn bind_quiesced_ahci_service_task<R, M, D>(
 }
 
 pub struct RetiredAhciServiceTask<R, M, D> {
+    termination: TaskTermination,
     retirement: NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
     backend: QuiescedAhciCommandBackend<R, M, D>,
 }
 
 impl<R, M, D> RetiredAhciServiceTask<R, M, D> {
+    pub const fn termination(&self) -> TaskTermination {
+        self.termination
+    }
+
     pub const fn retirement(
         &self,
     ) -> NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
@@ -287,11 +292,12 @@ impl<R, M, D> RetiredAhciServiceTask<R, M, D> {
     pub fn into_parts(
         self,
     ) -> (
+        TaskTermination,
         NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
         BoundAhciServiceLaunch,
         QuiescedAhciCommandBackend<R, M, D>,
     ) {
-        (self.retirement, self.launch, self.backend)
+        (self.termination, self.retirement, self.launch, self.backend)
     }
 }
 
@@ -326,7 +332,8 @@ pub fn retire_quiesced_ahci_service_task<
         backend,
     } = owner;
     match retire_current_native_device_service_task(task, runtime) {
-        Ok((_, retirement)) => Ok(RetiredAhciServiceTask {
+        Ok((termination, retirement)) => Ok(RetiredAhciServiceTask {
+            termination,
             retirement,
             launch,
             backend,
@@ -337,6 +344,187 @@ pub fn retire_quiesced_ahci_service_task<
                 task,
                 launch,
                 backend,
+            },
+        }),
+    }
+}
+
+pub struct RetiredAhciServiceMappingsRemoved<R, M, D> {
+    termination: TaskTermination,
+    retirement: NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+pub struct AhciRetiredMappingRemovalError<E, R, M, D> {
+    error: AhciServiceMappingRemovalError<E>,
+    owner: RetiredAhciServiceTask<R, M, D>,
+}
+
+impl<E, R, M, D> AhciRetiredMappingRemovalError<E, R, M, D> {
+    pub const fn error(&self) -> &AhciServiceMappingRemovalError<E> {
+        &self.error
+    }
+
+    pub fn into_owner(self) -> RetiredAhciServiceTask<R, M, D> {
+        self.owner
+    }
+}
+
+pub fn remove_retired_ahci_service_mappings<
+    A: AhciAbarRemovalBackend,
+    B: AhciServiceCpuMappingBackend,
+    R,
+    M,
+    D,
+    const C: usize,
+>(
+    owner: RetiredAhciServiceTask<R, M, D>,
+    abar_control_capability: Capability,
+    capabilities: &CapabilitySpace<C>,
+    abar_backend: &mut A,
+    cpu_backend: &mut B,
+) -> Result<
+    RetiredAhciServiceMappingsRemoved<R, M, D>,
+    AhciRetiredMappingRemovalError<B::Error, R, M, D>,
+> {
+    let RetiredAhciServiceTask {
+        termination,
+        retirement,
+        launch,
+        backend,
+    } = owner;
+    let (mappings, data_region, registers, command_memory, data_io) = backend.into_parts();
+    match remove_quiesced_ahci_service_mappings(
+        mappings,
+        abar_control_capability,
+        capabilities,
+        abar_backend,
+        cpu_backend,
+    ) {
+        Ok(state) => {
+            debug_assert!(state.complete());
+            Ok(RetiredAhciServiceMappingsRemoved {
+                termination,
+                retirement,
+                launch,
+                registers,
+                command_memory,
+                data_io,
+            })
+        }
+        Err(error) => {
+            let retained = match &error {
+                AhciServiceMappingRemovalError::Cpu { retained, .. }
+                | AhciServiceMappingRemovalError::Abar { retained, .. } => *retained,
+            };
+            Err(AhciRetiredMappingRemovalError {
+                error,
+                owner: RetiredAhciServiceTask {
+                    termination,
+                    retirement,
+                    launch,
+                    backend: QuiescedAhciCommandBackend {
+                        mappings: QuiescedAhciServiceMappings { mappings: retained },
+                        data_region,
+                        registers,
+                        command_memory,
+                        data_io,
+                    },
+                },
+            })
+        }
+    }
+}
+
+pub struct DispatchedAhciServiceTask<R, M, D> {
+    dispatch: TaskTerminationDispatch,
+    retirement: NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+impl<R, M, D> DispatchedAhciServiceTask<R, M, D> {
+    pub const fn dispatch(&self) -> &TaskTerminationDispatch {
+        &self.dispatch
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        TaskTerminationDispatch,
+        NativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        BoundAhciServiceLaunch,
+        R,
+        M,
+        D,
+    ) {
+        (
+            self.dispatch,
+            self.retirement,
+            self.launch,
+            self.registers,
+            self.command_memory,
+            self.data_io,
+        )
+    }
+}
+
+pub struct AhciServiceDispatchError<R, M, D> {
+    error: TaskTerminationDispatchError,
+    owner: RetiredAhciServiceMappingsRemoved<R, M, D>,
+}
+
+impl<R, M, D> AhciServiceDispatchError<R, M, D> {
+    pub const fn error(&self) -> TaskTerminationDispatchError {
+        self.error
+    }
+
+    pub fn into_owner(self) -> RetiredAhciServiceMappingsRemoved<R, M, D> {
+        self.owner
+    }
+}
+
+pub fn dispatch_retired_ahci_service_task<
+    R,
+    M,
+    D,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    owner: RetiredAhciServiceMappingsRemoved<R, M, D>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<DispatchedAhciServiceTask<R, M, D>, AhciServiceDispatchError<R, M, D>> {
+    let RetiredAhciServiceMappingsRemoved {
+        termination,
+        retirement,
+        launch,
+        registers,
+        command_memory,
+        data_io,
+    } = owner;
+    match runtime.dispatch_after_termination(termination) {
+        Ok(dispatch) => Ok(DispatchedAhciServiceTask {
+            dispatch,
+            retirement,
+            launch,
+            registers,
+            command_memory,
+            data_io,
+        }),
+        Err(error) => Err(AhciServiceDispatchError {
+            error,
+            owner: RetiredAhciServiceMappingsRemoved {
+                termination,
+                retirement,
+                launch,
+                registers,
+                command_memory,
+                data_io,
             },
         }),
     }

@@ -141,14 +141,17 @@ pub use service_cpu_mapping::{
     install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
 };
 pub use service_device_teardown::{
-    AhciCommandBackendQuiesceError, AhciServiceDeviceQuiesceError,
-    AhciServiceTaskBindingError, AhciServiceTaskRetirementError,
+    AhciCommandBackendQuiesceError, AhciRetiredMappingRemovalError,
+    AhciServiceDeviceQuiesceError, AhciServiceDispatchError, AhciServiceTaskBindingError,
+    AhciServiceTaskRetirementError, DispatchedAhciServiceTask,
     PendingAhciServiceDeviceTeardown, QuiescedAhciCommandBackend,
-    QuiescedAhciServiceMappings, QuiescedAhciServiceTask, RetiredAhciServiceTask,
+    QuiescedAhciServiceMappings, QuiescedAhciServiceTask, RetiredAhciServiceMappingsRemoved,
+    RetiredAhciServiceTask,
     bind_quiesced_ahci_service_task, quiesce_ahci_command_backend,
     quiesce_ahci_service_device, remove_quiesced_ahci_service_mappings,
+    remove_retired_ahci_service_mappings,
     resume_ahci_command_backend_teardown, resume_ahci_service_device_teardown,
-    retire_quiesced_ahci_service_task,
+    retire_quiesced_ahci_service_task, dispatch_retired_ahci_service_task,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
