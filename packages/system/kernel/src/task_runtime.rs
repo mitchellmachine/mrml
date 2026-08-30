@@ -379,6 +379,22 @@ pub struct ExpiredReceive {
     deadline: ReceiveDeadline,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct ReceiveDeadlineTick<const TASKS: usize> {
+    scheduling: ScheduleOutcome,
+    expired: [Option<ExpiredReceive>; TASKS],
+}
+
+impl<const TASKS: usize> ReceiveDeadlineTick<TASKS> {
+    pub const fn scheduling(&self) -> ScheduleOutcome {
+        self.scheduling
+    }
+
+    pub const fn expired(&self) -> &[Option<ExpiredReceive>; TASKS] {
+        &self.expired
+    }
+}
+
 impl ExpiredReceive {
     pub const fn task(&self) -> TaskId {
         self.identity.task
@@ -748,6 +764,25 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.scheduler
             .timer_tick()
             .map_err(TaskRuntimeError::Scheduler)
+    }
+
+    /// Accounts one scheduler tick, expires all waits due at that tick, and
+    /// selects a newly runnable task when the pre-expiry outcome was idle.
+    pub fn timer_tick_and_expire_receives(
+        &mut self,
+    ) -> Result<ReceiveDeadlineTick<TASKS>, TaskRuntimeError> {
+        let mut scheduling = self.timer_tick()?;
+        let expired = self.expire_due_receives()?;
+        if matches!(scheduling, ScheduleOutcome::Idle) && expired.iter().any(Option::is_some) {
+            scheduling = self.start();
+            if matches!(scheduling, ScheduleOutcome::Idle) {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+        }
+        Ok(ReceiveDeadlineTick {
+            scheduling,
+            expired,
+        })
     }
 
     /// Accounts one timer tick and atomically installs the interrupted CPL3
@@ -4219,6 +4254,34 @@ mod tests {
                 .into_iter()
                 .all(|expired| expired.is_none())
         );
+    }
+
+    #[test]
+    fn deadline_tick_selects_a_newly_expired_task_from_idle() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == task));
+        let wait = match runtime
+            .receive_or_block_current_until(ReceiveDeadline::new(1).unwrap())
+            .unwrap()
+        {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty receive must block"),
+        };
+        assert!(matches!(wait.outcome(), ScheduleOutcome::Idle));
+        let tick = runtime.timer_tick_and_expire_receives().unwrap();
+        assert_eq!(runtime.ticks(), 1);
+        assert!(matches!(
+            tick.scheduling(),
+            ScheduleOutcome::Switch { from: None, to } if to == task
+        ));
+        let mut expired_iter = tick.expired().iter().flatten();
+        let expired = expired_iter.next().unwrap();
+        assert!(expired.matches(&wait));
+        assert!(expired_iter.next().is_none());
+        assert_eq!(runtime.current(), Some(task));
     }
 
     #[test]

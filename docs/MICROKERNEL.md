@@ -11276,3 +11276,25 @@ only; no QEMU or physical-hardware execution was performed for this increment.
 Patent review: `NOT_TRIGGERED` — bounded transactional scanning of due timers
 and exact matching to retained wait identities is conventional scheduler and
 event-loop lifecycle handling. See `docs/patents/REVIEW_LOG.md`.
+
+`TaskRuntime::timer_tick_and_expire_receives` now composes hardware-tick
+accounting, bounded deadline expiry, and the resulting scheduling decision in
+one typed result. If the scheduler initially reports idle because every task was
+blocked, but that same tick expires a wait, the runtime immediately selects the
+newly runnable task with a `Switch { from: None, ... }` outcome. It therefore
+does not leave an eligible deadline waiter asleep until a later interrupt. When
+another task remains current, ordinary priority and quantum scheduling still
+decide when the newly runnable task executes.
+
+The Linux-host kernel suite passes 661 tests. New coverage places the only task
+in a deadline-bound receive, observes the initial idle block transition, and
+proves the exact deadline tick both returns its matching expiration and selects
+that task from idle. The affected Linux kernel release build and service plus
+component-service UEFI release profiles cross-build with the existing
+configuration-specific warnings. This is in-memory and cross-build evidence
+only; no live interrupt, QEMU, or physical-hardware execution was performed for
+this increment.
+
+Patent review: `NOT_TRIGGERED` — reconciling an idle scheduler result after a
+timer makes a blocked task runnable is conventional scheduler wakeup handling.
+See `docs/patents/REVIEW_LOG.md`.
