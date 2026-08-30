@@ -1384,6 +1384,62 @@ fn retain_exact_readonly_relocation_targets<'data, 'relocations, 'definitions>(
     Ok(changed)
 }
 
+fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
+    inputs: &[LinkInput<'data, 'relocations, 'definitions>],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    source_object: &[usize],
+    selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
+    writable_data: &[PeWritableData<'_, '_>],
+) -> Result<bool> {
+    let mut changed = false;
+    for relocation in writable_data.iter().flat_map(|data| data.relocations) {
+        if let PeWritableRelocationTarget::CoffSection { identity, .. } = relocation.target {
+            let already_selected = selected.inputs.iter().any(|input| {
+                matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                    || input.additional_definitions.iter().any(|definition| {
+                        matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                    })
+            });
+            if already_selected {
+                continue;
+            }
+            let Some(target_index) = inputs.iter().position(|input| {
+                matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                    || input.additional_definitions.iter().any(|definition| {
+                        matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                    })
+            }) else {
+                continue;
+            };
+            let group = archive_group[target_index];
+            let member = archive_member[target_index];
+            for index in 0..inputs.len() {
+                if archive_group[index] != group || archive_member[index] != member {
+                    continue;
+                }
+                selected.inputs.try_push(inputs[index]).map_err(|_| {
+                    anyhow!("selected writable section dependency capacity exceeded")
+                })?;
+                selected
+                    .archive_group
+                    .try_push(group)
+                    .map_err(|_| anyhow!("selected writable section origin capacity exceeded"))?;
+                selected
+                    .archive_member
+                    .try_push(member)
+                    .map_err(|_| anyhow!("selected writable section member capacity exceeded"))?;
+                selected
+                    .source_object
+                    .try_push(source_object[index])
+                    .map_err(|_| anyhow!("selected writable section source capacity exceeded"))?;
+            }
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
 fn selected_runtime_functions<'data>(
     objects: &[&'data [u8]],
     archive_group: &[u16],
@@ -1888,8 +1944,9 @@ fn write_linked_pe(
         &selected,
         &mut runtime_arena,
     )?;
-    let mut writable_arenas = writable_relocation_arenas(writable_fragment_count(objects)?)?;
-    let writable_data = selected_writable_data(
+    let writable_count = writable_fragment_count(objects)?;
+    let mut writable_arenas = writable_relocation_arenas(writable_count)?;
+    let initial_writable_data = selected_writable_data(
         objects,
         archive_group,
         archive_member,
@@ -1897,6 +1954,36 @@ fn write_linked_pe(
         &selected,
         &mut writable_arenas,
     )?;
+    let retained_writable_target = retain_writable_section_targets(
+        &decoded.inputs,
+        &decoded.archive_group,
+        &decoded.archive_member,
+        &decoded.source_object,
+        &mut selected,
+        &initial_writable_data,
+    )?;
+    drop(initial_writable_data);
+    let mut retained_writable_arenas;
+    let writable_data = if retained_writable_target {
+        retained_writable_arenas = writable_relocation_arenas(writable_count)?;
+        selected_writable_data(
+            objects,
+            archive_group,
+            archive_member,
+            archive_indexed,
+            &selected,
+            &mut retained_writable_arenas,
+        )?
+    } else {
+        selected_writable_data(
+            objects,
+            archive_group,
+            archive_member,
+            archive_indexed,
+            &selected,
+            &mut writable_arenas,
+        )?
+    };
     let mut contextual_arenas = relocation_arenas(selected.inputs.len())?;
     let contextual_inputs = contextualize_pe_writable_relocations(
         &selected.inputs,

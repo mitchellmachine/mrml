@@ -4355,12 +4355,31 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             {
                 return Err(LinkerError::UnsupportedCoff);
             }
-            PeWritableRelocationTarget::TextSymbol(coff_symbol_name(
-                object,
-                target,
-                symbols_end,
-                string_size,
-            )?)
+            if let Some(object_identity) = object_identity {
+                let target_header = 20 + (target_section_index - 1) * 40;
+                let target_size = usize::try_from(read_u32(object, target_header + 16)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let target_value = usize::try_from(read_u32(object, target + 8)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                if target_value > target_size {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                PeWritableRelocationTarget::CoffSection {
+                    identity: CoffSectionIdentity::new(
+                        object_identity,
+                        u16::try_from(target_section_index)
+                            .map_err(|_| LinkerError::OffsetOverflow)?,
+                    )?,
+                    offset: target_value,
+                }
+            } else {
+                PeWritableRelocationTarget::TextSymbol(coff_symbol_name(
+                    object,
+                    target,
+                    symbols_end,
+                    string_size,
+                )?)
+            }
         } else if tls_sections.contains(target_section_index) {
             let object_identity = object_identity.ok_or(LinkerError::UnsupportedCoffTls)?;
             let target_header = 20 + (target_section_index - 1) * 40;
@@ -8741,13 +8760,19 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                 )?,
                 PeWritableRelocationTarget::CoffSection { identity, offset } => {
                     let target = resolve_coff_section(inputs, &linked.layouts, identity, offset)?;
-                    readonly_rva
-                        .checked_add(
-                            target
-                                .checked_sub(linked.readonly_offset)
-                                .ok_or(LinkerError::OffsetOverflow)?,
-                        )
-                        .ok_or(LinkerError::OffsetOverflow)?
+                    if target < linked.readonly_offset {
+                        TEXT_RVA
+                            .checked_add(target)
+                            .ok_or(LinkerError::OffsetOverflow)?
+                    } else {
+                        readonly_rva
+                            .checked_add(
+                                target
+                                    .checked_sub(linked.readonly_offset)
+                                    .ok_or(LinkerError::OffsetOverflow)?,
+                            )
+                            .ok_or(LinkerError::OffsetOverflow)?
+                    }
                 }
                 PeWritableRelocationTarget::TextSymbol(symbol) => TEXT_RVA
                     .checked_add(resolve_symbol(inputs, &linked.layouts, symbol)?)
@@ -12937,7 +12962,6 @@ mod tests {
                 target: PeWritableRelocationTarget::TextSymbol("entry"),
             }]
         );
-
         let mut tls_target = object.clone();
         tls_target[56..60].copy_from_slice(&0x6000_0020u32.to_le_bytes());
         tls_target[60..68].fill(0);
@@ -13410,6 +13434,57 @@ mod tests {
                 &[writable],
             ),
             Err(LinkerError::InvalidRelocationOffset)
+        );
+    }
+
+    #[test]
+    fn resolves_typed_text_section_offsets_from_writable_data() {
+        let identity = CoffSectionIdentity::new(21, 1).unwrap();
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let typed = LinkInput {
+            symbol: ".text$typed",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0; 8],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let relocations = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity,
+                offset: 4,
+            },
+        }];
+        let writable = PeWritableData {
+            symbol: "writable",
+            identity: None,
+            kind: PeDataKind::Writable,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &relocations,
+        };
+        let pe = link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+            &[entry, typed],
+            "entry",
+            &[],
+            &[writable],
+        )
+        .unwrap();
+        assert_eq!(
+            u64::from_le_bytes(pe.bytes()[0x400..0x408].try_into().unwrap()),
+            0x0000_0001_4000_1014
         );
     }
 
