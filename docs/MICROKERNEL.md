@@ -12007,3 +12007,40 @@ pattern warning. No hosted or physical execution is claimed.
 Patent review: `NOT_TRIGGERED` — extending a fixed versioned request enum with a
 canonical capability-envelope operation is conventional service-protocol work.
 See `docs/patents/REVIEW_LOG.md`.
+
+The cancellation profiles now route operation 4 through a distinct third CPL3
+manager service rather than calling the envelope adapter in the requesting
+service. After the deadline receiver blocks, the manager blocks on the existing
+buffered control endpoint. The sender publishes the canonical 48-byte request
+and derives only the requested service authority into the manager: exact
+`CONTROL` for success/replay or exact `READ` for the denial profile. The
+sender's source handle carries `DELEGATE`, but that bit is attenuated from the
+received manager handle and therefore cannot broaden the kernel request.
+
+The manager receives exactly one transferred capability, invokes the constrained
+supervision adapter, releases the received handle, and returns a capability-free
+canonical response over buffered IPC. Replay repeats that complete transfer and
+release cycle, so its second denial is proven after a fresh authority envelope
+rather than by reusing a manager-local handle. The manager then exits through a
+dedicated supervised cleanup path that verifies its exact third service becomes
+`Exited` with no pending cleanup. It has no preprovisioned receiver-control
+handle and cannot manufacture one from the service ID.
+
+For successful cancellation, the resumed receiver yields once before publishing
+its proof marker so the sender must first consume and validate the manager's
+response. Denial leaves the receiver blocked under its original timeout. Thus
+the existing `0x2c`, `0x2d`, and `0x2e` markers now cover manager-process request,
+attenuated capability transfer, kernel authorization, response validation,
+received-handle release, and supervised manager exit in the signed image.
+
+All three cancellation service-image release profiles cross-build with 10
+expected dead-code warnings, and their matching `uefi-x86_64` bootloader
+profiles cross-build with the existing unreachable-pattern warning. The
+pre-existing service-restart-request boot profile also passes after sharing the
+third-service construction. These are cross-builds only; `/dev/kvm` remains
+absent, so no proof marker was observed under KVM/WHP or physical hardware.
+
+Patent review: `NOT_TRIGGERED` — forwarding a fixed request through isolated
+buffered IPC with attenuated capability transfer and explicit handle release is
+conventional capability-oriented service composition. See
+`docs/patents/REVIEW_LOG.md`.

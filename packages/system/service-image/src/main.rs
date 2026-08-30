@@ -442,6 +442,10 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     {
         halt();
     }
+    #[cfg(feature = "deadline-receive-cancel-probe")]
+    unsafe {
+        yield_now()
+    };
     unsafe {
         asm!(
             "out dx, eax",
@@ -1036,41 +1040,73 @@ unsafe extern "sysv64" fn mrml_restart_manager(
     control: u64,
     service: u64,
 ) -> ! {
-    let mut ready = [0u8; 13];
-    let mut no_capabilities = [0u64; 0];
-    let (length, count) = unsafe { receive_buffer(&mut ready, &mut no_capabilities) };
-    if length != ready.len() || count != 0 || &ready != b"restart-ready" {
-        halt();
-    }
-    let retired = ServiceId::from_token(service);
-    let mut request = [0u8; SUPERVISION_REQUEST_BYTES];
-    SupervisionRequest {
-        operation: SupervisionOperation::Restart,
-        request_id: 0x501,
-        service: retired,
-        capability: Capability::from_token(0),
-        setting: None,
-        setting_capability: Capability::from_token(0),
-    }
-    .encode(&mut request)
-    .unwrap_or_else(|_| halt());
-    let descriptor = capability_descriptor(control, Rights::CONTROL);
-    unsafe { send_buffer(endpoint, receiver, &request, descriptor.as_slice()) };
-    let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
-    let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
-    if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
-        halt();
-    }
-    let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
-    if decoded.request_id != 0x501
-        || decoded.status != ResponseStatus::Ok
-        || decoded.service == retired
-        || decoded.state != SupervisionState::Running
-        || decoded.detail != 0
+    #[cfg(feature = "deadline-receive-cancel-probe")]
     {
-        halt();
+        let attempts = if cfg!(feature = "deadline-receive-cancel-replay-probe") {
+            2
+        } else {
+            1
+        };
+        let _ = (control, service);
+        for _ in 0..attempts {
+            let mut request = [0u8; SUPERVISION_REQUEST_BYTES];
+            let mut capability_tokens = [0u64; 1];
+            let (length, count) = unsafe { receive_buffer(&mut request, &mut capability_tokens) };
+            if length != SUPERVISION_REQUEST_BYTES || count != 1 {
+                halt();
+            }
+            let capability = Capability::from_token(capability_tokens[0]);
+            let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
+            dispatch_supervision_cancel_receive_envelope(
+                &KernelAuthorizer,
+                &request,
+                &[capability],
+                &mut response,
+            )
+            .unwrap_or_else(|_| halt());
+            unsafe { release_received_capabilities(&[capability]) };
+            unsafe { send_buffer(endpoint, receiver, &response, &[]) };
+        }
+        unsafe { terminate(3) }
     }
-    unsafe { asm!("int3", options(noreturn, nostack)) }
+    #[cfg(not(feature = "deadline-receive-cancel-probe"))]
+    {
+        let mut ready = [0u8; 13];
+        let mut no_capabilities = [0u64; 0];
+        let (length, count) = unsafe { receive_buffer(&mut ready, &mut no_capabilities) };
+        if length != ready.len() || count != 0 || &ready != b"restart-ready" {
+            halt();
+        }
+        let retired = ServiceId::from_token(service);
+        let mut request = [0u8; SUPERVISION_REQUEST_BYTES];
+        SupervisionRequest {
+            operation: SupervisionOperation::Restart,
+            request_id: 0x501,
+            service: retired,
+            capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
+        }
+        .encode(&mut request)
+        .unwrap_or_else(|_| halt());
+        let descriptor = capability_descriptor(control, Rights::CONTROL);
+        unsafe { send_buffer(endpoint, receiver, &request, descriptor.as_slice()) };
+        let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
+        let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
+        if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
+            halt();
+        }
+        let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
+        if decoded.request_id != 0x501
+            || decoded.status != ResponseStatus::Ok
+            || decoded.service == retired
+            || decoded.state != SupervisionState::Running
+            || decoded.detail != 0
+        {
+            halt();
+        }
+        unsafe { asm!("int3", options(noreturn, nostack)) }
+    }
 }
 
 #[cfg(not(feature = "preemption-probe"))]
@@ -1368,8 +1404,8 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
-    _endpoint: u64,
-    _receiver: u64,
+    endpoint: u64,
+    manager: u64,
     _root_capability: u64,
     _setting_capability: u64,
     _generation: u64,
@@ -1392,14 +1428,19 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         };
         let mut wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode_message(&mut wire).unwrap_or_else(|_| halt());
+        let rights = if cfg!(feature = "deadline-receive-cancel-denied-probe") {
+            Rights::READ
+        } else {
+            Rights::CONTROL
+        };
+        let descriptor = capability_descriptor(receiver_control, rights);
+        unsafe { send_buffer(endpoint, manager, &wire, descriptor.as_slice()) };
         let mut response_wire = [0; SUPERVISION_RESPONSE_BYTES];
-        dispatch_supervision_cancel_receive_envelope(
-            &KernelAuthorizer,
-            &wire,
-            &[Capability::from_token(receiver_control)],
-            &mut response_wire,
-        )
-        .unwrap_or_else(|_| halt());
+        let mut no_capabilities = [0u64; 0];
+        let (length, count) = unsafe { receive_buffer(&mut response_wire, &mut no_capabilities) };
+        if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
+            halt();
+        }
         let response = SupervisionResponse::decode(&response_wire).unwrap_or_else(|_| halt());
         let expected = if cfg!(feature = "deadline-receive-cancel-denied-probe") || attempt == 1 {
             ResponseStatus::Rejected

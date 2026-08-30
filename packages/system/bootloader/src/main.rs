@@ -317,7 +317,10 @@ const SMP_PERIODIC_BOOTSTRAP_PORT: u16 = 0x4d64;
 const SERVICE_ROOT: u64 = 0x00c0_0000;
 #[cfg(feature = "service-probe")]
 const SERVICE_B_ROOT: u64 = 0x00d0_0000;
-#[cfg(feature = "service-restart-request-probe")]
+#[cfg(any(
+    feature = "service-restart-request-probe",
+    feature = "deadline-receive-cancel-probe"
+))]
 const SERVICE_C_ROOT: u64 = 0x0140_0000;
 #[cfg(any(
     feature = "smp-service-migration-probe",
@@ -1680,9 +1683,35 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         _ => halt(),
                     }
                 }
+                #[cfg(feature = "deadline-receive-cancel-probe")]
+                {
+                    let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
+                    if supervisor.task(ids[2]) != Ok(Some(current)) {
+                        halt();
+                    }
+                    let terminated = supervisor.exit_current(runtime).unwrap_or_else(|_| halt());
+                    if terminated.task != current || runtime.context(current).is_ok() {
+                        halt();
+                    }
+                    complete_service_cleanup(supervisor, terminated.cleanup);
+                    if supervisor.task(ids[2]) != Ok(None)
+                        || supervisor.pending_cleanup(ids[2]) != Ok(None)
+                        || supervisor.state(ids[2]) != Ok(mrml_kernel::ServiceState::Exited)
+                    {
+                        halt();
+                    }
+                    match terminated.dispatch.user().map(|(task, _)| task) {
+                        Some(to) => enter_service_dispatch(runtime, to, terminated.dispatch),
+                        None => halt(),
+                    }
+                }
                 #[cfg(not(any(
                     feature = "component-service-probe",
-                    feature = "block-service-probe"
+                    feature = "block-service-probe",
+                    feature = "deadline-receive-cancel-probe"
                 )))]
                 {
                     let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
@@ -3651,7 +3680,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let receiver = runtime
                 .create(Priority::NORMAL, context_a)
                 .unwrap_or_else(|_| halt());
-            #[cfg(feature = "service-restart-request-probe")]
+            #[cfg(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             let manager = runtime
                 .create(
                     Priority::RESPONSIVE,
@@ -3680,7 +3712,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let service_b = supervisor
                 .register_with_policy(ObjectId(0xa1), sender, RestartPolicy::ONCE_IMMEDIATE)
                 .unwrap_or_else(|_| halt());
-            #[cfg(feature = "service-restart-request-probe")]
+            #[cfg(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             let service_c = supervisor
                 .register_with_policy(ObjectId(0xa2), manager, RestartPolicy::ONCE_IMMEDIATE)
                 .unwrap_or_else(|_| halt());
@@ -3691,7 +3726,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let control_b = management
                 .insert(ObjectId(0xa1), Rights::CONTROL)
                 .unwrap_or_else(|_| halt());
-            #[cfg(feature = "service-restart-request-probe")]
+            #[cfg(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             let control_c = management
                 .insert(ObjectId(0xa2), Rights::CONTROL)
                 .unwrap_or_else(|_| halt());
@@ -3768,9 +3806,9 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                         .insert(
                             ObjectId(0xa0),
                             if cfg!(feature = "deadline-receive-cancel-denied-probe") {
-                                Rights::READ
+                                Rights::READ.union(Rights::DELEGATE)
                             } else {
-                                Rights::CONTROL
+                                Rights::CONTROL.union(Rights::DELEGATE)
                             },
                         )
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
@@ -3807,7 +3845,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
-            #[cfg(feature = "service-restart-request-probe")]
+            #[cfg(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             let manager_signal = runtime
                 .capabilities_mut(manager)
                 .and_then(|space| {
@@ -3849,7 +3890,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             }
             let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
             sender_context.r13 = capability.token();
-            sender_context.r14 = receiver.token();
+            #[cfg(not(feature = "deadline-receive-cancel-probe"))]
+            {
+                sender_context.r14 = receiver.token();
+            }
+            #[cfg(feature = "deadline-receive-cancel-probe")]
+            {
+                sender_context.r14 = manager.token();
+            }
             #[cfg(feature = "component-service-probe")]
             {
                 sender_context.r12 = 1;
@@ -3897,13 +3945,29 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             {
                 sender_context.r10 = root_capability.token();
             }
-            #[cfg(feature = "service-restart-request-probe")]
+            #[cfg(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             {
                 let manager_context = runtime.context_mut(manager).unwrap_or_else(|_| halt());
                 manager_context.r13 = manager_signal.token();
-                manager_context.r14 = receiver.token();
-                manager_context.r15 = manager_control.token();
-                manager_context.rbx = service_b.token();
+                #[cfg(feature = "service-restart-request-probe")]
+                {
+                    manager_context.r14 = receiver.token();
+                }
+                #[cfg(feature = "deadline-receive-cancel-probe")]
+                {
+                    manager_context.r14 = sender.token();
+                }
+                #[cfg(feature = "service-restart-request-probe")]
+                {
+                    manager_context.r15 = manager_control.token();
+                }
+                #[cfg(feature = "service-restart-request-probe")]
+                {
+                    manager_context.rbx = service_b.token();
+                }
             }
             if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver)
             {
@@ -3913,13 +3977,19 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             #[cfg(not(feature = "component-service-probe"))]
             core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor_storage));
             core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
-            #[cfg(feature = "service-restart-request-probe")]
+            #[cfg(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             {
                 core::ptr::addr_of_mut!(SERVICE_CONTROLS)
                     .write(Some([control_a, control_b, control_c]));
                 core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_c]));
             }
-            #[cfg(not(feature = "service-restart-request-probe"))]
+            #[cfg(not(any(
+                feature = "service-restart-request-probe",
+                feature = "deadline-receive-cancel-probe"
+            )))]
             {
                 core::ptr::addr_of_mut!(SERVICE_CONTROLS)
                     .write(Some([control_a, control_b, control_a]));
