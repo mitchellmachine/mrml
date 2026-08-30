@@ -1429,6 +1429,69 @@ fn retain_input_archive_member<'data, 'relocations, 'definitions>(
     Ok(changed)
 }
 
+fn retain_named_code_targets<'data, 'relocations, 'definitions>(
+    inputs: &[LinkInput<'data, 'relocations, 'definitions>],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    source_object: &[usize],
+    selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
+) -> Result<bool> {
+    let target = selected.inputs.iter().find_map(|input| {
+        input.relocations.iter().find_map(|relocation| {
+            let symbol = match relocation.target {
+                LinkRelocationTarget::Symbol(symbol)
+                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
+                | LinkRelocationTarget::RequiredSymbol(symbol) => symbol,
+                _ => return None,
+            };
+            let already_defined = selected.inputs.iter().any(|input| {
+                core::iter::once(LinkDefinition {
+                    symbol: input.symbol,
+                    target: input.symbol_target,
+                })
+                .chain(input.additional_definitions.iter().copied())
+                .any(|definition| {
+                    definition.symbol == symbol
+                        && !matches!(
+                            definition.target,
+                            LinkDefinitionTarget::CoffTextSection { .. }
+                                | LinkDefinitionTarget::CoffSection { .. }
+                        )
+                })
+            });
+            if already_defined {
+                return None;
+            }
+            inputs.iter().position(|input| {
+                core::iter::once(LinkDefinition {
+                    symbol: input.symbol,
+                    target: input.symbol_target,
+                })
+                .chain(input.additional_definitions.iter().copied())
+                .any(|definition| {
+                    definition.symbol == symbol
+                        && !matches!(
+                            definition.target,
+                            LinkDefinitionTarget::CoffTextSection { .. }
+                                | LinkDefinitionTarget::CoffSection { .. }
+                        )
+                })
+            })
+        })
+    });
+    let Some(target) = target else {
+        return Ok(false);
+    };
+    retain_input_archive_member(
+        inputs,
+        archive_group,
+        archive_member,
+        source_object,
+        selected,
+        target,
+    )
+}
+
 fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
     inputs: &[LinkInput<'data, 'relocations, 'definitions>],
     archive_group: &[u16],
@@ -1940,8 +2003,8 @@ fn write_linked_pe(
         &decoded.comdat_selection,
         entry,
     )?;
-    let readonly_absolute_relocations = loop {
-        let relocations = selected_readonly_absolute_relocations(
+    loop {
+        let readonly_absolute_relocations = selected_readonly_absolute_relocations(
             objects,
             archive_group,
             archive_member,
@@ -1953,11 +2016,57 @@ fn write_linked_pe(
             &decoded.archive_member,
             &decoded.source_object,
             &mut selected,
-            &relocations,
+            &readonly_absolute_relocations,
         )? {
-            break relocations;
+            break;
         }
-    };
+    }
+    let writable_count = writable_fragment_count(objects)?;
+    let mut probe_writable_arenas = writable_relocation_arenas(writable_count)?;
+    let probe_writable_data = selected_writable_data(
+        objects,
+        archive_group,
+        archive_member,
+        archive_indexed,
+        &selected,
+        &mut probe_writable_arenas,
+    )?;
+    retain_writable_section_targets(
+        &decoded.inputs,
+        &decoded.archive_group,
+        &decoded.archive_member,
+        &decoded.source_object,
+        &mut selected,
+        &probe_writable_data,
+    )?;
+    drop(probe_writable_data);
+    retain_named_code_targets(
+        &decoded.inputs,
+        &decoded.archive_group,
+        &decoded.archive_member,
+        &decoded.source_object,
+        &mut selected,
+    )?;
+    loop {
+        let readonly_absolute_relocations = selected_readonly_absolute_relocations(
+            objects,
+            archive_group,
+            archive_member,
+            &selected,
+        )?;
+        if !retain_exact_readonly_relocation_targets(
+            &decoded.inputs,
+            &decoded.archive_group,
+            &decoded.archive_member,
+            &decoded.source_object,
+            &mut selected,
+            &readonly_absolute_relocations,
+        )? {
+            break;
+        }
+    }
+    let readonly_absolute_relocations =
+        selected_readonly_absolute_relocations(objects, archive_group, archive_member, &selected)?;
     let mut runtime_arena = [PeRuntimeFunction {
         begin_symbol: "unused",
         begin_identity: None,
@@ -1974,9 +2083,8 @@ fn write_linked_pe(
         &selected,
         &mut runtime_arena,
     )?;
-    let writable_count = writable_fragment_count(objects)?;
     let mut writable_arenas = writable_relocation_arenas(writable_count)?;
-    let initial_writable_data = selected_writable_data(
+    let writable_data = selected_writable_data(
         objects,
         archive_group,
         archive_member,
@@ -1984,36 +2092,6 @@ fn write_linked_pe(
         &selected,
         &mut writable_arenas,
     )?;
-    let retained_writable_target = retain_writable_section_targets(
-        &decoded.inputs,
-        &decoded.archive_group,
-        &decoded.archive_member,
-        &decoded.source_object,
-        &mut selected,
-        &initial_writable_data,
-    )?;
-    drop(initial_writable_data);
-    let mut retained_writable_arenas;
-    let writable_data = if retained_writable_target {
-        retained_writable_arenas = writable_relocation_arenas(writable_count)?;
-        selected_writable_data(
-            objects,
-            archive_group,
-            archive_member,
-            archive_indexed,
-            &selected,
-            &mut retained_writable_arenas,
-        )?
-    } else {
-        selected_writable_data(
-            objects,
-            archive_group,
-            archive_member,
-            archive_indexed,
-            &selected,
-            &mut writable_arenas,
-        )?
-    };
     let mut contextual_arenas = relocation_arenas(selected.inputs.len())?;
     let contextual_inputs = contextualize_pe_writable_relocations(
         &selected.inputs,
@@ -2976,21 +3054,34 @@ mod tests {
             symbol: "callback",
             target: LinkDefinitionTarget::Text(4),
         }];
+        let sibling_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("late_dependency"),
+            addend: -4,
+        }];
         let sibling = LinkInput {
             symbol: "helper",
             symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &definitions,
             text: &[0; 8],
             readonly_data: &[],
+            relocations: &sibling_relocations,
+        };
+        let dependency = LinkInput {
+            symbol: "late_dependency",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
             relocations: &[],
         };
-        let inputs = [entry, target, sibling];
+        let inputs = [entry, target, sibling, dependency];
         let mut selected = selected_link_inputs(
             &inputs,
-            &[0, 4, 4],
-            &[0, 7, 7],
-            &[0, 8, 8],
-            &[CoffTextComdatSelection::None; 3],
+            &[0, 4, 4, 5],
+            &[0, 7, 7, 9],
+            &[0, 8, 8, 10],
+            &[CoffTextComdatSelection::None; 4],
             "entry",
         )
         .unwrap();
@@ -3008,9 +3099,9 @@ mod tests {
         assert!(
             retain_exact_readonly_relocation_targets(
                 &inputs,
-                &[0, 4, 4],
-                &[0, 7, 7],
-                &[0, 8, 8],
+                &[0, 4, 4, 5],
+                &[0, 7, 7, 9],
+                &[0, 8, 8, 10],
                 &mut selected,
                 &relocation,
             )
@@ -3022,11 +3113,23 @@ mod tests {
         assert_eq!(selected.source_object[1], 8);
         assert_eq!(selected.inputs[2].additional_definitions, &definitions);
         assert!(
+            retain_named_code_targets(
+                &inputs,
+                &[0, 4, 4, 5],
+                &[0, 7, 7, 9],
+                &[0, 8, 8, 10],
+                &mut selected,
+            )
+            .unwrap()
+        );
+        assert_eq!(selected.inputs.len(), 4);
+        assert_eq!(selected.inputs[3].symbol, "late_dependency");
+        assert!(
             !retain_exact_readonly_relocation_targets(
                 &inputs,
-                &[0, 4, 4],
-                &[0, 7, 7],
-                &[0, 8, 8],
+                &[0, 4, 4, 5],
+                &[0, 7, 7, 9],
+                &[0, 8, 8, 10],
                 &mut selected,
                 &relocation,
             )
