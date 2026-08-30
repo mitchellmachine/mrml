@@ -4,10 +4,12 @@ use core::ops::{Deref, DerefMut};
 
 use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
-    Capability, CapabilityError, CapabilitySpace, FaultRetirement, MemoryBackingKind,
-    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
-    Priority, Rights, TaskId, TaskProtocolViolation, TaskRuntime, TaskRuntimeError,
-    TaskTerminationDispatch, TaskTerminationDispatchError, TaskViolationRetirement,
+    Capability, CapabilityError, CapabilitySpace, DeadlineReceiveCancellation,
+    DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor, FaultRetirement,
+    MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
+    ObjectId, PAGE_SIZE, Priority, Rights, TaskId, TaskProtocolViolation, TaskRuntime,
+    TaskRuntimeError, TaskTerminationDispatch, TaskTerminationDispatchError,
+    TaskViolationRetirement,
 };
 
 #[cfg(test)]
@@ -61,6 +63,12 @@ pub enum ServiceError {
     Unauthorized(CapabilityError),
     Runtime(TaskRuntimeError),
     Dispatch(TaskTerminationDispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceDeadlineCancellationError {
+    Service(ServiceError),
+    Deadline(DeadlineReceiveSyscallError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -628,6 +636,43 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         self.slots[slot].restart_policy = restart_policy;
         self.slots[slot].policy_generation = next_policy_generation;
         Ok(())
+    }
+
+    /// Cancels one exact suspended deadline receive only when the manager also
+    /// holds exact CONTROL authority for the token's live service instance.
+    pub fn cancel_deadline_receive<
+        const TASKS: usize,
+        const CAPS: usize,
+        const MANAGEMENT_CAPS: usize,
+    >(
+        &self,
+        service: ServiceId,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        control: Capability,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        executor: &mut DeadlineReceiveSyscallExecutor<TASKS>,
+        cancellation: DeadlineReceiveCancellation,
+    ) -> Result<(), ServiceDeadlineCancellationError> {
+        let entry = self
+            .slot(service)
+            .map_err(ServiceDeadlineCancellationError::Service)?;
+        let authorized = management
+            .authorize_exact(control, Rights::CONTROL)
+            .map_err(ServiceError::Unauthorized)
+            .map_err(ServiceDeadlineCancellationError::Service)?;
+        if authorized != entry.object {
+            return Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::Unauthorized(CapabilityError::PermissionDenied),
+            ));
+        }
+        if entry.state != ServiceState::Running || entry.task != Some(cancellation.task()) {
+            return Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::TaskMismatch,
+            ));
+        }
+        executor
+            .cancel(runtime, cancellation)
+            .map_err(ServiceDeadlineCancellationError::Deadline)
     }
 
     pub fn exit_current<const TASKS: usize, const CAPS: usize>(
@@ -2234,6 +2279,93 @@ mod tests {
         assert_eq!(
             supervisor.state_authorized(service, &management, read),
             Err(ServiceError::Unauthorized(CapabilityError::Invalid))
+        );
+    }
+
+    #[test]
+    fn deadline_cancellation_requires_both_exact_service_control_and_wait_owner() {
+        let receiver_object = ObjectId(0x7c);
+        let sender_object = ObjectId(0x7d);
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let mut supervisor = ServiceSupervisor::<2>::new();
+        let receiver_service = supervisor.register(receiver_object, receiver).unwrap();
+        let sender_service = supervisor.register(sender_object, sender).unwrap();
+        let mut management = CapabilitySpace::<2>::new();
+        let receiver_control = management.insert(receiver_object, Rights::CONTROL).unwrap();
+        let sender_control = management.insert(sender_object, Rights::CONTROL).unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let cancellation = match executor
+            .start(&mut runtime, crate::ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            crate::DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                cancellation,
+            } if to == sender => cancellation,
+            _ => panic!("expected blocked supervised deadline receive"),
+        };
+
+        assert_eq!(
+            supervisor.cancel_deadline_receive(
+                receiver_service,
+                &management,
+                sender_control,
+                &mut runtime,
+                &mut executor,
+                cancellation,
+            ),
+            Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::Unauthorized(CapabilityError::PermissionDenied)
+            ))
+        );
+        assert_eq!(
+            supervisor.cancel_deadline_receive(
+                sender_service,
+                &management,
+                sender_control,
+                &mut runtime,
+                &mut executor,
+                cancellation,
+            ),
+            Err(ServiceDeadlineCancellationError::Service(
+                ServiceError::TaskMismatch
+            ))
+        );
+        assert!(executor.has_pending(receiver).unwrap());
+        assert_eq!(
+            supervisor.cancel_deadline_receive(
+                receiver_service,
+                &management,
+                receiver_control,
+                &mut runtime,
+                &mut executor,
+                cancellation,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.context(receiver).unwrap().rax,
+            crate::SyscallCompletionStatus::Error.code()
+        );
+        assert_eq!(
+            supervisor.cancel_deadline_receive(
+                receiver_service,
+                &management,
+                receiver_control,
+                &mut runtime,
+                &mut executor,
+                cancellation,
+            ),
+            Err(ServiceDeadlineCancellationError::Deadline(
+                DeadlineReceiveSyscallError::OwnerMismatch
+            ))
         );
     }
 }

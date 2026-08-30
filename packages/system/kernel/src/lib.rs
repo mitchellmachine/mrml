@@ -275,9 +275,10 @@ pub use scheduler::{
 };
 pub use service_lifecycle::{
     AccountedServiceSupervisor, AccountedServiceSupervisorError, RestartPolicy,
-    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket, ServiceError,
-    ServiceFault, ServiceId, ServiceRecovery, ServiceRecoveryError, ServiceRegistrationPlan,
-    ServiceRestartCommit, ServiceRetirement, ServiceState, ServiceSupervisor, ServiceViolation,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
+    ServiceDeadlineCancellationError, ServiceError, ServiceFault, ServiceId, ServiceRecovery,
+    ServiceRecoveryError, ServiceRegistrationPlan, ServiceRestartCommit, ServiceRetirement,
+    ServiceState, ServiceSupervisor, ServiceViolation,
 };
 pub use shared_buffer_syscall::{
     SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedBufferUserAccess,

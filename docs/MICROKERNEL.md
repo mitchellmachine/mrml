@@ -11701,3 +11701,33 @@ warning. This is deterministic unit and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — preparing a bounded set of scheduler wakes
 before a commit-only timer transition is conventional transactional scheduling.
 See `docs/patents/REVIEW_LOG.md`.
+
+The service supervisor now composes deadline cancellation with its existing
+exact service-object `CONTROL` boundary. Cancellation succeeds only when the
+supplied service generation is live and running, the capability has exactly
+`CONTROL` rights for that service object, the opaque cancellation token names
+that service's exact task generation, and the deadline executor still retains
+the matching wait owner. The supervisor then delegates to the executor's
+one-use cancellation transition; it never reconstructs a wait from the service
+or task name.
+
+Focused coverage proves a control capability for another object is rejected,
+valid control for a different running service cannot substitute for the token's
+task, exact control plus the exact token succeeds, and replay reaches the typed
+deadline `OwnerMismatch`. Failed authorization and task substitution leave the
+original owner pending. This is a kernel composition API for a trusted manager;
+no user-facing cancellation syscall or implicit first-party privilege exists.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes 676
+tests, and the native kernel release build passes. The service-image release
+builds for `deadline_receive_probe` and
+`deadline_receive_message_probe` pass with their expected 14 and 13 dead-code
+warnings, and the deadline UEFI bootloader release build passes with its
+existing unreachable-pattern warning. All successful builds used `--target
+native` for the MRML-native service image; an initial `--target mrml-x86_64`
+invocation was rejected as `UnsupportedTarget` before compilation and provides
+no product evidence. No hosted or physical execution was performed.
+
+Patent review: `NOT_TRIGGERED` — requiring both exact object capability
+authorization and a one-use wait token for cancellation is conventional
+capability-checked lifecycle composition. See `docs/patents/REVIEW_LOG.md`.
