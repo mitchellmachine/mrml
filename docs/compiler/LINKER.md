@@ -1482,3 +1482,18 @@ the next typed boundary: `COFF object 2 archive group 1 member 3 text fragment
 no std link or execution claim is made.
 An isolated canonical compiler-core gate at the typed-thunk checkpoint passed
 817 unit tests and 126 semantic-execution tests with zero failures.
+
+The durable `check_pinned_std_execution.sh` probe compiles an independently
+authored Rust 2024 consumer with the exact ORACLE-0003 Windows gnullvm rustc.
+The consumer calls `std::thread::available_parallelism` and returns 42 only
+when the result is nonzero. Dedicated diagnostic stubs intentionally provide
+no usable allocator, so an unexpected heap path fails closed instead of
+silently broadening the fixture. On the normal 8 MiB Linux stack, MRML linked
+the exact pinned `std` dependency closure and self-contained MinGW import
+archives into a deterministic 2,389,504-byte PE with SHA-256
+`a6b5bf79c127c2cb7f754a60df0a14e22f8aae22ef1985679d838a429a4e53f6`.
+The image has separate RX, R/NX, and RW/NX sections plus import, exception,
+TLS, and IAT directories. Wine 11.16 returned 42. This is one hosted Wine
+execution path through `std`, not native Windows evidence, general `std`
+conformance, production runtime closure, complete PE startup/TLS-callback
+lifecycle, WHP evidence, or physical-hardware evidence.
