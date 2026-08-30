@@ -1283,6 +1283,11 @@ Canonical FAT32 read transport validates the complete borrowed output range and
 local staging capacity before provider dispatch. It writes only that range after
 an active-handle read succeeds; stale handles leave all caller memory unchanged,
 and both staging areas are erased after every outcome.
+The isolated read path records cleanup ownership only after one structurally
+valid transferred writable-buffer token exists. Provider error causes no shared
+write; success copies only the bounded result, then release completes before
+reply. Malformed envelopes and kernel over-counts cannot trigger copy, release,
+or response through an unvalidated token.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

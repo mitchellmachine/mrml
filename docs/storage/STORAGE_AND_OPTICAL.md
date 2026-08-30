@@ -955,7 +955,10 @@ bounded file-range reads through the exact
 mount/root entry and a fully validated FAT chain; stale handles perform no block
 I/O or output mutation, and staging plus cluster scratch are erased. Canonical
 read transport bounds the borrowed output view, rejects insufficient staging,
-publishes only that view, and maps stale handles without block I/O. Eighty-six
+publishes only that view, and maps stale handles without block I/O. The isolated
+read loop accepts exactly one structurally valid writable-buffer capability,
+copies only successful bytes, releases before reply, and erases local buffers.
+Its register adapter rejects kernel over-counts. Ninety-one
 focused Linux-host tests pass.
 Filesystem interface generation 3 now adds one
 canonical provider-open operation that binds the exact volume, mount generation,
@@ -963,7 +966,7 @@ directory handle, and non-authorizing lookup object and returns a distinct opaqu
 handle. Its isolated open receive/reply loop accepts the exact request and zero
 capabilities, erases local buffers, and uses a launch-bound register adapter that
 rejects kernel over-counts. Generations 1 and 2 remain immutable history; read
-service dispatch is next. The storage service
+service entry integration is next. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

@@ -7506,6 +7506,14 @@ and erases staging plus cluster scratch on all paths. Stale handles perform no
 block I/O and leave the whole caller buffer unchanged. The focused FAT32 suite
 passes eighty-six Linux-host tests.
 
+Isolated FAT32 read dispatch now validates the exact request and one structurally
+valid transferred writable-buffer capability. It dispatches through local
+scratch, copies to shared memory only on typed success, releases the received
+leaf before reply, and erases all local buffers. Stale handles release and reply
+without copying; malformed envelopes do neither. The register adapter bounds
+kernel-returned counts and preserves receive/write/release/reply order. The
+focused FAT32 suite passes ninety-one Linux-host tests.
+
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
 authenticates the exact provider/mount/parent/object mapping; `OPEN_CHILD` on the

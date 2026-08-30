@@ -1,19 +1,20 @@
 use crate::{
     Fat32LookupServiceSyscalls, Fat32MountServiceSyscalls, Fat32OpenServiceSyscalls,
-    Fat32ServiceSyscalls, Fat32UnmountServiceSyscalls, ReceivedFat32Envelope,
-    ReceivedFat32LookupEnvelope, ReceivedFat32MountEnvelope, ReceivedFat32OpenEnvelope,
-    ReceivedFat32UnmountEnvelope,
+    Fat32ReadServiceSyscalls, Fat32ServiceSyscalls, Fat32UnmountServiceSyscalls,
+    ReceivedFat32Envelope, ReceivedFat32LookupEnvelope, ReceivedFat32MountEnvelope,
+    ReceivedFat32OpenEnvelope, ReceivedFat32ReadEnvelope, ReceivedFat32UnmountEnvelope,
 };
 use mrml_interface_storage_filesystem_v3::{
     LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES, MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES,
     OPEN_REQUEST_BYTES, OPEN_RESPONSE_BYTES, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
-    UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
+    READ_REQUEST_BYTES, READ_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
 };
 use mrml_kernel::Capability;
 
 const SEND_BUFFER: u64 = 4;
 const RECEIVE_BUFFER: u64 = 5;
 const READ_SHARED_BUFFER: u64 = 7;
+const WRITE_SHARED_BUFFER: u64 = 8;
 const RELEASE_CAPABILITY: u64 = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +92,33 @@ pub struct Fat32OpenUserspaceSyscalls<R> {
     raw: R,
     reply_endpoint: u64,
     reply_task: u64,
+}
+
+pub struct Fat32ReadUserspaceSyscalls<R> {
+    raw: R,
+    reply_endpoint: u64,
+    reply_task: u64,
+}
+
+impl<R> Fat32ReadUserspaceSyscalls<R> {
+    pub fn new(
+        raw: R,
+        reply_endpoint: u64,
+        reply_task: u64,
+    ) -> Result<Self, Fat32UserspaceSyscallError> {
+        if reply_endpoint == 0 || reply_task == 0 {
+            return Err(Fat32UserspaceSyscallError::InvalidLaunchBinding);
+        }
+        Ok(Self {
+            raw,
+            reply_endpoint,
+            reply_task,
+        })
+    }
+
+    pub fn into_raw(self) -> R {
+        self.raw
+    }
 }
 
 impl<R> Fat32OpenUserspaceSyscalls<R> {
@@ -405,6 +433,101 @@ unsafe impl<R: Fat32RawSyscall> Fat32OpenServiceSyscalls for Fat32OpenUserspaceS
     fn send_open_response(
         &mut self,
         response: &[u8; OPEN_RESPONSE_BYTES],
+    ) -> Result<(), Self::Error> {
+        let mut frame = Fat32SyscallFrame {
+            rax: SEND_BUFFER,
+            rdi: self.reply_endpoint,
+            rsi: self.reply_task,
+            rdx: response.as_ptr() as u64,
+            r10: response.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax == 0 {
+            Ok(())
+        } else {
+            Err(Fat32UserspaceSyscallError::Kernel(frame.rax))
+        }
+    }
+}
+
+unsafe impl<R: Fat32RawSyscall> Fat32ReadServiceSyscalls for Fat32ReadUserspaceSyscalls<R> {
+    type Error = Fat32UserspaceSyscallError;
+
+    fn receive_read(
+        &mut self,
+        request: &mut [u8; READ_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+    ) -> Result<ReceivedFat32ReadEnvelope, Self::Error> {
+        let mut frame = Fat32SyscallFrame {
+            rax: RECEIVE_BUFFER,
+            rdi: request.as_mut_ptr() as u64,
+            rsi: request.len() as u64,
+            rdx: capability_tokens.as_mut_ptr() as u64,
+            r10: capability_tokens.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax != 0 {
+            return Err(Fat32UserspaceSyscallError::Kernel(frame.rax));
+        }
+        let (payload_length, capability_count) = Fat32UserspaceSyscalls::<R>::receive_counts(
+            &frame,
+            request.len(),
+            capability_tokens.len(),
+        )?;
+        Ok(ReceivedFat32ReadEnvelope {
+            payload_length,
+            capability_count,
+        })
+    }
+
+    fn write_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        let mut frame = Fat32SyscallFrame {
+            rax: WRITE_SHARED_BUFFER,
+            rdi: capability.token(),
+            rsi: offset,
+            rdx: input.as_ptr() as u64,
+            r10: input.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax == 0 {
+            Ok(())
+        } else {
+            Err(Fat32UserspaceSyscallError::Kernel(frame.rax))
+        }
+    }
+
+    fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
+        let mut frame = Fat32SyscallFrame {
+            rax: RELEASE_CAPABILITY,
+            rdi: capability.token(),
+            rsi: 0,
+            rdx: 0,
+            r10: 0,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax == 0 {
+            Ok(())
+        } else {
+            Err(Fat32UserspaceSyscallError::Kernel(frame.rax))
+        }
+    }
+
+    fn send_read_response(
+        &mut self,
+        response: &[u8; READ_RESPONSE_BYTES],
     ) -> Result<(), Self::Error> {
         let mut frame = Fat32SyscallFrame {
             rax: SEND_BUFFER,
@@ -819,6 +942,124 @@ mod tests {
         let mut adapter = Fat32OpenUserspaceSyscalls::new(raw, 12, 13).unwrap();
         assert_eq!(
             adapter.receive_open(&mut [0; OPEN_REQUEST_BYTES]),
+            Err(Fat32UserspaceSyscallError::Range)
+        );
+        assert_eq!(adapter.into_raw().count, 1);
+    }
+
+    struct ReadRaw {
+        request: [u8; READ_REQUEST_BYTES],
+        response: [u8; READ_RESPONSE_BYTES],
+        shared: [u8; 16],
+        operations: [u64; 4],
+        count: usize,
+        reported_capabilities: u64,
+    }
+
+    unsafe impl Fat32RawSyscall for ReadRaw {
+        unsafe fn invoke(&mut self, frame: &mut Fat32SyscallFrame) {
+            self.operations[self.count] = frame.rax;
+            self.count += 1;
+            match frame.rax {
+                RECEIVE_BUFFER => unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        self.request.as_ptr(),
+                        frame.rdi as *mut u8,
+                        self.request.len(),
+                    );
+                    *(frame.rdx as *mut u64) = TOKEN;
+                    frame.rdx = READ_REQUEST_BYTES as u64;
+                    frame.r10 = self.reported_capabilities;
+                },
+                WRITE_SHARED_BUFFER => unsafe {
+                    assert_eq!(frame.rdi, TOKEN);
+                    let start = frame.rsi as usize;
+                    core::ptr::copy_nonoverlapping(
+                        frame.rdx as *const u8,
+                        self.shared[start..].as_mut_ptr(),
+                        frame.r10 as usize,
+                    );
+                },
+                RELEASE_CAPABILITY => assert_eq!(frame.rdi, TOKEN),
+                SEND_BUFFER => unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        frame.rdx as *const u8,
+                        self.response.as_mut_ptr(),
+                        frame.r10 as usize,
+                    );
+                },
+                _ => panic!("unexpected read syscall"),
+            }
+            frame.rax = 0;
+        }
+    }
+
+    #[test]
+    fn read_adapter_preserves_receive_write_release_reply_register_order() {
+        use mrml_interface_storage_filesystem_v3::{
+            encode_read_request, encode_read_response, BorrowedWriteView, OpaqueHandle,
+        };
+
+        let request = encode_read_request(
+            OpaqueHandle::new(3, 8).unwrap(),
+            7,
+            OpaqueHandle::new(4, 9).unwrap(),
+            2,
+            BorrowedWriteView::within(4, 8, 16).unwrap(),
+        )
+        .unwrap();
+        let raw = ReadRaw {
+            request,
+            response: [0; READ_RESPONSE_BYTES],
+            shared: [0xcc; 16],
+            operations: [0; 4],
+            count: 0,
+            reported_capabilities: 1,
+        };
+        let mut adapter = Fat32ReadUserspaceSyscalls::new(raw, 12, 13).unwrap();
+        let mut received = [0; READ_REQUEST_BYTES];
+        let mut tokens = [0; 1];
+        assert_eq!(
+            adapter.receive_read(&mut received, &mut tokens),
+            Ok(ReceivedFat32ReadEnvelope {
+                payload_length: READ_REQUEST_BYTES,
+                capability_count: 1,
+            })
+        );
+        assert_eq!(received, request);
+        assert_eq!(tokens, [TOKEN]);
+        let capability = Capability::from_token(TOKEN);
+        adapter.write_shared(capability, 4, &[1, 2, 3, 4]).unwrap();
+        adapter.release_received(capability).unwrap();
+        let response = encode_read_response(Ok(4));
+        adapter.send_read_response(&response).unwrap();
+        let raw = adapter.into_raw();
+        assert_eq!(
+            raw.operations,
+            [
+                RECEIVE_BUFFER,
+                WRITE_SHARED_BUFFER,
+                RELEASE_CAPABILITY,
+                SEND_BUFFER,
+            ]
+        );
+        assert_eq!(&raw.shared[4..8], &[1, 2, 3, 4]);
+        assert_eq!(raw.response, response);
+    }
+
+    #[test]
+    fn read_adapter_rejects_kernel_capability_over_count() {
+        let raw = ReadRaw {
+            request: [0; READ_REQUEST_BYTES],
+            response: [0; READ_RESPONSE_BYTES],
+            shared: [0; 16],
+            operations: [0; 4],
+            count: 0,
+            reported_capabilities: 2,
+        };
+        let mut adapter = Fat32ReadUserspaceSyscalls::new(raw, 12, 13).unwrap();
+        assert_eq!(
+            adapter.receive_read(&mut [0; READ_REQUEST_BYTES], &mut [0; 1]),
             Err(Fat32UserspaceSyscallError::Range)
         );
         assert_eq!(adapter.into_raw().count, 1);

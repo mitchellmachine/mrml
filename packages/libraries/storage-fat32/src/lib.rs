@@ -8,6 +8,7 @@ mod service_loop;
 mod mount_service_loop;
 mod lookup_service_loop;
 mod open_service_loop;
+mod read_service_loop;
 mod unmount_service_loop;
 mod userspace_syscall_adapter;
 
@@ -45,14 +46,18 @@ pub use open_service_loop::{
     Fat32OpenServiceLoop, Fat32OpenServiceLoopError, Fat32OpenServiceSyscalls,
     ReceivedFat32OpenEnvelope,
 };
+pub use read_service_loop::{
+    Fat32ReadServiceLoop, Fat32ReadServiceLoopError, Fat32ReadServiceSyscalls,
+    ReceivedFat32ReadEnvelope,
+};
 pub use unmount_service_loop::{
     Fat32UnmountServiceLoop, Fat32UnmountServiceLoopError, Fat32UnmountServiceSyscalls,
     ReceivedFat32UnmountEnvelope,
 };
 pub use userspace_syscall_adapter::{
     Fat32LookupUserspaceSyscalls, Fat32MountUserspaceSyscalls, Fat32RawSyscall, Fat32SyscallFrame,
-    Fat32OpenUserspaceSyscalls, Fat32UnmountUserspaceSyscalls, Fat32UserspaceSyscallError,
-    Fat32UserspaceSyscalls,
+    Fat32OpenUserspaceSyscalls, Fat32ReadUserspaceSyscalls, Fat32UnmountUserspaceSyscalls,
+    Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;
