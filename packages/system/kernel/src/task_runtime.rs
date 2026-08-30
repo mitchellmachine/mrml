@@ -170,7 +170,7 @@ pub struct TaskViolationRetirement {
     pub task: TaskId,
     pub context: UserContext,
     pub violation: TaskProtocolViolation,
-    pub next: ScheduleOutcome,
+    next: ScheduleOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -265,6 +265,8 @@ pub enum TaskTerminationDispatchError {
     TerminationMismatch,
     NoPendingFault,
     FaultMismatch,
+    NoPendingViolation,
+    ViolationMismatch,
     Runtime(TaskRuntimeError),
 }
 
@@ -447,6 +449,7 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
     pending_termination: Option<TaskTermination>,
     pending_fault: Option<FaultRetirement>,
+    pending_violation: Option<TaskViolationRetirement>,
 }
 
 /// A task runtime whose complete fixed-capacity kernel footprint has one exact
@@ -547,6 +550,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             delegations: [None; MAX_TASK_DELEGATIONS],
             pending_termination: None,
             pending_fault: None,
+            pending_violation: None,
         })
     }
 
@@ -591,7 +595,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn timer_tick(&mut self) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        self.ensure_no_pending_termination()?;
+        self.ensure_no_pending_retirement()?;
         self.scheduler
             .timer_tick()
             .map_err(TaskRuntimeError::Scheduler)
@@ -603,7 +607,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         interrupted: UserContext,
     ) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        self.ensure_no_pending_termination()?;
+        self.ensure_no_pending_retirement()?;
         let current = self
             .scheduler
             .current()
@@ -633,7 +637,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn yield_current(&mut self) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        self.ensure_no_pending_termination()?;
+        self.ensure_no_pending_retirement()?;
         self.scheduler
             .yield_current()
             .map_err(TaskRuntimeError::Scheduler)
@@ -651,7 +655,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn context_mut(&mut self, task: TaskId) -> Result<&mut UserContext, TaskRuntimeError> {
-        self.ensure_no_pending_termination()?;
+        self.ensure_no_pending_retirement()?;
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -998,7 +1002,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         disposition: TrapDisposition,
     ) -> Result<FaultRetirement, TaskRuntimeError> {
-        self.ensure_no_pending_termination()?;
+        self.ensure_no_pending_retirement()?;
         let (vector, address) = match disposition {
             TrapDisposition::TerminateUser { vector, address } => (vector, address),
             TrapDisposition::HaltKernel { .. } => {
@@ -1055,7 +1059,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         violation: TaskProtocolViolation,
     ) -> Result<TaskViolationRetirement, TaskRuntimeError> {
-        self.ensure_no_pending_termination()?;
+        self.ensure_no_pending_retirement()?;
         let current = self
             .scheduler
             .current()
@@ -1083,12 +1087,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             PeerDeathReason::ProtocolViolation(violation),
         );
         let next = self.scheduler.commit_current_termination(termination_plan);
-        Ok(TaskViolationRetirement {
+        let retirement = TaskViolationRetirement {
             task: current,
             context: domain.context,
             violation,
             next,
-        })
+        };
+        self.pending_violation = Some(retirement);
+        Ok(retirement)
     }
 
     /// Removes the current task's complete revocation domain for a voluntary
@@ -1125,6 +1131,23 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             return Err(TaskTerminationDispatchError::FaultMismatch);
         }
         self.pending_fault = None;
+        Ok(TaskTerminationDispatch { target })
+    }
+
+    /// Exact-matches a protocol-violation retirement to the runtime's one
+    /// pending violation transition before disclosing its successor context.
+    pub fn dispatch_after_violation(
+        &mut self,
+        retirement: TaskViolationRetirement,
+    ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
+        let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
+        let pending = self
+            .pending_violation
+            .ok_or(TaskTerminationDispatchError::NoPendingViolation)?;
+        if pending != retirement {
+            return Err(TaskTerminationDispatchError::ViolationMismatch);
+        }
+        self.pending_violation = None;
         Ok(TaskTerminationDispatch { target })
     }
 
@@ -1175,8 +1198,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(())
     }
 
-    fn ensure_no_pending_termination(&self) -> Result<(), TaskRuntimeError> {
-        if self.pending_termination.is_some() || self.pending_fault.is_some() {
+    fn ensure_no_pending_retirement(&self) -> Result<(), TaskRuntimeError> {
+        if self.pending_termination.is_some()
+            || self.pending_fault.is_some()
+            || self.pending_violation.is_some()
+        {
             Err(TaskRuntimeError::RetirementDispatchPending)
         } else {
             Ok(())
@@ -1186,7 +1212,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub(crate) fn terminate_current_with_context(
         &mut self,
     ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
-        if self.pending_termination.is_some() || self.pending_fault.is_some() {
+        if self.pending_termination.is_some()
+            || self.pending_fault.is_some()
+            || self.pending_violation.is_some()
+        {
             return Err(TaskRuntimeError::RetirementDispatchPending);
         }
         let current = self
@@ -4783,6 +4812,23 @@ mod tests {
                 UserReturnError::InvalidStack,
             ))
         );
+        assert_eq!(
+            runtime.timer_tick(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.dispatch_after_violation(TaskViolationRetirement {
+                violation: TaskProtocolViolation::BufferedReceiveMappingDrift,
+                ..retirement
+            }),
+            Err(TaskTerminationDispatchError::ViolationMismatch)
+        );
+        let dispatch = runtime.dispatch_after_violation(retirement).unwrap();
+        assert_eq!(dispatch.user(), Some((observer, observer_context)));
+        assert_eq!(
+            runtime.dispatch_after_violation(retirement),
+            Err(TaskTerminationDispatchError::NoPendingViolation)
+        );
     }
 
     #[test]
@@ -4803,6 +4849,12 @@ mod tests {
         );
         assert_eq!(retirement.next, ScheduleOutcome::Idle);
         assert_eq!(runtime.context(task), Err(TaskRuntimeError::MissingTask));
+        assert!(
+            runtime
+                .dispatch_after_violation(retirement)
+                .unwrap()
+                .is_idle()
+        );
     }
 
     #[test]

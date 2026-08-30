@@ -4376,8 +4376,8 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
         halt();
     }
     unsafe { complete_service_cleanup(supervisor, retired.cleanup) };
-    match retired.retirement.next {
-        ScheduleOutcome::Switch { to, .. } => {
+    match retired.dispatch.user().map(|(task, _)| task) {
+        Some(to) => {
             #[cfg(any(feature = "invalid-return-probe", feature = "buffer-drift-probe"))]
             {
                 let ControlEvent::PeerDied(death) =
@@ -4399,9 +4399,9 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
                     service_restart_stage(0x28)
                 };
             }
-            unsafe { enter_service_task(runtime, to) }
+            unsafe { enter_service_dispatch(runtime, to, retired.dispatch) }
         }
-        ScheduleOutcome::Idle => halt(),
+        None if retired.dispatch.is_idle() => halt(),
         _ => halt(),
     }
 }

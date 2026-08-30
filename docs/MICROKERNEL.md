@@ -10893,3 +10893,20 @@ integration step.
 Patent review: `NOT_TRIGGERED` — retaining and exact-matching one pending fault
 transition before successor dispatch is conventional fail-closed scheduler
 lifecycle validation. See `docs/patents/REVIEW_LOG.md`.
+
+Kernel-recognized userspace protocol violations now use the same one-pending,
+one-use successor-dispatch state machine. The raw schedule outcome inside a
+`TaskViolationRetirement` is private, `ServiceViolation` carries the opaque
+dispatch token, and substituted violation evidence neither authorizes a target
+nor consumes the pending transition. The UEFI violation handler derives the
+successor only from that token, processes the typed peer-death event, and then
+consumes the token through the final service context-entry boundary. The Linux-
+host kernel suite passes 653 tests and its release build passes; the
+configuration-service suite passes 53 tests. Service, invalid-return, and
+buffer-drift UEFI release profiles cross-build with one pre-existing unused-
+variable warning. This is in-memory and cross-build evidence only, not QEMU or
+physical protocol-violation/context-switch evidence.
+
+Patent review: `NOT_TRIGGERED` — one-use validation of a typed protocol-
+violation retirement before successor entry is conventional scheduler control-
+flow integrity. See `docs/patents/REVIEW_LOG.md`.

@@ -128,11 +128,12 @@ pub struct ServiceFault {
     pub dispatch: TaskTerminationDispatch,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ServiceViolation {
     pub service: ServiceId,
     pub retirement: TaskViolationRetirement,
     pub cleanup: ServiceCleanupTicket,
+    pub dispatch: TaskTerminationDispatch,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -724,6 +725,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let retirement = runtime
             .terminate_current_violation(violation)
             .map_err(ServiceError::Runtime)?;
+        let dispatch = runtime
+            .dispatch_after_violation(retirement)
+            .map_err(ServiceError::Dispatch)?;
         let cleanup = ServiceCleanupTicket {
             service: plan.service,
             task: plan.task,
@@ -734,6 +738,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             service: cleanup.service,
             retirement,
             cleanup,
+            dispatch,
         })
     }
 
@@ -1354,7 +1359,7 @@ mod tests {
             violation.retirement.violation,
             TaskProtocolViolation::InvalidUserReturn(crate::UserReturnError::InvalidStack)
         );
-        assert_eq!(violation.retirement.next, ScheduleOutcome::Idle);
+        assert!(violation.dispatch.is_idle());
         assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
         assert_eq!(
             supervisor.pending_cleanup(service),
