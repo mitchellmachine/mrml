@@ -11074,3 +11074,20 @@ This is in-memory and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — suppressing scheduler start selection until an
 existing idle transition is acknowledged is conventional fail-closed lifecycle
 serialization. See `docs/patents/REVIEW_LOG.md`.
+
+The combined receive-or-block IPC and control paths now reject before consuming
+an event or calling the scheduler whenever a retirement is pending or a
+dispatch is issued. This prevents an outstanding successor handoff from being
+replaced by an inbox-empty block transition while leaving the nonblocking,
+dispatch-bound buffered-receive preparation path available to the selected
+successor.
+
+The Linux-host kernel suite passes 653 tests, storage passes 163, Zstd passes 27,
+and configuration passes 53; their affected Linux release builds pass. The
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+This is in-memory and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — rejecting a blocking receive while a one-use
+scheduler transition is outstanding is conventional state-machine
+serialization. See `docs/patents/REVIEW_LOG.md`.

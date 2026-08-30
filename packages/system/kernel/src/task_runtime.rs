@@ -1918,6 +1918,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn receive_control_or_block_current(
         &mut self,
     ) -> Result<Result<ControlEvent, ScheduleOutcome>, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
             .current()
@@ -2174,6 +2175,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn receive_or_block_current(
         &mut self,
     ) -> Result<Result<Message, ScheduleOutcome>, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
             .current()
@@ -2528,6 +2530,14 @@ mod tests {
             runtime.preempt_current(context(0x30_0000, 0x50_0000)),
             Err(TaskRuntimeError::RetirementDispatchPending)
         );
+        assert!(matches!(
+            runtime.receive_or_block_current(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
+        assert!(matches!(
+            runtime.receive_control_or_block_current(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
         assert!(matches!(
             runtime.detach_domain(replacement),
             Err(TaskRuntimeError::RetirementDispatchPending)
