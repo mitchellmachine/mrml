@@ -40,13 +40,17 @@ The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
 and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversal,
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
-file-range reads, canonical provider probing, and the isolated syscall-backed
-receive/reply loop pass thirty-three tests on Windows and Arch Linux. The
+file-range reads, conservative bounded directory lookup, canonical provider
+probing, and the isolated syscall-backed receive/reply loop pass thirty-five
+focused tests on Linux. Lookup validates UTF-16 input, matches ASCII
+case-insensitively and non-ASCII exactly, accepts both a checked long name and
+canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
 filesystem interface codec passes three and storage passes 136, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
-does not change the modeled kernel epoch. Lookup/open policy, checking,
-formatting, writes, installed supervisor launch, and hardware evidence remain
-next in dependency order.
+does not change the modeled kernel epoch. Capability-authorized open policy,
+checking, formatting, writes, installed supervisor launch, and hardware evidence
+remain next in dependency order; this lookup returns metadata and grants no open
+authority.
 
 The FAT32 and Zstd isolated-service syscall adapters now apply the same receive-
 result bound as AHCI: kernel-reported payload and capability counts cannot

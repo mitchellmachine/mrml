@@ -1141,3 +1141,10 @@ When authenticated compare-and-store reports uncertainty, one opaque owner
 retains both reconstructed capabilities and the validator's non-authorizing
 output. A fresh load must exactly equal the intended replacement before either
 result is released; mismatch preserves the owner and grants nothing.
+
+FAT32 directory names remain identifiers rather than authority. Provider-local
+lookup returns only validated entry metadata, excludes volume labels, rejects
+ambiguous aliases, and never manufactures a file handle or I/O permission.
+Non-ASCII comparison is deliberately exact until a complete admitted upcase
+policy exists, avoiding an incomplete Unicode fold that could select the wrong
+entry.

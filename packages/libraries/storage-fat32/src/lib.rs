@@ -110,6 +110,9 @@ pub enum Fat32Error {
     InvalidLongNameEncoding,
     InvalidDirectoryEntry,
     DirectoryAlreadyEnded,
+    InvalidLookupName,
+    LookupNotFound,
+    AmbiguousLookup,
     InvalidFileEntry,
     InvalidFileRange,
     InvalidFileChain,
@@ -222,6 +225,88 @@ impl<const N: usize> Default for Fat32DirectoryBatch<N> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Resolves one bounded directory name to parsed FAT metadata. The returned
+/// entry is data, not open authority. ASCII comparison follows FAT's
+/// case-insensitive convention; non-ASCII UTF-16 units must match exactly until
+/// a complete code-page/upcase policy is admitted.
+pub fn lookup_fat32_directory_entry<const N: usize>(
+    directory: &Fat32DirectoryBatch<N>,
+    name: &[u16],
+) -> Result<Fat32ShortDirectoryEntry, Fat32Error> {
+    if name.is_empty() || name.len() > 255 || !valid_long_name(name) {
+        return Err(Fat32Error::InvalidLookupName);
+    }
+    let mut matched = None;
+    for entry in directory.entries() {
+        if entry.is_volume_label() {
+            continue;
+        }
+        let long_match = entry
+            .long_name
+            .map(|long_name| fat_name_eq(long_name.utf16(), name))
+            .unwrap_or(false);
+        if !long_match && !short_name_matches(&entry.short_name, name) {
+            continue;
+        }
+        if matched.is_some() {
+            return Err(Fat32Error::AmbiguousLookup);
+        }
+        matched = Some(*entry);
+    }
+    matched.ok_or(Fat32Error::LookupNotFound)
+}
+
+fn fat_name_eq(left: &[u16], right: &[u16]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(&left, &right)| ascii_fold(left) == ascii_fold(right))
+}
+
+const fn ascii_fold(unit: u16) -> u16 {
+    if unit >= b'a' as u16 && unit <= b'z' as u16 {
+        unit - (b'a' - b'A') as u16
+    } else {
+        unit
+    }
+}
+
+fn short_name_matches(short_name: &[u8; 11], query: &[u16]) -> bool {
+    let base_length = short_name[..8]
+        .iter()
+        .position(|&byte| byte == b' ')
+        .unwrap_or(8);
+    let extension_length = short_name[8..]
+        .iter()
+        .position(|&byte| byte == b' ')
+        .unwrap_or(3);
+    let expected_length = base_length
+        + if extension_length == 0 {
+            0
+        } else {
+            1 + extension_length
+        };
+    if query.len() != expected_length {
+        return false;
+    }
+    for (index, &byte) in short_name[..base_length].iter().enumerate() {
+        if ascii_fold(u16::from(byte)) != ascii_fold(query[index]) {
+            return false;
+        }
+    }
+    if extension_length == 0 {
+        return true;
+    }
+    if query[base_length] != u16::from(b'.') {
+        return false;
+    }
+    short_name[8..8 + extension_length]
+        .iter()
+        .zip(&query[base_length + 1..])
+        .all(|(&byte, &unit)| ascii_fold(u16::from(byte)) == ascii_fold(unit))
 }
 
 pub fn parse_fat32_boot_sector(
@@ -1202,6 +1287,58 @@ mod tests {
             (5, 4096)
         );
         assert!(batch.entries()[1].is_directory());
+    }
+
+    #[test]
+    fn lookup_is_bounded_non_authorizing_and_rejects_ambiguous_aliases() {
+        let mut long_units = [0; 255];
+        let long_name = ascii_utf16(b"Accessible notes.txt");
+        long_units[..long_name.len()].copy_from_slice(&long_name);
+        let file = Fat32ShortDirectoryEntry {
+            short_name: *b"ACCESS~1TXT",
+            long_name: Some(Fat32LongName {
+                utf16: long_units,
+                length: long_name.len() as u8,
+            }),
+            attributes: 0x20,
+            first_cluster: 8,
+            file_size: 20,
+        };
+        let label = Fat32ShortDirectoryEntry {
+            short_name: *b"ACCESS~1TXT",
+            long_name: None,
+            attributes: 0x08,
+            first_cluster: 0,
+            file_size: 0,
+        };
+        let mut directory = Fat32DirectoryBatch::<3>::new();
+        directory.entries[0] = file;
+        directory.entries[1] = label;
+        directory.length = 2;
+
+        assert_eq!(
+            lookup_fat32_directory_entry(&directory, &ascii_utf16(b"accessible NOTES.txt")),
+            Ok(file)
+        );
+        assert_eq!(
+            lookup_fat32_directory_entry(&directory, &ascii_utf16(b"access~1.txt")),
+            Ok(file)
+        );
+        assert_eq!(
+            lookup_fat32_directory_entry(&directory, &ascii_utf16(b"missing.txt")),
+            Err(Fat32Error::LookupNotFound)
+        );
+        assert_eq!(
+            lookup_fat32_directory_entry(&directory, &ascii_utf16(b"bad/name")),
+            Err(Fat32Error::InvalidLookupName)
+        );
+
+        directory.entries[2] = file;
+        directory.length = 3;
+        assert_eq!(
+            lookup_fat32_directory_entry(&directory, &ascii_utf16(b"ACCESS~1.TXT")),
+            Err(Fat32Error::AmbiguousLookup)
+        );
     }
 
     #[test]

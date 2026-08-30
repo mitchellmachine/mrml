@@ -7366,6 +7366,19 @@ authority and prepared service together. Configuration passes 53 Linux-host
 tests, and the release `MRML_NATIVE` service-image build passes. This is hosted
 and cross-build evidence, not KVM, WHP, or physical recovery evidence.
 
+The isolated FAT32 provider now **PARTIALLY IMPLEMENTS IN SOURCE** bounded
+directory lookup over its already validated batch. Lookup accepts checked
+UTF-16, applies ASCII-only case folding while requiring exact non-ASCII units,
+matches checked long names or canonical 8.3 aliases, excludes volume labels,
+and rejects duplicate matches. The result is parsed metadata, never an open
+capability. FAT32 passes 35 focused Linux-host tests; provider IPC lookup,
+capability-authorized open, installed launch, and physical media remain
+unverified.
+
+Patent review: `NOT_TRIGGERED` — bounded name validation, conservative equality,
+linear lookup, and duplicate rejection are conventional directory mechanisms.
+See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
