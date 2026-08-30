@@ -2022,6 +2022,11 @@ mod tests {
             .unwrap()
             .insert(receiver_object, Rights::CONTROL.union(Rights::DELEGATE))
             .unwrap();
+        let source_read = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(receiver_object, Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
         let manager_endpoint = runtime
             .capabilities_mut(manager)
             .unwrap()
@@ -2052,7 +2057,7 @@ mod tests {
                 if matches!(wait.outcome(), ScheduleOutcome::Switch { to, .. } if to == sender)
         ));
 
-        let request = SupervisionRequest {
+        let denied_request = SupervisionRequest {
             operation: SupervisionOperation::CancelReceive,
             request_id: 57,
             service: receiver_service,
@@ -2061,7 +2066,84 @@ mod tests {
             setting_capability: Capability::from_token(0),
         };
         let mut request_wire = [0; SUPERVISION_REQUEST_BYTES];
-        request.encode_message(&mut request_wire).unwrap();
+        denied_request.encode_message(&mut request_wire).unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                manager,
+                &mut endpoint,
+                sender_endpoint,
+                &request_wire,
+                &[(source_read, Rights::READ)],
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.receive_or_block_current().unwrap(),
+            Err(wait)
+                if matches!(wait.outcome(), ScheduleOutcome::Switch { to, .. } if to == manager)
+        ));
+        let message = runtime.receive_ipc(manager).unwrap();
+        let delivered_read = message.capabilities().next().unwrap();
+
+        let mut response_wire = [0; SUPERVISION_RESPONSE_BYTES];
+        {
+            let authorizer = KernelCancellationAuthorizer {
+                supervisor: &supervisor,
+                requester: manager,
+                state: RefCell::new(CancellationState {
+                    runtime: &mut runtime,
+                    executor: &mut executor,
+                    escrow: &mut escrow,
+                }),
+            };
+            dispatch_supervision_cancel_receive_envelope(
+                &authorizer,
+                message.payload(),
+                &[delivered_read],
+                &mut response_wire,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            SupervisionResponse::decode(&response_wire),
+            Ok(SupervisionResponse {
+                request_id: 57,
+                status: ResponseStatus::Rejected,
+                service: receiver_service,
+                state: SupervisionState::Exited,
+                detail: 0,
+            })
+        );
+        assert!(executor.has_pending(receiver).unwrap());
+        assert_eq!(escrow.get(receiver), Ok(cancellation));
+        assert_eq!(executor.validate_escrow(&escrow), Ok(()));
+        runtime.revoke_capability(manager, delivered_read).unwrap();
+        runtime
+            .deliver_ipc(
+                manager,
+                sender,
+                &mut endpoint,
+                manager_endpoint,
+                &response_wire,
+                &[],
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.receive_or_block_current().unwrap(),
+            Err(wait)
+                if matches!(wait.outcome(), ScheduleOutcome::Switch { to, .. } if to == sender)
+        ));
+        let denied_response = runtime.receive_ipc(sender).unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(denied_response.payload()),
+            SupervisionResponse::decode(&response_wire)
+        );
+
+        let accepted_request = SupervisionRequest {
+            request_id: 58,
+            ..denied_request
+        };
+        accepted_request.encode_message(&mut request_wire).unwrap();
         runtime
             .deliver_ipc(
                 sender,
@@ -2079,8 +2161,6 @@ mod tests {
         ));
         let message = runtime.receive_ipc(manager).unwrap();
         let delivered_control = message.capabilities().next().unwrap();
-
-        let mut response_wire = [0; SUPERVISION_RESPONSE_BYTES];
         {
             let authorizer = KernelCancellationAuthorizer {
                 supervisor: &supervisor,
@@ -2102,7 +2182,7 @@ mod tests {
         assert_eq!(
             SupervisionResponse::decode(&response_wire),
             Ok(SupervisionResponse {
-                request_id: 57,
+                request_id: 58,
                 status: ResponseStatus::Ok,
                 service: receiver_service,
                 state: SupervisionState::Running,
