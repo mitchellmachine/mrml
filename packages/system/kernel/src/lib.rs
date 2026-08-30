@@ -194,6 +194,7 @@ pub use isolation::{
     prepare_native_component_service_task_from_read_transfer_root,
     prepare_native_component_service_task_with_read_transfer,
     reserve_component_service_read_transfer_memory, reserve_isolation_vcpus,
+    resume_native_component_service_copy_read_transfer_mapping_revocation,
     retire_current_native_component_service_copy_read_transfer,
     retire_current_native_component_service_copy_read_transfer_on_active_x86_64,
     retire_current_native_component_service_copy_read_transfer_with_mapping_revocation,

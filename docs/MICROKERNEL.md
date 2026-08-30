@@ -10740,3 +10740,19 @@ context entry.
 Patent review: `NOT_TRIGGERED` — retaining an audit record beside a linear
 lifecycle token is conventional typed state transfer. See
 `docs/patents/REVIEW_LOG.md`.
+
+Copy-mediated native-service teardown now retains the exact scheduler
+termination alongside the retired context when mapping withdrawal fails after
+task removal. A bounded retry operation accepts only that progressed state,
+retries only the still-live mapping withdrawal, and returns the unchanged
+termination so the runtime can mint the successor dispatch proof after success;
+it never retires or revives the task again. Storage provider retirement uses
+this retry path and rejects malformed or later teardown states. The Linux-host
+release kernel suite passes 653 tests, storage passes 163 tests, and both release
+builds pass. The adversarial storage test injects one withdrawal failure and
+then proves successful inactive-hierarchy retry and exact successor dispatch;
+active-CR3 execution remains unverified.
+
+Patent review: `NOT_TRIGGERED` — retaining exact scheduler evidence across a
+retryable resource-withdrawal failure is conventional fail-closed lifecycle
+recovery. See `docs/patents/REVIEW_LOG.md`.

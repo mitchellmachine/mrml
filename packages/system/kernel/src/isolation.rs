@@ -1284,6 +1284,7 @@ impl NativeComponentServiceCopyReadTransferTask {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeComponentServiceCopyReadTransferTeardown {
     active: NativeComponentServiceCopyReadTransferTask,
+    termination: Option<crate::TaskTermination>,
     retired_context: Option<UserContext>,
     authority_revoked: bool,
     mapping_removed: bool,
@@ -1294,6 +1295,7 @@ impl NativeComponentServiceCopyReadTransferTeardown {
     pub const fn new(active: NativeComponentServiceCopyReadTransferTask) -> Self {
         Self {
             active,
+            termination: None,
             retired_context: None,
             authority_revoked: false,
             mapping_removed: false,
@@ -1301,10 +1303,12 @@ impl NativeComponentServiceCopyReadTransferTeardown {
         }
     }
     pub const fn from_retirement(
+        termination: crate::TaskTermination,
         retirement: NativeComponentServiceCopyReadTransferRetirement,
     ) -> Self {
         Self {
             active: retirement.active,
+            termination: Some(termination),
             retired_context: Some(retirement.context),
             authority_revoked: false,
             mapping_removed: false,
@@ -1312,10 +1316,12 @@ impl NativeComponentServiceCopyReadTransferTeardown {
         }
     }
     pub const fn from_retirement_with_mapping_revoked(
+        termination: crate::TaskTermination,
         retirement: NativeComponentServiceCopyReadTransferRetirement,
     ) -> Self {
         Self {
             active: retirement.active,
+            termination: Some(termination),
             retired_context: Some(retirement.context),
             authority_revoked: false,
             mapping_removed: true,
@@ -1327,6 +1333,9 @@ impl NativeComponentServiceCopyReadTransferTeardown {
     }
     pub const fn retired_context(self) -> Option<UserContext> {
         self.retired_context
+    }
+    pub const fn retired_termination(self) -> Option<crate::TaskTermination> {
+        self.termination
     }
     pub const fn is_pristine(self) -> bool {
         !self.authority_revoked && !self.mapping_removed && !self.backing_released
@@ -1362,6 +1371,7 @@ impl NativeComponentServiceCopyReadTransferRetirement {
 pub enum NativeComponentServiceCopyReadTransferRetirementError {
     NotCurrent,
     RootMismatch,
+    InvalidRetryState,
     Runtime(TaskRuntimeError),
 }
 
@@ -1799,7 +1809,8 @@ pub fn retire_current_native_component_service_copy_read_transfer_with_mapping_r
     let (termination, retirement) =
         retire_current_native_component_service_copy_read_transfer(active, runtime)
             .map_err(NativeComponentServiceCopyReadTransferRetirementMappingError::Retirement)?;
-    let state = NativeComponentServiceCopyReadTransferTeardown::from_retirement(retirement);
+    let state =
+        NativeComponentServiceCopyReadTransferTeardown::from_retirement(termination, retirement);
     let construction = active.construction();
     let capabilities = runtime
         .capabilities(construction.source_task())
@@ -1828,9 +1839,74 @@ pub fn retire_current_native_component_service_copy_read_transfer_with_mapping_r
     Ok((
         termination,
         NativeComponentServiceCopyReadTransferTeardown::from_retirement_with_mapping_revoked(
+            termination,
             retirement,
         ),
     ))
+}
+
+/// Retries only the mapping-withdrawal portion of a retirement that already
+/// removed the task domain. The retained scheduler outcome is returned
+/// unchanged so its successor dispatch can be validated after withdrawal.
+pub fn resume_native_component_service_copy_read_transfer_mapping_revocation<
+    M: MemoryMappingRevocationBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    state: NativeComponentServiceCopyReadTransferTeardown,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    mapping_backend: &mut M,
+) -> Result<
+    (
+        crate::TaskTermination,
+        NativeComponentServiceCopyReadTransferTeardown,
+    ),
+    NativeComponentServiceCopyReadTransferRetirementMappingError<M::Error>,
+> {
+    let termination = state.retired_termination().ok_or(
+        NativeComponentServiceCopyReadTransferRetirementMappingError::Retirement(
+            NativeComponentServiceCopyReadTransferRetirementError::InvalidRetryState,
+        ),
+    )?;
+    if state.retired_context().is_none() || state.mapping_removed() {
+        return Err(
+            NativeComponentServiceCopyReadTransferRetirementMappingError::Retirement(
+                NativeComponentServiceCopyReadTransferRetirementError::InvalidRetryState,
+            ),
+        );
+    }
+    let active = state.active();
+    let capabilities = runtime
+        .capabilities(active.construction().source_task())
+        .map_err(
+            |error| NativeComponentServiceCopyReadTransferRetirementMappingError::Runtime {
+                termination,
+                state,
+                error,
+            },
+        )?;
+    let mapping = active.binding().mapping();
+    memory
+        .revoke_mapping(
+            mapping.mapping(),
+            mapping.local_target_capability(),
+            capabilities,
+            mapping_backend,
+        )
+        .map_err(|error| {
+            NativeComponentServiceCopyReadTransferRetirementMappingError::LocalMapping {
+                termination,
+                state,
+                error,
+            }
+        })?;
+    let mut completed = state;
+    completed.mapping_removed = true;
+    Ok((termination, completed))
 }
 
 /// Retires the current native copy-transfer task through its physically active
