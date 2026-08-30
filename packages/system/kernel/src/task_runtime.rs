@@ -623,6 +623,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn context_mut(&mut self, task: TaskId) -> Result<&mut UserContext, TaskRuntimeError> {
+        self.ensure_no_pending_termination()?;
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -2284,6 +2285,10 @@ mod tests {
             Err(TaskRuntimeError::TerminationDispatchPending)
         );
         assert_eq!(
+            runtime.context_mut(replacement).map(|_| ()),
+            Err(TaskRuntimeError::TerminationDispatchPending)
+        );
+        assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
                 task: exiting,
                 next: ScheduleOutcome::Continue(replacement),
@@ -2330,6 +2335,7 @@ mod tests {
             runtime.dispatch_after_termination(terminated),
             Err(TaskTerminationDispatchError::NoPendingTermination)
         );
+        assert!(runtime.context_mut(replacement).is_ok());
         assert_eq!(runtime.context(exiting), Err(TaskRuntimeError::MissingTask));
         assert_eq!(
             runtime.capabilities_mut(exiting).map(|_| ()),

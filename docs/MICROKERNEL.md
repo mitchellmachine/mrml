@@ -10815,3 +10815,16 @@ do not execute an interrupt return or active hardware context switch.
 Patent review: `NOT_TRIGGERED` — freezing scheduler selection around a pending
 context transition is conventional critical lifecycle sequencing. See
 `docs/patents/REVIEW_LOG.md`.
+
+Mutable access to the selected successor's saved `UserContext` is now frozen by
+the same pending-termination gate. Read-only context inspection and the
+capability checks needed for mapping cleanup remain available, but the page-
+table root, instruction pointer, stack, flags, and registers cannot be replaced
+between scheduler selection and dispatch validation. Mutation becomes available
+again only after successful token issuance. The Linux-host release kernel suite
+passes 653 tests, storage passes 163 tests, and both release builds pass; this is
+in-memory state-machine evidence only.
+
+Patent review: `NOT_TRIGGERED` — preventing saved-context mutation during a
+pending dispatch is conventional scheduler integrity enforcement. See
+`docs/patents/REVIEW_LOG.md`.
