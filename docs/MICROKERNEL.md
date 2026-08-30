@@ -11792,3 +11792,33 @@ Patent review: `NOT_TRIGGERED` — decoding two opaque handles and composing exa
 task-local capability authorization with kernel-owned cancellation escrow is
 conventional capability-based syscall dispatch. See
 `docs/patents/REVIEW_LOG.md`.
+
+A dedicated `deadline_receive_cancel_probe` service profile now exercises the
+canonical cancellation request without reinterpreting yield or IPC. Its
+receiver enters operation 13 with a bounded one-million-tick timeout and accepts
+only generic-error completion with all detail registers zero. Its sender holds
+an exact task-local `CONTROL` capability for the receiver's supervised object,
+invokes operation 14 with that capability and exact service generation,
+requires detail-free success, and yields so the cancelled receiver can resume.
+The receiver then emits the distinct proof value `0x2c`; timeout remains `0x2a`
+and message completion remains `0x2b`.
+
+The corresponding UEFI profile provisions only that exact receiver-control
+handle into the sender's capability space and passes the receiver service ID.
+The cancellation request resolves the already-escrowed token, completes the
+receiver with error, retires both owner records, and leaves the timer deadline
+unable to win later. No cancellation token or task ID is accepted from the
+service request.
+
+The cancellation service-image release profile cross-builds with 13 expected
+dead-code warnings, and its UEFI bootloader release profile cross-builds with
+the existing unreachable-pattern warning. The timeout and message profiles also
+continue to cross-build with their respective 14/13 service warnings and the
+same boot warning. Whole-file rustfmt checking of the service source still
+reports unrelated pre-existing block/deployment formatting drift, so no broad
+mechanical rewrite was included. This is profile and cross-build evidence only;
+`0x2c` has not yet been observed under a hosted backend or on physical hardware.
+
+Patent review: `NOT_TRIGGERED` — a dedicated capability-authorized cancellation
+integration probe with a distinct exact proof marker is conventional syscall
+regression testing. See `docs/patents/REVIEW_LOG.md`.

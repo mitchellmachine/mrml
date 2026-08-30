@@ -342,9 +342,15 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         asm!(
             "int 0x80",
             inlateout("rax") status,
-            #[cfg(not(feature = "deadline-receive-message-probe"))]
+            #[cfg(not(any(
+                feature = "deadline-receive-message-probe",
+                feature = "deadline-receive-cancel-probe"
+            )))]
             in("rdi") 1u64,
-            #[cfg(feature = "deadline-receive-message-probe")]
+            #[cfg(any(
+                feature = "deadline-receive-message-probe",
+                feature = "deadline-receive-cancel-probe"
+            ))]
             in("rdi") 1_000_000u64,
             in("rsi") 0u64,
             inlateout("rdx") length,
@@ -354,13 +360,28 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
             options(nostack)
         )
     };
-    #[cfg(not(feature = "deadline-receive-message-probe"))]
+    #[cfg(not(any(
+        feature = "deadline-receive-message-probe",
+        feature = "deadline-receive-cancel-probe"
+    )))]
     if status != mrml_kernel::SyscallCompletionStatus::TimedOut.code()
         || length | word0 | word1 | word2 != 0
     {
         halt();
     }
-    #[cfg(feature = "deadline-receive-message-probe")]
+    #[cfg(all(
+        feature = "deadline-receive-cancel-probe",
+        not(feature = "deadline-receive-message-probe")
+    ))]
+    if status != mrml_kernel::SyscallCompletionStatus::Error.code()
+        || length | word0 | word1 | word2 != 0
+    {
+        halt();
+    }
+    #[cfg(all(
+        feature = "deadline-receive-message-probe",
+        not(feature = "deadline-receive-cancel-probe")
+    ))]
     if status != mrml_kernel::SyscallCompletionStatus::Success.code()
         || length != 5
         || &word0.to_le_bytes()[..5] != b"ready"
@@ -372,10 +393,21 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         asm!(
             "out dx, eax",
             in("dx") 0x4d58u16,
-            #[cfg(not(feature = "deadline-receive-message-probe"))]
+            #[cfg(not(any(
+                feature = "deadline-receive-message-probe",
+                feature = "deadline-receive-cancel-probe"
+            )))]
             in("eax") 0x2au32,
-            #[cfg(feature = "deadline-receive-message-probe")]
+            #[cfg(all(
+                feature = "deadline-receive-message-probe",
+                not(feature = "deadline-receive-cancel-probe")
+            ))]
             in("eax") 0x2bu32,
+            #[cfg(all(
+                feature = "deadline-receive-cancel-probe",
+                not(feature = "deadline-receive-message-probe")
+            ))]
+            in("eax") 0x2cu32,
             options(nomem, nostack)
         )
     };
@@ -1230,7 +1262,10 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
 #[cfg(all(
     not(feature = "preemption-probe"),
     feature = "deadline-receive-probe",
-    not(feature = "deadline-receive-message-probe")
+    not(any(
+        feature = "deadline-receive-message-probe",
+        feature = "deadline-receive-cancel-probe"
+    ))
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
@@ -1249,7 +1284,8 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
 
 #[cfg(all(
     not(feature = "preemption-probe"),
-    feature = "deadline-receive-message-probe"
+    feature = "deadline-receive-message-probe",
+    not(feature = "deadline-receive-cancel-probe")
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
@@ -1262,6 +1298,48 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     _supervised_service: u64,
 ) -> ! {
     unsafe { send_buffer(endpoint, receiver, b"ready", &[]) };
+    unsafe { yield_now() };
+    halt()
+}
+
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    feature = "deadline-receive-cancel-probe",
+    not(feature = "deadline-receive-message-probe")
+))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_sender(
+    _endpoint: u64,
+    _receiver: u64,
+    _root_capability: u64,
+    _setting_capability: u64,
+    _generation: u64,
+    receiver_control: u64,
+    receiver_service: u64,
+) -> ! {
+    let mut status = 14u64;
+    let mut detail0 = 0u64;
+    let mut detail1 = 0u64;
+    let mut detail2 = 0u64;
+    let mut detail3 = 0u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") receiver_control,
+            in("rsi") receiver_service,
+            inlateout("rdx") detail0,
+            inlateout("r10") detail1,
+            inlateout("r8") detail2,
+            inlateout("r9") detail3,
+            options(nostack)
+        )
+    };
+    if status != mrml_kernel::SyscallCompletionStatus::Success.code()
+        || detail0 | detail1 | detail2 | detail3 != 0
+    {
+        halt();
+    }
     unsafe { yield_now() };
     halt()
 }

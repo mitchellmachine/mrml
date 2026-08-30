@@ -3721,7 +3721,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
-            #[cfg(not(feature = "block-service-probe"))]
+            #[cfg(all(
+                not(feature = "block-service-probe"),
+                not(feature = "deadline-receive-cancel-probe")
+            ))]
             let supervision_capability = runtime
                 .capabilities_mut(sender)
                 .and_then(|space| {
@@ -3730,6 +3733,15 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                             ObjectId(0xa1),
                             Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
                         )
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "deadline-receive-cancel-probe")]
+            let deadline_receiver_control = runtime
+                .capabilities_mut(sender)
+                .and_then(|space| {
+                    space
+                        .insert(ObjectId(0xa0), Rights::CONTROL)
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
@@ -3824,17 +3836,31 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             {
                 sender_context.rbx = setting_capability.token();
             }
-            #[cfg(not(feature = "block-service-probe"))]
+            #[cfg(all(
+                not(feature = "block-service-probe"),
+                not(feature = "deadline-receive-cancel-probe")
+            ))]
             {
                 sender_context.rbp = supervision_capability.token();
+            }
+            #[cfg(feature = "deadline-receive-cancel-probe")]
+            {
+                sender_context.rbp = deadline_receiver_control.token();
             }
             #[cfg(feature = "block-service-probe")]
             {
                 sender_context.rbp = sender_transfer.token();
             }
-            #[cfg(not(feature = "block-service-probe"))]
+            #[cfg(all(
+                not(feature = "block-service-probe"),
+                not(feature = "deadline-receive-cancel-probe")
+            ))]
             {
                 sender_context.r10 = service_b.token();
+            }
+            #[cfg(feature = "deadline-receive-cancel-probe")]
+            {
+                sender_context.r10 = service_a.token();
             }
             #[cfg(feature = "block-service-probe")]
             {
