@@ -558,8 +558,10 @@ existing operation loops so capability shape, release-before-reply, buffer
 erasure, and protocol decoding do not diverge. Read/write and flush/reset borrow
 one retained backend owner per call; the router creates no second device owner.
 Unknown sizes and capability over-counts reach no operation, release, or reply.
-All 78 focused Linux tests and the release build pass. A concrete installed
-entry and supervisor launch remain next.
+The raw userspace adapter now implements that unified receive surface directly,
+using the maximum canonical buffer and the existing launch-bound shared-memory,
+release, and reply mappings. All 79 focused Linux tests and the release build
+pass. A concrete installed entry and supervisor launch remain next.
 
 Patent review: `NOT_TRIGGERED` — routing existing canonical operations by exact
 bounded message shape through their existing adapters is conventional service

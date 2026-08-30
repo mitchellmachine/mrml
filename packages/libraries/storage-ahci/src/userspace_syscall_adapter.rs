@@ -1,6 +1,7 @@
 use crate::{
-    AhciControlServiceSyscalls, AhciDataServiceSyscalls, AhciServiceSyscalls,
-    ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope, ReceivedAhciEnvelope,
+    AhciControlServiceSyscalls, AhciDataServiceSyscalls, AhciDispatchSyscalls,
+    AhciServiceSyscalls, ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope,
+    ReceivedAhciDispatchEnvelope, ReceivedAhciEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{
     ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES,
@@ -278,6 +279,59 @@ unsafe impl<R: AhciRawSyscall> AhciControlServiceSyscalls for AhciUserspaceSysca
     }
 }
 
+unsafe impl<R: AhciRawSyscall> AhciDispatchSyscalls for AhciUserspaceSyscalls<R> {
+    type Error = AhciUserspaceSyscallError;
+
+    fn receive(
+        &mut self,
+        request: &mut [u8; AHCI_DISPATCH_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+    ) -> Result<ReceivedAhciDispatchEnvelope, Self::Error> {
+        let mut frame = AhciSyscallFrame {
+            rax: RECEIVE_BUFFER,
+            rdi: request.as_mut_ptr() as u64,
+            rsi: request.len() as u64,
+            rdx: capability_tokens.as_mut_ptr() as u64,
+            r10: capability_tokens.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)?;
+        let (payload_length, capability_count) =
+            Self::receive_counts(&frame, request.len(), capability_tokens.len())?;
+        Ok(ReceivedAhciDispatchEnvelope {
+            payload_length,
+            capability_count,
+        })
+    }
+
+    fn read_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        <Self as AhciDataServiceSyscalls>::read_shared(self, capability, offset, output)
+    }
+
+    fn write_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        <Self as AhciDataServiceSyscalls>::write_shared(self, capability, offset, input)
+    }
+
+    fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
+        <Self as AhciDataServiceSyscalls>::release_received(self, capability)
+    }
+
+    fn send_response(&mut self, response: &[u8; READ_RESPONSE_BYTES]) -> Result<(), Self::Error> {
+        <Self as AhciDataServiceSyscalls>::send_response(self, response)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +565,28 @@ mod tests {
             ),
             Ok((0, 1))
         );
+    }
+
+    #[test]
+    fn unified_dispatch_adapter_receives_into_the_maximum_canonical_buffer() {
+        let raw = OperationRaw {
+            operations: [0; 7],
+            count: 0,
+            received_capabilities: 1,
+        };
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut request = [0; AHCI_DISPATCH_REQUEST_BYTES];
+        let mut tokens = [0; 1];
+        let envelope = AhciDispatchSyscalls::receive(&mut syscalls, &mut request, &mut tokens)
+            .unwrap();
+        assert_eq!(
+            envelope,
+            ReceivedAhciDispatchEnvelope {
+                payload_length: AHCI_DISPATCH_REQUEST_BYTES,
+                capability_count: 1,
+            }
+        );
+        assert_eq!(syscalls.raw.operations[0], RECEIVE_BUFFER);
+        assert_eq!(syscalls.raw.count, 1);
     }
 }

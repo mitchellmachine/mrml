@@ -436,9 +436,11 @@ exact enumerate, read/write, or flush/reset loop, preserving their canonical
 decoders, capability shapes, release-before-reply ordering, and erasure rules.
 Data and control calls borrow one retained backend owner rather than creating
 parallel device state. Unknown sizes and capability over-counts dispatch,
-release, and reply zero times. The 78-test focused Linux suite and release build
-pass; installed entry, supervisor launch, and physical-device execution remain
-unverified.
+release, and reply zero times. The existing raw userspace adapter now implements
+that unified receive surface with the maximum canonical request bound and reuses
+the same launch-bound shared-memory, release, and reply syscall mappings. The
+79-test focused Linux suite and release build pass; installed entry, supervisor
+launch, and physical-device execution remain unverified.
 
 Patent review: **NOT_TRIGGERED**. Exact bounded message-shape routing through
 existing operation adapters is conventional service dispatch. See
