@@ -12044,3 +12044,30 @@ Patent review: `NOT_TRIGGERED` — forwarding a fixed request through isolated
 buffered IPC with attenuated capability transfer and explicit handle release is
 conventional capability-oriented service composition. See
 `docs/patents/REVIEW_LOG.md`.
+
+A deterministic native simulation now composes the same manager-mediated path
+across three real `TaskRuntime` domains. The receiver enters a deadline wait and
+retains its opaque cancellation in escrow; the manager blocks; and the sender
+delivers the canonical request plus an exact `CONTROL` derivation through the
+kernel-owned inbox. The sender then blocks for the response, which schedules the
+manager to consume the queued message and authorize cancellation solely with
+the received task-local handle.
+
+The test requires cancellation to wake the receiver with the distinct
+`Cancelled` completion, retire both executor and escrow state coherently, and
+leave the sender's `CONTROL | DELEGATE` source handle authorized. It explicitly
+revokes the manager's received derivation before sending a capability-free
+canonical response, then retires and completes cleanup for the manager service.
+Capability tokens remain opaque and task-local: equal numeric slot/generation
+values in different task spaces are not treated as shared identity or authority.
+
+All 55 native configuration-service tests pass, including the complete
+three-domain scheduling, capability-transfer, cancellation, response, release,
+and manager-cleanup simulation. This is deterministic unit simulation evidence;
+it does not add KVM, WHP, hosted guest, proof-port, or physical-hardware
+execution evidence.
+
+Patent review: `NOT_TRIGGERED` — composing existing bounded scheduling,
+capability transfer, cancellation, and supervised cleanup mechanisms in a
+deterministic test is conventional verification work. See
+`docs/patents/REVIEW_LOG.md`.

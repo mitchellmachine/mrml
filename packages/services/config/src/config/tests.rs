@@ -3,13 +3,16 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use core::cell::RefCell;
     use mrml_crypto::{
         LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, Sha3_512, lamport_public_key,
     };
     use mrml_kernel::{
-        HostSubstrateCounts, InstalledRecoverySource, IsolationUnavailableCounts,
-        RuntimeDomainAssignment, RuntimeDomainAssignmentPlan, TotalMicrovmClass, TotalMicrovmState,
-        route_isolation_service,
+        DeadlineReceiveCancellationEscrow, DeadlineReceiveStart, DeadlineReceiveSyscallExecutor,
+        HostSubstrateCounts, InstalledRecoverySource, IsolationUnavailableCounts, ReceiveTimeout,
+        RuntimeDomainAssignment, RuntimeDomainAssignmentPlan, ScheduleOutcome,
+        ServiceDeadlineCancellationError, SyscallCompletionStatus, TotalMicrovmClass,
+        TotalMicrovmState, route_isolation_service,
     };
     use mrml_package_format::{
         ActivatedSystemGeneration, ActivatedSystemRelease, ComponentInterfaceProvider,
@@ -1927,6 +1930,226 @@ mod tests {
             ),
             Err(ConfigError::InvalidProtocol)
         );
+    }
+
+    #[test]
+    fn manager_delivers_and_consumes_receive_cancellation_authority() {
+        struct CancellationState<'a> {
+            runtime: &'a mut TaskRuntime<3, 4>,
+            executor: &'a mut DeadlineReceiveSyscallExecutor<3>,
+            escrow: &'a mut DeadlineReceiveCancellationEscrow<3>,
+        }
+
+        struct KernelCancellationAuthorizer<'a> {
+            supervisor: &'a ServiceSupervisor<3>,
+            requester: TaskId,
+            state: RefCell<CancellationState<'a>>,
+        }
+
+        impl ServiceReceiveCancellationAuthorizer for KernelCancellationAuthorizer<'_> {
+            fn cancel_receive(
+                &self,
+                capability: Capability,
+                service: ServiceId,
+            ) -> Result<(), ConfigError> {
+                let mut state = self.state.borrow_mut();
+                let CancellationState {
+                    runtime,
+                    executor,
+                    escrow,
+                } = &mut *state;
+                self.supervisor
+                    .cancel_escrowed_deadline_receive_for_requester(
+                        service,
+                        self.requester,
+                        capability,
+                        runtime,
+                        executor,
+                        escrow,
+                    )
+                    .map_err(|error| match error {
+                        ServiceDeadlineCancellationError::Service(ServiceError::Unauthorized(
+                            error,
+                        )) => ConfigError::Unauthorized(error),
+                        _ => ConfigError::Unauthorized(CapabilityError::PermissionDenied),
+                    })
+            }
+        }
+
+        struct Eraser;
+
+        impl ServiceAddressSpaceEraser for Eraser {
+            type Error = ();
+
+            fn erase(&mut self, _: TaskId, _: UserContext) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+
+        let context = |root, entry| {
+            UserContext::new(
+                mrml_kernel::PhysAddr::new(root).unwrap(),
+                entry,
+                0x7000_0000,
+            )
+            .unwrap()
+        };
+        let receiver_object = ObjectId(0x90);
+        let manager_object = ObjectId(0x91);
+        let sender_object = ObjectId(0x92);
+        let endpoint_object = ObjectId(0x93);
+        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let manager = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let mut supervisor = ServiceSupervisor::<3>::new();
+        let receiver_service = supervisor.register(receiver_object, receiver).unwrap();
+        let manager_service = supervisor.register(manager_object, manager).unwrap();
+        supervisor.register(sender_object, sender).unwrap();
+        let sender_endpoint = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let source_control = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(receiver_object, Rights::CONTROL.union(Rights::DELEGATE))
+            .unwrap();
+        let manager_endpoint = runtime
+            .capabilities_mut(manager)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = mrml_kernel::Endpoint::new(endpoint_object);
+
+        assert!(matches!(
+            runtime.start(),
+            ScheduleOutcome::Switch { to, .. } if to == receiver
+        ));
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                cancellation,
+            } if to == manager => cancellation,
+            _ => panic!("receiver must block and dispatch the manager"),
+        };
+        let mut escrow = DeadlineReceiveCancellationEscrow::new();
+        escrow.retain(cancellation).unwrap();
+        assert!(matches!(
+            runtime.receive_or_block_current().unwrap(),
+            Err(wait)
+                if matches!(wait.outcome(), ScheduleOutcome::Switch { to, .. } if to == sender)
+        ));
+
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::CancelReceive,
+            request_id: 57,
+            service: receiver_service,
+            capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
+        };
+        let mut request_wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode_message(&mut request_wire).unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                manager,
+                &mut endpoint,
+                sender_endpoint,
+                &request_wire,
+                &[(source_control, Rights::CONTROL)],
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.receive_or_block_current().unwrap(),
+            Err(wait)
+                if matches!(wait.outcome(), ScheduleOutcome::Switch { to, .. } if to == manager)
+        ));
+        let message = runtime.receive_ipc(manager).unwrap();
+        let delivered_control = message.capabilities().next().unwrap();
+
+        let mut response_wire = [0; SUPERVISION_RESPONSE_BYTES];
+        {
+            let authorizer = KernelCancellationAuthorizer {
+                supervisor: &supervisor,
+                requester: manager,
+                state: RefCell::new(CancellationState {
+                    runtime: &mut runtime,
+                    executor: &mut executor,
+                    escrow: &mut escrow,
+                }),
+            };
+            dispatch_supervision_cancel_receive_envelope(
+                &authorizer,
+                message.payload(),
+                &[delivered_control],
+                &mut response_wire,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            SupervisionResponse::decode(&response_wire),
+            Ok(SupervisionResponse {
+                request_id: 57,
+                status: ResponseStatus::Ok,
+                service: receiver_service,
+                state: SupervisionState::Running,
+                detail: 0,
+            })
+        );
+        assert_eq!(
+            runtime.context(receiver).unwrap().rax,
+            SyscallCompletionStatus::Cancelled.code()
+        );
+        assert!(!executor.has_pending(receiver).unwrap());
+        assert_eq!(executor.validate_escrow(&escrow), Ok(()));
+        runtime
+            .authorize_capability_exact(
+                sender,
+                source_control,
+                Rights::CONTROL.union(Rights::DELEGATE),
+                receiver_object,
+            )
+            .unwrap();
+        runtime.revoke_capability(manager, delivered_control).unwrap();
+        assert!(runtime
+            .authorize_capability_exact(
+                manager,
+                delivered_control,
+                Rights::CONTROL,
+                receiver_object,
+            )
+            .is_err());
+        runtime
+            .deliver_ipc(
+                manager,
+                sender,
+                &mut endpoint,
+                manager_endpoint,
+                &response_wire,
+                &[],
+            )
+            .unwrap();
+
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+        assert_eq!(retirement.service, manager_service);
+        assert!(retirement.dispatch.user().is_some());
+        supervisor
+            .complete_cleanup(retirement.cleanup, &mut Eraser)
+            .unwrap();
+        assert_eq!(supervisor.state(manager_service), Ok(ServiceState::Exited));
     }
 
     #[test]
