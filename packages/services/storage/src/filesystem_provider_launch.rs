@@ -500,10 +500,13 @@ mod tests {
     use mrml_interface_storage_block_provider_v1::OpaqueHandle as BlockOpaqueHandle;
     use mrml_interface_storage_filesystem_v3::OpaqueHandle as FilesystemOpaqueHandle;
     use mrml_kernel::ObjectId;
-    use mrml_kernel::arch::x86_64::UserContext;
+    use mrml_kernel::arch::x86_64::{
+        InactivePageTableMappingBackend, Mapping, PagePermissions, PageTableBuilder,
+        PreallocatedPageTableStore, UserContext, VirtAddr,
+    };
     use mrml_kernel::{
-        IsolationServiceSpec, MemoryBackingBackendRequest, MemoryMappingBackendRequest,
-        MemoryPhysicalBacking, MemoryPoolTable, TotalMicrovmClass,
+        IsolationServiceSpec, MemoryBackingBackendRequest, MemoryPhysicalBacking, MemoryPoolTable,
+        TotalMicrovmClass,
     };
 
     #[derive(Default)]
@@ -536,29 +539,8 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct NativeMappingBackend {
-        installed: Option<MemoryMappingBackendRequest>,
-    }
-
-    unsafe impl MemoryMappingBackend for NativeMappingBackend {
-        type Error = &'static str;
-
-        fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
-            if self.installed.replace(request).is_some() {
-                return Err("occupied");
-            }
-            Ok(())
-        }
-
-        fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
-            if self.installed != Some(request) {
-                return Err("substitution");
-            }
-            self.installed = None;
-            Ok(())
-        }
-    }
+    #[repr(C, align(4096))]
+    struct PageTableArena([u64; 512 * 5]);
 
     struct Backend {
         fail: bool,
@@ -927,7 +909,16 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x7100), Rights::MAP.union(Rights::CONTROL))
             .unwrap();
-        let mut local_mapping = NativeMappingBackend::default();
+        let mut page_tables = PageTableArena([0; 512 * 5]);
+        let page_table_base =
+            mrml_kernel::PhysAddr::new(page_tables.0.as_mut_ptr() as u64).unwrap();
+        // SAFETY: the aligned test arena remains exclusively owned and
+        // unreachable by every CPU for the complete adapter lifetime.
+        let store = unsafe { PreallocatedPageTableStore::new(page_table_base, 5) }.unwrap();
+        let builder = PageTableBuilder::new(store).unwrap();
+        // SAFETY: the builder is exclusively owned and never activated.
+        let mut local_mapping =
+            unsafe { InactivePageTableMappingBackend::new(builder, ObjectId(0x7100)) };
         let mapping = mrml_kernel::install_component_service_read_transfer_local_mapping(
             &mut memory,
             root,
@@ -1040,7 +1031,20 @@ mod tests {
             &mut backing,
         );
         teardown_filesystem_provider(receipt, &mut teardown).unwrap();
-        assert!(local_mapping.installed.is_none());
+        let expected = Mapping::new(
+            VirtAddr::new(0x300 * mrml_kernel::PAGE_SIZE).unwrap(),
+            mrml_kernel::PhysAddr::new(0x80_0000).unwrap(),
+            1,
+            PagePermissions::USER_READ,
+        )
+        .unwrap();
+        assert_eq!(
+            local_mapping
+                .into_builder()
+                .unwrap()
+                .verify_unmapped(expected),
+            Ok(())
+        );
         assert!(backing.claimed.is_none());
         assert_eq!(
             memory

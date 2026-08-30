@@ -1019,7 +1019,12 @@ accepts or stores a provider mapping backend. A focused lifecycle simulation
 completes launch, observes the live-task teardown refusal, retires the target,
 retries, and proves the one mapping, backing, and page charge are gone.
 Installed invocation and active page-table backends remain **PLANNED**. Storage
-passes 162 focused Linux-host release tests. The block transport now has a
+passes 162 focused Linux-host release tests. The lifecycle test now invokes the
+kernel's concrete inactive x86-64 page-table backend for the sole read-only
+mapping and verifies the exact leaf is absent after teardown. The hierarchy is
+never activated on a CPU, so this is controlled Linux-host page-table evidence,
+not active-address-space, TLB-shootdown, installed-system, or physical-device
+evidence. The block transport now has a
 direction-specific entry point
 for provider reads that return bytes through the kernel's non-mapped write-copy
 projection. It re-decodes the untrusted request, accepts only service-write
