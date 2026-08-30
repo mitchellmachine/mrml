@@ -41,6 +41,118 @@ pub enum ProtocolError {
     Transport,
 }
 
+/// Canonical operation identity recovered from a complete filesystem request.
+///
+/// This discriminator validates the common ABI header, interface generation,
+/// exact operation-specific payload size, response size, and total request
+/// length before a service uses it for dispatch. Operation-specific decoders
+/// must still validate the request body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemOperation {
+    Probe,
+    Mount,
+    Unmount,
+    Lookup,
+    Read,
+    Write,
+    Create,
+    Flush,
+    Check,
+    Format,
+    Open,
+}
+
+pub fn decode_request_operation(bytes: &[u8]) -> Result<FilesystemOperation, ProtocolError> {
+    if bytes.len() < ABI_CALL_HEADER_BYTES
+        || bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let operation = u32::from_le_bytes(bytes[52..56].try_into().unwrap());
+    let payload_bytes = u64::from_le_bytes(bytes[56..64].try_into().unwrap());
+    let response_bytes = u64::from_le_bytes(bytes[64..72].try_into().unwrap());
+    let (operation, request_bytes, expected_payload, expected_response) = match operation {
+        OP_PROBE => (
+            FilesystemOperation::Probe,
+            PROBE_REQUEST_BYTES,
+            24,
+            PROBE_RESPONSE_BYTES,
+        ),
+        OP_MOUNT => (
+            FilesystemOperation::Mount,
+            MOUNT_REQUEST_BYTES,
+            24,
+            MOUNT_RESPONSE_BYTES,
+        ),
+        OP_UNMOUNT => (
+            FilesystemOperation::Unmount,
+            UNMOUNT_REQUEST_BYTES,
+            16,
+            UNMOUNT_RESPONSE_BYTES,
+        ),
+        OP_LOOKUP => (
+            FilesystemOperation::Lookup,
+            LOOKUP_REQUEST_BYTES,
+            40,
+            LOOKUP_RESPONSE_BYTES,
+        ),
+        OP_READ => (
+            FilesystemOperation::Read,
+            READ_REQUEST_BYTES,
+            48,
+            READ_RESPONSE_BYTES,
+        ),
+        OP_WRITE => (
+            FilesystemOperation::Write,
+            WRITE_REQUEST_BYTES,
+            48,
+            WRITE_RESPONSE_BYTES,
+        ),
+        OP_CREATE => (
+            FilesystemOperation::Create,
+            CREATE_REQUEST_BYTES,
+            48,
+            CREATE_RESPONSE_BYTES,
+        ),
+        OP_FLUSH => (
+            FilesystemOperation::Flush,
+            FLUSH_REQUEST_BYTES,
+            16,
+            FLUSH_RESPONSE_BYTES,
+        ),
+        OP_CHECK => (
+            FilesystemOperation::Check,
+            CHECK_REQUEST_BYTES,
+            32,
+            CHECK_RESPONSE_BYTES,
+        ),
+        OP_FORMAT => (
+            FilesystemOperation::Format,
+            FORMAT_REQUEST_BYTES,
+            40,
+            FORMAT_RESPONSE_BYTES,
+        ),
+        OP_OPEN => (
+            FilesystemOperation::Open,
+            OPEN_REQUEST_BYTES,
+            40,
+            OPEN_RESPONSE_BYTES,
+        ),
+        _ => return Err(ProtocolError::InvalidHeader),
+    };
+    if bytes.len() != request_bytes
+        || payload_bytes != expected_payload
+        || response_bytes != expected_response as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    Ok(operation)
+}
+
 pub trait FilesystemTransport {
     fn probe(
         &mut self,
@@ -1528,6 +1640,122 @@ pub fn decode_format_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn framed_request(
+        operation: u32,
+        payload_bytes: usize,
+        response_bytes: usize,
+    ) -> [u8; READ_REQUEST_BYTES] {
+        let mut request = [0; READ_REQUEST_BYTES];
+        request[0..8].copy_from_slice(&ABI_MAGIC);
+        request[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+        request[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+        request[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+        request[52..56].copy_from_slice(&operation.to_le_bytes());
+        request[56..64].copy_from_slice(&(payload_bytes as u64).to_le_bytes());
+        request[64..72].copy_from_slice(&(response_bytes as u64).to_le_bytes());
+        request
+    }
+
+    #[test]
+    fn request_operation_dispatch_requires_an_exact_canonical_header() {
+        let cases = [
+            (
+                OP_PROBE,
+                PROBE_REQUEST_BYTES,
+                PROBE_RESPONSE_BYTES,
+                FilesystemOperation::Probe,
+            ),
+            (
+                OP_MOUNT,
+                MOUNT_REQUEST_BYTES,
+                MOUNT_RESPONSE_BYTES,
+                FilesystemOperation::Mount,
+            ),
+            (
+                OP_UNMOUNT,
+                UNMOUNT_REQUEST_BYTES,
+                UNMOUNT_RESPONSE_BYTES,
+                FilesystemOperation::Unmount,
+            ),
+            (
+                OP_LOOKUP,
+                LOOKUP_REQUEST_BYTES,
+                LOOKUP_RESPONSE_BYTES,
+                FilesystemOperation::Lookup,
+            ),
+            (
+                OP_READ,
+                READ_REQUEST_BYTES,
+                READ_RESPONSE_BYTES,
+                FilesystemOperation::Read,
+            ),
+            (
+                OP_WRITE,
+                WRITE_REQUEST_BYTES,
+                WRITE_RESPONSE_BYTES,
+                FilesystemOperation::Write,
+            ),
+            (
+                OP_CREATE,
+                CREATE_REQUEST_BYTES,
+                CREATE_RESPONSE_BYTES,
+                FilesystemOperation::Create,
+            ),
+            (
+                OP_FLUSH,
+                FLUSH_REQUEST_BYTES,
+                FLUSH_RESPONSE_BYTES,
+                FilesystemOperation::Flush,
+            ),
+            (
+                OP_CHECK,
+                CHECK_REQUEST_BYTES,
+                CHECK_RESPONSE_BYTES,
+                FilesystemOperation::Check,
+            ),
+            (
+                OP_FORMAT,
+                FORMAT_REQUEST_BYTES,
+                FORMAT_RESPONSE_BYTES,
+                FilesystemOperation::Format,
+            ),
+            (
+                OP_OPEN,
+                OPEN_REQUEST_BYTES,
+                OPEN_RESPONSE_BYTES,
+                FilesystemOperation::Open,
+            ),
+        ];
+        for (wire_operation, request_bytes, response_bytes, operation) in cases {
+            let payload_bytes = request_bytes - ABI_CALL_HEADER_BYTES;
+            let request = framed_request(wire_operation, payload_bytes, response_bytes);
+            assert_eq!(
+                decode_request_operation(&request[..request_bytes]),
+                Ok(operation)
+            );
+            assert_eq!(
+                decode_request_operation(&request[..request_bytes - 1]),
+                Err(ProtocolError::InvalidHeader)
+            );
+        }
+
+        let mut unknown = framed_request(12, 48, READ_RESPONSE_BYTES);
+        assert_eq!(
+            decode_request_operation(&unknown),
+            Err(ProtocolError::InvalidHeader)
+        );
+        unknown[52..56].copy_from_slice(&OP_READ.to_le_bytes());
+        unknown[64..72].copy_from_slice(&(READ_RESPONSE_BYTES as u64 + 1).to_le_bytes());
+        assert_eq!(
+            decode_request_operation(&unknown),
+            Err(ProtocolError::InvalidHeader)
+        );
+        assert_eq!(
+            decode_request_operation(&unknown[..ABI_CALL_HEADER_BYTES - 1]),
+            Err(ProtocolError::InvalidHeader)
+        );
+    }
 
     #[test]
     fn file_views_and_mount_generations_are_explicit() {
