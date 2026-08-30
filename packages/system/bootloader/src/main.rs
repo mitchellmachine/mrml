@@ -877,6 +877,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             } => (*endpoint, *receiver),
             SyscallRequest::Yield
             | SyscallRequest::Receive
+            | SyscallRequest::ReceiveFor { .. }
             | SyscallRequest::Exit
             | SyscallRequest::SendBuffer { .. }
             | SyscallRequest::ReceiveBuffer { .. }
@@ -996,6 +997,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
             UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
         match request {
+            SyscallRequest::ReceiveFor { .. } => frame.complete_error(),
             SyscallRequest::Receive => match runtime
                 .receive_or_block_current()
                 .unwrap_or_else(|_| halt())

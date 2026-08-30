@@ -1,5 +1,7 @@
 use crate::arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
-use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, Rights, TaskId};
+use crate::{
+    Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, ReceiveTimeout, Rights, TaskId,
+};
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
@@ -41,6 +43,7 @@ pub enum SyscallError {
     InvalidObject,
     InvalidRights,
     InvalidPolicy,
+    InvalidTimeout,
     InvalidTask,
     PayloadTooLarge,
     TooManyCapabilities,
@@ -298,6 +301,9 @@ const fn user_address(address: u64) -> bool {
 pub enum SyscallRequest {
     Yield,
     Receive,
+    ReceiveFor {
+        timeout: ReceiveTimeout,
+    },
     Exit,
     SendInline {
         endpoint: Capability,
@@ -576,6 +582,13 @@ impl SyscallRequest {
                     capability: Capability::from_token(rdi),
                 })
             }
+            13 => {
+                if rsi | rdx | r10 | r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                let timeout = ReceiveTimeout::new(rdi).ok_or(SyscallError::InvalidTimeout)?;
+                Ok(Self::ReceiveFor { timeout })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -584,6 +597,7 @@ impl SyscallRequest {
         match self {
             Self::Yield
             | Self::Receive
+            | Self::ReceiveFor { .. }
             | Self::Exit
             | Self::SendBuffer { .. }
             | Self::ReceiveBuffer { .. }
@@ -695,6 +709,40 @@ mod tests {
             SyscallRequest::decode(2, 0, 1, 0, 0, 0, 0),
             Err(SyscallError::ReservedArgument)
         );
+    }
+
+    #[test]
+    fn relative_timeout_receive_is_nonzero_and_register_bounded() {
+        assert_eq!(
+            SyscallRequest::decode(13, 7, 0, 0, 0, 0, 0),
+            Ok(SyscallRequest::ReceiveFor {
+                timeout: ReceiveTimeout::new(7).unwrap()
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(13, 0, 0, 0, 0, 0, 0),
+            Err(SyscallError::InvalidTimeout)
+        );
+        for arguments in [
+            [7, 1, 0, 0, 0, 0],
+            [7, 0, 1, 0, 0, 0],
+            [7, 0, 0, 1, 0, 0],
+            [7, 0, 0, 0, 1, 0],
+            [7, 0, 0, 0, 0, 1],
+        ] {
+            assert_eq!(
+                SyscallRequest::decode(
+                    13,
+                    arguments[0],
+                    arguments[1],
+                    arguments[2],
+                    arguments[3],
+                    arguments[4],
+                    arguments[5],
+                ),
+                Err(SyscallError::ReservedArgument)
+            );
+        }
     }
 
     #[test]

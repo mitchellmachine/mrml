@@ -11373,3 +11373,28 @@ was performed for this increment.
 Patent review: `NOT_TRIGGERED` — a fixed-capacity pending-syscall owner table
 that serializes message completion against timer completion is conventional
 event-loop and syscall lifecycle handling. See `docs/patents/REVIEW_LOG.md`.
+
+The pointer-free syscall decoder now assigns operation 13 to
+`ReceiveFor { timeout }`. The timeout is a nonzero relative scheduler-tick
+duration carried only in `rdi`; every other argument register must be zero.
+Zero returns the typed `InvalidTimeout` decode error, reserved-register drift is
+rejected, and payload inspection remains empty. Existing UEFI service and user
+probe profiles explicitly return the detail-free generic error for this request
+because they do not yet compose their syscall runtime with a periodic timer;
+they never accept a deadline that those profiles cannot honor.
+
+The dedicated timer-backed service profile remains the gate that will route
+operation 13 through `DeadlineReceiveSyscallExecutor`. Defining the canonical
+operation first prevents private profile-specific encodings while preserving
+fail-closed behavior in every existing build.
+
+The Linux-host kernel suite passes 666 tests, including successful decode and
+zero/reserved-register rejection. The affected Linux kernel release build and
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+This is ABI decode and cross-build evidence only; no timeout request ran under
+QEMU or on physical hardware.
+
+Patent review: `NOT_TRIGGERED` — decoding a bounded relative timeout from one
+register and rejecting unsupported execution profiles is conventional syscall
+ABI validation. See `docs/patents/REVIEW_LOG.md`.
