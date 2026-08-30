@@ -1242,6 +1242,31 @@ Patent review: **NOT_TRIGGERED**. Looping over the existing bounded authenticate
 dispatcher until its first error is conventional service control flow. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+Native AHCI entry working storage is now **IMPLEMENTED IN SOURCE** as one fixed,
+4 KiB-aligned, BSS-suitable owner. It centralizes the canonical maximum transfer
+at 1 MiB, binds dispatch scratch to that same launch-admission and command bound,
+keeps the large buffer off the guarded entry stack, and separately clears launch
+scratch, request bytes, transferred-capability tokens, and data scratch before
+each borrowed phase. Explicit erasure covers the complete owner. A static-storage
+test verifies alignment, exact bounds, phase clearing, and full erasure. The
+focused Linux suite passes all 130 tests and both Linux release and
+`MRML_NATIVE` release builds pass. This is source, unit, and ABI-compilation
+evidence; exclusive installed BSS ownership, the native entry symbol, supervisor
+launch/termination, and physical AHCI hardware remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Fixed aligned service working buffers and
+explicit zeroization are conventional bounded runtime storage. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

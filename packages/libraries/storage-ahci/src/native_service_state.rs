@@ -7,6 +7,7 @@ use crate::{
     AhciNativePortReconstructionError, AhciRawSyscall, AhciRegisterIo, AhciResetIo,
     AhciServiceBootstrapError, AhciServiceEntryRegisters, AhciUserspaceSyscalls,
     InstalledAhciServiceLaunch, AHCI_DISPATCH_REQUEST_BYTES, AHCI_SERVICE_LAUNCH_BYTES,
+    AHCI_MAX_TRANSFER_BYTES,
     bootstrap_installed_ahci_entry, reconstruct_installed_ahci_port,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
@@ -24,6 +25,67 @@ pub enum AhciNativeServicePreparationError {
     MappedMemory(AhciNativeMappedMemoryError),
     ActivePort(AhciNativePortReconstructionError),
     ServiceState(AhciNativeServiceStateError),
+}
+
+pub const AHCI_DISPATCH_SCRATCH_BYTES: usize = AHCI_MAX_TRANSFER_BYTES as usize;
+
+/// Fixed BSS-suitable working storage for one installed native AHCI service.
+///
+/// Keeping the maximum transfer buffer outside the entry stack avoids making
+/// the service's guarded stack size part of the block protocol. One service
+/// domain must own each instance exclusively for its complete lifetime.
+#[repr(C, align(4096))]
+pub struct AhciNativeServiceBuffers {
+    launch: [u8; AHCI_SERVICE_LAUNCH_BYTES],
+    request: [u8; AHCI_DISPATCH_REQUEST_BYTES],
+    capability_tokens: [u64; 1],
+    scratch: [u8; AHCI_DISPATCH_SCRATCH_BYTES],
+}
+
+impl AhciNativeServiceBuffers {
+    pub const fn new() -> Self {
+        Self {
+            launch: [0; AHCI_SERVICE_LAUNCH_BYTES],
+            request: [0; AHCI_DISPATCH_REQUEST_BYTES],
+            capability_tokens: [0; 1],
+            scratch: [0; AHCI_DISPATCH_SCRATCH_BYTES],
+        }
+    }
+
+    pub fn launch_scratch(&mut self) -> &mut [u8; AHCI_SERVICE_LAUNCH_BYTES] {
+        self.launch.fill(0);
+        &mut self.launch
+    }
+
+    pub fn dispatch_buffers(
+        &mut self,
+    ) -> (
+        &mut [u8; AHCI_DISPATCH_REQUEST_BYTES],
+        &mut [u64; 1],
+        &mut [u8; AHCI_DISPATCH_SCRATCH_BYTES],
+    ) {
+        self.request.fill(0);
+        self.capability_tokens.fill(0);
+        self.scratch.fill(0);
+        (
+            &mut self.request,
+            &mut self.capability_tokens,
+            &mut self.scratch,
+        )
+    }
+
+    pub fn erase(&mut self) {
+        self.launch.fill(0);
+        self.request.fill(0);
+        self.capability_tokens.fill(0);
+        self.scratch.fill(0);
+    }
+}
+
+impl Default for AhciNativeServiceBuffers {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Authenticates and prepares a service whose exact x86-64 DMA mapping has
@@ -321,6 +383,41 @@ mod tests {
 
     #[repr(align(4096))]
     struct Page([u8; 4096]);
+
+    static mut NATIVE_SERVICE_BUFFERS: AhciNativeServiceBuffers =
+        AhciNativeServiceBuffers::new();
+
+    #[test]
+    fn native_service_buffers_are_bss_suitable_bounded_and_erasable() {
+        let buffers = unsafe { &mut *core::ptr::addr_of_mut!(NATIVE_SERVICE_BUFFERS) };
+        assert_eq!(
+            buffers as *mut AhciNativeServiceBuffers as usize % 4096,
+            0
+        );
+        assert_eq!(buffers.launch.len(), AHCI_SERVICE_LAUNCH_BYTES);
+        assert_eq!(buffers.request.len(), AHCI_DISPATCH_REQUEST_BYTES);
+        assert_eq!(buffers.scratch.len(), AHCI_MAX_TRANSFER_BYTES as usize);
+
+        buffers.launch.fill(0xa5);
+        buffers.request.fill(0xa5);
+        buffers.capability_tokens.fill(u64::MAX);
+        buffers.scratch.fill(0xa5);
+        assert_eq!(buffers.launch_scratch(), &[0; AHCI_SERVICE_LAUNCH_BYTES]);
+        let (request, capability_tokens, scratch) = buffers.dispatch_buffers();
+        assert_eq!(request, &[0; AHCI_DISPATCH_REQUEST_BYTES]);
+        assert_eq!(capability_tokens, &[0]);
+        assert!(scratch.iter().all(|byte| *byte == 0));
+
+        request.fill(0xcc);
+        capability_tokens.fill(u64::MAX);
+        scratch.fill(0xcc);
+        buffers.launch.fill(0xcc);
+        buffers.erase();
+        assert!(buffers.launch.iter().all(|byte| *byte == 0));
+        assert!(buffers.request.iter().all(|byte| *byte == 0));
+        assert_eq!(buffers.capability_tokens, [0]);
+        assert!(buffers.scratch.iter().all(|byte| *byte == 0));
+    }
 
     struct Registers;
     impl AhciRegisterIo for Registers {

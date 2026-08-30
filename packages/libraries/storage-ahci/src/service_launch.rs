@@ -7,7 +7,7 @@
 use crate::{
     AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout,
     AHCI_ABAR_MINIMUM_BYTES, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_BYTES_PER_SLOT,
-    AHCI_MMIO_PAGE_BYTES, AHCI_RECEIVED_FIS_BYTES,
+    AHCI_MAX_TRANSFER_BYTES, AHCI_MMIO_PAGE_BYTES, AHCI_RECEIVED_FIS_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{
     BlockProviderDevice, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_READ_ONLY,
@@ -195,7 +195,7 @@ pub(crate) fn validate_ahci_service_state(
             || data.allocation_generation == 0
             || data.physical_base == 0
             || data.bytes == 0
-            || data.bytes > 1024 * 1024
+            || data.bytes > AHCI_MAX_TRANSFER_BYTES
             || data.bytes % 512 != 0
             || data.physical_base.checked_add(data.bytes).is_none()
         {

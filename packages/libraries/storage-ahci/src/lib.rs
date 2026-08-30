@@ -51,7 +51,7 @@ use mrml_interface_storage_block_provider_v1::{
 pub use ahci_cleanup::{reclaim_stopped_ahci_port_dma, AhciCleanupError, AhciCleanupFailure};
 pub use ahci_command::{
     prepare_ahci_dma_command, AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure,
-    AhciDataDmaRegion, PreparedAhciCommand,
+    AhciDataDmaRegion, PreparedAhciCommand, AHCI_MAX_TRANSFER_BYTES,
 };
 pub use ahci_command_execute::{
     execute_ahci_dma_command, AhciCommandCompletion, AhciCommandExecuteError,
@@ -141,7 +141,8 @@ pub use native_port_reconstruction::{
     AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
 };
 pub use native_service_state::{
-    AhciNativeServicePreparationError, AhciNativeServiceState, AhciNativeServiceStateError,
+    AhciNativeServiceBuffers, AhciNativeServicePreparationError, AhciNativeServiceState,
+    AhciNativeServiceStateError, AHCI_DISPATCH_SCRATCH_BYTES,
     bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
 };
 pub use platform_io::{AhciMonotonicDelay, AhciPlatformIo};

@@ -21,7 +21,7 @@ const COMMAND_HEADER_BYTES: u64 = 32;
 const COMMAND_TABLE_BYTES: u64 = 256;
 const PRDT_OFFSET: u64 = 0x80;
 const MAX_LBA: u64 = (1_u64 << 48) - 1;
-const MAX_TRANSFER_BYTES: u64 = 1024 * 1024;
+pub const AHCI_MAX_TRANSFER_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciAtaCommand {
@@ -150,7 +150,7 @@ pub fn prepare_ahci_dma_command<
     if slot >= layout.command_slot_count
         || sector_count == 0
         || transfer_bytes != Some(data.bytes)
-        || data.bytes > MAX_TRANSFER_BYTES
+        || data.bytes > AHCI_MAX_TRANSFER_BYTES
         || data.allocation_generation == 0
         || data.physical_base == 0
         || data.physical_base.checked_add(data.bytes).is_none()
