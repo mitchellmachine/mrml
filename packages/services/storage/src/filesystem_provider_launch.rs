@@ -4,7 +4,11 @@ use crate::{
 };
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, ComponentServiceLaunchAttachment,
-    ComponentServiceReadTransferAttachment, IsolationPlacement, IsolationServiceSpec, Rights,
+    ComponentServiceReadTransferAttachment, ComponentServiceReadTransferMemoryRoot,
+    ComponentServiceReadTransferTaskBinding, IsolationPlacement, IsolationServiceSpec,
+    NativeComponentServiceMappedReadTransferError, NativeComponentServiceMappedReadTransferTask,
+    ObjectId, Rights, TaskId, TaskRuntime, TaskRuntimeError,
+    prepare_native_component_service_task_from_mapped_read_transfer_attachment,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +125,140 @@ impl NativeFilesystemProviderLaunchSpec {
 
     pub const fn attachment(self) -> ComponentServiceLaunchAttachment {
         self.attachment
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderLaunchPreflightError {
+    HandoffMismatch,
+    Spec(NativeFilesystemProviderLaunchSpecError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderBackendError {
+    Preflight(NativeFilesystemProviderLaunchPreflightError),
+    Rollback {
+        preflight: NativeFilesystemProviderLaunchPreflightError,
+        cleanup: TaskRuntimeError,
+    },
+    Construction(NativeComponentServiceMappedReadTransferError),
+}
+
+pub struct NativeFilesystemProviderBackend<'a, const TASKS: usize, const CAPABILITIES: usize> {
+    runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    service: IsolationServiceSpec,
+    launch_attachment: ComponentServiceLaunchAttachment,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferTaskBinding,
+    supervisor_task_object: ObjectId,
+}
+
+impl<'a, const TASKS: usize, const CAPABILITIES: usize>
+    NativeFilesystemProviderBackend<'a, TASKS, CAPABILITIES>
+{
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
+        source_task: TaskId,
+        target_task: TaskId,
+        service: IsolationServiceSpec,
+        launch_attachment: ComponentServiceLaunchAttachment,
+        memory: ComponentServiceReadTransferMemoryRoot,
+        binding: ComponentServiceReadTransferTaskBinding,
+        supervisor_task_object: ObjectId,
+    ) -> Self {
+        Self {
+            runtime,
+            source_task,
+            target_task,
+            service,
+            launch_attachment,
+            memory,
+            binding,
+            supervisor_task_object,
+        }
+    }
+
+    fn reject_preflight(
+        &mut self,
+        transfer: ComponentServiceReadTransferAttachment,
+        preflight: NativeFilesystemProviderLaunchPreflightError,
+    ) -> NativeFilesystemProviderBackendError {
+        reject_native_filesystem_provider_preflight(
+            self.runtime,
+            self.source_task,
+            transfer,
+            preflight,
+        )
+    }
+}
+
+fn reject_native_filesystem_provider_preflight<const TASKS: usize, const CAPABILITIES: usize>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    transfer: ComponentServiceReadTransferAttachment,
+    preflight: NativeFilesystemProviderLaunchPreflightError,
+) -> NativeFilesystemProviderBackendError {
+    match runtime.revoke_capability_pair(
+        source_task,
+        transfer.local_read(),
+        transfer.provider_write(),
+    ) {
+        Ok(()) => NativeFilesystemProviderBackendError::Preflight(preflight),
+        Err(cleanup) => NativeFilesystemProviderBackendError::Rollback { preflight, cleanup },
+    }
+}
+
+// SAFETY: every preflight rejection atomically revokes the consumed attachment
+// roots, while the kernel constructor either returns the complete mapped task
+// or performs its own rollback. Success retains that task as the launch
+// instance, so no task, mapping, or backing cleanup owner is discarded.
+unsafe impl<'a, const TASKS: usize, const CAPABILITIES: usize> FilesystemProviderLaunchBackend
+    for NativeFilesystemProviderBackend<'a, TASKS, CAPABILITIES>
+{
+    type Error = NativeFilesystemProviderBackendError;
+    type Instance = NativeComponentServiceMappedReadTransferTask;
+
+    fn launch(
+        &mut self,
+        association: FilesystemBlockAssociation,
+        handoff: &[u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
+        block_endpoint: Capability,
+        transfer: ComponentServiceReadTransferAttachment,
+    ) -> Result<Self::Instance, Self::Error> {
+        if handoff != &association.handoff().encode() {
+            return Err(self.reject_preflight(
+                transfer,
+                NativeFilesystemProviderLaunchPreflightError::HandoffMismatch,
+            ));
+        }
+        if let Err(error) = NativeFilesystemProviderLaunchSpec::new(
+            association,
+            self.service,
+            self.launch_attachment,
+            block_endpoint,
+        ) {
+            return Err(self.reject_preflight(
+                transfer,
+                NativeFilesystemProviderLaunchPreflightError::Spec(error),
+            ));
+        }
+        prepare_native_component_service_task_from_mapped_read_transfer_attachment(
+            self.runtime,
+            self.source_task,
+            self.target_task,
+            self.service,
+            self.launch_attachment,
+            transfer,
+            self.memory,
+            self.binding,
+            association.filesystem_binding.endpoint_object,
+            self.supervisor_task_object,
+            association.filesystem_binding.module_object,
+        )
+        .map_err(NativeFilesystemProviderBackendError::Construction)
     }
 }
 
@@ -490,6 +628,73 @@ mod tests {
         assert_eq!(
             NativeFilesystemProviderLaunchSpec::new(association, service, wrong_length, endpoint,),
             Err(NativeFilesystemProviderLaunchSpecError::WrongLaunchDataLength)
+        );
+    }
+
+    #[test]
+    fn native_preflight_rejection_revokes_both_consumed_transfer_roots() {
+        let mut runtime = TaskRuntime::<1, 2>::new(100, 1).unwrap();
+        let source = runtime
+            .create(
+                mrml_kernel::Priority::NORMAL,
+                UserContext::new(
+                    mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let local_read = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                ObjectId(0xa0),
+                Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let provider_write = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                ObjectId(0xa0),
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let transfer = ComponentServiceReadTransferAttachment::new(
+            provider_task(),
+            ObjectId(0xa0),
+            1,
+            4096,
+            local_read,
+            provider_write,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reject_native_filesystem_provider_preflight(
+                &mut runtime,
+                source,
+                transfer,
+                NativeFilesystemProviderLaunchPreflightError::HandoffMismatch,
+            ),
+            NativeFilesystemProviderBackendError::Preflight(
+                NativeFilesystemProviderLaunchPreflightError::HandoffMismatch
+            )
+        );
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize(local_read, Rights::READ),
+            Err(CapabilityError::Invalid)
+        );
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize(provider_write, Rights::WRITE),
+            Err(CapabilityError::Invalid)
         );
     }
 
