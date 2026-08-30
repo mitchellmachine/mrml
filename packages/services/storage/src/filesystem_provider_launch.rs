@@ -7,28 +7,37 @@ use mrml_kernel::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FilesystemProviderLaunchReceipt {
+pub struct FilesystemProviderLaunchReceipt<I> {
     association_generation: u64,
     filesystem_provider_generation: u64,
     block_provider_generation: u64,
     system_generation: u64,
+    instance: I,
 }
 
-impl FilesystemProviderLaunchReceipt {
-    pub const fn association_generation(self) -> u64 {
+impl<I> FilesystemProviderLaunchReceipt<I> {
+    pub const fn association_generation(&self) -> u64 {
         self.association_generation
     }
 
-    pub const fn filesystem_provider_generation(self) -> u64 {
+    pub const fn filesystem_provider_generation(&self) -> u64 {
         self.filesystem_provider_generation
     }
 
-    pub const fn block_provider_generation(self) -> u64 {
+    pub const fn block_provider_generation(&self) -> u64 {
         self.block_provider_generation
     }
 
-    pub const fn system_generation(self) -> u64 {
+    pub const fn system_generation(&self) -> u64 {
         self.system_generation
+    }
+
+    pub const fn instance(&self) -> &I {
+        &self.instance
+    }
+
+    pub fn into_instance(self) -> I {
+        self.instance
     }
 }
 
@@ -51,9 +60,12 @@ pub enum FilesystemProviderLaunchError<E> {
 /// the attachment's local read and delegable provider-write handles, bind all
 /// projections to that same domain generation, and publish no endpoint or ready
 /// signal unless every projection and provider construction succeeds. Failure
-/// must revoke and erase every partial projection and domain.
+/// must revoke and erase every partial projection and domain. A successful
+/// return must be the exact live instance or cleanup owner for those resources;
+/// the caller retains it in the launch receipt until supervised teardown.
 pub unsafe trait FilesystemProviderLaunchBackend {
     type Error;
+    type Instance;
 
     fn launch(
         &mut self,
@@ -61,7 +73,7 @@ pub unsafe trait FilesystemProviderLaunchBackend {
         handoff: &[u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         block_endpoint: Capability,
         transfer: ComponentServiceReadTransferAttachment,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<Self::Instance, Self::Error>;
 }
 
 pub fn launch_filesystem_provider<B: FilesystemProviderLaunchBackend, const CAPABILITIES: usize>(
@@ -70,7 +82,7 @@ pub fn launch_filesystem_provider<B: FilesystemProviderLaunchBackend, const CAPA
     transfer: ComponentServiceReadTransferAttachment,
     association: FilesystemBlockAssociation,
     backend: &mut B,
-) -> Result<FilesystemProviderLaunchReceipt, FilesystemProviderLaunchError<B::Error>> {
+) -> Result<FilesystemProviderLaunchReceipt<B::Instance>, FilesystemProviderLaunchError<B::Error>> {
     let endpoint_object = capabilities
         .authorize_exact(
             block_endpoint_capability,
@@ -104,16 +116,19 @@ pub fn launch_filesystem_provider<B: FilesystemProviderLaunchBackend, const CAPA
         .launch(association, &encoded, block_endpoint_capability, transfer)
         .map_err(FilesystemProviderLaunchError::Backend);
     encoded.fill(0);
-    launched?;
-    Ok(receipt(handoff))
+    Ok(receipt(handoff, launched?))
 }
 
-fn receipt(handoff: FilesystemBlockAssociationHandoff) -> FilesystemProviderLaunchReceipt {
+fn receipt<I>(
+    handoff: FilesystemBlockAssociationHandoff,
+    instance: I,
+) -> FilesystemProviderLaunchReceipt<I> {
     FilesystemProviderLaunchReceipt {
         association_generation: handoff.association_generation(),
         filesystem_provider_generation: handoff.filesystem_provider_generation(),
         block_provider_generation: handoff.block_provider_generation(),
         system_generation: handoff.system_generation(),
+        instance,
     }
 }
 
@@ -134,6 +149,7 @@ mod tests {
 
     unsafe impl FilesystemProviderLaunchBackend for Backend {
         type Error = ();
+        type Instance = u64;
 
         fn launch(
             &mut self,
@@ -141,13 +157,13 @@ mod tests {
             handoff: &[u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
             block_endpoint: Capability,
             transfer: ComponentServiceReadTransferAttachment,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<Self::Instance, Self::Error> {
             assert_eq!(association.association_generation, 12);
             assert_ne!(block_endpoint.token(), 0);
             assert_eq!(transfer.shared_bytes(), 4096);
             self.calls += 1;
             self.observed = *handoff;
-            if self.fail { Err(()) } else { Ok(()) }
+            if self.fail { Err(()) } else { Ok(0xfeed) }
         }
     }
 
@@ -257,6 +273,8 @@ mod tests {
         assert_eq!(receipt.filesystem_provider_generation(), 5);
         assert_eq!(receipt.block_provider_generation(), 7);
         assert_eq!(receipt.system_generation(), 9);
+        assert_eq!(*receipt.instance(), 0xfeed);
+        assert_eq!(receipt.into_instance(), 0xfeed);
     }
 
     #[test]
