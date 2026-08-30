@@ -1018,7 +1018,15 @@ retirement. A focused lifecycle simulation completes launch, observes the
 live-task teardown refusal, retires the target, retries, and proves both
 mappings, backing, and the page charge are gone. Installed invocation and
 active page-table backends remain **PLANNED**. Storage passes 161 focused
-Linux-host tests. The
+Linux-host tests. The block transport now has a direction-specific entry point
+for provider reads that return bytes through the kernel's non-mapped write-copy
+projection. It re-decodes the untrusted request, accepts only service-write
+direction, exact-matches `MAP | WRITE` authority and the live task/VM/source
+binding, dispatches the admitted block read, and copies successful output into
+the opaque resource. Direction substitution reaches neither device nor buffer
+backend. Storage passes 162 focused Linux-host release tests; this is an
+in-memory service and recording-backend test, not installed syscall dispatch or
+physical block-device evidence. The
 `mrml-fat32-service.efi` entry first copies and validates the exact 144-byte
 filesystem/block launch attachment through the kernel-projected read-only
 capability, retains the separately projected block endpoint capability, erases
@@ -1041,6 +1049,10 @@ evidence.
 Patent review: `NOT_TRIGGERED` — two-phase open publication, bounded handle
 tables, generation invalidation, and lifecycle cleanup are conventional
 capability and resource-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
+Patent review: `NOT_TRIGGERED` — composing an existing block-read dispatcher
+with exact capability validation and bounded opaque-resource copy is
+conventional service transport plumbing. See `docs/patents/REVIEW_LOG.md`.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never

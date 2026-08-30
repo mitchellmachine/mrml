@@ -5,7 +5,8 @@ use crate::{
 };
 use mrml_kernel::{
     CapabilitySpace, GuestMemory, IpcSharedBufferBackend, IpcSharedBufferError,
-    IpcSharedBufferIoError, Message, Rights, SharedMemoryBindings, TaskId, VmId,
+    IpcSharedBufferIoError, Message, Rights, SharedMemoryBindings, SharedWriteCopyBindingId,
+    SharedWriteCopyBindings, TaskId, VmId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +34,153 @@ impl<const SESSIONS: usize> BlockKernelTransport<SESSIONS> {
         Self {
             dispatcher: BlockProtocolDispatcher::new(),
         }
+    }
+
+    /// Dispatches one block read whose returned bytes use an exact non-mapped
+    /// provider write projection. The request is decoded and direction-checked
+    /// again here; selecting this entry point grants no protocol authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch_service_write_copy<
+        const DEVICES: usize,
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const SOURCE_BINDINGS: usize,
+        const COPY_BINDINGS: usize,
+        D: BlockServiceBackend,
+        I: IpcSharedBufferBackend,
+    >(
+        &mut self,
+        service: &BlockService<DEVICES, SESSIONS>,
+        device_backend: &mut D,
+        ipc_backend: &mut I,
+        principal: StoragePrincipal,
+        message: &Message,
+        receiver_space: &CapabilitySpace<CAPS>,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        copy_bindings: &SharedWriteCopyBindings<COPY_BINDINGS>,
+        copy_binding: SharedWriteCopyBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+        scratch: &mut [u8],
+    ) -> Result<BlockResponse, BlockKernelTransportError<I::Error>> {
+        let result = self.dispatch_service_write_copy_inner(
+            service,
+            device_backend,
+            ipc_backend,
+            principal,
+            message,
+            receiver_space,
+            source_bindings,
+            copy_bindings,
+            copy_binding,
+            memory,
+            vm,
+            task,
+            scratch,
+        );
+        scratch.fill(0);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_service_write_copy_inner<
+        const DEVICES: usize,
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const SOURCE_BINDINGS: usize,
+        const COPY_BINDINGS: usize,
+        D: BlockServiceBackend,
+        I: IpcSharedBufferBackend,
+    >(
+        &mut self,
+        service: &BlockService<DEVICES, SESSIONS>,
+        device_backend: &mut D,
+        ipc_backend: &mut I,
+        principal: StoragePrincipal,
+        message: &Message,
+        receiver_space: &CapabilitySpace<CAPS>,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        copy_bindings: &SharedWriteCopyBindings<COPY_BINDINGS>,
+        copy_binding: SharedWriteCopyBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+        scratch: &mut [u8],
+    ) -> Result<BlockResponse, BlockKernelTransportError<I::Error>> {
+        let request =
+            BlockRequest::decode(message.payload()).map_err(BlockKernelTransportError::Protocol)?;
+        if request.buffer_access() != BlockBufferAccess::ServiceWrites {
+            return Err(BlockKernelTransportError::Authorization(
+                IpcSharedBufferError::AccessMismatch,
+            ));
+        }
+        let length = request.byte_length();
+        if length > scratch.len() {
+            return Err(BlockKernelTransportError::ScratchTooSmall);
+        }
+        let scratch = &mut scratch[..length];
+        let owner_valid = service.validate_owner(request.session(), principal).is_ok();
+        if owner_valid {
+            let authority = message
+                .authorize_single_capability(receiver_space, Rights::MAP.union(Rights::WRITE))
+                .map_err(|error| {
+                    BlockKernelTransportError::Authorization(IpcSharedBufferError::Ipc(error))
+                })?;
+            copy_bindings
+                .resolve(
+                    copy_binding,
+                    source_bindings,
+                    receiver_space,
+                    authority.capability(),
+                    memory,
+                    vm,
+                    task,
+                )
+                .map_err(IpcSharedBufferError::Binding)
+                .map_err(BlockKernelTransportError::Authorization)?;
+        } else {
+            message
+                .authorize_single_capability(receiver_space, Rights::MAP.union(Rights::WRITE))
+                .map_err(|error| {
+                    BlockKernelTransportError::Authorization(IpcSharedBufferError::Ipc(error))
+                })?;
+        }
+        let admitted = match self
+            .dispatcher
+            .admit(service, principal, request)
+            .map_err(BlockKernelTransportError::Protocol)?
+        {
+            BlockAdmission::Rejected(response) => return Ok(response),
+            BlockAdmission::Admitted(admitted) => admitted,
+        };
+        let response = self
+            .dispatcher
+            .dispatch_admitted(
+                service,
+                device_backend,
+                principal,
+                admitted,
+                BlockDispatchBuffer::Read(scratch),
+            )
+            .map_err(BlockKernelTransportError::Protocol)?;
+        if response.status() == crate::BlockStatus::Ok {
+            message
+                .write_single_shared_copy(
+                    receiver_space,
+                    source_bindings,
+                    copy_bindings,
+                    copy_binding,
+                    memory,
+                    vm,
+                    task,
+                    0,
+                    scratch,
+                    ipc_backend,
+                )
+                .map_err(BlockKernelTransportError::Buffer)?;
+        }
+        Ok(response)
     }
 
     /// Dispatches one already-received kernel message. `principal`, `vm`, and
@@ -536,6 +684,130 @@ mod tests {
         assert_eq!(buffer.bytes, [0xa5; BLOCK_SIZE]);
         assert_eq!(device.calls, 1);
         assert_eq!(buffer.calls, 1);
+        assert_eq!(scratch, [0; BLOCK_SIZE]);
+    }
+
+    #[test]
+    fn admitted_read_uses_exact_write_copy_without_provider_mapping() {
+        let (service, session) = service();
+        let vm = VmTable::<1>::new().create(1).unwrap();
+        let mut scheduler = KernelScheduler::<1>::new(1_000, 1).unwrap();
+        let task = scheduler.create(Priority::NORMAL).unwrap();
+        let mut memory = GuestMemory::<1>::new();
+        let mapping = memory
+            .map(GuestRegion::new(0x4000, PhysAddr::new(0x9000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let object = ObjectId(46);
+        let mut source = CapabilitySpace::<2>::new();
+        let root = source
+            .insert(
+                object,
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::CONTROL)
+                    .union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let control = source.insert(object, Rights::CONTROL).unwrap();
+        let host = HostResourceHandle::new(146).unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        let source_binding = bindings
+            .bind(
+                &source,
+                root,
+                &memory,
+                SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite),
+                host,
+            )
+            .unwrap();
+        let request = BlockRequest::Read {
+            request_id: 1,
+            session,
+            block: 1,
+            byte_length: BLOCK_SIZE as u32,
+        };
+        let mut encoded = [0; BLOCK_REQUEST_BYTES];
+        request.encode(&mut encoded).unwrap();
+        let mut receiver = CapabilitySpace::<1>::new();
+        let message = Message::transfer(
+            &encoded,
+            &[(root, Rights::MAP.union(Rights::WRITE))],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        let write = message.capabilities().next().unwrap();
+        let mut copies = SharedWriteCopyBindings::<1>::new();
+        let copy = copies
+            .bind(
+                &bindings,
+                source_binding,
+                &source,
+                control,
+                &receiver,
+                write,
+                &memory,
+                vm,
+                task,
+            )
+            .unwrap();
+        let (mut device, mut buffer) = backends(host);
+        device.bytes[BLOCK_SIZE..].fill(0xb6);
+        let mut scratch = [0xcc; BLOCK_SIZE];
+        let response = BlockKernelTransport::<2>::new()
+            .dispatch_service_write_copy(
+                &service,
+                &mut device,
+                &mut buffer,
+                owner(1),
+                &message,
+                &receiver,
+                &bindings,
+                &copies,
+                copy,
+                &memory,
+                vm,
+                task,
+                &mut scratch,
+            )
+            .unwrap();
+        assert_eq!(response.status(), BlockStatus::Ok);
+        assert_eq!(buffer.bytes, [0xb6; BLOCK_SIZE]);
+        assert_eq!((device.calls, buffer.calls), (1, 1));
+        assert_eq!(scratch, [0; BLOCK_SIZE]);
+
+        let mut wrong_encoded = [0; BLOCK_REQUEST_BYTES];
+        BlockRequest::Write {
+            request_id: 2,
+            session,
+            block: 0,
+            byte_length: BLOCK_SIZE as u32,
+        }
+        .encode(&mut wrong_encoded)
+        .unwrap();
+        let wrong = Message::new(&wrong_encoded, &[write]).unwrap();
+        assert_eq!(
+            BlockKernelTransport::<2>::new().dispatch_service_write_copy(
+                &service,
+                &mut device,
+                &mut buffer,
+                owner(1),
+                &wrong,
+                &receiver,
+                &bindings,
+                &copies,
+                copy,
+                &memory,
+                vm,
+                task,
+                &mut scratch,
+            ),
+            Err(BlockKernelTransportError::Authorization(
+                IpcSharedBufferError::AccessMismatch
+            ))
+        );
+        assert_eq!((device.calls, buffer.calls), (1, 1));
         assert_eq!(scratch, [0; BLOCK_SIZE]);
     }
 
