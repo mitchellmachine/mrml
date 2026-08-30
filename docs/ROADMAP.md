@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loop pass forty-four
+isolated syscall-backed receive/reply loop pass forty-seven
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -85,7 +85,10 @@ the lifecycle record. Backend and parser failures publish nothing and consume no
 generations. The provider-side concrete block-service client now requires an
 unsafe runtime-proven exact volume/session binding, issues one canonical full-
 logical-block read at LBA zero, requires exact completion, copies only the
-512-byte FAT boot sector, and erases scratch on every path.
+512-byte FAT boot sector, and erases scratch on every path. The mounted provider
+now consumes canonical generation-2 mount request bytes, accepts only the
+currently defined empty options, and returns canonical lifecycle/root responses;
+stale block sessions remain typed stale failures and publish no mount state.
 The storage service now provides the first concrete half of that composition:
 `FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
 to one owner-authenticated block session, validates full-block scratch geometry,

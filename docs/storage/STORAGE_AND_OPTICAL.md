@@ -915,8 +915,10 @@ backend or parse failure. The provider-side block client accepts only an unsafe
 runtime-proven exact volume/session association, sends one canonical LBA-zero
 read for the complete logical block, requires exact completion, publishes only
 its 512-byte FAT prefix, and erases its scratch after every outcome. A matching
-numeric handle or label is explicitly insufficient. Forty-four focused Linux-host
-tests pass. The storage service
+numeric handle or label is explicitly insufficient. Its canonical generation-2
+mount transport accepts only empty options, publishes the exact lifecycle/root
+response after validation, and maps stale backing sessions without creating
+state. Forty-seven focused Linux-host tests pass. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

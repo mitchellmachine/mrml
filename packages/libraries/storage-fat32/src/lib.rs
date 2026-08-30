@@ -14,8 +14,10 @@ use mrml_interface_storage_block_provider_v1::{
     ProtocolError as BlockProtocolError, ReadError as BlockReadError,
 };
 use mrml_interface_storage_filesystem_v2::{
-    decode_probe_request, encode_probe_response, FilesystemTransport, MountResponse, OpaqueHandle,
-    ProbeError, ProtocolError, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+    decode_mount_request, decode_probe_request, encode_mount_response, encode_probe_response,
+    FilesystemMountTransport, FilesystemTransport, MountError, MountResponse, OpaqueHandle,
+    ProbeError, ProtocolError, MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES, PROBE_REQUEST_BYTES,
+    PROBE_RESPONSE_BYTES,
 };
 
 pub use service_loop::{
@@ -423,6 +425,39 @@ impl<B: Fat32MountBackend, const N: usize> Fat32MountedProvider<B, N> {
         self.mounts
             .mount(volume, geometry)
             .map_err(Fat32MountAdmissionError::Lifecycle)
+    }
+}
+
+impl<T: BlockProviderReadTransport, const N: usize> FilesystemMountTransport
+    for Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N>
+{
+    fn mount(
+        &mut self,
+        request: &[u8; MOUNT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_mount_request(request, memory.len() as u64)?;
+        if request.options.length() != 0 {
+            return Ok(encode_mount_response(Err(MountError::InvalidRequest)));
+        }
+        let result = Fat32MountedProvider::mount(self, request.volume).map_err(|error| match error {
+            Fat32MountAdmissionError::Backend(Fat32BlockMountError::VolumeMismatch)
+            | Fat32MountAdmissionError::Backend(Fat32BlockMountError::Read(
+                BlockReadError::StaleObject,
+            )) => MountError::StaleObject,
+            Fat32MountAdmissionError::Backend(_)
+            | Fat32MountAdmissionError::InvalidFilesystem(_)
+            | Fat32MountAdmissionError::Lifecycle(Fat32MountError::Capacity)
+            | Fat32MountAdmissionError::Lifecycle(Fat32MountError::GenerationExhausted)
+            | Fat32MountAdmissionError::Lifecycle(Fat32MountError::CompletionExhausted) => {
+                MountError::InconsistentFilesystem
+            }
+            Fat32MountAdmissionError::Lifecycle(Fat32MountError::AlreadyMounted)
+            | Fat32MountAdmissionError::Lifecycle(Fat32MountError::StaleMount) => {
+                MountError::InvalidRequest
+            }
+        });
+        Ok(encode_mount_response(result))
     }
 }
 
@@ -1591,6 +1626,101 @@ mod tests {
             Err(Fat32BlockMountError::InvalidScratch)
         ));
         assert_eq!(scratch, [0; 512]);
+    }
+
+    #[test]
+    fn canonical_mount_transport_publishes_exact_lifecycle_response() {
+        use mrml_interface_storage_filesystem_v2::{
+            decode_mount_response, encode_mount_request, BorrowedReadView,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = BlockReadTransport {
+            session,
+            response: Ok(4096),
+            calls: 0,
+        };
+        let mut scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1>::new(backend);
+        let request = encode_mount_request(
+            volume,
+            BorrowedReadView::within(0, 0, 0).unwrap(),
+        )
+        .unwrap();
+        let response = FilesystemMountTransport::mount(&mut provider, &request, &mut []).unwrap();
+        let mounted = decode_mount_response(&response).unwrap().unwrap();
+        assert_eq!(mounted.generation, 1);
+        assert_eq!(mounted.root, OpaqueHandle::new(0, 1).unwrap());
+        assert_eq!(
+            provider.geometry(volume, mounted.generation, mounted.root),
+            Ok(parse_fat32_boot_sector(&boot_sector()).unwrap())
+        );
+    }
+
+    #[test]
+    fn canonical_mount_transport_rejects_options_before_block_io() {
+        use mrml_interface_storage_filesystem_v2::{
+            decode_mount_response, encode_mount_request, BorrowedReadView,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = BlockReadTransport {
+            session,
+            response: Ok(4096),
+            calls: 0,
+        };
+        let mut scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1>::new(backend);
+        let request = encode_mount_request(
+            volume,
+            BorrowedReadView::within(0, 1, 1).unwrap(),
+        )
+        .unwrap();
+        let response = FilesystemMountTransport::mount(&mut provider, &request, &mut [7]).unwrap();
+        assert_eq!(
+            decode_mount_response(&response),
+            Ok(Err(MountError::InvalidRequest))
+        );
+        assert_eq!(provider.into_backend().into_transport().calls, 0);
+    }
+
+    #[test]
+    fn canonical_mount_transport_maps_stale_block_session_without_state() {
+        use mrml_interface_storage_filesystem_v2::{
+            decode_mount_response, encode_mount_request, BorrowedReadView,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = BlockReadTransport {
+            session,
+            response: Err(BlockReadError::StaleObject),
+            calls: 0,
+        };
+        let mut scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1>::new(backend);
+        let request = encode_mount_request(
+            volume,
+            BorrowedReadView::within(0, 0, 0).unwrap(),
+        )
+        .unwrap();
+        let response = FilesystemMountTransport::mount(&mut provider, &request, &mut []).unwrap();
+        assert_eq!(
+            decode_mount_response(&response),
+            Ok(Err(MountError::StaleObject))
+        );
+        assert_eq!(provider.into_backend().into_transport().calls, 1);
     }
 
     #[test]

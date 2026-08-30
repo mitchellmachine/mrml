@@ -7421,8 +7421,11 @@ generation-1 block-provider protocol only through an unsafe runtime-proven exact
 volume/session binding. It requests one complete logical block at LBA zero,
 requires exact completion, copies only the 512-byte boot-sector prefix, and
 erases full-block scratch on every path. Numeric identity equality alone does not
-establish this binding. The focused Linux-host provider suite passes forty-four
-tests.
+establish this binding. The mounted provider now implements canonical
+generation-2 mount transport: options must be empty, stale backing sessions
+remain typed stale failures, and lifecycle/root identity is encoded only after
+validated state publication. The focused Linux-host provider suite passes
+forty-seven tests.
 
 Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and

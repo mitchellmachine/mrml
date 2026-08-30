@@ -1192,6 +1192,12 @@ at LBA zero, rejects typed errors and short completion, exposes only the first
 512 bytes to the parser, and clears both parser output and full-block scratch on
 failure.
 
+Canonical FAT32 mount transport accepts no provider-specific option bytes until
+their semantics and authority effects are defined. It decodes the complete
+generation-2 request before block I/O, maps a stale backing session to the typed
+stale result, and emits lifecycle/root identity only after the boot sector has
+validated and the mount record exists.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode
