@@ -84,6 +84,16 @@ const RUSTC_WIDE_CHECKED_CAST_LAZY_FALLBACK_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or_else(|| fallback) }",
 );
+const MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_FALLBACK_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, fallback: u128) -> u128 { input.checked_cast_unsigned().unwrap_or(fallback) }";
+const RUSTC_WIDE_CHECKED_CAST_UNSIGNED_FALLBACK_SOURCE: &str = concat!(
+    "#![feature(integer_cast_extras)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, fallback: u128) -> u128 { input.checked_cast_unsigned().unwrap_or(fallback) }",
+);
+const MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_LAZY_FALLBACK_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, fallback: u128) -> u128 { input.checked_cast_unsigned().unwrap_or_else(|| fallback) }";
+const RUSTC_WIDE_CHECKED_CAST_UNSIGNED_LAZY_FALLBACK_SOURCE: &str = concat!(
+    "#![feature(integer_cast_extras)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, fallback: u128) -> u128 { input.checked_cast_unsigned().unwrap_or_else(|| fallback) }",
+);
 const MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.checked_cast_signed().unwrap() }";
 const MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.checked_cast_unsigned().unwrap() }";
 const RUSTC_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE: &str = concat!(
@@ -1634,6 +1644,35 @@ fn mrml_v1_wide_checked_sign_cast_fallback_matches_both_oracle_words() {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, "for (input, fallback) in [(0u128, -17i128), (i128::MAX as u128, 42), (i128::MIN as u128, -17), (u128::MAX, i128::MIN)] { let returned = probe(input, fallback); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
+    }
+
+    let inputs = [
+        (0u128, u128::MAX),
+        (i128::MAX as u128, 42),
+        (i128::MIN as u128, 17),
+        ((-1i128) as u128, 1u128 << 127),
+    ];
+    for (source, oracle_source) in [
+        (
+            MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_FALLBACK_SOURCE,
+            RUSTC_WIDE_CHECKED_CAST_UNSIGNED_FALLBACK_SOURCE,
+        ),
+        (
+            MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_LAZY_FALLBACK_SOURCE,
+            RUSTC_WIDE_CHECKED_CAST_UNSIGNED_LAZY_FALLBACK_SOURCE,
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|(input, fallback)| {
+                let returned = unsafe {
+                    call_mrml_v1_two_wide_return(code.pointer, input, fallback)
+                };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, "for (input, fallback) in [(0i128, u128::MAX), (i128::MAX, 42), (i128::MIN, 17), (-1, 1u128 << 127)] { let returned = probe(input, fallback); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
     }
 }
 

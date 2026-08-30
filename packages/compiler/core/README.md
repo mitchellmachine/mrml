@@ -6073,7 +6073,7 @@ path. Zero-parameter lazy fallbacks are evaluated only on `None`; compositional
 wide option consumers remain unsupported and fail closed. Both x86-64 ABIs
 compile the terminal forms. The canonical Linux gate
 passes 821 unit tests, 351 replacement tests, and 128 semantic-execution tests;
-defaulting in both directions and eager or lazy custom signed fallbacks match exact
+defaulting and eager or lazy custom fallbacks in both directions match exact
 ORACLE-0003 results across both words at zero, signed boundaries, and all-ones
 input. Isolated Linux children confirm checked `unwrap` and `expect` trap at
 both invalid unsigned boundaries, and reverse-direction checked `unwrap` and
