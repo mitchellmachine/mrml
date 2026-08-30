@@ -10,8 +10,8 @@ use crate::{
     BalancePolicyError, BalanceTarget, Capability, CapabilitySpace, DetachedTask, Endpoint,
     IpcError, KernelScheduleError, KernelScheduler, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, OwnershipMailbox,
-    PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId, TaskMigration,
-    UserReturnError, PAGE_SIZE,
+    PAGE_SIZE, PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId,
+    TaskMigration, UserReturnError,
 };
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
@@ -2477,9 +2477,11 @@ mod tests {
         assert_eq!(projected_handles.next(), None);
         let stale_provider_write =
             Capability::from_token(provider_write.token().wrapping_add(1_u64 << 32));
-        assert!(runtime
-            .revoke_capability_pair(source, local_read, stale_provider_write)
-            .is_err());
+        assert!(
+            runtime
+                .revoke_capability_pair(source, local_read, stale_provider_write)
+                .is_err()
+        );
         assert_eq!(
             runtime
                 .capabilities(source)
@@ -2704,16 +2706,18 @@ mod tests {
         runtime
             .revoke_capability(first_receiver, first_derived.unwrap())
             .unwrap();
-        assert!(runtime
-            .send_ipc(
-                sender,
-                spare,
-                &mut endpoint,
-                endpoint_capability,
-                &[],
-                &[(root, Rights::READ)],
-            )
-            .is_ok());
+        assert!(
+            runtime
+                .send_ipc(
+                    sender,
+                    spare,
+                    &mut endpoint,
+                    endpoint_capability,
+                    &[],
+                    &[(root, Rights::READ)],
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2910,16 +2914,20 @@ mod tests {
 
         runtime.revoke_capability(source_task, root).unwrap();
 
-        assert!(runtime
-            .capabilities_mut(middle_task)
-            .unwrap()
-            .authorize(middle, Rights::READ)
-            .is_err());
-        assert!(runtime
-            .capabilities_mut(leaf_task)
-            .unwrap()
-            .authorize(leaf, Rights::READ)
-            .is_err());
+        assert!(
+            runtime
+                .capabilities_mut(middle_task)
+                .unwrap()
+                .authorize(middle, Rights::READ)
+                .is_err()
+        );
+        assert!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(leaf, Rights::READ)
+                .is_err()
+        );
     }
 
     #[test]
@@ -3015,11 +3023,13 @@ mod tests {
                 .authorize(root, Rights::READ),
             Ok(ObjectId(0xa1))
         );
-        assert!(runtime
-            .capabilities_mut(leaf_task)
-            .unwrap()
-            .authorize(leaf, Rights::READ)
-            .is_err());
+        assert!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(leaf, Rights::READ)
+                .is_err()
+        );
         assert!(runtime.detach_domain(middle_task).is_ok());
     }
 
@@ -3086,16 +3096,20 @@ mod tests {
         assert!(
             matches!(termination.next, ScheduleOutcome::Switch { to, .. } if to == middle_task)
         );
-        assert!(runtime
-            .capabilities_mut(middle_task)
-            .unwrap()
-            .authorize(middle, Rights::READ)
-            .is_err());
-        assert!(runtime
-            .capabilities_mut(leaf_task)
-            .unwrap()
-            .authorize(leaf, Rights::READ)
-            .is_err());
+        assert!(
+            runtime
+                .capabilities_mut(middle_task)
+                .unwrap()
+                .authorize(middle, Rights::READ)
+                .is_err()
+        );
+        assert!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(leaf, Rights::READ)
+                .is_err()
+        );
         assert_eq!(
             runtime
                 .capabilities_mut(leaf_task)
@@ -4362,16 +4376,20 @@ mod tests {
         ));
         let first_slot = runtime.domain_slot(first).unwrap();
         let second_slot = runtime.domain_slot(second).unwrap();
-        assert!(runtime.domains[first_slot]
-            .as_ref()
-            .unwrap()
-            .peers
-            .contains(&Some(second)));
-        assert!(runtime.domains[second_slot]
-            .as_ref()
-            .unwrap()
-            .peers
-            .contains(&Some(first)));
+        assert!(
+            runtime.domains[first_slot]
+                .as_ref()
+                .unwrap()
+                .peers
+                .contains(&Some(second))
+        );
+        assert!(
+            runtime.domains[second_slot]
+                .as_ref()
+                .unwrap()
+                .peers
+                .contains(&Some(first))
+        );
     }
 
     #[test]
@@ -4693,11 +4711,13 @@ mod tests {
         assert_eq!(runtime.current(), Some(violated));
         assert_eq!(runtime.context(violated).copied(), Ok(violated_context));
         let observer_slot = runtime.domain_slot(observer).unwrap();
-        assert!(runtime.domains[observer_slot]
-            .as_ref()
-            .unwrap()
-            .peers
-            .contains(&Some(violated)));
+        assert!(
+            runtime.domains[observer_slot]
+                .as_ref()
+                .unwrap()
+                .peers
+                .contains(&Some(violated))
+        );
         assert!(runtime.domains[observer_slot].as_ref().unwrap().peer_deaths[0].is_none());
     }
 
@@ -4771,18 +4791,22 @@ mod tests {
             ),
             Err(TaskRuntimeError::IntegrityFailure)
         );
-        assert!(runtime.domains[runtime.domain_slot(first).unwrap()]
-            .as_ref()
-            .unwrap()
-            .peers
-            .iter()
-            .all(Option::is_none));
-        assert!(runtime.domains[runtime.domain_slot(second).unwrap()]
-            .as_ref()
-            .unwrap()
-            .peers
-            .iter()
-            .all(Option::is_none));
+        assert!(
+            runtime.domains[runtime.domain_slot(first).unwrap()]
+                .as_ref()
+                .unwrap()
+                .peers
+                .iter()
+                .all(Option::is_none)
+        );
+        assert!(
+            runtime.domains[runtime.domain_slot(second).unwrap()]
+                .as_ref()
+                .unwrap()
+                .peers
+                .iter()
+                .all(Option::is_none)
+        );
     }
 
     #[test]
