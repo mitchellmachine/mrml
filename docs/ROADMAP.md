@@ -1103,6 +1103,30 @@ Patent review: `NOT_TRIGGERED` — exact construction of existing service and
 backend objects from one validated launch projection is conventional typed
 composition. See `docs/patents/REVIEW_LOG.md`.
 
+The assembled native AHCI service now has a bounded one-envelope dispatch
+transition **IMPLEMENTED IN SOURCE**. It lends—never moves or duplicates—the
+unique command backend to the existing unified dispatcher together with the
+single launch-derived catalog record. Each call retains the backend owner for
+the next message. An adversarial oversized envelope reaches no shared-memory,
+capability-release, response, or device operation, clears request, token, and
+scratch storage, and leaves the backend available. The focused Linux suite
+passes all 118 tests and both Linux release and `MRML_NATIVE` release builds
+pass. This does not create an unbounded native loop or prove real syscalls,
+cache/IOMMU synchronization, installed execution, supervision, or hardware.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — lending an existing unique backend through one
+bounded validated dispatch call is conventional service-loop composition. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
