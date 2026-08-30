@@ -1049,3 +1049,8 @@ Configured isolation preparation does not detach a kernel reservation from its
 configuration authority. Its linear owner reapplies exact policy reads and
 revision checks and exact-matches the launch specification before backend
 construction; denial cancels the reservation without fallback or launch.
+
+The complete Total-service owner cannot be decomposed wholesale into raw
+prepared routes. Cleanup consumes it and cancels every retained admission
+reservation, while complete construction and commit continue to reject any
+single route not restored to its exact expected domain slot.

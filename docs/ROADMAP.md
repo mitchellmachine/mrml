@@ -4074,3 +4074,8 @@ Prepared configured-isolation routes now retain the policy application inputs
 and revalidate them before backend construction. Revision drift, exact-read
 revocation, or specification substitution cancels the kernel reservation and
 starts neither placement backend.
+
+Complete Total-service preparation no longer supports bulk extraction of its
+kernel routes. Consuming cleanup cancels all retained reservations in reverse
+order; the remaining single-route transformation path must restore exact
+expected membership before complete endpoint construction or commit succeeds.

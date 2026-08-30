@@ -5787,7 +5787,7 @@ mod tests {
             .unwrap();
         assert!(prepared.is_empty());
         assert_eq!(prepared.len(), 0);
-        assert!(prepared.into_routes().iter().all(Option::is_none));
+        drop(prepared);
         assert_eq!(rejected.admission().running().count(), 0);
 
         let mut prepared = rejected
@@ -5850,9 +5850,7 @@ mod tests {
                 TotalServicePreparationBinding::new(valid_bounds, second),
             ])
             .unwrap();
-        for route in prepared.into_routes().into_iter().rev().flatten() {
-            route.cancel(invalid.admission_mut()).unwrap();
-        }
+        prepared.cancel_all(invalid.admission_mut()).unwrap();
 
         let release = activated_two_domain_release(first_domain, second_domain, 19);
         let mut construction = policy.bind_release_inventory(release).unwrap();

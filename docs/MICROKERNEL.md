@@ -7165,6 +7165,17 @@ Patent review: `NOT_TRIGGERED` — this is conventional policy/capability
 revalidation and rollback at an existing prepared-launch boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+Complete Total-service preparation no longer exposes a bulk `into_routes`
+decomposition into independently committable kernel reservations. Explicit
+cleanup consumes the set and attempts reverse-order cancellation of every
+retained route, while the bounded single-route take/restore transformation used
+for artifact binding remains tracked by expected complete membership.
+Configuration remains 53 focused tests and the native service image builds.
+
+Patent review: `NOT_TRIGGERED` — this removes an ownership escape and uses the
+existing conventional admission cancellation mechanism. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

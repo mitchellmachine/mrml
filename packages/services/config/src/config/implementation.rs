@@ -5115,8 +5115,20 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
         Ok(())
     }
 
-    pub fn into_routes(self) -> [Option<PreparedIsolationServiceRoute>; DOMAINS] {
-        self.routes
+    /// Cancels every still-prepared route in reverse order. All routes are
+    /// attempted even if one cancellation fails, preventing bulk decomposition
+    /// into independently committable admission reservations.
+    pub fn cancel_all(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<(), mrml_kernel::IsolationLaunchError> {
+        let mut failure = None;
+        for route in self.routes.into_iter().rev().flatten() {
+            if let Err(error) = route.cancel(admission) {
+                failure = Some(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// Constructs one backend endpoint for every exact prepared domain before
