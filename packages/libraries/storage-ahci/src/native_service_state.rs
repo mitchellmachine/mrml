@@ -62,6 +62,47 @@ where
     unsafe { prepare_installed_ahci_service_state(capabilities, launch, registers, sync) }
 }
 
+/// Prepares the concrete native x86-64 register path with an injected clock.
+///
+/// # Safety
+///
+/// The safety requirements of
+/// [`bootstrap_and_prepare_x86_coherent_ahci_service`] apply. The decoded ABAR
+/// virtual range must be a live exclusive volatile mapping. `delay` must use a
+/// platform-owned monotonic source and satisfy [`crate::AhciMonotonicDelay`].
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn bootstrap_and_prepare_native_x86_coherent_ahci_service<'a, 'm, A, B, D>(
+    syscalls: &mut AhciUserspaceSyscalls<B>,
+    entry: AhciServiceEntryRegisters,
+    launch_scratch: &mut [u8; AHCI_SERVICE_LAUNCH_BYTES],
+    capabilities: &'a mut A,
+    delay: D,
+) -> Result<
+    AhciNativeServiceState<
+        'a,
+        'm,
+        A,
+        crate::AhciPlatformIo<crate::NativeAhciRegisterIo, D>,
+        crate::AhciX86CoherentDataSync,
+    >,
+    AhciNativeServicePreparationError,
+>
+where
+    A: AhciDataCapabilityAuthorizer,
+    B: AhciRawSyscall,
+    D: crate::AhciMonotonicDelay,
+{
+    unsafe {
+        bootstrap_and_prepare_x86_coherent_ahci_service(
+            syscalls,
+            entry,
+            launch_scratch,
+            capabilities,
+            move |mapping| crate::AhciPlatformIo::from_installed_mapping(mapping, delay),
+        )
+    }
+}
+
 /// Authenticates the native entry projection, wipes its copied bytes, and then
 /// prepares the complete installed service state.
 ///
@@ -246,6 +287,14 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct Delay;
+    impl crate::AhciMonotonicDelay for Delay {
+        fn delay_at_least_microseconds(&mut self, _: u32) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
     struct BootRaw {
         bytes: [u8; AHCI_SERVICE_LAUNCH_BYTES],
         calls: usize,
@@ -348,7 +397,10 @@ mod tests {
         }
     }
 
-    fn launch_with_mappings(bases: [u64; 4]) -> InstalledAhciServiceLaunch {
+    fn launch_with_ranges(
+        bases: [u64; 4],
+        abar_virtual_base: u64,
+    ) -> InstalledAhciServiceLaunch {
         let record = AhciServiceLaunchRecord::new(
             4,
             3,
@@ -365,7 +417,7 @@ mod tests {
                 configuration_generation: 11,
                 mapping_generation: 12,
                 physical_base: 0x10_0000,
-                virtual_base: 0x20_0000,
+                virtual_base: abar_virtual_base,
                 bytes: 0x2000,
             },
             AhciPortDmaLayout {
@@ -400,6 +452,10 @@ mod tests {
             InstalledAhciServiceLaunch::from_installed_projection(&record.encode(), 3, authorities)
         }
         .unwrap()
+    }
+
+    fn launch_with_mappings(bases: [u64; 4]) -> InstalledAhciServiceLaunch {
+        launch_with_ranges(bases, 0x20_0000)
     }
 
     fn launch() -> InstalledAhciServiceLaunch {
@@ -710,5 +766,44 @@ mod tests {
         assert_eq!(rejected_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
         assert_eq!(rejected_authorizer.calls, 0);
         assert_eq!(rejected_syscalls.into_raw().calls, 1);
+    }
+
+    #[test]
+    fn native_entry_constructs_volatile_abar_only_from_decoded_mapping() {
+        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
+        let mut abar = [Page([0; 4096]), Page([0; 4096])];
+        abar[0].0[0x118..0x11c].copy_from_slice(&0x11_u32.to_ne_bytes());
+        let installed = launch_with_ranges(bases, abar[0].0.as_mut_ptr() as u64);
+        let mut syscalls = AhciUserspaceSyscalls::new(
+            BootRaw {
+                bytes: installed.record().encode(),
+                calls: 0,
+            },
+            1,
+            2,
+        )
+        .unwrap();
+        let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
+        let mut authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
+        let state = unsafe {
+            bootstrap_and_prepare_native_x86_coherent_ahci_service(
+                &mut syscalls,
+                entry(installed),
+                &mut launch_scratch,
+                &mut authorizer,
+                Delay,
+            )
+        }
+        .unwrap();
+        assert_eq!(launch_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
+        assert_eq!(state.device(), installed.record().device());
+        drop(state);
+        assert_eq!(authorizer.calls, 2);
+        assert_eq!(syscalls.into_raw().calls, 1);
     }
 }

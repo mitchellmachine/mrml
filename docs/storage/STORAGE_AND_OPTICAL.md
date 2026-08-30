@@ -1140,6 +1140,32 @@ Patent review: **NOT_TRIGGERED**. Composing existing MMIO and monotonic-delay
 interfaces by exact delegation is conventional driver dependency plumbing. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The authenticated coherent entry path now prepares concrete native platform I/O
+**PARTIALLY IMPLEMENTED IN SOURCE**. After launch decode it constructs the
+volatile `NativeAhciRegisterIo` exclusively from the decoded ABAR mapping,
+combines it with an injected `AhciMonotonicDelay`, admits the exact coherent data
+extent, and completes installed state preparation. Thus the returned backend
+satisfies both ordinary command-register and reset-delay contracts without an
+independently supplied register descriptor. The focused Linux suite passes all
+126 tests and both Linux release and `MRML_NATIVE` release builds pass. The new
+test performs volatile reads over an aligned host byte array and uses a fake
+delay; it is controlled memory evidence, not installed MMIO, a real monotonic
+clock, reset timing, IOMMU, or physical-device evidence.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Constructing an existing volatile MMIO adapter
+from authenticated mapping data and pairing it with an existing timing contract
+is conventional device-service initialization. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
