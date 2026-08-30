@@ -1008,17 +1008,19 @@ placement, filesystem interface/provider/SystemRelease generations, launch
 policy, association generation, canonical handoff length, and block endpoint
 before construction. Native launch is now one borrow-safe transaction over the
 source task runtime: it validates endpoint and transfer authority, consumes the
-exact attachment through the kernel's mapped-transfer constructor, and retains
+exact attachment through the kernel's copy-mediated constructor, and retains
 the resulting task as the receipt instance. Every preconstruction failure
 atomically revokes both consumed source roots; construction failure uses the
 kernel's rollback-complete result. The separate teardown backend changes that
 receipt from active-task to exact kernel retry state on failure, then resumes
-ordered revocation, unmapping, scrub, and object release after supervised task
-retirement. A focused lifecycle simulation completes launch, observes the
-live-task teardown refusal, retires the target, retries, and proves both
-mappings, backing, and the page charge are gone. Installed invocation and
-active page-table backends remain **PLANNED**. Storage passes 161 focused
-Linux-host tests. The block transport now has a direction-specific entry point
+ordered revocation, removal of the sole read-only consumer mapping, scrub, and
+object release after supervised task retirement. Its public backend no longer
+accepts or stores a provider mapping backend. A focused lifecycle simulation
+completes launch, observes the live-task teardown refusal, retires the target,
+retries, and proves the one mapping, backing, and page charge are gone.
+Installed invocation and active page-table backends remain **PLANNED**. Storage
+passes 162 focused Linux-host release tests. The block transport now has a
+direction-specific entry point
 for provider reads that return bytes through the kernel's non-mapped write-copy
 projection. It re-decodes the untrusted request, accepts only service-write
 direction, exact-matches `MAP | WRITE` authority and the live task/VM/source

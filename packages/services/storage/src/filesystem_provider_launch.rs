@@ -4,14 +4,14 @@ use crate::{
 };
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, ComponentServiceLaunchAttachment,
-    ComponentServiceReadTransferAttachment, ComponentServiceReadTransferMemoryRoot,
-    ComponentServiceReadTransferTaskBinding, IsolationPlacement, IsolationServiceSpec,
+    ComponentServiceReadTransferAttachment, ComponentServiceReadTransferCopyTaskBinding,
+    ComponentServiceReadTransferMemoryRoot, IsolationPlacement, IsolationServiceSpec,
     MemoryMappingBackend, MemoryObjectBackingBackend, MemoryPoolTable,
-    NativeComponentServiceMappedReadTransferError, NativeComponentServiceMappedReadTransferTask,
-    NativeComponentServiceMappedReadTransferTeardown,
-    NativeComponentServiceMappedReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
-    TaskRuntimeError, prepare_native_component_service_task_from_mapped_read_transfer_attachment,
-    teardown_native_component_service_mapped_read_transfer,
+    NativeComponentServiceCopyReadTransferError, NativeComponentServiceCopyReadTransferTask,
+    NativeComponentServiceCopyReadTransferTeardown,
+    NativeComponentServiceCopyReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
+    TaskRuntimeError, prepare_native_component_service_task_from_copy_read_transfer_attachment,
+    teardown_native_component_service_copy_read_transfer,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,24 +148,24 @@ pub enum NativeFilesystemProviderLaunchError {
         preflight: NativeFilesystemProviderLaunchPreflightError,
         cleanup: TaskRuntimeError,
     },
-    Construction(NativeComponentServiceMappedReadTransferError),
+    Construction(NativeComponentServiceCopyReadTransferError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeFilesystemProviderInstance {
-    Active(NativeComponentServiceMappedReadTransferTask),
-    Teardown(NativeComponentServiceMappedReadTransferTeardown),
+    Active(NativeComponentServiceCopyReadTransferTask),
+    Teardown(NativeComponentServiceCopyReadTransferTeardown),
 }
 
 impl NativeFilesystemProviderInstance {
-    pub const fn active(self) -> Option<NativeComponentServiceMappedReadTransferTask> {
+    pub const fn active(self) -> Option<NativeComponentServiceCopyReadTransferTask> {
         match self {
             Self::Active(active) => Some(active),
             Self::Teardown(_) => None,
         }
     }
 
-    pub const fn teardown(self) -> Option<NativeComponentServiceMappedReadTransferTeardown> {
+    pub const fn teardown(self) -> Option<NativeComponentServiceCopyReadTransferTeardown> {
         match self {
             Self::Active(_) => None,
             Self::Teardown(state) => Some(state),
@@ -200,7 +200,7 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
     service: IsolationServiceSpec,
     launch_attachment: ComponentServiceLaunchAttachment,
     memory: ComponentServiceReadTransferMemoryRoot,
-    binding: ComponentServiceReadTransferTaskBinding,
+    binding: ComponentServiceReadTransferCopyTaskBinding,
     supervisor_task_object: ObjectId,
 ) -> Result<
     FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
@@ -251,7 +251,7 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
             preflight,
         ));
     }
-    let active = prepare_native_component_service_task_from_mapped_read_transfer_attachment(
+    let active = prepare_native_component_service_task_from_copy_read_transfer_attachment(
         runtime,
         source_task,
         target_task,
@@ -274,7 +274,6 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
 pub struct NativeFilesystemProviderTeardownBackend<
     'a,
     F,
-    S,
     B,
     const POOLS: usize,
     const OBJECTS: usize,
@@ -285,45 +284,30 @@ pub struct NativeFilesystemProviderTeardownBackend<
     runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
     memory: &'a mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
     local_backend: &'a mut F,
-    provider_backend: &'a mut S,
     backing_backend: &'a mut B,
 }
 
 impl<
     'a,
     F,
-    S,
     B,
     const POOLS: usize,
     const OBJECTS: usize,
     const MAPPINGS: usize,
     const TASKS: usize,
     const CAPABILITIES: usize,
->
-    NativeFilesystemProviderTeardownBackend<
-        'a,
-        F,
-        S,
-        B,
-        POOLS,
-        OBJECTS,
-        MAPPINGS,
-        TASKS,
-        CAPABILITIES,
-    >
+> NativeFilesystemProviderTeardownBackend<'a, F, B, POOLS, OBJECTS, MAPPINGS, TASKS, CAPABILITIES>
 {
     pub const fn new(
         runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
         memory: &'a mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
         local_backend: &'a mut F,
-        provider_backend: &'a mut S,
         backing_backend: &'a mut B,
     ) -> Self {
         Self {
             runtime,
             memory,
             local_backend,
-            provider_backend,
             backing_backend,
         }
     }
@@ -462,7 +446,6 @@ pub fn teardown_filesystem_provider<B: FilesystemProviderTeardownBackend>(
 unsafe impl<
     'a,
     F: MemoryMappingBackend,
-    S: MemoryMappingBackend,
     B: MemoryObjectBackingBackend,
     const POOLS: usize,
     const OBJECTS: usize,
@@ -473,7 +456,6 @@ unsafe impl<
     for NativeFilesystemProviderTeardownBackend<
         'a,
         F,
-        S,
         B,
         POOLS,
         OBJECTS,
@@ -483,22 +465,20 @@ unsafe impl<
     >
 {
     type Instance = NativeFilesystemProviderInstance;
-    type TeardownError =
-        NativeComponentServiceMappedReadTransferTeardownError<F::Error, S::Error, B::Error>;
+    type TeardownError = NativeComponentServiceCopyReadTransferTeardownError<F::Error, B::Error>;
 
     fn teardown(&mut self, instance: &mut Self::Instance) -> Result<(), Self::TeardownError> {
         let state = match *instance {
             NativeFilesystemProviderInstance::Active(active) => {
-                NativeComponentServiceMappedReadTransferTeardown::new(active)
+                NativeComponentServiceCopyReadTransferTeardown::new(active)
             }
             NativeFilesystemProviderInstance::Teardown(state) => state,
         };
-        match teardown_native_component_service_mapped_read_transfer(
+        match teardown_native_component_service_copy_read_transfer(
             state,
             self.runtime,
             self.memory,
             self.local_backend,
-            self.provider_backend,
             self.backing_backend,
         ) {
             Ok(released_pages) => {
@@ -882,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn native_launch_and_teardown_retain_one_exact_mapped_task_lifecycle() {
+    fn native_launch_and_teardown_retain_one_exact_copy_task_lifecycle() {
         let association = association();
         let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
         let context = |physical, page_table, stack| {
@@ -911,14 +891,14 @@ mod tests {
                 context(0x40_0000, 0x60_0000, 0x7200_0000),
             )
             .unwrap();
-        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x2a).unwrap();
+        let mut memory = MemoryPoolTable::<1, 1, 1>::new(0x2a).unwrap();
         let pool_rights = Rights::ALLOCATE
             .union(Rights::CONTROL)
             .union(Rights::INSPECT);
         let (pool, pool_capability) = memory
             .create_root(
                 1,
-                2,
+                1,
                 0,
                 pool_rights,
                 runtime.capabilities_mut(source).unwrap(),
@@ -947,28 +927,19 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x7100), Rights::MAP.union(Rights::CONTROL))
             .unwrap();
-        let provider_target = runtime
-            .capabilities_mut(source)
-            .unwrap()
-            .insert(ObjectId(0x7200), Rights::MAP.union(Rights::CONTROL))
-            .unwrap();
         let mut local_mapping = NativeMappingBackend::default();
-        let mut provider_mapping = NativeMappingBackend::default();
-        let mappings = mrml_kernel::install_component_service_read_transfer_mappings(
+        let mapping = mrml_kernel::install_component_service_read_transfer_local_mapping(
             &mut memory,
             root,
             local_target,
             0x300,
             &mut local_mapping,
-            provider_target,
-            0x400,
-            &mut provider_mapping,
             &runtime,
             source,
         )
         .unwrap();
-        let binding = mrml_kernel::bind_component_service_read_transfer_tasks(
-            mappings, target, provider, &runtime,
+        let binding = mrml_kernel::bind_component_service_read_transfer_copy_tasks(
+            mapping, target, provider, &runtime,
         )
         .unwrap();
         let service = IsolationServiceSpec::new(
@@ -1045,14 +1016,13 @@ mod tests {
                 &mut runtime,
                 &mut memory,
                 &mut local_mapping,
-                &mut provider_mapping,
                 &mut backing,
             );
             teardown_filesystem_provider(receipt, &mut teardown).unwrap_err()
         };
         assert!(matches!(
             failure.error(),
-            NativeComponentServiceMappedReadTransferTeardownError::TaskStillLive {
+            NativeComponentServiceCopyReadTransferTeardownError::TaskStillLive {
                 task,
                 ..
             } if *task == target
@@ -1067,12 +1037,10 @@ mod tests {
             &mut runtime,
             &mut memory,
             &mut local_mapping,
-            &mut provider_mapping,
             &mut backing,
         );
         teardown_filesystem_provider(receipt, &mut teardown).unwrap();
         assert!(local_mapping.installed.is_none());
-        assert!(provider_mapping.installed.is_none());
         assert!(backing.claimed.is_none());
         assert_eq!(
             memory
