@@ -1380,6 +1380,20 @@ pub enum NativeComponentServiceCopyReadTransferRetirementMappingError<M> {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceCopyReadTransferActiveRetirementError {
+    Retirement(NativeComponentServiceCopyReadTransferRetirementError),
+    Runtime(TaskRuntimeError),
+    Mapping(MemoryResourceError),
+    ActivePageTables(crate::arch::x86_64::PageTableBuildError),
+    ActiveRevoker(crate::arch::x86_64::ActiveMappingRevocationError),
+    RetirementMapping(
+        NativeComponentServiceCopyReadTransferRetirementMappingError<
+            crate::arch::x86_64::ActiveMappingRevocationError,
+        >,
+    ),
+}
+
 impl<M> NativeComponentServiceCopyReadTransferRetirementMappingError<M> {
     pub const fn state(&self) -> Option<NativeComponentServiceCopyReadTransferTeardown> {
         match self {
@@ -1804,6 +1818,81 @@ pub fn retire_current_native_component_service_copy_read_transfer_with_mapping_r
             retirement,
         ),
     ))
+}
+
+/// Retires the current native copy-transfer task through its physically active
+/// x86-64 page-table root.
+///
+/// # Safety
+///
+/// The caller must execute on the CPU currently running `active`, with that
+/// task's hierarchy identity-mapped and exclusively owned. Interrupts and all
+/// concurrent page-table mutation must remain excluded through this call. The
+/// active-table constructor checks IF but cannot establish CPU ownership or
+/// restore a caller-managed critical section.
+pub unsafe fn retire_current_native_component_service_copy_read_transfer_on_active_x86_64<
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    active: NativeComponentServiceCopyReadTransferTask,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+) -> Result<
+    (
+        crate::TaskTermination,
+        NativeComponentServiceCopyReadTransferTeardown,
+    ),
+    NativeComponentServiceCopyReadTransferActiveRetirementError,
+> {
+    let construction = active.construction();
+    if runtime.current() != Some(construction.task()) {
+        return Err(
+            NativeComponentServiceCopyReadTransferActiveRetirementError::Retirement(
+                NativeComponentServiceCopyReadTransferRetirementError::NotCurrent,
+            ),
+        );
+    }
+    let context = runtime
+        .context(construction.task())
+        .map_err(NativeComponentServiceCopyReadTransferActiveRetirementError::Runtime)?;
+    if context.page_table() != active.page_table_root() {
+        return Err(
+            NativeComponentServiceCopyReadTransferActiveRetirementError::Retirement(
+                NativeComponentServiceCopyReadTransferRetirementError::RootMismatch,
+            ),
+        );
+    }
+    let capabilities = runtime
+        .capabilities(construction.source_task())
+        .map_err(NativeComponentServiceCopyReadTransferActiveRetirementError::Runtime)?;
+    let mapping = active.binding().mapping();
+    let request = memory
+        .mapping_revocation_request(
+            mapping.mapping(),
+            mapping.local_target_capability(),
+            capabilities,
+        )
+        .map_err(NativeComponentServiceCopyReadTransferActiveRetirementError::Mapping)?;
+    let mut tables = unsafe { crate::arch::x86_64::ActivePageTables::current() }
+        .map_err(NativeComponentServiceCopyReadTransferActiveRetirementError::ActivePageTables)?;
+    let mut revoker = unsafe {
+        crate::arch::x86_64::ActiveServiceMappingRevoker::from_request(
+            &mut tables,
+            active.page_table_root(),
+            request,
+        )
+    }
+    .map_err(NativeComponentServiceCopyReadTransferActiveRetirementError::ActiveRevoker)?;
+    retire_current_native_component_service_copy_read_transfer_with_mapping_revocation(
+        active,
+        runtime,
+        memory,
+        &mut revoker,
+    )
+    .map_err(NativeComponentServiceCopyReadTransferActiveRetirementError::RetirementMapping)
 }
 
 pub fn teardown_native_component_service_copy_read_transfer<
@@ -5546,6 +5635,20 @@ mod tests {
         assert_eq!(
             retire_current_native_component_service_copy_read_transfer(active, &mut runtime),
             Err(NativeComponentServiceCopyReadTransferRetirementError::NotCurrent)
+        );
+        assert_eq!(
+            unsafe {
+                retire_current_native_component_service_copy_read_transfer_on_active_x86_64(
+                    active,
+                    &mut runtime,
+                    &mut memory,
+                )
+            },
+            Err(
+                NativeComponentServiceCopyReadTransferActiveRetirementError::Retirement(
+                    NativeComponentServiceCopyReadTransferRetirementError::NotCurrent
+                )
+            )
         );
         let state = match teardown_native_component_service_copy_read_transfer(
             NativeComponentServiceCopyReadTransferTeardown::new(active),

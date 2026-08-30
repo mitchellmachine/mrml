@@ -10623,3 +10623,18 @@ authorization denial and exact descriptor recovery, not active hardware use.
 Patent review: `NOT_TRIGGERED` — capability-gated disclosure of an exact mapping
 withdrawal descriptor is conventional privileged resource introspection. See
 `docs/patents/REVIEW_LOG.md`.
+
+The kernel now exposes one unsafe x86-64 active retirement entry point for the
+copy-mediated native service lifecycle. It rejects wrong current-task and
+page-table-root state before privileged access, obtains the local mapping's
+capability-authorized revocation descriptor, requires an IF-clear current CR3,
+constructs the exact active revoker, and completes the coupled task/mapping
+retirement before returning a scheduling outcome. CPU ownership, identity
+mapping, and concurrent-mutation exclusion remain explicit unsafe caller
+obligations. The Linux-host release kernel suite passes 652 tests and the
+release build passes; only pre-privilege denial is exercised on the host, so
+active CR3 execution remains **PARTIALLY IMPLEMENTED**, not hardware-verified.
+
+Patent review: `NOT_TRIGGERED` — composing exact task, capability, CR3, and leaf
+preconditions around conventional page-table withdrawal is ordinary privileged
+lifecycle integration. See `docs/patents/REVIEW_LOG.md`.
