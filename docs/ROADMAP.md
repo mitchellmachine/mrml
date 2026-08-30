@@ -4129,3 +4129,8 @@ stable publication path can consume its storage receipt.
 Authenticated deployment recovery-state replacement is now fully encoded before
 stable-file receipt consumption. Recovery-epoch exhaustion and invalid successor
 bindings fail without publishing the prepared file or changing live activation.
+
+Deployment activation validation is now one private typed transition shared by
+direct and both stable commits. All fallible capability, candidate, release, and
+arithmetic checks precede storage mutation; final in-memory publication is an
+infallible consumption of that validated state.

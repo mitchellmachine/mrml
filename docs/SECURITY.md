@@ -1110,3 +1110,8 @@ Authenticated deployment publication preflights the complete replacement
 recovery-state record, including checked epoch advance and prepared file
 identity, before consuming the file receipt. Encoding failure leaves recovery
 state, activation, and receipt unchanged.
+
+Deployment does not repeat a fallible candidate lookup or capability check after
+durable publication. A private validated-activation owner captures the exact
+slot, activation/release identities, and checked successor sequence before the
+receipt boundary; final service mutation only consumes that owner.

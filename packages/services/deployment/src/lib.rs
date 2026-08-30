@@ -189,6 +189,14 @@ pub struct PreparedActivation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ValidatedActivation {
+    slot: usize,
+    active: ActivatedSystemGeneration,
+    active_release: Option<ActivatedSystemRelease>,
+    next_activation_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CandidateState {
     Staged,
     Prepared,
@@ -298,35 +306,41 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         control: Capability,
         prepared: PreparedActivation,
     ) -> Result<ActivatedSystemGeneration, DeploymentError> {
+        let validated = self.validate_activation(capabilities, control, prepared)?;
+        Ok(self.publish_validated_activation(validated))
+    }
+
+    fn validate_activation<const N: usize>(
+        &self,
+        capabilities: &CapabilitySpace<N>,
+        control: Capability,
+        prepared: PreparedActivation,
+    ) -> Result<ValidatedActivation, DeploymentError> {
         self.authorize(capabilities, control, Rights::CONTROL)?;
-        if prepared.expected_activation_sequence != self.next_activation_sequence {
-            return Err(DeploymentError::StaleActivation);
-        }
         let slot_index = prepared.candidate.slot as usize;
-        let slot = self.slot(prepared.candidate)?;
-        if slot.state != CandidateState::Prepared {
-            return Err(DeploymentError::InvalidCandidate);
-        }
-        let candidate = slot.candidate;
-        let active = ActivatedSystemGeneration::new(
-            candidate.generation,
-            candidate.generation_digest,
-            candidate.interface_catalog_digest,
-            self.next_activation_sequence,
-            candidate.source_object,
-            candidate.source_generation,
-        )
-        .map_err(DeploymentError::InvalidActivation)?;
-        self.next_activation_sequence = self
+        let active = self.preview_activation(prepared)?;
+        let active_release = self.preview_release(prepared)?;
+        let next_activation_sequence = self
             .next_activation_sequence
             .checked_add(1)
             .ok_or(DeploymentError::GenerationExhausted)?;
-        self.candidates[slot_index] = None;
-        self.active = Some(active);
-        self.active_release = candidate
-            .release_identity
-            .map(|release| ActivatedSystemRelease::new(active, release));
-        Ok(active)
+        Ok(ValidatedActivation {
+            slot: slot_index,
+            active,
+            active_release,
+            next_activation_sequence,
+        })
+    }
+
+    fn publish_validated_activation(
+        &mut self,
+        validated: ValidatedActivation,
+    ) -> ActivatedSystemGeneration {
+        self.next_activation_sequence = validated.next_activation_sequence;
+        self.candidates[validated.slot] = None;
+        self.active = Some(validated.active);
+        self.active_release = validated.active_release;
+        validated.active
     }
 
     pub fn preview_activation(
@@ -766,28 +780,20 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
     ) -> Result<StableActivation<EXTENTS>, StableActivationCommitError> {
-        service
-            .authorize(capabilities, control, Rights::CONTROL)
+        let validated = service
+            .validate_activation(capabilities, control, self.activation)
             .map_err(StableActivationCommitError::Deployment)?;
-        if service.preview_activation(self.activation) != Ok(self.active) {
+        if validated.active != self.active {
             return Err(StableActivationCommitError::StaleActivation);
         }
-        if service.preview_release(self.activation) != Ok(self.active_release) {
+        if validated.active_release != self.active_release {
             return Err(StableActivationCommitError::StaleActivation);
         }
         let file = self
             .file
             .commit_transaction_authorized(storage_authority, receipt)
             .map_err(|(_, error)| StableActivationCommitError::Storage(error))?;
-        let active = service
-            .commit_activation(capabilities, control, self.activation)
-            .map_err(StableActivationCommitError::Deployment)?;
-        if active != self.active {
-            return Err(StableActivationCommitError::StaleActivation);
-        }
-        if service.active_release != self.active_release {
-            return Err(StableActivationCommitError::StaleActivation);
-        }
+        let active = service.publish_validated_activation(validated);
         Ok(StableActivation {
             file,
             active,
@@ -810,13 +816,13 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
         state_store: &mut S,
     ) -> Result<StableActivation<EXTENTS>, AuthenticatedActivationCommitError<S::Error>> {
-        service
-            .authorize(capabilities, control, Rights::CONTROL)
+        let validated = service
+            .validate_activation(capabilities, control, self.activation)
             .map_err(AuthenticatedActivationCommitError::Deployment)?;
-        if service.preview_activation(self.activation) != Ok(self.active) {
+        if validated.active != self.active {
             return Err(AuthenticatedActivationCommitError::StaleActivation);
         }
-        if service.preview_release(self.activation) != Ok(self.active_release) {
+        if validated.active_release != self.active_release {
             return Err(AuthenticatedActivationCommitError::StaleActivation);
         }
         let mut expected = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
@@ -848,15 +854,7 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         state_store
             .compare_and_store(&expected, &replacement)
             .map_err(AuthenticatedActivationCommitError::StateStore)?;
-        let active = service
-            .commit_activation(capabilities, control, self.activation)
-            .map_err(AuthenticatedActivationCommitError::Deployment)?;
-        if active != self.active {
-            return Err(AuthenticatedActivationCommitError::StaleActivation);
-        }
-        if service.active_release != self.active_release {
-            return Err(AuthenticatedActivationCommitError::StaleActivation);
-        }
+        let active = service.publish_validated_activation(validated);
         Ok(StableActivation {
             file,
             active,

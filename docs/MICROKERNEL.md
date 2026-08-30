@@ -7291,6 +7291,18 @@ focused Linux tests.
 Patent review: `NOT_TRIGGERED` — this reorders existing checked encoding ahead
 of an existing commit point. See `docs/patents/REVIEW_LOG.md`.
 
+Deployment now represents the fully checked candidate transition as a private
+`ValidatedActivation`. Direct, stable, and authenticated commits perform exact
+control authorization, candidate/generation/release validation, and checked
+sequence advance before durable mutation. After receipt consumption—and after
+authenticated recovery-state compare-and-store—the final service publication
+has no remaining fallible validation branch. Deployment remains 7 focused Linux
+tests and the native service image builds.
+
+Patent review: `NOT_TRIGGERED` — this is conventional validation/commit
+factoring within the existing bounded activation state machine. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
