@@ -19256,12 +19256,9 @@ mod tests {
                 panic!("expected function")
             };
             for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
-                let error = compile_x86_64_function::<_, 4096, 4, 192>(
-                    &function,
-                    &NoConstants,
-                    abi,
-                )
-                .unwrap_err();
+                let error =
+                    compile_x86_64_function::<_, 4096, 4, 192>(&function, &NoConstants, abi)
+                        .unwrap_err();
                 assert_eq!(error.kind, expected, "{source}");
             }
         }
@@ -19383,26 +19380,41 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: u8, value: u8) -> u8 { flag.then_some(value).unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool) -> bool { flag.then_some(true).unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool, value: u8) -> u8 { flag.then(|ignored| value).unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool, value: u8) -> u8 { flag.then(value).unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool) -> u8 { flag.then_some().unwrap_or_default() }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: u8, value: u8) -> u8 { flag.then_some(value).unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool) -> bool { flag.then_some(true).unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool, value: u8) -> u8 { flag.then(|ignored| value).unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool, value: u8) -> u8 { flag.then(value).unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(flag: bool) -> u8 { flag.then_some().unwrap_or_default() }",
+                CodegenErrorKind::Expression(ExpressionErrorKind::ExpectedExpression),
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 4096, 4, 192>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 4096, 4, 192>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::SystemV,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, expected, "{source}");
+            }
         }
     }
 
