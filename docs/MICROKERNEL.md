@@ -11056,3 +11056,21 @@ passes; this is in-memory state-machine evidence only.
 Patent review: `NOT_TRIGGERED` — serializing task migration against an existing
 one-use scheduler transition is conventional lifecycle locking. See
 `docs/patents/REVIEW_LOG.md`.
+
+`TaskRuntime::start` now preserves an issued dispatch's selected state. When the
+dispatch targets userspace, repeated start observation remains a non-mutating
+`Continue` of that exact current task; when the dispatch is idle, start remains
+idle even if trusted recovery has provisioned a replacement task in the ready
+set. Only exact idle acknowledgement permits a later start to select that
+replacement. This keeps stopped-service provisioning available without letting
+it bypass the one-use retirement handoff.
+
+The Linux-host kernel suite passes 653 tests, storage passes 163, Zstd passes 27,
+and configuration passes 53; their affected Linux release builds pass. The
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+This is in-memory and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — suppressing scheduler start selection until an
+existing idle transition is acknowledged is conventional fail-closed lifecycle
+serialization. See `docs/patents/REVIEW_LOG.md`.

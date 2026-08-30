@@ -626,6 +626,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn start(&mut self) -> ScheduleOutcome {
+        if self.issued_dispatch.is_some() {
+            return self
+                .current()
+                .map_or(ScheduleOutcome::Idle, ScheduleOutcome::Continue);
+        }
         self.scheduler.start()
     }
 
@@ -2656,6 +2661,11 @@ mod tests {
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(dispatch.is_idle());
         assert_eq!(dispatch.user(), None);
+        let replacement = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert_eq!(runtime.start(), ScheduleOutcome::Idle);
+        assert_eq!(runtime.current(), None);
         let mut other_runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
         let dispatch = other_runtime
             .consume_idle_dispatch(dispatch)
@@ -2667,6 +2677,13 @@ mod tests {
         assert_eq!(
             runtime.dispatch_after_termination(termination),
             Err(TaskTerminationDispatchError::NoPendingTermination)
+        );
+        assert_eq!(
+            runtime.start(),
+            ScheduleOutcome::Switch {
+                from: None,
+                to: replacement,
+            }
         );
     }
 
