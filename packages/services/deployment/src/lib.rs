@@ -3045,7 +3045,7 @@ mod tests {
 
     #[test]
     fn authenticated_store_uncertainty_returns_published_checkpoint_owner() {
-        let (capabilities, control, inspect) = authority();
+        let (mut capabilities, control, inspect) = authority();
         let root = ObjectId(0x4445_504c_4f59);
         let mut service = DeploymentService::<1>::new(root).unwrap();
         let candidate = service
@@ -3121,6 +3121,16 @@ mod tests {
                 _ => panic!("state-load uncertainty did not retain published checkpoint"),
             };
         recovery_state.fail_load = false;
+        capabilities.revoke(control).unwrap();
+        let published =
+            match published.resolve(&mut service, &capabilities, control, &recovery_state) {
+                Err((
+                    published,
+                    PublishedActivationResolutionError::Deployment(DeploymentError::Unauthorized),
+                )) => published,
+                _ => panic!("revoked control released published checkpoint"),
+            };
+        let control = capabilities.insert(root, Rights::CONTROL).unwrap();
         let published =
             match published.resolve(&mut service, &capabilities, control, &recovery_state) {
                 Err((published, PublishedActivationResolutionError::RecoveryStateMismatch)) => {
