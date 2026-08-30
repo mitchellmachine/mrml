@@ -11541,3 +11541,20 @@ interrupt or physical-hardware evidence.
 Patent review: `NOT_TRIGGERED` — rejecting a stale completion before queue
 consumption and retaining a late event is conventional one-winner event-loop
 arbitration. See `docs/patents/REVIEW_LOG.md`.
+
+The fixed-capacity executor now has staggered multi-owner coverage. Three tasks
+are scheduled in one runtime; the first two retain distinct one-tick and
+two-tick receive owners while the third remains runnable. The first timer tick
+retires and completes only the first owner, leaving the second pending and its
+context untouched. The second tick then retires only the second owner. Both
+timeout completions clear every payload register, and the unrelated third task
+never acquires pending receive state.
+
+The Linux-host kernel suite passes 668 tests and the Linux kernel release build
+passes through `mrml`. This proves bounded in-memory owner separation across
+staggered deadlines; it does not establish hosted interrupt concurrency or
+physical timer behavior.
+
+Patent review: `NOT_TRIGGERED` — independently matching fixed-capacity timeout
+owners across staggered timer ticks is conventional scheduler regression
+testing. See `docs/patents/REVIEW_LOG.md`.

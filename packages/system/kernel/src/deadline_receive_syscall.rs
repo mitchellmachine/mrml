@@ -272,4 +272,55 @@ mod tests {
             b"late"
         );
     }
+
+    #[test]
+    fn staggered_deadlines_complete_only_their_exact_retained_owners() {
+        let mut runtime = TaskRuntime::<3, 0>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let third = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        assert!(matches!(
+            executor.start(&mut runtime, ReceiveTimeout::new(1).unwrap()),
+            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == second
+        ));
+        assert!(matches!(
+            executor.start(&mut runtime, ReceiveTimeout::new(2).unwrap()),
+            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == third
+        ));
+
+        executor.timer_tick(&mut runtime).unwrap();
+        assert!(!executor.has_pending(first).unwrap());
+        assert!(executor.has_pending(second).unwrap());
+        assert!(!executor.has_pending(third).unwrap());
+        assert_eq!(
+            runtime.context(first).unwrap().rax,
+            crate::SyscallCompletionStatus::TimedOut.code()
+        );
+        assert_ne!(
+            runtime.context(second).unwrap().rax,
+            crate::SyscallCompletionStatus::TimedOut.code()
+        );
+
+        executor.timer_tick(&mut runtime).unwrap();
+        assert!(!executor.has_pending(second).unwrap());
+        assert_eq!(
+            runtime.context(second).unwrap().rax,
+            crate::SyscallCompletionStatus::TimedOut.code()
+        );
+        for task in [first, second] {
+            let context = runtime.context(task).unwrap();
+            assert_eq!(
+                (context.rdx, context.r10, context.r8, context.r9),
+                (0, 0, 0, 0)
+            );
+        }
+    }
 }
