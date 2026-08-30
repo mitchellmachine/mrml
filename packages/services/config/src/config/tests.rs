@@ -22,14 +22,15 @@ mod tests {
     use mrml_storage::{
         AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
-        BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-        BlockServiceError, BlockSessionGrant, BlockVolume, BootRecoveryAdmission, CowMetadataImage,
-        CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend,
-        FileWriteBackend, FileWriteCommitError, OwnerApprovedAuthorityCheckpoint,
-        PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
-        ServicedBlockDevice, StorageAuthorityError, StorageObjectId, StorageObjectKind,
-        StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
-        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+        AuthorityRecoveryValidationError, BlockDeviceDescriptor, BlockDeviceId, BlockRights,
+        BlockService, BlockServiceBackend, BlockServiceError, BlockSessionGrant, BlockVolume,
+        BootRecoveryAdmission, BootRecoveryStateError, CowMetadataImage, CowMetadataWrite,
+        CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
+        FileWriteCommitError, OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor,
+        PlatformBlockDeviceIdentity, PlatformBlockTransport, ServicedBlockDevice,
+        StorageAuthorityError, StorageObjectId, StorageObjectKind, StorageRecoveryGrant,
+        StorageRights, StorageTransactionId, Superblock, VolumeHeader, VolumeId,
+        authority_checkpoint_digest, encode_authority_checkpoint,
         recover_validate_and_commit_stable_authorities,
     };
     use std::vec;
@@ -2262,6 +2263,7 @@ mod tests {
 
     struct RecoveryStateStore {
         bytes: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        report_uncertain_after_store: bool,
     }
 
     impl RecoveryStateStore {
@@ -2272,7 +2274,10 @@ mod tests {
             bytes[24..28].copy_from_slice(&generation.to_le_bytes());
             bytes[32..48].copy_from_slice(&volume.bytes());
             bytes[48..56].copy_from_slice(&root_generation.to_le_bytes());
-            Self { bytes }
+            Self {
+                bytes,
+                report_uncertain_after_store: false,
+            }
         }
     }
 
@@ -2296,6 +2301,9 @@ mod tests {
                 return Err(2);
             }
             self.bytes.copy_from_slice(replacement);
+            if self.report_uncertain_after_store {
+                return Err(3);
+            }
             Ok(())
         }
     }
@@ -3878,6 +3886,7 @@ mod tests {
                 )
                 .unwrap();
             let mut state_store = RecoveryStateStore::new(8, 1, stable_volume(), 14);
+            state_store.report_uncertain_after_store = true;
             let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
             let task = runtime
                 .create(
@@ -3975,21 +3984,29 @@ mod tests {
             let mut validator =
                 StableServiceRecoveryValidator::new(configuration_validator, &supervisor, task);
             let mut authority_scratch = [0xa5; 128];
-            let (authorities, prepared_service) =
-                recover_validate_and_commit_stable_authorities::<1, 1, 1, _, _, _>(
-                    &authority_file,
-                    &bootstrap,
-                    bootstrap_file,
-                    stable_principal(),
-                    2,
-                    &mut issuer,
-                    &mut authority_scratch,
-                    &mut authority_backend,
-                    &mut boot_store,
-                    &mut validator,
-                )
-                .unwrap();
+            let pending = match recover_validate_and_commit_stable_authorities::<1, 1, 1, _, _, _>(
+                &authority_file,
+                &bootstrap,
+                bootstrap_file,
+                stable_principal(),
+                2,
+                &mut issuer,
+                &mut authority_scratch,
+                &mut authority_backend,
+                &mut boot_store,
+                &mut validator,
+            ) {
+                Err(AuthorityRecoveryValidationError::StateUncertain {
+                    pending,
+                    error: BootRecoveryStateError::Store(3),
+                }) => pending,
+                _ => panic!("committed-but-uncertain configuration recovery was not retained"),
+            };
             drop(boot_store);
+            let (authorities, prepared_service) = match pending.resolve(&state_store) {
+                Ok(resolved) => resolved,
+                Err(_) => panic!("authenticated configuration recovery did not resolve"),
+            };
             assert!(
                 supervisor
                     .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
