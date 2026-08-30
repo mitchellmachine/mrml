@@ -1207,6 +1207,10 @@ The concrete register adapter expresses that rule with zero capability-buffer
 capacity and treats any nonzero kernel-reported count as a range failure before
 the provider sees the request.
 
+Canonical unmount transport exposes the provider's failure-atomic removal rule:
+only the exact volume and mount generation can produce a nonzero completion
+serial. Replay maps to typed stale and the removed root identity remains invalid.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

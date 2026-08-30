@@ -7432,6 +7432,10 @@ success or failure. The concrete register adapter passes a null pointer with
 zero capability capacity, rejects any kernel-reported transfer, and sends the
 exact 24-byte response through the launch-bound reply endpoint/task. Together
 the focused provider suite passes fifty-two tests.
+Canonical unmount transport now exact-matches volume/generation, emits the
+post-removal completion serial, and maps replay to typed stale while keeping the
+root invalid. The focused provider suite passes fifty-three tests; unmount is
+not yet connected to the register-level receive/reply adapter.
 
 Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and
