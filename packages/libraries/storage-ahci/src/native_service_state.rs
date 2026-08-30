@@ -3,14 +3,22 @@
 use crate::{
     ActiveAhciPort, AhciCommandBlockBackend, AhciDataBufferSync, AhciDataCapabilityAuthorizer,
     AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls, AhciMappedCommandMemory,
-    AhciMappedDataBuffer, AhciRegisterIo, AhciResetIo, InstalledAhciServiceLaunch,
-    AHCI_DISPATCH_REQUEST_BYTES,
+    AhciMappedDataBuffer, AhciNativeMappedMemory, AhciNativeMappedMemoryError,
+    AhciNativePortReconstructionError, AhciRegisterIo, AhciResetIo, InstalledAhciServiceLaunch,
+    AHCI_DISPATCH_REQUEST_BYTES, reconstruct_installed_ahci_port,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciNativeServiceStateError {
     BackendBinding,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciNativeServicePreparationError {
+    MappedMemory(AhciNativeMappedMemoryError),
+    ActivePort(AhciNativePortReconstructionError),
+    ServiceState(AhciNativeServiceStateError),
 }
 
 /// Launch-bound catalog and command backend owned by one native AHCI service.
@@ -23,6 +31,41 @@ pub struct AhciNativeServiceState<'a, 'm, A, R, S> {
         AhciMappedCommandMemory<'m>,
         AhciMappedDataBuffer<'m, S>,
     >,
+}
+
+/// Constructs all installed mechanism state needed by the bounded dispatcher.
+///
+/// # Safety
+///
+/// The launch's four virtual mappings must satisfy
+/// [`AhciNativeMappedMemory::from_installed_launch`]. `registers` must be the
+/// exclusive, launch-bound ABAR view and remain valid for the returned state's
+/// lifetime. On failure no service state is published; the supervisor owns
+/// process termination and installed-resource cleanup.
+pub unsafe fn prepare_installed_ahci_service_state<'a, 'm, A, R, S>(
+    capabilities: &'a mut A,
+    launch: InstalledAhciServiceLaunch,
+    mut registers: R,
+    sync: S,
+) -> Result<AhciNativeServiceState<'a, 'm, A, R, S>, AhciNativeServicePreparationError>
+where
+    A: AhciDataCapabilityAuthorizer,
+    R: AhciRegisterIo,
+{
+    let mapped = unsafe { AhciNativeMappedMemory::from_installed_launch(launch, sync) }
+        .map_err(AhciNativeServicePreparationError::MappedMemory)?;
+    let owner = reconstruct_installed_ahci_port(launch, &mut registers)
+        .map_err(AhciNativeServicePreparationError::ActivePort)?;
+    let (command_memory, data_io) = mapped.into_parts();
+    AhciNativeServiceState::new(
+        capabilities,
+        launch,
+        owner,
+        registers,
+        command_memory,
+        data_io,
+    )
+    .map_err(AhciNativeServicePreparationError::ServiceState)
 }
 
 impl<'a, 'm, A: AhciDataCapabilityAuthorizer, R, S>
@@ -108,6 +151,9 @@ mod tests {
     };
     use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
 
+    #[repr(align(4096))]
+    struct Page([u8; 4096]);
+
     struct Registers;
     impl AhciRegisterIo for Registers {
         fn read_u32(&mut self, offset: u32) -> Result<u32, ()> {
@@ -120,6 +166,16 @@ mod tests {
     impl AhciResetIo for Registers {
         fn delay_microseconds(&mut self, _: u32) -> Result<(), ()> {
             Ok(())
+        }
+    }
+
+    struct BusyRegisters;
+    impl AhciRegisterIo for BusyRegisters {
+        fn read_u32(&mut self, offset: u32) -> Result<u32, ()> {
+            Ok(if offset == 0x118 { 0x10 } else { 0 })
+        }
+        fn write_u32(&mut self, _: u32, _: u32) -> Result<(), ()> {
+            panic!("preparation must not write a non-idle port")
         }
     }
 
@@ -206,7 +262,7 @@ mod tests {
         }
     }
 
-    fn launch() -> InstalledAhciServiceLaunch {
+    fn launch_with_mappings(bases: [u64; 4]) -> InstalledAhciServiceLaunch {
         let record = AhciServiceLaunchRecord::new(
             4,
             3,
@@ -244,10 +300,10 @@ mod tests {
                 bytes: 4096,
             },
             [
-                AhciServiceCpuMapping::new(1, 0x30_0000).unwrap(),
-                AhciServiceCpuMapping::new(2, 0x31_0000).unwrap(),
-                AhciServiceCpuMapping::new(3, 0x32_0000).unwrap(),
-                AhciServiceCpuMapping::new(4, 0x40_0000).unwrap(),
+                AhciServiceCpuMapping::new(1, bases[0]).unwrap(),
+                AhciServiceCpuMapping::new(2, bases[1]).unwrap(),
+                AhciServiceCpuMapping::new(3, bases[2]).unwrap(),
+                AhciServiceCpuMapping::new(4, bases[3]).unwrap(),
             ],
         )
         .unwrap();
@@ -258,6 +314,10 @@ mod tests {
             InstalledAhciServiceLaunch::from_installed_projection(&record.encode(), 3, authorities)
         }
         .unwrap()
+    }
+
+    fn launch() -> InstalledAhciServiceLaunch {
+        launch_with_mappings([0x30_0000, 0x31_0000, 0x32_0000, 0x40_0000])
     }
 
     fn memory<'a>(
@@ -389,5 +449,52 @@ mod tests {
         assert_eq!(scratch, [0; 512]);
         let (_, backend) = state.into_parts();
         assert!(backend.is_available());
+    }
+
+    #[test]
+    fn installed_preparation_publishes_only_complete_service_state() {
+        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
+        let installed = launch_with_mappings(bases);
+        let mut authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
+        let state = unsafe {
+            prepare_installed_ahci_service_state(
+                &mut authorizer,
+                installed,
+                Registers,
+                Sync,
+            )
+        }
+        .unwrap();
+        assert_eq!(state.device(), installed.record().device());
+        let (_, backend) = state.into_parts();
+        assert!(backend.is_available());
+        drop(backend);
+        assert_eq!(authorizer.calls, 2);
+
+        let mut denied_authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
+        let result = unsafe {
+            prepare_installed_ahci_service_state(
+                &mut denied_authorizer,
+                installed,
+                BusyRegisters,
+                Sync,
+            )
+        };
+        assert!(matches!(
+            result,
+            Err(AhciNativeServicePreparationError::ActivePort(
+                AhciNativePortReconstructionError::PortNotIdle
+            ))
+        ));
+        assert_eq!(denied_authorizer.calls, 0);
     }
 }

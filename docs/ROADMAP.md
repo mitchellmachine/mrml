@@ -1127,6 +1127,32 @@ Patent review: `NOT_TRIGGERED` — lending an existing unique backend through on
 bounded validated dispatch call is conventional service-loop composition. See
 `docs/patents/REVIEW_LOG.md`.
 
+Native AHCI installed-state preparation is now **PARTIALLY IMPLEMENTED IN
+SOURCE** as one fail-closed transition. Under one explicit unsafe mapping
+contract it constructs the four exact bounded mapped views, double-samples and
+reconstructs the launch-bound idle active port, performs both exact directional
+data-capability authorizations, and publishes the assembled service state only
+after every stage succeeds. Typed errors identify mapped-memory, active-port,
+or final backend-binding failure. The integrated adversarial test proves a
+stable non-idle port reaches neither authorization and publishes no state. The
+focused Linux suite passes all 119 tests, and both Linux release and
+`MRML_NATIVE` release builds pass. The aligned in-process mappings and register
+model do not prove installed page tables, real syscalls, cache/IOMMU behavior,
+supervisor cleanup, an executable entry, or physical AHCI hardware.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — ordered fail-closed composition of existing
+mapping, register-validation, capability, and backend constructors is
+conventional service-startup plumbing. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

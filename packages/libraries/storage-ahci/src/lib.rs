@@ -137,7 +137,10 @@ pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryErr
 pub use native_port_reconstruction::{
     AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
 };
-pub use native_service_state::{AhciNativeServiceState, AhciNativeServiceStateError};
+pub use native_service_state::{
+    AhciNativeServicePreparationError, AhciNativeServiceState, AhciNativeServiceStateError,
+    prepare_installed_ahci_service_state,
+};
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
     bootstrap_installed_ahci_service,
