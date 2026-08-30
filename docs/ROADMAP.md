@@ -1077,6 +1077,32 @@ Patent review: `NOT_TRIGGERED` — stable double-sampling of conventional AHCI
 status registers before reconstructing existing typestate is ordinary defensive
 driver plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+The installed AHCI service-state assembly seam is now **PARTIALLY IMPLEMENTED
+IN SOURCE**. A single constructor derives the published block catalog, session,
+media generation, mapping, data extent, and directional data capabilities only
+from the validated installed launch. It consumes the reconstructed active-port
+owner and exact mapped-memory adapters, then reuses the command backend's two
+exact capability authorizations before publishing service state. Authorization
+denial publishes nothing; callers cannot independently substitute catalog or
+backend identity fields at this seam. The focused Linux suite passes all 117
+tests and both Linux release and `MRML_NATIVE` release builds pass. The cache
+backend and raw ABAR view remain injected, so this is composition evidence—not
+an installed entry loop, real syscall execution, cache/IOMMU, or physical AHCI
+result.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — exact construction of existing service and
+backend objects from one validated launch projection is conventional typed
+composition. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

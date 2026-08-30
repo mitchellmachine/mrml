@@ -29,6 +29,7 @@ mod mapped_command_memory;
 mod mapped_data_buffer;
 mod native_mapped_memory;
 mod native_port_reconstruction;
+mod native_service_state;
 mod service_bootstrap;
 mod service_cpu_mapping;
 mod service_device_teardown;
@@ -136,6 +137,7 @@ pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryErr
 pub use native_port_reconstruction::{
     AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
 };
+pub use native_service_state::{AhciNativeServiceState, AhciNativeServiceStateError};
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
     bootstrap_installed_ahci_service,
