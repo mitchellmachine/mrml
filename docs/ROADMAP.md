@@ -194,6 +194,16 @@ payload and capability over-counts. All five currently concrete isolated
 storage/compression syscall adapters therefore reject a kernel receive result
 that exceeds the buffers supplied to the trap.
 
+NVMe enumeration cleanup now records the transferred leaf only after exact
+one-capability envelope admission and structural token validation. Missing,
+malformed, or undeclared token bytes cannot invoke release, while failures after
+admission still release before returning. Its 68 focused Linux tests and release
+build pass; this adds no hardware evidence.
+
+Patent review: `NOT_TRIGGERED` — binding cleanup to an already validated
+capability envelope is conventional fail-closed resource handling. See
+`docs/patents/REVIEW_LOG.md`.
+
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block
 sessions, repeats principal and `READ` authorization, reads and validates block
