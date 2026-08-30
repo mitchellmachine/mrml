@@ -531,6 +531,8 @@ const COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS: Rights = Rights::MAP.union(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComponentServiceReadTransferMappings {
+    memory_object: MemoryObjectId,
+    shared_object: ObjectId,
     mappings: MemoryMappingPair,
     local_target: ObjectId,
     provider_target: ObjectId,
@@ -541,6 +543,14 @@ pub struct ComponentServiceReadTransferMappings {
 }
 
 impl ComponentServiceReadTransferMappings {
+    pub const fn memory_object(self) -> MemoryObjectId {
+        self.memory_object
+    }
+
+    pub const fn shared_object(self) -> ObjectId {
+        self.shared_object
+    }
+
     pub const fn mappings(self) -> MemoryMappingPair {
         self.mappings
     }
@@ -736,6 +746,8 @@ pub fn install_component_service_read_transfer_mappings<
         )
         .map_err(ComponentServiceReadTransferMappingError::Mapping)?;
     Ok(ComponentServiceReadTransferMappings {
+        memory_object: reservation.memory_object(),
+        shared_object: reservation.shared_object(),
         mappings,
         local_target,
         provider_target,
@@ -1077,6 +1089,27 @@ pub struct NativeComponentServiceReadTransferTask {
     source_provider_write: Capability,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceMappedReadTransferTask {
+    construction: NativeComponentServiceReadTransferTask,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferTaskBinding,
+}
+
+impl NativeComponentServiceMappedReadTransferTask {
+    pub const fn construction(self) -> NativeComponentServiceReadTransferTask {
+        self.construction
+    }
+
+    pub const fn memory(self) -> ComponentServiceReadTransferMemoryRoot {
+        self.memory
+    }
+
+    pub const fn binding(self) -> ComponentServiceReadTransferTaskBinding {
+        self.binding
+    }
+}
+
 impl NativeComponentServiceReadTransferTask {
     pub const fn task(self) -> TaskId {
         self.task
@@ -1127,6 +1160,63 @@ pub enum NativeComponentServiceReadTransferRootError {
         task: NativeComponentServiceTaskError,
         cleanup: TaskRuntimeError,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceMappedReadTransferError {
+    BindingMismatch,
+    Construction(NativeComponentServiceReadTransferRootError),
+}
+
+/// Constructs the exact local task only when the live directional mappings,
+/// task association, and charged memory root still describe one transfer.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_native_component_service_task_from_mapped_read_transfer<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    spec: IsolationServiceSpec,
+    launch_attachment: ComponentServiceLaunchAttachment,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferTaskBinding,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    consumer_module_object: ObjectId,
+) -> Result<
+    NativeComponentServiceMappedReadTransferTask,
+    NativeComponentServiceMappedReadTransferError,
+> {
+    let mappings = binding.mappings();
+    if binding.local_task() != target_task
+        || mappings.memory_object() != memory.memory_object()
+        || mappings.shared_object() != memory.shared_object()
+    {
+        return Err(NativeComponentServiceMappedReadTransferError::BindingMismatch);
+    }
+    let construction = prepare_native_component_service_task_from_read_transfer_root(
+        runtime,
+        source_task,
+        target_task,
+        spec,
+        launch_attachment,
+        binding.provider_task(),
+        memory.shared_object(),
+        memory.generation(),
+        memory.bytes(),
+        memory.root(),
+        service_endpoint_object,
+        supervisor_task_object,
+        consumer_module_object,
+    )
+    .map_err(NativeComponentServiceMappedReadTransferError::Construction)?;
+    Ok(NativeComponentServiceMappedReadTransferTask {
+        construction,
+        memory,
+        binding,
+    })
 }
 
 /// Prepares the direction-scoped source attachment and constructs the native
@@ -3925,7 +4015,7 @@ mod tests {
 
     #[test]
     fn read_transfer_memory_reservation_charges_one_exact_shared_page() {
-        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -4078,6 +4168,8 @@ mod tests {
         .unwrap();
         assert_eq!(mappings.local_target(), ObjectId(0x7100));
         assert_eq!(mappings.provider_target(), ObjectId(0x7200));
+        assert_eq!(mappings.memory_object(), reservation.memory_object());
+        assert_eq!(mappings.shared_object(), reservation.shared_object());
         assert_eq!(mappings.local_target_capability(), local_target);
         assert_eq!(mappings.provider_target_capability(), provider_target);
         assert_eq!(mappings.local_virtual_page(), 0x300);
@@ -4096,6 +4188,53 @@ mod tests {
         assert_eq!(binding.mappings(), mappings);
         assert_eq!(binding.local_task(), local_task);
         assert_eq!(binding.provider_task(), provider_task);
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let launch = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let constructed = prepare_native_component_service_task_from_mapped_read_transfer(
+            &mut runtime,
+            source,
+            local_task,
+            spec,
+            launch,
+            reservation,
+            binding,
+            ObjectId(0x90),
+            ObjectId(0x91),
+            ObjectId(0x92),
+        )
+        .unwrap();
+        assert_eq!(constructed.memory(), reservation);
+        assert_eq!(constructed.binding(), binding);
+        assert_eq!(constructed.construction().task(), local_task);
+        runtime
+            .revoke_capability_pair(
+                source,
+                constructed.construction().source_local_read(),
+                constructed.construction().source_provider_write(),
+            )
+            .unwrap();
         assert_eq!(
             local_mapping.installed.unwrap().mapping().access(),
             Rights::READ

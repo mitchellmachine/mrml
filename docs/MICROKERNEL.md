@@ -10347,3 +10347,19 @@ remains the next gate.
 Patent review: `NOT_TRIGGERED` — retaining opaque capability generations with
 their resource record is conventional authority-preserving bookkeeping. See
 `docs/patents/REVIEW_LOG.md`.
+
+Native service construction now **PARTIALLY IMPLEMENTS IN SOURCE** consumption
+of one coherent mapped-transfer record. Before splitting or projecting any
+authority, it requires the task binding to name the requested local task and
+requires the mapping record's typed memory-object generation and public object
+identity to match the charged root. Successful construction returns the task,
+memory root, mapping/task binding, projected handles, and source revocation
+ancestors together. The focused lifecycle test constructs through this path,
+atomically revokes both transfer trees, removes both mappings, scrubs the
+backing, and returns the one-page charge. The Linux-host release kernel suite
+passes 649 tests. Recording backends remain simulation rather than installed or
+physical execution evidence.
+
+Patent review: `NOT_TRIGGERED` — exact identity composition and ordered
+capability/resource teardown are conventional lifecycle mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
