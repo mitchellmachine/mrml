@@ -10432,3 +10432,25 @@ release kernel suite passes 649 tests and the release build passes.
 Patent review: `NOT_TRIGGERED` — exposing already retained retry state through a
 typed accessor is conventional lifecycle plumbing. See
 `docs/patents/REVIEW_LOG.md`.
+
+Shared resources now **PARTIALLY IMPLEMENT IN SOURCE** a distinct write-copy
+projection for service tasks. The projection creates no provider virtual
+mapping and requires exact `MAP | WRITE` authority, exact controller `CONTROL`
+authority, the task and VM generation, and a still-live mapped source resource
+on every resolution. This is the mechanism boundary needed where x86 page
+tables cannot enforce write-only mappings without silently widening authority.
+The Linux-host release kernel suite passes 650 tests. The projection is not yet
+wired into the shared-buffer syscall or storage transfer lifecycle, and the
+test uses in-memory mappings and an opaque recording handle rather than an
+installed page table or physical device.
+
+Engineering Constitution complexity score: TCB impact **MODERATE**; parser
+complexity **NONE**; persistent-state impact **NONE**; external dependency
+**NONE**; existing object reuse **YES**. Digital-rights review: the provider
+receives narrower operation authority and no new observer or vendor authority.
+Hostile-security review: exact rights, identity, generation, liveness, bounds,
+capacity, duplicate, stale-source, and revocation checks fail closed.
+
+Patent review: `NOT_TRIGGERED` — a capability-bound kernel copy projection over
+an existing opaque shared resource is conventional access-control and bounded
+copy plumbing. See `docs/patents/REVIEW_LOG.md`.

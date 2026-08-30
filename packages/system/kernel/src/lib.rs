@@ -270,6 +270,7 @@ pub use shared_memory::{
     HostResourceHandle, HostResourceRetirer, ServiceResourceCleanupError, ServiceResourceEraser,
     SharedAccess, SharedBindingError, SharedBindingId, SharedCleanupError, SharedCleanupReport,
     SharedEndpoint, SharedEndpointRequest, SharedMemoryBindings, SharedRevocation,
+    SharedWriteCopyBindingId, SharedWriteCopyBindings, SharedWriteCopyResource,
     revoke_task_shared_bindings_before_resume,
 };
 pub use syscall::{

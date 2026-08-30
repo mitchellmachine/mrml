@@ -131,6 +131,27 @@ impl SharedBindingId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SharedWriteCopyBindingId(u64);
+
+impl SharedWriteCopyBindingId {
+    const fn new(index: usize, generation: u32) -> Self {
+        Self(((generation as u64) << 32) | index as u64)
+    }
+
+    const fn index(self) -> usize {
+        self.0 as u32 as usize
+    }
+
+    const fn generation(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+
+    pub const fn token(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedBindingError {
     InvalidHostHandle,
     TableFull,
@@ -187,6 +208,164 @@ struct Binding {
     access: SharedAccess,
     host_start: crate::PhysAddr,
     pages: u64,
+}
+
+#[derive(Clone, Copy)]
+struct WriteCopyBinding {
+    generation: u32,
+    source: SharedBindingId,
+    vm: VmId,
+    task: TaskId,
+    object: ObjectId,
+    handle: HostResourceHandle,
+    bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SharedWriteCopyResource {
+    handle: HostResourceHandle,
+    bytes: u64,
+}
+
+impl SharedWriteCopyResource {
+    pub const fn handle(self) -> HostResourceHandle {
+        self.handle
+    }
+
+    pub const fn bytes(self) -> u64 {
+        self.bytes
+    }
+}
+
+/// Fixed-capacity task projection for kernel-mediated writes into an existing
+/// shared resource. This creates no virtual mapping: exact `MAP | WRITE`
+/// authority permits only bounded backend copies.
+pub struct SharedWriteCopyBindings<const N: usize> {
+    entries: [Option<WriteCopyBinding>; N],
+    generations: [u32; N],
+}
+
+impl<const N: usize> SharedWriteCopyBindings<N> {
+    pub const fn new() -> Self {
+        Self {
+            entries: [None; N],
+            generations: [0; N],
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn bind<
+        const SOURCE_BINDINGS: usize,
+        const CONTROL_CAPS: usize,
+        const DESTINATION_CAPS: usize,
+        const MAPPINGS: usize,
+    >(
+        &mut self,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        source: SharedBindingId,
+        controller: &CapabilitySpace<CONTROL_CAPS>,
+        control: Capability,
+        destination: &CapabilitySpace<DESTINATION_CAPS>,
+        authority: Capability,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+    ) -> Result<SharedWriteCopyBindingId, SharedBindingError> {
+        let source_entry = source_bindings.live_entry(source, memory)?;
+        if controller.authorize_exact(control, Rights::CONTROL)? != source_entry.object {
+            return Err(SharedBindingError::WrongObject);
+        }
+        let write = Rights::MAP.union(Rights::WRITE);
+        if destination.authorize_exact(authority, write)? != source_entry.object {
+            return Err(SharedBindingError::WrongObject);
+        }
+        if self
+            .entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.source == source && entry.vm == vm && entry.task == task)
+        {
+            return Err(SharedBindingError::DuplicateMapping);
+        }
+        let index = self
+            .entries
+            .iter()
+            .position(Option::is_none)
+            .ok_or(SharedBindingError::TableFull)?;
+        let generation = self.generations[index]
+            .checked_add(1)
+            .ok_or(SharedBindingError::SequenceExhausted)?;
+        let bytes = source_entry
+            .pages
+            .checked_mul(crate::PAGE_SIZE)
+            .ok_or(SharedBindingError::ResourceMismatch)?;
+        self.generations[index] = generation;
+        self.entries[index] = Some(WriteCopyBinding {
+            generation,
+            source,
+            vm,
+            task,
+            object: source_entry.object,
+            handle: source_entry.handle,
+            bytes,
+        });
+        Ok(SharedWriteCopyBindingId::new(index, generation))
+    }
+
+    pub fn resolve<const CAPS: usize, const SOURCE_BINDINGS: usize, const MAPPINGS: usize>(
+        &self,
+        id: SharedWriteCopyBindingId,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        capabilities: &CapabilitySpace<CAPS>,
+        authority: Capability,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+    ) -> Result<SharedWriteCopyResource, SharedBindingError> {
+        let entry = self
+            .entries
+            .get(id.index())
+            .and_then(Option::as_ref)
+            .filter(|entry| entry.generation == id.generation())
+            .ok_or(SharedBindingError::StaleBinding)?;
+        let write = Rights::MAP.union(Rights::WRITE);
+        if capabilities.authorize_exact(authority, write)? != entry.object {
+            return Err(SharedBindingError::WrongObject);
+        }
+        if entry.vm != vm {
+            return Err(SharedBindingError::WrongVm);
+        }
+        if entry.task != task {
+            return Err(SharedBindingError::WrongTask);
+        }
+        let source = source_bindings.live_entry(entry.source, memory)?;
+        if source.object != entry.object
+            || source.handle != entry.handle
+            || source.pages.checked_mul(crate::PAGE_SIZE) != Some(entry.bytes)
+        {
+            return Err(SharedBindingError::ResourceMismatch);
+        }
+        Ok(SharedWriteCopyResource {
+            handle: entry.handle,
+            bytes: entry.bytes,
+        })
+    }
+
+    pub fn revoke(&mut self, id: SharedWriteCopyBindingId) -> Result<(), SharedBindingError> {
+        self.entries
+            .get(id.index())
+            .and_then(Option::as_ref)
+            .filter(|entry| entry.generation == id.generation())
+            .ok_or(SharedBindingError::StaleBinding)?;
+        self.entries[id.index()] = None;
+        Ok(())
+    }
+}
+
+impl<const N: usize> Default for SharedWriteCopyBindings<N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -602,6 +781,21 @@ impl<const N: usize> SharedMemoryBindings<N> {
             .filter(|entry| entry.generation == id.generation())
             .ok_or(SharedBindingError::StaleBinding)
     }
+
+    fn live_entry<const MAPPINGS: usize>(
+        &self,
+        id: SharedBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+    ) -> Result<&Binding, SharedBindingError> {
+        let entry = self.entry(id)?;
+        let region = memory
+            .region(entry.mapping)
+            .map_err(|_| SharedBindingError::StaleMapping)?;
+        if region.host_start() != entry.host_start || region.pages() != entry.pages {
+            return Err(SharedBindingError::ResourceMismatch);
+        }
+        Ok(entry)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -970,6 +1164,114 @@ mod tests {
             ),
             Err(SharedBindingError::StaleMapping)
         );
+    }
+
+    #[test]
+    fn write_copy_projection_requires_exact_authority_and_a_live_source() {
+        let vm = vm();
+        let (mut memory, mapping) = mapped();
+        let mut controller = CapabilitySpace::<2>::new();
+        let source_authority = controller
+            .insert(
+                OBJECT,
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::CONTROL),
+            )
+            .unwrap();
+        let control = controller.insert(OBJECT, Rights::CONTROL).unwrap();
+        let host = HostResourceHandle::new(92).unwrap();
+        let mut mapped_bindings = SharedMemoryBindings::<1>::new();
+        let source = mapped_bindings
+            .bind(
+                &controller,
+                source_authority,
+                &memory,
+                SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite),
+                host,
+            )
+            .unwrap();
+
+        let (task, wrong_task) = tasks();
+        let write_rights = Rights::MAP.union(Rights::WRITE);
+        let mut provider = CapabilitySpace::<2>::new();
+        let write = provider.insert(OBJECT, write_rights).unwrap();
+        let overbroad = provider
+            .insert(OBJECT, write_rights.union(Rights::READ))
+            .unwrap();
+        let mut copies = SharedWriteCopyBindings::<1>::new();
+        assert_eq!(
+            copies.bind(
+                &mapped_bindings,
+                source,
+                &controller,
+                source_authority,
+                &provider,
+                write,
+                &memory,
+                vm,
+                task,
+            ),
+            Err(SharedBindingError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        assert_eq!(
+            copies.bind(
+                &mapped_bindings,
+                source,
+                &controller,
+                control,
+                &provider,
+                overbroad,
+                &memory,
+                vm,
+                task,
+            ),
+            Err(SharedBindingError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        );
+
+        let copy = copies
+            .bind(
+                &mapped_bindings,
+                source,
+                &controller,
+                control,
+                &provider,
+                write,
+                &memory,
+                vm,
+                task,
+            )
+            .unwrap();
+        let resolved = copies
+            .resolve(copy, &mapped_bindings, &provider, write, &memory, vm, task)
+            .unwrap();
+        assert_eq!(resolved.handle(), host);
+        assert_eq!(resolved.bytes(), crate::PAGE_SIZE);
+        assert!(matches!(
+            copies.resolve(
+                copy,
+                &mapped_bindings,
+                &provider,
+                write,
+                &memory,
+                vm,
+                wrong_task,
+            ),
+            Err(SharedBindingError::WrongTask)
+        ));
+
+        memory.unmap(mapping).unwrap();
+        assert!(matches!(
+            copies.resolve(copy, &mapped_bindings, &provider, write, &memory, vm, task,),
+            Err(SharedBindingError::StaleMapping)
+        ));
+        copies.revoke(copy).unwrap();
+        assert_eq!(copies.revoke(copy), Err(SharedBindingError::StaleBinding));
     }
 
     #[test]
