@@ -7544,8 +7544,13 @@ through an unsafe runtime-authenticated launch constructor. It exact-matches the
 filesystem module and provider generation, requires the separately attenuated
 block endpoint capability with exact `SIGNAL`, and only then constructs the
 volume/session binding. Handoff object IDs remain non-authorizing data. The
-installed service entry does not yet receive the attachment. The focused FAT32
-suite passes ninety-seven Linux-host tests.
+MRML-native entry now consumes the fixed native register ABI, copies the exact
+144-byte handoff through the projected read-only capability, validates its
+filesystem module and provider generation, retains the distinct block endpoint
+capability, erases the temporary bytes, and only then sends ready. Concrete
+kernel task construction still must invoke the entry preparation, and the entry's
+block-call routing is not yet connected. The focused FAT32 suite passes
+ninety-nine Linux-host tests.
 
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding

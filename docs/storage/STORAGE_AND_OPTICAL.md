@@ -998,8 +998,13 @@ coordinator separately authorizes the exact block endpoint, requires the
 placement backend to project the handoff read-only and attenuate that endpoint,
 erases its temporary encoding, and returns a generation-bound receipt only on
 successful construction. Storage passes 157 focused Linux-host tests. The
-`mrml-fat32-service.efi` entry sends a generation-bound ready message and then
-serves calls until fail-stop or supervised replacement. Prior Windows evidence
+`mrml-fat32-service.efi` entry first copies and validates the exact 144-byte
+filesystem/block launch attachment through the kernel-projected read-only
+capability, retains the separately projected block endpoint capability, erases
+the temporary bytes, sends a generation-bound ready message, and then serves
+calls until fail-stop or supervised replacement. Concrete kernel task
+construction and block-call routing through the retained binding remain
+**PLANNED**. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows
 as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. The
 validated backend now makes the block-provider health check mandatory during

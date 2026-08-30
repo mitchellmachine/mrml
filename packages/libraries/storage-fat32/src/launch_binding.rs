@@ -12,6 +12,7 @@ use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights
 pub struct Fat32LaunchBinding {
     block: Fat32BlockBinding,
     block_endpoint: ObjectId,
+    block_endpoint_capability: Capability,
     association_generation: u64,
     system_generation: u64,
     filesystem_provider_generation: u64,
@@ -48,17 +49,7 @@ impl Fat32LaunchBinding {
         filesystem_provider_generation: u64,
         bytes: &[u8],
     ) -> Result<Self, Fat32LaunchBindingError> {
-        let handoff = BlockProviderDependencyHandoff::decode(bytes)
-            .map_err(Fat32LaunchBindingError::Handoff)?;
-        if handoff.consumer_interface_generation() != FILESYSTEM_INTERFACE_GENERATION {
-            return Err(Fat32LaunchBindingError::WrongFilesystemInterfaceGeneration);
-        }
-        if handoff.consumer_module_object() != filesystem_module.0 {
-            return Err(Fat32LaunchBindingError::WrongFilesystemModule);
-        }
-        if handoff.consumer_provider_generation() != filesystem_provider_generation {
-            return Err(Fat32LaunchBindingError::WrongFilesystemProviderGeneration);
-        }
+        let handoff = validate_handoff(bytes, filesystem_module, filesystem_provider_generation)?;
         let block_endpoint = capabilities
             .authorize_exact(block_endpoint_capability, Rights::SIGNAL)
             .map_err(Fat32LaunchBindingError::Capability)?;
@@ -81,6 +72,47 @@ impl Fat32LaunchBinding {
         Ok(Self {
             block,
             block_endpoint,
+            block_endpoint_capability,
+            association_generation: handoff.association_generation(),
+            system_generation: handoff.system_generation(),
+            filesystem_provider_generation,
+            block_provider_generation: handoff.block_provider_generation(),
+        })
+    }
+
+    /// Consumes entry data after the kernel has projected the handoff and
+    /// dependency capability into this exact service domain.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the installed entry path created from
+    /// `NativeComponentServiceEntry`. `bytes` must have been copied through its
+    /// exact read-only launch-data capability, and `block_endpoint_capability`
+    /// must be its separately projected exact-`SIGNAL` dependency capability.
+    pub unsafe fn from_installed_projection(
+        bytes: &[u8],
+        filesystem_module: ObjectId,
+        filesystem_provider_generation: u64,
+        block_endpoint_capability: Capability,
+    ) -> Result<Self, Fat32LaunchBindingError> {
+        let handoff = validate_handoff(bytes, filesystem_module, filesystem_provider_generation)?;
+        let volume = OpaqueHandle::new(
+            handoff.consumer_volume_index(),
+            handoff.consumer_volume_generation(),
+        )
+        .ok_or(Fat32LaunchBindingError::InvalidHandle)?;
+        let session = BlockOpaqueHandle::new(
+            handoff.block_session_index(),
+            handoff.block_session_generation(),
+        )
+        .ok_or(Fat32LaunchBindingError::InvalidHandle)?;
+        let block =
+            unsafe { Fat32BlockBinding::new(volume, session, handoff.logical_block_bytes()) }
+                .ok_or(Fat32LaunchBindingError::InvalidGeometry)?;
+        Ok(Self {
+            block,
+            block_endpoint: ObjectId(handoff.block_endpoint_object()),
+            block_endpoint_capability,
             association_generation: handoff.association_generation(),
             system_generation: handoff.system_generation(),
             filesystem_provider_generation,
@@ -94,6 +126,10 @@ impl Fat32LaunchBinding {
 
     pub const fn block_endpoint(self) -> ObjectId {
         self.block_endpoint
+    }
+
+    pub const fn block_endpoint_capability(self) -> Capability {
+        self.block_endpoint_capability
     }
 
     pub const fn association_generation(self) -> u64 {
@@ -111,6 +147,25 @@ impl Fat32LaunchBinding {
     pub const fn block_provider_generation(self) -> u64 {
         self.block_provider_generation
     }
+}
+
+fn validate_handoff(
+    bytes: &[u8],
+    filesystem_module: ObjectId,
+    filesystem_provider_generation: u64,
+) -> Result<BlockProviderDependencyHandoff, Fat32LaunchBindingError> {
+    let handoff =
+        BlockProviderDependencyHandoff::decode(bytes).map_err(Fat32LaunchBindingError::Handoff)?;
+    if handoff.consumer_interface_generation() != FILESYSTEM_INTERFACE_GENERATION {
+        return Err(Fat32LaunchBindingError::WrongFilesystemInterfaceGeneration);
+    }
+    if handoff.consumer_module_object() != filesystem_module.0 {
+        return Err(Fat32LaunchBindingError::WrongFilesystemModule);
+    }
+    if handoff.consumer_provider_generation() != filesystem_provider_generation {
+        return Err(Fat32LaunchBindingError::WrongFilesystemProviderGeneration);
+    }
+    Ok(handoff)
 }
 
 #[cfg(test)]
@@ -162,10 +217,27 @@ mod tests {
             BlockOpaqueHandle::new(8, 10).unwrap()
         );
         assert_eq!(binding.block_endpoint(), ObjectId(21));
+        assert_eq!(binding.block_endpoint_capability(), endpoint);
         assert_eq!(binding.association_generation(), 12);
         assert_eq!(binding.system_generation(), 9);
         assert_eq!(binding.filesystem_provider_generation(), 5);
         assert_eq!(binding.block_provider_generation(), 7);
+    }
+
+    #[test]
+    fn installed_projection_retains_only_kernel_projected_dependency_capability() {
+        let endpoint = Capability::from_token((9_u64 << 32) | 4);
+        let binding = unsafe {
+            Fat32LaunchBinding::from_installed_projection(&handoff(), ObjectId(41), 5, endpoint)
+        }
+        .unwrap();
+        assert_eq!(binding.block_endpoint(), ObjectId(21));
+        assert_eq!(binding.block_endpoint_capability(), endpoint);
+        assert_eq!(binding.block().volume(), OpaqueHandle::new(2, 6).unwrap());
+        assert_eq!(
+            binding.block().session(),
+            BlockOpaqueHandle::new(8, 10).unwrap()
+        );
     }
 
     #[test]

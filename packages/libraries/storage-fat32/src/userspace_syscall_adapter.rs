@@ -234,6 +234,29 @@ impl<R> Fat32UserspaceSyscalls<R> {
 }
 
 impl<R: Fat32RawSyscall> Fat32UserspaceSyscalls<R> {
+    /// Copies immutable startup data through the exact launch-data capability
+    /// installed by the kernel. The capability token is authority; no object ID
+    /// embedded in the copied bytes can select a different source.
+    pub fn read_launch_data(
+        &mut self,
+        capability: Capability,
+        output: &mut [u8],
+    ) -> Result<(), Fat32UserspaceSyscallError> {
+        if output.is_empty() || output.len() > mrml_kernel::PAGE_SIZE as usize {
+            return Err(Fat32UserspaceSyscallError::Range);
+        }
+        let mut frame = Fat32SyscallFrame {
+            rax: READ_SHARED_BUFFER,
+            rdi: capability.token(),
+            rsi: 0,
+            rdx: output.as_mut_ptr() as u64,
+            r10: output.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)
+    }
+
     fn invoke(&mut self, frame: &mut Fat32SyscallFrame) -> Result<(), Fat32UserspaceSyscallError> {
         unsafe { self.raw.invoke(frame) };
         if frame.rax == 0 {
@@ -846,6 +869,27 @@ mod tests {
             }
             frame.rax = 0;
         }
+    }
+
+    #[test]
+    fn launch_data_read_uses_exact_capability_at_zero_offset() {
+        let raw = Raw {
+            request: [0; PROBE_REQUEST_BYTES],
+            shared: crate::tests::boot_sector(),
+            response: [0; PROBE_RESPONSE_BYTES],
+            operations: [0; 4],
+            count: 0,
+        };
+        let mut expected = [0; 144];
+        expected.copy_from_slice(&raw.shared[..144]);
+        let mut syscalls = Fat32UserspaceSyscalls::new(raw, 12, 13).unwrap();
+        let mut output = [0; 144];
+        syscalls
+            .read_launch_data(Capability::from_token(TOKEN), &mut output)
+            .unwrap();
+        let raw = syscalls.into_raw();
+        assert_eq!(output, expected);
+        assert_eq!(&raw.operations[..raw.count], &[READ_SHARED_BUFFER]);
     }
 
     #[test]
