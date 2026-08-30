@@ -7119,6 +7119,16 @@ Patent review: `NOT_TRIGGERED` — this applies conventional generational livene
 validation at an existing lifecycle commit boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+Configuration's direct persisted-policy registration helper uses the same
+runtime-validated publication boundary. A caller-supplied retired `TaskId`
+cannot be turned into a running service identity even when the setting read and
+policy revisions remain valid; the supervisor stays vacant until the policy is
+applied to a live task generation. Configuration remains 53 focused tests.
+
+Patent review: `NOT_TRIGGERED` — this extends the existing generational
+liveness check to the remaining policy-bound registration entry. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

@@ -1050,6 +1050,8 @@ impl BoundRestartPolicy {
         const SETTINGS: usize,
         const AUDIT: usize,
         const SERVICES: usize,
+        const TASKS: usize,
+        const CAPS: usize,
         A: CapabilityAuthorizer + ?Sized,
     >(
         self,
@@ -1057,6 +1059,7 @@ impl BoundRestartPolicy {
         capabilities: &A,
         policy_capability: Capability,
         supervisor: &mut ServiceSupervisor<SERVICES>,
+        runtime: &TaskRuntime<TASKS, CAPS>,
         task: TaskId,
     ) -> Result<ServiceId, PersistedRestartPolicyError> {
         let plan = self.plan_registration(
@@ -1067,7 +1070,7 @@ impl BoundRestartPolicy {
             task,
         )?;
         supervisor
-            .commit_registration(plan)
+            .commit_registration_with_runtime(plan, runtime)
             .map_err(PersistedRestartPolicyError::Service)
     }
 

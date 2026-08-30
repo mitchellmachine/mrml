@@ -4715,14 +4715,34 @@ mod tests {
         )
         .unwrap();
         let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
-        let task = runtime.create(Priority::NORMAL, context).unwrap();
+        let stale_task = runtime.create(Priority::NORMAL, context).unwrap();
         let mut supervisor = ServiceSupervisor::<1>::new();
+        runtime.detach_domain(stale_task).unwrap();
+        assert!(matches!(
+            bound.register(
+                &recovered,
+                &capabilities,
+                policy_read,
+                &mut supervisor,
+                &runtime,
+                stale_task,
+            ),
+            Err(PersistedRestartPolicyError::Service(
+                ServiceError::Runtime(_)
+            ))
+        ));
+        assert!(supervisor
+            .plan_registration(service_object, stale_task, RestartPolicy::ONCE_IMMEDIATE)
+            .is_ok());
+        let task = runtime.create(Priority::NORMAL, context).unwrap();
+        assert_ne!(task, stale_task);
         let service = bound
             .register(
                 &recovered,
                 &capabilities,
                 policy_read,
                 &mut supervisor,
+                &runtime,
                 task,
             )
             .unwrap();
@@ -4802,6 +4822,7 @@ mod tests {
                 &capabilities,
                 policy_read,
                 &mut supervisor,
+                &runtime,
                 task,
             ),
             Err(PersistedRestartPolicyError::Configuration(

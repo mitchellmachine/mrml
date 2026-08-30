@@ -4055,3 +4055,7 @@ Recovered service publication now also revalidates the planned generational
 task identity against the live runtime at commit. Retirement between recovery
 validation and publication leaves the supervisor slot vacant; recovery must
 replan against a newly created live task generation.
+
+Direct persisted restart-policy registration now uses that same live-runtime
+commit boundary. Valid policy authority and revisions cannot publish a retired
+caller-supplied task generation as a running service.

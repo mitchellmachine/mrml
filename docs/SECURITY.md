@@ -1030,3 +1030,7 @@ Recovered service registration treats `TaskId` as generational identity, not
 authority or proof of liveness. Its delayed commit checks that exact task in the
 retained runtime immediately before supervisor mutation. A retired or reused
 slot generation cannot be published from a prepared recovery decision.
+
+The direct persisted-policy registration helper also requires the exact task
+generation to be live in its supplied runtime. Configuration authority governs
+policy access; it does not convert a stale task name into lifecycle authority.
