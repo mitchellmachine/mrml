@@ -204,6 +204,10 @@ impl NativeFilesystemProviderRetirement {
     pub const fn dispatch(&self) -> &TaskTerminationDispatch {
         &self.dispatch
     }
+
+    pub fn into_dispatch(self) -> TaskTerminationDispatch {
+        self.dispatch
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -10700,3 +10700,16 @@ loading remains unexecuted.
 
 Patent review: `NOT_TRIGGERED` — linear ownership of a validated lifecycle token
 is conventional replay prevention. See `docs/patents/REVIEW_LOG.md`.
+
+The termination-dispatch token now has one consuming x86-64 transition-stack
+operation. Idle consumption returns only an opaque marker; a validated user
+successor is passed directly to the existing non-returning context-entry
+assembly without returning or re-exposing the token. Storage retirement can
+transfer ownership of its retained token into this boundary. The Linux-host
+release kernel suite passes 653 tests, storage passes 162 tests, and both release
+builds pass. Host tests exercise only idle consumption; active CR3 switching,
+TSS state, and `IRETQ` execution remain unverified on physical hardware.
+
+Patent review: `NOT_TRIGGERED` — consuming a validated scheduler token at a
+conventional architecture context-switch boundary is ordinary lifecycle
+integration. See `docs/patents/REVIEW_LOG.md`.

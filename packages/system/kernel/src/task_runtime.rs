@@ -2,7 +2,7 @@ use core::array;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 
-use crate::arch::x86_64::{TrapDisposition, UserContext};
+use crate::arch::x86_64::{TrapDisposition, UserContext, enter_user_context_on_stack};
 use crate::capability::CapabilityRevocationPlan;
 use crate::ipc::EndpointSendPlan;
 use crate::scheduler::WakePlan;
@@ -191,6 +191,11 @@ pub struct TaskTerminationDispatch {
     target: TaskTerminationDispatchTarget,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct TaskTerminationIdle {
+    _private: (),
+}
+
 impl TaskTerminationDispatch {
     pub const fn is_idle(&self) -> bool {
         matches!(self.target, TaskTerminationDispatchTarget::Idle)
@@ -200,6 +205,23 @@ impl TaskTerminationDispatch {
         match self.target {
             TaskTerminationDispatchTarget::Idle => None,
             TaskTerminationDispatchTarget::User { task, context } => Some((task, context)),
+        }
+    }
+
+    /// Consumes this validated dispatch at the x86-64 context-transition
+    /// boundary. An idle dispatch returns an opaque marker; a user dispatch
+    /// does not return.
+    ///
+    /// # Safety
+    ///
+    /// The caller must satisfy every transition-stack, page-table, TSS, and
+    /// interrupt exclusion requirement of [`enter_user_context_on_stack`].
+    pub unsafe fn enter_user_on_stack(self, transition_stack: u64) -> TaskTerminationIdle {
+        match self.target {
+            TaskTerminationDispatchTarget::Idle => TaskTerminationIdle { _private: () },
+            TaskTerminationDispatchTarget::User { context, .. } => unsafe {
+                enter_user_context_on_stack(&context, transition_stack)
+            },
         }
     }
 }
@@ -2264,6 +2286,10 @@ mod tests {
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(dispatch.is_idle());
         assert_eq!(dispatch.user(), None);
+        assert_eq!(
+            unsafe { dispatch.enter_user_on_stack(0) },
+            TaskTerminationIdle { _private: () }
+        );
     }
 
     #[test]
