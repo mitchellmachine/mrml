@@ -1480,3 +1480,5 @@ probe advances into the selected 10,065,474-byte std archive member and stops at
 the next typed boundary: `COFF object 2 archive group 1 member 3 text fragment
 0: unsupported COFF TLS section`. TLS content and lifecycle remain unimplemented;
 no std link or execution claim is made.
+An isolated canonical compiler-core gate at the typed-thunk checkpoint passed
+817 unit tests and 126 semantic-execution tests with zero failures.
