@@ -11585,3 +11585,27 @@ increment.
 Patent review: `NOT_TRIGGERED` — bounded message-shape admission before
 publication and non-consuming capacity rejection are conventional IPC boundary
 validation. See `docs/patents/REVIEW_LOG.md`.
+
+Deadline-aware delivery is now one kernel-owned executor transaction rather
+than three dispatcher-managed steps. The executor determines whether the exact
+receiver owns a pending operation 13, validates that delivery's complete shape,
+publishes through the ordinary transactional IPC path, and consumes and
+completes the exact retained owner before returning the endpoint sequence. The
+UEFI deadline profiles use this composed entry point for both inline and
+buffered sends; callers can no longer omit the shape gate or leave a published,
+woken receiver awaiting a separate completion call.
+
+The adversarial kernel test attempts a capability-bearing delivery to a pending
+register-only receive and proves rejection preserves the owner, empty inbox,
+empty receiver capability space, and endpoint sequence. A subsequent compatible
+delivery receives sequence one, consumes the owner, and writes the exact saved
+success context. `./target/debug/mrml test org.mrml.system.kernel --target
+native` passes 671 tests. The native kernel release build and UEFI bootloader
+release builds for `deadline_receive_probe`,
+`deadline_receive_message_probe`, and `service_probe` pass through `mrml`; the
+boot profiles retain only their existing unreachable-pattern warning. This is
+unit and cross-build evidence, not KVM, WHP, or physical-hardware execution.
+
+Patent review: `NOT_TRIGGERED` — composing validation, transactional IPC
+publication, and retained-syscall completion behind one trusted entry point is
+conventional state-machine encapsulation. See `docs/patents/REVIEW_LOG.md`.

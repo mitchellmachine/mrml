@@ -1078,10 +1078,29 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .as_mut()
                     .unwrap_or_else(|| halt());
                 #[cfg(feature = "deadline-receive-probe")]
-                if !deadline_delivery_is_valid(receiver, usize::from(length), 0) {
-                    frame.complete_error();
-                    return;
-                }
+                let sequence = match deadline_deliver_ipc(
+                    runtime,
+                    current,
+                    receiver,
+                    endpoint_object,
+                    endpoint,
+                    &payload[..usize::from(length)],
+                    &[],
+                ) {
+                    Ok(sequence) => sequence,
+                    Err(mrml_kernel::DeadlineReceiveSyscallError::MessageShape) => {
+                        frame.complete_error();
+                        return;
+                    }
+                    Err(mrml_kernel::DeadlineReceiveSyscallError::Runtime(error))
+                        if error.is_precommit_send_denial() =>
+                    {
+                        frame.complete_error();
+                        return;
+                    }
+                    Err(_) => halt(),
+                };
+                #[cfg(not(feature = "deadline-receive-probe"))]
                 let sequence = match runtime.deliver_ipc(
                     current,
                     receiver,
@@ -1097,8 +1116,6 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     }
                     Err(_) => halt(),
                 };
-                #[cfg(feature = "deadline-receive-probe")]
-                complete_deadline_receive_if_ready(runtime, receiver);
                 frame.complete(sequence);
                 asm!(
                     "out dx, eax",
@@ -1167,12 +1184,16 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .as_mut()
                     .unwrap_or_else(|| halt());
                 #[cfg(feature = "deadline-receive-probe")]
-                if !deadline_delivery_is_valid(receiver, payload_length, capability_count) {
-                    payload_storage.fill(0);
-                    requested.fill((Capability::from_token(0), Rights::NONE));
-                    frame.complete_error();
-                    return;
-                }
+                let delivery = deadline_deliver_ipc(
+                    runtime,
+                    current,
+                    receiver,
+                    endpoint_object,
+                    endpoint,
+                    payload,
+                    &requested[..capability_count],
+                );
+                #[cfg(not(feature = "deadline-receive-probe"))]
                 let delivery = runtime.deliver_ipc(
                     current,
                     receiver,
@@ -1185,14 +1206,25 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 requested.fill((Capability::from_token(0), Rights::NONE));
                 let sequence = match delivery {
                     Ok(sequence) => sequence,
+                    #[cfg(feature = "deadline-receive-probe")]
+                    Err(mrml_kernel::DeadlineReceiveSyscallError::MessageShape) => {
+                        frame.complete_error();
+                        return;
+                    }
+                    #[cfg(feature = "deadline-receive-probe")]
+                    Err(mrml_kernel::DeadlineReceiveSyscallError::Runtime(error))
+                        if error.is_precommit_send_denial() =>
+                    {
+                        frame.complete_error();
+                        return;
+                    }
+                    #[cfg(not(feature = "deadline-receive-probe"))]
                     Err(error) if error.is_precommit_send_denial() => {
                         frame.complete_error();
                         return;
                     }
                     Err(_) => halt(),
                 };
-                #[cfg(feature = "deadline-receive-probe")]
-                complete_deadline_receive_if_ready(runtime, receiver);
                 frame.complete(sequence);
                 asm!(
                     "out dx, eax",
@@ -5328,34 +5360,27 @@ unsafe fn pending_inline_wait_slot(task: mrml_kernel::TaskId) -> Option<usize> {
 }
 
 #[cfg(feature = "deadline-receive-probe")]
-unsafe fn complete_deadline_receive_if_ready(
+unsafe fn deadline_deliver_ipc(
     runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    sender: mrml_kernel::TaskId,
     receiver: mrml_kernel::TaskId,
-) {
+    endpoint: &mut Endpoint,
+    endpoint_capability: Capability,
+    payload: &[u8],
+    requested: &[(Capability, Rights)],
+) -> Result<u64, mrml_kernel::DeadlineReceiveSyscallError> {
     let executor = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES) }
         .as_mut()
         .unwrap_or_else(|| halt());
-    if executor.has_pending(receiver).unwrap_or_else(|_| halt()) {
-        executor
-            .complete_ready(runtime, receiver)
-            .unwrap_or_else(|_| halt());
-    }
-}
-
-#[cfg(feature = "deadline-receive-probe")]
-unsafe fn deadline_delivery_is_valid(
-    receiver: mrml_kernel::TaskId,
-    payload_length: usize,
-    capability_count: usize,
-) -> bool {
-    let executor = unsafe { &*core::ptr::addr_of!(SERVICE_DEADLINE_RECEIVES) }
-        .as_ref()
-        .unwrap_or_else(|| halt());
-    match executor.validate_delivery(receiver, payload_length, capability_count) {
-        Ok(()) => true,
-        Err(mrml_kernel::DeadlineReceiveSyscallError::MessageShape) => false,
-        Err(_) => halt(),
-    }
+    executor.deliver(
+        runtime,
+        sender,
+        receiver,
+        endpoint,
+        endpoint_capability,
+        payload,
+        requested,
+    )
 }
 
 #[cfg(all(feature = "service-probe", not(feature = "deadline-receive-probe")))]

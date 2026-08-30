@@ -1,8 +1,9 @@
 use core::array;
 
 use crate::{
-    BlockedReceive, DeadlineReceive, Message, ReceiveDeadlineTick, ReceiveTimeout, ScheduleOutcome,
-    TaskId, TaskRuntime, TaskRuntimeError, MAX_SYSCALL_INLINE_PAYLOAD,
+    BlockedReceive, Capability, DeadlineReceive, Endpoint, MAX_SYSCALL_INLINE_PAYLOAD, Message,
+    ReceiveDeadlineTick, ReceiveTimeout, Rights, ScheduleOutcome, TaskId, TaskRuntime,
+    TaskRuntimeError,
 };
 
 #[must_use = "deadline receive admission must be completed or retained"]
@@ -103,6 +104,36 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
         Ok(())
     }
 
+    /// Publishes one IPC delivery and, when the exact receiver owns a pending
+    /// deadline syscall, completes that retained syscall before returning.
+    pub fn deliver<const CAPS: usize>(
+        &mut self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        sender: TaskId,
+        receiver: TaskId,
+        endpoint: &mut Endpoint,
+        endpoint_capability: Capability,
+        payload: &[u8],
+        requested: &[(Capability, Rights)],
+    ) -> Result<u64, DeadlineReceiveSyscallError> {
+        let completes_deadline = self.owner_slot(receiver)?.is_some();
+        self.validate_delivery(receiver, payload.len(), requested.len())?;
+        let sequence = runtime
+            .deliver_ipc(
+                sender,
+                receiver,
+                endpoint,
+                endpoint_capability,
+                payload,
+                requested,
+            )
+            .map_err(DeadlineReceiveSyscallError::Runtime)?;
+        if completes_deadline {
+            self.complete_ready(runtime, receiver)?;
+        }
+        Ok(sequence)
+    }
+
     pub fn timer_tick<const CAPS: usize>(
         &mut self,
         runtime: &mut TaskRuntime<TASKS, CAPS>,
@@ -152,7 +183,7 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
         self.owner_slot(task).map(|slot| slot.is_some())
     }
 
-    pub fn validate_delivery(
+    fn validate_delivery(
         &self,
         task: TaskId,
         payload_length: usize,
@@ -291,10 +322,7 @@ mod tests {
             Err(DeadlineReceiveSyscallError::OwnerMismatch)
         );
         assert_eq!(*runtime.context(receiver).unwrap(), timed_out);
-        assert_eq!(
-            runtime.receive_ipc(receiver).unwrap().payload(),
-            b"late"
-        );
+        assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"late");
     }
 
     #[test]
@@ -405,7 +433,78 @@ mod tests {
             executor.validate_delivery(receiver, MAX_SYSCALL_INLINE_PAYLOAD, 0),
             Ok(())
         );
-        assert_eq!(executor.validate_delivery(sender, usize::MAX, usize::MAX), Ok(()));
+        assert_eq!(
+            executor.validate_delivery(sender, usize::MAX, usize::MAX),
+            Ok(())
+        );
         assert!(executor.has_pending(receiver).unwrap());
+    }
+
+    #[test]
+    fn rejected_delivery_preserves_every_prepublication_state() {
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x94);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let delegated = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x95), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        assert!(matches!(
+            executor.start(&mut runtime, ReceiveTimeout::new(3).unwrap()),
+            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+        ));
+
+        assert_eq!(
+            executor.deliver(
+                &mut runtime,
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"blocked",
+                &[(delegated, Rights::READ)],
+            ),
+            Err(DeadlineReceiveSyscallError::MessageShape)
+        );
+        assert!(executor.has_pending(receiver).unwrap());
+        assert!(matches!(
+            runtime.receive_ipc(receiver),
+            Err(TaskRuntimeError::InboxEmpty)
+        ));
+        assert!(runtime.capabilities(receiver).unwrap().is_empty());
+
+        assert_eq!(
+            executor
+                .deliver(
+                    &mut runtime,
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"ready",
+                    &[],
+                )
+                .unwrap(),
+            1
+        );
+        assert!(!executor.has_pending(receiver).unwrap());
+        let context = runtime.context(receiver).unwrap();
+        assert_eq!(context.rax, crate::SyscallCompletionStatus::Success.code());
+        assert_eq!(context.rdx, 5);
+        assert_eq!(context.r10, u64::from_le_bytes(*b"ready\0\0\0"));
     }
 }
