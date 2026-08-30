@@ -6,7 +6,7 @@ use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, ComponentServiceLaunchAttachment,
     ComponentServiceReadTransferAttachment, ComponentServiceReadTransferCopyTaskBinding,
     ComponentServiceReadTransferMemoryRoot, IsolationPlacement, IsolationServiceSpec,
-    MemoryMappingBackend, MemoryObjectBackingBackend, MemoryPoolTable,
+    MemoryMappingRevocationBackend, MemoryObjectBackingBackend, MemoryPoolTable,
     NativeComponentServiceCopyReadTransferError, NativeComponentServiceCopyReadTransferRetirement,
     NativeComponentServiceCopyReadTransferRetirementError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
@@ -500,7 +500,7 @@ pub fn teardown_filesystem_provider<B: FilesystemProviderTeardownBackend>(
 // and cannot repeat a completed unmap, scrub, or object release.
 unsafe impl<
     'a,
-    F: MemoryMappingBackend,
+    F: MemoryMappingRevocationBackend,
     B: MemoryObjectBackingBackend,
     const POOLS: usize,
     const OBJECTS: usize,

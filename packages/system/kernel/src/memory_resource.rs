@@ -124,6 +124,16 @@ pub unsafe trait MemoryMappingRevocationBackend {
     fn revoke(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error>;
 }
 
+// SAFETY: every full mapping backend already promises that `remove` succeeds
+// only after exact native withdrawal and all required invalidation completes.
+unsafe impl<B: MemoryMappingBackend> MemoryMappingRevocationBackend for B {
+    type Error = B::Error;
+
+    fn revoke(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+        self.remove(request)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryMappingOperationError<E> {
     Policy(MemoryResourceError),
@@ -1694,24 +1704,6 @@ mod tests {
         }
 
         fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
-            self.remove_calls += 1;
-            if self.fail_remove {
-                return Err("remove");
-            }
-            if self.installed != Some(request) {
-                return Err("substitution");
-            }
-            self.installed = None;
-            Ok(())
-        }
-    }
-
-    // SAFETY: the test revoker clears only the exact copied request on success
-    // and retains it unchanged on every failure.
-    unsafe impl MemoryMappingRevocationBackend for RecordingMappingBackend {
-        type Error = &'static str;
-
-        fn revoke(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
             self.remove_calls += 1;
             if self.fail_remove {
                 return Err("remove");

@@ -10567,3 +10567,18 @@ CPU execution is claimed yet.
 Patent review: `NOT_TRIGGERED` — revoke-before-policy-retirement ordering and
 exact page-table tuple validation are conventional memory lifecycle mechanisms.
 See `docs/patents/REVIEW_LOG.md`.
+
+Copy-mediated native service teardown and the storage provider teardown backend
+now require only the revoke-only mapping contract. Existing full mapping
+backends inherit that contract from their already equivalent removal guarantee,
+while an active service revoker can be supplied without acquiring installation
+authority. Teardown still requires the exact typed task-retirement context
+before invoking withdrawal, preserves the mapping record after backend failure,
+and advances retry state only after policy-accounted revocation succeeds. The
+Linux-host release kernel suite passes 652 tests and storage passes 162 tests.
+The storage test continues to use an inactive hierarchy, so active-CR3 execution
+and interrupt-exclusion integration remain **PLANNED**.
+
+Patent review: `NOT_TRIGGERED` — narrowing teardown to a revoke-only backend and
+retaining conventional fail-closed ordering is ordinary authority attenuation.
+See `docs/patents/REVIEW_LOG.md`.

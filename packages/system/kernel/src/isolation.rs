@@ -9,9 +9,9 @@ use crate::{
     CpuResourceError, MemoryBackingKind, MemoryBackingOperationError, MemoryMappingBackend,
     MemoryMappingId, MemoryMappingOperationError, MemoryMappingPair,
     MemoryMappingPairOperationError, MemoryMappingPairRemovalError, MemoryMappingPairRemovalState,
-    MemoryObjectBackingBackend, MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId,
-    MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime,
-    TaskRuntimeError, VcpuReservationId, arch::x86_64::UserContext,
+    MemoryMappingRevocationBackend, MemoryObjectBackingBackend, MemoryObjectId,
+    MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
+    Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId, arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1712,7 +1712,7 @@ pub fn retire_current_native_component_service_copy_read_transfer<
 }
 
 pub fn teardown_native_component_service_copy_read_transfer<
-    M: MemoryMappingBackend,
+    M: MemoryMappingRevocationBackend,
     B: MemoryObjectBackingBackend,
     const POOLS: usize,
     const OBJECTS: usize,
@@ -1783,7 +1783,7 @@ pub fn teardown_native_component_service_copy_read_transfer<
                 },
             )?;
         let mapping = state.active().binding().mapping();
-        if let Err(error) = memory.remove_mapping(
+        if let Err(error) = memory.revoke_mapping(
             mapping.mapping(),
             mapping.local_target_capability(),
             capabilities,
