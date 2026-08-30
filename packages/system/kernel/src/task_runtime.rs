@@ -1,6 +1,7 @@
 use core::array;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::arch::x86_64::{
     InstalledEntryStack, TrapDisposition, UserContext, enter_user_context_on_stack,
@@ -19,6 +20,8 @@ use crate::{
 pub const TASK_INBOX_MESSAGES: usize = 2;
 pub const TASK_CONTROL_PEERS: usize = 8;
 pub const MAX_TASK_DELEGATIONS: usize = 256;
+
+static NEXT_TASK_RUNTIME_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskRuntimeError {
@@ -204,6 +207,7 @@ enum TaskTerminationDispatchTarget {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TaskTerminationDispatchIdentity {
+    runtime: u64,
     source: TaskId,
     target: Option<TaskId>,
 }
@@ -489,6 +493,7 @@ impl<const CPUS: usize, const CAPS: usize> PeriodicDomainBalancer<CPUS, CAPS> {
 /// the scheduler for a replacement, so a stale task is never resumable with a
 /// partially live authority set.
 pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
+    identity: u64,
     scheduler: KernelScheduler<TASKS>,
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
@@ -588,7 +593,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn new(ticks_per_second: u32, quantum_ticks: u32) -> Result<Self, TaskRuntimeError> {
         let scheduler = KernelScheduler::new(ticks_per_second, quantum_ticks)
             .map_err(TaskRuntimeError::Scheduler)?;
+        let identity = allocate_task_runtime_identity(&NEXT_TASK_RUNTIME_IDENTITY)?;
         Ok(Self {
+            identity,
             scheduler,
             domains: array::from_fn(|_| None),
             delegations: [None; MAX_TASK_DELEGATIONS],
@@ -1232,6 +1239,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         target: TaskTerminationDispatchTarget,
     ) -> TaskTerminationDispatch {
         let identity = TaskTerminationDispatchIdentity {
+            runtime: self.identity,
             source,
             target: match target {
                 TaskTerminationDispatchTarget::Idle => None,
@@ -2192,6 +2200,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 }
 
+fn allocate_task_runtime_identity(counter: &AtomicU64) -> Result<u64, TaskRuntimeError> {
+    counter
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |identity| {
+            identity.checked_add(1)
+        })
+        .map_err(|_| TaskRuntimeError::IntegrityFailure)
+}
+
 fn two_domains_mut<const TASKS: usize, const CAPS: usize>(
     domains: &mut [Option<TaskDomain<CAPS>>; TASKS],
     first: usize,
@@ -2219,6 +2235,17 @@ mod tests {
     }
 
     const KERNEL_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    #[test]
+    fn runtime_identity_allocation_exhausts_without_wrapping() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(allocate_task_runtime_identity(&counter), Ok(u64::MAX - 1));
+        assert_eq!(
+            allocate_task_runtime_identity(&counter),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
 
     #[test]
     fn send_denial_classification_excludes_integrity_and_unrelated_failures() {
@@ -2677,9 +2704,22 @@ mod tests {
         assert_eq!(runtime.start(), ScheduleOutcome::Idle);
         assert_eq!(runtime.current(), None);
         let mut other_runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let other_task = other_runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        assert_eq!(other_task, task);
+        other_runtime.start();
+        let other_termination = other_runtime.terminate_current().unwrap();
+        let other_dispatch = other_runtime
+            .dispatch_after_termination(other_termination)
+            .unwrap();
         let dispatch = other_runtime
             .consume_idle_dispatch(dispatch)
             .expect_err("another runtime must not consume the issued dispatch");
+        assert_eq!(
+            other_runtime.consume_idle_dispatch(other_dispatch),
+            Ok(TaskTerminationIdle { _private: () })
+        );
         assert_eq!(
             runtime.consume_idle_dispatch(dispatch),
             Ok(TaskTerminationIdle { _private: () })

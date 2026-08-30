@@ -11091,3 +11091,22 @@ This is in-memory and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — rejecting a blocking receive while a one-use
 scheduler transition is outstanding is conventional state-machine
 serialization. See `docs/patents/REVIEW_LOG.md`.
+
+Every `TaskRuntime` now receives a kernel-internal nonzero instance identity
+from one bounded atomic allocator, and each issued dispatch binds that identity
+in addition to its retired source and selected successor. Allocation fails
+permanently at exhaustion rather than wrapping. Consequently, two runtimes with
+identical generational task IDs and identical retirement outcomes still cannot
+consume or prepare state through each other's dispatch tokens. The runtime
+identity is internal matching state, not caller-visible authority.
+
+The Linux-host kernel suite passes 654 tests, including exact cross-runtime
+collision and allocator-exhaustion cases. Storage passes 163 tests, Zstd passes
+27, and configuration passes 53; their affected Linux release builds pass. The
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+This is in-memory and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — assigning a non-wrapping instance generation
+to exact-match a one-use token is conventional stale-handle prevention. See
+`docs/patents/REVIEW_LOG.md`.
