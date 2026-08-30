@@ -119,7 +119,8 @@ pub use dispatch_service::{
 pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use service_bootstrap::{
-    AhciServiceBootstrapError, bootstrap_installed_ahci_service,
+    AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
+    bootstrap_installed_ahci_service,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,

@@ -14,6 +14,112 @@ pub enum AhciServiceBootstrapError {
     Launch(AhciServiceLaunchRecordError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciServiceEntryRegisters {
+    service_endpoint: u64,
+    supervisor_task: u64,
+    provider_generation: u64,
+    launch_data: Capability,
+    service_module_object: u64,
+    authorities: [Capability; AHCI_SERVICE_AUTHORITY_COUNT],
+}
+
+impl AhciServiceEntryRegisters {
+    /// Captures the exact register ABI installed by `NativeDeviceServiceEntry`.
+    ///
+    /// # Safety
+    ///
+    /// Every argument must be the unmodified value from its documented native
+    /// entry register. Numeric values supplied from any other source have not
+    /// been authenticated as capability tokens or launch identity.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn from_installed_registers(
+        service_endpoint: u64,
+        supervisor_task: u64,
+        provider_generation: u64,
+        launch_data: u64,
+        launch_data_bytes: u64,
+        service_module_object: u64,
+        device: u64,
+        command_list: u64,
+        received_fis: u64,
+        command_tables: u64,
+        device_write_data: u64,
+        device_read_data: u64,
+    ) -> Result<Self, AhciServiceBootstrapError> {
+        let raw_authorities = [
+            device,
+            command_list,
+            received_fis,
+            command_tables,
+            device_write_data,
+            device_read_data,
+        ];
+        if service_endpoint == 0
+            || supervisor_task == 0
+            || service_endpoint == supervisor_task
+            || provider_generation == 0
+            || service_module_object == 0
+            || launch_data_bytes != AHCI_SERVICE_LAUNCH_BYTES as u64
+            || !valid_token(launch_data)
+            || raw_authorities.iter().any(|token| !valid_token(*token))
+            || raw_authorities.contains(&launch_data)
+        {
+            return Err(AhciServiceBootstrapError::InvalidProjection);
+        }
+        for (index, token) in raw_authorities.iter().enumerate() {
+            if raw_authorities[..index].contains(token) {
+                return Err(AhciServiceBootstrapError::InvalidProjection);
+            }
+        }
+        Ok(Self {
+            service_endpoint,
+            supervisor_task,
+            provider_generation,
+            launch_data: Capability::from_token(launch_data),
+            service_module_object,
+            authorities: raw_authorities.map(Capability::from_token),
+        })
+    }
+
+    pub const fn service_endpoint(self) -> u64 {
+        self.service_endpoint
+    }
+
+    pub const fn supervisor_task(self) -> u64 {
+        self.supervisor_task
+    }
+
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+
+    pub const fn service_module_object(self) -> u64 {
+        self.service_module_object
+    }
+}
+
+fn valid_token(token: u64) -> bool {
+    token != 0 && token >> 32 != 0
+}
+
+/// Bootstraps an AHCI service from one previously validated register capture.
+pub fn bootstrap_installed_ahci_entry<R: AhciRawSyscall>(
+    syscalls: &mut AhciUserspaceSyscalls<R>,
+    entry: AhciServiceEntryRegisters,
+    scratch: &mut [u8; AHCI_SERVICE_LAUNCH_BYTES],
+) -> Result<InstalledAhciServiceLaunch, AhciServiceBootstrapError> {
+    unsafe {
+        bootstrap_installed_ahci_service(
+            syscalls,
+            entry.launch_data,
+            entry.provider_generation,
+            entry.authorities,
+            scratch,
+        )
+    }
+}
+
 /// Copies, validates, binds, and erases the installed AHCI launch record.
 ///
 /// # Safety
@@ -29,10 +135,7 @@ pub unsafe fn bootstrap_installed_ahci_service<R: AhciRawSyscall>(
     scratch: &mut [u8; AHCI_SERVICE_LAUNCH_BYTES],
 ) -> Result<InstalledAhciServiceLaunch, AhciServiceBootstrapError> {
     let launch_token = launch_data.token();
-    if provider_generation == 0
-        || launch_token == 0
-        || launch_token >> 32 == 0
-        || authorities.contains(&launch_data)
+    if provider_generation == 0 || !valid_token(launch_token) || authorities.contains(&launch_data)
     {
         scratch.fill(0);
         return Err(AhciServiceBootstrapError::InvalidProjection);
@@ -152,6 +255,94 @@ mod tests {
         core::array::from_fn(|index| {
             Capability::from_token(((index as u64 + 20) << 32) | (index as u64 + 2))
         })
+    }
+
+    unsafe fn entry_with(
+        endpoint: u64,
+        launch_bytes: u64,
+        command_list: u64,
+    ) -> Result<AhciServiceEntryRegisters, AhciServiceBootstrapError> {
+        let authorities = authorities();
+        unsafe {
+            AhciServiceEntryRegisters::from_installed_registers(
+                endpoint,
+                2,
+                3,
+                LAUNCH_TOKEN,
+                launch_bytes,
+                9,
+                authorities[0].token(),
+                command_list,
+                authorities[2].token(),
+                authorities[3].token(),
+                authorities[4].token(),
+                authorities[5].token(),
+            )
+        }
+    }
+
+    #[test]
+    fn exact_entry_registers_bind_once_to_bootstrap() {
+        let authorities = authorities();
+        let entry = unsafe {
+            entry_with(
+                1,
+                AHCI_SERVICE_LAUNCH_BYTES as u64,
+                authorities[1].token(),
+            )
+        }
+        .unwrap();
+        assert_eq!(entry.service_endpoint(), 1);
+        assert_eq!(entry.supervisor_task(), 2);
+        assert_eq!(entry.provider_generation(), 3);
+        assert_eq!(entry.service_module_object(), 9);
+        let raw = Raw {
+            bytes: record().encode(),
+            status: 0,
+            calls: 0,
+        };
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, 1, 2).unwrap();
+        let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
+        assert_eq!(
+            bootstrap_installed_ahci_entry(&mut syscalls, entry, &mut scratch)
+                .unwrap()
+                .record(),
+            record()
+        );
+        assert_eq!(scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
+    }
+
+    #[test]
+    fn entry_register_substitution_and_aliasing_fail_before_copy() {
+        let authorities = authorities();
+        assert_eq!(
+            unsafe {
+                entry_with(
+                    0,
+                    AHCI_SERVICE_LAUNCH_BYTES as u64,
+                    authorities[1].token(),
+                )
+            },
+            Err(AhciServiceBootstrapError::InvalidProjection)
+        );
+        assert_eq!(
+            unsafe { entry_with(1, 383, authorities[1].token()) },
+            Err(AhciServiceBootstrapError::InvalidProjection)
+        );
+        assert_eq!(
+            unsafe { entry_with(1, AHCI_SERVICE_LAUNCH_BYTES as u64, LAUNCH_TOKEN) },
+            Err(AhciServiceBootstrapError::InvalidProjection)
+        );
+        assert_eq!(
+            unsafe {
+                entry_with(
+                    1,
+                    AHCI_SERVICE_LAUNCH_BYTES as u64,
+                    authorities[0].token(),
+                )
+            },
+            Err(AhciServiceBootstrapError::InvalidProjection)
+        );
     }
 
     #[test]

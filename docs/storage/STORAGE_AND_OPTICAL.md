@@ -603,6 +603,22 @@ validation and unconditional scratch erasure is conventional fail-closed
 service bootstrap plumbing. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The complete twelve-register native AHCI entry ABI is now **PARTIALLY
+IMPLEMENTED IN SOURCE** as a typed installed-register capture. It validates the
+service endpoint, supervisor task, provider generation, exact 384-byte launch
+length, service module, launch token, and six fixed-order authority tokens;
+invalid tokens, launch/authority aliasing, duplicated authorities, and endpoint
+identity aliasing fail before copying launch data. Only this validated binding
+can enter bootstrap. The focused Linux AHCI suite passes all 99 tests. The
+assembly entry stub and native binary artifact remain unimplemented, along with
+capability-backed CPU mapping construction, active-port reconstruction,
+concrete cache/IOMMU backends, supervised teardown, active execution, and
+physical-device evidence.
+
+Patent review: **NOT_TRIGGERED**. Fixed register-to-field validation and token
+non-aliasing checks are conventional native service ABI binding. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

@@ -719,6 +719,22 @@ Patent review: `NOT_TRIGGERED` — one bounded capability copy followed by
 validation and unconditional scratch erasure is conventional fail-closed
 service bootstrap plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+The complete twelve-register native AHCI entry ABI is now **PARTIALLY
+IMPLEMENTED IN SOURCE** as one typed installed-register capture. It exact-checks
+the service endpoint, supervisor task, provider generation, 384-byte launch
+length, service module, launch token, and six fixed-order authority tokens;
+invalid tokens, launch/authority aliasing, authority duplication, and endpoint
+identity aliasing fail before launch-data copying. Only that validated binding
+can enter the bootstrap operation. The focused Linux AHCI suite passes all 99
+tests. The assembly entry stub and binary artifact remain unimplemented, as do
+capability-backed CPU mapping construction, active-port reconstruction,
+cache/IOMMU backends, supervised teardown, active execution, and physical-device
+evidence.
+
+Patent review: `NOT_TRIGGERED` — fixed register-to-field validation and token
+non-aliasing checks are conventional native service ABI binding. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
