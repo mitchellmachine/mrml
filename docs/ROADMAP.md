@@ -1551,6 +1551,36 @@ Patent review: `NOT_TRIGGERED` — projecting an existing endpoint capability an
 installing an existing generational task identity are conventional
 least-authority IPC plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+Native device-service reply authority now has a controlled `TaskRuntime`
+exercise **IMPLEMENTED IN SOURCE**. After construction and activation, the
+projected non-delegable endpoint leaf authorizes delivery into the
+launch-selected supervisor inbox; the received event retains the exact service
+task sender, endpoint sequence, and payload. A substituted endpoint object, a
+different `SIGNAL` leaf naming another object, and transitive source-root
+revocation all fail before inbox publication. The denied send on the live
+endpoint does not consume its sequence. The supervisor `TaskId` remains
+authenticated launch-selected routing identity, not authority embedded in the
+endpoint; the unsafe userspace adapter must continue taking it only from the
+installed entry rather than request bytes. The Linux kernel suite passes all
+688 tests, AHCI passes all 135 tests, Linux and `MRML_NATIVE` release builds pass
+for kernel and AHCI, and the AHCI service-image profile passes its `MRML_NATIVE`
+release build. This is direct runtime API evidence using a locally constructed
+endpoint, not scheduled userspace syscall/user-copy, installed supervisor, KVM/
+WHP, or physical AHCI evidence.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — exercising existing capability-gated IPC,
+inbox delivery, sequencing, and transitive revocation introduces no new
+mechanism. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

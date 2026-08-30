@@ -550,7 +550,7 @@ fn rollback_projection<const N: usize, const TASKS: usize, const CAPABILITIES: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PhysAddr, Priority, TotalMicrovmClass};
+    use crate::{ControlEvent, Endpoint, IpcError, PhysAddr, Priority, TotalMicrovmClass};
 
     fn spec(placement: IsolationPlacement) -> IsolationServiceSpec {
         IsolationServiceSpec::new(
@@ -692,6 +692,118 @@ mod tests {
                 Err(CapabilityError::PermissionDenied)
             );
         }
+    }
+
+    #[test]
+    fn projected_reply_endpoint_authorizes_delivery_and_revokes_transitively() {
+        let (mut runtime, source, target) = runtime();
+        let source_endpoint = endpoint(&mut runtime, source);
+        let rights = [
+            Rights::CONTROL,
+            Rights::MAP.union(Rights::READ),
+            Rights::MAP.union(Rights::WRITE),
+            Rights::PIN.union(Rights::READ),
+            Rights::PIN.union(Rights::WRITE),
+            Rights::SIGNAL,
+        ];
+        let (attachment, _, _) = attachment(&mut runtime, source, rights);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            source_endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        let entry = task.entry();
+        runtime.activate_constructed_task(target).unwrap();
+
+        let mut reply_endpoint = Endpoint::new(ObjectId(0xa0));
+        assert_eq!(
+            runtime.deliver_ipc(
+                target,
+                entry.supervisor_task(),
+                &mut Endpoint::new(ObjectId(0xa1)),
+                entry.service_endpoint(),
+                b"wrong object",
+                &[],
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert_eq!(
+            runtime.deliver_ipc(
+                target,
+                entry.supervisor_task(),
+                &mut reply_endpoint,
+                entry.service_endpoint(),
+                b"ready",
+                &[],
+            ),
+            Ok(1)
+        );
+        let ControlEvent::Message(reply) = runtime.receive_control(source).unwrap() else {
+            panic!("reply delivery cannot synthesize a peer-death event")
+        };
+        assert_eq!(reply.sender(), target);
+        assert_eq!(reply.sequence(), 1);
+        assert_eq!(reply.message().payload(), b"ready");
+
+        let wrong_endpoint = entry.authorities()[5];
+        assert_eq!(
+            runtime.deliver_ipc(
+                target,
+                entry.supervisor_task(),
+                &mut reply_endpoint,
+                wrong_endpoint,
+                b"wrong endpoint",
+                &[],
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert!(matches!(
+            runtime.receive_ipc(source),
+            Err(TaskRuntimeError::InboxEmpty)
+        ));
+        assert_eq!(
+            runtime.deliver_ipc(
+                target,
+                entry.supervisor_task(),
+                &mut reply_endpoint,
+                entry.service_endpoint(),
+                b"still live",
+                &[],
+            ),
+            Ok(2)
+        );
+        let ControlEvent::Message(reply) = runtime.receive_control(source).unwrap() else {
+            panic!("reply delivery cannot synthesize a peer-death event")
+        };
+        assert_eq!(reply.sender(), target);
+        assert_eq!(reply.sequence(), 2);
+        assert_eq!(reply.message().payload(), b"still live");
+
+        runtime
+            .revoke_capability(source, source_endpoint)
+            .unwrap();
+        assert_eq!(
+            runtime.deliver_ipc(
+                target,
+                entry.supervisor_task(),
+                &mut reply_endpoint,
+                entry.service_endpoint(),
+                b"revoked",
+                &[],
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert!(matches!(
+            runtime.receive_ipc(source),
+            Err(TaskRuntimeError::InboxEmpty)
+        ));
     }
 
     #[test]
