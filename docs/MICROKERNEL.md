@@ -10129,3 +10129,19 @@ Patent review: `NOT_TRIGGERED` — exact bitset equality and operation-scoped
 capability handles are conventional authorization tightening and introduce no
 new algorithm, protocol, or compatibility mechanism. See
 `docs/patents/REVIEW_LOG.md`.
+
+Native component construction now **PARTIALLY IMPLEMENTS IN SOURCE** a
+direction-scoped dependency read-transfer attachment. The source must hold two
+distinct delegable capabilities for one exact generational shared object: local
+`MAP|READ` authority and provider-bound `MAP|WRITE` authority. Construction
+atomically attenuates the former while preserving only the latter's delegation
+right, installs both fresh target-space handles with the exact shared generation
+and byte bound, and revokes every projected descendant on entry failure. The
+Linux-host kernel suite passes 643 tests. This proves source, unit, and simulated
+capability-lifecycle behavior only; it does not prove an installed FAT32 data
+plane, KVM, WHP, IOMMU, or physical-device execution.
+
+Patent review: `NOT_TRIGGERED` — separate read and delegated-write capability
+handles are conventional least-authority shared-memory mediation and introduce
+no new algorithm, protocol, or compatibility mechanism. See
+`docs/patents/REVIEW_LOG.md`.

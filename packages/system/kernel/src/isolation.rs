@@ -431,6 +431,99 @@ impl ComponentServiceLaunchAttachment {
     }
 }
 
+/// Direction-scoped shared memory used by a component to receive data from a
+/// dependency service.
+///
+/// The local capability can only read the completed transfer. The distinct
+/// transfer capability can only be delegated with write authority to the
+/// provider. Both capabilities must name the same object, but their separate
+/// generations prevent either token from silently acquiring the other's role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceReadTransferAttachment {
+    shared_object: ObjectId,
+    shared_generation: u64,
+    shared_bytes: u32,
+    local_read: Capability,
+    provider_write: Capability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferAttachmentError {
+    InvalidIdentity,
+    InvalidGeneration,
+    InvalidLength,
+    LocalReadCapability(CapabilityError),
+    WrongLocalReadObject,
+    ProviderWriteCapability(CapabilityError),
+    WrongProviderWriteObject,
+    CapabilityAlias,
+}
+
+impl ComponentServiceReadTransferAttachment {
+    pub fn new<const C: usize>(
+        shared_object: ObjectId,
+        shared_generation: u64,
+        shared_bytes: u32,
+        local_read: Capability,
+        provider_write: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<Self, ComponentServiceReadTransferAttachmentError> {
+        if shared_object.0 == 0 {
+            return Err(ComponentServiceReadTransferAttachmentError::InvalidIdentity);
+        }
+        if shared_generation == 0 {
+            return Err(ComponentServiceReadTransferAttachmentError::InvalidGeneration);
+        }
+        if shared_bytes == 0 || shared_bytes > 4096 {
+            return Err(ComponentServiceReadTransferAttachmentError::InvalidLength);
+        }
+        if local_read == provider_write {
+            return Err(ComponentServiceReadTransferAttachmentError::CapabilityAlias);
+        }
+        let actual_local = capabilities
+            .authorize_exact(
+                local_read,
+                Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+            )
+            .map_err(ComponentServiceReadTransferAttachmentError::LocalReadCapability)?;
+        if actual_local != shared_object {
+            return Err(ComponentServiceReadTransferAttachmentError::WrongLocalReadObject);
+        }
+        let actual_transfer = capabilities
+            .authorize_exact(
+                provider_write,
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .map_err(ComponentServiceReadTransferAttachmentError::ProviderWriteCapability)?;
+        if actual_transfer != shared_object {
+            return Err(ComponentServiceReadTransferAttachmentError::WrongProviderWriteObject);
+        }
+        Ok(Self {
+            shared_object,
+            shared_generation,
+            shared_bytes,
+            local_read,
+            provider_write,
+        })
+    }
+
+    pub const fn shared_object(self) -> ObjectId {
+        self.shared_object
+    }
+    pub const fn shared_generation(self) -> u64 {
+        self.shared_generation
+    }
+    pub const fn shared_bytes(self) -> u32 {
+        self.shared_bytes
+    }
+    pub const fn local_read(self) -> Capability {
+        self.local_read
+    }
+    pub const fn provider_write(self) -> Capability {
+        self.provider_write
+    }
+}
+
 /// Native-service entry state built only after the attachment capabilities have
 /// been projected into the fresh target capability space.
 ///
@@ -569,6 +662,29 @@ pub struct NativeComponentServiceTask {
     entry: NativeComponentServiceEntry,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceReadTransferTask {
+    task: TaskId,
+    entry: NativeComponentServiceEntry,
+    local_read: Capability,
+    provider_write: Capability,
+}
+
+impl NativeComponentServiceReadTransferTask {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+    pub const fn entry(self) -> NativeComponentServiceEntry {
+        self.entry
+    }
+    pub const fn local_read(self) -> Capability {
+        self.local_read
+    }
+    pub const fn provider_write(self) -> Capability {
+        self.provider_write
+    }
+}
+
 impl NativeComponentServiceTask {
     pub const fn task(self) -> TaskId {
         self.task
@@ -588,6 +704,133 @@ pub enum NativeComponentServiceTaskError {
         entry: NativeComponentServiceEntryError,
         cleanup: TaskRuntimeError,
     },
+}
+
+/// Constructs a native component with a receive-only shared-memory path to its
+/// dependency. The target keeps local read authority and may delegate only
+/// write authority to the provider named by the separately projected endpoint.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_native_component_service_task_with_read_transfer<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    spec: IsolationServiceSpec,
+    attachment: ComponentServiceLaunchAttachment,
+    transfer: ComponentServiceReadTransferAttachment,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    consumer_module_object: ObjectId,
+) -> Result<NativeComponentServiceReadTransferTask, NativeComponentServiceTaskError> {
+    if spec.placement() != IsolationPlacement::NativeService {
+        return Err(NativeComponentServiceTaskError::WrongPlacement);
+    }
+    let context = *runtime
+        .context(target_task)
+        .map_err(NativeComponentServiceTaskError::Runtime)?;
+    if context.rbp != 0 || context.rsi != 0 || context.r9 != 0 || context.r8 != 0 {
+        return Err(NativeComponentServiceTaskError::Entry(
+            NativeComponentServiceEntryError::LaunchRegistersOccupied,
+        ));
+    }
+    let projection = runtime
+        .project_capabilities_for_construction(
+            source_task,
+            target_task,
+            &[
+                (attachment.launch_data(), Rights::READ),
+                (attachment.dependency_endpoint(), Rights::SIGNAL),
+                (transfer.local_read(), Rights::MAP.union(Rights::READ)),
+                (
+                    transfer.provider_write(),
+                    Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+                ),
+            ],
+        )
+        .map_err(NativeComponentServiceTaskError::Runtime)?;
+    let mut capabilities = projection.capabilities();
+    let projected = [
+        capabilities
+            .next()
+            .expect("four construction projections produce four handles"),
+        capabilities
+            .next()
+            .expect("four construction projections produce four handles"),
+        capabilities
+            .next()
+            .expect("four construction projections produce four handles"),
+        capabilities
+            .next()
+            .expect("four construction projections produce four handles"),
+    ];
+    debug_assert!(capabilities.next().is_none());
+    let [launch_data, dependency_endpoint, local_read, provider_write] = projected;
+    let entry = match NativeComponentServiceEntry::new(
+        spec,
+        attachment,
+        service_endpoint_object,
+        supervisor_task_object,
+        consumer_module_object,
+        launch_data,
+        dependency_endpoint,
+        runtime
+            .capabilities(target_task)
+            .expect("successful projection preserves the target domain"),
+    ) {
+        Ok(entry) => entry,
+        Err(error) => {
+            return rollback_native_read_transfer_projection(
+                runtime,
+                target_task,
+                projected,
+                error,
+            );
+        }
+    };
+    let mut installed = match entry.install(context) {
+        Ok(installed) => installed,
+        Err((_, error, _)) => {
+            return rollback_native_read_transfer_projection(
+                runtime,
+                target_task,
+                projected,
+                error,
+            );
+        }
+    };
+    installed.rbp = local_read.token();
+    installed.rsi = provider_write.token();
+    installed.r9 = transfer.shared_generation();
+    installed.r8 = u64::from(transfer.shared_bytes());
+    *runtime
+        .context_mut(target_task)
+        .expect("successful projection preserves the target context") = installed;
+    Ok(NativeComponentServiceReadTransferTask {
+        task: target_task,
+        entry,
+        local_read,
+        provider_write,
+    })
+}
+
+fn rollback_native_read_transfer_projection<const TASKS: usize, const CAPABILITIES: usize>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    target_task: TaskId,
+    projected: [Capability; 4],
+    entry: NativeComponentServiceEntryError,
+) -> Result<NativeComponentServiceReadTransferTask, NativeComponentServiceTaskError> {
+    let mut cleanup = None;
+    for capability in projected {
+        if let Err(error) = runtime.revoke_capability(target_task, capability) {
+            cleanup = cleanup.or(Some(error));
+        }
+    }
+    match cleanup {
+        Some(cleanup) => Err(NativeComponentServiceTaskError::Rollback { entry, cleanup }),
+        None => Err(NativeComponentServiceTaskError::Entry(entry)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3051,6 +3294,179 @@ mod tests {
                 .unwrap()
                 .authorize_exact(entry.dependency_endpoint(), Rights::SIGNAL,),
             Ok(ObjectId(0x81))
+        );
+    }
+
+    #[test]
+    fn read_transfer_attachment_requires_disjoint_direction_scoped_authority() {
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let local_read = capabilities
+            .insert(
+                ObjectId(0xa0),
+                Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let provider_write = capabilities
+            .insert(
+                ObjectId(0xa0),
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let wrong_object = capabilities
+            .insert(
+                ObjectId(0xa1),
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let attachment = ComponentServiceReadTransferAttachment::new(
+            ObjectId(0xa0),
+            9,
+            4096,
+            local_read,
+            provider_write,
+            &capabilities,
+        )
+        .unwrap();
+        assert_eq!(attachment.shared_object(), ObjectId(0xa0));
+        assert_eq!(attachment.shared_generation(), 9);
+        assert_eq!(attachment.shared_bytes(), 4096);
+        assert_eq!(attachment.local_read(), local_read);
+        assert_eq!(attachment.provider_write(), provider_write);
+        assert_eq!(
+            ComponentServiceReadTransferAttachment::new(
+                ObjectId(0xa0),
+                9,
+                4096,
+                local_read,
+                wrong_object,
+                &capabilities,
+            ),
+            Err(ComponentServiceReadTransferAttachmentError::WrongProviderWriteObject)
+        );
+        assert_eq!(
+            ComponentServiceReadTransferAttachment::new(
+                ObjectId(0xa0),
+                9,
+                4096,
+                local_read,
+                local_read,
+                &capabilities,
+            ),
+            Err(ComponentServiceReadTransferAttachmentError::CapabilityAlias)
+        );
+    }
+
+    #[test]
+    fn native_read_transfer_construction_projects_exact_split_authority() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut runtime = TaskRuntime::<2, 4>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let target = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x30_0000).unwrap(),
+                    0x50_0000,
+                    0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let source_capabilities = runtime.capabilities_mut(source).unwrap();
+        let data = source_capabilities
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = source_capabilities
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let local_read = source_capabilities
+            .insert(
+                ObjectId(0xa0),
+                Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let provider_write = source_capabilities
+            .insert(
+                ObjectId(0xa0),
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let transfer = ComponentServiceReadTransferAttachment::new(
+            ObjectId(0xa0),
+            9,
+            4096,
+            local_read,
+            provider_write,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let prepared = prepare_native_component_service_task_with_read_transfer(
+            &mut runtime,
+            source,
+            target,
+            spec,
+            attachment,
+            transfer,
+            ObjectId(0x90),
+            ObjectId(0x91),
+            ObjectId(0x92),
+        )
+        .unwrap();
+        let context = runtime.context(target).unwrap();
+        assert_eq!(context.rbp, prepared.local_read().token());
+        assert_eq!(context.rsi, prepared.provider_write().token());
+        assert_eq!(context.r9, transfer.shared_generation());
+        assert_eq!(context.r8, u64::from(transfer.shared_bytes()));
+        let target_capabilities = runtime.capabilities(target).unwrap();
+        assert_eq!(
+            target_capabilities
+                .authorize_exact(prepared.local_read(), Rights::MAP.union(Rights::READ),),
+            Ok(ObjectId(0xa0))
+        );
+        assert_eq!(
+            target_capabilities.authorize_exact(
+                prepared.provider_write(),
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            ),
+            Ok(ObjectId(0xa0))
+        );
+        runtime.revoke_capability(source, provider_write).unwrap();
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize(prepared.provider_write(), Rights::WRITE,),
+            Err(CapabilityError::Invalid)
+        );
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(prepared.local_read(), Rights::MAP.union(Rights::READ),),
+            Ok(ObjectId(0xa0))
         );
     }
 

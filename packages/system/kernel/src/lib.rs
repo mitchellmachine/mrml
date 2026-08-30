@@ -151,15 +151,17 @@ pub use ipc::{
 };
 pub use isolation::{
     ComponentServiceArtifactError, ComponentServiceHandoffError, ComponentServiceLaunchAttachment,
-    ComponentServiceLaunchAttachmentError, ComponentServiceLaunchError, HostSubstrateReason,
+    ComponentServiceLaunchAttachmentError, ComponentServiceLaunchError,
+    ComponentServiceReadTransferAttachment, ComponentServiceReadTransferAttachmentError,
+    HostSubstrateReason,
     IsolationAdmissionTable, IsolationApplicationBackend, IsolationAttachedServiceBackend,
     IsolationApplicationRouteError, IsolationApplicationSpec, IsolationApplicationSpecError,
     IsolationBackendFailure, IsolationLaunchError, IsolationLaunchEvidence, IsolationLaunchRequest,
     IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
     IsolationServiceSpec, IsolationServiceSpecError, IsolationUnavailableReason,
     IsolationVcpuReservationError, NativeComponentServiceEntry,
-    NativeComponentServiceEntryError, NativeComponentServiceTask,
-    NativeComponentServiceTaskError, PreparedComponentServiceLaunch,
+    NativeComponentServiceEntryError, NativeComponentServiceReadTransferTask,
+    NativeComponentServiceTask, NativeComponentServiceTaskError, PreparedComponentServiceLaunch,
     PreparedAttachedComponentServiceRouteError, PreparedComponentServiceRouteError,
     PreparedIsolationApplicationRoute, PreparedIsolationLaunch, PreparedIsolationServiceRoute,
     ReservedIsolationVcpus, RoutedIsolationApplication,
@@ -168,6 +170,7 @@ pub use isolation::{
     launch_prepared_component_service, launch_prepared_component_service_with_attachment,
     launch_prepared_isolation_application_route, launch_prepared_isolation_service_route,
     prepare_component_service_handoff, prepare_native_component_service_task,
+    prepare_native_component_service_task_with_read_transfer,
     prepare_isolation_application_route, prepare_isolation_service_route, reserve_isolation_vcpus,
     route_isolation_application, route_isolation_service,
 };
