@@ -22,9 +22,11 @@ pub const MAX_PE_READONLY_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
 /// Runtime metadata is independently bounded but must cover every retained
 /// code fragment from an atomically selected COFF archive member.
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = MAX_LINK_FRAGMENTS;
-/// Ordinary members that may be indexed without making every member a link input.
-pub const MAX_ARCHIVE_MEMBERS: usize = 1024;
-pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
+/// Ordinary members that may be indexed without making every member a link
+/// input. Pinned ORACLE-0003 self-contained `ntdll` peaks at 2,341 members.
+pub const MAX_ARCHIVE_MEMBERS: usize = 4096;
+/// Pinned ORACLE-0003 `ntdll` peaks at 4,673 indexed symbols.
+pub const MAX_ARCHIVE_SYMBOLS: usize = 8192;
 /// Pinned ORACLE-0002 Windows archives peak at 3,834 sections in one `std`
 /// member. Keep one power-of-two bounded table that admits that exact family.
 const MAX_COFF_SECTIONS: usize = 4096;
@@ -195,6 +197,7 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
     };
     let mut string_table = None;
     let mut gnu_index = None;
+    let mut coff_index = None;
     let mut cursor = 8usize;
     while cursor < archive.len() {
         let header_end = cursor.checked_add(60).ok_or(LinkerError::OffsetOverflow)?;
@@ -225,7 +228,12 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         if raw_name == "//" {
             string_table = Some(stored);
         } else if raw_name == "/" || raw_name == "/SYM64/" {
-            if gnu_index.replace((stored, raw_name == "/SYM64/")).is_some() {
+            if gnu_index.is_none() {
+                gnu_index = Some((stored, raw_name == "/SYM64/"));
+            } else if raw_name == "/" && coff_index.replace(stored).is_none() {
+                // Microsoft COFF libraries carry a redundant second linker
+                // member after the ordinary big-endian archive index.
+            } else {
                 return Err(LinkerError::InvalidArchive);
             }
         } else if raw_name != "/" && raw_name != "/SYM64/" && !raw_name.starts_with("__.SYMDEF") {
@@ -266,7 +274,76 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
             &mut decoded.symbols,
         )?;
     }
+    if let Some(index) = coff_index {
+        validate_coff_archive_second_index(index, &decoded.member_offsets[..decoded.length])?;
+    }
     Ok(decoded)
+}
+
+fn validate_coff_archive_second_index(
+    index: &[u8],
+    member_offsets: &[usize],
+) -> Result<(), LinkerError> {
+    let member_count = read_archive_le(index, 0, 4)?;
+    if member_count != member_offsets.len() || member_count > MAX_ARCHIVE_MEMBERS {
+        return Err(LinkerError::InvalidArchive);
+    }
+    let offsets_end = 4usize
+        .checked_add(
+            member_count
+                .checked_mul(4)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    for (member, expected) in member_offsets.iter().copied().enumerate() {
+        if read_archive_le(index, 4 + member * 4, 4)? != expected {
+            return Err(LinkerError::InvalidArchive);
+        }
+    }
+    let symbol_count = read_archive_le(index, offsets_end, 4)?;
+    if symbol_count > MAX_ARCHIVE_SYMBOLS {
+        return Err(LinkerError::TooManyArchiveSymbols);
+    }
+    let indices_start = offsets_end
+        .checked_add(4)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let names_start = indices_start
+        .checked_add(
+            symbol_count
+                .checked_mul(2)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    index
+        .get(..names_start)
+        .ok_or(LinkerError::InvalidArchive)?;
+    let mut name_cursor = names_start;
+    for symbol in 0..symbol_count {
+        let member = read_archive_le(index, indices_start + symbol * 2, 2)?;
+        if member == 0 || member > member_count {
+            return Err(LinkerError::InvalidArchive);
+        }
+        let suffix = index
+            .get(name_cursor..)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let length = suffix
+            .iter()
+            .position(|byte| *byte == 0)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let name = core::str::from_utf8(&suffix[..length])
+            .map_err(|_| LinkerError::InvalidArchive)?;
+        validate_symbol(name).map_err(|_| LinkerError::InvalidArchive)?;
+        name_cursor = name_cursor
+            .checked_add(length + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    let aligned_padding = name_cursor & 1 == 1
+        && index.len() == name_cursor + 1
+        && index.get(name_cursor) == Some(&0);
+    if name_cursor != index.len() && !aligned_padding {
+        return Err(LinkerError::InvalidArchive);
+    }
+    Ok(())
 }
 
 fn validate_thin_archive_member_path(path: &str) -> Result<(), LinkerError> {
@@ -300,10 +377,14 @@ fn decode_archive_member<'a>(
         let offset = parse_archive_usize(offset.as_bytes())?;
         let strings = string_table.ok_or(LinkerError::InvalidArchive)?;
         let suffix = strings.get(offset..).ok_or(LinkerError::InvalidArchive)?;
-        let end = suffix
-            .windows(2)
-            .position(|bytes| bytes == b"/\n")
-            .ok_or(LinkerError::InvalidArchive)?;
+        let gnu_end = suffix.windows(2).position(|bytes| bytes == b"/\n");
+        let coff_end = suffix.iter().position(|byte| *byte == 0);
+        let end = match (gnu_end, coff_end) {
+            (Some(gnu), Some(coff)) => core::cmp::min(gnu, coff),
+            (Some(gnu), None) => gnu,
+            (None, Some(coff)) => coff,
+            (None, None) => return Err(LinkerError::InvalidArchive),
+        };
         let name = core::str::from_utf8(&suffix[..end]).map_err(|_| LinkerError::InvalidArchive)?;
         return Ok((name, stored));
     }
@@ -371,6 +452,20 @@ fn read_archive_be(bytes: &[u8], offset: usize, width: usize) -> Result<usize, L
         .ok_or(LinkerError::InvalidArchive)?;
     let mut value = 0usize;
     for byte in field {
+        value = value
+            .checked_mul(256)
+            .and_then(|value| value.checked_add(usize::from(*byte)))
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(value)
+}
+
+fn read_archive_le(bytes: &[u8], offset: usize, width: usize) -> Result<usize, LinkerError> {
+    let field = bytes
+        .get(offset..offset + width)
+        .ok_or(LinkerError::InvalidArchive)?;
+    let mut value = 0usize;
+    for byte in field.iter().rev() {
         value = value
             .checked_mul(256)
             .and_then(|value| value.checked_add(usize::from(*byte)))
@@ -9911,6 +10006,18 @@ mod tests {
                 external: false,
             }
         );
+
+        let mut coff_archive = b"!<arch>\n".to_vec();
+        append_archive_member(&mut coff_archive, "//", b"coff-long-name.o\0");
+        append_archive_member(&mut coff_archive, "/0", b"object");
+        assert_eq!(
+            decode_unix_archive(&coff_archive).unwrap().members(),
+            &[ArchiveMember {
+                name: "coff-long-name.o",
+                bytes: b"object",
+                external: false,
+            }]
+        );
     }
 
     #[test]
@@ -9967,6 +10074,63 @@ mod tests {
                 symbol: "even",
                 member_index: 0
             }]
+        );
+    }
+
+    #[test]
+    fn validates_redundant_coff_archive_linker_members() {
+        let mut archive = b"!<arch>\n".to_vec();
+        let mut first = std::vec![0, 0, 0, 1, 0, 0, 0, 162];
+        first.extend_from_slice(b"entry\0");
+        append_archive_member(&mut archive, "/", &first);
+        let mut second = std::vec::Vec::new();
+        second.extend_from_slice(&1u32.to_le_bytes());
+        second.extend_from_slice(&162u32.to_le_bytes());
+        second.extend_from_slice(&1u32.to_le_bytes());
+        second.extend_from_slice(&1u16.to_le_bytes());
+        second.extend_from_slice(b"entry\0");
+        append_archive_member(&mut archive, "/", &second);
+        append_archive_member(&mut archive, "entry.o/", b"object");
+
+        let decoded = decode_unix_archive(&archive).unwrap();
+        assert_eq!(decoded.members().len(), 1);
+        assert_eq!(decoded.member_for_symbol("entry"), Some(&decoded.members()[0]));
+
+        let mut padded_archive = b"!<arch>\n".to_vec();
+        let mut padded_first = std::vec![0, 0, 0, 1, 0, 0, 0, 164];
+        padded_first.extend_from_slice(b"entry\0");
+        append_archive_member(&mut padded_archive, "/", &padded_first);
+        let mut padded_second = std::vec::Vec::new();
+        padded_second.extend_from_slice(&1u32.to_le_bytes());
+        padded_second.extend_from_slice(&164u32.to_le_bytes());
+        padded_second.extend_from_slice(&1u32.to_le_bytes());
+        padded_second.extend_from_slice(&1u16.to_le_bytes());
+        padded_second.extend_from_slice(b"entry\0\0");
+        append_archive_member(&mut padded_archive, "/", &padded_second);
+        append_archive_member(&mut padded_archive, "entry.o/", b"object");
+        assert_eq!(
+            decode_unix_archive(&padded_archive)
+                .unwrap()
+                .member_for_symbol("entry")
+                .unwrap()
+                .name,
+            "entry.o"
+        );
+
+        let second_payload = 8 + 60 + first.len() + 60;
+        for offset in [0usize, 8, 12] {
+            let mut malformed = archive.clone();
+            malformed[second_payload + offset] = 0;
+            assert_eq!(
+                decode_unix_archive(&malformed),
+                Err(LinkerError::InvalidArchive)
+            );
+        }
+        let mut missing_name = archive;
+        *missing_name.get_mut(second_payload + 19).unwrap() = b'x';
+        assert_eq!(
+            decode_unix_archive(&missing_name),
+            Err(LinkerError::InvalidArchive)
         );
     }
 
