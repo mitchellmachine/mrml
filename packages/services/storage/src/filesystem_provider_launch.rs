@@ -7,12 +7,14 @@ use mrml_kernel::{
     ComponentServiceReadTransferAttachment, ComponentServiceReadTransferCopyTaskBinding,
     ComponentServiceReadTransferMemoryRoot, IsolationPlacement, IsolationServiceSpec,
     MemoryMappingRevocationBackend, MemoryObjectBackingBackend, MemoryPoolTable,
+    NativeComponentServiceCopyReadTransferActiveRetirementError,
     NativeComponentServiceCopyReadTransferError,
     NativeComponentServiceCopyReadTransferRetirementMappingError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
     NativeComponentServiceCopyReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
     TaskRuntimeError, TaskTermination,
     prepare_native_component_service_task_from_copy_read_transfer_attachment,
+    retire_current_native_component_service_copy_read_transfer_on_active_x86_64,
     retire_current_native_component_service_copy_read_transfer_with_mapping_revocation,
     teardown_native_component_service_copy_read_transfer,
 };
@@ -184,6 +186,12 @@ pub enum NativeFilesystemProviderRetirementError<M> {
     RetirementMapping(NativeComponentServiceCopyReadTransferRetirementMappingError<M>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderActiveRetirementError {
+    TeardownProgressed,
+    Retirement(NativeComponentServiceCopyReadTransferActiveRetirementError),
+}
+
 pub fn retire_current_native_filesystem_provider<
     M: MemoryMappingRevocationBackend,
     const POOLS: usize,
@@ -223,6 +231,56 @@ pub fn retire_current_native_filesystem_provider<
                 receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
             }
             Err(NativeFilesystemProviderRetirementError::RetirementMapping(
+                error,
+            ))
+        }
+    }
+}
+
+/// Retires the current filesystem provider through its physically active x86-64
+/// page-table root and retains exact teardown state in `receipt`.
+///
+/// # Safety
+///
+/// The safety contract of
+/// [`retire_current_native_component_service_copy_read_transfer_on_active_x86_64`]
+/// applies to the provider task and its local mapping.
+pub unsafe fn retire_current_native_filesystem_provider_on_active_x86_64<
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    receipt: &mut FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+) -> Result<TaskTermination, NativeFilesystemProviderActiveRetirementError> {
+    let active = match receipt.instance {
+        NativeFilesystemProviderInstance::Active(active) => active,
+        NativeFilesystemProviderInstance::Teardown(state)
+            if state.is_pristine() && state.retired_context().is_none() =>
+        {
+            state.active()
+        }
+        NativeFilesystemProviderInstance::Teardown(_) => {
+            return Err(NativeFilesystemProviderActiveRetirementError::TeardownProgressed);
+        }
+    };
+    match unsafe {
+        retire_current_native_component_service_copy_read_transfer_on_active_x86_64(
+            active, runtime, memory,
+        )
+    } {
+        Ok((termination, state)) => {
+            receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
+            Ok(termination)
+        }
+        Err(error) => {
+            if let Some(state) = error.state() {
+                receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
+            }
+            Err(NativeFilesystemProviderActiveRetirementError::Retirement(
                 error,
             ))
         }
@@ -1103,7 +1161,7 @@ mod tests {
             root.root(),
         )
         .unwrap();
-        let receipt = launch_native_filesystem_provider(
+        let mut receipt = launch_native_filesystem_provider(
             &mut runtime,
             source,
             target,
@@ -1126,6 +1184,21 @@ mod tests {
             receipt.instance().active().unwrap().construction().task(),
             target
         );
+        assert!(matches!(
+            unsafe {
+                retire_current_native_filesystem_provider_on_active_x86_64(
+                    &mut receipt,
+                    &mut runtime,
+                    &mut memory,
+                )
+            },
+            Err(NativeFilesystemProviderActiveRetirementError::Retirement(
+                NativeComponentServiceCopyReadTransferActiveRetirementError::Retirement(
+                    mrml_kernel::NativeComponentServiceCopyReadTransferRetirementError::NotCurrent
+                )
+            ))
+        ));
+        assert!(receipt.instance().active().is_some());
         let failure = {
             let mut teardown = NativeFilesystemProviderTeardownBackend::new(
                 &mut runtime,

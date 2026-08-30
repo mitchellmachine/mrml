@@ -126,8 +126,10 @@ pub use filesystem_provider_launch::{
     FilesystemProviderTeardownError, NativeFilesystemProviderInstance,
     NativeFilesystemProviderLaunchError, NativeFilesystemProviderLaunchPreflightError,
     NativeFilesystemProviderLaunchSpec, NativeFilesystemProviderLaunchSpecError,
-    NativeFilesystemProviderRetirementError, NativeFilesystemProviderTeardownBackend,
+    NativeFilesystemProviderActiveRetirementError, NativeFilesystemProviderRetirementError,
+    NativeFilesystemProviderTeardownBackend,
     launch_filesystem_provider, launch_native_filesystem_provider,
+    retire_current_native_filesystem_provider_on_active_x86_64,
     retire_current_native_filesystem_provider, teardown_filesystem_provider,
 };
 pub use format::{

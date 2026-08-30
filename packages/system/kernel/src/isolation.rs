@@ -1394,6 +1394,19 @@ pub enum NativeComponentServiceCopyReadTransferActiveRetirementError {
     ),
 }
 
+impl NativeComponentServiceCopyReadTransferActiveRetirementError {
+    pub const fn state(&self) -> Option<NativeComponentServiceCopyReadTransferTeardown> {
+        match self {
+            Self::RetirementMapping(error) => error.state(),
+            Self::Retirement(_)
+            | Self::Runtime(_)
+            | Self::Mapping(_)
+            | Self::ActivePageTables(_)
+            | Self::ActiveRevoker(_) => None,
+        }
+    }
+}
+
 impl<M> NativeComponentServiceCopyReadTransferRetirementMappingError<M> {
     pub const fn state(&self) -> Option<NativeComponentServiceCopyReadTransferTeardown> {
         match self {

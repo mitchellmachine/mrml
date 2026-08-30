@@ -10638,3 +10638,17 @@ active CR3 execution remains **PARTIALLY IMPLEMENTED**, not hardware-verified.
 Patent review: `NOT_TRIGGERED` — composing exact task, capability, CR3, and leaf
 preconditions around conventional page-table withdrawal is ordinary privileged
 lifecycle integration. See `docs/patents/REVIEW_LOG.md`.
+
+The storage provider receipt now exposes a matching unsafe active-x86 retirement
+operation. It accepts only an active instance or an untouched live-task teardown
+retry, delegates all CR3 and mapping checks to the kernel entry point, and
+replaces the receipt with exact teardown state whenever the task was retired
+even if native withdrawal then failed. Pre-retirement denial leaves the active
+receipt unchanged. The Linux-host release kernel suite passes 652 tests,
+storage passes 162 tests, and both release builds pass. Tests exercise the
+pre-privilege denial and receipt preservation paths; active hardware execution
+is not claimed.
+
+Patent review: `NOT_TRIGGERED` — propagating a typed fail-closed retirement
+result through a service receipt is conventional lifecycle state management.
+See `docs/patents/REVIEW_LOG.md`.
