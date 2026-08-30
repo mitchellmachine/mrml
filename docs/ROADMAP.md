@@ -4079,3 +4079,7 @@ Complete Total-service preparation no longer supports bulk extraction of its
 kernel routes. Consuming cleanup cancels all retained reservations in reverse
 order; the remaining single-route transformation path must restore exact
 expected membership before complete endpoint construction or commit succeeds.
+
+That restoration gate now binds the full prepared service specification rather
+than domain membership alone. Same-domain substitution of interface, provider,
+generation, class, policy, or placement is rejected before complete commit.

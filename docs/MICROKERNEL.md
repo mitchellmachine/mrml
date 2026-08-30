@@ -7176,6 +7176,17 @@ Patent review: `NOT_TRIGGERED` — this removes an ownership escape and uses the
 existing conventional admission cancellation mechanism. See
 `docs/patents/REVIEW_LOG.md`.
 
+The remaining bounded take/restore transformation now records and exact-matches
+the complete expected `IsolationServiceSpec`, not only its domain. A separately
+admitted route for the same domain cannot substitute interface identity,
+interface/provider generation, system/policy generation, class, or placement
+before complete construction. Configuration remains 53 focused tests and the
+native service image builds.
+
+Patent review: `NOT_TRIGGERED` — this applies conventional exact structural
+identity comparison to an existing linear restoration gate. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

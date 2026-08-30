@@ -4926,13 +4926,14 @@ impl TotalServicePreparationBinding {
 
 pub struct PreparedTotalServiceSet<const DOMAINS: usize> {
     routes: [Option<PreparedIsolationServiceRoute>; DOMAINS],
-    expected_domains: [Option<ObjectId>; DOMAINS],
+    expected_specs: [Option<IsolationServiceSpec>; DOMAINS],
     count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompleteTotalServiceRestoreError {
     UnexpectedDomain,
+    IdentityMismatch,
     AlreadyPresent,
 }
 
@@ -5089,8 +5090,15 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
         ),
     > {
         let domain = route.spec().domain();
-        if !self.expected_domains.contains(&Some(domain)) {
+        let Some(slot) = self
+            .expected_specs
+            .iter()
+            .position(|expected| expected.is_some_and(|spec| spec.domain() == domain))
+        else {
             return Err((CompleteTotalServiceRestoreError::UnexpectedDomain, route));
+        };
+        if self.expected_specs[slot] != Some(route.spec()) {
+            return Err((CompleteTotalServiceRestoreError::IdentityMismatch, route));
         }
         if self
             .routes
@@ -5100,13 +5108,6 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
         {
             return Err((CompleteTotalServiceRestoreError::AlreadyPresent, route));
         }
-        let Some(slot) = self
-            .expected_domains
-            .iter()
-            .position(|expected| *expected == Some(domain))
-        else {
-            unreachable!("expected domain membership checked above");
-        };
         if self.routes[slot].is_some() {
             return Err((CompleteTotalServiceRestoreError::AlreadyPresent, route));
         }
@@ -5149,9 +5150,9 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
     {
         let mut endpoints: [Option<TotalServiceEndpointBinding<X>>; DOMAINS] =
             [const { None }; DOMAINS];
-        if self.count != self.expected_domains.iter().flatten().count()
+        if self.count != self.expected_specs.iter().flatten().count()
             || self
-                .expected_domains
+                .expected_specs
                 .iter()
                 .zip(&self.routes)
                 .any(|(expected, route)| expected.is_some() != route.is_some())
@@ -5440,13 +5441,13 @@ impl<const DOMAINS: usize> BootTotalAdmission<DOMAINS> {
                 }
             }
         }
-        let mut expected_domains = [None; DOMAINS];
-        for (index, binding) in bindings.iter().enumerate() {
-            expected_domains[index] = Some(binding.domain());
+        let mut expected_specs = [None; DOMAINS];
+        for (index, route) in routes.iter().enumerate() {
+            expected_specs[index] = route.as_ref().map(PreparedIsolationServiceRoute::spec);
         }
         Ok(PreparedTotalServiceSet {
             routes,
-            expected_domains,
+            expected_specs,
             count,
         })
     }

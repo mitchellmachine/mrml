@@ -1054,3 +1054,8 @@ The complete Total-service owner cannot be decomposed wholesale into raw
 prepared routes. Cleanup consumes it and cancels every retained admission
 reservation, while complete construction and commit continue to reject any
 single route not restored to its exact expected domain slot.
+
+Single-route artifact transformation cannot exploit a shared domain name to
+replace the reservation. Restore exact-compares the full original service spec,
+including interface/provider identities and every generation, class, and
+placement field, before returning it to the complete set.

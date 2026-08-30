@@ -5798,6 +5798,30 @@ mod tests {
             .unwrap();
         let transformed = prepared.take(first_domain).unwrap();
         assert_eq!(prepared.len(), 1);
+        let original_spec = transformed.spec();
+        let substituted_spec = IsolationServiceSpec::new(
+            original_spec.domain(),
+            original_spec.interface(),
+            original_spec.interface_generation(),
+            original_spec.provider_generation() + 1,
+            original_spec.system_generation(),
+            original_spec.policy_generation(),
+            original_spec.class(),
+            original_spec.placement(),
+        )
+        .unwrap();
+        let mut substituted_admission = IsolationAdmissionTable::<1>::new(
+            IsolationMode::TotalMicrovm,
+            original_spec.system_generation(),
+            original_spec.policy_generation(),
+        )
+        .unwrap();
+        let substituted =
+            prepare_isolation_service_route(&mut substituted_admission, substituted_spec).unwrap();
+        let (error, substituted) = prepared.restore(substituted).unwrap_err();
+        assert_eq!(error, CompleteTotalServiceRestoreError::IdentityMismatch);
+        substituted.cancel(&mut substituted_admission).unwrap();
+        assert_eq!(prepared.len(), 1);
         prepared.restore(transformed).unwrap();
         assert_eq!(prepared.len(), 2);
         let mut routed = prepared
