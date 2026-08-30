@@ -7417,6 +7417,17 @@ Patent review: `NOT_TRIGGERED` — bounded immutable inputs, checked offsets,
 partial-progress validation, and typed write errors are conventional IPC and
 file-I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
+Canonical filesystem create framing binds exact volume, mount, parent directory,
+provider endpoint, and bounded nonempty name. Generation 1 leaves `kind` as
+provider-defined `u32` data, so the codec preserves it without inventing an
+unversioned enum. Reserved alignment bytes fail closed; success returns one
+nonzero object identity and typed failures return zero. The focused Linux-host
+interface suite passes ten tests.
+
+Patent review: `NOT_TRIGGERED` — canonical parent/name framing, zero padding,
+opaque provider-kind carriage, and typed identity responses are conventional IPC
+and directory-operation mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
 completion-count validation, and typed read errors are conventional IPC and file
 I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.

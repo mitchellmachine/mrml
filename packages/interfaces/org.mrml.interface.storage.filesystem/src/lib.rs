@@ -18,6 +18,8 @@ pub const READ_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
 pub const READ_RESPONSE_BYTES: usize = 16;
 pub const WRITE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
 pub const WRITE_RESPONSE_BYTES: usize = 16;
+pub const CREATE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
+pub const CREATE_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
@@ -131,6 +133,23 @@ pub trait FilesystemWriteEndpoint {
     ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait FilesystemCreateTransport {
+    fn create(
+        &mut self,
+        request: &[u8; CREATE_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; CREATE_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemCreateEndpoint {
+    fn invoke_create(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; CREATE_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; CREATE_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub struct IsolatedFilesystemTransport<E> {
     endpoint: OpaqueHandle,
     maximum_memory_bytes: usize,
@@ -241,6 +260,20 @@ impl<E: FilesystemWriteEndpoint> FilesystemWriteTransport for IsolatedFilesystem
         }
         decode_write_request(request, memory.len() as u64)?;
         self.service.invoke_write(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemCreateEndpoint> FilesystemCreateTransport for IsolatedFilesystemTransport<E> {
+    fn create(
+        &mut self,
+        request: &[u8; CREATE_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; CREATE_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_create_request(request, memory.len() as u64)?;
+        self.service.invoke_create(self.endpoint, request, memory)
     }
 }
 
@@ -843,6 +876,119 @@ pub fn decode_write_response(
     }
 }
 
+pub fn encode_create_request(
+    volume: OpaqueHandle,
+    generation: u64,
+    directory: OpaqueHandle,
+    name: BorrowedReadView,
+    kind: u32,
+) -> Result<[u8; CREATE_REQUEST_BYTES], ProtocolError> {
+    let request = CreateRequest {
+        volume,
+        generation,
+        directory,
+        name,
+        kind,
+    };
+    if !request.validate() || generation == 0 || name.length() == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; CREATE_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_CREATE.to_le_bytes());
+    bytes[56..64].copy_from_slice(&48_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(CREATE_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&generation.to_le_bytes());
+    bytes[88..92].copy_from_slice(&directory.index().to_le_bytes());
+    bytes[92..96].copy_from_slice(&directory.generation().to_le_bytes());
+    bytes[96..104].copy_from_slice(&name.offset().to_le_bytes());
+    bytes[104..112].copy_from_slice(&name.length().to_le_bytes());
+    bytes[112..116].copy_from_slice(&kind.to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_create_request(
+    bytes: &[u8; CREATE_REQUEST_BYTES],
+    memory_length: u64,
+) -> Result<CreateRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_CREATE
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 48
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != CREATE_RESPONSE_BYTES as u64
+        || bytes[116..120] != [0; 4]
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let generation = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+    let directory = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[88..92].try_into().unwrap()),
+        u32::from_le_bytes(bytes[92..96].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let name = BorrowedReadView::within(
+        u64::from_le_bytes(bytes[96..104].try_into().unwrap()),
+        u64::from_le_bytes(bytes[104..112].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let request = CreateRequest {
+        volume,
+        generation,
+        directory,
+        name,
+        kind: u32::from_le_bytes(bytes[112..116].try_into().unwrap()),
+    };
+    (request.validate() && generation != 0 && name.length() != 0)
+        .then_some(request)
+        .ok_or(ProtocolError::InvalidRequest)
+}
+
+pub fn encode_create_response(
+    result: Result<CreateResponse, CreateError>,
+) -> [u8; CREATE_RESPONSE_BYTES] {
+    let mut bytes = [0; CREATE_RESPONSE_BYTES];
+    let (status, object) = match result {
+        Ok(object) => (0, object),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&object.to_le_bytes());
+    bytes
+}
+
+pub fn decode_create_response(
+    bytes: &[u8; CREATE_RESPONSE_BYTES],
+) -> Result<Result<CreateResponse, CreateError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let object = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if object != 0 => Ok(Ok(object)),
+        1 if object == 0 => Ok(Err(CreateError::InvalidRequest)),
+        2 if object == 0 => Ok(Err(CreateError::StaleObject)),
+        3 if object == 0 => Ok(Err(CreateError::PermissionDenied)),
+        4 if object == 0 => Ok(Err(CreateError::AlreadyExists)),
+        5 if object == 0 => Ok(Err(CreateError::NoSpace)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1233,6 +1379,69 @@ mod tests {
         invalid[8] = 1;
         assert_eq!(
             decode_write_response(&invalid, 16),
+            Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    struct CreateEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemCreateEndpoint for CreateEndpoint {
+        fn invoke_create(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; CREATE_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<[u8; CREATE_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            decode_create_request(request, memory.len() as u64)?;
+            Ok(encode_create_response(Ok(51)))
+        }
+    }
+
+    #[test]
+    fn create_codec_binds_parent_name_kind_and_non_authorizing_identity() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let directory = OpaqueHandle::new(9, 3).unwrap();
+        let name = BorrowedReadView::within(8, 16, 32).unwrap();
+        let request = encode_create_request(volume, 12, directory, name, 0xfeed_beef).unwrap();
+        assert_eq!(
+            decode_create_request(&request, 32),
+            Ok(CreateRequest {
+                volume,
+                generation: 12,
+                directory,
+                name,
+                kind: 0xfeed_beef,
+            })
+        );
+        let service = CreateEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_create_response(&transport.create(&request, &mut [0; 32]).unwrap()),
+            Ok(Ok(51))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        let mut padded = request;
+        padded[116] = 1;
+        assert_eq!(
+            decode_create_request(&padded, 32),
+            Err(ProtocolError::InvalidHeader)
+        );
+        assert_eq!(
+            transport.create(&request, &mut [0; 33]),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_create_response(&encode_create_response(Ok(0))),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut invalid = encode_create_response(Err(CreateError::AlreadyExists));
+        invalid[8] = 1;
+        assert_eq!(
+            decode_create_response(&invalid),
             Err(ProtocolError::InvalidResponse)
         );
     }

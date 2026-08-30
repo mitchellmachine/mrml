@@ -1177,3 +1177,9 @@ bind exact volume, mount, file, provider endpoint, checked file offset, and one
 nonempty immutable range; successful byte counts cannot be zero or exceed that
 range. `ReadOnly`, permission, capacity, and I/O failures remain distinguishable
 and carry no progress count.
+
+Filesystem create requests bind the exact volume, mount, parent directory,
+provider endpoint, and nonempty bounded name. The generation-1 `kind` remains
+provider-validated data rather than authority. Success returns only a nonzero
+object identity; typed failure carries zero, and reserved alignment bytes cannot
+hide alternate semantics.
