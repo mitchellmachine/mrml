@@ -10235,3 +10235,18 @@ unverified by this increment.
 Patent review: `NOT_TRIGGERED` — exact page charging and typed generational
 capability binding are conventional resource-accounting mechanisms. See
 `docs/patents/REVIEW_LOG.md`.
+
+The charged read-transfer root now **PARTIALLY IMPLEMENTS IN SOURCE** exact
+zeroed physical-backing acquisition through the backend-neutral memory-object
+contract. Binding consumes the typed object and its `CONTROL|PIN` authority;
+the backend must claim the complete one-page run exclusively and leave no claim
+on failure. An injected claim failure leaves the object unbacked and retryable,
+while successful release requires the backend to scrub the same recorded run
+before accounting can return the object. The Linux-host release kernel suite
+still passes all 648 tests and the release kernel build passes. This is a
+controlled recording-backend simulation, not evidence of a production frame
+allocator, installed service, IOMMU, KVM, WHP, or physical hardware.
+
+Patent review: `NOT_TRIGGERED` — exclusive zeroed allocation, scrubbed release,
+and retry-after-clean-failure are conventional memory-lifecycle mechanisms. See
+`docs/patents/REVIEW_LOG.md`.

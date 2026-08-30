@@ -6,9 +6,10 @@ use mrml_package_format::{
 
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
-    CpuResourceError, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime, TaskRuntimeError,
-    VcpuReservationId, arch::x86_64::UserContext,
+    CpuResourceError, MemoryBackingKind, MemoryBackingOperationError, MemoryObjectBackingBackend,
+    MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
+    ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId,
+    arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -520,6 +521,12 @@ pub enum ComponentServiceReadTransferMemoryError {
     Memory(MemoryResourceError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferBackingError<E> {
+    Runtime(TaskRuntimeError),
+    Backing(MemoryBackingOperationError<E>),
+}
+
 /// Charges one exact shared page into the source task before backing, mapping,
 /// or provider construction can begin.
 pub fn reserve_component_service_read_transfer_memory<
@@ -558,6 +565,37 @@ pub fn reserve_component_service_read_transfer_memory<
         shared_object,
         root,
     })
+}
+
+/// Claims and zeroes the exact one-page physical run for a charged transfer
+/// root. Backend failure leaves the memory object unbacked and retryable.
+pub fn bind_component_service_read_transfer_backing<
+    B: MemoryObjectBackingBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    reservation: ComponentServiceReadTransferMemoryRoot,
+    physical: MemoryPhysicalBacking,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    backend: &mut B,
+) -> Result<(), ComponentServiceReadTransferBackingError<B::Error>> {
+    let capabilities = runtime
+        .capabilities(source_task)
+        .map_err(ComponentServiceReadTransferBackingError::Runtime)?;
+    memory
+        .bind_physical_backing(
+            reservation.memory_object(),
+            reservation.root(),
+            physical,
+            capabilities,
+            backend,
+        )
+        .map_err(ComponentServiceReadTransferBackingError::Backing)
 }
 
 impl ComponentServiceReadTransferAttachment {
@@ -2592,6 +2630,7 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MemoryBackingBackendRequest;
 
     const SYSTEM_GENERATION: u64 = 108;
 
@@ -2599,6 +2638,42 @@ mod tests {
     enum BackendError {
         Unavailable,
         Revoke,
+    }
+
+    #[derive(Default)]
+    struct TransferBackingBackend {
+        claimed: Option<MemoryBackingBackendRequest>,
+        fail_claim: bool,
+    }
+
+    // SAFETY: the test backend records only an exact successful claim, leaves
+    // failed claims absent, and releases only the same recorded request.
+    unsafe impl MemoryObjectBackingBackend for TransferBackingBackend {
+        type Error = &'static str;
+
+        fn claim_zeroed(
+            &mut self,
+            request: MemoryBackingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            if self.fail_claim {
+                return Err("claim");
+            }
+            if self.claimed.replace(request).is_some() {
+                return Err("occupied");
+            }
+            Ok(())
+        }
+
+        fn release_scrubbed(
+            &mut self,
+            request: MemoryBackingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            if self.claimed != Some(request) {
+                return Err("substitution");
+            }
+            self.claimed = None;
+            Ok(())
+        }
     }
 
     struct DualBackend {
@@ -3690,6 +3765,49 @@ mod tests {
         assert_eq!(usage.object_pages(), 1);
         assert_eq!(usage.live_objects(), 1);
         assert_eq!(usage.active_mappings(), 0);
+
+        let physical =
+            MemoryPhysicalBacking::new(crate::PhysAddr::new(0x40_0000).unwrap(), 1).unwrap();
+        let mut backend = TransferBackingBackend {
+            fail_claim: true,
+            ..TransferBackingBackend::default()
+        };
+        assert_eq!(
+            bind_component_service_read_transfer_backing(
+                &mut memory,
+                reservation,
+                physical,
+                &runtime,
+                source,
+                &mut backend,
+            ),
+            Err(ComponentServiceReadTransferBackingError::Backing(
+                MemoryBackingOperationError::Backend("claim")
+            ))
+        );
+        assert!(backend.claimed.is_none());
+        backend.fail_claim = false;
+        bind_component_service_read_transfer_backing(
+            &mut memory,
+            reservation,
+            physical,
+            &runtime,
+            source,
+            &mut backend,
+        )
+        .unwrap();
+        assert!(backend.claimed.is_some());
+        assert_eq!(
+            memory
+                .release_physical_backing(
+                    reservation.memory_object(),
+                    reservation.root(),
+                    runtime.capabilities(source).unwrap(),
+                    &mut backend,
+                )
+                .unwrap(),
+            physical
+        );
 
         assert_eq!(
             memory
