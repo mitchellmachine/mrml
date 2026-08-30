@@ -27,6 +27,7 @@ mod dispatch_service;
 mod mapped_command_memory;
 mod mapped_data_buffer;
 mod service_launch;
+mod service_launch_record;
 mod service_loop;
 mod userspace_syscall_adapter;
 
@@ -120,7 +121,12 @@ pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
     AHCI_DEVICE_AUTHORITY_INDEX, AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
     AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX, AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
-    AHCI_SERVICE_AUTHORITY_COUNT, AhciServiceLaunchSpec, AhciServiceLaunchSpecError,
+    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES, AhciServiceLaunchSpec,
+    AhciServiceLaunchSpecError,
+};
+pub use service_launch_record::{
+    AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
+    BoundAhciServiceLaunch,
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,

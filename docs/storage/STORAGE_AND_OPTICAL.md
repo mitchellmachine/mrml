@@ -527,6 +527,33 @@ Patent review: **NOT_TRIGGERED**. Exact role/object/right matching and physical
 range disjointness checks are conventional least-authority driver launch
 validation. See [the patent review log](../patents/REVIEW_LOG.md).
 
+The AHCI launch-data boundary is now **PARTIALLY IMPLEMENTED IN SOURCE** as a
+canonical 384-byte little-endian record containing exact system, provider,
+attachment, device, ABAR, port-layout, data-region, and four CPU-mapping
+generations and ranges. It contains no capability tokens; the separately
+projected handles remain the only authority. Decode rejects header, length,
+reserved-field, handle-like-value, geometry, canonical-address, alignment, and
+mapping-overlap corruption, and binding exact-matches all launch generations
+before reusing the typed six-role validator. The focused Linux AHCI suite passes
+all 92 tests. Installed launch-memory copying, CPU mapping construction,
+active-port reconstruction, service binary entry, concrete cache/IOMMU
+backends, supervised teardown, active execution, and physical-device evidence
+remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: YES
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. A fixed-layout endian codec with bounded
+generation, reserved-field, range, and overlap validation is conventional
+hostile-input parsing and introduces no new storage algorithm. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

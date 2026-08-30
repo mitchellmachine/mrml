@@ -22,6 +22,7 @@ pub const AHCI_COMMAND_TABLES_AUTHORITY_INDEX: usize = 3;
 pub const AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX: usize = 4;
 pub const AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX: usize = 5;
 pub const AHCI_SERVICE_AUTHORITY_COUNT: usize = 6;
+pub const AHCI_SERVICE_LAUNCH_BYTES: usize = 384;
 
 const COMMAND_MEMORY_RIGHTS: Rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
 const DEVICE_WRITE_DATA_RIGHTS: Rights = Rights::PIN.union(Rights::MAP).union(Rights::WRITE);
@@ -63,6 +64,88 @@ impl AhciServiceLaunchSpec {
         if !attachment.matches_spec(service) {
             return Err(AhciServiceLaunchSpecError::AttachmentMismatch);
         }
+        if attachment.launch_data_bytes() as usize != AHCI_SERVICE_LAUNCH_BYTES {
+            return Err(AhciServiceLaunchSpecError::AttachmentMismatch);
+        }
+        validate_ahci_service_state(device, mapping, layout, data)?;
+        let authorities = attachment.authorities();
+        for (index, object, rights) in [
+            (AHCI_DEVICE_AUTHORITY_INDEX, mapping.device_object, Rights::CONTROL),
+            (
+                AHCI_COMMAND_LIST_AUTHORITY_INDEX,
+                layout.command_list.memory_object,
+                COMMAND_MEMORY_RIGHTS,
+            ),
+            (
+                AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
+                layout.received_fis.memory_object,
+                COMMAND_MEMORY_RIGHTS,
+            ),
+            (
+                AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
+                layout.command_tables.memory_object,
+                COMMAND_MEMORY_RIGHTS,
+            ),
+            (
+                AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX,
+                data.memory_object,
+                DEVICE_WRITE_DATA_RIGHTS,
+            ),
+            (
+                AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
+                data.memory_object,
+                DEVICE_READ_DATA_RIGHTS,
+            ),
+        ] {
+            if authorities[index].object() != object
+                || authorities[index].target_rights() != rights
+            {
+                return Err(AhciServiceLaunchSpecError::WrongAuthorityRole(index));
+            }
+        }
+        Ok(Self {
+            service,
+            attachment,
+            device,
+            mapping,
+            layout,
+            data,
+        })
+    }
+
+    pub const fn service(self) -> IsolationServiceSpec {
+        self.service
+    }
+
+    pub const fn attachment(
+        self,
+    ) -> DeviceServiceLaunchAttachment<AHCI_SERVICE_AUTHORITY_COUNT> {
+        self.attachment
+    }
+
+    pub const fn device(self) -> BlockProviderDevice {
+        self.device
+    }
+
+    pub const fn mapping(self) -> AhciAbarMapping {
+        self.mapping
+    }
+
+    pub const fn layout(self) -> AhciPortDmaLayout {
+        self.layout
+    }
+
+    pub const fn data(self) -> AhciDataDmaRegion {
+        self.data
+    }
+}
+
+pub(crate) fn validate_ahci_service_state(
+    device: BlockProviderDevice,
+    mapping: AhciAbarMapping,
+    layout: AhciPortDmaLayout,
+    data: AhciDataDmaRegion,
+) -> Result<(), AhciServiceLaunchSpecError> {
         if device.logical_block_bytes != 512
             || device.logical_block_count == 0
             || device.media_generation == 0
@@ -139,76 +222,7 @@ impl AhciServiceLaunchSpec {
         {
             return Err(AhciServiceLaunchSpecError::OverlappingDma);
         }
-        let authorities = attachment.authorities();
-        for (index, object, rights) in [
-            (AHCI_DEVICE_AUTHORITY_INDEX, mapping.device_object, Rights::CONTROL),
-            (
-                AHCI_COMMAND_LIST_AUTHORITY_INDEX,
-                layout.command_list.memory_object,
-                COMMAND_MEMORY_RIGHTS,
-            ),
-            (
-                AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
-                layout.received_fis.memory_object,
-                COMMAND_MEMORY_RIGHTS,
-            ),
-            (
-                AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
-                layout.command_tables.memory_object,
-                COMMAND_MEMORY_RIGHTS,
-            ),
-            (
-                AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX,
-                data.memory_object,
-                DEVICE_WRITE_DATA_RIGHTS,
-            ),
-            (
-                AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
-                data.memory_object,
-                DEVICE_READ_DATA_RIGHTS,
-            ),
-        ] {
-            if authorities[index].object() != object
-                || authorities[index].target_rights() != rights
-            {
-                return Err(AhciServiceLaunchSpecError::WrongAuthorityRole(index));
-            }
-        }
-        Ok(Self {
-            service,
-            attachment,
-            device,
-            mapping,
-            layout,
-            data,
-        })
-    }
-
-    pub const fn service(self) -> IsolationServiceSpec {
-        self.service
-    }
-
-    pub const fn attachment(
-        self,
-    ) -> DeviceServiceLaunchAttachment<AHCI_SERVICE_AUTHORITY_COUNT> {
-        self.attachment
-    }
-
-    pub const fn device(self) -> BlockProviderDevice {
-        self.device
-    }
-
-    pub const fn mapping(self) -> AhciAbarMapping {
-        self.mapping
-    }
-
-    pub const fn layout(self) -> AhciPortDmaLayout {
-        self.layout
-    }
-
-    pub const fn data(self) -> AhciDataDmaRegion {
-        self.data
-    }
+    Ok(())
 }
 
 fn valid_dma_region(region: AhciDmaRegion, expected_bytes: u64) -> bool {
@@ -339,7 +353,7 @@ mod tests {
             8,
             ObjectId(30),
             9,
-            256,
+            AHCI_SERVICE_LAUNCH_BYTES as u32,
             launch,
             authorities,
             &capabilities,
@@ -463,7 +477,7 @@ mod tests {
             8,
             ObjectId(30),
             9,
-            256,
+            AHCI_SERVICE_LAUNCH_BYTES as u32,
             launch,
             authorities,
             &capabilities,
