@@ -18,6 +18,7 @@ mod capability;
 mod component_memory;
 mod component_queue;
 mod cpu_resource;
+mod deadline_receive_syscall;
 mod early;
 mod framebuffer;
 mod grant;
@@ -106,6 +107,9 @@ pub use cpu_resource::{
     CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError,
     CpuRuntimeReconciliation, CpuRuntimeSlice, MAX_CPU_BUDGET_VCPUS, VcpuReservationId,
     VcpuReservationInfo,
+};
+pub use deadline_receive_syscall::{
+    DeadlineReceiveStart, DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

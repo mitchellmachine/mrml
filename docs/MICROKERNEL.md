@@ -11345,3 +11345,31 @@ increment.
 Patent review: `NOT_TRIGGERED` — checked conversion from a relative timeout to
 an internal absolute deadline is conventional bounded timer arithmetic. See
 `docs/patents/REVIEW_LOG.md`.
+
+The kernel now provides a fixed-capacity `DeadlineReceiveSyscallExecutor` for
+the service-dispatch boundary. It reserves owner capacity before asking the
+runtime to block, retains the exact opaque wait token, and exposes only typed
+ready, timed-out, or scheduler-transition admission results. Message wakeup
+exact-matches and consumes the retained owner before completing the suspended
+context with bounded inline payload registers. Its timer entry uses the composed
+runtime tick, prevalidates every returned expiration against one unique owner
+and live context, then consumes those owners and writes the detail-free timeout
+completion.
+
+This host-tested executor is the canonical lifecycle path intended for the
+dedicated UEFI deadline profile. It does not yet assign a public syscall
+operation or establish live interrupt execution evidence. Owner mismatch is a
+fail-closed dispatcher error; it never falls back to task-name cancellation.
+
+The Linux-host kernel suite passes 665 tests. New tests prove an all-blocked
+one-task timeout selects the exact task from idle and zeroes its suspended
+completion registers, while a message arriving before a later deadline consumes
+the owner and completes the original payload instead. The affected Linux kernel
+release build and service plus component-service UEFI release profiles
+cross-build with the existing configuration-specific warnings. This is
+in-memory and cross-build evidence only; no QEMU or physical-hardware execution
+was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — a fixed-capacity pending-syscall owner table
+that serializes message completion against timer completion is conventional
+event-loop and syscall lifecycle handling. See `docs/patents/REVIEW_LOG.md`.
