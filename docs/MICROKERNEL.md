@@ -10470,3 +10470,16 @@ installed syscall dispatch, active page table, or physical block provider.
 Patent review: `NOT_TRIGGERED` — exact capability revalidation, checked range
 arithmetic, scratch erasure, and a bounded kernel-mediated copy are conventional
 syscall mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
+Received IPC messages can now write through one exact non-mapped shared-copy
+projection. The helper requires exactly one transferred `MAP | WRITE`
+capability, revalidates the projection's source mapping and task/VM binding,
+checks the complete byte range, and exposes only the opaque resource handle to
+the backend. The focused test performs the copy and then proves source unmapping
+invalidates further resolution. The Linux-host release kernel suite remains at
+651 passing tests and the release build passes. Storage transport composition
+remains the next gate.
+
+Patent review: `NOT_TRIGGERED` — composing existing exact IPC authorization,
+projection resolution, range validation, and opaque backend I/O is conventional
+mechanism reuse. See `docs/patents/REVIEW_LOG.md`.

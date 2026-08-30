@@ -1,7 +1,7 @@
 use crate::{
     Capability, CapabilityError, CapabilitySpace, GuestMemory, HostResourceHandle, ObjectId,
     Rights, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,
-    SharedMemoryBindings, TaskId, VmId,
+    SharedMemoryBindings, SharedWriteCopyBindingId, SharedWriteCopyBindings, TaskId, VmId,
 };
 
 pub const MAX_INLINE_PAYLOAD: usize = 4096;
@@ -315,6 +315,51 @@ impl Message {
         if resource.access() != SharedAccess::ReadWrite {
             return Err(IpcSharedBufferIoError::AccessDenied);
         }
+        validate_buffer_range(resource.bytes(), offset, input.len())?;
+        backend
+            .write(resource.handle(), offset, input)
+            .map_err(IpcSharedBufferIoError::Backend)
+    }
+
+    /// Writes through one exact task-bound copy projection without requiring
+    /// a writable provider mapping.
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_single_shared_copy<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const SOURCE_BINDINGS: usize,
+        const COPY_BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        copy_bindings: &SharedWriteCopyBindings<COPY_BINDINGS>,
+        copy_binding: SharedWriteCopyBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+        offset: u64,
+        input: &[u8],
+        backend: &mut B,
+    ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
+        let required = Rights::MAP.union(Rights::WRITE);
+        let authority = self
+            .authorize_single_capability(receiver_space, required)
+            .map_err(IpcSharedBufferError::Ipc)
+            .map_err(IpcSharedBufferIoError::Authorization)?;
+        let resource = copy_bindings
+            .resolve(
+                copy_binding,
+                source_bindings,
+                receiver_space,
+                authority.capability(),
+                memory,
+                vm,
+                task,
+            )
+            .map_err(IpcSharedBufferError::Binding)
+            .map_err(IpcSharedBufferIoError::Authorization)?;
         validate_buffer_range(resource.bytes(), offset, input.len())?;
         backend
             .write(resource.handle(), offset, input)

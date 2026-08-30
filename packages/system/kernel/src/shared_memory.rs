@@ -1252,6 +1252,28 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.handle(), host);
         assert_eq!(resolved.bytes(), crate::PAGE_SIZE);
+        let message = Message::new(b"copy", &[write]).unwrap();
+        let mut backend = BufferBackend {
+            handle: host,
+            bytes: [0; crate::PAGE_SIZE as usize],
+            calls: 0,
+            fail: false,
+        };
+        message
+            .write_single_shared_copy(
+                &provider,
+                &mapped_bindings,
+                &copies,
+                copy,
+                &memory,
+                vm,
+                task,
+                9,
+                b"bounded",
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(&backend.bytes[9..16], b"bounded");
         assert!(matches!(
             copies.resolve(
                 copy,
