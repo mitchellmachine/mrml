@@ -938,7 +938,11 @@ before block I/O. Validated root lookup now allocates stable monotonic nonzero
 object identities in a fixed-capacity table bound to the exact mount/root/entry.
 Aliases reuse identity, volume labels are rejected, exhaustion never wraps, and
 unmount invalidates the associated objects. Sixty-seven focused Linux-host tests
-pass; canonical lookup transport remains next. The storage service
+pass. Canonical lookup transport preserves the borrowed UTF-8 name, performs
+bounded local UTF-16 conversion, rejects malformed/oversized names before block
+I/O, exact-loads the mounted root, and emits only a stable nonzero object or
+typed zero-object error. Seventy focused Linux-host tests pass; isolated lookup
+dispatch remains next. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

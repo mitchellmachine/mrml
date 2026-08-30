@@ -16,11 +16,13 @@ use mrml_interface_storage_block_provider_v1::{
     ProtocolError as BlockProtocolError, ReadError as BlockReadError,
 };
 use mrml_interface_storage_filesystem_v2::{
-    decode_mount_request, decode_probe_request, decode_unmount_request, encode_mount_response,
-    encode_probe_response, encode_unmount_response, FilesystemMountTransport,
-    FilesystemTransport, FilesystemUnmountTransport, MountError, MountResponse, OpaqueHandle,
-    ProbeError, ProtocolError, UnmountError, MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES,
-    PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
+    decode_lookup_request, decode_mount_request, decode_probe_request, decode_unmount_request,
+    encode_lookup_response, encode_mount_response, encode_probe_response, encode_unmount_response,
+    FilesystemLookupTransport, FilesystemMountTransport, FilesystemTransport,
+    FilesystemUnmountTransport, LookupError, MountError, MountResponse, OpaqueHandle, ProbeError,
+    ProtocolError, UnmountError, LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES, MOUNT_REQUEST_BYTES,
+    MOUNT_RESPONSE_BYTES, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES,
+    UNMOUNT_RESPONSE_BYTES,
 };
 
 pub use service_loop::{
@@ -1309,6 +1311,93 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
     }
 }
 
+pub struct Fat32LookupProvider<'a, B, const N: usize, const O: usize = 64> {
+    provider: Fat32MountedProvider<B, N, O>,
+    cluster_scratch: &'a mut [u8],
+}
+
+impl<'a, B, const N: usize, const O: usize> Fat32LookupProvider<'a, B, N, O> {
+    pub fn new(provider: Fat32MountedProvider<B, N, O>, cluster_scratch: &'a mut [u8]) -> Self {
+        cluster_scratch.fill(0);
+        Self {
+            provider,
+            cluster_scratch,
+        }
+    }
+
+    pub fn into_provider(self) -> Fat32MountedProvider<B, N, O> {
+        self.provider
+    }
+}
+
+impl<T: BlockProviderReadTransport, const N: usize, const O: usize> FilesystemLookupTransport
+    for Fat32LookupProvider<'_, Fat32BlockMountBackend<'_, T>, N, O>
+{
+    fn lookup(
+        &mut self,
+        request: &[u8; LOOKUP_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_lookup_request(request, memory.len() as u64)?;
+        let start = usize::try_from(request.name.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
+        let length = usize::try_from(request.name.length()).map_err(|_| ProtocolError::InvalidRequest)?;
+        let end = start
+            .checked_add(length)
+            .ok_or(ProtocolError::InvalidRequest)?;
+        let name = memory.get(start..end).ok_or(ProtocolError::InvalidRequest)?;
+        let name = core::str::from_utf8(name).map_err(|_| ProtocolError::InvalidRequest)?;
+        let mut utf16 = [0_u16; 255];
+        let mut utf16_length = 0;
+        for unit in name.encode_utf16() {
+            let Some(destination) = utf16.get_mut(utf16_length) else {
+                utf16.fill(0);
+                return Err(ProtocolError::InvalidRequest);
+            };
+            *destination = unit;
+            utf16_length += 1;
+        }
+        if utf16_length == 0 {
+            return Ok(encode_lookup_response(Err(LookupError::InvalidRequest)));
+        }
+        let directory = match self.provider.load_root_directory::<64, 64>(
+            request.volume,
+            request.generation,
+            request.directory,
+            self.cluster_scratch,
+        ) {
+            Ok(directory) => directory,
+            Err(Fat32RootDirectoryError::Lifecycle(_)) => {
+                utf16.fill(0);
+                return Ok(encode_lookup_response(Err(LookupError::StaleObject)));
+            }
+            Err(Fat32RootDirectoryError::Filesystem(_)) => {
+                utf16.fill(0);
+                return Ok(encode_lookup_response(Err(LookupError::InvalidRequest)));
+            }
+        };
+        let result = self
+            .provider
+            .lookup_root_entry(
+                request.volume,
+                request.generation,
+                request.directory,
+                &directory,
+                &utf16[..utf16_length],
+            )
+            .map_err(|error| match error {
+                Fat32RootLookupError::Lookup(Fat32Error::LookupNotFound) => LookupError::NotFound,
+                Fat32RootLookupError::Identity(Fat32ObjectIdentityError::Lifecycle(_))
+                | Fat32RootLookupError::Identity(Fat32ObjectIdentityError::StaleObject) => {
+                    LookupError::StaleObject
+                }
+                Fat32RootLookupError::Lookup(_)
+                | Fat32RootLookupError::Identity(_) => LookupError::InvalidRequest,
+            });
+        utf16.fill(0);
+        Ok(encode_lookup_response(result))
+    }
+}
+
 fn append_fat32_short_directory_inner<const N: usize>(
     geometry: Fat32Geometry,
     directory: &mut Fat32DirectoryBatch<N>,
@@ -2419,6 +2508,141 @@ mod tests {
             provider.identify_root_entry(volume, mounted.generation, mounted.root, label),
             Err(Fat32ObjectIdentityError::InvalidEntry)
         );
+    }
+
+    #[test]
+    fn canonical_lookup_transport_loads_root_and_returns_stable_object_identity() {
+        use mrml_interface_storage_filesystem_v2::{
+            decode_lookup_response, encode_lookup_request, BorrowedReadView,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = FilesystemImageTransport {
+            session,
+            calls: [0; 8],
+            count: 0,
+        };
+        let mut block_scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut block_scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1, 4>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let mut directory_scratch = [0xbb; 4096];
+        let mut lookup = Fat32LookupProvider::new(provider, &mut directory_scratch);
+        let mut memory = *b"KERNEL.MRP";
+        let request = encode_lookup_request(
+            volume,
+            mounted.generation,
+            mounted.root,
+            BorrowedReadView::within(0, memory.len() as u64, memory.len() as u64).unwrap(),
+        )
+        .unwrap();
+        let first = FilesystemLookupTransport::lookup(&mut lookup, &request, &mut memory).unwrap();
+        let second = FilesystemLookupTransport::lookup(&mut lookup, &request, &mut memory).unwrap();
+        assert_eq!(decode_lookup_response(&first), Ok(Ok(1)));
+        assert_eq!(decode_lookup_response(&second), Ok(Ok(1)));
+        assert_eq!(memory, *b"KERNEL.MRP");
+        let transport = lookup.into_provider().into_backend().into_transport();
+        assert_eq!(directory_scratch, [0; 4096]);
+        assert_eq!(
+            &transport.calls[..transport.count],
+            &[0, 4, 132, 260, 4, 132, 260]
+        );
+        assert_eq!(block_scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn canonical_lookup_transport_maps_not_found_and_stale_without_object_data() {
+        use mrml_interface_storage_filesystem_v2::{
+            decode_lookup_response, encode_lookup_request, BorrowedReadView,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = FilesystemImageTransport {
+            session,
+            calls: [0; 8],
+            count: 0,
+        };
+        let mut block_scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut block_scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1, 4>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let mut directory_scratch = [0xbb; 4096];
+        let mut lookup = Fat32LookupProvider::new(provider, &mut directory_scratch);
+        let mut missing = *b"MISSING.MRP";
+        let missing_request = encode_lookup_request(
+            volume,
+            mounted.generation,
+            mounted.root,
+            BorrowedReadView::within(0, missing.len() as u64, missing.len() as u64).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decode_lookup_response(
+                &FilesystemLookupTransport::lookup(&mut lookup, &missing_request, &mut missing)
+                    .unwrap(),
+            ),
+            Ok(Err(LookupError::NotFound))
+        );
+        let calls_after_missing = lookup.provider.backend.transport.count;
+        let mut name = *b"KERNEL.MRP";
+        let stale_root = OpaqueHandle::new(mounted.root.index(), 2).unwrap();
+        let stale_request = encode_lookup_request(
+            volume,
+            mounted.generation,
+            stale_root,
+            BorrowedReadView::within(0, name.len() as u64, name.len() as u64).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decode_lookup_response(
+                &FilesystemLookupTransport::lookup(&mut lookup, &stale_request, &mut name)
+                    .unwrap(),
+            ),
+            Ok(Err(LookupError::StaleObject))
+        );
+        assert_eq!(lookup.provider.backend.transport.count, calls_after_missing);
+        assert_eq!(directory_scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn canonical_lookup_transport_rejects_invalid_utf8_before_block_io() {
+        use mrml_interface_storage_filesystem_v2::{encode_lookup_request, BorrowedReadView};
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = FilesystemImageTransport {
+            session,
+            calls: [0; 8],
+            count: 0,
+        };
+        let mut block_scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut block_scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1, 4>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let mut directory_scratch = [0xbb; 4096];
+        let mut lookup = Fat32LookupProvider::new(provider, &mut directory_scratch);
+        let mut invalid = [0xff];
+        let request = encode_lookup_request(
+            volume,
+            mounted.generation,
+            mounted.root,
+            BorrowedReadView::within(0, 1, 1).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            FilesystemLookupTransport::lookup(&mut lookup, &request, &mut invalid),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(lookup.provider.backend.transport.count, 1);
+        assert_eq!(directory_scratch, [0; 4096]);
     }
 
     #[test]

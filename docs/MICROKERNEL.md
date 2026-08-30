@@ -7457,8 +7457,11 @@ are now separated: validated root lookup interns stable nonzero identities in a
 bounded provider-local table keyed by the exact mount/root/entry tuple. Aliases
 reuse identity, capacity and permanent exhaustion fail without reuse, volume
 labels are excluded, and unmount invalidates all tied records. These identities
-grant no capability. The focused Linux-host suite passes sixty-seven tests;
-canonical lookup transport and syscall dispatch remain pending.
+grant no capability. Canonical lookup transport preserves the borrowed UTF-8
+range, performs strict bounded provider-local UTF-16 conversion before I/O,
+loads only the exact mounted root, and returns either a stable nonzero identity
+or a typed zero-object failure. The focused Linux-host suite passes seventy
+tests; isolated lookup syscall dispatch remains pending.
 
 Patent review: `NOT_TRIGGERED` — checked filesystem offset derivation, exact
 single-block reads, failure-atomic range assembly, and scratch erasure are

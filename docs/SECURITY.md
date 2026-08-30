@@ -1234,6 +1234,12 @@ stably interns aliases for the same entry, bounds table capacity, and permanentl
 fails after identity exhaustion rather than wrapping. Unmount deletes every
 record tied to that mount; stale identities cannot resolve after slot reuse.
 
+The FAT32 lookup transport treats wire names as bounded UTF-8 data and preserves
+the caller's borrowed range. Strict decoding and the 255-unit FAT limit are
+checked before block access; conversion uses provider-local UTF-16 that is erased
+after dispatch. Stale roots and missing names return typed responses whose object
+field is canonically zero.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode
