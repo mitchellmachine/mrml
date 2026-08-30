@@ -9,18 +9,17 @@ use mrml_runtime::{
     MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
 use mrml_rustc::{
-    CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffTextComdatSelection, ElfSelectedDefinitions,
-    ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections, LinkDefinition,
-    LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS,
-    MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS,
-    MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
-    PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
-    PeWritableRelocationTarget,
-    TargetLayout, compile_source_function_with_options, decode_unix_archive,
+    CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffTextComdatSelection,
+    ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections,
+    LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget,
+    MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS,
+    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
+    ObjectFormat, PeDataKind, PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData,
+    PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
+    compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
-    decode_x86_64_coff_short_import,
     decode_x86_64_coff_runtime_functions_with_section_identities,
-    decode_x86_64_coff_section_identity_readonly_fragment,
+    decode_x86_64_coff_section_identity_readonly_fragment, decode_x86_64_coff_short_import,
     decode_x86_64_coff_text_fragment_with_section_identities_from_inventory,
     decode_x86_64_coff_writable_data_fragment_with_section_identities,
     decode_x86_64_elf_selected_definitions_from_sections,
@@ -30,8 +29,7 @@ use mrml_rustc::{
     link_x86_64_elf_selected_executable,
     link_x86_64_pe_with_data_unwind_and_readonly_relocations_into,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
-    x86_64_coff_section_identity_readonly_fragment_count,
-    x86_64_coff_short_import,
+    x86_64_coff_section_identity_readonly_fragment_count, x86_64_coff_short_import,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
     x86_64_coff_writable_section_count,
 };
@@ -620,28 +618,27 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                     }
                     let Some(candidate) = archive.symbols().iter().find(|candidate| {
                         candidate.symbol == symbol
-                            && !archive_group
-                                .iter()
-                                .zip(archive_member.iter())
-                                .any(|(selected_group, selected_member)| {
+                            && !archive_group.iter().zip(archive_member.iter()).any(
+                                |(selected_group, selected_member)| {
                                     *selected_group == group
                                         && usize::from(*selected_member)
                                             == candidate.member_index + 1
-                                })
+                                },
+                            )
                     }) else {
                         continue;
                     };
                     let member = &archive.members()[candidate.member_index];
                     scan_link_object_symbols(member.bytes, format, &mut referenced, &mut defined)
                         .map_err(|error| {
-                            anyhow!(
-                                "archive group {} member {} ({}) symbol inventory: {}",
-                                group,
-                                candidate.member_index + 1,
-                                member.name,
-                                error
-                            )
-                        })?;
+                        anyhow!(
+                            "archive group {} member {} ({}) symbol inventory: {}",
+                            group,
+                            candidate.member_index + 1,
+                            member.name,
+                            error
+                        )
+                    })?;
                     let alias = short_import_alias(
                         format,
                         member.bytes,
@@ -718,12 +715,11 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                     .map_err(|_| anyhow!("archive member identity overflow"))?;
                 if member.name == "lib.rmeta"
                     || member.name == "lib.rmeta-link"
-                    || !selected_group
-                        .iter()
-                        .zip(selected_member.iter())
-                        .any(|(selected_group, selected_member)| {
+                    || !selected_group.iter().zip(selected_member.iter()).any(
+                        |(selected_group, selected_member)| {
                             *selected_group == group && *selected_member == member_number
-                        })
+                        },
+                    )
                 {
                     continue;
                 }
@@ -934,9 +930,8 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
         let coff_short_import = match format {
-            ObjectFormat::Coff => x86_64_coff_short_import(object).map_err(|error| {
-                anyhow!("COFF object {} short import: {}", object_index, error)
-            })?,
+            ObjectFormat::Coff => x86_64_coff_short_import(object)
+                .map_err(|error| anyhow!("COFF object {} short import: {}", object_index, error))?,
             ObjectFormat::Elf64 => None,
         };
         let coff_comdat_sections = match format {
@@ -999,7 +994,11 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                 ObjectFormat::Coff if coff_short_import.is_some() => {
                     let mut input = decode_x86_64_coff_short_import(object, arena)
                         .map_err(|error| {
-                            anyhow!("COFF object {} short import decode: {}", object_index, error)
+                            anyhow!(
+                                "COFF object {} short import decode: {}",
+                                object_index,
+                                error
+                            )
                         })?
                         .ok_or_else(|| anyhow!("COFF short import changed after inventory"))?;
                     if let Some(alias) = object_import_alias[object_index] {
@@ -1158,18 +1157,22 @@ fn expanded_fragment_count(
     }
     let mut count = 0usize;
     for (object_index, object) in objects.iter().enumerate() {
-        let object_fragments = match format {
-            ObjectFormat::Coff => {
-                if x86_64_coff_short_import(object)
-                    .map_err(|error| anyhow!("COFF object {} short import: {}", object_index, error))?
-                    .is_some()
-                {
-                    1
-                } else {
-                let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
-                    anyhow!("COFF object {} COMDAT inventory: {}", object_index, error)
-                })?;
-                x86_64_coff_text_fragment_count(object)
+        let object_fragments =
+            match format {
+                ObjectFormat::Coff => {
+                    if x86_64_coff_short_import(object)
+                        .map_err(|error| {
+                            anyhow!("COFF object {} short import: {}", object_index, error)
+                        })?
+                        .is_some()
+                    {
+                        1
+                    } else {
+                        let inventory =
+                            inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
+                                anyhow!("COFF object {} COMDAT inventory: {}", object_index, error)
+                            })?;
+                        x86_64_coff_text_fragment_count(object)
                     .map_err(|error| {
                         anyhow!(
                             "COFF object {} archive group {} member {} text fragment count: {}",
@@ -1188,10 +1191,10 @@ fn expanded_fragment_count(
                             })?,
                     )
                     .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?
+                    }
                 }
-            }
-            ObjectFormat::Elf64 => 1,
-        };
+                ObjectFormat::Elf64 => 1,
+            };
         count = count
             .checked_add(object_fragments)
             .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?;
@@ -1230,8 +1233,7 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     for index in selection.indices() {
         let current_is_internal = matches!(
             inputs[*index].symbol_target,
-            LinkDefinitionTarget::CoffTextSection { .. }
-                | LinkDefinitionTarget::CoffSection { .. }
+            LinkDefinitionTarget::CoffTextSection { .. } | LinkDefinitionTarget::CoffSection { .. }
         );
         if let Some(earlier) = (!current_is_internal)
             .then(|| {
@@ -1415,16 +1417,15 @@ fn selected_runtime_functions<'data>(
                     .map_err(|_| anyhow!("COFF source-object identity overflow"))?,
                 arena,
             )
-                .map_err(|error| {
-                    anyhow!(
-                        "COFF object {} archive group {} member {} runtime-function decode: {}",
-                        object_index,
-                        archive_group[object_index],
-                        archive_member[object_index],
-                        error
-                    )
-                })?
-            {
+            .map_err(|error| {
+                anyhow!(
+                    "COFF object {} archive group {} member {} runtime-function decode: {}",
+                    object_index,
+                    archive_group[object_index],
+                    archive_member[object_index],
+                    error
+                )
+            })? {
                 let retained = selected
                     .inputs
                     .iter()
@@ -1434,25 +1435,29 @@ fn selected_runtime_functions<'data>(
                             return false;
                         }
                         match function.begin_identity {
-                            Some(identity) => matches!(
-                                input.symbol_target,
-                                LinkDefinitionTarget::CoffTextSection {
-                                    identity: candidate,
-                                    ..
-                                } if candidate == identity
-                            ) || input.additional_definitions.iter().any(|definition| {
+                            Some(identity) => {
                                 matches!(
-                                    definition.target,
+                                    input.symbol_target,
                                     LinkDefinitionTarget::CoffTextSection {
                                         identity: candidate,
                                         ..
                                     } if candidate == identity
-                                )
-                            }),
-                            None => input.symbol == function.begin_symbol
-                                || input.additional_definitions.iter().any(|definition| {
-                                    definition.symbol == function.begin_symbol
-                                }),
+                                ) || input.additional_definitions.iter().any(|definition| {
+                                    matches!(
+                                        definition.target,
+                                        LinkDefinitionTarget::CoffTextSection {
+                                            identity: candidate,
+                                            ..
+                                        } if candidate == identity
+                                    )
+                                })
+                            }
+                            None => {
+                                input.symbol == function.begin_symbol
+                                    || input.additional_definitions.iter().any(|definition| {
+                                        definition.symbol == function.begin_symbol
+                                    })
+                            }
                         }
                     });
                 if !retained {
@@ -1565,8 +1570,10 @@ fn selected_writable_data<'data, 'relocations>(
             })
             .map(|(input, _)| input.symbol);
         if owner.is_none() && archive_indexed[object_index] {
-            let inventory = inventory_x86_64_coff_symbols(objects[object_index])
-                .map_err(|error| anyhow!("COFF object {} symbol inventory: {}", object_index, error))?;
+            let inventory =
+                inventory_x86_64_coff_symbols(objects[object_index]).map_err(|error| {
+                    anyhow!("COFF object {} symbol inventory: {}", object_index, error)
+                })?;
             for symbol in inventory.symbols() {
                 let symbol = symbol.map_err(|error| {
                     anyhow!("COFF object {} symbol inventory: {}", object_index, error)
@@ -1665,8 +1672,11 @@ fn selected_readonly_absolute_relocations<'data>(
                         )
                     })?;
             for relocation in decoded.relocations() {
-                let retained = selected.inputs.iter().zip(selected.source_object.iter()).any(
-                    |(input, source)| {
+                let retained = selected
+                    .inputs
+                    .iter()
+                    .zip(selected.source_object.iter())
+                    .any(|(input, source)| {
                         if *source != object_index {
                             return false;
                         }
@@ -1680,8 +1690,7 @@ fn selected_readonly_absolute_relocations<'data>(
                             ),
                             None => input.symbol == relocation.readonly_owner,
                         }
-                    },
-                );
+                    });
                 if retained {
                     if output.len() == MAX_PE_READONLY_RELOCATIONS {
                         return Err(anyhow!("too many selected COFF readonly relocations"));
@@ -1720,9 +1729,8 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                 })
         })
     };
-    let writable_target_defined = |symbol: &str| {
-        writable_data.iter().any(|data| data.symbol == symbol)
-    };
+    let writable_target_defined =
+        |symbol: &str| writable_data.iter().any(|data| data.symbol == symbol);
     let import_target = |symbol: &str| {
         inputs.iter().find_map(|input| {
             let defines_import = input.additional_definitions.iter().any(|definition| {
@@ -1730,12 +1738,15 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                     && definition.target == LinkDefinitionTarget::PeImportAddress
             });
             defines_import.then(|| {
-                input.relocations.iter().find_map(|relocation| match relocation.target {
-                    LinkRelocationTarget::PeImportAddress { library, symbol } => {
-                        Some((library, symbol))
-                    }
-                    _ => None,
-                })
+                input
+                    .relocations
+                    .iter()
+                    .find_map(|relocation| match relocation.target {
+                        LinkRelocationTarget::PeImportAddress { library, symbol } => {
+                            Some((library, symbol))
+                        }
+                        _ => None,
+                    })
             })?
         })
     };
@@ -1796,12 +1807,8 @@ fn write_linked_pe(
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let fragment_count = expanded_fragment_count(
-        objects,
-        archive_group,
-        archive_member,
-        ObjectFormat::Coff,
-    )?;
+    let fragment_count =
+        expanded_fragment_count(objects, archive_group, archive_member, ObjectFormat::Coff)?;
     let mut arenas = relocation_arenas(fragment_count)?;
     let mut definitions = definition_arenas(fragment_count)?;
     let decoded = decode_link_inputs(
@@ -1935,29 +1942,30 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                 input.symbol_target,
                 LinkDefinitionTarget::CoffTextSection { .. }
                     | LinkDefinitionTarget::CoffSection { .. }
-            )
-                && input.symbol == symbol)
+            ) && input.symbol == symbol)
                 || input.additional_definitions.iter().any(|definition| {
                     !matches!(
                         definition.target,
                         LinkDefinitionTarget::CoffTextSection { .. }
                             | LinkDefinitionTarget::CoffSection { .. }
-                    )
-                        && definition.symbol == symbol
+                    ) && definition.symbol == symbol
                 })
         })
     };
-    let writable_target_defined = |symbol: &str| {
-        writable_data.iter().any(|data| data.symbol == symbol)
-    };
+    let writable_target_defined =
+        |symbol: &str| writable_data.iter().any(|data| data.symbol == symbol);
     let writable_section_defined = |identity: CoffSectionIdentity| {
         writable_data
             .iter()
             .any(|data| data.identity == Some(identity))
     };
-    let named_target_defined = |symbol: &str| {
-        link_target_defined(symbol) || writable_target_defined(symbol)
+    let tls_section_defined = |identity: CoffSectionIdentity| {
+        writable_data
+            .iter()
+            .any(|data| data.kind == PeDataKind::Tls && data.identity == Some(identity))
     };
+    let named_target_defined =
+        |symbol: &str| link_target_defined(symbol) || writable_target_defined(symbol);
     let section_identity_defined = |identity: CoffSectionIdentity| {
         inputs.iter().any(|input| {
             matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
@@ -1984,9 +1992,7 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                 relocation.readonly_owner
             ));
         }
-        if relocation.target_identity.is_none()
-            && !named_target_defined(relocation.target_symbol)
-        {
+        if relocation.target_identity.is_none() && !named_target_defined(relocation.target_symbol) {
             return Err(anyhow!(
                 "selected read-only relocation target is undefined: {}",
                 relocation.target_symbol
@@ -2041,9 +2047,11 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                     symbol
                 ));
             }
-            if let LinkRelocationTarget::PeTlsSection { identity, .. } = relocation.target {
+            if let LinkRelocationTarget::PeTlsSection { identity, .. } = relocation.target
+                && !tls_section_defined(identity)
+            {
                 return Err(anyhow!(
-                    "selected PE TLS target is unsupported: object {}, section {}",
+                    "selected PE TLS target section is undefined: object {}, section {}",
                     identity.object(),
                     identity.section()
                 ));
@@ -2093,17 +2101,17 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                         owner
                     ));
                 }
-                PeWritableRelocationTarget::TextSymbol(symbol)
-                    if !named_target_defined(symbol) =>
-                {
+                PeWritableRelocationTarget::TextSymbol(symbol) if !named_target_defined(symbol) => {
                     return Err(anyhow!(
                         "selected writable relocation text target is undefined: {}",
                         symbol
                     ));
                 }
-                PeWritableRelocationTarget::TlsSection { identity, .. } => {
+                PeWritableRelocationTarget::TlsSection { identity, .. }
+                    if !tls_section_defined(identity) =>
+                {
                     return Err(anyhow!(
-                        "selected writable PE TLS target is unsupported: object {}, section {}",
+                        "selected writable PE TLS target section is undefined: object {}, section {}",
                         identity.object(),
                         identity.section()
                     ));
@@ -2152,11 +2160,7 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             )
         })?;
     mrml_runtime::write_file(output, &executable[..length])?;
-    println!(
-        "linked {} to {} deterministic PE bytes",
-        entry,
-        length
-    );
+    println!("linked {} to {} deterministic PE bytes", entry, length);
     Ok(())
 }
 
@@ -2419,12 +2423,7 @@ mod tests {
         append_archive_member(&mut archive, "/", &index);
         append_archive_member(&mut archive, "import.o/", &import);
         let archives = [archive];
-        let refs = link_object_refs(
-            &archives,
-            ObjectFormat::Coff,
-            "__imp_WaitOnAddress",
-        )
-        .unwrap();
+        let refs = link_object_refs(&archives, ObjectFormat::Coff, "__imp_WaitOnAddress").unwrap();
         assert_eq!(&refs.import_alias[..], &[Some("__imp_WaitOnAddress")]);
     }
 
@@ -2472,6 +2471,7 @@ mod tests {
         let writable = [PeWritableData {
             symbol: "marker",
             identity: None,
+            kind: PeDataKind::Writable,
             selection: mrml_rustc::PeWritableComdatSelection::NoDuplicates,
             initialized: &[0],
             zeroed_size: 0,
@@ -2494,12 +2494,9 @@ mod tests {
             ..input
         };
         let mut defined_arenas = relocation_arenas(1).unwrap();
-        let defined_contextual = contextualize_pe_writable_relocations(
-            &[defined],
-            &writable,
-            &mut defined_arenas,
-        )
-        .unwrap();
+        let defined_contextual =
+            contextualize_pe_writable_relocations(&[defined], &writable, &mut defined_arenas)
+                .unwrap();
         assert_eq!(
             defined_contextual[0].relocations[0].target,
             LinkRelocationTarget::Symbol("marker")
@@ -2535,12 +2532,9 @@ mod tests {
             ..input
         };
         let mut import_arenas = relocation_arenas(2).unwrap();
-        let import_contextual = contextualize_pe_writable_relocations(
-            &[alias_user, import],
-            &[],
-            &mut import_arenas,
-        )
-        .unwrap();
+        let import_contextual =
+            contextualize_pe_writable_relocations(&[alias_user, import], &[], &mut import_arenas)
+                .unwrap();
         assert_eq!(
             import_contextual[0].relocations[0].target,
             LinkRelocationTarget::PeImportAddress {
@@ -2575,15 +2569,17 @@ mod tests {
             CoffTextComdatSelection::Any,
             CoffTextComdatSelection::NoDuplicates,
         ];
-        assert!(selected_link_inputs(
-            &[first, second],
-            &[0, 0],
-            &[0, 0],
-            &[0, 1],
-            &strict,
-            "entry",
-        )
-        .is_err());
+        assert!(
+            selected_link_inputs(
+                &[first, second],
+                &[0, 0],
+                &[0, 0],
+                &[0, 1],
+                &strict,
+                "entry",
+            )
+            .is_err()
+        );
 
         let same_size = [CoffTextComdatSelection::SameSize; 2];
         let selected = selected_link_inputs(
@@ -2600,15 +2596,17 @@ mod tests {
             text: &[0x63, 0xc3],
             ..first
         };
-        assert!(selected_link_inputs(
-            &[first, longer],
-            &[0, 0],
-            &[0, 0],
-            &[0, 1],
-            &same_size,
-            "entry",
-        )
-        .is_err());
+        assert!(
+            selected_link_inputs(
+                &[first, longer],
+                &[0, 0],
+                &[0, 0],
+                &[0, 1],
+                &same_size,
+                "entry",
+            )
+            .is_err()
+        );
 
         let exact = [CoffTextComdatSelection::ExactMatch; 2];
         assert!(
@@ -2712,25 +2710,29 @@ mod tests {
         assert_eq!(selected.source_object[0], 7);
 
         let same_size = [CoffTextComdatSelection::SameSize; 2];
-        assert!(selected_link_inputs(
-            &[first, second],
-            &[0, 0],
-            &[0, 0],
-            &[3, 7],
-            &same_size,
-            "literal",
-        )
-        .is_err());
+        assert!(
+            selected_link_inputs(
+                &[first, second],
+                &[0, 0],
+                &[0, 0],
+                &[3, 7],
+                &same_size,
+                "literal",
+            )
+            .is_err()
+        );
         let exact = [CoffTextComdatSelection::ExactMatch; 2];
-        assert!(selected_link_inputs(
-            &[first, second],
-            &[0, 0],
-            &[0, 0],
-            &[3, 7],
-            &exact,
-            "literal",
-        )
-        .is_err());
+        assert!(
+            selected_link_inputs(
+                &[first, second],
+                &[0, 0],
+                &[0, 0],
+                &[3, 7],
+                &exact,
+                "literal",
+            )
+            .is_err()
+        );
 
         let entry_relocations = [LinkRelocation {
             offset: 0,

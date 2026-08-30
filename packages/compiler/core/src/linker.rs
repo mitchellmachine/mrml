@@ -585,6 +585,7 @@ pub enum LinkRelocationTarget<'a> {
     PeTlsSection {
         identity: CoffSectionIdentity,
         offset: usize,
+        section_relative: bool,
     },
     InputText(usize),
     ReadonlyData(usize),
@@ -724,6 +725,12 @@ pub enum PeWritableComdatSelection {
     Any,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeDataKind {
+    Writable,
+    Tls,
+}
+
 /// The bounded COFF duplicate-selection policy attached to one text section.
 /// Selection values outside this deliberately small set fail closed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -860,6 +867,7 @@ impl ExactSizeIterator for CoffComdatSectionIter<'_, '_> {}
 pub struct PeWritableData<'a, 'relocations> {
     pub symbol: &'a str,
     pub identity: Option<CoffSectionIdentity>,
+    pub kind: PeDataKind,
     pub selection: PeWritableComdatSelection,
     pub initialized: &'a [u8],
     pub zeroed_size: usize,
@@ -3391,7 +3399,7 @@ pub fn x86_64_coff_writable_section_count(object: &[u8]) -> Result<usize, Linker
             symbols_end,
             string_size,
         )?;
-        if coff_is_writable_section(name)
+        if (coff_is_writable_section(name) || coff_is_tls_section(name))
             && read_u32(object, header + 16)? != 0
         {
             count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
@@ -4118,6 +4126,31 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             text_sections.insert(section + 1)?;
         } else if coff_is_tls_section(name) {
             tls_sections.insert(section + 1)?;
+            writable_sections.insert(section + 1)?;
+            let characteristics = read_u32(object, header + 36)?;
+            if characteristics & 0xe000_00e0 != 0xc000_0040 {
+                return Err(LinkerError::UnsupportedCoffTls);
+            }
+            if writable_ordinal == fragment_index {
+                let raw = usize::try_from(read_u32(object, header + 20)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let bytes = object
+                    .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
+                    .ok_or(LinkerError::InvalidCoff)?;
+                writable = Some((
+                    bytes,
+                    0,
+                    usize::try_from(read_u32(object, header + 24)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                    usize::from(read_u16(object, header + 32)?),
+                    i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?,
+                    name,
+                    PeDataKind::Tls,
+                ));
+            }
+            writable_ordinal = writable_ordinal
+                .checked_add(1)
+                .ok_or(LinkerError::OffsetOverflow)?;
         } else if coff_is_readonly_data_section(name) {
             let raw = usize::try_from(read_u32(object, header + 20)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -4162,6 +4195,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     usize::from(read_u16(object, header + 32)?),
                     i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?,
                     name,
+                    PeDataKind::Writable,
                 ));
             }
             writable_ordinal = writable_ordinal
@@ -4169,8 +4203,15 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                 .ok_or(LinkerError::OffsetOverflow)?;
         }
     }
-    let (bytes, zeroed_size, relocation_offset, relocation_count, writable_section, section_name) =
-        writable.ok_or(LinkerError::InvalidCoff)?;
+    let (
+        bytes,
+        zeroed_size,
+        relocation_offset,
+        relocation_count,
+        writable_section,
+        section_name,
+        data_kind,
+    ) = writable.ok_or(LinkerError::InvalidCoff)?;
     let mut local_writable_symbol = None;
     let mut external_writable_symbol = None;
     let mut comdat_selection = PeWritableComdatSelection::None;
@@ -4339,11 +4380,11 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             .map(|object| {
                 CoffSectionIdentity::new(
                     object,
-                    u16::try_from(writable_section)
-                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                    u16::try_from(writable_section).map_err(|_| LinkerError::OffsetOverflow)?,
                 )
             })
             .transpose()?,
+        kind: data_kind,
         selection: comdat_selection,
         initialized: bytes,
         zeroed_size,
@@ -5367,8 +5408,8 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             let target_value = usize::try_from(read_u32(object, target_offset + 8)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             let target = if let Some(object_identity) = object_identity {
-                let section = u16::try_from(target_section)
-                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let section =
+                    u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
                 let target_header = 20 + (usize::from(section) - 1) * 40;
                 let section_size = usize::try_from(read_u32(object, target_header + 16)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -5408,6 +5449,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                         section,
                     )?,
                     offset,
+                    section_relative: relocation_type == 11,
                 },
                 if relocation_type == 11 {
                     i64::from(field_addend)
@@ -8070,10 +8112,23 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             writable_kept[index] = true;
         }
     }
+    let has_tls = writable_data
+        .iter()
+        .enumerate()
+        .any(|(index, data)| writable_kept[index] && data.kind == PeDataKind::Tls);
+    let tls_directory_offset = align(readonly_size, 8)?;
+    if has_tls {
+        readonly_size = tls_directory_offset
+            .checked_add(48)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
     let mut writable_offsets = [0usize; MAX_LINK_INPUTS];
     let mut writable_size = 0usize;
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] {
+            continue;
+        }
+        if data.kind == PeDataKind::Tls {
             continue;
         }
         if data.initialized.is_empty() || data.zeroed_size != 0 {
@@ -8089,9 +8144,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                 PeWritableRelocationTarget::Readonly { owner, .. } => validate_symbol(owner)?,
                 PeWritableRelocationTarget::CoffSection { .. } => {}
                 PeWritableRelocationTarget::TextSymbol(symbol) => validate_symbol(symbol)?,
-                PeWritableRelocationTarget::TlsSection { .. } => {
-                    return Err(LinkerError::UnsupportedCoffTls);
-                }
+                PeWritableRelocationTarget::TlsSection { .. } => {}
                 PeWritableRelocationTarget::WritableSymbol(symbol) => validate_symbol(symbol)?,
             }
             relocation
@@ -8101,10 +8154,33 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
         }
     }
+    let tls_offset = align(writable_size, 8)?;
+    for (index, data) in writable_data.iter().enumerate() {
+        if !writable_kept[index] || data.kind != PeDataKind::Tls {
+            continue;
+        }
+        if data.initialized.is_empty() || data.zeroed_size != 0 {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+        writable_size = align(writable_size, 8)?;
+        writable_offsets[index] = writable_size;
+        writable_size = writable_size
+            .checked_add(data.initialized.len())
+            .ok_or(LinkerError::OffsetOverflow)?;
+        if !data.relocations.is_empty() {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+    }
+    let tls_file_size = writable_size
+        .checked_sub(tls_offset)
+        .ok_or(LinkerError::OffsetOverflow)?;
     let writable_file_size = writable_size;
     let mut zeroed_total = 0usize;
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] {
+            continue;
+        }
+        if data.kind == PeDataKind::Tls {
             continue;
         }
         if !data.initialized.is_empty() {
@@ -8236,6 +8312,14 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             to_u32_link(runtime_functions.len() * 12)?,
         )?;
     }
+    if has_tls {
+        patch_u32(
+            bytes,
+            optional + 184,
+            to_u32_link(readonly_rva + tls_directory_offset)?,
+        )?;
+        patch_u32(bytes, optional + 188, 40)?;
+    }
 
     write_pe_section(
         bytes,
@@ -8359,6 +8443,57 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
         }
         Ok((index, offset))
     };
+    if has_tls {
+        let index = writable_index("_tls_index")?;
+        if writable_data[index].kind != PeDataKind::Writable
+            || writable_data[index]
+                .initialized
+                .len()
+                .checked_add(writable_data[index].zeroed_size)
+                .filter(|size| *size >= 4)
+                .is_none()
+        {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+        let directory = readonly_raw
+            .checked_add(tls_directory_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let tls_start = IMAGE_BASE
+            .checked_add(writable_rva)
+            .and_then(|address| address.checked_add(tls_offset))
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let tls_end = tls_start
+            .checked_add(tls_file_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let index_address = IMAGE_BASE
+            .checked_add(writable_rva)
+            .and_then(|address| address.checked_add(writable_offsets[index]))
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let callbacks_address = IMAGE_BASE
+            .checked_add(readonly_rva)
+            .and_then(|address| address.checked_add(tls_directory_offset + 40))
+            .ok_or(LinkerError::OffsetOverflow)?;
+        patch_u64(
+            bytes,
+            directory,
+            u64::try_from(tls_start).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        patch_u64(
+            bytes,
+            directory + 8,
+            u64::try_from(tls_end).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        patch_u64(
+            bytes,
+            directory + 16,
+            u64::try_from(index_address).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        patch_u64(
+            bytes,
+            directory + 24,
+            u64::try_from(callbacks_address).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+    }
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] || data.initialized.is_empty() {
             continue;
@@ -8388,7 +8523,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                 PeWritableRelocationTarget::TextSymbol(symbol) => TEXT_RVA
                     .checked_add(resolve_symbol(inputs, &linked.layouts, symbol)?)
                     .ok_or(LinkerError::OffsetOverflow)?,
-                PeWritableRelocationTarget::TlsSection { .. } => unreachable!(),
+                PeWritableRelocationTarget::TlsSection { identity, offset } => {
+                    let (target_index, target_offset) = writable_section(identity, offset)?;
+                    if writable_data[target_index].kind != PeDataKind::Tls {
+                        return Err(LinkerError::UnsupportedCoffTls);
+                    }
+                    writable_rva
+                        .checked_add(writable_offsets[target_index])
+                        .and_then(|target| target.checked_add(target_offset))
+                        .ok_or(LinkerError::OffsetOverflow)?
+                }
                 PeWritableRelocationTarget::WritableSymbol(symbol) => {
                     let target_index = writable_index(symbol)?;
                     writable_rva
@@ -8446,12 +8590,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             )
             .ok_or(LinkerError::OffsetOverflow)?;
         let target_rva = if let Some(identity) = relocation.target_identity {
-            match resolve_coff_section(
-                inputs,
-                &linked.layouts,
-                identity,
-                relocation.target_offset,
-            ) {
+            match resolve_coff_section(inputs, &linked.layouts, identity, relocation.target_offset)
+            {
                 Ok(target) if target < linked.readonly_offset => TEXT_RVA
                     .checked_add(target)
                     .ok_or(LinkerError::OffsetOverflow)?,
@@ -8522,6 +8662,50 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     }
     for (input, layout) in inputs.iter().zip(linked.layouts.iter()) {
         for relocation in input.relocations {
+            if let LinkRelocationTarget::PeTlsSection {
+                identity,
+                offset,
+                section_relative,
+            } = relocation.target
+            {
+                let (target_index, target_offset) = writable_section(identity, offset)?;
+                if writable_data[target_index].kind != PeDataKind::Tls {
+                    return Err(LinkerError::UnsupportedCoffTls);
+                }
+                let place = layout
+                    .text
+                    .checked_add(relocation.offset)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let target_layout_offset = i128::try_from(writable_offsets[target_index])
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let target_offset =
+                    i128::try_from(target_offset).map_err(|_| LinkerError::OffsetOverflow)?;
+                let value = if section_relative {
+                    target_layout_offset
+                        .checked_sub(
+                            i128::try_from(tls_offset).map_err(|_| LinkerError::OffsetOverflow)?,
+                        )
+                        .and_then(|value| value.checked_add(target_offset))
+                        .and_then(|value| value.checked_add(i128::from(relocation.addend)))
+                } else {
+                    i128::try_from(writable_rva)
+                        .map_err(|_| LinkerError::OffsetOverflow)?
+                        .checked_add(target_layout_offset)
+                        .and_then(|value| value.checked_add(target_offset))
+                        .and_then(|value| value.checked_add(i128::from(relocation.addend)))
+                        .and_then(|value| value.checked_sub(i128::try_from(TEXT_RVA + place).ok()?))
+                }
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or(LinkerError::RelocationOverflow)?;
+                patch_i32(
+                    bytes,
+                    HEADERS
+                        .checked_add(place)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                    value,
+                )?;
+                continue;
+            }
             let (writable_index, target_offset) = match relocation.target {
                 LinkRelocationTarget::PeWritableSymbol(symbol) => (writable_index(symbol)?, 0),
                 LinkRelocationTarget::PeWritableSection { identity, offset } => {
@@ -11555,6 +11739,7 @@ mod tests {
                 target: LinkRelocationTarget::PeTlsSection {
                     identity: CoffSectionIdentity::new(9, 2).unwrap(),
                     offset: 0,
+                    section_relative: true,
                 },
                 addend: 0,
             }]
@@ -12445,7 +12630,7 @@ mod tests {
         let mut tls_storage = storage;
         let tls_writable = decode_x86_64_coff_writable_data_fragment_with_section_identities(
             &tls_target,
-            0,
+            1,
             "entry",
             9,
             &mut tls_storage,
@@ -12455,6 +12640,7 @@ mod tests {
             tls_writable.identity,
             Some(CoffSectionIdentity::new(9, 3).unwrap())
         );
+        assert_eq!(tls_writable.kind, PeDataKind::Writable);
         assert_eq!(
             tls_writable.relocations,
             &[PeWritableRelocation {
@@ -12464,6 +12650,20 @@ mod tests {
                     offset: 0,
                 },
             }]
+        );
+        let mut tls_fragment_storage = storage;
+        let tls_fragment = decode_x86_64_coff_writable_data_fragment_with_section_identities(
+            &tls_target,
+            0,
+            "entry",
+            9,
+            &mut tls_fragment_storage,
+        )
+        .unwrap();
+        assert_eq!(tls_fragment.kind, PeDataKind::Tls);
+        assert_eq!(
+            tls_fragment.identity,
+            Some(CoffSectionIdentity::new(9, 2).unwrap())
         );
         let mut missing_storage = [PeWritableRelocation {
             offset: 0,
@@ -12529,6 +12729,7 @@ mod tests {
         let first = PeWritableData {
             symbol: "shared",
             identity: None,
+            kind: PeDataKind::Writable,
             selection: PeWritableComdatSelection::Any,
             initialized: &[1; 8],
             zeroed_size: 0,
@@ -12725,6 +12926,7 @@ mod tests {
         let writable = PeWritableData {
             symbol: "writable",
             identity: None,
+            kind: PeDataKind::Writable,
             selection: PeWritableComdatSelection::None,
             initialized: &[0; 8],
             zeroed_size: 0,
@@ -12741,6 +12943,65 @@ mod tests {
             u64::from_le_bytes(pe.bytes()[0x600..0x608].try_into().unwrap()),
             0x0000_0001_4000_2000
         );
+    }
+
+    #[test]
+    fn emits_bounded_pe_tls_directory_and_section_relative_offsets() {
+        let tls_identity = CoffSectionIdentity::new(17, 4).unwrap();
+        let relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::PeTlsSection {
+                identity: tls_identity,
+                offset: 4,
+                section_relative: true,
+            },
+            addend: 0,
+        }];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &relocation,
+        };
+        let tls_index = PeWritableData {
+            symbol: "_tls_index",
+            identity: None,
+            kind: PeDataKind::Writable,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[],
+            zeroed_size: 4,
+            relocations: &[],
+        };
+        let tls = PeWritableData {
+            symbol: ".tls$fixture",
+            identity: Some(tls_identity),
+            kind: PeDataKind::Tls,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[1, 2, 3, 4, 5, 6, 7, 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let pe = link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+            &[input],
+            "entry",
+            &[],
+            &[tls_index, tls],
+        )
+        .unwrap();
+
+        assert_eq!(read_u32(pe.bytes(), 0x150).unwrap(), 0x2000);
+        assert_eq!(read_u32(pe.bytes(), 0x154).unwrap(), 40);
+        let read_image_u64 =
+            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
+        assert_eq!(read_image_u64(0x400), 0x0000_0001_4000_3000);
+        assert_eq!(read_image_u64(0x408), 0x0000_0001_4000_3008);
+        assert_eq!(read_image_u64(0x410), 0x0000_0001_4000_3008);
+        assert_eq!(read_image_u64(0x418), 0x0000_0001_4000_2028);
+        assert_eq!(read_image_u64(0x420), 0);
+        assert_eq!(read_i32(pe.bytes(), 0x200).unwrap(), 4);
+        assert_eq!(&pe.bytes()[0x600..0x608], &[1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]
@@ -12765,6 +13026,7 @@ mod tests {
         let writable = PeWritableData {
             symbol: ".bss",
             identity: Some(identity),
+            kind: PeDataKind::Writable,
             selection: PeWritableComdatSelection::None,
             initialized: &[],
             zeroed_size: 8,
@@ -12816,6 +13078,7 @@ mod tests {
         let writable = PeWritableData {
             symbol: "writable",
             identity: Some(writable_identity),
+            kind: PeDataKind::Writable,
             selection: PeWritableComdatSelection::None,
             initialized: &[0; 8],
             zeroed_size: 0,
