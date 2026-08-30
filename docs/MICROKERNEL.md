@@ -11653,3 +11653,28 @@ interrupt execution or physical timer evidence.
 Patent review: `NOT_TRIGGERED` — proving that one-use cancellation loses after
 message or timeout completion is conventional event-race regression testing.
 See `docs/patents/REVIEW_LOG.md`.
+
+Timer expiration ownership is now checked before the runtime accounts the next
+tick. `TaskRuntime` exposes a read-only preview of the exact bounded receive
+identities due on that tick, using the same internal due-at predicate as commit.
+The deadline executor first unique-matches every previewed identity to one
+retained owner and a live saved context, then advances and expires the runtime,
+and requires the committed expiration set to equal the preview before consuming
+owners or writing timeout completions.
+
+An adversarial test creates a deadline wait directly in the runtime without an
+executor owner. The executor returns `OwnerMismatch` while the tick remains
+zero, the task context remains byte-for-byte unchanged, and the original opaque
+wait token can still cancel the live wait. Thus a composition error cannot wake
+an unowned suspended syscall merely because its deadline became due.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes 675
+tests. The native kernel release build and the UEFI bootloader release builds
+for `deadline_receive_probe` and `deadline_receive_message_probe` pass through
+`mrml`; the boot profiles retain only their existing unreachable-pattern
+warning. This is deterministic unit and cross-build evidence, not KVM, WHP, or
+physical timer execution.
+
+Patent review: `NOT_TRIGGERED` — previewing a bounded due set before committing
+the same timer transition is conventional transactional state-machine
+validation. See `docs/patents/REVIEW_LOG.md`.

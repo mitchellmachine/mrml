@@ -185,11 +185,11 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
         &mut self,
         runtime: &mut TaskRuntime<TASKS, CAPS>,
     ) -> Result<ReceiveDeadlineTick<TASKS>, DeadlineReceiveSyscallError> {
-        let tick = runtime
-            .timer_tick_and_expire_receives()
+        let preview = runtime
+            .preview_receive_expirations_on_next_tick()
             .map_err(DeadlineReceiveSyscallError::Runtime)?;
         let mut slots = [None; TASKS];
-        for (index, expired) in tick.expired().iter().enumerate() {
+        for (index, expired) in preview.iter().enumerate() {
             let Some(expired) = expired else {
                 continue;
             };
@@ -206,6 +206,12 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
                 return Err(DeadlineReceiveSyscallError::OwnerMismatch);
             }
             slots[index] = Some(slot);
+        }
+        let tick = runtime
+            .timer_tick_and_expire_receives()
+            .map_err(DeadlineReceiveSyscallError::Runtime)?;
+        if tick.expired() != &preview {
+            return Err(DeadlineReceiveSyscallError::OwnerMismatch);
         }
         for (index, expired) in tick.expired().iter().enumerate() {
             let Some(expired) = expired else {
@@ -651,6 +657,32 @@ mod tests {
             (completed.rdx, completed.r10, completed.r8, completed.r9),
             (0, 0, 0, 0)
         );
+    }
+
+    #[test]
+    fn unmatched_expiration_is_rejected_before_tick_or_wakeup() {
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let blocked = match runtime
+            .receive_or_block_current_for(ReceiveTimeout::new(1).unwrap())
+            .unwrap()
+        {
+            DeadlineReceive::Blocked(blocked) => blocked,
+            _ => panic!("expected direct blocked receive"),
+        };
+        let saved = *runtime.context(receiver).unwrap();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+
+        assert!(matches!(
+            executor.timer_tick(&mut runtime),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        ));
+        assert_eq!(runtime.ticks(), 0);
+        assert_eq!(*runtime.context(receiver).unwrap(), saved);
+        assert_eq!(runtime.cancel_blocked_receive(blocked), Ok(()));
     }
 
     #[test]

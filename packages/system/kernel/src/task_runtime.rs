@@ -812,6 +812,22 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         })
     }
 
+    /// Returns the exact receives that would expire on the next timer tick
+    /// without advancing time, waking a task, or consuming a wait identity.
+    pub fn preview_receive_expirations_on_next_tick(
+        &self,
+    ) -> Result<[Option<ExpiredReceive>; TASKS], TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let next_tick =
+            self.scheduler
+                .ticks()
+                .checked_add(1)
+                .ok_or(TaskRuntimeError::Scheduler(
+                    KernelScheduleError::TickExhausted,
+                ))?;
+        Ok(self.receive_expirations_due_at(next_tick))
+    }
+
     /// Accounts one timer tick and atomically installs the interrupted CPL3
     /// context into the domain that was current at interrupt entry.
     pub fn preempt_current(
@@ -2500,23 +2516,16 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.ensure_scheduler_mutable()?;
         let now = self.scheduler.ticks();
         let mut wakes: [Option<WakePlan>; TASKS] = array::from_fn(|_| None);
-        let mut expired = array::from_fn(|_| None);
-        for (slot, domain) in self.domains.iter().enumerate() {
-            let Some(identity) = domain.as_ref().and_then(|domain| domain.blocked_receive) else {
+        let expired = self.receive_expirations_due_at(now);
+        for (slot, expiration) in expired.iter().enumerate() {
+            let Some(expiration) = expiration else {
                 continue;
             };
-            let Some(deadline) = identity.deadline else {
-                continue;
-            };
-            if deadline.tick() > now {
-                continue;
-            }
             wakes[slot] = Some(
                 self.scheduler
-                    .prepare_wake(identity.task)
+                    .prepare_wake(expiration.identity.task)
                     .map_err(TaskRuntimeError::Scheduler)?,
             );
-            expired[slot] = Some(ExpiredReceive { identity, deadline });
         }
         for slot in 0..TASKS {
             let Some(wake) = wakes[slot].take() else {
@@ -2534,6 +2543,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             self.scheduler.commit_wake(wake);
         }
         Ok(expired)
+    }
+
+    fn receive_expirations_due_at(&self, now: u64) -> [Option<ExpiredReceive>; TASKS] {
+        array::from_fn(|slot| {
+            let identity = self.domains[slot].as_ref()?.blocked_receive?;
+            let deadline = identity.deadline?;
+            (deadline.tick() <= now).then_some(ExpiredReceive { identity, deadline })
+        })
     }
 
     fn block_current_for_receive(
