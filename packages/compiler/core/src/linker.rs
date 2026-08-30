@@ -4868,9 +4868,10 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             usize::try_from(read_u32(object, offset)?).map_err(|_| LinkerError::OffsetOverflow)?;
         let target_index = usize::try_from(read_u32(object, offset + 4)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
-        if target_index >= symbol_count || read_u16(object, offset + 8)? != 4 {
+        if target_index >= symbol_count {
             return Err(LinkerError::UnsupportedCoffRelocation);
         }
+        let relocation_type = read_u16(object, offset + 8)?;
         let target_offset = symbol_offset
             .checked_add(
                 target_index
@@ -4879,6 +4880,16 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             )
             .ok_or(LinkerError::OffsetOverflow)?;
         let target_section = read_i16(object, target_offset + 12)?;
+        let target_is_tls = target_section > 0
+            && tls_sections
+                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?);
+        // IMAGE_REL_AMD64_REL32 is the ordinary code relocation. Rust's
+        // Windows TLS access sequence additionally uses IMAGE_REL_AMD64_SECREL
+        // for the offset within the selected TLS template; retain that target
+        // as typed PE TLS work rather than treating it as an unknown encoding.
+        if relocation_type != 4 && !(relocation_type == 11 && target_is_tls) {
+            return Err(LinkerError::UnsupportedCoffRelocation);
+        }
         let field_addend = read_i32(text, field_offset)?;
         let (target, addend) = if target_section == 0 {
             (
@@ -5037,10 +5048,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 )?),
                 i64::from(field_addend) - 4,
             )
-        } else if target_section > 0
-            && tls_sections
-                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-        {
+        } else if target_is_tls {
             let section = u16::try_from(target_section)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             let target_header = 20 + (usize::from(section) - 1) * 40;
@@ -5059,7 +5067,11 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     )?,
                     offset,
                 },
-                i64::from(field_addend) - 4,
+                if relocation_type == 11 {
+                    i64::from(field_addend)
+                } else {
+                    i64::from(field_addend) - 4
+                },
             )
         } else {
             return Err(LinkerError::UnsupportedCoffRelocationTarget);
@@ -9415,6 +9427,39 @@ mod tests {
         object
     }
 
+    fn coff_with_tls_secrel_relocation() -> std::vec::Vec<u8> {
+        let mut object = std::vec![0u8; 158];
+        object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[2..4].copy_from_slice(&2u16.to_le_bytes());
+        object[8..12].copy_from_slice(&118u32.to_le_bytes());
+        object[12..16].copy_from_slice(&2u32.to_le_bytes());
+
+        object[20..27].copy_from_slice(b".text$a");
+        object[36..40].copy_from_slice(&4u32.to_le_bytes());
+        object[40..44].copy_from_slice(&100u32.to_le_bytes());
+        object[44..48].copy_from_slice(&108u32.to_le_bytes());
+        object[52..54].copy_from_slice(&1u16.to_le_bytes());
+        object[56..60].copy_from_slice(&0x6000_0020u32.to_le_bytes());
+
+        object[60..66].copy_from_slice(b".tls$a");
+        object[76..80].copy_from_slice(&4u32.to_le_bytes());
+        object[80..84].copy_from_slice(&104u32.to_le_bytes());
+        object[96..100].copy_from_slice(&0xc000_0040u32.to_le_bytes());
+
+        object[108..112].copy_from_slice(&0u32.to_le_bytes());
+        object[112..116].copy_from_slice(&1u32.to_le_bytes());
+        object[116..118].copy_from_slice(&11u16.to_le_bytes());
+
+        object[118..123].copy_from_slice(b"entry");
+        object[130..132].copy_from_slice(&1i16.to_le_bytes());
+        object[134] = 2;
+        object[136..143].copy_from_slice(b"TLS_VAR");
+        object[148..150].copy_from_slice(&2i16.to_le_bytes());
+        object[152] = 2;
+        object[154..158].copy_from_slice(&4u32.to_le_bytes());
+        object
+    }
+
     fn two_fragment_coff_with_removed_metadata() -> std::vec::Vec<u8> {
         let original = two_fragment_coff();
         let mut object = std::vec![0u8; original.len() + 40];
@@ -10898,6 +10943,56 @@ mod tests {
                 &mut legacy_definitions,
             ),
             Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn retains_typed_pe_tls_secrel_targets() {
+        let object = coff_with_tls_secrel_relocation();
+        let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let decoded = decode_x86_64_coff_text_fragment_with_section_identities_from_inventory(
+            &object,
+            0,
+            &inventory,
+            9,
+            &mut relocations,
+            &mut definitions,
+        )
+        .unwrap();
+        assert_eq!(
+            decoded.relocations,
+            &[LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::PeTlsSection {
+                    identity: CoffSectionIdentity::new(9, 2).unwrap(),
+                    offset: 0,
+                },
+                addend: 0,
+            }]
+        );
+
+        let mut unsupported = object.clone();
+        unsupported[116..118].copy_from_slice(&10u16.to_le_bytes());
+        let unsupported_inventory = inventory_x86_64_coff_comdat_sections(&unsupported).unwrap();
+        assert_eq!(
+            decode_x86_64_coff_text_fragment_with_section_identities_from_inventory(
+                &unsupported,
+                0,
+                &unsupported_inventory,
+                9,
+                &mut relocations,
+                &mut definitions,
+            ),
+            Err(LinkerError::UnsupportedCoffRelocation)
         );
     }
 
