@@ -6,8 +6,9 @@ use mrml_package_format::{
 
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
-    CpuResourceError, ObjectId, Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId,
-    arch::x86_64::UserContext,
+    CpuResourceError, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime, TaskRuntimeError,
+    VcpuReservationId, arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -472,6 +473,93 @@ pub enum ComponentServiceReadTransferPreparationError {
     },
 }
 
+const COMPONENT_SERVICE_READ_TRANSFER_ROOT_RIGHTS: Rights = Rights::MAP
+    .union(Rights::READ)
+    .union(Rights::WRITE)
+    .union(Rights::PIN)
+    .union(Rights::CONTROL)
+    .union(Rights::DELEGATE);
+
+/// One charged shared page and its exact construction authority.
+///
+/// Physical backing and mappings remain absent until a privileged backend
+/// consumes this root. The typed memory-object identity keeps accounting and
+/// teardown bound to the same table generation as the capability authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceReadTransferMemoryRoot {
+    memory_object: MemoryObjectId,
+    shared_object: ObjectId,
+    root: Capability,
+}
+
+impl ComponentServiceReadTransferMemoryRoot {
+    pub const fn memory_object(self) -> MemoryObjectId {
+        self.memory_object
+    }
+
+    pub const fn shared_object(self) -> ObjectId {
+        self.shared_object
+    }
+
+    pub const fn generation(self) -> u64 {
+        self.memory_object.generation() as u64
+    }
+
+    pub const fn bytes(self) -> u32 {
+        PAGE_SIZE as u32
+    }
+
+    pub const fn root(self) -> Capability {
+        self.root
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferMemoryError {
+    Runtime(TaskRuntimeError),
+    Memory(MemoryResourceError),
+}
+
+/// Charges one exact shared page into the source task before backing, mapping,
+/// or provider construction can begin.
+pub fn reserve_component_service_read_transfer_memory<
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    pool: MemoryPoolId,
+    pool_capability: Capability,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+) -> Result<ComponentServiceReadTransferMemoryRoot, ComponentServiceReadTransferMemoryError> {
+    let capabilities = runtime
+        .capabilities_mut(source_task)
+        .map_err(ComponentServiceReadTransferMemoryError::Runtime)?;
+    let (memory_object, root) = memory
+        .allocate_object(
+            pool,
+            pool_capability,
+            1,
+            MemoryBackingKind::Shared,
+            COMPONENT_SERVICE_READ_TRANSFER_ROOT_RIGHTS,
+            capabilities,
+        )
+        .map_err(ComponentServiceReadTransferMemoryError::Memory)?;
+    let (shared_object, rights) = capabilities
+        .describe(root)
+        .map_err(MemoryResourceError::from)
+        .map_err(ComponentServiceReadTransferMemoryError::Memory)?;
+    debug_assert_eq!(rights, COMPONENT_SERVICE_READ_TRANSFER_ROOT_RIGHTS);
+    Ok(ComponentServiceReadTransferMemoryRoot {
+        memory_object,
+        shared_object,
+        root,
+    })
+}
+
 impl ComponentServiceReadTransferAttachment {
     pub fn new<const C: usize>(
         provider_task: TaskId,
@@ -578,13 +666,13 @@ pub fn prepare_component_service_read_transfer_attachment<
             ComponentServiceReadTransferAttachmentError::InvalidLength,
         ));
     }
-    let root_rights = Rights::MAP
-        .union(Rights::READ)
-        .union(Rights::WRITE)
-        .union(Rights::CONTROL)
-        .union(Rights::DELEGATE);
     runtime
-        .authorize_capability_exact(source_task, shared_root, root_rights, shared_object)
+        .authorize_capability_exact(
+            source_task,
+            shared_root,
+            COMPONENT_SERVICE_READ_TRANSFER_ROOT_RIGHTS,
+            shared_object,
+        )
         .map_err(ComponentServiceReadTransferPreparationError::Root)?;
     let local_rights = Rights::MAP.union(Rights::READ).union(Rights::DELEGATE);
     let provider_rights = Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE);
@@ -3552,6 +3640,75 @@ mod tests {
     }
 
     #[test]
+    fn read_transfer_memory_reservation_charges_one_exact_shared_page() {
+        let mut runtime = TaskRuntime::<1, 2>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x2a).unwrap();
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::CONTROL)
+            .union(Rights::INSPECT);
+        let (pool, pool_capability) = memory
+            .create_root(
+                1,
+                2,
+                0,
+                pool_rights,
+                runtime.capabilities_mut(source).unwrap(),
+            )
+            .unwrap();
+
+        let reservation = reserve_component_service_read_transfer_memory(
+            &mut memory,
+            pool,
+            pool_capability,
+            &mut runtime,
+            source,
+        )
+        .unwrap();
+        assert_eq!(reservation.generation(), 1);
+        assert_eq!(reservation.bytes(), PAGE_SIZE as u32);
+        assert_eq!(
+            runtime.capabilities(source).unwrap().authorize_exact(
+                reservation.root(),
+                COMPONENT_SERVICE_READ_TRANSFER_ROOT_RIGHTS,
+            ),
+            Ok(reservation.shared_object())
+        );
+        let usage = memory
+            .usage(pool, pool_capability, runtime.capabilities(source).unwrap())
+            .unwrap();
+        assert_eq!(usage.object_pages(), 1);
+        assert_eq!(usage.live_objects(), 1);
+        assert_eq!(usage.active_mappings(), 0);
+
+        assert_eq!(
+            memory
+                .release_object(
+                    reservation.memory_object(),
+                    reservation.root(),
+                    runtime.capabilities_mut(source).unwrap(),
+                )
+                .unwrap(),
+            1
+        );
+        let usage = memory
+            .usage(pool, pool_capability, runtime.capabilities(source).unwrap())
+            .unwrap();
+        assert_eq!(usage.object_pages(), 0);
+        assert_eq!(usage.live_objects(), 0);
+    }
+
+    #[test]
     fn read_transfer_preparation_splits_one_exact_root_and_tracks_revocation() {
         let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
         let source = runtime
@@ -3579,6 +3736,7 @@ mod tests {
         let root_rights = Rights::MAP
             .union(Rights::READ)
             .union(Rights::WRITE)
+            .union(Rights::PIN)
             .union(Rights::CONTROL)
             .union(Rights::DELEGATE);
         let root = runtime
@@ -3815,6 +3973,7 @@ mod tests {
         let root_rights = Rights::MAP
             .union(Rights::READ)
             .union(Rights::WRITE)
+            .union(Rights::PIN)
             .union(Rights::CONTROL)
             .union(Rights::DELEGATE);
         let root = source_capabilities

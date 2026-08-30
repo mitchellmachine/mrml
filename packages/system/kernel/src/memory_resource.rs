@@ -31,6 +31,13 @@ pub struct MemoryObjectId {
     generation: u32,
 }
 
+impl MemoryObjectId {
+    /// Returns the table generation bound to this typed object identity.
+    pub const fn generation(self) -> u32 {
+        self.generation
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryMappingId {
     slot: u16,

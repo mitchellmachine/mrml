@@ -153,6 +153,7 @@ pub use isolation::{
     ComponentServiceArtifactError, ComponentServiceHandoffError, ComponentServiceLaunchAttachment,
     ComponentServiceLaunchAttachmentError, ComponentServiceLaunchError,
     ComponentServiceReadTransferAttachment, ComponentServiceReadTransferAttachmentError,
+    ComponentServiceReadTransferMemoryError, ComponentServiceReadTransferMemoryRoot,
     ComponentServiceReadTransferPreparationError, HostSubstrateReason,
     IsolationAdmissionTable, IsolationApplicationBackend, IsolationAttachedServiceBackend,
     IsolationApplicationRouteError, IsolationApplicationSpec, IsolationApplicationSpecError,
@@ -174,7 +175,8 @@ pub use isolation::{
     prepare_native_component_service_task,
     prepare_native_component_service_task_from_read_transfer_root,
     prepare_native_component_service_task_with_read_transfer,
-    prepare_isolation_application_route, prepare_isolation_service_route, reserve_isolation_vcpus,
+    prepare_isolation_application_route, prepare_isolation_service_route,
+    reserve_component_service_read_transfer_memory, reserve_isolation_vcpus,
     route_isolation_application, route_isolation_service,
 };
 pub use isolation_monitor::{

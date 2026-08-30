@@ -10219,3 +10219,19 @@ installed invocation.
 Patent review: `NOT_TRIGGERED` — this only composes existing capability
 attenuation, target construction, and transitive rollback paths. See
 `docs/patents/REVIEW_LOG.md`.
+
+Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
+memory-resource root. The kernel reserves exactly one `Shared` page from an
+explicit pool into the source task, retains its typed table generation, and
+issues only the exact `MAP|READ|WRITE|PIN|CONTROL|DELEGATE` construction
+authority needed for later zeroed backing, directional mappings, attenuation,
+and teardown. Reservation publishes no physical backing or mapping, and pool
+accounting returns to zero when the still-unsplit object is released. The
+Linux-host release kernel suite passes 648 tests. This is memory-ledger and
+capability-policy evidence only; native backing and mapping installation,
+installed service execution, KVM, WHP, IOMMU, and physical hardware remain
+unverified by this increment.
+
+Patent review: `NOT_TRIGGERED` — exact page charging and typed generational
+capability binding are conventional resource-accounting mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
