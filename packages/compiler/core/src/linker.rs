@@ -9,7 +9,10 @@ pub const MAX_LINK_INPUTS: usize = 256;
 /// This is distinct from the source-input bound so large COFF members do not
 /// inflate archive, path, or source-object workspaces.
 pub const MAX_LINK_FRAGMENTS: usize = 4096;
-pub const MAX_LINK_RELOCATIONS: usize = 256;
+/// Pinned ORACLE-0003 Windows `std` peaks at 305 relocations in one text
+/// fragment. Keep a power-of-two per-fragment arena that admits that exact
+/// family while the aggregate selected-relocation bound remains independent.
+pub const MAX_LINK_RELOCATIONS: usize = 512;
 /// Aggregate relocations across retained fragments do not share one arena.
 pub const MAX_LINK_TOTAL_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
