@@ -38,7 +38,10 @@ impl<'a, S> AhciNativeMappedMemory<'a, S> {
                 || request.virtual_base() % PAGE_BYTES != 0
                 || request.exposed_bytes() == 0
                 || request.exposed_bytes() > request.mapped_bytes()
-                || request.virtual_base().checked_add(request.mapped_bytes()).is_none()
+                || request
+                    .virtual_base()
+                    .checked_add(request.mapped_bytes())
+                    .is_none()
                 || usize::try_from(request.virtual_base()).is_err()
                 || usize::try_from(request.exposed_bytes())
                     .ok()
@@ -93,8 +96,8 @@ impl<'a, S> AhciNativeMappedMemory<'a, S> {
 mod tests {
     use super::*;
     use crate::{
-        AhciAbarMapping, AhciCommandMemoryIo, AhciDataBufferSync, AhciDataDmaRegion,
-        AhciDmaRegion, AhciPortDmaLayout, AhciServiceCpuMapping, AhciServiceLaunchRecord,
+        AhciAbarMapping, AhciCommandMemoryIo, AhciDataBufferSync, AhciDataDmaRegion, AhciDmaRegion,
+        AhciPortDmaLayout, AhciServiceCpuMapping, AhciServiceLaunchRecord,
     };
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
@@ -106,11 +109,21 @@ mod tests {
 
     struct Sync;
     impl AhciDataBufferSync for Sync {
-        fn prepare_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn prepare_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn complete_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn complete_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn publish_sanitized(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
+        fn prepare_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn prepare_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn complete_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn complete_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn publish_sanitized(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
     }
 
     fn region(object: u64, physical_base: u64, bytes: u64) -> AhciDmaRegion {
@@ -124,7 +137,12 @@ mod tests {
 
     #[test]
     fn exact_native_views_are_bounded_to_the_four_launch_mappings() {
-        let pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let pages = [
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+        ];
         let bases = pages.each_ref().map(|page| page.0.as_ptr() as u64);
         let layout = AhciPortDmaLayout {
             device_object: ObjectId(10),
@@ -163,23 +181,23 @@ mod tests {
                 physical_base: 0x40_0000,
                 bytes: 4096,
             },
-            core::array::from_fn(|index| AhciServiceCpuMapping::new(index as u64 + 1, bases[index]).unwrap()),
+            core::array::from_fn(|index| {
+                AhciServiceCpuMapping::new(index as u64 + 1, bases[index]).unwrap()
+            }),
         )
         .unwrap();
-        let authorities = core::array::from_fn(|index| {
-            Capability::from_token(((index as u64 + 20) << 32) | 1)
-        });
+        let authorities =
+            core::array::from_fn(|index| Capability::from_token(((index as u64 + 20) << 32) | 1));
         let launch = unsafe {
-            InstalledAhciServiceLaunch::from_installed_projection(
-                &record.encode(),
-                3,
-                authorities,
-            )
+            InstalledAhciServiceLaunch::from_installed_projection(&record.encode(), 3, authorities)
         }
         .unwrap();
-        let mapped = unsafe { AhciNativeMappedMemory::from_installed_launch(launch, Sync) }.unwrap();
+        let mapped =
+            unsafe { AhciNativeMappedMemory::from_installed_launch(launch, Sync) }.unwrap();
         let (mut command, data) = mapped.into_parts();
-        command.write_u32(layout.command_list, 1020, 0x1122_3344).unwrap();
+        command
+            .write_u32(layout.command_list, 1020, 0x1122_3344)
+            .unwrap();
         let (command_list, _, _) = command.into_mappings();
         assert_eq!(&command_list[1020..], &0x1122_3344_u32.to_le_bytes());
         let (data, _) = data.into_clean_parts().ok().unwrap();

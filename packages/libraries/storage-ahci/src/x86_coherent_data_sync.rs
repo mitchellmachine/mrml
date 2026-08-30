@@ -106,11 +106,23 @@ mod tests {
         assert_eq!(sync.publish_sanitized(prefix), Ok(()));
 
         for substituted in [
-            AhciDataDmaRegion { memory_object: ObjectId(10), ..prefix },
-            AhciDataDmaRegion { allocation_generation: 8, ..prefix },
-            AhciDataDmaRegion { physical_base: 0x5000, ..prefix },
+            AhciDataDmaRegion {
+                memory_object: ObjectId(10),
+                ..prefix
+            },
+            AhciDataDmaRegion {
+                allocation_generation: 8,
+                ..prefix
+            },
+            AhciDataDmaRegion {
+                physical_base: 0x5000,
+                ..prefix
+            },
             AhciDataDmaRegion { bytes: 0, ..prefix },
-            AhciDataDmaRegion { bytes: 4097, ..prefix },
+            AhciDataDmaRegion {
+                bytes: 4097,
+                ..prefix
+            },
         ] {
             assert_eq!(sync.prepare_device_read(substituted), Err(()));
         }
@@ -119,12 +131,24 @@ mod tests {
     #[test]
     fn malformed_coherent_region_cannot_be_admitted() {
         for malformed in [
-            AhciDataDmaRegion { memory_object: ObjectId(0), ..region(512) },
-            AhciDataDmaRegion { allocation_generation: 0, ..region(512) },
-            AhciDataDmaRegion { physical_base: 0, ..region(512) },
+            AhciDataDmaRegion {
+                memory_object: ObjectId(0),
+                ..region(512)
+            },
+            AhciDataDmaRegion {
+                allocation_generation: 0,
+                ..region(512)
+            },
+            AhciDataDmaRegion {
+                physical_base: 0,
+                ..region(512)
+            },
             region(0),
             region(1024 * 1024 + 1),
-            AhciDataDmaRegion { physical_base: u64::MAX - 255, ..region(512) },
+            AhciDataDmaRegion {
+                physical_base: u64::MAX - 255,
+                ..region(512)
+            },
         ] {
             assert!(unsafe { AhciX86CoherentDataSync::new(malformed) }.is_none());
         }

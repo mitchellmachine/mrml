@@ -118,11 +118,7 @@ impl<S: AhciDataBufferSync> AhciDataBufferIo for AhciMappedDataBuffer<'_, S> {
         Ok(())
     }
 
-    fn complete_read(
-        &mut self,
-        region: AhciDataDmaRegion,
-        output: &mut [u8],
-    ) -> Result<(), ()> {
+    fn complete_read(&mut self, region: AhciDataDmaRegion, output: &mut [u8]) -> Result<(), ()> {
         if self.state != DataState::DeviceWrite(region)
             || u64::try_from(output.len()).ok() != Some(region.bytes)
         {
@@ -150,7 +146,10 @@ impl<S: AhciDataBufferSync> AhciDataBufferIo for AhciMappedDataBuffer<'_, S> {
     }
 
     fn sanitize(&mut self, region: AhciDataDmaRegion) -> Result<(), ()> {
-        if self.expected_region().is_some_and(|active| active != region) {
+        if self
+            .expected_region()
+            .is_some_and(|active| active != region)
+        {
             return Err(());
         }
         self.exact_bytes(region)?.fill(0);

@@ -7,9 +7,9 @@ use crate::{
     ActiveAhciPort, AhciCommandMemoryIo, AhciDataCapabilityAuthorizer, AhciDmaRegion,
     AhciPortDmaLayout, AhciRegisterIo,
 };
-use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
 #[cfg(test)]
 use mrml_kernel::CapabilitySpace;
+use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
 
 const PORT_BASE: u32 = 0x100;
 const PORT_STRIDE: u32 = 0x80;

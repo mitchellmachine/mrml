@@ -36,8 +36,8 @@ impl<'a> AhciMappedCommandMemory<'a> {
             layout.received_fis,
             layout.command_tables,
         ];
-        let expected_table_bytes = u64::from(layout.command_slot_count)
-            .checked_mul(AHCI_COMMAND_TABLE_BYTES_PER_SLOT)?;
+        let expected_table_bytes =
+            u64::from(layout.command_slot_count).checked_mul(AHCI_COMMAND_TABLE_BYTES_PER_SLOT)?;
         if layout.device_object.0 == 0
             || layout.configuration_generation == 0
             || layout.mapping_generation == 0
@@ -103,12 +103,7 @@ impl AhciCommandMemoryIo for AhciMappedCommandMemory<'_> {
         Ok(u32::from_le_bytes(bytes.try_into().map_err(|_| ())?))
     }
 
-    fn write_u32(
-        &mut self,
-        region: AhciDmaRegion,
-        offset: u64,
-        value: u32,
-    ) -> Result<(), ()> {
+    fn write_u32(&mut self, region: AhciDmaRegion, offset: u64, value: u32) -> Result<(), ()> {
         word_mut(self.region(region).ok_or(())?.bytes, offset)?
             .copy_from_slice(&value.to_le_bytes());
         Ok(())
@@ -138,7 +133,9 @@ fn word(bytes: &[u8], offset: u64) -> Result<&[u8], ()> {
     if offset % 4 != 0 {
         return Err(());
     }
-    bytes.get(offset..offset.checked_add(4).ok_or(())?).ok_or(())
+    bytes
+        .get(offset..offset.checked_add(4).ok_or(())?)
+        .ok_or(())
 }
 
 fn word_mut(bytes: &mut [u8], offset: u64) -> Result<&mut [u8], ()> {
@@ -193,8 +190,12 @@ mod tests {
             &mut command_tables,
         )
         .unwrap();
-        memory.write_u32(layout.command_list, 8, 0x1122_3344).unwrap();
-        memory.write_u32(layout.received_fis, 4, 0x5566_7788).unwrap();
+        memory
+            .write_u32(layout.command_list, 8, 0x1122_3344)
+            .unwrap();
+        memory
+            .write_u32(layout.received_fis, 4, 0x5566_7788)
+            .unwrap();
         memory
             .write_u32(layout.command_tables, 508, 0x99aa_bbcc)
             .unwrap();
@@ -220,11 +221,9 @@ mod tests {
             &mut command_tables,
         )
         .unwrap();
-        let initialized = initialize_ahci_command_memory(
-            ProgrammedAhciPortDma::from_layout(layout),
-            &mut memory,
-        )
-        .unwrap();
+        let initialized =
+            initialize_ahci_command_memory(ProgrammedAhciPortDma::from_layout(layout), &mut memory)
+                .unwrap();
         assert_eq!(initialized.layout(), layout);
         let (command_list, _, _) = memory.into_mappings();
         assert_eq!(

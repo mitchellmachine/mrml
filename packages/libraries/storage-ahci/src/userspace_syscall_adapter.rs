@@ -1,17 +1,16 @@
 use crate::{
-    service_bootstrap::AhciReplyBinding, AhciControlServiceSyscalls,
-    AhciDataCapabilityAuthorizer, AhciDataServiceSyscalls, AhciDispatchSyscalls,
-    AhciServiceSyscalls, InstalledAhciServiceLaunch,
+    service_bootstrap::AhciReplyBinding, AhciControlServiceSyscalls, AhciDataCapabilityAuthorizer,
+    AhciDataServiceSyscalls, AhciDispatchSyscalls, AhciServiceSyscalls, InstalledAhciServiceLaunch,
     ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope, ReceivedAhciDispatchEnvelope,
     ReceivedAhciEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
+#[cfg(target_arch = "x86_64")]
+use core::arch::asm;
 use mrml_interface_storage_block_provider_v1::{
     ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES,
     READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
 };
 use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
-#[cfg(target_arch = "x86_64")]
-use core::arch::asm;
 
 const AUTHORIZE_EXACT: u64 = 6;
 const SEND_BUFFER: u64 = 4;
@@ -723,8 +722,8 @@ mod tests {
         let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
         let mut request = [0; AHCI_DISPATCH_REQUEST_BYTES];
         let mut tokens = [0; 1];
-        let envelope = AhciDispatchSyscalls::receive(&mut syscalls, &mut request, &mut tokens)
-            .unwrap();
+        let envelope =
+            AhciDispatchSyscalls::receive(&mut syscalls, &mut request, &mut tokens).unwrap();
         assert_eq!(
             envelope,
             ReceivedAhciDispatchEnvelope {

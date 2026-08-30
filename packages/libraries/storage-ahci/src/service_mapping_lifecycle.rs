@@ -1,12 +1,12 @@
 //! Combined pre-launch ownership of AHCI MMIO and CPU mappings.
 
 use crate::{
-    install_ahci_service_abar, install_ahci_service_cpu_mappings,
-    remove_ahci_service_abar, remove_ahci_service_cpu_mappings, AhciAbarDescriptor,
-    AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError,
-    AhciInstalledCpuMappings, AhciServiceCpuMappingBackend, AhciServiceCpuMappingError,
-    AhciServiceCpuMappingRemovalError, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
-    InstalledAhciAbarMapping, PreparedAhciNativeServiceTask,
+    install_ahci_service_abar, install_ahci_service_cpu_mappings, remove_ahci_service_abar,
+    remove_ahci_service_cpu_mappings, AhciAbarDescriptor, AhciAbarMappingBackend,
+    AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError, AhciInstalledCpuMappings,
+    AhciServiceCpuMappingBackend, AhciServiceCpuMappingError, AhciServiceCpuMappingRemovalError,
+    AhciServiceLaunchRecord, AhciServiceLaunchRecordError, InstalledAhciAbarMapping,
+    PreparedAhciNativeServiceTask,
 };
 use mrml_kernel::{
     Capability, CapabilitySpace, NativeDeviceServiceActivationError, RestartPolicy, ServiceError,
@@ -165,12 +165,7 @@ pub fn activate_mapped_ahci_service_task<
     // checked against this exact runtime above, and the lifecycle object is
     // derived from the same bound launch rather than accepted from a caller.
     match unsafe {
-        supervisor.register_and_activate_constructed(
-            object,
-            task,
-            restart_policy,
-            runtime,
-        )
+        supervisor.register_and_activate_constructed(object, task, restart_policy, runtime)
     } {
         Ok(binding) => {
             debug_assert_eq!(binding.task(), task);
@@ -204,7 +199,12 @@ impl<E> PreparedAhciServiceMappingFailure<E> {
         &self.error
     }
 
-    pub fn into_parts(self) -> (PreparedAhciNativeServiceTask, PreparedAhciServiceMappingError<E>) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        PreparedAhciNativeServiceTask,
+        PreparedAhciServiceMappingError<E>,
+    ) {
         (self.prepared, self.error)
     }
 }
@@ -348,12 +348,7 @@ pub fn remove_ahci_service_mappings<
         }
     }
     if let Some(abar) = state.abar {
-        match remove_ahci_service_abar(
-            abar,
-            capabilities,
-            abar_control_capability,
-            abar_backend,
-        ) {
+        match remove_ahci_service_abar(abar, capabilities, abar_control_capability, abar_backend) {
             Ok(_) => state.abar = None,
             Err(error) => {
                 let retained_abar = error.retained();
@@ -372,20 +367,19 @@ pub fn remove_ahci_service_mappings<
 mod tests {
     use super::*;
     use crate::{
-        AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPciFunctionSnapshot,
+        ActiveAhciPort, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPciFunctionSnapshot,
         AhciPortDmaBackend, AhciPortDmaLayout, AhciRegisterIo, AhciServiceCpuMapping,
-        AhciServiceCpuMappingRequest, ActiveAhciPort, PciFunctionLocation,
-        AHCI_SERVICE_CPU_MAPPING_RIGHTS,
+        AhciServiceCpuMappingRequest, PciFunctionLocation, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
     };
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
+    use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
         prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
         IsolationPlacement, IsolationServiceSpec, ObjectId, PhysAddr, Priority, Rights,
         TaskRuntime, TotalMicrovmClass,
     };
-    use mrml_kernel::arch::x86_64::UserContext;
 
     #[derive(Default)]
     struct AbarBackend {
@@ -434,12 +428,14 @@ mod tests {
 
     impl AhciRegisterIo for Registers {
         fn read_u32(&mut self, offset: u32) -> Result<u32, ()> {
-            let index = usize::try_from(offset.checked_sub(0x200).ok_or(())? / 4).map_err(|_| ())?;
+            let index =
+                usize::try_from(offset.checked_sub(0x200).ok_or(())? / 4).map_err(|_| ())?;
             self.0.get(index).copied().ok_or(())
         }
 
         fn write_u32(&mut self, offset: u32, value: u32) -> Result<(), ()> {
-            let index = usize::try_from(offset.checked_sub(0x200).ok_or(())? / 4).map_err(|_| ())?;
+            let index =
+                usize::try_from(offset.checked_sub(0x200).ok_or(())? / 4).map_err(|_| ())?;
             *self.0.get_mut(index).ok_or(())? = value;
             Ok(())
         }
@@ -451,10 +447,18 @@ mod tests {
     }
 
     impl crate::AhciDataBufferIo for Data {
-        fn prepare_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn prepare_write(&mut self, _: AhciDataDmaRegion, _: &[u8]) -> Result<(), ()> { Ok(()) }
-        fn complete_read(&mut self, _: AhciDataDmaRegion, _: &mut [u8]) -> Result<(), ()> { Ok(()) }
-        fn complete_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
+        fn prepare_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn prepare_write(&mut self, _: AhciDataDmaRegion, _: &[u8]) -> Result<(), ()> {
+            Ok(())
+        }
+        fn complete_read(&mut self, _: AhciDataDmaRegion, _: &mut [u8]) -> Result<(), ()> {
+            Ok(())
+        }
+        fn complete_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
         fn sanitize(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
             self.sanitizations += 1;
             if self.sanitize_failures == 0 {
@@ -472,7 +476,9 @@ mod tests {
     }
 
     impl AhciPortDmaBackend for DmaBackend {
-        fn install_zeroed_layout(&mut self, _: AhciPortDmaLayout) -> Result<(), ()> { Ok(()) }
+        fn install_zeroed_layout(&mut self, _: AhciPortDmaLayout) -> Result<(), ()> {
+            Ok(())
+        }
         fn remove_layout(&mut self, _: AhciPortDmaLayout) -> Result<(), ()> {
             self.removals += 1;
             Ok(())
@@ -515,10 +521,7 @@ mod tests {
             Ok(())
         }
 
-        fn remove(
-            &mut self,
-            request: AhciServiceCpuMappingRequest,
-        ) -> Result<(), Self::Error> {
+        fn remove(&mut self, request: AhciServiceCpuMappingRequest) -> Result<(), Self::Error> {
             if self.fail_remove_object == Some(request.memory_object().0) {
                 return Err(request.memory_object().0);
             }
@@ -612,10 +615,7 @@ mod tests {
         let control = capabilities.insert(ObjectId(10), Rights::CONTROL).unwrap();
         let cpu = core::array::from_fn(|index| {
             capabilities
-                .insert(
-                    ObjectId(index as u64 + 20),
-                    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
-                )
+                .insert(ObjectId(index as u64 + 20), AHCI_SERVICE_CPU_MAPPING_RIGHTS)
                 .unwrap()
         });
         (capabilities, map, control, cpu)
@@ -643,15 +643,11 @@ mod tests {
         crate::BoundAhciServiceLaunch,
     ) {
         let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
-        let context = |root| {
-            UserContext::new(
-                PhysAddr::new(root).unwrap(),
-                0x40_0000,
-                0x7000_0000,
-            )
-            .unwrap()
-        };
-        let source = runtime.create(Priority::NORMAL, context(0x50_0000)).unwrap();
+        let context =
+            |root| UserContext::new(PhysAddr::new(root).unwrap(), 0x40_0000, 0x7000_0000).unwrap();
+        let source = runtime
+            .create(Priority::NORMAL, context(0x50_0000))
+            .unwrap();
         let target = runtime
             .create_for_construction(Priority::NORMAL, context(0x60_0000))
             .unwrap();
@@ -670,11 +666,26 @@ mod tests {
             .unwrap();
         let roles = [
             (ObjectId(10), Rights::CONTROL),
-            (ObjectId(20), Rights::MAP.union(Rights::READ).union(Rights::WRITE)),
-            (ObjectId(21), Rights::MAP.union(Rights::READ).union(Rights::WRITE)),
-            (ObjectId(22), Rights::MAP.union(Rights::READ).union(Rights::WRITE)),
-            (ObjectId(23), Rights::PIN.union(Rights::MAP).union(Rights::WRITE)),
-            (ObjectId(23), Rights::PIN.union(Rights::MAP).union(Rights::READ)),
+            (
+                ObjectId(20),
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                ObjectId(21),
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                ObjectId(22),
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                ObjectId(23),
+                Rights::PIN.union(Rights::MAP).union(Rights::WRITE),
+            ),
+            (
+                ObjectId(23),
+                Rights::PIN.union(Rights::MAP).union(Rights::READ),
+            ),
         ];
         let mut handles = [Capability::from_token(0); crate::AHCI_SERVICE_AUTHORITY_COUNT];
         let authority_specs = core::array::from_fn(|index| {
@@ -908,14 +919,8 @@ mod tests {
         assert_eq!(failure.mapped().abar_mapping(), expected_abar);
         assert_eq!(failure.mapped().cpu_mappings(), expected_cpu);
         assert_eq!(other_runtime.load(), before);
-        assert_eq!(
-            other_runtime.construction_pending(other_target),
-            Ok(true)
-        );
-        assert_eq!(
-            owner_runtime.construction_pending(owner_target),
-            Ok(true)
-        );
+        assert_eq!(other_runtime.construction_pending(other_target), Ok(true));
+        assert_eq!(owner_runtime.construction_pending(owner_target), Ok(true));
         assert!(abar_backend.mapping.is_some());
         assert!(cpu_backend.installed.iter().all(Option::is_some));
         let mapped = failure.into_mapped();
@@ -941,12 +946,12 @@ mod tests {
         assert_eq!(failure.mapped().prepared(), expected_prepared);
         assert_eq!(failure.mapped().abar_mapping(), expected_abar);
         assert_eq!(failure.mapped().cpu_mappings(), expected_cpu);
-        assert_eq!(supervisor.state(existing), Ok(mrml_kernel::ServiceState::Running));
-        assert_eq!(owner_runtime.load(), owner_before);
         assert_eq!(
-            owner_runtime.construction_pending(owner_target),
-            Ok(true)
+            supervisor.state(existing),
+            Ok(mrml_kernel::ServiceState::Running)
         );
+        assert_eq!(owner_runtime.load(), owner_before);
+        assert_eq!(owner_runtime.construction_pending(owner_target), Ok(true));
         let mapped = failure.into_mapped();
 
         let mut supervisor = ServiceSupervisor::<1>::new();
@@ -1004,8 +1009,14 @@ mod tests {
         };
         assert!(matches!(
             install_ahci_service_mappings(
-                record(), descriptor(), map, control, cpu, &capabilities,
-                &mut abar_backend, &mut cpu_backend,
+                record(),
+                descriptor(),
+                map,
+                control,
+                cpu,
+                &capabilities,
+                &mut abar_backend,
+                &mut cpu_backend,
             ),
             Err(AhciServiceMappingInstallError::Cpu(_))
         ));
@@ -1017,8 +1028,14 @@ mod tests {
             ..CpuBackend::default()
         };
         let error = install_ahci_service_mappings(
-            record(), descriptor(), map, control, cpu, &capabilities,
-            &mut abar_backend, &mut cpu_backend,
+            record(),
+            descriptor(),
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
         )
         .unwrap_err();
         let AhciServiceMappingInstallError::CpuRetained { retained, .. } = error else {
@@ -1027,7 +1044,11 @@ mod tests {
         assert!(retained.abar().is_some());
         cpu_backend.fail_remove_object = None;
         let state = remove_ahci_service_mappings(
-            retained, control, &capabilities, &mut abar_backend, &mut cpu_backend,
+            retained,
+            control,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
         )
         .unwrap();
         assert!(state.complete());
@@ -1039,13 +1060,23 @@ mod tests {
         let mut abar_backend = AbarBackend::default();
         let mut cpu_backend = CpuBackend::default();
         let state = install_ahci_service_mappings(
-            record(), descriptor(), map, control, cpu, &capabilities,
-            &mut abar_backend, &mut cpu_backend,
+            record(),
+            descriptor(),
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
         )
         .unwrap();
         abar_backend.fail_remove = true;
         let error = remove_ahci_service_mappings(
-            state, control, &capabilities, &mut abar_backend, &mut cpu_backend,
+            state,
+            control,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
         )
         .unwrap_err();
         let AhciServiceMappingRemovalError::Abar { retained, .. } = error else {
@@ -1054,7 +1085,11 @@ mod tests {
         assert!(retained.cpu().complete());
         abar_backend.fail_remove = false;
         assert!(remove_ahci_service_mappings(
-            retained, control, &capabilities, &mut abar_backend, &mut cpu_backend,
+            retained,
+            control,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
         )
         .unwrap()
         .complete());
@@ -1130,7 +1165,10 @@ mod tests {
             ActiveAhciPort::from_layout(launch.layout()),
             Registers::active(),
             command_memory,
-            Data { sanitize_failures: 1, sanitizations: 0 },
+            Data {
+                sanitize_failures: 1,
+                sanitizations: 0,
+            },
         )
         .unwrap();
         let teardown = match backend.into_teardown() {
@@ -1228,11 +1266,7 @@ mod tests {
         // SAFETY: this test backend models truthful stop, sanitization, and DMA
         // withdrawal; the returned owner remains held through typed cleanup.
         let error = match unsafe {
-            crate::retire_quiesced_ahci_service_task(
-                owner,
-                &mut wrong_supervisor,
-                &mut runtime,
-            )
+            crate::retire_quiesced_ahci_service_task(owner, &mut wrong_supervisor, &mut runtime)
         } {
             Ok(_) => panic!("another supervisor must not accept the binding"),
             Err(error) => error,

@@ -5,9 +5,9 @@
 //! bytes nor reconstructs an active hardware owner.
 
 use crate::{
-    AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout,
-    AHCI_ABAR_MINIMUM_BYTES, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_BYTES_PER_SLOT,
-    AHCI_MAX_TRANSFER_BYTES, AHCI_MMIO_PAGE_BYTES, AHCI_RECEIVED_FIS_BYTES,
+    AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout, AHCI_ABAR_MINIMUM_BYTES,
+    AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_MAX_TRANSFER_BYTES,
+    AHCI_MMIO_PAGE_BYTES, AHCI_RECEIVED_FIS_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{
     BlockProviderDevice, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_READ_ONLY,
@@ -70,7 +70,11 @@ impl AhciServiceLaunchSpec {
         validate_ahci_service_state(device, mapping, layout, data)?;
         let authorities = attachment.authorities();
         for (index, object, rights) in [
-            (AHCI_DEVICE_AUTHORITY_INDEX, mapping.device_object, Rights::CONTROL),
+            (
+                AHCI_DEVICE_AUTHORITY_INDEX,
+                mapping.device_object,
+                Rights::CONTROL,
+            ),
             (
                 AHCI_COMMAND_LIST_AUTHORITY_INDEX,
                 layout.command_list.memory_object,
@@ -97,8 +101,7 @@ impl AhciServiceLaunchSpec {
                 DEVICE_READ_DATA_RIGHTS,
             ),
         ] {
-            if authorities[index].object() != object
-                || authorities[index].target_rights() != rights
+            if authorities[index].object() != object || authorities[index].target_rights() != rights
             {
                 return Err(AhciServiceLaunchSpecError::WrongAuthorityRole(index));
             }
@@ -117,9 +120,7 @@ impl AhciServiceLaunchSpec {
         self.service
     }
 
-    pub const fn attachment(
-        self,
-    ) -> DeviceServiceLaunchAttachment<AHCI_SERVICE_AUTHORITY_COUNT> {
+    pub const fn attachment(self) -> DeviceServiceLaunchAttachment<AHCI_SERVICE_AUTHORITY_COUNT> {
         self.attachment
     }
 
@@ -146,82 +147,82 @@ pub(crate) fn validate_ahci_service_state(
     layout: AhciPortDmaLayout,
     data: AhciDataDmaRegion,
 ) -> Result<(), AhciServiceLaunchSpecError> {
-        if device.logical_block_bytes != 512
-            || device.logical_block_count == 0
-            || device.media_generation == 0
-            || device.flags & !KNOWN_DEVICE_FLAGS != 0
-            || device.flags & (BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET)
-                != BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET
-        {
-            return Err(AhciServiceLaunchSpecError::InvalidDevice);
-        }
-        if mapping.device_object.0 == 0
-            || mapping.configuration_generation == 0
-            || mapping.mapping_generation == 0
-            || mapping.physical_base == 0
-            || mapping.virtual_base == 0
-            || mapping.bytes < AHCI_ABAR_MINIMUM_BYTES
-            || mapping.physical_base % AHCI_MMIO_PAGE_BYTES != 0
-            || mapping.virtual_base % AHCI_MMIO_PAGE_BYTES != 0
-            || mapping.bytes % AHCI_MMIO_PAGE_BYTES != 0
-            || mapping.physical_base.checked_add(mapping.bytes).is_none()
-            || mapping.virtual_base.checked_add(mapping.bytes).is_none()
-        {
-            return Err(AhciServiceLaunchSpecError::InvalidMapping);
-        }
-        let table_bytes = u64::from(layout.command_slot_count)
-            .checked_mul(AHCI_COMMAND_TABLE_BYTES_PER_SLOT)
-            .ok_or(AhciServiceLaunchSpecError::InvalidLayout)?;
-        if layout.device_object.0 == 0
-            || layout.configuration_generation == 0
-            || layout.mapping_generation == 0
-            || layout.dma_generation == 0
-            || layout.port >= 32
-            || layout.command_slot_count == 0
-            || layout.command_slot_count > 32
-            || !valid_dma_region(layout.command_list, AHCI_COMMAND_LIST_BYTES)
-            || !valid_dma_region(layout.received_fis, AHCI_RECEIVED_FIS_BYTES)
-            || !valid_dma_region(layout.command_tables, table_bytes)
-        {
-            return Err(AhciServiceLaunchSpecError::InvalidLayout);
-        }
-        if layout.device_object != mapping.device_object
-            || layout.configuration_generation != mapping.configuration_generation
-            || layout.mapping_generation != mapping.mapping_generation
-        {
-            return Err(AhciServiceLaunchSpecError::LayoutMismatch);
-        }
-        if data.memory_object.0 == 0
-            || data.allocation_generation == 0
-            || data.physical_base == 0
-            || data.bytes == 0
-            || data.bytes > AHCI_MAX_TRANSFER_BYTES
-            || data.bytes % 512 != 0
-            || data.physical_base.checked_add(data.bytes).is_none()
-        {
-            return Err(AhciServiceLaunchSpecError::InvalidDataRegion);
-        }
-        let control = [
-            layout.command_list,
-            layout.received_fis,
-            layout.command_tables,
-        ];
-        if control[0].memory_object == control[1].memory_object
-            || control[0].memory_object == control[2].memory_object
-            || control[1].memory_object == control[2].memory_object
-            || overlaps(control[0], control[1])
-            || overlaps(control[0], control[2])
-            || overlaps(control[1], control[2])
-            || control.iter().any(|region| {
-                region.memory_object == data.memory_object || overlaps_data(data, *region)
-            })
-            || control
-                .iter()
-                .any(|region| overlaps_mapping(*region, mapping))
-            || overlaps_data_mapping(data, mapping)
-        {
-            return Err(AhciServiceLaunchSpecError::OverlappingDma);
-        }
+    if device.logical_block_bytes != 512
+        || device.logical_block_count == 0
+        || device.media_generation == 0
+        || device.flags & !KNOWN_DEVICE_FLAGS != 0
+        || device.flags & (BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET)
+            != BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET
+    {
+        return Err(AhciServiceLaunchSpecError::InvalidDevice);
+    }
+    if mapping.device_object.0 == 0
+        || mapping.configuration_generation == 0
+        || mapping.mapping_generation == 0
+        || mapping.physical_base == 0
+        || mapping.virtual_base == 0
+        || mapping.bytes < AHCI_ABAR_MINIMUM_BYTES
+        || mapping.physical_base % AHCI_MMIO_PAGE_BYTES != 0
+        || mapping.virtual_base % AHCI_MMIO_PAGE_BYTES != 0
+        || mapping.bytes % AHCI_MMIO_PAGE_BYTES != 0
+        || mapping.physical_base.checked_add(mapping.bytes).is_none()
+        || mapping.virtual_base.checked_add(mapping.bytes).is_none()
+    {
+        return Err(AhciServiceLaunchSpecError::InvalidMapping);
+    }
+    let table_bytes = u64::from(layout.command_slot_count)
+        .checked_mul(AHCI_COMMAND_TABLE_BYTES_PER_SLOT)
+        .ok_or(AhciServiceLaunchSpecError::InvalidLayout)?;
+    if layout.device_object.0 == 0
+        || layout.configuration_generation == 0
+        || layout.mapping_generation == 0
+        || layout.dma_generation == 0
+        || layout.port >= 32
+        || layout.command_slot_count == 0
+        || layout.command_slot_count > 32
+        || !valid_dma_region(layout.command_list, AHCI_COMMAND_LIST_BYTES)
+        || !valid_dma_region(layout.received_fis, AHCI_RECEIVED_FIS_BYTES)
+        || !valid_dma_region(layout.command_tables, table_bytes)
+    {
+        return Err(AhciServiceLaunchSpecError::InvalidLayout);
+    }
+    if layout.device_object != mapping.device_object
+        || layout.configuration_generation != mapping.configuration_generation
+        || layout.mapping_generation != mapping.mapping_generation
+    {
+        return Err(AhciServiceLaunchSpecError::LayoutMismatch);
+    }
+    if data.memory_object.0 == 0
+        || data.allocation_generation == 0
+        || data.physical_base == 0
+        || data.bytes == 0
+        || data.bytes > AHCI_MAX_TRANSFER_BYTES
+        || data.bytes % 512 != 0
+        || data.physical_base.checked_add(data.bytes).is_none()
+    {
+        return Err(AhciServiceLaunchSpecError::InvalidDataRegion);
+    }
+    let control = [
+        layout.command_list,
+        layout.received_fis,
+        layout.command_tables,
+    ];
+    if control[0].memory_object == control[1].memory_object
+        || control[0].memory_object == control[2].memory_object
+        || control[1].memory_object == control[2].memory_object
+        || overlaps(control[0], control[1])
+        || overlaps(control[0], control[2])
+        || overlaps(control[1], control[2])
+        || control.iter().any(|region| {
+            region.memory_object == data.memory_object || overlaps_data(data, *region)
+        })
+        || control
+            .iter()
+            .any(|region| overlaps_mapping(*region, mapping))
+        || overlaps_data_mapping(data, mapping)
+    {
+        return Err(AhciServiceLaunchSpecError::OverlappingDma);
+    }
     Ok(())
 }
 
@@ -381,14 +382,7 @@ mod tests {
     #[test]
     fn identity_geometry_and_dma_substitution_fail_before_binding() {
         let create = |device, mapping, layout, data| {
-            AhciServiceLaunchSpec::new(
-                service(),
-                attachment(),
-                device,
-                mapping,
-                layout,
-                data,
-            )
+            AhciServiceLaunchSpec::new(service(), attachment(), device, mapping, layout, data)
         };
         assert_eq!(
             create(

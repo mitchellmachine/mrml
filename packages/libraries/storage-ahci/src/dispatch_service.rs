@@ -57,10 +57,7 @@ pub unsafe trait AhciDispatchSyscalls {
 
     fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error>;
 
-    fn send_response(
-        &mut self,
-        response: &[u8; READ_RESPONSE_BYTES],
-    ) -> Result<(), Self::Error>;
+    fn send_response(&mut self, response: &[u8; READ_RESPONSE_BYTES]) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -466,8 +463,8 @@ mod tests {
     fn one_endpoint_routes_every_canonical_operation_through_one_backend_owner() {
         let devices = [device()];
         let mut service = AhciDispatchService::new(&devices, Backend::default());
-        let enumerate = encode_enumerate_request(BorrowedWriteView::within(0, 48, 1024).unwrap())
-            .unwrap();
+        let enumerate =
+            encode_enumerate_request(BorrowedWriteView::within(0, 48, 1024).unwrap()).unwrap();
         let mut call = syscalls(enumerate, 1);
         service
             .serve_one(
@@ -477,7 +474,10 @@ mod tests {
                 &mut [0xcc; 512],
             )
             .unwrap();
-        assert_eq!(decode_enumerate_response(&call.response.unwrap(), 48), Ok(Ok(48)));
+        assert_eq!(
+            decode_enumerate_response(&call.response.unwrap(), 48),
+            Ok(Ok(48))
+        );
         assert_eq!((call.writes, call.releases), (1, 1));
 
         let read = encode_read_request(
@@ -496,7 +496,10 @@ mod tests {
                 &mut [0; 512],
             )
             .unwrap();
-        assert_eq!(decode_read_response(&call.response.unwrap(), 512), Ok(Ok(512)));
+        assert_eq!(
+            decode_read_response(&call.response.unwrap(), 512),
+            Ok(Ok(512))
+        );
         assert!(call.shared[64..576].iter().all(|byte| *byte == 0x5a));
         assert_eq!((call.reads, call.writes, call.releases), (0, 1, 1));
 
@@ -517,7 +520,10 @@ mod tests {
                 &mut [0; 512],
             )
             .unwrap();
-        assert_eq!(decode_write_response(&call.response.unwrap(), 512), Ok(Ok(512)));
+        assert_eq!(
+            decode_write_response(&call.response.unwrap(), 512),
+            Ok(Ok(512))
+        );
         assert_eq!((call.reads, call.writes, call.releases), (1, 0, 1));
 
         let mut call = syscalls(encode_flush_request(device().session), 0);
@@ -546,7 +552,12 @@ mod tests {
 
         let backend = service.into_backend();
         assert_eq!(
-            (backend.reads, backend.writes, backend.flushes, backend.resets),
+            (
+                backend.reads,
+                backend.writes,
+                backend.flushes,
+                backend.resets
+            ),
             (1, 1, 1, 1)
         );
     }

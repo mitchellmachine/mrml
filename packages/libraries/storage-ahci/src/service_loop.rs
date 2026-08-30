@@ -294,11 +294,7 @@ mod tests {
     #[test]
     fn rejects_untransferred_capability_before_copy_back() {
         let devices = devices();
-        for (token, capability_count) in [
-            (0, 1),
-            (7, 1),
-            ((9_u64 << 32) | 4, 0),
-        ] {
+        for (token, capability_count) in [(0, 1), (7, 1), ((9_u64 << 32) | 4, 0)] {
             let mut syscalls = syscalls();
             syscalls.token = token;
             syscalls.capability_count = capability_count;

@@ -214,8 +214,12 @@ impl<'a, A: AhciDataCapabilityAuthorizer, R, M, D> AhciCommandBlockBackend<'a, A
     }
 }
 
-impl<A: AhciDataCapabilityAuthorizer, R: AhciResetIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
-    AhciBlockControlBackend for AhciCommandBlockBackend<'_, A, R, M, D>
+impl<
+        A: AhciDataCapabilityAuthorizer,
+        R: AhciResetIo,
+        M: AhciCommandMemoryIo,
+        D: AhciDataBufferIo,
+    > AhciBlockControlBackend for AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
         if device.session != self.session || device.media_generation != self.media_generation {
@@ -264,8 +268,12 @@ impl<A: AhciDataCapabilityAuthorizer, R: AhciResetIo, M: AhciCommandMemoryIo, D:
     }
 }
 
-impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
-    AhciBlockIoBackend for AhciCommandBlockBackend<'_, A, R, M, D>
+impl<
+        A: AhciDataCapabilityAuthorizer,
+        R: AhciRegisterIo,
+        M: AhciCommandMemoryIo,
+        D: AhciDataBufferIo,
+    > AhciBlockIoBackend for AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn read(
         &mut self,
@@ -302,8 +310,12 @@ impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo, M: AhciCommandMemoryIo,
     }
 }
 
-impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
-    AhciCommandBlockBackend<'_, A, R, M, D>
+impl<
+        A: AhciDataCapabilityAuthorizer,
+        R: AhciRegisterIo,
+        M: AhciCommandMemoryIo,
+        D: AhciDataBufferIo,
+    > AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn execute(
         &mut self,

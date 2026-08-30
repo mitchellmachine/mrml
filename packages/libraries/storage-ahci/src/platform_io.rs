@@ -96,7 +96,11 @@ mod tests {
     impl AhciMonotonicDelay for Delay {
         fn delay_at_least_microseconds(&mut self, microseconds: u32) -> Result<(), ()> {
             self.requested = microseconds;
-            if self.reject { Err(()) } else { Ok(()) }
+            if self.reject {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -112,7 +116,10 @@ mod tests {
 
         let mut rejected = AhciPlatformIo::new(
             Registers::default(),
-            Delay { requested: 0, reject: true },
+            Delay {
+                requested: 0,
+                reject: true,
+            },
         );
         assert_eq!(rejected.delay_microseconds(77), Err(()));
         assert_eq!(rejected.into_parts().1.requested, 77);
@@ -128,16 +135,15 @@ mod tests {
             virtual_base: 0,
             bytes: 0x2000,
         };
-        assert!(unsafe {
-            AhciPlatformIo::from_installed_mapping(invalid, Delay::default())
-        }
-        .is_none());
+        assert!(
+            unsafe { AhciPlatformIo::from_installed_mapping(invalid, Delay::default()) }.is_none()
+        );
     }
 
     #[test]
     fn kernel_calibrated_tsc_delay_preserves_invalid_duration_failure() {
-        let mut timing = mrml_kernel::arch::x86_64::ApStartupTiming::from_tsc_hz(1_000_000)
-            .unwrap();
+        let mut timing =
+            mrml_kernel::arch::x86_64::ApStartupTiming::from_tsc_hz(1_000_000).unwrap();
         assert_eq!(timing.delay_at_least_microseconds(0), Err(()));
         assert_eq!(timing.delay_at_least_microseconds(1_000_001), Err(()));
     }

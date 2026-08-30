@@ -56,8 +56,7 @@ impl AhciServiceCpuMappingRequest {
 pub unsafe trait AhciServiceCpuMappingBackend {
     type Error;
 
-    fn install_rw_nx(&mut self, request: AhciServiceCpuMappingRequest)
-        -> Result<(), Self::Error>;
+    fn install_rw_nx(&mut self, request: AhciServiceCpuMappingRequest) -> Result<(), Self::Error>;
     fn remove(&mut self, request: AhciServiceCpuMappingRequest) -> Result<(), Self::Error>;
 }
 
@@ -117,21 +116,14 @@ pub struct AhciServiceCpuMappingRemovalError<E> {
     pub retained: AhciInstalledCpuMappings,
 }
 
-pub fn install_ahci_service_cpu_mappings<
-    B: AhciServiceCpuMappingBackend,
-    const C: usize,
->(
+pub fn install_ahci_service_cpu_mappings<B: AhciServiceCpuMappingBackend, const C: usize>(
     record: AhciServiceLaunchRecord,
     mapping_capabilities: [Capability; CPU_MAPPING_COUNT],
     capabilities: &CapabilitySpace<C>,
     backend: &mut B,
 ) -> Result<AhciInstalledCpuMappings, AhciServiceCpuMappingError<B::Error>> {
     let requests = mapping_requests(record);
-    for (index, (request, capability)) in requests
-        .iter()
-        .zip(mapping_capabilities)
-        .enumerate()
-    {
+    for (index, (request, capability)) in requests.iter().zip(mapping_capabilities).enumerate() {
         let object = capabilities
             .authorize_exact(capability, AHCI_SERVICE_CPU_MAPPING_RIGHTS)
             .map_err(|error| AhciServiceCpuMappingError::Capability { index, error })?;
@@ -252,10 +244,7 @@ mod tests {
             }
         }
 
-        fn remove(
-            &mut self,
-            request: AhciServiceCpuMappingRequest,
-        ) -> Result<(), Self::Error> {
+        fn remove(&mut self, request: AhciServiceCpuMappingRequest) -> Result<(), Self::Error> {
             self.events[self.count] = (false, request.memory_object().0);
             self.count += 1;
             let request_index = request.memory_object().0 as usize - 20;
@@ -327,10 +316,7 @@ mod tests {
         let mut space = CapabilitySpace::new();
         let capabilities = core::array::from_fn(|index| {
             space
-                .insert(
-                    ObjectId(index as u64 + 20),
-                    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
-                )
+                .insert(ObjectId(index as u64 + 20), AHCI_SERVICE_CPU_MAPPING_RIGHTS)
                 .unwrap()
         });
         (space, capabilities)
@@ -340,13 +326,8 @@ mod tests {
     fn exact_launcher_authorities_install_and_remove_four_rw_nx_mappings() {
         let (space, capabilities) = authorities();
         let mut backend = Backend::default();
-        let state = install_ahci_service_cpu_mappings(
-            record(),
-            capabilities,
-            &space,
-            &mut backend,
-        )
-        .unwrap();
+        let state = install_ahci_service_cpu_mappings(record(), capabilities, &space, &mut backend)
+            .unwrap();
         assert_eq!(state.requests()[0].exposed_bytes(), 1024);
         assert_eq!(state.requests()[0].mapped_bytes(), 4096);
         let state = remove_ahci_service_cpu_mappings(state, &mut backend).unwrap();
@@ -398,13 +379,8 @@ mod tests {
             fail_remove: Some(1),
             ..Backend::default()
         };
-        let error = install_ahci_service_cpu_mappings(
-            record(),
-            capabilities,
-            &space,
-            &mut backend,
-        )
-        .unwrap_err();
+        let error = install_ahci_service_cpu_mappings(record(), capabilities, &space, &mut backend)
+            .unwrap_err();
         let AhciServiceCpuMappingError::Rollback { retained, .. } = error else {
             panic!("expected retained rollback state");
         };

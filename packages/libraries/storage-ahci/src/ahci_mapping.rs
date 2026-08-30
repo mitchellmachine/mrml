@@ -384,8 +384,8 @@ mod tests {
         )
         .unwrap();
         backend.reject_unmap = true;
-        let error = remove_ahci_service_abar(installed, &capabilities, control, &mut backend)
-            .unwrap_err();
+        let error =
+            remove_ahci_service_abar(installed, &capabilities, control, &mut backend).unwrap_err();
         let AhciAbarRemovalError::BackendRejected { retained } = error else {
             panic!("expected retained ABAR mapping");
         };

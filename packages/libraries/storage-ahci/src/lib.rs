@@ -36,8 +36,8 @@ mod service_cpu_mapping;
 mod service_device_teardown;
 mod service_launch;
 mod service_launch_record;
-mod service_mapping_lifecycle;
 mod service_loop;
+mod service_mapping_lifecycle;
 mod userspace_syscall_adapter;
 #[cfg(target_arch = "x86_64")]
 mod x86_coherent_data_sync;
@@ -89,9 +89,9 @@ pub use ahci_flush::{
     flush_ahci_cache, AhciFlushError, AhciFlushFailure, AHCI_FLUSH_COMPLETION_POLL_LIMIT,
 };
 pub use ahci_mapping::{
-    AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend,
-    AhciAbarRemovalError, InstalledAhciAbarMapping, AHCI_MMIO_PAGE_BYTES,
-    install_ahci_service_abar, map_ahci_abar, remove_ahci_service_abar,
+    install_ahci_service_abar, map_ahci_abar, remove_ahci_service_abar, AhciAbarMapping,
+    AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError,
+    InstalledAhciAbarMapping, AHCI_MMIO_PAGE_BYTES,
 };
 pub use ahci_port::{
     discover_ahci_ports, AhciPortDeviceKind, AhciPortDiscoveryError, AhciPortError,
@@ -138,56 +138,55 @@ pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryError};
 pub use native_port_reconstruction::{
-    AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
+    reconstruct_installed_ahci_port, AhciNativePortReconstructionError,
 };
 pub use native_service_state::{
+    bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
     AhciNativeServiceBuffers, AhciNativeServicePreparationError, AhciNativeServiceState,
     AhciNativeServiceStateError, AHCI_DISPATCH_SCRATCH_BYTES,
-    bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
 };
-pub use platform_io::{AhciMonotonicDelay, AhciPlatformIo};
 #[cfg(target_arch = "x86_64")]
 pub use native_service_state::{
     bootstrap_and_prepare_native_x86_coherent_ahci_service,
     bootstrap_and_prepare_x86_coherent_ahci_service,
     prepare_bootstrapped_native_x86_coherent_ahci_service,
 };
+pub use platform_io::{AhciMonotonicDelay, AhciPlatformIo};
 pub use service_bootstrap::{
-    AhciReplyBinding, AhciServiceBootstrapError, AhciServiceEntryRegisters,
-    bootstrap_installed_ahci_entry, bootstrap_installed_ahci_service,
+    bootstrap_installed_ahci_entry, bootstrap_installed_ahci_service, AhciReplyBinding,
+    AhciServiceBootstrapError, AhciServiceEntryRegisters,
 };
 pub use service_cpu_mapping::{
-    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
-    AhciInstalledCpuMappings, AhciServiceCpuMappingBackend, AhciServiceCpuMappingError,
-    AhciServiceCpuMappingRemovalError, AhciServiceCpuMappingRequest,
-    install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
+    install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings, AhciInstalledCpuMappings,
+    AhciServiceCpuMappingBackend, AhciServiceCpuMappingError, AhciServiceCpuMappingRemovalError,
+    AhciServiceCpuMappingRequest, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
 };
 pub use service_device_teardown::{
-    ActiveAhciServiceQuiesceError, AhciCommandBackendQuiesceError,
-    AhciRetiredMappingRemovalError, AhciRetiredServiceCleanupError,
-    AhciServiceDeviceQuiesceError, AhciServiceDispatchError, AhciServiceTaskBindingError,
-    AhciServiceTaskRetirementError, DispatchedAhciServiceTask,
-    PendingAhciServiceDeviceTeardown, QuiescedAhciCommandBackend,
-    QuiescedAhciServiceMappings, QuiescedAhciServiceTask,
-    RetiredAhciServiceCleanupComplete, RetiredAhciServiceMappingsRemoved,
-    RetiredAhciServiceTask, complete_retired_ahci_service_cleanup,
-    dispatch_retired_ahci_service_task, quiesce_active_ahci_service_task,
-    quiesce_ahci_command_backend, quiesce_ahci_service_device,
+    complete_retired_ahci_service_cleanup, dispatch_retired_ahci_service_task,
+    quiesce_active_ahci_service_task, quiesce_ahci_command_backend, quiesce_ahci_service_device,
     remove_quiesced_ahci_service_mappings, remove_retired_ahci_service_mappings,
     resume_active_ahci_service_task_quiescence, resume_ahci_command_backend_teardown,
     resume_ahci_service_device_teardown, retire_quiesced_ahci_service_task,
+    ActiveAhciServiceQuiesceError, AhciCommandBackendQuiesceError, AhciRetiredMappingRemovalError,
+    AhciRetiredServiceCleanupError, AhciServiceDeviceQuiesceError, AhciServiceDispatchError,
+    AhciServiceTaskBindingError, AhciServiceTaskRetirementError, DispatchedAhciServiceTask,
+    PendingAhciServiceDeviceTeardown, QuiescedAhciCommandBackend, QuiescedAhciServiceMappings,
+    QuiescedAhciServiceTask, RetiredAhciServiceCleanupComplete, RetiredAhciServiceMappingsRemoved,
+    RetiredAhciServiceTask,
 };
 pub use service_launch::{
-    AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
-    AHCI_DEVICE_AUTHORITY_INDEX, AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
-    AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX, AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
-    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES, AhciServiceLaunchSpec,
-    AhciServiceLaunchSpecError,
+    AhciServiceLaunchSpec, AhciServiceLaunchSpecError, AHCI_COMMAND_LIST_AUTHORITY_INDEX,
+    AHCI_COMMAND_TABLES_AUTHORITY_INDEX, AHCI_DEVICE_AUTHORITY_INDEX,
+    AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX, AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX,
+    AHCI_RECEIVED_FIS_AUTHORITY_INDEX, AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES,
 };
 pub use service_launch_record::{
     prepare_bound_ahci_native_service_task, AhciNativeServiceTaskPreparationFailure,
     AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
     BoundAhciServiceLaunch, InstalledAhciServiceLaunch, PreparedAhciNativeServiceTask,
+};
+pub use service_loop::{
+    AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };
 pub use service_mapping_lifecycle::{
     activate_mapped_ahci_service_task, install_ahci_service_mappings,
@@ -197,15 +196,12 @@ pub use service_mapping_lifecycle::{
     MappedAhciNativeServiceTask, PreparedAhciServiceMappingError,
     PreparedAhciServiceMappingFailure,
 };
-pub use service_loop::{
-    AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
-};
-pub use userspace_syscall_adapter::{
-    AhciInstalledDataAuthorizer, AhciRawSyscall, AhciSyscallFrame,
-    AhciUserspaceSyscallError, AhciUserspaceSyscalls,
-};
 #[cfg(target_arch = "x86_64")]
 pub use userspace_syscall_adapter::NativeAhciRawSyscall;
+pub use userspace_syscall_adapter::{
+    AhciInstalledDataAuthorizer, AhciRawSyscall, AhciSyscallFrame, AhciUserspaceSyscallError,
+    AhciUserspaceSyscalls,
+};
 #[cfg(target_arch = "x86_64")]
 pub use x86_coherent_data_sync::AhciX86CoherentDataSync;
 

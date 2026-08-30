@@ -1,14 +1,13 @@
 //! Exact assembly of installed AHCI mechanism state for service dispatch.
 
 use crate::{
-    ActiveAhciPort, AhciCommandBlockBackend, AhciDataBufferSync, AhciDataCapabilityAuthorizer,
-    AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls, AhciMappedCommandMemory,
-    AhciMappedDataBuffer, AhciNativeMappedMemory, AhciNativeMappedMemoryError,
-    AhciNativePortReconstructionError, AhciRawSyscall, AhciRegisterIo, AhciResetIo,
-    AhciServiceBootstrapError, AhciServiceEntryRegisters, AhciUserspaceSyscalls,
-    InstalledAhciServiceLaunch, AHCI_DISPATCH_REQUEST_BYTES, AHCI_SERVICE_LAUNCH_BYTES,
-    AHCI_MAX_TRANSFER_BYTES,
-    bootstrap_installed_ahci_entry, reconstruct_installed_ahci_port,
+    bootstrap_installed_ahci_entry, reconstruct_installed_ahci_port, ActiveAhciPort,
+    AhciCommandBlockBackend, AhciDataBufferSync, AhciDataCapabilityAuthorizer, AhciDispatchService,
+    AhciDispatchServiceError, AhciDispatchSyscalls, AhciMappedCommandMemory, AhciMappedDataBuffer,
+    AhciNativeMappedMemory, AhciNativeMappedMemoryError, AhciNativePortReconstructionError,
+    AhciRawSyscall, AhciRegisterIo, AhciResetIo, AhciServiceBootstrapError,
+    AhciServiceEntryRegisters, AhciUserspaceSyscalls, InstalledAhciServiceLaunch,
+    AHCI_DISPATCH_REQUEST_BYTES, AHCI_MAX_TRANSFER_BYTES, AHCI_SERVICE_LAUNCH_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 
@@ -156,13 +155,7 @@ where
 {
     let launch = bootstrap_installed_ahci_entry(syscalls, entry, launch_scratch)
         .map_err(AhciNativeServicePreparationError::Bootstrap)?;
-    unsafe {
-        prepare_bootstrapped_native_x86_coherent_ahci_service(
-            capabilities,
-            launch,
-            delay,
-        )
-    }
+    unsafe { prepare_bootstrapped_native_x86_coherent_ahci_service(capabilities, launch, delay) }
 }
 
 /// Prepares one already-authenticated launch after its authorizer is bound.
@@ -196,10 +189,9 @@ where
     A: AhciDataCapabilityAuthorizer,
     D: crate::AhciMonotonicDelay,
 {
-    let registers = unsafe {
-        crate::AhciPlatformIo::from_installed_mapping(launch.record().mapping(), delay)
-    }
-    .ok_or(AhciNativeServicePreparationError::RegisterMapping)?;
+    let registers =
+        unsafe { crate::AhciPlatformIo::from_installed_mapping(launch.record().mapping(), delay) }
+            .ok_or(AhciNativeServicePreparationError::RegisterMapping)?;
     let sync = unsafe { crate::AhciX86CoherentDataSync::new(launch.record().data()) }
         .ok_or(AhciNativeServicePreparationError::CoherenceAdmission)?;
     unsafe { prepare_installed_ahci_service_state(capabilities, launch, registers, sync) }
@@ -234,13 +226,8 @@ where
 /// Launch-bound catalog and command backend owned by one native AHCI service.
 pub struct AhciNativeServiceState<'a, 'm, A, R, S> {
     device: BlockProviderDevice,
-    backend: AhciCommandBlockBackend<
-        'a,
-        A,
-        R,
-        AhciMappedCommandMemory<'m>,
-        AhciMappedDataBuffer<'m, S>,
-    >,
+    backend:
+        AhciCommandBlockBackend<'a, A, R, AhciMappedCommandMemory<'m>, AhciMappedDataBuffer<'m, S>>,
 }
 
 /// Constructs all installed mechanism state needed by the bounded dispatcher.
@@ -278,9 +265,7 @@ where
     .map_err(AhciNativeServicePreparationError::ServiceState)
 }
 
-impl<'a, 'm, A: AhciDataCapabilityAuthorizer, R, S>
-    AhciNativeServiceState<'a, 'm, A, R, S>
-{
+impl<'a, 'm, A: AhciDataCapabilityAuthorizer, R, S> AhciNativeServiceState<'a, 'm, A, R, S> {
     /// Assembles only state named by the installed launch projection.
     pub fn new(
         capabilities: &'a mut A,
@@ -317,23 +302,14 @@ impl<'a, 'm, A: AhciDataCapabilityAuthorizer, R, S>
         self,
     ) -> (
         BlockProviderDevice,
-        AhciCommandBlockBackend<
-            'a,
-            A,
-            R,
-            AhciMappedCommandMemory<'m>,
-            AhciMappedDataBuffer<'m, S>,
-        >,
+        AhciCommandBlockBackend<'a, A, R, AhciMappedCommandMemory<'m>, AhciMappedDataBuffer<'m, S>>,
     ) {
         (self.device, self.backend)
     }
 }
 
-impl<
-        A: AhciDataCapabilityAuthorizer,
-        R: AhciRegisterIo + AhciResetIo,
-        S: AhciDataBufferSync,
-    > AhciNativeServiceState<'_, '_, A, R, S>
+impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo + AhciResetIo, S: AhciDataBufferSync>
+    AhciNativeServiceState<'_, '_, A, R, S>
 {
     /// Serves exactly one authenticated envelope and retains the backend owner.
     pub fn serve_one<D: AhciDispatchSyscalls>(
@@ -343,8 +319,12 @@ impl<
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
     ) -> Result<(), AhciDispatchServiceError<D::Error>> {
-        AhciDispatchService::new(core::slice::from_ref(&self.device), &mut self.backend)
-            .serve_one(syscalls, request, capability_tokens, scratch)
+        AhciDispatchService::new(core::slice::from_ref(&self.device), &mut self.backend).serve_one(
+            syscalls,
+            request,
+            capability_tokens,
+            scratch,
+        )
     }
 
     /// Blocks for successive authenticated envelopes until one fails closed.
@@ -356,12 +336,7 @@ impl<
         scratch: &mut [u8],
     ) -> AhciDispatchServiceError<D::Error> {
         loop {
-            if let Err(error) = self.serve_one(
-                syscalls,
-                request,
-                capability_tokens,
-                scratch,
-            ) {
+            if let Err(error) = self.serve_one(syscalls, request, capability_tokens, scratch) {
                 return error;
             }
         }
@@ -394,16 +369,12 @@ mod tests {
     #[repr(align(4096))]
     struct Page([u8; 4096]);
 
-    static mut NATIVE_SERVICE_BUFFERS: AhciNativeServiceBuffers =
-        AhciNativeServiceBuffers::new();
+    static mut NATIVE_SERVICE_BUFFERS: AhciNativeServiceBuffers = AhciNativeServiceBuffers::new();
 
     #[test]
     fn native_service_buffers_are_bss_suitable_bounded_and_erasable() {
         let buffers = unsafe { &mut *core::ptr::addr_of_mut!(NATIVE_SERVICE_BUFFERS) };
-        assert_eq!(
-            buffers as *mut AhciNativeServiceBuffers as usize % 4096,
-            0
-        );
+        assert_eq!(buffers as *mut AhciNativeServiceBuffers as usize % 4096, 0);
         assert_eq!(buffers.launch.len(), AHCI_SERVICE_LAUNCH_BYTES);
         assert_eq!(buffers.request.len(), AHCI_DISPATCH_REQUEST_BYTES);
         assert_eq!(buffers.scratch.len(), AHCI_MAX_TRANSFER_BYTES as usize);
@@ -509,21 +480,11 @@ mod tests {
             })
         }
 
-        fn read_shared(
-            &mut self,
-            _: Capability,
-            _: u64,
-            _: &mut [u8],
-        ) -> Result<(), Self::Error> {
+        fn read_shared(&mut self, _: Capability, _: u64, _: &mut [u8]) -> Result<(), Self::Error> {
             panic!("invalid envelope must not read shared memory")
         }
 
-        fn write_shared(
-            &mut self,
-            _: Capability,
-            _: u64,
-            _: &[u8],
-        ) -> Result<(), Self::Error> {
+        fn write_shared(&mut self, _: Capability, _: u64, _: &[u8]) -> Result<(), Self::Error> {
             panic!("invalid envelope must not write shared memory")
         }
 
@@ -561,11 +522,21 @@ mod tests {
 
     struct Sync;
     impl AhciDataBufferSync for Sync {
-        fn prepare_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn prepare_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn complete_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn complete_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
-        fn publish_sanitized(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
+        fn prepare_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn prepare_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn complete_device_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn complete_device_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
+        fn publish_sanitized(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            Ok(())
+        }
     }
 
     fn region(object: u64, physical: u64, bytes: u64) -> AhciDmaRegion {
@@ -577,10 +548,7 @@ mod tests {
         }
     }
 
-    fn launch_with_ranges(
-        bases: [u64; 4],
-        abar_virtual_base: u64,
-    ) -> InstalledAhciServiceLaunch {
+    fn launch_with_ranges(bases: [u64; 4], abar_virtual_base: u64) -> InstalledAhciServiceLaunch {
         let record = AhciServiceLaunchRecord::new(
             4,
             3,
@@ -625,9 +593,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let authorities = core::array::from_fn(|index| {
-            Capability::from_token(((index as u64 + 20) << 32) | 1)
-        });
+        let authorities =
+            core::array::from_fn(|index| Capability::from_token(((index as u64 + 20) << 32) | 1));
         unsafe {
             InstalledAhciServiceLaunch::from_installed_projection(&record.encode(), 3, authorities)
         }
@@ -698,7 +665,11 @@ mod tests {
             &mut command_tables,
             &mut data,
         );
-        let mut authorizer = Authorizer { object: ObjectId(23), calls: 0, reject: false };
+        let mut authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
         let state = AhciNativeServiceState::new(
             &mut authorizer,
             installed,
@@ -731,16 +702,23 @@ mod tests {
             &mut command_tables,
             &mut data,
         );
-        let mut authorizer = Authorizer { object: ObjectId(23), calls: 0, reject: true };
+        let mut authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: true,
+        };
         let result = AhciNativeServiceState::new(
-                &mut authorizer,
-                installed,
-                owner,
-                Registers,
-                command_memory,
-                data_io,
-            );
-        assert!(matches!(result, Err(AhciNativeServiceStateError::BackendBinding)));
+            &mut authorizer,
+            installed,
+            owner,
+            Registers,
+            command_memory,
+            data_io,
+        );
+        assert!(matches!(
+            result,
+            Err(AhciNativeServiceStateError::BackendBinding)
+        ));
         assert_eq!(authorizer.calls, 1);
     }
 
@@ -843,7 +821,12 @@ mod tests {
 
     #[test]
     fn installed_preparation_publishes_only_complete_service_state() {
-        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let mut pages = [
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+        ];
         let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
         let installed = launch_with_mappings(bases);
         let mut authorizer = Authorizer {
@@ -852,12 +835,7 @@ mod tests {
             reject: false,
         };
         let state = unsafe {
-            prepare_installed_ahci_service_state(
-                &mut authorizer,
-                installed,
-                Registers,
-                Sync,
-            )
+            prepare_installed_ahci_service_state(&mut authorizer, installed, Registers, Sync)
         }
         .unwrap();
         assert_eq!(state.device(), installed.record().device());
@@ -890,7 +868,12 @@ mod tests {
 
     #[test]
     fn authenticated_entry_wipes_launch_copy_before_state_publication() {
-        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let mut pages = [
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+        ];
         let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
         let installed = launch_with_mappings(bases);
         let entry = entry(installed);
@@ -927,7 +910,12 @@ mod tests {
 
     #[test]
     fn coherent_entry_selects_visibility_adapter_at_single_unsafe_boundary() {
-        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let mut pages = [
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+        ];
         let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
         let installed = launch_with_mappings(bases);
         let mut syscalls = AhciUserspaceSyscalls::new(
@@ -992,7 +980,12 @@ mod tests {
 
     #[test]
     fn native_entry_constructs_volatile_abar_only_from_decoded_mapping() {
-        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let mut pages = [
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+        ];
         let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
         let mut abar = [Page([0; 4096]), Page([0; 4096])];
         abar[0].0[0x118..0x11c].copy_from_slice(&0x11_u32.to_ne_bytes());
@@ -1029,7 +1022,12 @@ mod tests {
 
     #[test]
     fn bootstrapped_launch_can_bind_authorizer_before_native_state_borrow() {
-        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let mut pages = [
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+            Page([0; 4096]),
+        ];
         let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
         let mut abar = [Page([0; 4096]), Page([0; 4096])];
         abar[0].0[0x118..0x11c].copy_from_slice(&0x11_u32.to_ne_bytes());
@@ -1057,11 +1055,7 @@ mod tests {
             launch,
         );
         let state = unsafe {
-            prepare_bootstrapped_native_x86_coherent_ahci_service(
-                &mut authorizer,
-                launch,
-                Delay,
-            )
+            prepare_bootstrapped_native_x86_coherent_ahci_service(&mut authorizer, launch, Delay)
         }
         .unwrap();
         assert_eq!(launch_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);

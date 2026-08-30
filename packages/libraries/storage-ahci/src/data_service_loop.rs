@@ -425,7 +425,10 @@ mod tests {
                 &mut [0; READ_RESPONSE_BYTES],
             );
             assert_eq!(result, Err(AhciDataServiceLoopError::InvalidEnvelope));
-            assert_eq!((syscalls.reads, syscalls.writes, syscalls.releases), (0, 0, 0));
+            assert_eq!(
+                (syscalls.reads, syscalls.writes, syscalls.releases),
+                (0, 0, 0)
+            );
             assert!(syscalls.response.is_none());
         }
     }

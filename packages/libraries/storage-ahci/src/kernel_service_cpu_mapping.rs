@@ -68,13 +68,12 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
         let requests = crate::service_cpu_mapping::mapping_requests(record);
         for index in 0..MAPPING_COUNT {
             let object = capabilities
-                .authorize_exact(
-                    memory_capabilities[index],
-                    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
-                )
+                .authorize_exact(memory_capabilities[index], AHCI_SERVICE_CPU_MAPPING_RIGHTS)
                 .map_err(KernelAhciServiceCpuMappingAdapterError::Capability)?;
             if object != requests[index].memory_object() {
-                return Err(KernelAhciServiceCpuMappingAdapterError::WrongMemoryObject(index));
+                return Err(KernelAhciServiceCpuMappingAdapterError::WrongMemoryObject(
+                    index,
+                ));
             }
             if object == target {
                 return Err(KernelAhciServiceCpuMappingAdapterError::InvalidTarget);
@@ -117,7 +116,9 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
     }
 
     fn request_index(&self, request: AhciServiceCpuMappingRequest) -> Option<usize> {
-        self.requests.iter().position(|expected| *expected == request)
+        self.requests
+            .iter()
+            .position(|expected| *expected == request)
     }
 }
 
@@ -125,20 +126,12 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
 // physically-backed kernel memory object and one MAP|CONTROL target. Install
 // and removal delegate to MemoryPoolTable's transactional backend boundary and
 // retain each generational mapping ID until exact removal succeeds.
-unsafe impl<
-        B: MemoryMappingBackend,
-        const P: usize,
-        const O: usize,
-        const M: usize,
-        const C: usize,
-    > AhciServiceCpuMappingBackend for KernelAhciServiceCpuMappingAdapter<'_, B, P, O, M, C>
+unsafe impl<B: MemoryMappingBackend, const P: usize, const O: usize, const M: usize, const C: usize>
+    AhciServiceCpuMappingBackend for KernelAhciServiceCpuMappingAdapter<'_, B, P, O, M, C>
 {
     type Error = KernelAhciServiceCpuMappingOperationError<B::Error>;
 
-    fn install_rw_nx(
-        &mut self,
-        request: AhciServiceCpuMappingRequest,
-    ) -> Result<(), Self::Error> {
+    fn install_rw_nx(&mut self, request: AhciServiceCpuMappingRequest) -> Result<(), Self::Error> {
         let index = self
             .request_index(request)
             .ok_or(Self::Error::InvalidRequest)?;
@@ -163,10 +156,7 @@ unsafe impl<
         Ok(())
     }
 
-    fn remove(
-        &mut self,
-        request: AhciServiceCpuMappingRequest,
-    ) -> Result<(), Self::Error> {
+    fn remove(&mut self, request: AhciServiceCpuMappingRequest) -> Result<(), Self::Error> {
         let index = self
             .request_index(request)
             .ok_or(Self::Error::InvalidRequest)?;
@@ -208,10 +198,7 @@ mod tests {
             Ok(())
         }
 
-        fn release_scrubbed(
-            &mut self,
-            _: MemoryBackingBackendRequest,
-        ) -> Result<(), Self::Error> {
+        fn release_scrubbed(&mut self, _: MemoryBackingBackendRequest) -> Result<(), Self::Error> {
             Ok(())
         }
     }
@@ -225,11 +212,7 @@ mod tests {
         type Error = ();
 
         fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
-            let slot = self
-                .installed
-                .iter()
-                .position(Option::is_none)
-                .ok_or(())?;
+            let slot = self.installed.iter().position(Option::is_none).ok_or(())?;
             self.installed[slot] = Some(request);
             Ok(())
         }
@@ -348,17 +331,12 @@ mod tests {
         let objects = objects.map(Option::unwrap);
         let public_objects = core::array::from_fn(|index| {
             capabilities
-                .authorize_exact(
-                    mapping_capabilities[index],
-                    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
-                )
+                .authorize_exact(mapping_capabilities[index], AHCI_SERVICE_CPU_MAPPING_RIGHTS)
                 .unwrap()
         });
         let generations = objects.map(|object| u64::from(object.generation()));
         let launch_record = record(public_objects, generations);
-        let target = capabilities
-            .insert(ObjectId(0x900), TARGET_RIGHTS)
-            .unwrap();
+        let target = capabilities.insert(ObjectId(0x900), TARGET_RIGHTS).unwrap();
         let mut native = NativeMappings::default();
         let mut adapter = KernelAhciServiceCpuMappingAdapter::new(
             launch_record,

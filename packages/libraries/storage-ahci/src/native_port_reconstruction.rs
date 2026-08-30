@@ -34,9 +34,11 @@ pub fn reconstruct_installed_ahci_port<R: AhciRegisterIo>(
     let mapping = record.mapping();
     let layout = record.layout();
     let base = PORT_BASE
-        .checked_add(u32::from(layout.port).checked_mul(PORT_STRIDE).ok_or(
-            AhciNativePortReconstructionError::InvalidInstalledLayout,
-        )?)
+        .checked_add(
+            u32::from(layout.port)
+                .checked_mul(PORT_STRIDE)
+                .ok_or(AhciNativePortReconstructionError::InvalidInstalledLayout)?,
+        )
         .ok_or(AhciNativePortReconstructionError::InvalidInstalledLayout)?;
     let required_bytes = u64::from(
         base.checked_add(CI + 4)
@@ -177,9 +179,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let authorities = core::array::from_fn(|index| {
-            Capability::from_token(((index as u64 + 20) << 32) | 1)
-        });
+        let authorities =
+            core::array::from_fn(|index| Capability::from_token(((index as u64 + 20) << 32) | 1));
         unsafe {
             InstalledAhciServiceLaunch::from_installed_projection(&record.encode(), 3, authorities)
         }

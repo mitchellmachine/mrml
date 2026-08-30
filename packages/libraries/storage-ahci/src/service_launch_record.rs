@@ -1,18 +1,18 @@
 //! Canonical non-authorizing launch record for the installed AHCI service.
 
 use crate::{
-    service_launch::validate_ahci_service_state, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout,
-    AhciServiceLaunchSpec, AhciServiceLaunchSpecError, AHCI_SERVICE_AUTHORITY_COUNT,
+    service_launch::validate_ahci_service_state, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion,
+    AhciPortDmaLayout, AhciServiceLaunchSpec, AhciServiceLaunchSpecError,
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
     AHCI_DEVICE_AUTHORITY_INDEX, AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
     AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX, AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
-    AHCI_SERVICE_LAUNCH_BYTES,
+    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{BlockProviderDevice, OpaqueHandle};
 use mrml_kernel::{
     prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
-    IsolationServiceSpec, NativeDeviceServiceTask, NativeDeviceServiceTaskError, ObjectId,
-    TaskId, TaskRuntime,
+    IsolationServiceSpec, NativeDeviceServiceTask, NativeDeviceServiceTaskError, ObjectId, TaskId,
+    TaskRuntime,
 };
 
 const MAGIC: [u8; 8] = *b"MRMLAHC1";
@@ -137,10 +137,7 @@ impl AhciNativeServiceTaskPreparationFailure {
 /// dispatch, and teardown checks. Kernel construction owns atomic capability
 /// attenuation and rollback; failure returns the unchanged launch for retry.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_bound_ahci_native_service_task<
-    const TASKS: usize,
-    const CAPABILITIES: usize,
->(
+pub fn prepare_bound_ahci_native_service_task<const TASKS: usize, const CAPABILITIES: usize>(
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
     source_task: TaskId,
     target_task: TaskId,
@@ -411,11 +408,9 @@ impl AhciServiceLaunchRecord {
         }; 4];
         for (index, mapping) in cpu_mappings.iter_mut().enumerate() {
             let offset = 312 + index * 16;
-            *mapping = AhciServiceCpuMapping::new(
-                read_u64(bytes, offset),
-                read_u64(bytes, offset + 8),
-            )
-            .ok_or(AhciServiceLaunchRecordError::InvalidCpuMapping)?;
+            *mapping =
+                AhciServiceCpuMapping::new(read_u64(bytes, offset), read_u64(bytes, offset + 8))
+                    .ok_or(AhciServiceLaunchRecordError::InvalidCpuMapping)?;
         }
         Self::new(
             read_u64(bytes, 32),
@@ -562,9 +557,8 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 mod tests {
     use super::*;
     use crate::{
-        AhciControlServiceSyscalls, AhciRawSyscall, AhciReplyBinding,
-        AhciServiceEntryRegisters, AhciSyscallFrame, AhciUserspaceSyscallError,
-        AhciUserspaceSyscalls,
+        AhciControlServiceSyscalls, AhciRawSyscall, AhciReplyBinding, AhciServiceEntryRegisters,
+        AhciSyscallFrame, AhciUserspaceSyscallError, AhciUserspaceSyscalls,
     };
     use mrml_interface_storage_block_provider_v1::{
         BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, FLUSH_RESPONSE_BYTES,
@@ -798,7 +792,10 @@ mod tests {
         assert_eq!(prepared.launch(), launch);
         assert_eq!(prepared.task().task(), target);
         assert_eq!(prepared.task().source_task(), source);
-        assert_eq!(prepared.task().entry().attachment(), launch.spec().attachment());
+        assert_eq!(
+            prepared.task().entry().attachment(),
+            launch.spec().attachment()
+        );
         assert_eq!(prepared.task().entry().provider_generation(), 3);
     }
 
@@ -981,9 +978,7 @@ mod tests {
         assert_eq!(reply.sequence(), 1);
         assert_eq!(reply.message().payload(), response);
 
-        runtime
-            .revoke_capability(source, source_endpoint)
-            .unwrap();
+        runtime.revoke_capability(source, source_endpoint).unwrap();
         assert_eq!(
             send_control_reply(
                 &mut runtime,

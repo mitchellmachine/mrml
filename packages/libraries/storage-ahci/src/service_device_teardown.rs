@@ -5,15 +5,15 @@ use crate::{
     stop_ahci_port_engine, ActiveAhciPort, AhciAbarMapping, AhciAbarRemovalBackend,
     AhciCleanupFailure, AhciCommandBackendTeardown, AhciCommandMemoryIo, AhciDataBufferIo,
     AhciDataDmaRegion, AhciEngineFailure, AhciPortDmaBackend, AhciRegisterIo,
-    AhciServiceCpuMappingBackend, AhciServiceMappingRemovalError,
-    AhciServiceMappingTeardown, BoundAhciServiceLaunch, InstalledAhciPortDma,
+    AhciServiceCpuMappingBackend, AhciServiceMappingRemovalError, AhciServiceMappingTeardown,
+    BoundAhciServiceLaunch, InstalledAhciPortDma,
 };
 use mrml_kernel::{
     Capability, CapabilitySpace, ServiceAddressSpaceEraser, ServiceCleanupError,
-    ServiceCleanupTicket, ServiceId, ServiceSupervisor,
-    SupervisedNativeDeviceServiceDispatch, SupervisedNativeDeviceServiceFreeze,
-    SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError,
-    TaskRuntime, TaskTerminationDispatch, TaskTerminationDispatchError,
+    ServiceCleanupTicket, ServiceId, ServiceSupervisor, SupervisedNativeDeviceServiceDispatch,
+    SupervisedNativeDeviceServiceFreeze, SupervisedNativeDeviceServiceRetirement,
+    SupervisedNativeDeviceServiceRetirementError, TaskRuntime, TaskTerminationDispatch,
+    TaskTerminationDispatchError,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -163,12 +163,7 @@ pub fn resume_ahci_command_backend_teardown<D: AhciDataBufferIo, B: AhciPortDmaB
             data_io,
         });
     };
-    match resume_ahci_service_device_teardown(
-        pending,
-        data_region,
-        &mut data_io,
-        dma_backend,
-    ) {
+    match resume_ahci_service_device_teardown(pending, data_region, &mut data_io, dma_backend) {
         Ok(mappings) => Ok(QuiescedAhciCommandBackend {
             mappings,
             data_region,
@@ -220,9 +215,7 @@ pub enum ActiveAhciServiceQuiesceError<R, M, D> {
         backend: AhciCommandBackendTeardown<R, M, D>,
     },
     Device {
-        frozen: SupervisedNativeDeviceServiceFreeze<{
-            crate::AHCI_SERVICE_AUTHORITY_COUNT
-        }>,
+        frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
         launch: BoundAhciServiceLaunch,
         error: AhciCommandBackendQuiesceError<R, M, D>,
     },
@@ -241,9 +234,7 @@ impl<R, M, D> ActiveAhciServiceQuiesceError<R, M, D> {
         }
     }
 
-    pub const fn lifecycle_error(
-        &self,
-    ) -> Option<SupervisedNativeDeviceServiceRetirementError> {
+    pub const fn lifecycle_error(&self) -> Option<SupervisedNativeDeviceServiceRetirementError> {
         match self {
             Self::Lifecycle { error, .. } => Some(*error),
             Self::Binding { .. } | Self::Device { .. } => None,
@@ -333,20 +324,17 @@ pub fn quiesce_active_ahci_service_task<
     }
 
     let native = active.mapped().prepared().task();
-    let frozen = match supervisor.freeze_current_native_device_service(
-        active.binding(),
-        native,
-        runtime,
-    ) {
-        Ok(frozen) => frozen,
-        Err(error) => {
-            return Err(ActiveAhciServiceQuiesceError::Lifecycle {
-                error,
-                active,
-                backend,
-            });
-        }
-    };
+    let frozen =
+        match supervisor.freeze_current_native_device_service(active.binding(), native, runtime) {
+            Ok(frozen) => frozen,
+            Err(error) => {
+                return Err(ActiveAhciServiceQuiesceError::Lifecycle {
+                    error,
+                    active,
+                    backend,
+                });
+            }
+        };
     let (binding, mapped) = active.into_parts();
     let (prepared, mappings) = mapped.into_parts();
     debug_assert_eq!(binding.service(), frozen.service());
@@ -401,9 +389,7 @@ fn quiesced_service_task<R, M, D>(
 }
 
 pub struct RetiredAhciServiceTask<R, M, D> {
-    retirement: SupervisedNativeDeviceServiceRetirement<{
-        crate::AHCI_SERVICE_AUTHORITY_COUNT
-    }>,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
     backend: QuiescedAhciCommandBackend<R, M, D>,
 }
@@ -479,9 +465,7 @@ pub unsafe fn retire_quiesced_ahci_service_task<
 }
 
 pub struct RetiredAhciServiceMappingsRemoved<R, M, D> {
-    retirement: SupervisedNativeDeviceServiceRetirement<{
-        crate::AHCI_SERVICE_AUTHORITY_COUNT
-    }>,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
     registers: R,
     command_memory: M,
@@ -490,9 +474,7 @@ pub struct RetiredAhciServiceMappingsRemoved<R, M, D> {
 
 pub struct AhciRetiredMappingRemovalError<E, R, M, D> {
     error: AhciServiceMappingRemovalError<E>,
-    retirement: SupervisedNativeDeviceServiceRetirement<{
-        crate::AHCI_SERVICE_AUTHORITY_COUNT
-    }>,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
     data_region: AhciDataDmaRegion,
     registers: R,
@@ -569,24 +551,20 @@ pub unsafe fn remove_retired_ahci_service_mappings<
                 data_io,
             })
         }
-        Err(error) => {
-            Err(AhciRetiredMappingRemovalError {
-                error,
-                retirement,
-                launch,
-                data_region,
-                registers,
-                command_memory,
-                data_io,
-            })
-        }
+        Err(error) => Err(AhciRetiredMappingRemovalError {
+            error,
+            retirement,
+            launch,
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        }),
     }
 }
 
 pub struct RetiredAhciServiceCleanupComplete<R, M, D> {
-    retirement: SupervisedNativeDeviceServiceRetirement<{
-        crate::AHCI_SERVICE_AUTHORITY_COUNT
-    }>,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
     registers: R,
     command_memory: M,
@@ -626,8 +604,10 @@ pub unsafe fn complete_retired_ahci_service_cleanup<
     owner: RetiredAhciServiceMappingsRemoved<R, M, D>,
     supervisor: &mut ServiceSupervisor<SERVICES>,
     eraser: &mut E,
-) -> Result<RetiredAhciServiceCleanupComplete<R, M, D>, AhciRetiredServiceCleanupError<E::Error, R, M, D>>
-{
+) -> Result<
+    RetiredAhciServiceCleanupComplete<R, M, D>,
+    AhciRetiredServiceCleanupError<E::Error, R, M, D>,
+> {
     let RetiredAhciServiceMappingsRemoved {
         retirement,
         launch,
@@ -773,10 +753,7 @@ pub fn quiesce_ahci_service_device<
     dma_backend: &mut B,
 ) -> Result<QuiescedAhciServiceMappings, AhciServiceDeviceQuiesceError> {
     if mappings.abar().map(|abar| abar.mapping()) != Some(mapping) {
-        return Err(AhciServiceDeviceQuiesceError::MappingMismatch {
-            port,
-            mappings,
-        });
+        return Err(AhciServiceDeviceQuiesceError::MappingMismatch { port, mappings });
     }
     let stopped = match stop_ahci_port_engine(mapping, port, registers) {
         Ok(stopped) => stopped,
@@ -795,8 +772,7 @@ pub fn quiesce_ahci_service_device<
             PendingAhciServiceDeviceTeardown::DataSanitization { dma, mappings },
         ));
     }
-    withdraw_dma(dma, mappings, dma_backend)
-        .map_err(AhciServiceDeviceQuiesceError::Pending)
+    withdraw_dma(dma, mappings, dma_backend).map_err(AhciServiceDeviceQuiesceError::Pending)
 }
 
 pub fn resume_ahci_service_device_teardown<D: AhciDataBufferIo, B: AhciPortDmaBackend>(
@@ -808,10 +784,7 @@ pub fn resume_ahci_service_device_teardown<D: AhciDataBufferIo, B: AhciPortDmaBa
     let (dma, mappings) = match pending {
         PendingAhciServiceDeviceTeardown::DataSanitization { dma, mappings } => {
             if data.sanitize(data_region).is_err() {
-                return Err(PendingAhciServiceDeviceTeardown::DataSanitization {
-                    dma,
-                    mappings,
-                });
+                return Err(PendingAhciServiceDeviceTeardown::DataSanitization { dma, mappings });
             }
             (dma, mappings)
         }
