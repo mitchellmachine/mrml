@@ -100,6 +100,11 @@ pub trait ServiceRestartAuthorizer {
     ) -> Result<ServiceId, ConfigError>;
 }
 
+pub trait ServiceReceiveCancellationAuthorizer {
+    fn cancel_receive(&self, capability: Capability, service: ServiceId)
+    -> Result<(), ConfigError>;
+}
+
 pub trait ServicePolicyAuthorizer {
     fn replace_policy(
         &self,
@@ -7671,6 +7676,7 @@ pub enum SupervisionOperation {
     Query = 1,
     Restart = 2,
     ReplacePolicy = 3,
+    CancelReceive = 4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7689,7 +7695,12 @@ impl SupervisionRequest {
             return Err(ConfigError::NonCanonical);
         }
         let target = match (self.operation, self.setting) {
-            (SupervisionOperation::Query | SupervisionOperation::Restart, None) => 0,
+            (
+                SupervisionOperation::Query
+                | SupervisionOperation::Restart
+                | SupervisionOperation::CancelReceive,
+                None,
+            ) => 0,
             (SupervisionOperation::ReplacePolicy, Some(setting)) => setting.get(),
             _ => return Err(ConfigError::NonCanonical),
         };
@@ -7722,6 +7733,7 @@ impl SupervisionRequest {
             1 => SupervisionOperation::Query,
             2 => SupervisionOperation::Restart,
             3 => SupervisionOperation::ReplacePolicy,
+            4 => SupervisionOperation::CancelReceive,
             _ => return Err(ConfigError::InvalidProtocol),
         };
         let request_id = read_u64(input, 16)?;
@@ -7730,7 +7742,13 @@ impl SupervisionRequest {
         }
         let target = read_u32(input, 40)?;
         let setting = match operation {
-            SupervisionOperation::Query | SupervisionOperation::Restart if target == 0 => None,
+            SupervisionOperation::Query
+            | SupervisionOperation::Restart
+            | SupervisionOperation::CancelReceive
+                if target == 0 =>
+            {
+                None
+            }
             SupervisionOperation::ReplacePolicy => Some(SettingId::new(target)?),
             _ => return Err(ConfigError::NonCanonical),
         };
@@ -7763,7 +7781,9 @@ impl SupervisionRequest {
         let mut request = Self::decode(message.payload())?;
         let mut capabilities = message.capabilities();
         match request.operation {
-            SupervisionOperation::Query | SupervisionOperation::Restart
+            SupervisionOperation::Query
+            | SupervisionOperation::Restart
+            | SupervisionOperation::CancelReceive
                 if message.capability_count() == 1 =>
             {
                 request.capability = capabilities
@@ -7919,6 +7939,41 @@ pub fn dispatch_supervision_restart_envelope<A: ServiceRestartAuthorizer + ?Size
     .encode(output)
 }
 
+pub fn dispatch_supervision_cancel_receive_envelope<
+    A: ServiceReceiveCancellationAuthorizer + ?Sized,
+>(
+    authorizer: &A,
+    payload: &[u8],
+    capabilities: &[Capability],
+    output: &mut [u8; SUPERVISION_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let message =
+        Message::new(payload, capabilities).map_err(|_| ConfigError::InvalidAuthorityEnvelope)?;
+    let request = SupervisionRequest::decode_message(&message)?;
+    if request.operation != SupervisionOperation::CancelReceive {
+        return Err(ConfigError::InvalidProtocol);
+    }
+    let cancelled = authorizer
+        .cancel_receive(request.capability, request.service)
+        .is_ok();
+    SupervisionResponse {
+        request_id: request.request_id,
+        status: if cancelled {
+            ResponseStatus::Ok
+        } else {
+            ResponseStatus::Rejected
+        },
+        service: request.service,
+        state: if cancelled {
+            SupervisionState::Running
+        } else {
+            SupervisionState::Exited
+        },
+        detail: 0,
+    }
+    .encode(output)
+}
+
 /// Re-reads one exact service-bound policy through the IPC-delivered setting
 /// READ capability, then asks the kernel to apply it through the separately
 /// delivered service CONTROL capability. The trusted userspace service supplies
@@ -8026,6 +8081,11 @@ pub fn dispatch_supervision_message<
             ),
         },
         SupervisionOperation::ReplacePolicy => (
+            ResponseStatus::Rejected,
+            request.service,
+            SupervisionState::Exited,
+        ),
+        SupervisionOperation::CancelReceive => (
             ResponseStatus::Rejected,
             request.service,
             SupervisionState::Exited,

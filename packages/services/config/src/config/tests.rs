@@ -1829,6 +1829,107 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_envelope_binds_one_delivered_control_capability() {
+        struct CancellationAuthorizer {
+            capability: Capability,
+            service: ServiceId,
+        }
+
+        impl ServiceReceiveCancellationAuthorizer for CancellationAuthorizer {
+            fn cancel_receive(
+                &self,
+                capability: Capability,
+                service: ServiceId,
+            ) -> Result<(), ConfigError> {
+                if capability == self.capability && service == self.service {
+                    Ok(())
+                } else {
+                    Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+                }
+            }
+        }
+
+        let capability = Capability::from_token((14u64 << 32) | 2);
+        let service = ServiceId::from_token((9u64 << 32) | 3);
+        let authorizer = CancellationAuthorizer {
+            capability,
+            service,
+        };
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::CancelReceive,
+            request_id: 56,
+            service,
+            capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
+        };
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode_message(&mut wire).unwrap();
+        assert_eq!(SupervisionRequest::decode(&wire), Ok(request));
+        let mut response = [0; SUPERVISION_RESPONSE_BYTES];
+        dispatch_supervision_cancel_receive_envelope(
+            &authorizer,
+            &wire,
+            &[capability],
+            &mut response,
+        )
+        .unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response),
+            Ok(SupervisionResponse {
+                request_id: 56,
+                status: ResponseStatus::Ok,
+                service,
+                state: SupervisionState::Running,
+                detail: 0,
+            })
+        );
+
+        assert_eq!(
+            dispatch_supervision_cancel_receive_envelope(&authorizer, &wire, &[], &mut response,),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        assert_eq!(
+            dispatch_supervision_cancel_receive_envelope(
+                &authorizer,
+                &wire,
+                &[capability, capability],
+                &mut response,
+            ),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        let wrong = Capability::from_token((15u64 << 32) | 2);
+        dispatch_supervision_cancel_receive_envelope(&authorizer, &wire, &[wrong], &mut response)
+            .unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response),
+            Ok(SupervisionResponse {
+                request_id: 56,
+                status: ResponseStatus::Rejected,
+                service,
+                state: SupervisionState::Exited,
+                detail: 0,
+            })
+        );
+        let mut wrong_operation = wire;
+        write_u16(
+            &mut wrong_operation,
+            6,
+            SupervisionOperation::Query as u16,
+        )
+        .unwrap();
+        assert_eq!(
+            dispatch_supervision_cancel_receive_envelope(
+                &authorizer,
+                &wrong_operation,
+                &[capability],
+                &mut response,
+            ),
+            Err(ConfigError::InvalidProtocol)
+        );
+    }
+
+    #[test]
     fn configuration_responses_round_trip_and_reject_hidden_tail_data() {
         let response = ConfigurationResponse {
             request_id: 7,

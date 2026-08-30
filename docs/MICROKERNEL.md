@@ -11972,3 +11972,38 @@ no WHP, hosted guest, proof-port, or physical-hardware execution is claimed.
 Patent review: `NOT_TRIGGERED` — exact bidirectional consistency checking across
 two fixed-capacity owner tables is conventional defensive state validation. See
 `docs/patents/REVIEW_LOG.md`.
+
+Version-1 supervision requests now assign operation 4 to `CancelReceive` rather
+than leaving deadline cancellation as a probe-only wire exception. The existing
+48-byte canonical request remains unchanged: request ID and generational service
+identity are encoded, the payload capability field and target field must be
+zero, and exactly one capability must arrive in the independent message
+authority envelope. Missing, excess, inline-forged, or wrong-operation authority
+is rejected before the cancellation authorizer is called.
+
+The new `ServiceReceiveCancellationAuthorizer` exposes only the constrained
+non-extractable operation. Its canonical envelope dispatcher returns a 48-byte
+detail-free supervision response: success preserves `Running` because cancelling
+a wait does not stop the service, while authorization or lifecycle denial is a
+generic rejected response. The general in-kernel supervision-message dispatcher
+still rejects this operation because it lacks the separately composed deadline
+executor and escrow; it does not silently reinterpret or partially perform it.
+
+The service image's kernel adapter translates this one operation to syscall 14,
+requires every syscall detail register to remain zero, and maps only success or
+generic denial into the protocol result. The successful, unauthorized, and
+replay cancellation profiles now construct and decode the canonical supervision
+request/response around that adapter. This exercises the codec and constrained
+authorizer in the signed service binary, but it is not yet a separate manager-
+process buffered-IPC forwarding path.
+
+All 54 native configuration-service tests pass, including exact authority-
+envelope success, denial, missing capability, and excess capability cases, and
+the configuration-service release build passes. All three cancellation service-
+image release profiles pass with 12 expected dead-code warnings, and their
+matching `uefi-x86_64` bootloader profiles pass with the existing unreachable-
+pattern warning. No hosted or physical execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — extending a fixed versioned request enum with a
+canonical capability-envelope operation is conventional service-protocol work.
+See `docs/patents/REVIEW_LOG.md`.

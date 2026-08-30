@@ -21,13 +21,13 @@ use mrml_config::{
     ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
     PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, ResponseStatus,
     SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES, ServicePolicyAuthorizer,
-    ServiceRestartAuthorizer, ServiceStateAuthorizer, SettingId, SettingSchema,
-    StableConfigurationRecoveryValidator, SupervisionOperation, SupervisionRequest,
-    SupervisionResponse, SupervisionState, dispatch_configuration_envelope,
-    dispatch_supervision_policy_envelope, dispatch_supervision_query_envelope,
-    dispatch_supervision_restart_envelope, encode_commit_message_request,
-    encode_schema_message_request, prepare_block_stable_configuration,
-    recover_block_stable_total_system_selection,
+    ServiceReceiveCancellationAuthorizer, ServiceRestartAuthorizer, ServiceStateAuthorizer,
+    SettingId, SettingSchema, StableConfigurationRecoveryValidator, SupervisionOperation,
+    SupervisionRequest, SupervisionResponse, SupervisionState, dispatch_configuration_envelope,
+    dispatch_supervision_cancel_receive_envelope, dispatch_supervision_policy_envelope,
+    dispatch_supervision_query_envelope, dispatch_supervision_restart_envelope,
+    encode_commit_message_request, encode_schema_message_request,
+    prepare_block_stable_configuration, recover_block_stable_total_system_selection,
     recover_selected_runtime_assignment_shared_backend,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
@@ -223,6 +223,41 @@ impl ServiceRestartAuthorizer for KernelAuthorizer {
         };
         if status == 0 && replacement != 0 {
             Ok(ServiceId::from_token(replacement))
+        } else {
+            Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+        }
+    }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+impl ServiceReceiveCancellationAuthorizer for KernelAuthorizer {
+    fn cancel_receive(
+        &self,
+        capability: Capability,
+        service: ServiceId,
+    ) -> Result<(), ConfigError> {
+        let mut status = 14u64;
+        let mut detail0 = 0u64;
+        let mut detail1 = 0u64;
+        let mut detail2 = 0u64;
+        let mut detail3 = 0u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") capability.token(),
+                in("rsi") service.token(),
+                inlateout("rdx") detail0,
+                inlateout("r10") detail1,
+                inlateout("r8") detail2,
+                inlateout("r9") detail3,
+                options(nostack)
+            )
+        };
+        if detail0 | detail1 | detail2 | detail3 != 0 {
+            Err(ConfigError::InvalidProtocol)
+        } else if status == 0 {
+            Ok(())
         } else {
             Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
         }
@@ -1347,30 +1382,41 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         1
     };
     for attempt in 0..attempts {
-        let mut status = 14u64;
-        let mut detail0 = 0u64;
-        let mut detail1 = 0u64;
-        let mut detail2 = 0u64;
-        let mut detail3 = 0u64;
-        unsafe {
-            asm!(
-                "int 0x80",
-                inlateout("rax") status,
-                in("rdi") receiver_control,
-                in("rsi") receiver_service,
-                inlateout("rdx") detail0,
-                inlateout("r10") detail1,
-                inlateout("r8") detail2,
-                inlateout("r9") detail3,
-                options(nostack)
-            )
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::CancelReceive,
+            request_id: 0x601 + attempt,
+            service: ServiceId::from_token(receiver_service),
+            capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
         };
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode_message(&mut wire).unwrap_or_else(|_| halt());
+        let mut response_wire = [0; SUPERVISION_RESPONSE_BYTES];
+        dispatch_supervision_cancel_receive_envelope(
+            &KernelAuthorizer,
+            &wire,
+            &[Capability::from_token(receiver_control)],
+            &mut response_wire,
+        )
+        .unwrap_or_else(|_| halt());
+        let response = SupervisionResponse::decode(&response_wire).unwrap_or_else(|_| halt());
         let expected = if cfg!(feature = "deadline-receive-cancel-denied-probe") || attempt == 1 {
-            mrml_kernel::SyscallCompletionStatus::Error.code()
+            ResponseStatus::Rejected
         } else {
-            mrml_kernel::SyscallCompletionStatus::Success.code()
+            ResponseStatus::Ok
         };
-        if status != expected || detail0 | detail1 | detail2 | detail3 != 0 {
+        let expected_state = if expected == ResponseStatus::Ok {
+            SupervisionState::Running
+        } else {
+            SupervisionState::Exited
+        };
+        if response.request_id != request.request_id
+            || response.status != expected
+            || response.service != request.service
+            || response.state != expected_state
+            || response.detail != 0
+        {
             halt();
         }
     }
