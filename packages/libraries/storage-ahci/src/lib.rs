@@ -24,6 +24,7 @@ mod command_block_backend;
 mod control_service_loop;
 mod data_service_loop;
 mod dispatch_service;
+mod kernel_abar_page_table;
 mod kernel_service_cpu_mapping;
 mod mapped_command_memory;
 mod mapped_data_buffer;
@@ -129,6 +130,10 @@ pub use data_service_loop::{
 pub use dispatch_service::{
     AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls,
     ReceivedAhciDispatchEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
+};
+pub use kernel_abar_page_table::{
+    KernelAhciAbarPreactivationError, KernelAhciAbarPreactivationOwner,
+    KernelAhciAbarRollbackFailure,
 };
 pub use kernel_service_cpu_mapping::{
     KernelAhciServiceCpuMappingAdapter, KernelAhciServiceCpuMappingAdapterError,

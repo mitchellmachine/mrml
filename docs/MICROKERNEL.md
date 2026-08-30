@@ -9404,10 +9404,14 @@ does not replace independent human dual review.
 The first concrete page-table composition is **PARTIALLY IMPLEMENTED** for an
 exclusively owned inactive x86-64 hierarchy. The unsafe
 `InactivePageTableMappingBackend` binds one `PageTableBuilder` to one exact
-target object and consumes only the already validated backed-mapping request.
-It requires physical backing and converts only `READ`, `READ|WRITE`, or
-`READ|EXECUTE` into user leaf permissions. Write-only and execute-only requests
-fail because ordinary x86 leaves would silently grant broader read access.
+target object. Its ordinary path consumes only an already validated
+backed-mapping request, requires physical backing, and converts only `READ`,
+`READ|WRITE`, or `READ|EXECUTE` into user leaf permissions. Write-only and
+execute-only requests fail because ordinary x86 leaves would silently grant
+broader read access. A separate unsafe method installs or removes one exact
+target-bound `USER_MMIO_READ_WRITE` range through the same transaction. That
+device path is not exposed through the generic service or application mapping
+planner.
 
 Installation verifies the complete virtual range is absent before mutation.
 If any later page-table allocation or write fails, every leaf the attempt could
@@ -9418,16 +9422,21 @@ physical leaf and permission, then clears them; a late clear error restores all
 possibly removed leaves so the policy mapping remains retryable. Uncertain
 restoration also poisons the hierarchy. The root must remain unreachable by all
 CPUs, VMs, and resumable contexts while the adapter exists, so no TLB operation
-is needed or claimed.
+is needed or claimed. Leaf rollback is not byte-identical hierarchy rollback:
+new intermediate tables remain charged in the precommitted arena and parent
+user-bit promotion can remain after a recoverable failure. Those residuals
+grant no leaf and remain bounded by the arena, but a later activation owner must
+revalidate the effective path; repeated failures can exhaust that arena.
 
 Focused deterministic release tests compose the real memory-resource policy,
 physical-backing lifecycle, and x86 page-table builder. They prove exact
-two-page installation/removal, unsupported-access denial without accounting
-publication, mutation-before-error rollback, retryable removal restoration,
-mapping-budget retention, and poison quarantine when rollback also fails. This
-does not publish an active hierarchy, issue local or remote TLB invalidation,
-perform an SMP shootdown, migrate boot construction, drive KVM/WHP, or provide
-hosted or physical evidence.
+ordinary and device two-page installation/removal, target substitution denial,
+unsupported-access denial without accounting publication,
+mutation-before-error rollback, retryable removal restoration, mapping-budget
+retention, and poison quarantine when rollback also fails. The Linux kernel
+suite passes 709 tests. This does not publish an active hierarchy, issue local
+or remote TLB invalidation, perform an SMP shootdown, migrate boot construction,
+drive KVM/WHP, or provide installed or physical evidence.
 
 Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
 `LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
@@ -9973,28 +9982,44 @@ No AHCI register discovery, DMA, interrupt, queue, block I/O, OVMF, or physical
 hardware was implemented or exercised.
 
 The next native-storage authority boundary is now **PARTIALLY IMPLEMENTED** as
-a typed ABAR mapping request. It requires a live `MAP | READ | WRITE`
-capability for the exact device object, nonzero configuration and mapping
-generations, and an aligned non-wrapping lower-half virtual range. The provider
-runs at CPL3, so the platform contract is an exact-driver-task user RW/NX
-mapping bound to both generations, never a mapping for another task or ordinary
-application. `USER_MMIO_READ_WRITE` and `KERNEL_MMIO_READ_WRITE` are distinct
-from normal memory and encode PWT=PCD=1, selecting PAT index 3 for 4 KiB leaves;
-device mappings cannot be executable, and generic user-buffer resolution rejects
-them for both reads and writes. The active platform-MMIO verifier also rejects
-leaves missing either selector bit, but that existing verifier is kernel-only;
-the AHCI user mapping still lacks an installed equivalent. Missing rights,
-stale handles, object substitution, malformed ranges, and mapper failure publish
-nothing. Storage passes 138 tests on Linux and the kernel passes 708 tests on
-Linux. The unsafe backend still must be pre-bound to the exact task/root, prove
-IA32_PAT index 3 is UC, exclude aliases, and provide active-root/TLB/IOMMU
-lifecycle; the mapping record itself carries no task/root proof. WHP already set
-and read back the reset PAT layout; KVM now performs the same exact MSR
-transaction before synthetic long-mode entry. KVM's Linux suite passes 23 tests
-with one manual performance test ignored, but `/dev/kvm` was absent, so no live
-ioctl or guest execution was exercised. No installed CPL3 entry, volatile AHCI
-MMIO, reset, DMA, interrupt, command, NCQ, WHP, or physical behavior was
-exercised.
+a typed ABAR request and a concrete preactivation-only page-table adapter. The
+request requires a live `MAP | READ | WRITE` capability for the exact device
+object, nonzero configuration and mapping generations, and an aligned
+non-wrapping lower-half virtual range. `KernelAhciAbarPreactivationOwner`
+requires the exact live mapping and control capabilities plus a structurally
+valid descriptor whose configuration generation and ABAR geometry match the
+retained launch, then accepts only the launch-bound prepared task whose
+generation remains construction-pending in the exact borrowed `TaskRuntime`,
+whose saved CR3 root matches the exclusively owned inactive hierarchy, and whose
+service-domain target matches that backend. Its immutable runtime borrow
+prevents safe activation or context mutation while the owner exists. A private backend
+installs only the exact `USER_MMIO_READ_WRITE` launch range; the owner can verify
+the leaves and returns the prepared task only after capability-revalidated exact
+rollback. Wrong runtime, root, target, ABAR generation/geometry, or capability
+fails before publication. Mutation-before-error rollback uncertainty retains
+the owner and poisons the hierarchy. The Linux AHCI suite passes 143 tests and
+the Linux kernel suite passes 709.
+
+This is controlled Linux-host, in-memory page-table evidence only. The unsafe
+caller must keep PAT index 3 UC on every CPU that may later execute the task,
+exclude cacheable aliases for the complete installed lifetime, and establish
+exclusive root ownership plus the trusted correlation between the descriptor's
+PCI location/vendor/device identity and the capability-bound device object;
+neither relation is retained in the launch record. Runtime/root equality does
+not prove uniqueness. The owner deliberately does not implement the public
+generic mapping traits or create `MappedAhciNativeServiceTask`. Dropping it is
+not an activation seal: no later owner yet binds the four CPU mappings, consumes
+and revalidates the exact root and effective leaves, or converts poison into
+permanent task quarantine.
+There is no active-root lifetime/removal owner, local or SMP TLB withdrawal,
+IOMMU binding, installed CPL3/INT80 entry, live KVM/WHP run, volatile AHCI
+register access, or physical-device evidence. The mapping record itself remains
+data, not task/root authority.
+
+Patent review: `NOT_TRIGGERED` — exact task/root/target binding and
+transactional installation/removal of conventional x86-64 user-device PTEs are
+standard memory-management composition and add no storage algorithm or
+interoperability protocol. See [the patent review log](patents/REVIEW_LOG.md).
 
 Configuration now **PARTIALLY IMPLEMENTS** one transactional bridge from that
 typed verifier to the existing installed recovery owner. Correlation,

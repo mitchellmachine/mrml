@@ -329,8 +329,22 @@ access. The security/acceptance gate is canonical in
   use the dedicated device-PAT selector; the privileged mapper must separately
   prove that the selected PAT entry is UC, exclude cacheable aliases, and bind
   active-root and translation-cache withdrawal to the device/mapping
-  generations. Generic syscall/user-buffer copies reject device-selector leaves
-  so non-volatile byte-copy machinery cannot access registers.
+  generations. The current AHCI preactivation owner enforces the bounded
+  inactive subset by requiring the live mapping/control capabilities and a
+  structurally valid descriptor whose ABAR generation/geometry match the
+  launch, then matching the construction-pending task generation, owning
+  runtime, saved CR3 root, service-domain target, and launch-bound ABAR. Its
+  private backend is not a generic mapped-task backend; explicit rollback
+  returns the prepared task only after exact withdrawal, and uncertain rollback
+  retains the owner while poisoning the hierarchy. This is not an activation
+  seal: root uniqueness, descriptor-PCI-identity/device-object correlation,
+  PAT3=UC, and alias exclusion remain unsafe caller obligations for the complete
+  installed lifetime, while an owner combining this concrete inactive ABAR
+  hierarchy with the four concrete CPU mappings, activation-time effective-leaf
+  revalidation, permanent task quarantine or activation exclusion on poison,
+  active-root ownership, SMP TLB withdrawal, and IOMMU teardown remain required.
+  Generic syscall/user-buffer copies reject device-selector leaves so
+  non-volatile byte-copy machinery cannot access registers.
 - Restart commit publishes and returns the exact service/task generations as
   one typed result, so recovery and service dispatch do not rediscover task
   identity through a fallible lookup after creation.

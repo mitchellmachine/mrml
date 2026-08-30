@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_only_the_exact_descriptor_as_read_write_nx() {
+    fn maps_only_validated_descriptor_geometry_as_read_write_nx() {
         let rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
         let (capabilities, capability, object) = authority(rights);
         let mut backend = RecordingBackend::default();

@@ -266,28 +266,31 @@ register/DMA/interrupt mechanics, reacquisition, Arch Linux parity, and physical
 evidence remain **PLANNED**.
 
 The first ABAR authority boundary is now **PARTIALLY IMPLEMENTED** without
-claiming controller access. After the typed PCI snapshot validates the function
-and BAR geometry, `map_ahci_abar` requires one live capability carrying
-`MAP | READ | WRITE` for the expected device object, nonzero configuration and
-mapping generations, and an aligned non-wrapping lower-half virtual range. The
-isolated native provider runs at CPL3, so its backend may map the ABAR
-user-accessible only in that exact driver task, read/write and non-executable;
-ordinary applications and all other tasks remain excluded. The canonical x86
-permission selects PAT index 3 with PWT and PCD. The backend must independently
-prove that index 3 is UC, exclude cacheable aliases, and bind revocation to both
-generations. Generic syscall/user-buffer copying rejects device-selector leaves.
-Generic protection cannot change privilege or normal/device class, and active
-inspection aggregates effective R/W, U/S, and NX across every paging level.
-The backend traits are unsafe, but `AhciAbarMapping` itself carries no task/root
-proof; a concrete pre-bound adapter remains required. Missing rights, stale
-handles, object substitution, malformed ranges, and backend refusal fail before
-publication. Storage passes 138 tests on Linux and the kernel page-table suite
-passes 708 tests on Linux. KVM now exact-sets and reads back the same reset PAT
-layout already used by WHP before synthetic long-mode entry. Its Linux suite
-passes 23 tests with one manual performance test ignored, but `/dev/kvm` is
-absent. No installed ABAR mapper, bare-metal PAT-MSR validation, alias exclusion,
-active-root/TLB/IOMMU path, CPL3 entry, register access, or physical behavior was
-exercised; those remain **PLANNED**.
+claiming controller access. Given a caller-correlated typed PCI descriptor,
+`KernelAhciAbarPreactivationOwner` requires live mapping/control handles and
+exact launch-bound ABAR generation/geometry, then accepts only the launch-bound
+prepared task whose generation remains construction-pending in the borrowed
+`TaskRuntime`, whose saved CR3 root matches the exclusively owned inactive
+hierarchy, and whose service-domain target matches the backend. Its private
+backend installs only the launch-bound `USER_MMIO_READ_WRITE` range; explicit
+rollback returns the prepared task only after exact withdrawal, while
+uncertainty retains the owner and poisons the hierarchy. Ordinary applications
+and the public generic mapping traits cannot reach this concrete path. Wrong
+ABAR generation/geometry, authority, runtime, root, or target fails before
+publication. PCI location/vendor/device fields remain caller-bound data because
+the launch record does not retain them. Storage passes 143 tests on Linux and
+the kernel suite passes 709.
+
+This owner covers only preactivation ABAR construction. The unsafe caller must
+prove root uniqueness and descriptor-PCI-identity/device-object correlation,
+keep PAT index 3 UC on every eligible CPU, and exclude cacheable aliases for the
+full installed lifetime. It cannot create the existing mapped-task token. No
+owner yet combines this concrete inactive ABAR hierarchy with the four concrete
+CPU mappings; activation-time effective-leaf revalidation, permanent task
+quarantine or activation exclusion on poison, an active-root owner, local or SMP
+TLB withdrawal, and IOMMU binding also remain absent. No installed CPL3 entry,
+live KVM/WHP run, register access, or physical behavior was exercised; those
+remain **PLANNED**.
 
 Patent review: **NOT_TRIGGERED**. Conventional x86-64 four-level permission
 aggregation, 4 KiB PWT/PCD PAT-index selection, exact PAT MSR set/readback, and
@@ -1347,17 +1350,36 @@ plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
 
 Prepared AHCI tasks now compose with exact pre-launch mapping installation
 **IMPLEMENTED IN SOURCE**. The transition reconstructs the canonical record only
-from its retained bound launch, exact-matches the discovered ABAR descriptor,
-then installs the ABAR and four launch-named CPU mappings through the existing
-rollback-complete lifecycle. Success retains the prepared task/launch owner and
-the complete mapping teardown state together. Every failure returns the same
-prepared owner; retained or uncertain mappings remain carried by the existing
-typed mapping error for explicit cleanup. Tests prove exact successful mapping
-of the bound set and descriptor substitution returning the task owner before any
-ABAR or CPU backend mutation. The AHCI Linux suite passes all 134 tests and both
-Linux and `MRML_NATIVE` release builds pass. This is controlled backend and
+from its retained bound launch, exact-matches the descriptor's launch-bound
+configuration generation and ABAR geometry, then installs the ABAR and four
+launch-named CPU mappings through the existing rollback-complete lifecycle.
+Success retains the prepared task/launch owner and the complete mapping
+teardown state together. Every failure returns the same prepared owner;
+retained or uncertain mappings remain carried by the existing typed mapping
+error for explicit cleanup. Tests prove exact successful mapping of the bound
+set and descriptor substitution returning the task owner before any ABAR or CPU
+backend mutation. The AHCI Linux suite passes all 134 tests and both Linux and
+`MRML_NATIVE` release builds pass. This is controlled backend and
 capability-runtime evidence, not active page-table, IOMMU, installed-task, or
 physical AHCI execution evidence.
+
+A concrete preactivation ABAR page-table owner is now **PARTIALLY IMPLEMENTED
+IN SOURCE**. It checks the live mapping/control handles and exact launch-bound
+ABAR generation/geometry, then matches the prepared task's owning runtime and
+construction-pending generation, saved CR3 root, service-domain target, and
+launch-bound range before using a private inactive-hierarchy backend. Tests
+cover authority, generation/geometry and runtime/root/target substitution, exact
+installation/verification/rollback, poison retention after
+mutation-before-error rollback uncertainty, and the explicit limitation that
+PCI identity-only descriptor changes are not rechecked. The owner cannot create
+the existing mapped-task token. The Linux AHCI suite passes 143 tests and the
+Linux kernel suite passes 709. This is not an activation seal or active mapping
+owner. Root uniqueness, descriptor-identity/device-object correlation,
+full-lifetime PAT3=UC and alias exclusion, an owner combining this concrete
+inactive ABAR hierarchy with the four concrete CPU mappings, activation-time
+effective-leaf revalidation, permanent task quarantine or activation exclusion
+on poison, SMP TLB withdrawal, IOMMU binding, installed CPL3, KVM/WHP, and
+physical evidence remain absent.
 
 Complexity impact: LOW
 TCB impact: LOW
@@ -1369,7 +1391,8 @@ Failure isolated: YES
 Existing-object reuse: HIGH
 
 Patent review: **NOT_TRIGGERED**. Retaining task ownership while invoking the
-existing exact mapping and rollback lifecycle is conventional resource
+existing exact mapping and rollback lifecycle, including conventional exact
+x86-64 task/root/target page-table installation, is standard resource
 composition. See [the patent review log](../patents/REVIEW_LOG.md).
 
 Native device-service construction now has an explicit scheduler publication

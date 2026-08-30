@@ -160,10 +160,11 @@ pub fn activate_mapped_ahci_service_task<
     }
     let task = native_task.task();
     let object = prepared.launch().spec().service().domain();
-    // SAFETY: the mapped owner proves that native task construction and every
+    // The mapped owner proves that native task construction and every
     // launch-bound AHCI mapping completed. Its retained native-task identity is
-    // checked against this exact runtime above, and the lifecycle object is
-    // derived from the same bound launch rather than accepted from a caller.
+    // checked against this exact runtime above.
+    // SAFETY: the lifecycle object is derived from that same bound launch
+    // rather than accepted from a caller.
     match unsafe {
         supervisor.register_and_activate_constructed(object, task, restart_policy, runtime)
     } {
@@ -375,12 +376,109 @@ mod tests {
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
-    use mrml_kernel::arch::x86_64::UserContext;
+    use mrml_kernel::arch::x86_64::{
+        InactivePageTableMappingBackend, InactivePageTableMappingError, Mapping, PagePermissions,
+        PageTableBuildError, PageTableBuilder, PageTableStore, UserContext,
+    };
     use mrml_kernel::{
         prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
         IsolationPlacement, IsolationServiceSpec, ObjectId, PhysAddr, Priority, Rights,
-        TaskRuntime, TotalMicrovmClass,
+        TaskRuntime, TotalMicrovmClass, PAGE_SIZE,
     };
+
+    const TABLE_BASE: u64 = 0x60_0000;
+
+    #[derive(Default)]
+    struct WriteFault {
+        remaining: Cell<usize>,
+    }
+
+    impl WriteFault {
+        fn arm(&self, failures: usize) {
+            self.remaining.set(failures);
+        }
+    }
+
+    struct Tables<'a> {
+        pages: [[u64; 512]; 8],
+        used: usize,
+        base: u64,
+        fault: &'a WriteFault,
+    }
+
+    impl<'a> Tables<'a> {
+        fn new(base: u64, fault: &'a WriteFault) -> Self {
+            Self {
+                pages: [[0; 512]; 8],
+                used: 0,
+                base,
+                fault,
+            }
+        }
+
+        fn base(&self) -> u64 {
+            self.base
+        }
+
+        fn slot(&self, frame: PhysAddr) -> Result<usize, PageTableBuildError> {
+            let offset = frame
+                .get()
+                .checked_sub(self.base())
+                .ok_or(PageTableBuildError::Storage)?;
+            if !offset.is_multiple_of(PAGE_SIZE) {
+                return Err(PageTableBuildError::Storage);
+            }
+            let slot =
+                usize::try_from(offset / PAGE_SIZE).map_err(|_| PageTableBuildError::Storage)?;
+            if slot >= self.used {
+                return Err(PageTableBuildError::Storage);
+            }
+            Ok(slot)
+        }
+    }
+
+    impl PageTableStore for Tables<'_> {
+        fn allocate_zeroed(&mut self) -> Result<PhysAddr, PageTableBuildError> {
+            if self.used == self.pages.len() {
+                return Err(PageTableBuildError::Storage);
+            }
+            let address = self
+                .base()
+                .checked_add(self.used as u64 * PAGE_SIZE)
+                .ok_or(PageTableBuildError::Storage)?;
+            self.pages[self.used].fill(0);
+            self.used += 1;
+            PhysAddr::new(address).map_err(|_| PageTableBuildError::Storage)
+        }
+
+        fn read(&self, table: PhysAddr, index: usize) -> Result<u64, PageTableBuildError> {
+            self.pages
+                .get(self.slot(table)?)
+                .and_then(|page| page.get(index))
+                .copied()
+                .ok_or(PageTableBuildError::Storage)
+        }
+
+        fn write(
+            &mut self,
+            table: PhysAddr,
+            index: usize,
+            value: u64,
+        ) -> Result<(), PageTableBuildError> {
+            let slot = self.slot(table)?;
+            *self
+                .pages
+                .get_mut(slot)
+                .and_then(|page| page.get_mut(index))
+                .ok_or(PageTableBuildError::Storage)? = value;
+            let remaining = self.fault.remaining.get();
+            if remaining != 0 {
+                self.fault.remaining.set(remaining - 1);
+                return Err(PageTableBuildError::Storage);
+            }
+            Ok(())
+        }
+    }
 
     #[derive(Default)]
     struct AbarBackend {
@@ -722,6 +820,57 @@ mod tests {
         .unwrap()
     }
 
+    fn expected_abar_page_mapping() -> Mapping {
+        let mapping = record().mapping();
+        Mapping::new(
+            mrml_kernel::arch::x86_64::VirtAddr::new(mapping.virtual_base).unwrap(),
+            PhysAddr::new(mapping.physical_base).unwrap(),
+            mapping.bytes / PAGE_SIZE,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .unwrap()
+    }
+
+    fn inactive_abar_tables<'a>(
+        base: u64,
+        target: ObjectId,
+        fault: &'a WriteFault,
+    ) -> InactivePageTableMappingBackend<Tables<'a>> {
+        let builder = PageTableBuilder::new(Tables::new(base, fault)).unwrap();
+        // SAFETY: this modeled hierarchy is exclusively owned, unreachable by
+        // every CPU, and `target` is its exact test address-space identity.
+        unsafe { InactivePageTableMappingBackend::new(builder, target) }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn install_inactive_abar<'a, 'fault: 'a>(
+        prepared: crate::PreparedAhciNativeServiceTask,
+        descriptor: AhciAbarDescriptor,
+        mapping: Capability,
+        control: Capability,
+        authorities: &'a CapabilitySpace<6>,
+        runtime: &'a TaskRuntime<3, 8>,
+        tables: &'a mut InactivePageTableMappingBackend<Tables<'fault>>,
+    ) -> Result<
+        crate::KernelAhciAbarPreactivationOwner<'a, Tables<'fault>, 3, 8, 6>,
+        crate::KernelAhciAbarPreactivationError,
+    > {
+        // SAFETY: these tests never activate the modeled root, have no CPU PAT
+        // state or physical aliases, and retain the exact prepared-task root and
+        // leaves until explicit rollback or poison verification.
+        unsafe {
+            crate::KernelAhciAbarPreactivationOwner::install(
+                prepared,
+                descriptor,
+                mapping,
+                control,
+                authorities,
+                runtime,
+                tables,
+            )
+        }
+    }
+
     fn authorities() -> (CapabilitySpace<6>, Capability, Capability, [Capability; 4]) {
         let mut capabilities = CapabilitySpace::new();
         let map = capabilities
@@ -881,6 +1030,211 @@ mod tests {
         assert!(mapped.cpu_mappings().fully_installed());
         assert_eq!(abar_backend.mapping, Some(record().mapping()));
         assert!(cpu_backend.installed.iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn preactivation_owner_installs_verifies_and_rolls_back_exact_device_leaves() {
+        let (runtime, _, prepared, _, _) = native_tasks();
+        let target = prepared.launch().spec().service().domain();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, target, &fault);
+        let (capabilities, map, control, _) = authorities();
+        let owner = install_inactive_abar(
+            prepared,
+            descriptor(),
+            map,
+            control,
+            &capabilities,
+            &runtime,
+            &mut tables,
+        )
+        .unwrap();
+        assert_eq!(owner.prepared(), prepared);
+        assert_eq!(owner.task(), prepared.task().task());
+        assert_eq!(owner.root(), prepared.task().page_table_root());
+        assert_eq!(owner.mapping(), record().mapping());
+        assert_eq!(owner.verify_exact(), Ok(()));
+        let returned = match owner.rollback() {
+            Ok(returned) => returned,
+            Err(_) => panic!("exact inactive rollback must succeed"),
+        };
+        assert_eq!(returned, prepared);
+
+        let builder = tables.into_builder().unwrap();
+        assert_eq!(
+            builder.verify_unmapped(expected_abar_page_mapping()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn preactivation_owner_rejects_descriptor_and_capabilities_before_mapping() {
+        let (runtime, _, prepared, _, _) = native_tasks();
+        let target = prepared.launch().spec().service().domain();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, target, &fault);
+        let (capabilities, map, control, _) = authorities();
+        let mut wrong_descriptor = descriptor();
+        wrong_descriptor.configuration_generation += 1;
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                wrong_descriptor,
+                map,
+                control,
+                &capabilities,
+                &runtime,
+                &mut tables,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::AbarGenerationOrGeometryMismatch)
+        ));
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                descriptor(),
+                Capability::from_token(0),
+                control,
+                &capabilities,
+                &runtime,
+                &mut tables,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::Mapping(
+                AhciAbarMappingError::Capability(_)
+            ))
+        ));
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                descriptor(),
+                map,
+                map,
+                &capabilities,
+                &runtime,
+                &mut tables,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::ControlCapability(
+                _
+            ))
+        ));
+
+        let builder = tables.into_builder().unwrap();
+        let pml4_index = ((record().mapping().virtual_base >> 39) & 0x1ff) as usize;
+        assert_eq!(builder.store().read(builder.root(), pml4_index), Ok(0));
+    }
+
+    #[test]
+    fn preactivation_owner_leaves_pci_identity_correlation_to_its_unsafe_caller() {
+        let (runtime, _, prepared, _, _) = native_tasks();
+        let target = prepared.launch().spec().service().domain();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, target, &fault);
+        let (capabilities, map, control, _) = authorities();
+        let mut identity_substituted = descriptor();
+        identity_substituted.location.bus += 1;
+        identity_substituted.vendor_id ^= 0x0101;
+        identity_substituted.device_id ^= 0x1010;
+        let owner = install_inactive_abar(
+            prepared,
+            identity_substituted,
+            map,
+            control,
+            &capabilities,
+            &runtime,
+            &mut tables,
+        )
+        .unwrap();
+        assert_eq!(owner.mapping(), record().mapping());
+        assert_eq!(owner.verify_exact(), Ok(()));
+        assert!(owner.rollback().is_ok());
+    }
+
+    #[test]
+    fn preactivation_owner_rejects_runtime_root_and_target_substitution() {
+        let (runtime, _, prepared, _, _) = native_tasks();
+        let target = prepared.launch().spec().service().domain();
+        let (capabilities, map, control, _) = authorities();
+
+        let root_fault = WriteFault::default();
+        let mut wrong_root = inactive_abar_tables(0x70_0000, target, &root_fault);
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                descriptor(),
+                map,
+                control,
+                &capabilities,
+                &runtime,
+                &mut wrong_root,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::WrongRoot)
+        ));
+
+        let target_fault = WriteFault::default();
+        let mut wrong_target = inactive_abar_tables(TABLE_BASE, ObjectId(0xdead), &target_fault);
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                descriptor(),
+                map,
+                control,
+                &capabilities,
+                &runtime,
+                &mut wrong_target,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::WrongTarget)
+        ));
+
+        let other_runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let runtime_fault = WriteFault::default();
+        let mut wrong_runtime = inactive_abar_tables(TABLE_BASE, target, &runtime_fault);
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                descriptor(),
+                map,
+                control,
+                &capabilities,
+                &other_runtime,
+                &mut wrong_runtime,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::Activation(
+                mrml_kernel::NativeDeviceServiceActivationError::WrongRuntime
+            ))
+        ));
+    }
+
+    #[test]
+    fn poisoned_inactive_rollback_retains_owner_and_quarantines_hierarchy() {
+        let (runtime, _, prepared, _, _) = native_tasks();
+        let target = prepared.launch().spec().service().domain();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, target, &fault);
+        let (capabilities, map, control, _) = authorities();
+        let owner = install_inactive_abar(
+            prepared,
+            descriptor(),
+            map,
+            control,
+            &capabilities,
+            &runtime,
+            &mut tables,
+        )
+        .unwrap();
+        fault.arm(2);
+        let failure = match owner.rollback() {
+            Ok(_) => panic!("injected rollback uncertainty must fail"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            failure.error(),
+            crate::AhciAbarRemovalError::BackendRejected { .. }
+        ));
+        assert!(failure.owner().page_tables_poisoned());
+        drop(failure.into_owner());
+        assert!(matches!(
+            tables.into_builder(),
+            Err(InactivePageTableMappingError::Poisoned)
+        ));
     }
 
     #[test]

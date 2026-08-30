@@ -728,9 +728,11 @@ impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
     ///
     /// The caller must exclusively own the complete hierarchy and keep its
     /// root unreachable from every CPU, VM, and resumable context until this
-    /// adapter is consumed. No concurrent page-table access or mutation is
-    /// permitted. If the adapter reports `Poisoned`, the hierarchy must never
-    /// become reachable.
+    /// adapter is consumed. `target` must be the exact address-space object
+    /// represented by that root; it identifies the bound target but does not
+    /// itself grant mapping authority. No concurrent page-table access or
+    /// mutation is permitted. If the adapter reports `Poisoned`, the hierarchy
+    /// must never become reachable.
     pub unsafe fn new(builder: PageTableBuilder<S>, target: ObjectId) -> Self {
         Self {
             builder,
@@ -743,8 +745,99 @@ impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
         self.builder.root()
     }
 
+    pub const fn target(&self) -> ObjectId {
+        self.target
+    }
+
     pub const fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+
+    /// Installs one exact task-local user RW/NX device range in the bound,
+    /// inactive address space. PWT=PCD=1 selects PAT index 3.
+    ///
+    /// # Safety
+    ///
+    /// The bound target/root must belong to one exact construction-pending
+    /// native device task, not an ordinary application. The caller must also
+    /// establish that index 3 is UC for every CPU that could execute this
+    /// hierarchy and exclude every cacheable physical alias for the complete
+    /// installed lifetime. After this backend is consumed, the caller must keep
+    /// the exact root and device leaves unreachable and unchanged until a later
+    /// activation owner consumes and revalidates them.
+    pub unsafe fn install_user_device_rw_nx(
+        &mut self,
+        target: ObjectId,
+        virtual_start: VirtAddr,
+        physical_start: PhysAddr,
+        pages: u64,
+    ) -> Result<(), InactivePageTableMappingError> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        if target != self.target {
+            return Err(InactivePageTableMappingError::WrongTarget);
+        }
+        let mapping = Mapping::new(
+            virtual_start,
+            physical_start,
+            pages,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
+        self.install_exact(mapping)
+    }
+
+    /// Removes the exact task-local user device range while the hierarchy is
+    /// still unreachable, so no translation-cache invalidation is required.
+    pub fn remove_user_device_rw_nx(
+        &mut self,
+        target: ObjectId,
+        virtual_start: VirtAddr,
+        physical_start: PhysAddr,
+        pages: u64,
+    ) -> Result<(), InactivePageTableMappingError> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        if target != self.target {
+            return Err(InactivePageTableMappingError::WrongTarget);
+        }
+        let mapping = Mapping::new(
+            virtual_start,
+            physical_start,
+            pages,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
+        self.remove_exact(mapping)
+    }
+
+    /// Verifies one exact task-local user device range without changing the
+    /// inactive hierarchy or creating an activation proof.
+    pub fn verify_user_device_rw_nx(
+        &self,
+        target: ObjectId,
+        virtual_start: VirtAddr,
+        physical_start: PhysAddr,
+        pages: u64,
+    ) -> Result<(), InactivePageTableMappingError> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        if target != self.target {
+            return Err(InactivePageTableMappingError::WrongTarget);
+        }
+        let mapping = Mapping::new(
+            virtual_start,
+            physical_start,
+            pages,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
+        self.builder
+            .verify_mapped(mapping)
+            .map_err(InactivePageTableMappingError::PageTable)
     }
 
     /// Returns the hierarchy only when every adapter operation remained exact.
@@ -764,6 +857,63 @@ impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
             return Err(InactivePageTableMappingError::WrongTarget);
         }
         native_user_mapping(request)
+    }
+
+    fn install_exact(&mut self, mapping: Mapping) -> Result<(), InactivePageTableMappingError> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        self.builder
+            .verify_available(mapping)
+            .map_err(InactivePageTableMappingError::PageTable)?;
+        for page in 0..mapping.pages() {
+            let (virtual_address, physical_address) =
+                mapping_page(mapping, page).map_err(InactivePageTableMappingError::PageTable)?;
+            if let Err(error) =
+                self.builder
+                    .map_page(virtual_address, physical_address, mapping.permissions())
+            {
+                if self
+                    .builder
+                    .rollback_new_mapping(mapping, page + 1)
+                    .is_err()
+                {
+                    self.poisoned = true;
+                    return Err(InactivePageTableMappingError::Poisoned);
+                }
+                return Err(InactivePageTableMappingError::PageTable(error));
+            }
+        }
+        Ok(())
+    }
+
+    fn remove_exact(&mut self, mapping: Mapping) -> Result<(), InactivePageTableMappingError> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        self.builder
+            .verify_mapped(mapping)
+            .map_err(InactivePageTableMappingError::PageTable)?;
+        for page in 0..mapping.pages() {
+            let (virtual_address, _) =
+                mapping_page(mapping, page).map_err(InactivePageTableMappingError::PageTable)?;
+            let (table, index) = self
+                .builder
+                .leaf_location(virtual_address)
+                .map_err(InactivePageTableMappingError::PageTable)?;
+            if let Err(error) = self.builder.store.write(table, index, 0) {
+                if self
+                    .builder
+                    .restore_removed_mapping(mapping, page + 1)
+                    .is_err()
+                {
+                    self.poisoned = true;
+                    return Err(InactivePageTableMappingError::Poisoned);
+                }
+                return Err(InactivePageTableMappingError::PageTable(error));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -812,28 +962,7 @@ unsafe impl<S: PageTableStore> MemoryMappingBackend for InactivePageTableMapping
             return Err(InactivePageTableMappingError::Poisoned);
         }
         let mapping = self.native_mapping(request)?;
-        self.builder
-            .verify_available(mapping)
-            .map_err(InactivePageTableMappingError::PageTable)?;
-        for page in 0..mapping.pages() {
-            let (virtual_address, physical_address) =
-                mapping_page(mapping, page).map_err(InactivePageTableMappingError::PageTable)?;
-            if let Err(error) =
-                self.builder
-                    .map_page(virtual_address, physical_address, mapping.permissions())
-            {
-                if self
-                    .builder
-                    .rollback_new_mapping(mapping, page + 1)
-                    .is_err()
-                {
-                    self.poisoned = true;
-                    return Err(InactivePageTableMappingError::Poisoned);
-                }
-                return Err(InactivePageTableMappingError::PageTable(error));
-            }
-        }
-        Ok(())
+        self.install_exact(mapping)
     }
 
     fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
@@ -841,29 +970,7 @@ unsafe impl<S: PageTableStore> MemoryMappingBackend for InactivePageTableMapping
             return Err(InactivePageTableMappingError::Poisoned);
         }
         let mapping = self.native_mapping(request)?;
-        self.builder
-            .verify_mapped(mapping)
-            .map_err(InactivePageTableMappingError::PageTable)?;
-        for page in 0..mapping.pages() {
-            let (virtual_address, _) =
-                mapping_page(mapping, page).map_err(InactivePageTableMappingError::PageTable)?;
-            let (table, index) = self
-                .builder
-                .leaf_location(virtual_address)
-                .map_err(InactivePageTableMappingError::PageTable)?;
-            if let Err(error) = self.builder.store.write(table, index, 0) {
-                if self
-                    .builder
-                    .restore_removed_mapping(mapping, page + 1)
-                    .is_err()
-                {
-                    self.poisoned = true;
-                    return Err(InactivePageTableMappingError::Poisoned);
-                }
-                return Err(InactivePageTableMappingError::PageTable(error));
-            }
-        }
-        Ok(())
+        self.remove_exact(mapping)
     }
 }
 
@@ -1616,6 +1723,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(builder.verify_mapped(ordinary), Ok(()));
+    }
+
+    #[test]
+    fn inactive_backend_installs_only_exact_task_local_device_pages() {
+        let store = Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        };
+        let builder = PageTableBuilder::new(store).unwrap();
+        let target = ObjectId(0x7100);
+        // SAFETY: the mock hierarchy is exclusively owned and unreachable,
+        // and `target` is its exact test address-space identity.
+        let mut backend = unsafe { InactivePageTableMappingBackend::new(builder, target) };
+        let virtual_start = VirtAddr::new(0x20_0000).unwrap();
+        let physical_start = PhysAddr::new(0x40_0000).unwrap();
+        assert_eq!(backend.target(), target);
+        assert_eq!(
+            // SAFETY: this is an unreachable modeled root with the test's
+            // assumed UC PAT3 layout and no other physical mappings.
+            unsafe {
+                backend.install_user_device_rw_nx(
+                    ObjectId(0x7101),
+                    virtual_start,
+                    physical_start,
+                    2,
+                )
+            },
+            Err(InactivePageTableMappingError::WrongTarget)
+        );
+        // SAFETY: this is an unreachable modeled root with the test's assumed
+        // UC PAT3 layout and no other physical mappings.
+        unsafe {
+            backend
+                .install_user_device_rw_nx(target, virtual_start, physical_start, 2)
+                .unwrap()
+        };
+        let expected = Mapping::new(
+            virtual_start,
+            physical_start,
+            2,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .unwrap();
+        assert_eq!(backend.builder.verify_mapped(expected), Ok(()));
+        assert_eq!(
+            // SAFETY: the same modeled PAT and alias assumptions remain live.
+            unsafe { backend.install_user_device_rw_nx(target, virtual_start, physical_start, 2) },
+            Err(InactivePageTableMappingError::PageTable(
+                PageTableBuildError::AlreadyMapped
+            ))
+        );
+        backend
+            .remove_user_device_rw_nx(target, virtual_start, physical_start, 2)
+            .unwrap();
+        assert_eq!(backend.builder.verify_unmapped(expected), Ok(()));
     }
 
     #[test]
