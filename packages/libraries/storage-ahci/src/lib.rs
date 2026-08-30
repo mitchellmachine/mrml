@@ -30,6 +30,7 @@ mod mapped_data_buffer;
 mod native_mapped_memory;
 mod native_port_reconstruction;
 mod native_service_state;
+mod platform_io;
 mod service_bootstrap;
 mod service_cpu_mapping;
 mod service_device_teardown;
@@ -143,6 +144,7 @@ pub use native_service_state::{
     AhciNativeServicePreparationError, AhciNativeServiceState, AhciNativeServiceStateError,
     bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
 };
+pub use platform_io::{AhciMonotonicDelay, AhciPlatformIo};
 #[cfg(target_arch = "x86_64")]
 pub use native_service_state::bootstrap_and_prepare_x86_coherent_ahci_service;
 pub use service_bootstrap::{

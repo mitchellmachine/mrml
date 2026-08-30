@@ -1115,6 +1115,31 @@ Patent review: **NOT_TRIGGERED**. Delayed construction of an exact decoded MMIO
 view through a fail-closed one-shot factory is conventional initialization
 ordering. See [the patent review log](../patents/REVIEW_LOG.md).
 
+AHCI now has a composed platform-I/O owner **PARTIALLY IMPLEMENTED IN SOURCE**
+that joins one launch-bound register adapter with one separately supplied
+monotonic-delay backend. Register reads and writes delegate only to the retained
+adapter; reset delay forwards the exact requested microseconds and propagates
+uncertainty without manufacturing elapsed time. The native constructor creates
+the volatile ABAR half only under the existing exclusive authenticated-mapping
+safety contract, while timing remains an explicit independent platform
+obligation. The focused Linux suite passes all 125 tests and both Linux release
+and `MRML_NATIVE` release builds pass. Tests use injected registers and delay;
+no monotonic clock implementation, installed MMIO, reset timing, or physical
+hardware is verified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Composing existing MMIO and monotonic-delay
+interfaces by exact delegation is conventional driver dependency plumbing. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
