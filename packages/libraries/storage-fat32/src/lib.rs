@@ -19,13 +19,15 @@ use mrml_interface_storage_block_provider_v1::{
 };
 use mrml_interface_storage_filesystem_v3::{
     decode_lookup_request, decode_mount_request, decode_open_request, decode_probe_request,
-    decode_unmount_request, encode_lookup_response, encode_mount_response, encode_open_response,
-    encode_probe_response, encode_unmount_response, FilesystemLookupTransport,
-    FilesystemMountTransport, FilesystemOpenTransport, FilesystemTransport,
-    FilesystemUnmountTransport, LookupError, MountError, MountResponse, OpaqueHandle, OpenError,
-    ProbeError, ProtocolError, UnmountError, LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES,
-    MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES, OPEN_REQUEST_BYTES, OPEN_RESPONSE_BYTES,
-    PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
+    decode_read_request, decode_unmount_request, encode_lookup_response, encode_mount_response,
+    encode_open_response, encode_probe_response, encode_read_response, encode_unmount_response,
+    FilesystemLookupTransport, FilesystemMountTransport, FilesystemOpenTransport,
+    FilesystemReadTransport, FilesystemTransport, FilesystemUnmountTransport, LookupError,
+    MountError, MountResponse, OpaqueHandle, OpenError, ProbeError, ProtocolError, ReadError,
+    UnmountError, LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES, MOUNT_REQUEST_BYTES,
+    MOUNT_RESPONSE_BYTES, OPEN_REQUEST_BYTES, OPEN_RESPONSE_BYTES, PROBE_REQUEST_BYTES,
+    PROBE_RESPONSE_BYTES, READ_REQUEST_BYTES, READ_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES,
+    UNMOUNT_RESPONSE_BYTES,
 };
 
 pub use service_loop::{
@@ -1685,6 +1687,97 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize> FilesystemLo
     }
 }
 
+pub struct Fat32ReadProvider<
+    'a,
+    'b,
+    B,
+    const N: usize,
+    const O: usize = 64,
+    const C: usize = 64,
+> {
+    provider: Fat32MountedProvider<B, N, O>,
+    staging: &'a mut [u8],
+    cluster_scratch: &'b mut [u8],
+}
+
+impl<'a, 'b, B, const N: usize, const O: usize, const C: usize>
+    Fat32ReadProvider<'a, 'b, B, N, O, C>
+{
+    pub fn new(
+        provider: Fat32MountedProvider<B, N, O>,
+        staging: &'a mut [u8],
+        cluster_scratch: &'b mut [u8],
+    ) -> Self {
+        staging.fill(0);
+        cluster_scratch.fill(0);
+        Self {
+            provider,
+            staging,
+            cluster_scratch,
+        }
+    }
+
+    pub fn into_provider(self) -> Fat32MountedProvider<B, N, O> {
+        self.provider
+    }
+}
+
+impl<T: BlockProviderReadTransport, const N: usize, const O: usize, const C: usize>
+    FilesystemReadTransport
+    for Fat32ReadProvider<'_, '_, Fat32BlockMountBackend<'_, T>, N, O, C>
+{
+    fn read(
+        &mut self,
+        request: &[u8; READ_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; READ_RESPONSE_BYTES], ProtocolError> {
+        self.staging.fill(0);
+        self.cluster_scratch.fill(0);
+        let result = (|| {
+            let request = decode_read_request(request, memory.len() as u64)?;
+            let start = usize::try_from(request.output.offset())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let length = usize::try_from(request.output.length())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let end = start
+                .checked_add(length)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let output = memory
+                .get_mut(start..end)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let staging = self
+                .staging
+                .get_mut(..length)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let result = self
+                .provider
+                .read_open_file::<C>(
+                    request.volume,
+                    request.generation,
+                    request.file,
+                    request.offset,
+                    output,
+                    staging,
+                    self.cluster_scratch,
+                )
+                .map(|()| length as u64)
+                .map_err(|error| match error {
+                    Fat32OpenReadError::Open(_) => ReadError::StaleObject,
+                    Fat32OpenReadError::Filesystem(Fat32Error::FatRead)
+                    | Fat32OpenReadError::Filesystem(Fat32Error::DirectoryRead)
+                    | Fat32OpenReadError::Filesystem(Fat32Error::FileRead) => {
+                        ReadError::IoFailure
+                    }
+                    Fat32OpenReadError::Filesystem(_) => ReadError::InvalidRequest,
+                });
+            Ok(encode_read_response(result))
+        })();
+        self.staging.fill(0);
+        self.cluster_scratch.fill(0);
+        result
+    }
+}
+
 fn append_fat32_short_directory_inner<const N: usize>(
     geometry: Fat32Geometry,
     directory: &mut Fat32DirectoryBatch<N>,
@@ -2992,6 +3085,62 @@ mod tests {
         let backend = provider.into_backend();
         let transport = backend.into_transport();
         assert_eq!(&transport.calls[..transport.count], &[0, 4, 132, 263]);
+    }
+
+    #[test]
+    fn canonical_read_transport_publishes_only_borrowed_output_range() {
+        use mrml_interface_storage_filesystem_v3::{
+            decode_read_response, encode_read_request, BorrowedWriteView,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = FilesystemImageTransport {
+            session,
+            calls: [0; 8],
+            count: 0,
+        };
+        let mut block_scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut block_scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let entry = file_entry(5, 4096);
+        let object = provider
+            .identify_root_entry(volume, mounted.generation, mounted.root, entry)
+            .unwrap();
+        let handle = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .and_then(|reservation| provider.activate_open(reservation))
+            .unwrap();
+        let mut staging = [0xdd; 16];
+        let mut cluster_scratch = [0xee; 4096];
+        let mut read = Fat32ReadProvider::<_, 1, 1, 1>::new(
+            provider,
+            &mut staging,
+            &mut cluster_scratch,
+        );
+        let view = BorrowedWriteView::within(4, 8, 16).unwrap();
+        let request = encode_read_request(volume, mounted.generation, handle, 3, view).unwrap();
+        let mut memory = [0xcc; 16];
+        let response = FilesystemReadTransport::read(&mut read, &request, &mut memory).unwrap();
+        assert_eq!(decode_read_response(&response, 8), Ok(Ok(8)));
+        assert_eq!(&memory[..4], &[0xcc; 4]);
+        assert_eq!(&memory[4..12], &[3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(&memory[12..], &[0xcc; 4]);
+        let stale = OpaqueHandle::new(handle.index(), handle.generation() + 1).unwrap();
+        let request = encode_read_request(volume, mounted.generation, stale, 3, view).unwrap();
+        memory.fill(0xcc);
+        let response = FilesystemReadTransport::read(&mut read, &request, &mut memory).unwrap();
+        assert_eq!(
+            decode_read_response(&response, 8),
+            Ok(Err(ReadError::StaleObject))
+        );
+        assert_eq!(memory, [0xcc; 16]);
+        let _provider = read.into_provider();
+        assert_eq!(staging, [0; 16]);
+        assert_eq!(cluster_scratch, [0; 4096]);
     }
 
     #[test]

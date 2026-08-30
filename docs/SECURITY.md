@@ -1279,6 +1279,10 @@ The isolated open receive path supplies no capability-token buffer. Both its
 semantic envelope check and register adapter require zero transferred
 capabilities; payload or kernel-count mismatch produces no reply. Request and
 response buffers are erased after every later outcome.
+Canonical FAT32 read transport validates the complete borrowed output range and
+local staging capacity before provider dispatch. It writes only that range after
+an active-handle read succeeds; stale handles leave all caller memory unchanged,
+and both staging areas are erased after every outcome.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

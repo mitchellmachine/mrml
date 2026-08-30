@@ -953,7 +953,9 @@ exact volume/mount/directory/object tuple and publishes only its revocable opaqu
 handle; capacity and stale failures carry no handle. Active handles drive
 bounded file-range reads through the exact
 mount/root entry and a fully validated FAT chain; stale handles perform no block
-I/O or output mutation, and staging plus cluster scratch are erased. Eighty-five
+I/O or output mutation, and staging plus cluster scratch are erased. Canonical
+read transport bounds the borrowed output view, rejects insufficient staging,
+publishes only that view, and maps stale handles without block I/O. Eighty-six
 focused Linux-host tests pass.
 Filesystem interface generation 3 now adds one
 canonical provider-open operation that binds the exact volume, mount generation,

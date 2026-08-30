@@ -7499,6 +7499,13 @@ and erases its request/response buffers. Its register adapter supplies no
 capability array, rejects kernel-reported payload/capability over-counts, and
 sends the exact 16-byte response only to the launch-bound caller.
 
+Canonical FAT32 read transport now consumes generation-3 read requests through
+an active provider handle. It bounds and isolates the borrowed output slice,
+requires sufficient local staging, publishes only after complete FAT validation,
+and erases staging plus cluster scratch on all paths. Stale handles perform no
+block I/O and leave the whole caller buffer unchanged. The focused FAT32 suite
+passes eighty-six Linux-host tests.
+
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
 authenticates the exact provider/mount/parent/object mapping; `OPEN_CHILD` on the
