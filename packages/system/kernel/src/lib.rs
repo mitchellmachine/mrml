@@ -293,7 +293,7 @@ pub use syscall::{
 };
 pub use task_runtime::{
     AccountedTaskRuntime, AccountedTaskRuntimeError, BlockedReceive, ControlEvent,
-    DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, FaultRetirement,
+    DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, ExpiredReceive, FaultRetirement,
     MAX_TASK_DELEGATIONS, PeerDeath, PeerDeathReason, PeriodicDomainBalancer, QueuedMessageShape,
     ReceiveDeadline, ReceivedMessage, TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES,
     TaskProtocolViolation, TaskRuntime, TaskRuntimeError, TaskTermination, TaskTerminationDispatch,

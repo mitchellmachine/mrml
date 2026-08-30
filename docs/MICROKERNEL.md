@@ -11250,3 +11250,29 @@ only; no QEMU or physical-hardware execution was performed for this increment.
 Patent review: `NOT_TRIGGERED` — assigning a distinct bounded syscall completion
 code to timeout is a conventional ABI result convention. See
 `docs/patents/REVIEW_LOG.md`.
+
+`TaskRuntime::expire_due_receives` now scans its fixed-capacity domains at the
+runtime's already-accounted scheduler tick, prepares every due wake before any
+mutation, then atomically clears and wakes the exact deadline-bound waits. It
+returns a bounded array of opaque `ExpiredReceive` identities. A trusted owner
+can exact-match each identity against its retained `BlockedReceive`, including
+runtime, generational task, wait generation, wait kind, and deadline, without
+recovering authority from a task name. Undelimited and future waits remain
+untouched, and a second scan cannot replay an expiration.
+
+This establishes the timer-facing kernel mechanism but does not itself advance
+time, complete suspended syscall contexts, or expose a user deadline request.
+Those integrations remain separate gates so an ABI cannot promise timeout
+behavior before a periodic trusted caller exists.
+
+The Linux-host kernel suite passes 660 tests. New coverage blocks distinct IPC
+and control owners at consecutive deadlines, advances real scheduler ticks,
+matches each bounded expiration only to its exact retained token, and proves a
+later scan is empty. The affected Linux kernel release build and service plus
+component-service UEFI release profiles cross-build with the existing
+configuration-specific warnings. This is in-memory and cross-build evidence
+only; no QEMU or physical-hardware execution was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — bounded transactional scanning of due timers
+and exact matching to retained wait identities is conventional scheduler and
+event-loop lifecycle handling. See `docs/patents/REVIEW_LOG.md`.

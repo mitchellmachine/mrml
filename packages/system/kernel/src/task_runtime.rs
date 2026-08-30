@@ -373,6 +373,38 @@ pub struct BlockedReceive {
     outcome: ScheduleOutcome,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExpiredReceive {
+    identity: BlockedReceiveIdentity,
+    deadline: ReceiveDeadline,
+}
+
+impl ExpiredReceive {
+    pub const fn task(&self) -> TaskId {
+        self.identity.task
+    }
+
+    pub const fn is_control(&self) -> bool {
+        matches!(self.identity.kind, BlockedReceiveKind::Control)
+    }
+
+    pub const fn deadline(&self) -> ReceiveDeadline {
+        self.deadline
+    }
+
+    pub fn matches(&self, blocked: &BlockedReceive) -> bool {
+        self.identity.runtime == blocked.identity.runtime
+            && self.identity.task == blocked.identity.task
+            && self.identity.generation == blocked.identity.generation
+            && matches!(
+                (self.identity.kind, blocked.identity.kind),
+                (BlockedReceiveKind::Ipc, BlockedReceiveKind::Ipc)
+                    | (BlockedReceiveKind::Control, BlockedReceiveKind::Control)
+            )
+            && blocked.identity.deadline == Some(self.deadline)
+    }
+}
+
 impl BlockedReceive {
     pub const fn task(&self) -> TaskId {
         self.identity.task
@@ -2352,6 +2384,50 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.cancel_blocked_receive(blocked)
     }
 
+    /// Transactionally expires every receive deadline due at the runtime's
+    /// already-accounted scheduler tick and returns exact owner identities.
+    pub fn expire_due_receives(
+        &mut self,
+    ) -> Result<[Option<ExpiredReceive>; TASKS], TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let now = self.scheduler.ticks();
+        let mut wakes: [Option<WakePlan>; TASKS] = array::from_fn(|_| None);
+        let mut expired = array::from_fn(|_| None);
+        for (slot, domain) in self.domains.iter().enumerate() {
+            let Some(identity) = domain.as_ref().and_then(|domain| domain.blocked_receive) else {
+                continue;
+            };
+            let Some(deadline) = identity.deadline else {
+                continue;
+            };
+            if deadline.tick() > now {
+                continue;
+            }
+            wakes[slot] = Some(
+                self.scheduler
+                    .prepare_wake(identity.task)
+                    .map_err(TaskRuntimeError::Scheduler)?,
+            );
+            expired[slot] = Some(ExpiredReceive { identity, deadline });
+        }
+        for slot in 0..TASKS {
+            let Some(wake) = wakes[slot].take() else {
+                continue;
+            };
+            let identity = expired[slot]
+                .as_ref()
+                .expect("expiry commit preserves every prepared identity")
+                .identity;
+            let domain = self.domains[slot]
+                .as_mut()
+                .expect("expiry commit preserves every prepared domain");
+            assert_eq!(domain.blocked_receive, Some(identity));
+            domain.blocked_receive = None;
+            self.scheduler.commit_wake(wake);
+        }
+        Ok(expired)
+    }
+
     fn block_current_for_receive(
         &mut self,
         current: TaskId,
@@ -4084,6 +4160,65 @@ mod tests {
         );
         assert_eq!(runtime.cancel_blocked_receive(undelimited), Ok(()));
         assert_eq!(sender, runtime.current().unwrap());
+    }
+
+    #[test]
+    fn scheduler_tick_expires_all_due_waits_with_exact_owner_identities() {
+        let mut runtime = TaskRuntime::<3, 1>::new(1_000, 1).unwrap();
+        let control = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let ipc = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let runner = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == control));
+        let control_wait = match runtime
+            .receive_control_or_block_current_until(ReceiveDeadline::new(1).unwrap())
+            .unwrap()
+        {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty control receive must block"),
+        };
+        assert_eq!(runtime.current(), Some(ipc));
+        let ipc_wait = match runtime
+            .receive_or_block_current_until(ReceiveDeadline::new(2).unwrap())
+            .unwrap()
+        {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty IPC receive must block"),
+        };
+        assert_eq!(runtime.current(), Some(runner));
+
+        runtime.timer_tick().unwrap();
+        let first = runtime.expire_due_receives().unwrap();
+        let mut first_iter = first.into_iter().flatten();
+        let first = first_iter.next().unwrap();
+        assert!(first_iter.next().is_none());
+        assert_eq!(first.task(), control);
+        assert!(first.is_control());
+        assert_eq!(first.deadline().tick(), 1);
+        assert!(first.matches(&control_wait));
+        assert!(!first.matches(&ipc_wait));
+
+        runtime.timer_tick().unwrap();
+        let second = runtime.expire_due_receives().unwrap();
+        let mut second_iter = second.into_iter().flatten();
+        let second = second_iter.next().unwrap();
+        assert!(second_iter.next().is_none());
+        assert_eq!(second.task(), ipc);
+        assert!(!second.is_control());
+        assert_eq!(second.deadline().tick(), 2);
+        assert!(second.matches(&ipc_wait));
+        assert!(
+            runtime
+                .expire_due_receives()
+                .unwrap()
+                .into_iter()
+                .all(|expired| expired.is_none())
+        );
     }
 
     #[test]
