@@ -561,12 +561,17 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        AhciControlServiceSyscalls, AhciRawSyscall, AhciServiceEntryRegisters, AhciSyscallFrame,
+        AhciUserspaceSyscallError, AhciUserspaceSyscalls,
+    };
     use mrml_interface_storage_block_provider_v1::{
-        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, FLUSH_RESPONSE_BYTES,
     };
     use mrml_kernel::{
-        arch::x86_64::UserContext, CapabilitySpace, IsolationPlacement,
-        NativeDeviceServiceEntryError, PhysAddr, Priority, Rights, TotalMicrovmClass,
+        arch::x86_64::UserContext, CapabilitySpace, ControlEvent, Endpoint, IsolationPlacement,
+        NativeDeviceServiceEntryError, PhysAddr, Priority, Rights, SyscallRequest,
+        TotalMicrovmClass,
     };
 
     fn service() -> IsolationServiceSpec {
@@ -794,6 +799,194 @@ mod tests {
         assert_eq!(prepared.task().source_task(), source);
         assert_eq!(prepared.task().entry().attachment(), launch.spec().attachment());
         assert_eq!(prepared.task().entry().provider_generation(), 3);
+    }
+
+    struct RuntimeRawSyscall<'a> {
+        runtime: &'a mut TaskRuntime<2, 8>,
+        endpoint: &'a mut Endpoint,
+        sender: TaskId,
+    }
+
+    unsafe impl AhciRawSyscall for RuntimeRawSyscall<'_> {
+        unsafe fn invoke(&mut self, frame: &mut AhciSyscallFrame) {
+            let request = SyscallRequest::decode(
+                frame.rax, frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9,
+            );
+            let SyscallRequest::SendBuffer {
+                endpoint,
+                receiver,
+                payload_address,
+                payload_length,
+                capabilities_address: 0,
+                capability_count: 0,
+            } = request.unwrap()
+            else {
+                panic!("AHCI reply must use the canonical capability-free send-buffer frame")
+            };
+            let payload = unsafe {
+                core::slice::from_raw_parts(payload_address as *const u8, payload_length.into())
+            };
+            match self.runtime.deliver_ipc(
+                self.sender,
+                receiver,
+                self.endpoint,
+                endpoint,
+                payload,
+                &[],
+            ) {
+                Ok(sequence) => {
+                    frame.rax = 0;
+                    frame.rdx = sequence;
+                }
+                Err(error) if error.is_precommit_send_denial() => {
+                    frame.rax = 1;
+                    frame.rdx = 0;
+                }
+                Err(error) => panic!("unexpected kernel reply-dispatch failure: {error:?}"),
+            }
+        }
+    }
+
+    fn send_control_reply(
+        runtime: &mut TaskRuntime<2, 8>,
+        endpoint: &mut Endpoint,
+        sender: TaskId,
+        endpoint_token: u64,
+        receiver_token: u64,
+        response: &[u8; FLUSH_RESPONSE_BYTES],
+    ) -> Result<(), AhciUserspaceSyscallError> {
+        let raw = RuntimeRawSyscall {
+            runtime,
+            endpoint,
+            sender,
+        };
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, endpoint_token, receiver_token).unwrap();
+        AhciControlServiceSyscalls::send_response(&mut syscalls, response)
+    }
+
+    fn dispatch_control_reply_frame(
+        runtime: &mut TaskRuntime<2, 8>,
+        endpoint: &mut Endpoint,
+        sender: TaskId,
+        endpoint_token: u64,
+        receiver_token: u64,
+        response: &[u8; FLUSH_RESPONSE_BYTES],
+    ) -> u64 {
+        let mut raw = RuntimeRawSyscall {
+            runtime,
+            endpoint,
+            sender,
+        };
+        let mut frame = AhciSyscallFrame {
+            rax: 4,
+            rdi: endpoint_token,
+            rsi: receiver_token,
+            rdx: response.as_ptr() as u64,
+            r10: response.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { raw.invoke(&mut frame) };
+        frame.rax
+    }
+
+    #[test]
+    fn installed_reply_tokens_cross_the_canonical_syscall_decoder_and_runtime() {
+        let (mut runtime, source, target, launch, source_endpoint) = runtime_launch(false);
+        let prepared = prepare_bound_ahci_native_service_task(
+            &mut runtime,
+            source,
+            target,
+            launch,
+            ObjectId(40),
+            source_endpoint,
+            source,
+            ObjectId(42),
+        )
+        .unwrap();
+        let entry = prepared.task().entry();
+        let installed = *runtime.context(target).unwrap();
+        let installed_entry = unsafe {
+            AhciServiceEntryRegisters::from_installed_registers(
+                installed.r13,
+                installed.r14,
+                installed.r12,
+                installed.r15,
+                installed.r11,
+                installed.r10,
+                installed.rbx,
+                installed.rdx,
+                installed.rbp,
+                installed.rsi,
+                installed.r9,
+                installed.r8,
+            )
+        }
+        .unwrap();
+        assert_eq!(installed_entry.service_endpoint(), entry.service_endpoint().token());
+        assert_eq!(installed_entry.supervisor_task(), entry.supervisor_task().token());
+        runtime.activate_constructed_task(target).unwrap();
+        let mut endpoint = Endpoint::new(ObjectId(40));
+        let response = [0x5a; FLUSH_RESPONSE_BYTES];
+
+        assert_eq!(
+            dispatch_control_reply_frame(
+                &mut runtime,
+                &mut endpoint,
+                target,
+                entry.authorities()[0].token(),
+                installed_entry.supervisor_task(),
+                &response,
+            ),
+            1
+        );
+        assert_eq!(
+            dispatch_control_reply_frame(
+                &mut runtime,
+                &mut endpoint,
+                target,
+                installed_entry.service_endpoint(),
+                target.token(),
+                &response,
+            ),
+            1
+        );
+        assert_eq!(
+            send_control_reply(
+                &mut runtime,
+                &mut endpoint,
+                target,
+                installed_entry.service_endpoint(),
+                installed_entry.supervisor_task(),
+                &response,
+            ),
+            Ok(())
+        );
+        let ControlEvent::Message(reply) = runtime.receive_control(source).unwrap() else {
+            panic!("reply delivery cannot synthesize a peer-death event")
+        };
+        assert_eq!(reply.sender(), target);
+        assert_eq!(reply.sequence(), 1);
+        assert_eq!(reply.message().payload(), response);
+
+        runtime
+            .revoke_capability(source, source_endpoint)
+            .unwrap();
+        assert_eq!(
+            send_control_reply(
+                &mut runtime,
+                &mut endpoint,
+                target,
+                installed_entry.service_endpoint(),
+                installed_entry.supervisor_task(),
+                &response,
+            ),
+            Err(AhciUserspaceSyscallError::Kernel(1))
+        );
+        assert!(matches!(
+            runtime.receive_control(source),
+            Err(mrml_kernel::TaskRuntimeError::InboxEmpty)
+        ));
     }
 
     #[test]

@@ -635,8 +635,8 @@ mod tests {
     fn entry(installed: InstalledAhciServiceLaunch) -> AhciServiceEntryRegisters {
         unsafe {
             AhciServiceEntryRegisters::from_installed_registers(
-                1,
-                2,
+                (8 << 32) | 2,
+                (9 << 32) | 3,
                 3,
                 (10 << 32) | 1,
                 AHCI_SERVICE_LAUNCH_BYTES as u64,

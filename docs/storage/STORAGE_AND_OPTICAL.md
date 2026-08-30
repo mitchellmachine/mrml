@@ -1439,6 +1439,41 @@ Patent review: **NOT_TRIGGERED**. Exercising existing capability-gated IPC,
 inbox delivery, sequencing, and transitive revocation introduces no new
 mechanism. See [the patent review log](../patents/REVIEW_LOG.md).
 
+The installed AHCI reply values now cross the canonical buffered-syscall path
+in a controlled host test **IMPLEMENTED IN SOURCE**. The target's
+`TaskRuntime`-installed `UserContext` is reconstructed through the same
+`AhciServiceEntryRegisters` validator used by the service image; its endpoint
+and supervisor tokens feed the real `AhciUserspaceSyscalls` operation-4 frame,
+the kernel's canonical `SyscallRequest` decoder, a test-only raw-syscall shim
+honoring the decoded bounded pointer, and the real `TaskRuntime` inbox. A
+different projected role token and a same-task route substitution return the
+canonical precommit error; the exact launch values then deliver sequence one
+with the harness-selected service task recorded as sender, and source-root
+revocation rejects a later reply. The entry validator now requires nonzero
+generations for both typed tokens and permits equal numeric bit patterns across
+the separate capability and task namespaces instead of misclassifying them as
+authority aliasing. AHCI passes all 136 Linux tests and its Linux
+and `MRML_NATIVE` release builds; the AHCI service-image profile also passes its
+`MRML_NATIVE` release build. The kernel's previously exercised 688-test Linux
+suite remains unchanged. This does not execute `INT 0x80`, `UserCallFrame`
+privilege validation, active page-table usercopy, kernel current-task selection,
+the bootloader handler, an installed supervisor, KVM/WHP, or physical AHCI
+hardware.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Composing the existing launch-bound adapter,
+canonical syscall decoder, and capability-gated runtime delivery in a controlled
+test introduces no new mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

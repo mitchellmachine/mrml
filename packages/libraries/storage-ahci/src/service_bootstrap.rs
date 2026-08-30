@@ -55,9 +55,8 @@ impl AhciServiceEntryRegisters {
             device_write_data,
             device_read_data,
         ];
-        if service_endpoint == 0
-            || supervisor_task == 0
-            || service_endpoint == supervisor_task
+        if !valid_token(service_endpoint)
+            || !valid_token(supervisor_task)
             || provider_generation == 0
             || service_module_object == 0
             || launch_data_bytes != AHCI_SERVICE_LAUNCH_BYTES as u64
@@ -168,6 +167,8 @@ mod tests {
     use mrml_kernel::{ObjectId, Rights};
 
     const LAUNCH_TOKEN: u64 = (10 << 32) | 1;
+    const ENDPOINT_TOKEN: u64 = (11 << 32) | 2;
+    const SUPERVISOR_TOKEN: u64 = (12 << 32) | 3;
 
     struct Raw {
         bytes: [u8; AHCI_SERVICE_LAUNCH_BYTES],
@@ -350,11 +351,20 @@ mod tests {
         launch_bytes: u64,
         command_list: u64,
     ) -> Result<AhciServiceEntryRegisters, AhciServiceBootstrapError> {
+        unsafe { entry_with_supervisor(endpoint, SUPERVISOR_TOKEN, launch_bytes, command_list) }
+    }
+
+    unsafe fn entry_with_supervisor(
+        endpoint: u64,
+        supervisor: u64,
+        launch_bytes: u64,
+        command_list: u64,
+    ) -> Result<AhciServiceEntryRegisters, AhciServiceBootstrapError> {
         let authorities = authorities();
         unsafe {
             AhciServiceEntryRegisters::from_installed_registers(
                 endpoint,
-                2,
+                supervisor,
                 3,
                 LAUNCH_TOKEN,
                 launch_bytes,
@@ -374,22 +384,33 @@ mod tests {
         let authorities = authorities();
         let entry = unsafe {
             entry_with(
-                1,
+                ENDPOINT_TOKEN,
                 AHCI_SERVICE_LAUNCH_BYTES as u64,
                 authorities[1].token(),
             )
         }
         .unwrap();
-        assert_eq!(entry.service_endpoint(), 1);
-        assert_eq!(entry.supervisor_task(), 2);
+        assert_eq!(entry.service_endpoint(), ENDPOINT_TOKEN);
+        assert_eq!(entry.supervisor_task(), SUPERVISOR_TOKEN);
         assert_eq!(entry.provider_generation(), 3);
         assert_eq!(entry.service_module_object(), 9);
+        let equal_bit_pattern = unsafe {
+            entry_with(
+                SUPERVISOR_TOKEN,
+                AHCI_SERVICE_LAUNCH_BYTES as u64,
+                authorities[1].token(),
+            )
+        }
+        .unwrap();
+        assert_eq!(equal_bit_pattern.service_endpoint(), SUPERVISOR_TOKEN);
+        assert_eq!(equal_bit_pattern.supervisor_task(), SUPERVISOR_TOKEN);
         let raw = Raw {
             bytes: record().encode(),
             status: 0,
             calls: 0,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 1, 2).unwrap();
+        let mut syscalls =
+            AhciUserspaceSyscalls::new(raw, ENDPOINT_TOKEN, SUPERVISOR_TOKEN).unwrap();
         let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         assert_eq!(
             bootstrap_installed_ahci_entry(&mut syscalls, entry, &mut scratch)
@@ -414,17 +435,44 @@ mod tests {
             Err(AhciServiceBootstrapError::InvalidProjection)
         );
         assert_eq!(
-            unsafe { entry_with(1, 383, authorities[1].token()) },
+            unsafe {
+                entry_with(
+                    1,
+                    AHCI_SERVICE_LAUNCH_BYTES as u64,
+                    authorities[1].token(),
+                )
+            },
             Err(AhciServiceBootstrapError::InvalidProjection)
         );
         assert_eq!(
-            unsafe { entry_with(1, AHCI_SERVICE_LAUNCH_BYTES as u64, LAUNCH_TOKEN) },
+            unsafe {
+                entry_with_supervisor(
+                    ENDPOINT_TOKEN,
+                    2,
+                    AHCI_SERVICE_LAUNCH_BYTES as u64,
+                    authorities[1].token(),
+                )
+            },
+            Err(AhciServiceBootstrapError::InvalidProjection)
+        );
+        assert_eq!(
+            unsafe { entry_with(ENDPOINT_TOKEN, 383, authorities[1].token()) },
             Err(AhciServiceBootstrapError::InvalidProjection)
         );
         assert_eq!(
             unsafe {
                 entry_with(
-                    1,
+                    ENDPOINT_TOKEN,
+                    AHCI_SERVICE_LAUNCH_BYTES as u64,
+                    LAUNCH_TOKEN,
+                )
+            },
+            Err(AhciServiceBootstrapError::InvalidProjection)
+        );
+        assert_eq!(
+            unsafe {
+                entry_with(
+                    ENDPOINT_TOKEN,
                     AHCI_SERVICE_LAUNCH_BYTES as u64,
                     authorities[0].token(),
                 )
