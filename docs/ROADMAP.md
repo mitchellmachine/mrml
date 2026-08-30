@@ -62,7 +62,7 @@ probing, and the isolated syscall-backed receive/reply loop pass thirty-five
 focused tests on Linux. Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
-filesystem interface codec passes three and storage passes 136, including a
+filesystem interface codec passes thirteen and storage passes 142, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
 does not change the modeled kernel epoch. Capability-authorized open policy,
 checking, formatting, writes, installed supervisor launch, and hardware evidence

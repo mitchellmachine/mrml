@@ -896,8 +896,9 @@ consumes the canonical probe bytes and distinguishes malformed calls from
 unsupported media. Its authenticated receive/read/release/reply loop and concrete
 register-level syscall adapter erase transient buffers on every path; the
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
-serves calls until fail-stop or supervised replacement. Thirty-three tests pass
-on Windows and Arch Linux, and the MRML-native release binary builds on Windows
+serves calls until fail-stop or supervised replacement. Thirty-five focused
+tests pass on Linux; prior Windows evidence covered thirty-three tests. The
+MRML-native release binary builds on Windows
 as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. The
 validated backend now makes the block-provider health check mandatory during
 replacement:
