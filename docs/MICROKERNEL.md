@@ -11094,8 +11094,10 @@ serialization. See `docs/patents/REVIEW_LOG.md`.
 
 Every `TaskRuntime` now receives a kernel-internal nonzero instance identity
 from one bounded atomic allocator, and each issued dispatch binds that identity
-in addition to its retired source and selected successor. Allocation fails
-permanently at exhaustion rather than wrapping. Consequently, two runtimes with
+in addition to its retired source and selected successor. Allocation returns the
+typed `TaskRuntimeError::RuntimeIdentityExhausted` permanently at exhaustion
+rather than wrapping or misclassifying it as corruption. Consequently, two
+runtimes with
 identical generational task IDs and identical retirement outcomes still cannot
 consume or prepare state through each other's dispatch tokens. The runtime
 identity is internal matching state, not caller-visible authority.

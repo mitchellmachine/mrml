@@ -43,6 +43,7 @@ pub enum TaskRuntimeError {
     DelegationTableFull,
     ConstructionTargetNotPristine,
     RetirementDispatchPending,
+    RuntimeIdentityExhausted,
 }
 
 impl TaskRuntimeError {
@@ -2205,7 +2206,7 @@ fn allocate_task_runtime_identity(counter: &AtomicU64) -> Result<u64, TaskRuntim
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |identity| {
             identity.checked_add(1)
         })
-        .map_err(|_| TaskRuntimeError::IntegrityFailure)
+        .map_err(|_| TaskRuntimeError::RuntimeIdentityExhausted)
 }
 
 fn two_domains_mut<const TASKS: usize, const CAPS: usize>(
@@ -2242,7 +2243,7 @@ mod tests {
         assert_eq!(allocate_task_runtime_identity(&counter), Ok(u64::MAX - 1));
         assert_eq!(
             allocate_task_runtime_identity(&counter),
-            Err(TaskRuntimeError::IntegrityFailure)
+            Err(TaskRuntimeError::RuntimeIdentityExhausted)
         );
         assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
     }
