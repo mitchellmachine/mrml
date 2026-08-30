@@ -3990,7 +3990,7 @@ mod tests {
             );
             let authorizations_before_commit = authorizer.calls.get();
             let recovered = prepared_service
-                .commit(authorities, &authorizer, &mut supervisor)
+                .commit(authorities, &authorizer, &mut supervisor, &runtime)
                 .unwrap();
             assert_eq!(authorizer.calls.get(), authorizations_before_commit + 1);
             assert_eq!(recovered.service().token(), 1u64 << 32);

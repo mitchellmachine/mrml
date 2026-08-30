@@ -7107,6 +7107,18 @@ Patent review: `NOT_TRIGGERED` — this is conventional commit-time capability
 revalidation and bounded lifecycle sequencing. See
 `docs/patents/REVIEW_LOG.md`.
 
+Delayed service registration now has a runtime-validated commit entry. Recovery
+uses it to recheck the exact generational `TaskId` immediately before supervisor
+publication; a task retired after policy validation leaves the reserved service
+slot vacant, and only a newly planned live task generation can be registered.
+The trusted immediate kernel registration API remains available for transitions
+whose caller already owns task creation and publication as one operation. Kernel
+passes 633 focused tests and configuration passes 53.
+
+Patent review: `NOT_TRIGGERED` — this applies conventional generational liveness
+validation at an existing lifecycle commit boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

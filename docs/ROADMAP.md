@@ -4050,3 +4050,8 @@ Prepared service restart now revalidates exact live `CONTROL` at commit for
 both external management spaces and task-local syscall requesters. Revocation
 between prepare and commit creates no replacement task and leaves the service
 stopped for an explicitly reauthorized retry.
+
+Recovered service publication now also revalidates the planned generational
+task identity against the live runtime at commit. Retirement between recovery
+validation and publication leaves the supervisor slot vacant; recovery must
+replan against a newly created live task generation.

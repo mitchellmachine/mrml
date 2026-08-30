@@ -3992,12 +3992,15 @@ impl<const SETTINGS: usize, const AUDIT: usize> PreparedRecoveredService<SETTING
     pub fn commit<
         const GRANTS: usize,
         const SERVICES: usize,
+        const TASKS: usize,
+        const CAPS: usize,
         A: CapabilityAuthorizer + ?Sized,
     >(
         self,
         authorities: CommittedRecoveredStorageAuthorities<GRANTS>,
         capabilities: &A,
         supervisor: &mut ServiceSupervisor<SERVICES>,
+        runtime: &TaskRuntime<TASKS, CAPS>,
     ) -> Result<RecoveredSystemState<GRANTS, SETTINGS, AUDIT>, RecoveredSystemCommitError> {
         if authorities.epoch() != self.authority_epoch {
             return Err(RecoveredSystemCommitError::AuthorityEpochMismatch);
@@ -4019,7 +4022,7 @@ impl<const SETTINGS: usize, const AUDIT: usize> PreparedRecoveredService<SETTING
             ));
         }
         let service = supervisor
-            .commit_registration(self.registration)
+            .commit_registration_with_runtime(self.registration, runtime)
             .map_err(RecoveredSystemCommitError::Service)?;
         let (configuration, _) = self.recovered.into_parts();
         Ok(RecoveredSystemState {

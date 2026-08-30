@@ -1025,3 +1025,8 @@ Service restart plans retain identity and reprovisioning inputs but not cached
 authority. Commit rechecks the retained exact control handle in the live
 management domain—or the requester's live task capability space—before task
 creation. Revocation therefore covers prepared restart decisions.
+
+Recovered service registration treats `TaskId` as generational identity, not
+authority or proof of liveness. Its delayed commit checks that exact task in the
+retained runtime immediately before supervisor mutation. A retired or reused
+slot generation cannot be published from a prepared recovery decision.

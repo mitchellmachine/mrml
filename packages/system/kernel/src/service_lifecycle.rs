@@ -499,6 +499,26 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         &mut self,
         plan: ServiceRegistrationPlan,
     ) -> Result<ServiceId, ServiceError> {
+        self.commit_registration_validated(plan)
+    }
+
+    /// Publishes a prepared registration only while its exact task generation
+    /// remains live in the supplied runtime. Recovery and other delayed
+    /// publication paths must use this entry rather than trusting the
+    /// prepare-time task identity.
+    pub fn commit_registration_with_runtime<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        plan: ServiceRegistrationPlan,
+        runtime: &TaskRuntime<TASKS, CAPS>,
+    ) -> Result<ServiceId, ServiceError> {
+        runtime.context(plan.task).map_err(ServiceError::Runtime)?;
+        self.commit_registration_validated(plan)
+    }
+
+    fn commit_registration_validated(
+        &mut self,
+        plan: ServiceRegistrationPlan,
+    ) -> Result<ServiceId, ServiceError> {
         let entry = self
             .slots
             .get(plan.slot as usize)
@@ -1360,6 +1380,38 @@ mod tests {
             supervisor.plan_registration(ObjectId(0x62), task, policy),
             Err(ServiceError::Full)
         );
+    }
+
+    #[test]
+    fn runtime_registration_commit_rejects_retired_task_generation() {
+        let object = ObjectId(0x62);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let plan = supervisor
+            .plan_registration(object, task, RestartPolicy::ONCE_IMMEDIATE)
+            .unwrap();
+        runtime.detach_domain(task).unwrap();
+
+        assert!(matches!(
+            supervisor.commit_registration_with_runtime(plan, &runtime),
+            Err(ServiceError::Runtime(_))
+        ));
+        assert!(!supervisor.slots[0].occupied);
+
+        let replacement = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert_ne!(replacement, task);
+        let plan = supervisor
+            .plan_registration(object, replacement, RestartPolicy::ONCE_IMMEDIATE)
+            .unwrap();
+        let service = supervisor
+            .commit_registration_with_runtime(plan, &runtime)
+            .unwrap();
+        assert_eq!(supervisor.task(service), Ok(Some(replacement)));
     }
 
     #[test]
