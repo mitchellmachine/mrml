@@ -227,4 +227,49 @@ mod tests {
         assert_eq!(context.rdx, 5);
         assert_eq!(context.r10.to_le_bytes()[..5], *b"ready");
     }
+
+    #[test]
+    fn timeout_winner_rejects_stale_completion_and_preserves_late_message() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x92);
+        let capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(object);
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        assert!(matches!(
+            executor.start(&mut runtime, ReceiveTimeout::new(1).unwrap()),
+            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+        ));
+        let tick = executor.timer_tick(&mut runtime).unwrap();
+        assert!(matches!(tick.scheduling(), ScheduleOutcome::Continue(task) if task == sender));
+        assert!(!executor.has_pending(receiver).unwrap());
+        let timed_out = *runtime.context(receiver).unwrap();
+        assert_eq!(
+            timed_out.rax,
+            crate::SyscallCompletionStatus::TimedOut.code()
+        );
+
+        runtime
+            .deliver_ipc(sender, receiver, &mut endpoint, capability, b"late", &[])
+            .unwrap();
+        assert_eq!(
+            executor.complete_ready(&mut runtime, receiver),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert_eq!(*runtime.context(receiver).unwrap(), timed_out);
+        assert_eq!(
+            runtime.receive_ipc(receiver).unwrap().payload(),
+            b"late"
+        );
+    }
 }

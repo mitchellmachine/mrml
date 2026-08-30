@@ -11523,3 +11523,21 @@ probe.
 Patent review: `NOT_TRIGGERED` — a bounded message-before-timeout integration
 probe and exact mode-specific proof matching are conventional race-regression
 testing. See `docs/patents/REVIEW_LOG.md`.
+
+Deadline arbitration now has an explicit late-delivery regression boundary.
+After the timer expires an exact pending owner, a later IPC publication wakes
+the receiver but cannot recreate or consume that retired owner. Attempting the
+old ready-completion path returns `OwnerMismatch` before inbox access, leaves
+the saved timeout status and zero detail registers unchanged, and preserves the
+late message for the receiver's next explicit receive operation.
+
+The Linux-host kernel suite passes 667 tests. The new test exercises a
+two-task runtime from deadline admission through timer expiry, late authorized
+delivery, stale completion rejection, unchanged saved context, and subsequent
+message retrieval. The Linux kernel release build also passes through the
+canonical `mrml` frontend. This is deterministic in-memory evidence, not hosted
+interrupt or physical-hardware evidence.
+
+Patent review: `NOT_TRIGGERED` — rejecting a stale completion before queue
+consumption and retaining a late event is conventional one-winner event-loop
+arbitration. See `docs/patents/REVIEW_LOG.md`.
