@@ -8,7 +8,7 @@ use crate::{
     AhciServiceCpuMappingRemovalError, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
     InstalledAhciAbarMapping, PreparedAhciNativeServiceTask,
 };
-use mrml_kernel::{Capability, CapabilitySpace};
+use mrml_kernel::{Capability, CapabilitySpace, TaskRuntime, TaskRuntimeError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciServiceMappingTeardown {
@@ -72,6 +72,47 @@ impl MappedAhciNativeServiceTask {
 
     pub const fn into_parts(self) -> (PreparedAhciNativeServiceTask, AhciServiceMappingTeardown) {
         (self.prepared, self.mappings)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActiveAhciNativeServiceTask {
+    mapped: MappedAhciNativeServiceTask,
+}
+
+impl ActiveAhciNativeServiceTask {
+    pub const fn mapped(self) -> MappedAhciNativeServiceTask {
+        self.mapped
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciServiceActivationFailure {
+    error: TaskRuntimeError,
+    mapped: MappedAhciNativeServiceTask,
+}
+
+impl AhciServiceActivationFailure {
+    pub const fn error(self) -> TaskRuntimeError {
+        self.error
+    }
+
+    pub const fn mapped(self) -> MappedAhciNativeServiceTask {
+        self.mapped
+    }
+}
+
+pub fn activate_mapped_ahci_service_task<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    mapped: MappedAhciNativeServiceTask,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<ActiveAhciNativeServiceTask, AhciServiceActivationFailure> {
+    let task = mapped.prepared().task().task();
+    match runtime.activate_constructed_task(task) {
+        Ok(()) => Ok(ActiveAhciNativeServiceTask { mapped }),
+        Err(error) => Err(AhciServiceActivationFailure { error, mapped }),
     }
 }
 
@@ -524,8 +565,12 @@ mod tests {
             .unwrap()
         };
         let source = runtime.create(Priority::NORMAL, context(0x50_0000)).unwrap();
-        let target = runtime.create(Priority::NORMAL, context(0x60_0000)).unwrap();
-        let wrong_target = runtime.create(Priority::NORMAL, context(0x70_0000)).unwrap();
+        let target = runtime
+            .create_for_construction(Priority::NORMAL, context(0x60_0000))
+            .unwrap();
+        let wrong_target = runtime
+            .create_for_construction(Priority::NORMAL, context(0x70_0000))
+            .unwrap();
         let launch_data = runtime
             .capabilities_mut(source)
             .unwrap()
@@ -643,6 +688,44 @@ mod tests {
         );
         assert!(abar_backend.mapping.is_none());
         assert!(cpu_backend.installed.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn mapped_task_becomes_runnable_only_through_typed_activation() {
+        let (mut runtime, source, prepared, _, _) = native_tasks();
+        let target = prepared.task().task();
+        let (capabilities, map, control, cpu) = authorities();
+        let mut abar_backend = AbarBackend::default();
+        let mut cpu_backend = CpuBackend::default();
+        let mapped = crate::install_prepared_ahci_service_mappings(
+            prepared,
+            descriptor(),
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        )
+        .unwrap();
+        assert_eq!(runtime.construction_pending(target), Ok(true));
+        assert_eq!(runtime.load().runnable(), 1);
+        assert!(matches!(
+            runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        assert_eq!(
+            runtime.yield_current(),
+            Ok(mrml_kernel::ScheduleOutcome::Continue(source))
+        );
+        let active = crate::activate_mapped_ahci_service_task(mapped, &mut runtime).unwrap();
+        assert_eq!(active.mapped(), mapped);
+        assert_eq!(runtime.construction_pending(target), Ok(false));
+        assert_eq!(runtime.load().runnable(), 2);
+        assert!(matches!(
+            runtime.yield_current(),
+            Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target
+        ));
     }
 
     #[test]
@@ -815,6 +898,10 @@ mod tests {
         assert_eq!(binding, crate::AhciServiceTaskBindingError::TaskAttachmentMismatch);
         let owner = crate::bind_quiesced_ahci_service_task(task, launch, quiesced)
             .unwrap_or_else(|_| panic!("exact task and launch must bind"));
+        runtime.activate_constructed_task(task.task()).unwrap();
+        runtime
+            .activate_constructed_task(wrong_task.task())
+            .unwrap();
         assert!(matches!(
             runtime.start(),
             mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source

@@ -392,6 +392,10 @@ impl<const TASKS: usize> Scheduler<TASKS> {
         self.create_with_state(priority, TaskState::Runnable)
     }
 
+    pub(crate) fn create_blocked(&mut self, priority: Priority) -> Result<TaskId, SchedulerError> {
+        self.create_with_state(priority, TaskState::Blocked)
+    }
+
     fn create_with_state(
         &mut self,
         priority: Priority,
@@ -557,6 +561,15 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
     pub fn create(&mut self, priority: Priority) -> Result<TaskId, KernelScheduleError> {
         self.scheduler
             .create(priority)
+            .map_err(KernelScheduleError::Scheduler)
+    }
+
+    pub(crate) fn create_blocked(
+        &mut self,
+        priority: Priority,
+    ) -> Result<TaskId, KernelScheduleError> {
+        self.scheduler
+            .create_blocked(priority)
             .map_err(KernelScheduleError::Scheduler)
     }
 

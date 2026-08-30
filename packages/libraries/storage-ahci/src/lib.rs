@@ -188,8 +188,9 @@ pub use service_launch_record::{
     BoundAhciServiceLaunch, InstalledAhciServiceLaunch, PreparedAhciNativeServiceTask,
 };
 pub use service_mapping_lifecycle::{
-    install_ahci_service_mappings, install_prepared_ahci_service_mappings,
-    remove_ahci_service_mappings, AhciServiceMappingInstallError,
+    activate_mapped_ahci_service_task, install_ahci_service_mappings,
+    install_prepared_ahci_service_mappings, remove_ahci_service_mappings,
+    ActiveAhciNativeServiceTask, AhciServiceActivationFailure, AhciServiceMappingInstallError,
     AhciServiceMappingRemovalError, AhciServiceMappingTeardown, MappedAhciNativeServiceTask,
     PreparedAhciServiceMappingError, PreparedAhciServiceMappingFailure,
 };

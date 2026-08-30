@@ -410,6 +410,14 @@ pub fn prepare_native_device_service_task<
     if spec.placement() != IsolationPlacement::NativeService {
         return Err(NativeDeviceServiceTaskError::WrongPlacement);
     }
+    if !runtime
+        .construction_pending(target_task)
+        .map_err(NativeDeviceServiceTaskError::Runtime)?
+    {
+        return Err(NativeDeviceServiceTaskError::Runtime(
+            TaskRuntimeError::NotConstructionTarget,
+        ));
+    }
     let context = *runtime
         .context(target_task)
         .map_err(NativeDeviceServiceTaskError::Runtime)?;
@@ -518,7 +526,9 @@ mod tests {
     fn runtime() -> (TaskRuntime<2, 8>, TaskId, TaskId) {
         let mut runtime = TaskRuntime::<2, 8>::new(1_000, 1).unwrap();
         let source = runtime.create(Priority::NORMAL, context(0x20_0000)).unwrap();
-        let target = runtime.create(Priority::NORMAL, context(0x30_0000)).unwrap();
+        let target = runtime
+            .create_for_construction(Priority::NORMAL, context(0x30_0000))
+            .unwrap();
         (runtime, source, target)
     }
 
@@ -600,6 +610,7 @@ mod tests {
             ],
             projected.map(Capability::token)
         );
+        assert_eq!(runtime.construction_pending(target), Ok(true));
         for ((capability, expected), index) in projected.into_iter().zip(rights).zip(0_u64..) {
             assert_eq!(
                 runtime
@@ -731,6 +742,31 @@ mod tests {
     }
 
     #[test]
+    fn runnable_target_is_rejected_before_capability_projection() {
+        let mut runtime = TaskRuntime::<2, 8>::new(1_000, 1).unwrap();
+        let source = runtime.create(Priority::NORMAL, context(0x20_0000)).unwrap();
+        let target = runtime.create(Priority::NORMAL, context(0x30_0000)).unwrap();
+        let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
+        assert_eq!(
+            prepare_native_device_service_task(
+                &mut runtime,
+                source,
+                target,
+                spec(IsolationPlacement::NativeService),
+                attachment,
+                ObjectId(0xa0),
+                ObjectId(0xa1),
+                ObjectId(0xa2),
+            ),
+            Err(NativeDeviceServiceTaskError::Runtime(
+                TaskRuntimeError::NotConstructionTarget
+            ))
+        );
+        assert!(runtime.capabilities(target).unwrap().is_empty());
+        assert_eq!(runtime.load().runnable(), 2);
+    }
+
+    #[test]
     fn source_revocation_reaches_each_derived_target_authority() {
         let (mut runtime, source, target) = runtime();
         let (attachment, launch_data, source_authorities) = attachment(
@@ -794,6 +830,7 @@ mod tests {
             ObjectId(0xa2),
         )
         .unwrap();
+        runtime.activate_constructed_task(target).unwrap();
         assert_eq!(task.page_table_root(), PhysAddr::new(0x30_0000).unwrap());
         assert!(matches!(
             runtime.start(),

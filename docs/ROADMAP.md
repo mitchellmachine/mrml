@@ -1494,6 +1494,35 @@ Patent review: `NOT_TRIGGERED` — retaining task ownership while invoking the
 existing exact mapping and rollback lifecycle is conventional resource
 composition. See `docs/patents/REVIEW_LOG.md`.
 
+Native device-service construction now has an explicit scheduler publication
+gate **IMPLEMENTED IN SOURCE**. `TaskRuntime` can create a complete but blocked
+construction domain; native device preparation rejects an ordinary runnable
+target before projecting any capability, and construction-pending domains
+cannot migrate. Only an explicit one-use activation clears that state and wakes
+the exact generational task. AHCI consumes this mechanism through a typed
+mapped-to-active transition, so its task cannot be selected before the bound
+launch, attenuated entry capabilities, ABAR, and four CPU mappings all exist.
+Tests prove a runnable target is rejected without projection, a mapped target is
+absent from runnable load and repeated scheduling, activation raises the load by
+exactly one, and only then can the target be selected. The kernel Linux suite
+passes all 687 tests, AHCI passes all 135 tests, and Linux plus `MRML_NATIVE`
+release builds pass for both kernel and AHCI. This is scheduler/unit and
+controlled mapping-backend evidence; no installed task, real page-table switch,
+IOMMU, KVM/WHP, or physical AHCI execution was exercised.
+
+Complexity impact: MEDIUM
+TCB impact: MEDIUM
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — blocked construction followed by explicit
+scheduler activation is conventional task lifecycle synchronization. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

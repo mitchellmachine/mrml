@@ -702,7 +702,7 @@ mod tests {
             )
             .unwrap();
         let target = runtime
-            .create(
+            .create_for_construction(
                 Priority::NORMAL,
                 UserContext::new(PhysAddr::new(0x60_0000).unwrap(), 0x40_0000, 0x7000_0000)
                     .unwrap(),

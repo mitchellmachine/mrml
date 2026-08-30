@@ -42,6 +42,8 @@ pub enum TaskRuntimeError {
     ActiveDelegations,
     DelegationTableFull,
     ConstructionTargetNotPristine,
+    ConstructionPending,
+    NotConstructionTarget,
     RetirementDispatchPending,
     RuntimeIdentityExhausted,
     ReceiveWaitGenerationExhausted,
@@ -334,6 +336,7 @@ struct TaskDomain<const CAPS: usize> {
     inbox_tail: u8,
     inbox_count: u8,
     blocked_receive: Option<BlockedReceiveIdentity>,
+    construction_pending: bool,
     next_receive_wait_generation: u64,
     peers: [Option<TaskId>; TASK_CONTROL_PEERS],
     peer_deaths: [Option<PeerDeath>; TASK_CONTROL_PEERS],
@@ -744,15 +747,35 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         priority: Priority,
         context: UserContext,
     ) -> Result<TaskId, TaskRuntimeError> {
+        self.create_with_construction_state(priority, context, false)
+    }
+
+    /// Creates a complete task domain that cannot be selected until activated.
+    pub fn create_for_construction(
+        &mut self,
+        priority: Priority,
+        context: UserContext,
+    ) -> Result<TaskId, TaskRuntimeError> {
+        self.create_with_construction_state(priority, context, true)
+    }
+
+    fn create_with_construction_state(
+        &mut self,
+        priority: Priority,
+        context: UserContext,
+        construction_pending: bool,
+    ) -> Result<TaskId, TaskRuntimeError> {
         let slot = self
             .domains
             .iter()
             .position(Option::is_none)
             .ok_or(TaskRuntimeError::Full)?;
-        let task = self
-            .scheduler
-            .create(priority)
-            .map_err(TaskRuntimeError::Scheduler)?;
+        let task = if construction_pending {
+            self.scheduler.create_blocked(priority)
+        } else {
+            self.scheduler.create(priority)
+        }
+        .map_err(TaskRuntimeError::Scheduler)?;
         self.domains[slot] = Some(TaskDomain {
             task,
             context,
@@ -762,11 +785,45 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             inbox_tail: 0,
             inbox_count: 0,
             blocked_receive: None,
+            construction_pending,
             next_receive_wait_generation: 1,
             peers: [None; TASK_CONTROL_PEERS],
             peer_deaths: [None; TASK_CONTROL_PEERS],
         });
         Ok(task)
+    }
+
+    pub fn construction_pending(&self, task: TaskId) -> Result<bool, TaskRuntimeError> {
+        let slot = self.domain_slot(task)?;
+        self.domains[slot]
+            .as_ref()
+            .map(|domain| domain.construction_pending)
+            .ok_or(TaskRuntimeError::IntegrityFailure)
+    }
+
+    /// Makes one completely constructed task scheduler-visible exactly once.
+    pub fn activate_constructed_task(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let slot = self.domain_slot(task)?;
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if !domain.construction_pending {
+            return Err(TaskRuntimeError::NotConstructionTarget);
+        }
+        if domain.blocked_receive.is_some() {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let wake = self
+            .scheduler
+            .prepare_wake(task)
+            .map_err(TaskRuntimeError::Scheduler)?;
+        self.scheduler.commit_wake(wake);
+        self.domains[slot]
+            .as_mut()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .construction_pending = false;
+        Ok(())
     }
 
     pub fn start(&mut self) -> ScheduleOutcome {
@@ -937,10 +994,18 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.ensure_scheduler_mutable()?;
         let slot = self.domain_slot(task)?;
         if self.domains[slot].as_ref().is_some_and(|domain| {
-            domain.peers.iter().any(Option::is_some)
+            domain.construction_pending
+                || domain.peers.iter().any(Option::is_some)
                 || domain.peer_deaths.iter().any(Option::is_some)
         }) {
-            return Err(TaskRuntimeError::ActiveControlPeers);
+            return Err(if self.domains[slot]
+                .as_ref()
+                .is_some_and(|domain| domain.construction_pending)
+            {
+                TaskRuntimeError::ConstructionPending
+            } else {
+                TaskRuntimeError::ActiveControlPeers
+            });
         }
         if self
             .delegations
