@@ -1000,6 +1000,30 @@ Patent review: `NOT_TRIGGERED` — binding a conventional exact-authorization
 syscall adapter to already validated launch roles is ordinary capability
 plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+The AHCI userspace syscall boundary now has a zero-state x86-64 raw adapter
+**IMPLEMENTED IN SOURCE**. Its sole unsafe operation transfers the canonical
+`rax`, `rdi`, `rsi`, `rdx`, `r10`, `r8`, and `r9` frame through `int 0x80` and
+writes every returned register back to the typed frame; it stores no ambient
+task, capability, pointer, or service state. The Linux suite passes all 112
+tests, including a layout-only zero-size check that deliberately does not invoke
+the host's interrupt ABI. Both Linux release and `MRML_NATIVE` release builds
+pass. No installed MRML kernel syscall was executed, and native mapped-memory
+construction, the service binary entry/loop, active execution, and physical
+hardware evidence remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — a direct architecture-ABI register bridge for
+an existing syscall mechanism is conventional low-level plumbing. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

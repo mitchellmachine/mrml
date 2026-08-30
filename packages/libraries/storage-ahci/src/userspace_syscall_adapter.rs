@@ -9,6 +9,8 @@ use mrml_interface_storage_block_provider_v1::{
     READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
 };
 use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
+#[cfg(target_arch = "x86_64")]
+use core::arch::asm;
 
 const AUTHORIZE_EXACT: u64 = 6;
 const SEND_BUFFER: u64 = 4;
@@ -34,6 +36,46 @@ pub struct AhciSyscallFrame {
 /// pointer/length pairs carried by the frame for the duration of the call.
 pub unsafe trait AhciRawSyscall {
     unsafe fn invoke(&mut self, frame: &mut AhciSyscallFrame);
+}
+
+/// Zero-state MRML x86-64 userspace syscall transition.
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NativeAhciRawSyscall;
+
+#[cfg(target_arch = "x86_64")]
+unsafe impl AhciRawSyscall for NativeAhciRawSyscall {
+    unsafe fn invoke(&mut self, frame: &mut AhciSyscallFrame) {
+        let mut rax = frame.rax;
+        let mut rdi = frame.rdi;
+        let mut rsi = frame.rsi;
+        let mut rdx = frame.rdx;
+        let mut r10 = frame.r10;
+        let mut r8 = frame.r8;
+        let mut r9 = frame.r9;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") rax,
+                inlateout("rdi") rdi,
+                inlateout("rsi") rsi,
+                inlateout("rdx") rdx,
+                inlateout("r10") r10,
+                inlateout("r8") r8,
+                inlateout("r9") r9,
+                options(nostack)
+            )
+        };
+        *frame = AhciSyscallFrame {
+            rax,
+            rdi,
+            rsi,
+            rdx,
+            r10,
+            r8,
+            r9,
+        };
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +467,13 @@ mod tests {
     };
 
     const TOKEN: u64 = (9_u64 << 32) | 4;
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn native_raw_syscall_bridge_retains_no_ambient_state() {
+        assert_eq!(core::mem::size_of::<NativeAhciRawSyscall>(), 0);
+        let _: NativeAhciRawSyscall = NativeAhciRawSyscall;
+    }
 
     struct Raw {
         request: [u8; ENUMERATE_REQUEST_BYTES],

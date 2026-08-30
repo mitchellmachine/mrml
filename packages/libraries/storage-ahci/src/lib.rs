@@ -175,6 +175,8 @@ pub use userspace_syscall_adapter::{
     AhciInstalledDataAuthorizer, AhciRawSyscall, AhciSyscallFrame,
     AhciUserspaceSyscallError, AhciUserspaceSyscalls,
 };
+#[cfg(target_arch = "x86_64")]
+pub use userspace_syscall_adapter::NativeAhciRawSyscall;
 
 pub struct AhciBlockProvider<'a> {
     devices: &'a [BlockProviderDevice],
