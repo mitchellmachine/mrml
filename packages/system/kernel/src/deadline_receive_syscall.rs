@@ -307,6 +307,27 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
         self.owner_slot(task).map(|slot| slot.is_some())
     }
 
+    /// Requires the executor's live waits and the dispatcher's opaque
+    /// cancellation escrow to form one exact bijection. A missing, excess, or
+    /// substituted owner fails closed before another dispatcher mutation.
+    pub fn validate_escrow(
+        &self,
+        escrow: &DeadlineReceiveCancellationEscrow<TASKS>,
+    ) -> Result<(), DeadlineReceiveSyscallError> {
+        for owner in self.owners.iter().flatten() {
+            let cancellation = escrow.get(owner.task())?;
+            if cancellation.owner != *owner {
+                return Err(DeadlineReceiveSyscallError::OwnerMismatch);
+            }
+        }
+        for cancellation in escrow.cancellations.iter().flatten() {
+            self.owner_slot(cancellation.task())?
+                .filter(|slot| self.owners[*slot] == Some(cancellation.owner))
+                .ok_or(DeadlineReceiveSyscallError::OwnerMismatch)?;
+        }
+        Ok(())
+    }
+
     fn validate_delivery(
         &self,
         task: TaskId,
@@ -648,6 +669,50 @@ mod tests {
             1
         );
         assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"after");
+    }
+
+    #[test]
+    fn executor_and_escrow_must_form_an_exact_owner_bijection() {
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let mut escrow = DeadlineReceiveCancellationEscrow::new();
+        assert_eq!(executor.validate_escrow(&escrow), Ok(()));
+
+        let cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked { cancellation, .. } => cancellation,
+            _ => panic!("expected blocked deadline receive"),
+        };
+        assert_eq!(cancellation.task(), receiver);
+        assert_eq!(
+            executor.validate_escrow(&escrow),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        escrow.retain(cancellation).unwrap();
+        assert_eq!(executor.validate_escrow(&escrow), Ok(()));
+
+        escrow.retire(cancellation).unwrap();
+        assert_eq!(
+            executor.validate_escrow(&escrow),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        escrow.retain(cancellation).unwrap();
+        executor.cancel(&mut runtime, cancellation).unwrap();
+        assert_eq!(
+            executor.validate_escrow(&escrow),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        escrow.retire(cancellation).unwrap();
+        assert_eq!(executor.validate_escrow(&escrow), Ok(()));
     }
 
     #[test]

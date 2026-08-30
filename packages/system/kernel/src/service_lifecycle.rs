@@ -690,6 +690,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         executor: &mut DeadlineReceiveSyscallExecutor<TASKS>,
         escrow: &mut DeadlineReceiveCancellationEscrow<TASKS>,
     ) -> Result<(), ServiceDeadlineCancellationError> {
+        executor
+            .validate_escrow(escrow)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
         let entry = self
             .slot(service)
             .map_err(ServiceDeadlineCancellationError::Service)?;
@@ -717,6 +720,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         escrow
             .retire(cancellation)
             .expect("successful exact cancellation preserves its prevalidated escrow owner");
+        executor
+            .validate_escrow(escrow)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
         Ok(())
     }
 
@@ -733,6 +739,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         executor: &mut DeadlineReceiveSyscallExecutor<TASKS>,
         escrow: &mut DeadlineReceiveCancellationEscrow<TASKS>,
     ) -> Result<(), ServiceDeadlineCancellationError> {
+        executor
+            .validate_escrow(escrow)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
         let entry = self
             .slot(service)
             .map_err(ServiceDeadlineCancellationError::Service)?;
@@ -755,6 +764,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         escrow
             .retire(cancellation)
             .expect("successful requester cancellation preserves its escrow owner");
+        executor
+            .validate_escrow(escrow)
+            .map_err(ServiceDeadlineCancellationError::Deadline)?;
         Ok(())
     }
 
@@ -2490,6 +2502,20 @@ mod tests {
             _ => panic!("expected escrowed supervised deadline receive"),
         };
         let mut escrow = DeadlineReceiveCancellationEscrow::new();
+        assert_eq!(
+            supervisor.cancel_escrowed_deadline_receive(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                &mut executor,
+                &mut escrow,
+            ),
+            Err(ServiceDeadlineCancellationError::Deadline(
+                DeadlineReceiveSyscallError::OwnerMismatch
+            ))
+        );
+        assert!(executor.has_pending(receiver).unwrap());
         escrow.retain(cancellation).unwrap();
 
         assert_eq!(

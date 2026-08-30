@@ -1022,6 +1022,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
                         .as_mut()
                         .unwrap_or_else(|| halt());
+                    let escrow = deadline_cancellation_escrow();
+                    executor
+                        .validate_escrow(escrow)
+                        .unwrap_or_else(|_| halt());
                     match executor.start(runtime, timeout).unwrap_or_else(|_| halt()) {
                         mrml_kernel::DeadlineReceiveStart::Ready(message) => {
                             frame.complete_message(message.payload())
@@ -1034,8 +1038,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             scheduling: ScheduleOutcome::Switch { to, .. },
                             cancellation,
                         } => {
-                            deadline_cancellation_escrow()
+                            escrow
                                 .retain(cancellation)
+                                .unwrap_or_else(|_| halt());
+                            executor
+                                .validate_escrow(escrow)
                                 .unwrap_or_else(|_| halt());
                             enter_service_task(runtime, to)
                         }
@@ -1060,14 +1067,22 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
                         .as_mut()
                         .unwrap_or_else(|| halt());
-                    match supervisor.cancel_escrowed_deadline_receive_for_requester(
+                    let escrow = deadline_cancellation_escrow();
+                    executor
+                        .validate_escrow(escrow)
+                        .unwrap_or_else(|_| halt());
+                    let cancellation = supervisor.cancel_escrowed_deadline_receive_for_requester(
                         service,
                         current,
                         capability,
                         runtime,
                         executor,
-                        deadline_cancellation_escrow(),
-                    ) {
+                        escrow,
+                    );
+                    executor
+                        .validate_escrow(escrow)
+                        .unwrap_or_else(|_| halt());
+                    match cancellation {
                         Ok(()) => frame.complete(0),
                         Err(
                             mrml_kernel::ServiceDeadlineCancellationError::Service(
@@ -1846,6 +1861,10 @@ unsafe extern "sysv64" fn mrml_timer_dispatch(frame: *const HardwareTrapFrame) -
         let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
             .as_mut()
             .unwrap_or_else(|| halt());
+        let escrow = deadline_cancellation_escrow();
+        executor
+            .validate_escrow(escrow)
+            .unwrap_or_else(|_| halt());
         let preview = runtime
             .preview_receive_expirations_on_next_tick()
             .unwrap_or_else(|_| halt());
@@ -1853,9 +1872,7 @@ unsafe extern "sysv64" fn mrml_timer_dispatch(frame: *const HardwareTrapFrame) -
         for (slot, expiration) in preview.iter().enumerate() {
             if let Some(expiration) = expiration {
                 cancellations[slot] = Some(
-                    deadline_cancellation_escrow()
-                        .get(expiration.task())
-                        .unwrap_or_else(|_| halt()),
+                    escrow.get(expiration.task()).unwrap_or_else(|_| halt()),
                 );
             }
         }
@@ -1865,14 +1882,15 @@ unsafe extern "sysv64" fn mrml_timer_dispatch(frame: *const HardwareTrapFrame) -
                 (Some(expiration), Some(cancellation))
                     if cancellation.task() == expiration.task() =>
                 {
-                    deadline_cancellation_escrow()
-                        .retire(cancellation)
-                        .unwrap_or_else(|_| halt());
+                    escrow.retire(cancellation).unwrap_or_else(|_| halt());
                 }
                 (None, None) => {}
                 _ => halt(),
             }
         }
+        executor
+            .validate_escrow(escrow)
+            .unwrap_or_else(|_| halt());
         let next = match tick.scheduling() {
             ScheduleOutcome::Continue(task) => task,
             ScheduleOutcome::Switch { to, .. } => to,
@@ -5503,8 +5521,10 @@ unsafe fn deadline_deliver_ipc(
     let executor = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES) }
         .as_mut()
         .unwrap_or_else(|| halt());
+    let escrow = unsafe { deadline_cancellation_escrow() };
+    executor.validate_escrow(escrow)?;
     let cancellation = if executor.has_pending(receiver)? {
-        Some(unsafe { deadline_cancellation_escrow() }.get(receiver)?)
+        Some(escrow.get(receiver)?)
     } else {
         None
     };
@@ -5518,8 +5538,9 @@ unsafe fn deadline_deliver_ipc(
         requested,
     )?;
     if let Some(cancellation) = cancellation {
-        unsafe { deadline_cancellation_escrow() }.retire(cancellation)?;
+        escrow.retire(cancellation)?;
     }
+    executor.validate_escrow(escrow)?;
     Ok(sequence)
 }
 

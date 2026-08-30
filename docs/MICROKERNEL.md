@@ -11936,3 +11936,39 @@ claimed.
 Patent review: `NOT_TRIGGERED` — replaying an already-consumed cancellation
 request and requiring fail-closed rejection is conventional one-use token
 testing. See `docs/patents/REVIEW_LOG.md`.
+
+The deadline executor can now validate that its retained blocked-receive owners
+and the dispatcher's cancellation escrow form one exact bijection. Every live
+executor owner must have the identical opaque cancellation value in escrow, and
+every escrow entry must resolve to that exact executor owner. Missing, excess,
+duplicate-task, and substituted state returns `OwnerMismatch`; names or task
+slots are never sufficient to repair a disagreement.
+
+The service-supervisor escrow cancellation compositions perform this validation
+before authority resolution and again after successful retirement. The UEFI
+deadline dispatcher also checks coherence before receive admission,
+capability-authorized cancellation, timer expiry, and IPC delivery, and after
+each paired mutation becomes externally observable. Any unexpected half-state
+halts the controlled profile rather than continuing with reduced cancellation
+coverage or leaked fixed capacity.
+
+Lifecycle inspection confirmed that voluntary service exit and trap-fault
+retirement operate only on the current task, while a deadline-blocked task is
+not current; those paths therefore cannot directly retire a blocked owner. The
+new invariant covers the actual cross-table risk at dispatcher boundaries
+without inventing a task-name cleanup path. Adversarial tests construct both
+executor-only and escrow-only intermediate states, require rejection without
+losing the live wait, and prove coherence is restored only after the exact pair
+is retained or retired. Supervisor composition also rejects a missing escrow
+entry before consuming its executor owner.
+
+The native kernel suite passes 680 tests and its release build passes. Timeout,
+message-completion, and cancellation-replay service-image release profiles pass
+with their existing 14/13/13 dead-code warnings, and all three matching
+`uefi-x86_64` bootloader profiles pass with the existing unreachable-pattern
+warning. This is unit and cross-build evidence; `/dev/kvm` is unavailable and
+no WHP, hosted guest, proof-port, or physical-hardware execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — exact bidirectional consistency checking across
+two fixed-capacity owner tables is conventional defensive state validation. See
+`docs/patents/REVIEW_LOG.md`.
