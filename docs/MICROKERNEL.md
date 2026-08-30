@@ -10690,3 +10690,13 @@ does not add or exercise privileged context loading.
 Patent review: `NOT_TRIGGERED` — an opaque validated token with read-only
 accessors is conventional type-safe boundary enforcement. See
 `docs/patents/REVIEW_LOG.md`.
+
+The opaque termination-dispatch token is also non-cloneable and non-copyable,
+and provider retirement exposes it only by shared reference. This prevents safe
+code from duplicating a validated dispatch before the later consuming context-
+transition boundary. The Linux-host release kernel suite passes 653 tests,
+storage passes 162 tests, and both release builds pass; privileged context
+loading remains unexecuted.
+
+Patent review: `NOT_TRIGGERED` — linear ownership of a validated lifecycle token
+is conventional replay prevention. See `docs/patents/REVIEW_LOG.md`.

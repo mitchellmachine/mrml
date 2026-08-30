@@ -186,17 +186,17 @@ enum TaskTerminationDispatchTarget {
 ///
 /// Callers may inspect the selected target but cannot construct a replacement
 /// proof from a task name or saved context.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct TaskTerminationDispatch {
     target: TaskTerminationDispatchTarget,
 }
 
 impl TaskTerminationDispatch {
-    pub const fn is_idle(self) -> bool {
+    pub const fn is_idle(&self) -> bool {
         matches!(self.target, TaskTerminationDispatchTarget::Idle)
     }
 
-    pub const fn user(self) -> Option<(TaskId, UserContext)> {
+    pub const fn user(&self) -> Option<(TaskId, UserContext)> {
         match self.target {
             TaskTerminationDispatchTarget::Idle => None,
             TaskTerminationDispatchTarget::User { task, context } => Some((task, context)),

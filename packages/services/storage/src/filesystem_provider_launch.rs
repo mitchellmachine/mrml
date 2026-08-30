@@ -190,19 +190,19 @@ pub enum NativeFilesystemProviderRetirementError<M> {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct NativeFilesystemProviderRetirement {
     termination: TaskTermination,
     dispatch: TaskTerminationDispatch,
 }
 
 impl NativeFilesystemProviderRetirement {
-    pub const fn termination(self) -> TaskTermination {
+    pub const fn termination(&self) -> TaskTermination {
         self.termination
     }
 
-    pub const fn dispatch(self) -> TaskTerminationDispatch {
-        self.dispatch
+    pub const fn dispatch(&self) -> &TaskTerminationDispatch {
+        &self.dispatch
     }
 }
 
