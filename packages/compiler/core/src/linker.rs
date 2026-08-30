@@ -4621,7 +4621,7 @@ fn decode_x86_64_coff_runtime_functions_for_object<'data, 'records>(
                         u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
                     text_section_names[field] = target_name;
                 } else {
-                    if !coff_is_xdata_section(target_name) || addend != 0 {
+                    if !coff_is_xdata_section(target_name) {
                         return Err(LinkerError::UnsupportedCoffRelocationTarget);
                     }
                     let target_size = usize::try_from(read_u32(object, target_header + 16)?)
@@ -4631,6 +4631,8 @@ fn decode_x86_64_coff_runtime_functions_for_object<'data, 'records>(
                     let bytes = object
                         .get(
                             target_raw
+                                .checked_add(addend)
+                                .ok_or(LinkerError::OffsetOverflow)?
                                 ..target_raw
                                     .checked_add(target_size)
                                     .ok_or(LinkerError::OffsetOverflow)?,
@@ -12836,6 +12838,21 @@ mod tests {
             Some(CoffSectionIdentity::new(9, 1).unwrap())
         );
         assert_eq!(identified[0].end_identity, identified[0].begin_identity);
+
+        let mut offset_unwind = object.clone();
+        offset_unwind[153..157].copy_from_slice(&1u32.to_le_bytes());
+        let mut offset_storage = storage;
+        assert_eq!(
+            decode_x86_64_coff_runtime_functions(&offset_unwind, &mut offset_storage).unwrap()[0]
+                .unwind_info,
+            &[2, 3, 4]
+        );
+        offset_unwind[153..157].copy_from_slice(&4u32.to_le_bytes());
+        let mut empty_storage = storage;
+        assert_eq!(
+            decode_x86_64_coff_runtime_functions(&offset_unwind, &mut empty_storage),
+            Err(LinkerError::UnsupportedCoffSection)
+        );
 
         let mut base_sections = object.clone();
         base_sections[60..68].copy_from_slice(b".xdata\0\0");
