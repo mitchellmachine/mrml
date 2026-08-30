@@ -18962,25 +18962,37 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).is_some_and(|| true) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, predicate: bool) -> bool { a.checked_add(b).is_some_and(predicate) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).is_none_or(|value| value) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { |value| value == input }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).is_some_and(|| true) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, predicate: bool) -> bool { a.checked_add(b).is_some_and(predicate) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).is_none_or(|value| value) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { |value| value == input }",
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 2048, 4, 128>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 2048, 4, 128>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::SystemV,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, expected, "{source}");
+            }
         }
     }
 
