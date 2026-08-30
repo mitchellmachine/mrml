@@ -1072,6 +1072,64 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(message)
     }
 
+    /// Atomically attenuates a bounded capability set inside one live domain
+    /// while recording the same revocation ancestry used for IPC projections.
+    /// This is the kernel-owned path for splitting a broad construction root
+    /// into narrow source handles before a fresh target domain is populated.
+    pub fn derive_capabilities_for_construction_source(
+        &mut self,
+        task: TaskId,
+        requested: &[(Capability, Rights)],
+    ) -> Result<Message, TaskRuntimeError> {
+        if requested.is_empty() {
+            return Err(TaskRuntimeError::Ipc(IpcError::CapabilityShape));
+        }
+        Message::validate_shape(0, requested.len()).map_err(TaskRuntimeError::Ipc)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let slot = self
+            .domain_slot(task)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        domain
+            .capabilities
+            .validate_derivations(requested)
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
+        domain
+            .capabilities
+            .validate_derivation_capacity(requested.len())
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
+        let delegation_slots = self.prepare_delegation_slots(requested.len())?;
+        self.validate_delegation_graph()?;
+        let mut derived = [None; crate::MAX_CAPABILITIES];
+        self.domains[slot]
+            .as_mut()
+            .expect("validated live domain remains present")
+            .capabilities
+            .derive_local_batch(requested, &mut derived[..requested.len()])
+            .expect("complete local derivation was preflighted");
+        let message = Message::from_derived_capabilities(&derived[..requested.len()])
+            .expect("preflighted derived capability shape is canonical");
+        for (((source, _), destination), edge_slot) in requested
+            .iter()
+            .zip(message.capabilities())
+            .zip(delegation_slots)
+        {
+            self.delegations[edge_slot] = Some(Delegation {
+                source_task: task,
+                source: *source,
+                destination_task: task,
+                destination,
+            });
+        }
+        Ok(message)
+    }
+
     /// Transfers a message and attenuated capabilities between two distinct
     /// task domains. Endpoint authority and sequence capacity are reserved
     /// before receiver capability state changes.
@@ -1668,8 +1726,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             let Some(edge) = *edge else {
                 continue;
             };
-            if edge.source_task == edge.destination_task
-                || !self.scheduler.contains(edge.source_task)
+            if !self.scheduler.contains(edge.source_task)
                 || !self.scheduler.contains(edge.destination_task)
                 || self.delegations[..index].iter().flatten().any(|prior| {
                     prior.destination_task == edge.destination_task
@@ -2213,6 +2270,116 @@ mod tests {
                 .authorize_exact(target_endpoint, Rights::SIGNAL),
             Ok(ObjectId(0x81))
         );
+    }
+
+    #[test]
+    fn construction_source_split_tracks_local_and_cross_domain_descendants() {
+        let mut runtime = TaskRuntime::<2, 5>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let target = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let root_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::DELEGATE);
+        let root = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0xa0), root_rights)
+            .unwrap();
+        let local_read_rights = Rights::MAP.union(Rights::READ).union(Rights::DELEGATE);
+        let provider_write_rights = Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE);
+        let split = runtime
+            .derive_capabilities_for_construction_source(
+                source,
+                &[(root, local_read_rights), (root, provider_write_rights)],
+            )
+            .unwrap();
+        let mut split_handles = split.capabilities();
+        let local_read = split_handles.next().unwrap();
+        let provider_write = split_handles.next().unwrap();
+        assert_eq!(split_handles.next(), None);
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize_exact(local_read, local_read_rights),
+            Ok(ObjectId(0xa0))
+        );
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize_exact(provider_write, provider_write_rights),
+            Ok(ObjectId(0xa0))
+        );
+        let projection = runtime
+            .project_capabilities_for_construction(
+                source,
+                target,
+                &[
+                    (local_read, Rights::MAP.union(Rights::READ)),
+                    (provider_write, provider_write_rights),
+                ],
+            )
+            .unwrap();
+        let mut projected_handles = projection.capabilities();
+        let projected = [
+            projected_handles.next().unwrap(),
+            projected_handles.next().unwrap(),
+        ];
+        assert_eq!(projected_handles.next(), None);
+        runtime.revoke_capability(source, root).unwrap();
+        for (task, capability, rights) in [
+            (source, local_read, Rights::READ),
+            (source, provider_write, Rights::WRITE),
+            (target, projected[0], Rights::READ),
+            (target, projected[1], Rights::WRITE),
+        ] {
+            assert_eq!(
+                runtime
+                    .capabilities(task)
+                    .unwrap()
+                    .authorize(capability, rights),
+                Err(crate::CapabilityError::Invalid)
+            );
+        }
+    }
+
+    #[test]
+    fn construction_source_split_preflights_complete_batch_without_partial_handles() {
+        let mut runtime = TaskRuntime::<1, 4>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(task)
+            .unwrap()
+            .insert(
+                ObjectId(0xa0),
+                Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let nondelegable = runtime
+            .capabilities_mut(task)
+            .unwrap()
+            .insert(ObjectId(0xa1), Rights::READ)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .derive_capabilities_for_construction_source(
+                    task,
+                    &[(root, Rights::READ), (nondelegable, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        let capabilities = runtime.capabilities_mut(task).unwrap();
+        assert!(capabilities.insert(ObjectId(0xb0), Rights::READ).is_ok());
+        assert!(capabilities.insert(ObjectId(0xb1), Rights::WRITE).is_ok());
     }
 
     #[test]

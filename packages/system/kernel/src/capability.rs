@@ -286,6 +286,41 @@ impl<const N: usize> CapabilitySpace<N> {
         Ok(())
     }
 
+    /// Atomically attenuates capabilities within one space. Callers must record
+    /// the resulting parent/child edges before exposing the returned handles.
+    pub(crate) fn derive_local_batch(
+        &mut self,
+        requested: &[(Capability, Rights)],
+        output: &mut [Option<Capability>],
+    ) -> Result<(), CapabilityError> {
+        if requested.len() > output.len() || output.iter().any(Option::is_some) {
+            return Err(CapabilityError::Invalid);
+        }
+        self.validate_derivations(requested)?;
+        self.validate_derivation_capacity(requested.len())?;
+        for (output, (capability, rights)) in output.iter_mut().zip(requested.iter().copied()) {
+            let source = *self
+                .entries
+                .get(capability.slot as usize)
+                .filter(|entry| entry.occupied && entry.generation == capability.generation)
+                .expect("local batch sources were preflighted");
+            let slot = self
+                .entries
+                .iter()
+                .position(|entry| !entry.occupied && !entry.retired)
+                .expect("local batch capacity was preflighted");
+            let entry = &mut self.entries[slot];
+            entry.object = source.object;
+            entry.rights = source.rights.intersect(rights);
+            entry.occupied = true;
+            *output = Some(Capability {
+                slot: slot as u32,
+                generation: entry.generation,
+            });
+        }
+        Ok(())
+    }
+
     pub fn revoke(&mut self, capability: Capability) -> Result<(), CapabilityError> {
         let plan = self.prepare_revoke(capability)?;
         self.commit_revoke(plan);

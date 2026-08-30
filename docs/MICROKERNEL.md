@@ -10180,3 +10180,17 @@ kernel construction, nor any hosted or physical-device execution evidence.
 Patent review: `NOT_TRIGGERED` — this is conventional preflight validation and
 least-authority construction plumbing for the existing service launch path. See
 `docs/patents/REVIEW_LOG.md`.
+
+Kernel task construction now **PARTIALLY IMPLEMENTS IN SOURCE** tracked
+same-domain attenuation for launch resources. One delegable memory root can be
+split atomically into narrow local source handles without bypassing the runtime
+delegation graph; later cross-domain projections remain descendants of that
+root, so root revocation removes the local split and every target-space leaf.
+The complete request and capability/delegation capacity are preflighted before
+any handle is published. The Linux-host kernel suite passes 645 tests. This is
+unit/simulation evidence only and does not allocate, map, or execute an
+installed service shared page.
+
+Patent review: `NOT_TRIGGERED` — tracked local capability attenuation and
+transitive revocation are conventional capability-lifecycle mechanisms. See
+`docs/patents/REVIEW_LOG.md`.

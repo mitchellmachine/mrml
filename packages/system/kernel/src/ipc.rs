@@ -165,6 +165,19 @@ impl Message {
         Ok(message)
     }
 
+    pub(crate) fn from_derived_capabilities(
+        capabilities: &[Option<Capability>],
+    ) -> Result<Self, IpcError> {
+        Self::validate_shape(0, capabilities.len())?;
+        if capabilities.iter().any(Option::is_none) {
+            return Err(IpcError::CapabilityShape);
+        }
+        let mut message = Self::new(&[], &[])?;
+        message.capabilities[..capabilities.len()].copy_from_slice(capabilities);
+        message.capability_count = capabilities.len() as u8;
+        Ok(message)
+    }
+
     pub fn payload(&self) -> &[u8] {
         &self.payload[..self.payload_length as usize]
     }
