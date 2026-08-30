@@ -292,7 +292,7 @@ pub use syscall::{
     UserReturnError, X86_USER_CALL_VECTOR, decode_capability_transfers,
 };
 pub use task_runtime::{
-    AccountedTaskRuntime, AccountedTaskRuntimeError, BlockedReceive, ControlEvent,
+    AccountedTaskRuntime, AccountedTaskRuntimeError, BlockedReceive, ControlEvent, DeadlineReceive,
     DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, ExpiredReceive, FaultRetirement,
     MAX_TASK_DELEGATIONS, PeerDeath, PeerDeathReason, PeriodicDomainBalancer, QueuedMessageShape,
     ReceiveDeadline, ReceiveDeadlineTick, ReceivedMessage, TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES,

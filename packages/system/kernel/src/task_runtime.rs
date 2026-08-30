@@ -357,6 +357,12 @@ impl ReceiveDeadline {
     }
 }
 
+pub enum DeadlineReceive<T> {
+    Ready(T),
+    Blocked(BlockedReceive),
+    TimedOut,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BlockedReceiveIdentity {
     runtime: u64,
@@ -2070,8 +2076,22 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn receive_control_or_block_current_until(
         &mut self,
         deadline: ReceiveDeadline,
-    ) -> Result<Result<ControlEvent, BlockedReceive>, TaskRuntimeError> {
-        self.receive_control_or_block_current_with_deadline(Some(deadline))
+    ) -> Result<DeadlineReceive<ControlEvent>, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let current = self
+            .scheduler
+            .current()
+            .ok_or(TaskRuntimeError::NoCurrentTask)?;
+        if deadline.tick() <= self.scheduler.ticks() {
+            return Ok(DeadlineReceive::TimedOut);
+        }
+        match self.receive_control(current) {
+            Ok(event) => Ok(DeadlineReceive::Ready(event)),
+            Err(TaskRuntimeError::InboxEmpty) => self
+                .block_current_for_receive(current, BlockedReceiveKind::Control, Some(deadline))
+                .map(DeadlineReceive::Blocked),
+            Err(error) => Err(error),
+        }
     }
 
     fn receive_control_or_block_current_with_deadline(
@@ -2347,8 +2367,22 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn receive_or_block_current_until(
         &mut self,
         deadline: ReceiveDeadline,
-    ) -> Result<Result<Message, BlockedReceive>, TaskRuntimeError> {
-        self.receive_or_block_current_with_deadline(Some(deadline))
+    ) -> Result<DeadlineReceive<Message>, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let current = self
+            .scheduler
+            .current()
+            .ok_or(TaskRuntimeError::NoCurrentTask)?;
+        if deadline.tick() <= self.scheduler.ticks() {
+            return Ok(DeadlineReceive::TimedOut);
+        }
+        match self.receive_ipc(current) {
+            Ok(message) => Ok(DeadlineReceive::Ready(message)),
+            Err(TaskRuntimeError::InboxEmpty) => self
+                .block_current_for_receive(current, BlockedReceiveKind::Ipc, Some(deadline))
+                .map(DeadlineReceive::Blocked),
+            Err(error) => Err(error),
+        }
     }
 
     fn receive_or_block_current_with_deadline(
@@ -4166,8 +4200,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == receiver));
         let deadline = ReceiveDeadline::new(50).unwrap();
         let blocked = match runtime.receive_or_block_current_until(deadline).unwrap() {
-            Err(blocked) => blocked,
-            Ok(_) => panic!("empty receive must retain its deadline-bound token"),
+            DeadlineReceive::Blocked(blocked) => blocked,
+            _ => panic!("empty receive must retain its deadline-bound token"),
         };
         assert_eq!(blocked.deadline(), Some(deadline));
         assert_eq!(
@@ -4198,6 +4232,27 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_deadline_times_out_before_creating_a_wait() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 2).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == task));
+        assert_eq!(runtime.timer_tick(), Ok(ScheduleOutcome::Continue(task)));
+        assert!(matches!(
+            runtime
+                .receive_or_block_current_until(ReceiveDeadline::new(1).unwrap())
+                .unwrap(),
+            DeadlineReceive::TimedOut
+        ));
+        assert_eq!(runtime.current(), Some(task));
+        assert!(matches!(
+            runtime.receive_or_block_current().unwrap(),
+            Err(blocked) if matches!(blocked.outcome(), ScheduleOutcome::Idle)
+        ));
+    }
+
+    #[test]
     fn scheduler_tick_expires_all_due_waits_with_exact_owner_identities() {
         let mut runtime = TaskRuntime::<3, 1>::new(1_000, 1).unwrap();
         let control = runtime
@@ -4214,16 +4269,16 @@ mod tests {
             .receive_control_or_block_current_until(ReceiveDeadline::new(1).unwrap())
             .unwrap()
         {
-            Err(blocked) => blocked,
-            Ok(_) => panic!("empty control receive must block"),
+            DeadlineReceive::Blocked(blocked) => blocked,
+            _ => panic!("empty control receive must block"),
         };
         assert_eq!(runtime.current(), Some(ipc));
         let ipc_wait = match runtime
             .receive_or_block_current_until(ReceiveDeadline::new(2).unwrap())
             .unwrap()
         {
-            Err(blocked) => blocked,
-            Ok(_) => panic!("empty IPC receive must block"),
+            DeadlineReceive::Blocked(blocked) => blocked,
+            _ => panic!("empty IPC receive must block"),
         };
         assert_eq!(runtime.current(), Some(runner));
 
@@ -4267,8 +4322,8 @@ mod tests {
             .receive_or_block_current_until(ReceiveDeadline::new(1).unwrap())
             .unwrap()
         {
-            Err(blocked) => blocked,
-            Ok(_) => panic!("empty receive must block"),
+            DeadlineReceive::Blocked(blocked) => blocked,
+            _ => panic!("empty receive must block"),
         };
         assert!(matches!(wait.outcome(), ScheduleOutcome::Idle));
         let tick = runtime.timer_tick_and_expire_receives().unwrap();
@@ -5500,8 +5555,8 @@ mod tests {
             .receive_control_or_block_current_until(deadline)
             .unwrap()
         {
-            Err(blocked) => blocked,
-            Ok(_) => panic!("empty control receive must retain its deadline owner"),
+            DeadlineReceive::Blocked(blocked) => blocked,
+            _ => panic!("empty control receive must retain its deadline owner"),
         };
         assert!(blocked.is_control());
         assert_eq!(blocked.deadline(), Some(deadline));

@@ -11298,3 +11298,28 @@ this increment.
 Patent review: `NOT_TRIGGERED` — reconciling an idle scheduler result after a
 timer makes a blocked task runnable is conventional scheduler wakeup handling.
 See `docs/patents/REVIEW_LOG.md`.
+
+Deadline-bearing IPC and control receive admission now returns the typed
+`DeadlineReceive::{Ready, Blocked, TimedOut}` result. A deadline at or before
+the runtime's already-accounted scheduler tick returns `TimedOut` before inbox
+consumption, wait-generation allocation, or scheduler blocking. A future
+deadline may still return an immediately ready event or mint the exact bounded
+wait owner. Undelimited receive APIs retain their existing nested result and
+behavior.
+
+This admission rule closes the zero-progress case where an already elapsed
+deadline could create a blocked task and then require another hardware tick to
+notice the timeout. The typed result can map directly to the distinct syscall
+timeout completion status once a timer-backed service dispatcher is composed.
+
+The Linux-host kernel suite passes 662 tests. New coverage advances the runtime
+to the exact requested deadline, proves admission returns `TimedOut` while the
+task remains current, then proves a later undelimited receive can still create
+the first wait. The affected Linux kernel release build and service plus
+component-service UEFI release profiles cross-build with the existing
+configuration-specific warnings. This is in-memory and cross-build evidence
+only; no QEMU or physical-hardware execution was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — rejecting an already elapsed timeout before
+creating wait state is conventional deadline admission handling. See
+`docs/patents/REVIEW_LOG.md`.
