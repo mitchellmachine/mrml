@@ -583,6 +583,7 @@ pub enum PeWritableRelocationTarget<'a> {
         identity: CoffSectionIdentity,
         offset: usize,
     },
+    TextSymbol(&'a str),
     WritableSymbol(&'a str),
 }
 
@@ -3890,6 +3891,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
         None
     };
     let mut readonly_sections = CoffSectionSet::empty();
+    let mut text_sections = CoffSectionSet::empty();
     let mut writable_sections = CoffSectionSet::empty();
     let mut readonly_span = None;
     let mut writable = None;
@@ -3909,7 +3911,9 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
         if size == 0 {
             continue;
         }
-        if name == ".rdata" || name.starts_with(".rdata$") {
+        if name == ".text" || name.starts_with(".text$") {
+            text_sections.insert(section + 1)?;
+        } else if name == ".rdata" || name.starts_with(".rdata$") {
             let raw = usize::try_from(read_u32(object, header + 20)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
@@ -4072,6 +4076,19 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     offset,
                 }
             }
+        } else if text_sections.contains(target_section_index) {
+            let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
+            if (storage_class != 2 && storage_class != 3)
+                || read_u64_coff(bytes, field_offset)? != 0
+            {
+                return Err(LinkerError::UnsupportedCoff);
+            }
+            PeWritableRelocationTarget::TextSymbol(coff_symbol_name(
+                object,
+                target,
+                symbols_end,
+                string_size,
+            )?)
         } else if writable_sections.contains(target_section_index) {
             let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
             if (storage_class != 2 && storage_class != 3)
@@ -7724,6 +7741,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             match relocation.target {
                 PeWritableRelocationTarget::Readonly { owner, .. } => validate_symbol(owner)?,
                 PeWritableRelocationTarget::CoffSection { .. } => {}
+                PeWritableRelocationTarget::TextSymbol(symbol) => validate_symbol(symbol)?,
                 PeWritableRelocationTarget::WritableSymbol(symbol) => validate_symbol(symbol)?,
             }
             relocation
@@ -8006,6 +8024,9 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                         )
                         .ok_or(LinkerError::OffsetOverflow)?
                 }
+                PeWritableRelocationTarget::TextSymbol(symbol) => TEXT_RVA
+                    .checked_add(resolve_symbol(inputs, &linked.layouts, symbol)?)
+                    .ok_or(LinkerError::OffsetOverflow)?,
                 PeWritableRelocationTarget::WritableSymbol(symbol) => {
                     let target_index = writable_index(symbol)?;
                     writable_rva
@@ -11722,6 +11743,21 @@ mod tests {
             decode_x86_64_coff_writable_data_fragment(&object, 0, "entry", &mut fragment_storage)
                 .unwrap();
         assert_eq!(fragment, writable);
+
+        let mut text_target = object.clone();
+        text_target[153 + 4..153 + 8].copy_from_slice(&0u32.to_le_bytes());
+        let mut text_storage = storage;
+        let text_writable =
+            decode_x86_64_coff_writable_data(&text_target, "entry", &mut text_storage)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            text_writable.relocations,
+            &[PeWritableRelocation {
+                offset: 0,
+                target: PeWritableRelocationTarget::TextSymbol("entry"),
+            }]
+        );
         let mut missing_storage = [PeWritableRelocation {
             offset: 0,
             target: PeWritableRelocationTarget::Readonly {

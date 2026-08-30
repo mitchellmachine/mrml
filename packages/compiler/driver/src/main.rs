@@ -1682,6 +1682,14 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                         owner
                     ));
                 }
+                PeWritableRelocationTarget::TextSymbol(symbol)
+                    if !named_target_defined(symbol) =>
+                {
+                    return Err(anyhow!(
+                        "selected writable relocation text target is undefined: {}",
+                        symbol
+                    ));
+                }
                 PeWritableRelocationTarget::WritableSymbol(symbol)
                     if !named_target_defined(symbol) =>
                 {
