@@ -10378,3 +10378,18 @@ execution.
 Patent review: `NOT_TRIGGERED` — a staged retry state over conventional
 revocation, unmapping, scrubbing, and accounting operations introduces no new
 algorithm or compatibility mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+Mapped native transfer teardown now also fails closed while its constructed
+service task remains live. The liveness check precedes capability revocation,
+backend unmapping, backing scrubbing, and accounting mutation, so supervision
+must first retire the exact generational task and its complete task-local
+authority domain. The lifecycle test proves the live-task attempt returns the
+unchanged teardown state, explicitly schedules and terminates that task, and
+then completes the existing injected-failure retry sequence. The Linux-host
+release kernel suite passes 649 tests and the release build passes. This is
+in-memory scheduler and recording-backend evidence, not installed or physical
+execution.
+
+Patent review: `NOT_TRIGGERED` — requiring task retirement before revocation and
+unmapping is conventional safe resource-lifecycle ordering. See
+`docs/patents/REVIEW_LOG.md`.

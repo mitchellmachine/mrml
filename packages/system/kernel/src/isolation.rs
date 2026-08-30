@@ -1136,6 +1136,10 @@ impl NativeComponentServiceMappedReadTransferTeardown {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeComponentServiceMappedReadTransferTeardownError<F, S, B> {
+    TaskStillLive {
+        state: NativeComponentServiceMappedReadTransferTeardown,
+        task: TaskId,
+    },
     Authority {
         state: NativeComponentServiceMappedReadTransferTeardown,
         error: TaskRuntimeError,
@@ -1201,7 +1205,9 @@ impl NativeComponentServiceReadTransferTask {
 }
 
 /// Tears down one mapped transfer in authority, mapping, backing, and object
-/// order. Every failure returns the exact progress state for a safe retry.
+/// order. The constructed task must already be retired so no schedulable domain
+/// can retain a virtual mapping while teardown progresses. Every failure returns
+/// the exact progress state for a safe retry.
 pub fn teardown_native_component_service_mapped_read_transfer<
     F: MemoryMappingBackend,
     S: MemoryMappingBackend,
@@ -1221,6 +1227,22 @@ pub fn teardown_native_component_service_mapped_read_transfer<
 ) -> Result<u64, NativeComponentServiceMappedReadTransferTeardownError<F::Error, S::Error, B::Error>>
 {
     let construction = state.active().construction();
+    match runtime.context(construction.task()) {
+        Ok(_) => {
+            return Err(
+                NativeComponentServiceMappedReadTransferTeardownError::TaskStillLive {
+                    state,
+                    task: construction.task(),
+                },
+            );
+        }
+        Err(TaskRuntimeError::MissingTask) => {}
+        Err(error) => {
+            return Err(
+                NativeComponentServiceMappedReadTransferTeardownError::Runtime { state, error },
+            );
+        }
+    }
     if !state.authority_revoked {
         if let Err(error) = runtime.revoke_capability_pair(
             construction.source_task(),
@@ -4423,9 +4445,30 @@ mod tests {
             provider_mapping.installed.unwrap().mapping().access(),
             Rights::WRITE
         );
-        provider_mapping.fail_remove = true;
         let state = match teardown_native_component_service_mapped_read_transfer(
             NativeComponentServiceMappedReadTransferTeardown::new(constructed),
+            &mut runtime,
+            &mut memory,
+            &mut local_mapping,
+            &mut provider_mapping,
+            &mut backend,
+        ) {
+            Err(NativeComponentServiceMappedReadTransferTeardownError::TaskStillLive {
+                state,
+                task,
+            }) => {
+                assert_eq!(task, local_task);
+                state
+            }
+            other => panic!("unexpected live-task teardown result: {other:?}"),
+        };
+        runtime.start();
+        runtime.yield_current().unwrap();
+        assert_eq!(runtime.current(), Some(local_task));
+        assert_eq!(runtime.terminate_current().unwrap().task, local_task);
+        provider_mapping.fail_remove = true;
+        let state = match teardown_native_component_service_mapped_read_transfer(
+            state,
             &mut runtime,
             &mut memory,
             &mut local_mapping,
@@ -4439,6 +4482,10 @@ mod tests {
             other => panic!("unexpected provider teardown result: {other:?}"),
         };
         assert!(state.authority_revoked());
+        assert_eq!(
+            runtime.context(local_task),
+            Err(TaskRuntimeError::MissingTask)
+        );
         assert_eq!(state.mappings().first(), Some(mappings.mappings().first()));
         assert_eq!(
             state.mappings().second(),
