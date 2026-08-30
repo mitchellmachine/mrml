@@ -11731,3 +11731,31 @@ no product evidence. No hosted or physical execution was performed.
 Patent review: `NOT_TRIGGERED` — requiring both exact object capability
 authorization and a one-use wait token for cancellation is conventional
 capability-checked lifecycle composition. See `docs/patents/REVIEW_LOG.md`.
+
+The deadline dispatcher now retains every issued cancellation token in a
+separate fixed-capacity `DeadlineReceiveCancellationEscrow`. Retention rejects a
+duplicate task owner and full capacity without replacing any token. Lookup
+unique-matches the exact generational task, while retirement also exact-matches
+the complete opaque wait token; substitution and replay return the existing
+typed owner errors.
+
+Operation-13 block admission escrows the token before switching tasks. The
+deadline-aware send path prevalidates the matching escrow entry before IPC
+publication and retires it only after message completion succeeds. The timer
+path previews the exact next-tick expiration set and prevalidates all matching
+escrow entries before the executor advances time, then retires exactly the
+tokens corresponding to the committed expiration set. Any disagreement is a
+fail-stop dispatcher invariant, never a task-name fallback.
+
+The kernel escrow test covers duplicate retention, bounded capacity, wrong-task
+lookup, exact retirement, replay, and capacity reuse after retirement. The
+Linux-host kernel suite passes 677 tests and its release build passes. Both
+deadline service-image release profiles pass with their expected 14 and 13
+dead-code warnings, and both deadline UEFI bootloader release profiles pass
+with their existing unreachable-pattern warning. This establishes bounded
+dispatcher ownership and cross-builds only; no manager cancellation request or
+hosted/physical execution is claimed yet.
+
+Patent review: `NOT_TRIGGERED` — fixed-capacity escrow of opaque one-use
+cancellation tokens with exact retirement is conventional lifecycle ownership.
+See `docs/patents/REVIEW_LOG.md`.

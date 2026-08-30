@@ -524,6 +524,10 @@ static mut SERVICE_PENDING_INLINE_WAITS: [Option<mrml_kernel::BlockedReceive>;
 static mut SERVICE_DEADLINE_RECEIVES: Option<mrml_kernel::DeadlineReceiveSyscallExecutor<
     SERVICE_TASK_CAPACITY,
 >> = None;
+#[cfg(feature = "deadline-receive-probe")]
+static mut SERVICE_DEADLINE_CANCELLATIONS: Option<mrml_kernel::DeadlineReceiveCancellationEscrow<
+    SERVICE_TASK_CAPACITY,
+>> = None;
 #[cfg(feature = "buffer-drift-probe")]
 static mut BUFFER_DRIFT_ARMED: bool = false;
 #[cfg(feature = "service-probe")]
@@ -1022,8 +1026,13 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         }
                         mrml_kernel::DeadlineReceiveStart::Blocked {
                             scheduling: ScheduleOutcome::Switch { to, .. },
-                            cancellation: _,
-                        } => enter_service_task(runtime, to),
+                            cancellation,
+                        } => {
+                            deadline_cancellation_escrow()
+                                .retain(cancellation)
+                                .unwrap_or_else(|_| halt());
+                            enter_service_task(runtime, to)
+                        }
                         mrml_kernel::DeadlineReceiveStart::Blocked { .. } => halt(),
                     }
                 }
@@ -1788,7 +1797,33 @@ unsafe extern "sysv64" fn mrml_timer_dispatch(frame: *const HardwareTrapFrame) -
         let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
             .as_mut()
             .unwrap_or_else(|| halt());
+        let preview = runtime
+            .preview_receive_expirations_on_next_tick()
+            .unwrap_or_else(|_| halt());
+        let mut cancellations = [None; SERVICE_TASK_CAPACITY];
+        for (slot, expiration) in preview.iter().enumerate() {
+            if let Some(expiration) = expiration {
+                cancellations[slot] = Some(
+                    deadline_cancellation_escrow()
+                        .get(expiration.task())
+                        .unwrap_or_else(|_| halt()),
+                );
+            }
+        }
         let tick = executor.timer_tick(runtime).unwrap_or_else(|_| halt());
+        for (expiration, cancellation) in tick.expired().iter().zip(cancellations) {
+            match (expiration, cancellation) {
+                (Some(expiration), Some(cancellation))
+                    if cancellation.task() == expiration.task() =>
+                {
+                    deadline_cancellation_escrow()
+                        .retire(cancellation)
+                        .unwrap_or_else(|_| halt());
+                }
+                (None, None) => {}
+                _ => halt(),
+            }
+        }
         let next = match tick.scheduling() {
             ScheduleOutcome::Continue(task) => task,
             ScheduleOutcome::Switch { to, .. } => to,
@@ -3796,6 +3831,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 mrml_kernel::DeadlineReceiveSyscallExecutor::new(),
             ));
             #[cfg(feature = "deadline-receive-probe")]
+            core::ptr::addr_of_mut!(SERVICE_DEADLINE_CANCELLATIONS).write(Some(
+                mrml_kernel::DeadlineReceiveCancellationEscrow::new(),
+            ));
+            #[cfg(feature = "deadline-receive-probe")]
             LocalApicTimer::periodic(TIMER_VECTOR, 100_000, TimerDivide::By16)
                 .and_then(|timer| timer.enable())
                 .unwrap_or_else(|_| halt());
@@ -5361,6 +5400,15 @@ unsafe fn pending_inline_wait_slot(task: mrml_kernel::TaskId) -> Option<usize> {
 }
 
 #[cfg(feature = "deadline-receive-probe")]
+unsafe fn deadline_cancellation_escrow() -> &'static mut mrml_kernel::DeadlineReceiveCancellationEscrow<
+    SERVICE_TASK_CAPACITY,
+> {
+    unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_DEADLINE_CANCELLATIONS) }
+        .as_mut()
+        .unwrap_or_else(|| halt())
+}
+
+#[cfg(feature = "deadline-receive-probe")]
 unsafe fn deadline_deliver_ipc(
     runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
     sender: mrml_kernel::TaskId,
@@ -5373,7 +5421,12 @@ unsafe fn deadline_deliver_ipc(
     let executor = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES) }
         .as_mut()
         .unwrap_or_else(|| halt());
-    executor.deliver(
+    let cancellation = if executor.has_pending(receiver)? {
+        Some(unsafe { deadline_cancellation_escrow() }.get(receiver)?)
+    } else {
+        None
+    };
+    let sequence = executor.deliver(
         runtime,
         sender,
         receiver,
@@ -5381,7 +5434,11 @@ unsafe fn deadline_deliver_ipc(
         endpoint_capability,
         payload,
         requested,
-    )
+    )?;
+    if let Some(cancellation) = cancellation {
+        unsafe { deadline_cancellation_escrow() }.retire(cancellation)?;
+    }
+    Ok(sequence)
 }
 
 #[cfg(all(feature = "service-probe", not(feature = "deadline-receive-probe")))]

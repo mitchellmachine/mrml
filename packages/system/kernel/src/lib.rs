@@ -109,8 +109,8 @@ pub use cpu_resource::{
     VcpuReservationInfo,
 };
 pub use deadline_receive_syscall::{
-    DeadlineReceiveCancellation, DeadlineReceiveStart, DeadlineReceiveSyscallError,
-    DeadlineReceiveSyscallExecutor,
+    DeadlineReceiveCancellation, DeadlineReceiveCancellationEscrow, DeadlineReceiveStart,
+    DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

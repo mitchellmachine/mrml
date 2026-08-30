@@ -29,6 +29,77 @@ impl DeadlineReceiveCancellation {
     }
 }
 
+pub struct DeadlineReceiveCancellationEscrow<const TASKS: usize> {
+    cancellations: [Option<DeadlineReceiveCancellation>; TASKS],
+}
+
+impl<const TASKS: usize> DeadlineReceiveCancellationEscrow<TASKS> {
+    pub fn new() -> Self {
+        Self {
+            cancellations: array::from_fn(|_| None),
+        }
+    }
+
+    pub fn retain(
+        &mut self,
+        cancellation: DeadlineReceiveCancellation,
+    ) -> Result<(), DeadlineReceiveSyscallError> {
+        if self.cancellation_slot(cancellation.task())?.is_some() {
+            return Err(DeadlineReceiveSyscallError::OwnerMismatch);
+        }
+        let slot = self
+            .cancellations
+            .iter()
+            .position(Option::is_none)
+            .ok_or(DeadlineReceiveSyscallError::OwnerFull)?;
+        self.cancellations[slot] = Some(cancellation);
+        Ok(())
+    }
+
+    pub fn get(
+        &self,
+        task: TaskId,
+    ) -> Result<DeadlineReceiveCancellation, DeadlineReceiveSyscallError> {
+        let slot = self
+            .cancellation_slot(task)?
+            .ok_or(DeadlineReceiveSyscallError::OwnerMismatch)?;
+        self.cancellations[slot].ok_or(DeadlineReceiveSyscallError::OwnerMismatch)
+    }
+
+    pub fn retire(
+        &mut self,
+        cancellation: DeadlineReceiveCancellation,
+    ) -> Result<(), DeadlineReceiveSyscallError> {
+        let slot = self
+            .cancellation_slot(cancellation.task())?
+            .filter(|slot| self.cancellations[*slot] == Some(cancellation))
+            .ok_or(DeadlineReceiveSyscallError::OwnerMismatch)?;
+        self.cancellations[slot] = None;
+        Ok(())
+    }
+
+    fn cancellation_slot(
+        &self,
+        task: TaskId,
+    ) -> Result<Option<usize>, DeadlineReceiveSyscallError> {
+        let mut found = None;
+        for (slot, cancellation) in self.cancellations.iter().enumerate() {
+            if cancellation.is_some_and(|cancellation| cancellation.task() == task)
+                && found.replace(slot).is_some()
+            {
+                return Err(DeadlineReceiveSyscallError::OwnerMismatch);
+            }
+        }
+        Ok(found)
+    }
+}
+
+impl<const TASKS: usize> Default for DeadlineReceiveCancellationEscrow<TASKS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeadlineReceiveSyscallError {
     Runtime(TaskRuntimeError),
@@ -574,6 +645,59 @@ mod tests {
             1
         );
         assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"after");
+    }
+
+    #[test]
+    fn cancellation_escrow_is_bounded_exact_and_replay_safe() {
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let first_cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked { cancellation, .. } => cancellation,
+            _ => panic!("expected first blocked deadline receive"),
+        };
+        let second_cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked { cancellation, .. } => cancellation,
+            _ => panic!("expected second blocked deadline receive"),
+        };
+        assert_eq!(first_cancellation.task(), first);
+        assert_eq!(second_cancellation.task(), second);
+
+        let mut escrow = DeadlineReceiveCancellationEscrow::<1>::new();
+        assert_eq!(escrow.retain(first_cancellation), Ok(()));
+        assert_eq!(
+            escrow.retain(first_cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert_eq!(
+            escrow.retain(second_cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerFull)
+        );
+        assert_eq!(escrow.get(first), Ok(first_cancellation));
+        assert_eq!(
+            escrow.get(second),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+
+        executor.cancel(&mut runtime, first_cancellation).unwrap();
+        assert_eq!(escrow.retire(first_cancellation), Ok(()));
+        assert_eq!(
+            escrow.retire(first_cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert_eq!(escrow.retain(second_cancellation), Ok(()));
     }
 
     #[test]
