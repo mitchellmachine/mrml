@@ -6,6 +6,7 @@
 
 mod service_loop;
 mod mount_service_loop;
+mod unmount_service_loop;
 mod userspace_syscall_adapter;
 
 use mrml_interface_storage_block_provider_v1::{
@@ -29,9 +30,13 @@ pub use mount_service_loop::{
     Fat32MountServiceLoop, Fat32MountServiceLoopError, Fat32MountServiceSyscalls,
     ReceivedFat32MountEnvelope,
 };
+pub use unmount_service_loop::{
+    Fat32UnmountServiceLoop, Fat32UnmountServiceLoopError, Fat32UnmountServiceSyscalls,
+    ReceivedFat32UnmountEnvelope,
+};
 pub use userspace_syscall_adapter::{
     Fat32MountUserspaceSyscalls, Fat32RawSyscall, Fat32SyscallFrame,
-    Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
+    Fat32UnmountUserspaceSyscalls, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;

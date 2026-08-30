@@ -1210,6 +1210,11 @@ the provider sees the request.
 Canonical unmount transport exposes the provider's failure-atomic removal rule:
 only the exact volume and mount generation can produce a nonzero completion
 serial. Replay maps to typed stale and the removed root identity remains invalid.
+The isolated unmount loop accepts exactly the canonical payload size and zero
+capabilities; malformed envelopes fail without reply. Its register adapter
+advertises zero capability capacity and rejects any kernel-reported transfer
+before lifecycle state can change. Request and response buffers are erased after
+each attempt.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

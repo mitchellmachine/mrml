@@ -922,10 +922,12 @@ state. A dedicated mount receive/reply loop requires the exact canonical payload
 size and zero transferred capabilities while options remain undefined, then
 dispatches through the already bound provider and erases local buffers. Its
 register adapter uses a null/zero capability receive pair, rejects any reported
-capability transfer, and emits the exact mount response. Fifty-two
+capability transfer, and emits the exact mount response. Fifty-seven
 focused Linux-host tests pass. Canonical unmount transport now removes the exact
 volume/generation record, returns its nonzero completion serial, and makes replay
-typed stale; syscall dispatch for unmount remains pending. The storage service
+typed stale. Its dedicated loop and register adapter require the exact request
+size and zero capability transfer, reject kernel over-counts without reply, erase
+local buffers, and send the exact completion response. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

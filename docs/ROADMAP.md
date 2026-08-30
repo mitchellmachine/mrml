@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loops pass fifty-three
+isolated syscall-backed receive/reply loops pass fifty-seven
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -78,7 +78,8 @@ mount and root generations, exact-matches both, invalidates them together on
 unmount, and permanently fails after generation exhaustion. It grants no open
 authority. Exact unmount issues one fresh nonzero completion serial only after
 record removal; serial exhaustion preserves the live mount rather than reporting
-an ambiguous completion. The table is not yet wired to the provider syscall loop.
+an ambiguous completion. Mount and unmount are wired through separate bounded
+provider receive/reply loops while probe retains its transferred-buffer path.
 An unsafe exact-volume backend contract now reads the complete boot sector for the
 specified live volume handle, validates it, erases scratch, and only then admits
 the lifecycle record. Backend and parser failures publish nothing and consume no
@@ -97,7 +98,9 @@ rejects any kernel-reported transfer, and sends the exact 24-byte response to
 the launch-bound reply target.
 Canonical unmount transport now exact-matches volume and mount generation,
 returns the post-removal completion serial, and maps replay to typed stale while
-the removed root remains invalid. Its isolated syscall dispatch remains next.
+the removed root remains invalid. Its isolated loop and register adapter require
+the exact 88-byte request, accept zero capabilities, reject kernel over-counts,
+erase local buffers, and emit the exact 16-byte response.
 The storage service now provides the first concrete half of that composition:
 `FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
 to one owner-authenticated block session, validates full-block scratch geometry,

@@ -1,9 +1,10 @@
 use crate::{
-    Fat32MountServiceSyscalls, Fat32ServiceSyscalls, ReceivedFat32Envelope,
-    ReceivedFat32MountEnvelope,
+    Fat32MountServiceSyscalls, Fat32ServiceSyscalls, Fat32UnmountServiceSyscalls,
+    ReceivedFat32Envelope, ReceivedFat32MountEnvelope, ReceivedFat32UnmountEnvelope,
 };
 use mrml_interface_storage_filesystem_v2::{
     MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+    UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
 };
 use mrml_kernel::Capability;
 
@@ -48,6 +49,33 @@ pub struct Fat32MountUserspaceSyscalls<R> {
     raw: R,
     reply_endpoint: u64,
     reply_task: u64,
+}
+
+pub struct Fat32UnmountUserspaceSyscalls<R> {
+    raw: R,
+    reply_endpoint: u64,
+    reply_task: u64,
+}
+
+impl<R> Fat32UnmountUserspaceSyscalls<R> {
+    pub fn new(
+        raw: R,
+        reply_endpoint: u64,
+        reply_task: u64,
+    ) -> Result<Self, Fat32UserspaceSyscallError> {
+        if reply_endpoint == 0 || reply_task == 0 {
+            return Err(Fat32UserspaceSyscallError::InvalidLaunchBinding);
+        }
+        Ok(Self {
+            raw,
+            reply_endpoint,
+            reply_task,
+        })
+    }
+
+    pub fn into_raw(self) -> R {
+        self.raw
+    }
 }
 
 impl<R> Fat32MountUserspaceSyscalls<R> {
@@ -220,6 +248,56 @@ unsafe impl<R: Fat32RawSyscall> Fat32MountServiceSyscalls for Fat32MountUserspac
     fn send_mount_response(
         &mut self,
         response: &[u8; MOUNT_RESPONSE_BYTES],
+    ) -> Result<(), Self::Error> {
+        let mut frame = Fat32SyscallFrame {
+            rax: SEND_BUFFER,
+            rdi: self.reply_endpoint,
+            rsi: self.reply_task,
+            rdx: response.as_ptr() as u64,
+            r10: response.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax == 0 {
+            Ok(())
+        } else {
+            Err(Fat32UserspaceSyscallError::Kernel(frame.rax))
+        }
+    }
+}
+
+unsafe impl<R: Fat32RawSyscall> Fat32UnmountServiceSyscalls for Fat32UnmountUserspaceSyscalls<R> {
+    type Error = Fat32UserspaceSyscallError;
+
+    fn receive_unmount(
+        &mut self,
+        request: &mut [u8; UNMOUNT_REQUEST_BYTES],
+    ) -> Result<ReceivedFat32UnmountEnvelope, Self::Error> {
+        let mut frame = Fat32SyscallFrame {
+            rax: RECEIVE_BUFFER,
+            rdi: request.as_mut_ptr() as u64,
+            rsi: request.len() as u64,
+            rdx: 0,
+            r10: 0,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax != 0 {
+            return Err(Fat32UserspaceSyscallError::Kernel(frame.rax));
+        }
+        let (payload_length, capability_count) =
+            Fat32UserspaceSyscalls::<R>::receive_counts(&frame, request.len(), 0)?;
+        Ok(ReceivedFat32UnmountEnvelope {
+            payload_length,
+            capability_count,
+        })
+    }
+
+    fn send_unmount_response(
+        &mut self,
+        response: &[u8; UNMOUNT_RESPONSE_BYTES],
     ) -> Result<(), Self::Error> {
         let mut frame = Fat32SyscallFrame {
             rax: SEND_BUFFER,
@@ -449,6 +527,90 @@ mod tests {
         let mut adapter = Fat32MountUserspaceSyscalls::new(raw, 12, 13).unwrap();
         assert_eq!(
             adapter.receive_mount(&mut [0; MOUNT_REQUEST_BYTES]),
+            Err(Fat32UserspaceSyscallError::Range)
+        );
+        assert_eq!(adapter.into_raw().count, 1);
+    }
+
+    struct UnmountRaw {
+        request: [u8; UNMOUNT_REQUEST_BYTES],
+        response: [u8; UNMOUNT_RESPONSE_BYTES],
+        operations: [u64; 2],
+        count: usize,
+        reported_capabilities: u64,
+    }
+
+    unsafe impl Fat32RawSyscall for UnmountRaw {
+        unsafe fn invoke(&mut self, frame: &mut Fat32SyscallFrame) {
+            self.operations[self.count] = frame.rax;
+            self.count += 1;
+            match frame.rax {
+                RECEIVE_BUFFER => unsafe {
+                    assert_eq!((frame.rdx, frame.r10), (0, 0));
+                    core::ptr::copy_nonoverlapping(
+                        self.request.as_ptr(),
+                        frame.rdi as *mut u8,
+                        self.request.len(),
+                    );
+                    frame.rdx = UNMOUNT_REQUEST_BYTES as u64;
+                    frame.r10 = self.reported_capabilities;
+                },
+                SEND_BUFFER => unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        frame.rdx as *const u8,
+                        self.response.as_mut_ptr(),
+                        frame.r10 as usize,
+                    );
+                },
+                _ => panic!("unexpected unmount syscall"),
+            }
+            frame.rax = 0;
+        }
+    }
+
+    #[test]
+    fn unmount_adapter_uses_zero_capability_receive_and_exact_reply() {
+        use mrml_interface_storage_filesystem_v2::{
+            encode_unmount_request, encode_unmount_response, OpaqueHandle,
+        };
+
+        let request = encode_unmount_request(OpaqueHandle::new(3, 8).unwrap(), 12).unwrap();
+        let raw = UnmountRaw {
+            request,
+            response: [0; UNMOUNT_RESPONSE_BYTES],
+            operations: [0; 2],
+            count: 0,
+            reported_capabilities: 0,
+        };
+        let mut adapter = Fat32UnmountUserspaceSyscalls::new(raw, 12, 13).unwrap();
+        let mut received = [0; UNMOUNT_REQUEST_BYTES];
+        assert_eq!(
+            adapter.receive_unmount(&mut received),
+            Ok(ReceivedFat32UnmountEnvelope {
+                payload_length: UNMOUNT_REQUEST_BYTES,
+                capability_count: 0,
+            })
+        );
+        assert_eq!(received, request);
+        let response = encode_unmount_response(Ok(17));
+        adapter.send_unmount_response(&response).unwrap();
+        let raw = adapter.into_raw();
+        assert_eq!(raw.operations, [RECEIVE_BUFFER, SEND_BUFFER]);
+        assert_eq!(raw.response, response);
+    }
+
+    #[test]
+    fn unmount_adapter_rejects_kernel_reported_capability_transfer() {
+        let raw = UnmountRaw {
+            request: [0; UNMOUNT_REQUEST_BYTES],
+            response: [0; UNMOUNT_RESPONSE_BYTES],
+            operations: [0; 2],
+            count: 0,
+            reported_capabilities: 1,
+        };
+        let mut adapter = Fat32UnmountUserspaceSyscalls::new(raw, 12, 13).unwrap();
+        assert_eq!(
+            adapter.receive_unmount(&mut [0; UNMOUNT_REQUEST_BYTES]),
             Err(Fat32UserspaceSyscallError::Range)
         );
         assert_eq!(adapter.into_raw().count, 1);
