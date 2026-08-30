@@ -10454,3 +10454,19 @@ capacity, duplicate, stale-source, and revocation checks fail closed.
 Patent review: `NOT_TRIGGERED` — a capability-bound kernel copy projection over
 an existing opaque shared resource is conventional access-control and bounded
 copy plumbing. See `docs/patents/REVIEW_LOG.md`.
+
+The shared-buffer write ABI now **PARTIALLY IMPLEMENTS IN SOURCE** execution
+through that non-mapped projection. The executor accepts only
+`WriteSharedBuffer`, revalidates the exact provider task, VM, capability,
+projection generation, mapped source liveness, and byte range before copying
+from validated ordinary user memory into the opaque resource. Every outcome
+cancels the user-copy ticket and erases scratch storage; out-of-range requests
+reach neither the user bulk copy nor resource backend. The existing mapped
+read/read-write executor remains available while storage migrates. The
+Linux-host release kernel suite passes 651 tests and the release build passes.
+This is in-memory syscall-executor and recording-backend evidence, not an
+installed syscall dispatch, active page table, or physical block provider.
+
+Patent review: `NOT_TRIGGERED` — exact capability revalidation, checked range
+arithmetic, scratch erasure, and a bounded kernel-mediated copy are conventional
+syscall mechanisms. See `docs/patents/REVIEW_LOG.md`.

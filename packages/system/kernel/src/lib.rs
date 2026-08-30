@@ -264,7 +264,7 @@ pub use service_lifecycle::{
 };
 pub use shared_buffer_syscall::{
     SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedBufferUserAccess,
-    SharedBufferUserCopy,
+    SharedBufferUserCopy, SharedWriteCopySyscallError, SharedWriteCopySyscallExecutor,
 };
 pub use shared_memory::{
     HostResourceHandle, HostResourceRetirer, ServiceResourceCleanupError, ServiceResourceEraser,

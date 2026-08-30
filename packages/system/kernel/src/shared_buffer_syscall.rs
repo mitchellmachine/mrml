@@ -1,6 +1,7 @@
 use crate::{
     GuestMemory, IpcSharedBufferBackend, IpcSharedBufferError, IpcSharedBufferIoError, Message,
-    Rights, SharedMemoryBindings, SyscallRequest, TaskId, TaskRuntime, TaskRuntimeError, VmId,
+    Rights, SharedBindingError, SharedMemoryBindings, SharedWriteCopyBindingId,
+    SharedWriteCopyBindings, SyscallRequest, TaskId, TaskRuntime, TaskRuntimeError, VmId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +187,132 @@ impl SharedBufferSyscallExecutor {
             user.write(task, address, scratch)
                 .map_err(SharedBufferSyscallError::UserCopy)
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SharedWriteCopySyscallError<S, U> {
+    Unsupported,
+    Runtime(TaskRuntimeError),
+    Authorization(SharedBindingError),
+    Buffer(IpcSharedBufferIoError<S>),
+    UserValidation(U),
+    UserCopy(U),
+    ScratchTooSmall,
+}
+
+/// Executes the write half of the shared-buffer ABI through an exact
+/// non-mapped provider projection.
+pub struct SharedWriteCopySyscallExecutor;
+
+impl SharedWriteCopySyscallExecutor {
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute<
+        const TASKS: usize,
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const SOURCE_BINDINGS: usize,
+        const COPY_BINDINGS: usize,
+        S: IpcSharedBufferBackend,
+        U: SharedBufferUserCopy,
+    >(
+        request: SyscallRequest,
+        runtime: &TaskRuntime<TASKS, CAPS>,
+        task: TaskId,
+        vm: VmId,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        copy_bindings: &SharedWriteCopyBindings<COPY_BINDINGS>,
+        copy_binding: SharedWriteCopyBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        shared: &mut S,
+        user: &mut U,
+        scratch: &mut [u8],
+    ) -> Result<(), SharedWriteCopySyscallError<S::Error, U::Error>> {
+        let result = Self::execute_inner(
+            request,
+            runtime,
+            task,
+            vm,
+            source_bindings,
+            copy_bindings,
+            copy_binding,
+            memory,
+            shared,
+            user,
+            scratch,
+        );
+        user.cancel();
+        scratch.fill(0);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_inner<
+        const TASKS: usize,
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const SOURCE_BINDINGS: usize,
+        const COPY_BINDINGS: usize,
+        S: IpcSharedBufferBackend,
+        U: SharedBufferUserCopy,
+    >(
+        request: SyscallRequest,
+        runtime: &TaskRuntime<TASKS, CAPS>,
+        task: TaskId,
+        vm: VmId,
+        source_bindings: &SharedMemoryBindings<SOURCE_BINDINGS>,
+        copy_bindings: &SharedWriteCopyBindings<COPY_BINDINGS>,
+        copy_binding: SharedWriteCopyBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        shared: &mut S,
+        user: &mut U,
+        scratch: &mut [u8],
+    ) -> Result<(), SharedWriteCopySyscallError<S::Error, U::Error>> {
+        let SyscallRequest::WriteSharedBuffer {
+            capability,
+            offset,
+            input_address,
+            length,
+        } = request
+        else {
+            return Err(SharedWriteCopySyscallError::Unsupported);
+        };
+        let length =
+            usize::try_from(length).map_err(|_| SharedWriteCopySyscallError::ScratchTooSmall)?;
+        if length == 0 || length > scratch.len() {
+            return Err(SharedWriteCopySyscallError::ScratchTooSmall);
+        }
+        user.validate(task, input_address, length, SharedBufferUserAccess::Read)
+            .map_err(SharedWriteCopySyscallError::UserValidation)?;
+        let capabilities = runtime
+            .capabilities(task)
+            .map_err(SharedWriteCopySyscallError::Runtime)?;
+        let resource = copy_bindings
+            .resolve(
+                copy_binding,
+                source_bindings,
+                capabilities,
+                capability,
+                memory,
+                vm,
+                task,
+            )
+            .map_err(SharedWriteCopySyscallError::Authorization)?;
+        let length_u64 = u64::try_from(length)
+            .map_err(|_| SharedWriteCopySyscallError::Buffer(IpcSharedBufferIoError::OutOfRange))?;
+        offset
+            .checked_add(length_u64)
+            .filter(|end| *end <= resource.bytes())
+            .ok_or(SharedWriteCopySyscallError::Buffer(
+                IpcSharedBufferIoError::OutOfRange,
+            ))?;
+        let scratch = &mut scratch[..length];
+        user.read(task, input_address, scratch)
+            .map_err(SharedWriteCopySyscallError::UserCopy)?;
+        shared
+            .write(resource.handle(), offset, scratch)
+            .map_err(IpcSharedBufferIoError::Backend)
+            .map_err(SharedWriteCopySyscallError::Buffer)
     }
 }
 
@@ -493,6 +620,128 @@ mod tests {
         .unwrap();
         assert_eq!(&shared.bytes[13..18], b"write");
         assert_eq!((user.validations, user.copies, shared.calls), (1, 1, 1));
+        assert_eq!(scratch, [0; 8]);
+    }
+
+    #[test]
+    fn write_copy_syscall_uses_exact_write_authority_without_provider_mapping() {
+        let context = UserContext::new(
+            PhysAddr::new(0x20_0000).unwrap(),
+            0x40_0000,
+            0x0000_7000_0000_0000,
+        )
+        .unwrap();
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime.create(Priority::NORMAL, context).unwrap();
+        let object = ObjectId(52);
+        let write = runtime
+            .capabilities_mut(task)
+            .unwrap()
+            .insert(object, Rights::MAP.union(Rights::WRITE))
+            .unwrap();
+        let vm = VmTable::<1>::new().create(1).unwrap();
+        let mut memory = GuestMemory::<1>::new();
+        let mapping = memory
+            .map(GuestRegion::new(0x4000, PhysAddr::new(0x9000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let mut controller = crate::CapabilitySpace::<2>::new();
+        let mapped = controller
+            .insert(
+                object,
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::CONTROL),
+            )
+            .unwrap();
+        let control = controller.insert(object, Rights::CONTROL).unwrap();
+        let handle = HostResourceHandle::new(152).unwrap();
+        let mut source_bindings = SharedMemoryBindings::<1>::new();
+        let source = source_bindings
+            .bind(
+                &controller,
+                mapped,
+                &memory,
+                SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite),
+                handle,
+            )
+            .unwrap();
+        let mut copy_bindings = SharedWriteCopyBindings::<1>::new();
+        let copy = copy_bindings
+            .bind(
+                &source_bindings,
+                source,
+                &controller,
+                control,
+                runtime.capabilities(task).unwrap(),
+                write,
+                &memory,
+                vm,
+                task,
+            )
+            .unwrap();
+        let mut shared = SharedBackend {
+            handle,
+            bytes: [0; BYTES],
+            calls: 0,
+            fail: false,
+        };
+        let mut user = UserBackend {
+            task,
+            bytes: [0; BYTES],
+            validations: 0,
+            copies: 0,
+            reject: false,
+        };
+        user.bytes[..5].copy_from_slice(b"exact");
+        let mut scratch = [0xcc; 8];
+        SharedWriteCopySyscallExecutor::execute(
+            SyscallRequest::WriteSharedBuffer {
+                capability: write,
+                offset: 21,
+                input_address: USER_ADDRESS,
+                length: 5,
+            },
+            &runtime,
+            task,
+            vm,
+            &source_bindings,
+            &copy_bindings,
+            copy,
+            &memory,
+            &mut shared,
+            &mut user,
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(&shared.bytes[21..26], b"exact");
+        assert_eq!((user.validations, user.copies, shared.calls), (1, 1, 1));
+        assert_eq!(scratch, [0; 8]);
+
+        assert_eq!(
+            SharedWriteCopySyscallExecutor::execute(
+                SyscallRequest::WriteSharedBuffer {
+                    capability: write,
+                    offset: crate::PAGE_SIZE - 1,
+                    input_address: USER_ADDRESS,
+                    length: 5,
+                },
+                &runtime,
+                task,
+                vm,
+                &source_bindings,
+                &copy_bindings,
+                copy,
+                &memory,
+                &mut shared,
+                &mut user,
+                &mut scratch,
+            ),
+            Err(SharedWriteCopySyscallError::Buffer(
+                IpcSharedBufferIoError::OutOfRange
+            ))
+        );
+        assert_eq!((user.copies, shared.calls), (1, 1));
         assert_eq!(scratch, [0; 8]);
     }
 
