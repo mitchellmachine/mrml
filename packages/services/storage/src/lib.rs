@@ -123,7 +123,7 @@ pub use format::{
 };
 pub use filesystem_open::{
     AuthenticatedFilesystemLookup, FilesystemOpenBroker, FilesystemOpenError,
-    FilesystemOpenKind,
+    FilesystemOpenKind, FilesystemOpenReservation,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use kernel_transport::{BlockKernelTransport, BlockKernelTransportError};

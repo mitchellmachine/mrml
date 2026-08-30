@@ -1253,6 +1253,10 @@ mount, parent, and provider object to a stable storage object; this evidence
 still grants no right. A child handle is derived only from the same principal's
 exact directory handle carrying `OPEN_CHILD`, with kind-valid requested rights.
 Mount cleanup revokes each opened handle transitively, including descendants.
+Before provider activation, the broker reserves the matching child authority in
+an unusable state and occupies its own bounded lifecycle slot. Exact activation
+publishes it; cancellation or mount cleanup invalidates the reservation and
+releases both capacities. No partial open can leave a usable storage capability.
 The provider independently reserves an exact mount/root/object tuple before
 publishing any read-usable state. Only activation returns an opaque handle;
 cancellation, close, and unmount advance its generation, and exhaustion retires

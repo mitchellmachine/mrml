@@ -1,6 +1,6 @@
 use crate::{
-    StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectId,
-    StorageObjectKind, StoragePrincipal, StorageRights, VolumeId,
+    StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,
+    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights, VolumeId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,44 +75,60 @@ impl AuthenticatedFilesystemLookup {
     }
 }
 
-#[derive(Clone, Copy)]
-struct OpenedFilesystemHandle {
-    volume: VolumeId,
-    mount_generation: u64,
-    handle: StorageHandle,
-    owner: StoragePrincipal,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FilesystemOpenState {
+    Reserved(StorageHandle),
+    Active(StorageHandle),
 }
 
-impl OpenedFilesystemHandle {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FilesystemOpenRecord {
+    volume: VolumeId,
+    mount_generation: u64,
+    owner: StoragePrincipal,
+    state: FilesystemOpenState,
+}
+
+impl FilesystemOpenRecord {
     const EMPTY: Option<Self> = None;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct FilesystemOpenReservation {
+    broker_slot: u32,
+    volume: VolumeId,
+    mount_generation: u64,
+    owner: StoragePrincipal,
+    authority: StorageAuthorityReservation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FilesystemOpenError {
     Capacity,
     WrongParent,
+    InvalidReservation,
     Authority(StorageAuthorityError),
 }
 
 pub struct FilesystemOpenBroker<const N: usize> {
-    opened: [Option<OpenedFilesystemHandle>; N],
+    opened: [Option<FilesystemOpenRecord>; N],
 }
 
 impl<const N: usize> FilesystemOpenBroker<N> {
     pub const fn new() -> Self {
         Self {
-            opened: [OpenedFilesystemHandle::EMPTY; N],
+            opened: [FilesystemOpenRecord::EMPTY; N],
         }
     }
 
-    pub fn open_child<const A: usize>(
+    pub fn reserve_child<const A: usize>(
         &mut self,
         authorities: &mut StorageAuthorityTable<A>,
         parent: StorageHandle,
         owner: StoragePrincipal,
         lookup: AuthenticatedFilesystemLookup,
         requested: StorageRights,
-    ) -> Result<StorageHandle, FilesystemOpenError> {
+    ) -> Result<FilesystemOpenReservation, FilesystemOpenError> {
         let parent_object = authorities
             .authorize(
                 parent,
@@ -124,13 +140,15 @@ impl<const N: usize> FilesystemOpenBroker<N> {
         if parent_object != lookup.parent || parent_object.volume() != lookup.volume {
             return Err(FilesystemOpenError::WrongParent);
         }
-        let slot = self
+        let broker_slot = self
             .opened
             .iter()
             .position(Option::is_none)
             .ok_or(FilesystemOpenError::Capacity)?;
-        let handle = authorities
-            .insert_child_derived(
+        let broker_slot_u32 =
+            u32::try_from(broker_slot).map_err(|_| FilesystemOpenError::Capacity)?;
+        let authority = authorities
+            .reserve_child_insert(
                 parent,
                 owner,
                 StorageRights::OPEN_CHILD,
@@ -139,13 +157,87 @@ impl<const N: usize> FilesystemOpenBroker<N> {
                 requested,
             )
             .map_err(FilesystemOpenError::Authority)?;
-        self.opened[slot] = Some(OpenedFilesystemHandle {
+        let authority_handle = authority.handle();
+        self.opened[broker_slot] = Some(FilesystemOpenRecord {
             volume: lookup.volume,
             mount_generation: lookup.mount_generation,
-            handle,
             owner,
+            state: FilesystemOpenState::Reserved(authority_handle),
+        });
+        Ok(FilesystemOpenReservation {
+            broker_slot: broker_slot_u32,
+            volume: lookup.volume,
+            mount_generation: lookup.mount_generation,
+            owner,
+            authority,
+        })
+    }
+
+    pub fn activate_child<const A: usize>(
+        &mut self,
+        authorities: &mut StorageAuthorityTable<A>,
+        reservation: FilesystemOpenReservation,
+    ) -> Result<StorageHandle, FilesystemOpenError> {
+        let slot = usize::try_from(reservation.broker_slot)
+            .map_err(|_| FilesystemOpenError::InvalidReservation)?;
+        let authority_handle = reservation.authority.handle();
+        let expected = FilesystemOpenRecord {
+            volume: reservation.volume,
+            mount_generation: reservation.mount_generation,
+            owner: reservation.owner,
+            state: FilesystemOpenState::Reserved(authority_handle),
+        };
+        if self.opened.get(slot).copied().flatten() != Some(expected)
+            || !authorities.reservation_is_valid(&reservation.authority)
+        {
+            if self.opened.get(slot).copied().flatten() == Some(expected) {
+                self.opened[slot] = None;
+            }
+            return Err(FilesystemOpenError::InvalidReservation);
+        }
+        let handle = authorities.activate_validated(reservation.authority);
+        self.opened[slot] = Some(FilesystemOpenRecord {
+            state: FilesystemOpenState::Active(handle),
+            ..expected
         });
         Ok(handle)
+    }
+
+    pub fn cancel_child<const A: usize>(
+        &mut self,
+        authorities: &mut StorageAuthorityTable<A>,
+        reservation: FilesystemOpenReservation,
+    ) -> Result<(), FilesystemOpenError> {
+        let slot = usize::try_from(reservation.broker_slot)
+            .map_err(|_| FilesystemOpenError::InvalidReservation)?;
+        let authority_handle = reservation.authority.handle();
+        let expected = FilesystemOpenRecord {
+            volume: reservation.volume,
+            mount_generation: reservation.mount_generation,
+            owner: reservation.owner,
+            state: FilesystemOpenState::Reserved(authority_handle),
+        };
+        if self.opened.get(slot).copied().flatten() != Some(expected) {
+            return Err(FilesystemOpenError::InvalidReservation);
+        }
+        authorities
+            .cancel_reservation(reservation.authority)
+            .map_err(FilesystemOpenError::Authority)?;
+        self.opened[slot] = None;
+        Ok(())
+    }
+
+    pub fn open_child<const A: usize>(
+        &mut self,
+        authorities: &mut StorageAuthorityTable<A>,
+        parent: StorageHandle,
+        owner: StoragePrincipal,
+        lookup: AuthenticatedFilesystemLookup,
+        requested: StorageRights,
+    ) -> Result<StorageHandle, FilesystemOpenError> {
+        let reservation =
+            self.reserve_child(authorities, parent, owner, lookup, requested)?;
+        self.activate_child(authorities, reservation)
     }
 
     pub fn revoke_mount<const A: usize>(
@@ -165,9 +257,16 @@ impl<const N: usize> FilesystemOpenBroker<N> {
             if opened.volume != volume || opened.mount_generation != mount_generation {
                 continue;
             }
-            match authorities.revoke(opened.handle, opened.owner) {
+            let result = match opened.state {
+                FilesystemOpenState::Reserved(handle) => authorities
+                    .cancel_reserved_handle(handle)
+                    .map(|()| 0),
+                FilesystemOpenState::Active(handle) => authorities.revoke(handle, opened.owner),
+            };
+            match result {
                 Ok(count) => revoked += count,
-                Err(StorageAuthorityError::InvalidHandle) => {}
+                Err(StorageAuthorityError::InvalidHandle)
+                | Err(StorageAuthorityError::InvalidReservation) => {}
                 Err(error) => return Err(FilesystemOpenError::Authority(error)),
             }
             *record = None;
@@ -278,6 +377,145 @@ mod tests {
         assert_eq!(
             authorities.authorize(file, owner, StorageObjectKind::File, StorageRights::WRITE),
             Err(StorageAuthorityError::Denied)
+        );
+    }
+
+    #[test]
+    fn reserved_child_is_not_authority_until_exact_activation() {
+        let volume = volume(1);
+        let parent_object = object(volume, 1);
+        let child = object(volume, 2);
+        let owner = principal(9);
+        let mut authorities = StorageAuthorityTable::<3>::new();
+        let parent = authorities
+            .insert(
+                parent_object,
+                StorageObjectKind::Directory,
+                StorageRights::OPEN_CHILD,
+                owner,
+            )
+            .unwrap();
+        let mut broker = FilesystemOpenBroker::<1>::new();
+        let reservation = broker
+            .reserve_child(
+                &mut authorities,
+                parent,
+                owner,
+                lookup(volume, parent_object, child),
+                StorageRights::READ,
+            )
+            .unwrap();
+        assert_eq!(
+            authorities.authorize(
+                reservation.authority.handle(),
+                owner,
+                StorageObjectKind::File,
+                StorageRights::READ,
+            ),
+            Err(StorageAuthorityError::InvalidHandle)
+        );
+        let handle = broker
+            .activate_child(&mut authorities, reservation)
+            .unwrap();
+        assert_eq!(
+            authorities.authorize(handle, owner, StorageObjectKind::File, StorageRights::READ),
+            Ok(child)
+        );
+    }
+
+    #[test]
+    fn cancellation_releases_broker_and_authority_capacity_without_publication() {
+        let volume = volume(1);
+        let parent_object = object(volume, 1);
+        let child = object(volume, 2);
+        let owner = principal(9);
+        let mut authorities = StorageAuthorityTable::<2>::new();
+        let parent = authorities
+            .insert(
+                parent_object,
+                StorageObjectKind::Directory,
+                StorageRights::OPEN_CHILD,
+                owner,
+            )
+            .unwrap();
+        let mut broker = FilesystemOpenBroker::<1>::new();
+        let reservation = broker
+            .reserve_child(
+                &mut authorities,
+                parent,
+                owner,
+                lookup(volume, parent_object, child),
+                StorageRights::READ,
+            )
+            .unwrap();
+        let cancelled_handle = reservation.authority.handle();
+        assert_eq!(
+            broker.reserve_child(
+                &mut authorities,
+                parent,
+                owner,
+                lookup(volume, parent_object, child),
+                StorageRights::READ,
+            ),
+            Err(FilesystemOpenError::Capacity)
+        );
+        broker
+            .cancel_child(&mut authorities, reservation)
+            .unwrap();
+        assert!(authorities.has_capacity());
+        let replacement = broker
+            .reserve_child(
+                &mut authorities,
+                parent,
+                owner,
+                lookup(volume, parent_object, child),
+                StorageRights::READ,
+            )
+            .unwrap();
+        let replacement_handle = broker
+            .activate_child(&mut authorities, replacement)
+            .unwrap();
+        assert_ne!(replacement_handle, cancelled_handle);
+    }
+
+    #[test]
+    fn mount_revocation_cancels_pending_child_before_activation() {
+        let volume = volume(1);
+        let parent_object = object(volume, 1);
+        let child = object(volume, 2);
+        let owner = principal(9);
+        let mut authorities = StorageAuthorityTable::<3>::new();
+        let parent = authorities
+            .insert(
+                parent_object,
+                StorageObjectKind::Directory,
+                StorageRights::OPEN_CHILD,
+                owner,
+            )
+            .unwrap();
+        let mut broker = FilesystemOpenBroker::<1>::new();
+        let reservation = broker
+            .reserve_child(
+                &mut authorities,
+                parent,
+                owner,
+                lookup(volume, parent_object, child),
+                StorageRights::READ,
+            )
+            .unwrap();
+        assert_eq!(broker.revoke_mount(&mut authorities, volume, 7), Ok(0));
+        assert_eq!(
+            broker.activate_child(&mut authorities, reservation),
+            Err(FilesystemOpenError::InvalidReservation)
+        );
+        assert_eq!(
+            authorities.authorize(
+                parent,
+                owner,
+                StorageObjectKind::Directory,
+                StorageRights::OPEN_CHILD,
+            ),
+            Ok(parent_object)
         );
     }
 

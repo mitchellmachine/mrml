@@ -959,9 +959,12 @@ from the service entry remain **PLANNED**. The storage policy service now also
 has a bounded filesystem open broker. It consumes an unsafe runtime-authenticated
 provider/mount/parent/object mapping as identity evidence only, requires the
 exact parent's `OPEN_CHILD` authority, derives only requested kind-valid rights,
-and tracks opened handles for mount-scoped transitive revocation. Lookup-only
+and tracks opened handles for mount-scoped transitive revocation. Broker and
+authority slots are reserved together without publishing authority, then exact
+activation makes the child handle usable. Cancellation and unmount invalidate
+pending state and release both bounded resources. Lookup-only
 authority, parent substitution, and cross-volume mapping fail before creation.
-Storage passes 149 focused Linux-host tests. The
+Storage passes 152 focused Linux-host tests. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows

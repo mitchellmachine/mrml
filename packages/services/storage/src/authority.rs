@@ -153,6 +153,15 @@ pub struct StorageAuthorityReservation {
     parent: Option<StorageHandle>,
 }
 
+impl StorageAuthorityReservation {
+    pub(crate) const fn handle(&self) -> StorageHandle {
+        StorageHandle {
+            slot: self.slot,
+            generation: self.generation,
+        }
+    }
+}
+
 impl<const N: usize> StorageAuthorityTable<N> {
     pub fn new() -> Self {
         Self::with_generation(1)
@@ -319,6 +328,23 @@ impl<const N: usize> StorageAuthorityTable<N> {
         reservation: StorageAuthorityReservation,
     ) -> Result<(), StorageAuthorityError> {
         let entry = self.reserved_entry_mut(&reservation)?;
+        Self::retire(entry);
+        Ok(())
+    }
+
+    pub(crate) fn cancel_reserved_handle(
+        &mut self,
+        handle: StorageHandle,
+    ) -> Result<(), StorageAuthorityError> {
+        let slot = usize::try_from(handle.slot)
+            .map_err(|_| StorageAuthorityError::InvalidReservation)?;
+        let entry = self
+            .entries
+            .get_mut(slot)
+            .ok_or(StorageAuthorityError::InvalidReservation)?;
+        if entry.generation != handle.generation || entry.object.is_none() || !entry.reserved {
+            return Err(StorageAuthorityError::InvalidReservation);
+        }
         Self::retire(entry);
         Ok(())
     }

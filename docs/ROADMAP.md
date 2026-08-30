@@ -67,7 +67,7 @@ valid transferred leaf; absent or malformed token data cannot trigger revocation
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
-filesystem interface codec passes thirteen and storage passes 149, including a
+filesystem interface codec passes thirteen and storage passes 152, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
 does not change the modeled kernel epoch. Checking, formatting, writes,
 installed supervisor launch, and hardware evidence
@@ -78,6 +78,10 @@ mount/parent result to a stable storage object but grants nothing by itself.
 Opening requires the exact parent handle with `OPEN_CHILD`, derives only requested
 kind-valid rights, rejects substitution before allocation, and records the child
 handle for mount-scoped transitive revocation. `LOOKUP` alone remains insufficient.
+Storage authority creation is also two-phase: reservation occupies both bounded
+broker and authority slots but cannot authorize access, exact activation
+publishes the child handle, and cancellation or unmount invalidates the pending
+state before either capacity can be reused.
 The provider now reserves opens in a fixed-capacity table without issuing a
 usable handle. Exact activation publishes a fresh opaque handle; cancellation,
 close, and unmount advance its generation, reject replay, and permanently retire
