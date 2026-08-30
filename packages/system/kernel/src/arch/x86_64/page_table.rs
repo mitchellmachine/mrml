@@ -894,6 +894,24 @@ impl<'a> ActiveServiceMappingRevoker<'a> {
             retired: false,
         })
     }
+
+    /// Creates a one-use active revoker from the complete descriptor returned
+    /// by the memory-resource table's capability-authorized revocation
+    /// preflight.
+    ///
+    /// # Safety
+    ///
+    /// The safety contract of [`Self::new`] applies. `request` must be the
+    /// unmodified result of the policy table's exact mapping preflight.
+    pub unsafe fn from_request(
+        tables: &'a mut ActivePageTables,
+        expected_root: PhysAddr,
+        request: MemoryMappingBackendRequest,
+    ) -> Result<Self, ActiveMappingRevocationError> {
+        let expected =
+            native_user_mapping(request).map_err(|_| ActiveMappingRevocationError::WrongMapping)?;
+        unsafe { Self::new(tables, expected_root, expected) }
+    }
 }
 
 impl GuestMappingRevoker for ActiveServiceMappingRevoker<'_> {

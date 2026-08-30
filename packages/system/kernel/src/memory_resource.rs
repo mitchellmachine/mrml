@@ -1240,6 +1240,20 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         })
     }
 
+    /// Returns the complete backend withdrawal descriptor only after the same
+    /// exact `CONTROL` authorization and generational preflight required for
+    /// mapping retirement. The descriptor is validated data, not authority.
+    pub fn mapping_revocation_request<const C: usize>(
+        &self,
+        mapping: MemoryMappingId,
+        target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<MemoryMappingBackendRequest, MemoryResourceError> {
+        let (entry, _, _, _) =
+            self.prepare_mapping_release(mapping, target_capability, capabilities)?;
+        Ok(mapping_backend_request(entry))
+    }
+
     pub fn usage<const C: usize>(
         &self,
         pool: MemoryPoolId,
@@ -2351,6 +2365,16 @@ mod tests {
         assert_eq!(request.mapping().object(), object);
         assert_eq!(request.mapping().virtual_page(), 0x200);
         assert_eq!(request.mapping().pages(), 2);
+        assert_eq!(
+            table.mapping_revocation_request(mapping, target, &caps),
+            Ok(request)
+        );
+        assert_eq!(
+            table.mapping_revocation_request(mapping, object_cap, &caps),
+            Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        );
         assert_eq!(
             table
                 .usage(root, root_cap, &caps)

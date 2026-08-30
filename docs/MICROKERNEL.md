@@ -10610,3 +10610,16 @@ privileged active-CR3 execution is claimed.
 Patent review: `NOT_TRIGGERED` — checking the architectural interrupt-enable
 flag before privileged page-table mutation is a conventional critical-section
 precondition. See `docs/patents/REVIEW_LOG.md`.
+
+The memory-resource table now releases a complete native revocation descriptor
+only after exact mapping generation and target `CONTROL` authorization pass the
+same preflight used by retirement. The descriptor includes the physical backing
+needed for leaf identity validation but remains non-authorizing data. The x86-64
+active-service revoker can construct directly from this unmodified descriptor,
+rebuilding the complete native mapping before any leaf mutation. The Linux-host
+release kernel suite passes 652 tests and the release build passes; tests prove
+authorization denial and exact descriptor recovery, not active hardware use.
+
+Patent review: `NOT_TRIGGERED` — capability-gated disclosure of an exact mapping
+withdrawal descriptor is conventional privileged resource introspection. See
+`docs/patents/REVIEW_LOG.md`.
