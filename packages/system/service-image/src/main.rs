@@ -1981,7 +1981,9 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     let mut receipt = transaction
         .publish(&plan, &mut volume)
         .unwrap_or_else(|_| halt());
-    let stable = prepared.commit(&mut receipt).unwrap_or_else(|_| halt());
+    let stable = prepared
+        .commit(&KernelAuthorizer, &authority, &mut receipt)
+        .unwrap_or_else(|_| halt());
     if receipt.remaining() != 0 || stable.file().generation() != 2 {
         halt();
     }

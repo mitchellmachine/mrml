@@ -4098,3 +4098,8 @@ Deployment stable activation is also migrated. Ordinary and authenticated
 publication now require the retained exact storage authority in addition to
 live deployment control and unchanged activation state; storage revocation
 leaves the receipt, recovery state, and deployment service unchanged.
+
+Durable storage-authority checkpoint publication now uses the same authorized
+commit, completing the planned stable configuration, deployment, and authority
+checkpoint migrations. A revoked staged-file handle cannot publish a durable
+grant generation or consume its transaction receipt.

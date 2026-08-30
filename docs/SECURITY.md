@@ -1076,3 +1076,8 @@ After exact control and activation-state revalidation, the retained file handle,
 principal, kind, and write/resize rights must still authorize the successor.
 Denial occurs before receipt consumption, authenticated recovery-state update,
 or live activation.
+
+Durable authority checkpoint bytes likewise cannot preserve the authority used
+to stage their stable file. Commit revalidates the retained generational file
+binding before consuming the receipt, so revocation prevents publication of the
+grant checkpoint even though its bytes and metadata were already prepared.

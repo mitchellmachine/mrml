@@ -1,9 +1,9 @@
 use crate::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
-    FileWriteError, MetadataPointer, PreparedFileWrite, ReachableFileSelection,
-    StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectId,
-    StorageObjectKind, StoragePrincipal, StorageRights, StorageTransaction, TransactionError,
-    TransactionReceipt, VolumeId,
+    FileWriteCommitError, FileWriteError, MetadataPointer, PreparedFileWrite,
+    ReachableFileSelection, StorageAuthorityError, StorageAuthorityTable, StorageHandle,
+    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights, StorageTransaction,
+    TransactionError, TransactionReceipt, VolumeId,
 };
 use core::{
     array,
@@ -571,11 +571,15 @@ impl<const EXTENTS: usize> PreparedStableAuthorities<EXTENTS> {
         transaction.admit_file(&self.file)
     }
 
-    pub fn commit<const PARTICIPANTS: usize>(
+    pub fn commit<const PARTICIPANTS: usize, const AUTHORITIES: usize>(
         self,
+        authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
-    ) -> Result<StableAuthorities<EXTENTS>, TransactionError> {
-        let file = self.file.commit_transaction(receipt)?;
+    ) -> Result<StableAuthorities<EXTENTS>, FileWriteCommitError> {
+        let file = self
+            .file
+            .commit_transaction_authorized(authority, receipt)
+            .map_err(|(_, error)| error)?;
         Ok(StableAuthorities {
             file,
             checkpoint: self.checkpoint,
@@ -1854,7 +1858,50 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared.commit(&mut receipt).unwrap();
+        authority.revoke(file, principal(7)).unwrap();
+        assert!(matches!(
+            prepared.commit(&authority, &mut receipt),
+            Err(FileWriteCommitError::Authority(
+                StorageAuthorityError::InvalidHandle
+            ))
+        ));
+        assert_eq!(receipt.remaining(), 1);
+
+        let mut authority = StorageAuthorityTable::<2>::new();
+        let file = authority
+            .insert(
+                object(90),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                principal(7),
+            )
+            .unwrap();
+        let (_, next, metadata, images) = stable_layout(&expected);
+        let prepared = prepare_stable_authorities(
+            9,
+            14,
+            &grants,
+            &current,
+            &authority,
+            file,
+            principal(7),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut output,
+            &mut backend,
+        )
+        .unwrap();
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(81).unwrap(), 2).unwrap();
+        prepared.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let stable = prepared.commit(&authority, &mut receipt).unwrap();
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.file().generation(), 2);
         assert_eq!(stable.checkpoint().epoch(), 9);

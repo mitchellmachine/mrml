@@ -7221,6 +7221,16 @@ Patent review: `NOT_TRIGGERED` — this applies the existing conventional
 generational storage-handle check at the deployment transaction boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+Durable storage-authority checkpoint publication now completes the migration of
+the three stable-file consumers. Commit revalidates the exact retained file
+handle, principal, kind, and write/resize rights before consuming its receipt;
+revocation leaves the receipt unconsumed and publishes no authority generation.
+Storage passes 142 focused tests and the native service image builds.
+
+Patent review: `NOT_TRIGGERED` — this reuses conventional generational handle
+reauthorization at the existing authority-checkpoint commit boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
