@@ -1,6 +1,12 @@
 #![no_std]
 #![no_main]
 
+#[cfg(all(
+    feature = "deadline-receive-cancel-denied-probe",
+    feature = "deadline-receive-cancel-replay-probe"
+))]
+compile_error!("deadline receive cancellation denial and replay probes are mutually exclusive");
+
 #[cfg(feature = "vmx-root-probe")]
 mod vmx_probe;
 

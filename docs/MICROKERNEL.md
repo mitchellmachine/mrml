@@ -11905,3 +11905,34 @@ result.
 Patent review: `NOT_TRIGGERED` — exercising capability denial while requiring
 the pre-existing timeout to remain authoritative is conventional adversarial
 authorization testing. See `docs/patents/REVIEW_LOG.md`.
+
+The `deadline_receive_cancel_replay_probe` now exercises the one-use property
+through the canonical CPL3 interface rather than only inside kernel tests. A
+sender holding exact task-local `CONTROL` submits the same operation-14 request
+twice for one blocked receiver. The first request must return detail-free
+success and complete that receiver as `Cancelled`; the immediate replay must
+return detail-free generic error because the kernel-owned escrow entry has
+already retired. Only after both results match does the sender yield. The
+receiver accepts only its original `Cancelled` completion and emits the
+replay-specific proof marker `0x2e`.
+
+KVM and WHP select the same bounded timer-capable three-service guest for this
+profile. KVM binds `0x2e` only to replay mode, accepts canonical deadline proof
+markers exactly from `0x2a` through `0x2e`, and rejects both cross-mode marker
+substitution and noncanonical `0x2f`.
+
+The replay service-image release profile and matching `uefi-x86_64` bootloader
+profile cross-build with the existing 13 dead-code warnings and one unreachable-
+pattern warning respectively. Rebuilt ordinary-success and denied-cancellation
+service profiles also pass. One concurrent pair of MRML-native service builds
+collided in the shared target directory while creating a crypto archive; the
+exact denied profile passed when rerun alone, so the collision is recorded as a
+build-orchestration limitation rather than product evidence. The Linux KVM
+runner's 16 tests and release build pass with the existing 25 CUDA/PTX warnings.
+WHP remains unbuilt because `cross_host_rust_target` is absent, and `/dev/kvm`
+remains unavailable. No hosted proof-port or physical-hardware result is
+claimed.
+
+Patent review: `NOT_TRIGGERED` — replaying an already-consumed cancellation
+request and requiring fail-closed rejection is conventional one-use token
+testing. See `docs/patents/REVIEW_LOG.md`.

@@ -6,6 +6,12 @@
     allow(dead_code)
 )]
 
+#[cfg(all(
+    feature = "deadline-receive-cancel-denied-probe",
+    feature = "deadline-receive-cancel-replay-probe"
+))]
+compile_error!("deadline receive cancellation denial and replay probes are mutually exclusive");
+
 use core::arch::{asm, global_asm};
 
 #[cfg(not(feature = "preemption-probe"))]
@@ -418,11 +424,14 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
             #[cfg(all(
                 feature = "deadline-receive-cancel-probe",
                 not(feature = "deadline-receive-message-probe"),
-                not(feature = "deadline-receive-cancel-denied-probe")
+                not(feature = "deadline-receive-cancel-denied-probe"),
+                not(feature = "deadline-receive-cancel-replay-probe")
             ))]
             in("eax") 0x2cu32,
             #[cfg(feature = "deadline-receive-cancel-denied-probe")]
             in("eax") 0x2du32,
+            #[cfg(feature = "deadline-receive-cancel-replay-probe")]
+            in("eax") 0x2eu32,
             options(nomem, nostack)
         )
     };
@@ -1332,30 +1341,38 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     receiver_control: u64,
     receiver_service: u64,
 ) -> ! {
-    let mut status = 14u64;
-    let mut detail0 = 0u64;
-    let mut detail1 = 0u64;
-    let mut detail2 = 0u64;
-    let mut detail3 = 0u64;
-    unsafe {
-        asm!(
-            "int 0x80",
-            inlateout("rax") status,
-            in("rdi") receiver_control,
-            in("rsi") receiver_service,
-            inlateout("rdx") detail0,
-            inlateout("r10") detail1,
-            inlateout("r8") detail2,
-            inlateout("r9") detail3,
-            options(nostack)
-        )
+    let attempts = if cfg!(feature = "deadline-receive-cancel-replay-probe") {
+        2
+    } else {
+        1
     };
-    #[cfg(not(feature = "deadline-receive-cancel-denied-probe"))]
-    let expected = mrml_kernel::SyscallCompletionStatus::Success.code();
-    #[cfg(feature = "deadline-receive-cancel-denied-probe")]
-    let expected = mrml_kernel::SyscallCompletionStatus::Error.code();
-    if status != expected || detail0 | detail1 | detail2 | detail3 != 0 {
-        halt();
+    for attempt in 0..attempts {
+        let mut status = 14u64;
+        let mut detail0 = 0u64;
+        let mut detail1 = 0u64;
+        let mut detail2 = 0u64;
+        let mut detail3 = 0u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") receiver_control,
+                in("rsi") receiver_service,
+                inlateout("rdx") detail0,
+                inlateout("r10") detail1,
+                inlateout("r8") detail2,
+                inlateout("r9") detail3,
+                options(nostack)
+            )
+        };
+        let expected = if cfg!(feature = "deadline-receive-cancel-denied-probe") || attempt == 1 {
+            mrml_kernel::SyscallCompletionStatus::Error.code()
+        } else {
+            mrml_kernel::SyscallCompletionStatus::Success.code()
+        };
+        if status != expected || detail0 | detail1 | detail2 | detail3 != 0 {
+            halt();
+        }
     }
     unsafe { yield_now() };
     halt()
