@@ -10322,3 +10322,16 @@ service-transfer teardown transaction.
 Patent review: `NOT_TRIGGERED` — atomic preflight and revocation of a bounded
 capability set is conventional capability-lifecycle management. See
 `docs/patents/REVIEW_LOG.md`.
+
+Backed mapping teardown now **PARTIALLY IMPLEMENTS IN SOURCE** an exact retry
+state for a two-sided mapping. Removal proceeds provider/second side first and
+then consumer/first side. Any policy or backend uncertainty returns the
+generational IDs of precisely the mappings still installed; retry skips a side
+already removed and therefore cannot issue a duplicate backend removal. Tests
+inject failures at both stages and finish from the returned state before
+backing release. The Linux-host release kernel suite passes 649 tests. This is
+recording-backend simulation, not active native page-table or hardware evidence.
+
+Patent review: `NOT_TRIGGERED` — explicit progress state for retryable ordered
+resource teardown is conventional lifecycle management. See
+`docs/patents/REVIEW_LOG.md`.

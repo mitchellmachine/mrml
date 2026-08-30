@@ -142,6 +142,45 @@ pub enum MemoryMappingPairOperationError<F, S> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryMappingPairRemovalState {
+    first: Option<MemoryMappingId>,
+    second: Option<MemoryMappingId>,
+}
+
+impl MemoryMappingPairRemovalState {
+    pub const fn new(pair: MemoryMappingPair) -> Self {
+        Self {
+            first: Some(pair.first()),
+            second: Some(pair.second()),
+        }
+    }
+
+    pub const fn first(self) -> Option<MemoryMappingId> {
+        self.first
+    }
+
+    pub const fn second(self) -> Option<MemoryMappingId> {
+        self.second
+    }
+
+    pub const fn complete(self) -> bool {
+        self.first.is_none() && self.second.is_none()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryMappingPairRemovalError<F, S> {
+    Second {
+        state: MemoryMappingPairRemovalState,
+        error: MemoryMappingOperationError<S>,
+    },
+    First {
+        state: MemoryMappingPairRemovalState,
+        error: MemoryMappingOperationError<F>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryBackingKind {
     Anonymous,
     Shared,
@@ -963,6 +1002,41 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
                 }),
             },
         }
+    }
+
+    /// Removes the second mapping and then the first, retaining exact progress
+    /// after any backend uncertainty so retries never repeat a completed side.
+    #[allow(clippy::too_many_arguments)]
+    pub fn remove_mapping_pair<F: MemoryMappingBackend, S: MemoryMappingBackend, const C: usize>(
+        &mut self,
+        mut state: MemoryMappingPairRemovalState,
+        first_target_capability: Capability,
+        first_backend: &mut F,
+        second_target_capability: Capability,
+        second_backend: &mut S,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<MemoryMappingPairRemovalState, MemoryMappingPairRemovalError<F::Error, S::Error>>
+    {
+        if let Some(second) = state.second {
+            if let Err(error) = self.remove_mapping(
+                second,
+                second_target_capability,
+                capabilities,
+                second_backend,
+            ) {
+                return Err(MemoryMappingPairRemovalError::Second { state, error });
+            }
+            state.second = None;
+        }
+        if let Some(first) = state.first {
+            if let Err(error) =
+                self.remove_mapping(first, first_target_capability, capabilities, first_backend)
+            {
+                return Err(MemoryMappingPairRemovalError::First { state, error });
+            }
+            state.first = None;
+        }
+        Ok(state)
     }
 
     /// Retires one reservation only after its actual page-table/backend mapping
@@ -2640,6 +2714,76 @@ mod tests {
             ))
         );
         assert!(first_backend.installed.is_none());
+        assert_eq!(
+            table
+                .usage(pool, pool_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+        second_backend.fail_install = false;
+        let pair = table
+            .install_backed_mapping_pair(
+                object,
+                object_cap,
+                first_target,
+                0x300,
+                Rights::READ,
+                &mut first_backend,
+                second_target,
+                0x400,
+                Rights::WRITE,
+                &mut second_backend,
+                &caps,
+            )
+            .unwrap();
+        second_backend.fail_remove = true;
+        let state = match table.remove_mapping_pair(
+            MemoryMappingPairRemovalState::new(pair),
+            first_target,
+            &mut first_backend,
+            second_target,
+            &mut second_backend,
+            &caps,
+        ) {
+            Err(MemoryMappingPairRemovalError::Second {
+                state,
+                error: MemoryMappingOperationError::Backend("remove"),
+            }) => state,
+            other => panic!("unexpected second removal result: {other:?}"),
+        };
+        assert_eq!(state.first(), Some(pair.first()));
+        assert_eq!(state.second(), Some(pair.second()));
+        second_backend.fail_remove = false;
+        first_backend.fail_remove = true;
+        let state = match table.remove_mapping_pair(
+            state,
+            first_target,
+            &mut first_backend,
+            second_target,
+            &mut second_backend,
+            &caps,
+        ) {
+            Err(MemoryMappingPairRemovalError::First {
+                state,
+                error: MemoryMappingOperationError::Backend("remove"),
+            }) => state,
+            other => panic!("unexpected first removal result: {other:?}"),
+        };
+        assert_eq!(state.first(), Some(pair.first()));
+        assert_eq!(state.second(), None);
+        first_backend.fail_remove = false;
+        assert!(table
+            .remove_mapping_pair(
+                state,
+                first_target,
+                &mut first_backend,
+                second_target,
+                &mut second_backend,
+                &caps,
+            )
+            .unwrap()
+            .complete());
         assert_eq!(
             table
                 .usage(pool, pool_cap, &caps)

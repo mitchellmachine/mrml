@@ -205,8 +205,9 @@ pub use memory_resource::{
     MemoryBackingBackendRequest, MemoryBackingKind, MemoryBackingOperationError, MemoryMapping,
     MemoryMappingBackend, MemoryMappingBackendRequest, MemoryMappingId,
     MemoryMappingOperationError, MemoryMappingPair, MemoryMappingPairOperationError,
-    MemoryObjectBackingBackend, MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId,
-    MemoryPoolTable, MemoryResourceError, MemoryRevocationSummary, MemoryUsage,
+    MemoryMappingPairRemovalError, MemoryMappingPairRemovalState, MemoryObjectBackingBackend,
+    MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
+    MemoryRevocationSummary, MemoryUsage,
 };
 pub use microvm_projection::{
     ActiveMicrovmProjectionPlan, MicrovmProjectionDescriptor, MicrovmProjectionError,
