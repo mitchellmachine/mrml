@@ -11,7 +11,22 @@ pub enum DeadlineReceiveStart {
     Ready(Message),
     TimedOut,
     IncompatibleMessage,
-    Blocked(ScheduleOutcome),
+    Blocked {
+        scheduling: ScheduleOutcome,
+        cancellation: DeadlineReceiveCancellation,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use = "deadline receive cancellation authority must be retained or discarded deliberately"]
+pub struct DeadlineReceiveCancellation {
+    owner: BlockedReceive,
+}
+
+impl DeadlineReceiveCancellation {
+    pub const fn task(self) -> TaskId {
+        self.owner.task()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,9 +85,41 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
                     return Err(DeadlineReceiveSyscallError::OwnerMismatch);
                 }
                 self.owners[free_slot] = Some(wait);
-                Ok(DeadlineReceiveStart::Blocked(wait.outcome()))
+                Ok(DeadlineReceiveStart::Blocked {
+                    scheduling: wait.outcome(),
+                    cancellation: DeadlineReceiveCancellation { owner: wait },
+                })
             }
         }
+    }
+
+    pub fn cancel<const CAPS: usize>(
+        &mut self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        cancellation: DeadlineReceiveCancellation,
+    ) -> Result<(), DeadlineReceiveSyscallError> {
+        let task = cancellation.owner.task();
+        let slot = self
+            .owner_slot(task)?
+            .filter(|slot| self.owners[*slot] == Some(cancellation.owner))
+            .ok_or(DeadlineReceiveSyscallError::OwnerMismatch)?;
+        runtime
+            .context(task)
+            .map_err(DeadlineReceiveSyscallError::Runtime)?;
+        runtime
+            .cancel_blocked_receive(cancellation.owner)
+            .map_err(DeadlineReceiveSyscallError::Runtime)?;
+        let owner = self.owners[slot]
+            .take()
+            .ok_or(DeadlineReceiveSyscallError::OwnerMismatch)?;
+        if owner != cancellation.owner {
+            return Err(DeadlineReceiveSyscallError::OwnerMismatch);
+        }
+        runtime
+            .context_mut(task)
+            .expect("cancellation preserves the prevalidated task context")
+            .complete_error();
+        Ok(())
     }
 
     pub fn complete_ready<const CAPS: usize>(
@@ -234,7 +281,10 @@ mod tests {
         let mut executor = DeadlineReceiveSyscallExecutor::new();
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(1).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Idle))
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Idle,
+                ..
+            })
         ));
         let tick = executor.timer_tick(&mut runtime).unwrap();
         assert!(matches!(
@@ -270,7 +320,10 @@ mod tests {
         let mut executor = DeadlineReceiveSyscallExecutor::new();
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(5).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                ..
+            }) if to == sender
         ));
         runtime
             .deliver_ipc(sender, receiver, &mut endpoint, capability, b"ready", &[])
@@ -303,7 +356,10 @@ mod tests {
         let mut executor = DeadlineReceiveSyscallExecutor::new();
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(1).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                ..
+            }) if to == sender
         ));
         let tick = executor.timer_tick(&mut runtime).unwrap();
         assert!(matches!(tick.scheduling(), ScheduleOutcome::Continue(task) if task == sender));
@@ -341,11 +397,17 @@ mod tests {
         let mut executor = DeadlineReceiveSyscallExecutor::new();
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(1).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == second
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                ..
+            }) if to == second
         ));
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(2).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == third
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                ..
+            }) if to == third
         ));
 
         executor.timer_tick(&mut runtime).unwrap();
@@ -419,7 +481,10 @@ mod tests {
         let mut executor = DeadlineReceiveSyscallExecutor::new();
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(3).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                ..
+            }) if to == sender
         ));
         assert_eq!(
             executor.validate_delivery(receiver, MAX_SYSCALL_INLINE_PAYLOAD + 1, 0),
@@ -438,6 +503,71 @@ mod tests {
             Ok(())
         );
         assert!(executor.has_pending(receiver).unwrap());
+    }
+
+    #[test]
+    fn exact_cancellation_completes_error_once_without_consuming_messages() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x96);
+        let capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(object);
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        let cancellation = match executor
+            .start(&mut runtime, ReceiveTimeout::new(3).unwrap())
+            .unwrap()
+        {
+            DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                cancellation,
+            } if to == sender && cancellation.task() == receiver => cancellation,
+            _ => panic!("expected exact blocked deadline owner"),
+        };
+
+        let mut other_executor = DeadlineReceiveSyscallExecutor::new();
+        assert_eq!(
+            other_executor.cancel(&mut runtime, cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+        assert!(executor.has_pending(receiver).unwrap());
+        executor.cancel(&mut runtime, cancellation).unwrap();
+        assert!(!executor.has_pending(receiver).unwrap());
+        let context = runtime.context(receiver).unwrap();
+        assert_eq!(context.rax, crate::SyscallCompletionStatus::Error.code());
+        assert_eq!(
+            (context.rdx, context.r10, context.r8, context.r9),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(
+            executor.cancel(&mut runtime, cancellation),
+            Err(DeadlineReceiveSyscallError::OwnerMismatch)
+        );
+
+        assert_eq!(
+            executor
+                .deliver(
+                    &mut runtime,
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    capability,
+                    b"after",
+                    &[],
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), b"after");
     }
 
     #[test]
@@ -465,7 +595,10 @@ mod tests {
         let mut executor = DeadlineReceiveSyscallExecutor::new();
         assert!(matches!(
             executor.start(&mut runtime, ReceiveTimeout::new(3).unwrap()),
-            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+            Ok(DeadlineReceiveStart::Blocked {
+                scheduling: ScheduleOutcome::Switch { to, .. },
+                ..
+            }) if to == sender
         ));
 
         assert_eq!(

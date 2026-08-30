@@ -1020,10 +1020,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         mrml_kernel::DeadlineReceiveStart::IncompatibleMessage => {
                             frame.complete_error()
                         }
-                        mrml_kernel::DeadlineReceiveStart::Blocked(
-                            ScheduleOutcome::Switch { to, .. },
-                        ) => enter_service_task(runtime, to),
-                        mrml_kernel::DeadlineReceiveStart::Blocked(_) => halt(),
+                        mrml_kernel::DeadlineReceiveStart::Blocked {
+                            scheduling: ScheduleOutcome::Switch { to, .. },
+                            cancellation: _,
+                        } => enter_service_task(runtime, to),
+                        mrml_kernel::DeadlineReceiveStart::Blocked { .. } => halt(),
                     }
                 }
                 #[cfg(not(feature = "deadline-receive-probe"))]

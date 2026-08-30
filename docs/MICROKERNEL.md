@@ -11609,3 +11609,30 @@ unit and cross-build evidence, not KVM, WHP, or physical-hardware execution.
 Patent review: `NOT_TRIGGERED` — composing validation, transactional IPC
 publication, and retained-syscall completion behind one trusted entry point is
 conventional state-machine encapsulation. See `docs/patents/REVIEW_LOG.md`.
+
+Blocked operation-13 admission now returns an opaque
+`DeadlineReceiveCancellation` alongside its scheduler transition while the
+executor retains the same exact runtime/task/wait-generation owner. Trusted
+cancellation must present that token; the executor exact-matches its retained
+owner, invokes the runtime's existing one-use cancellation, consumes its owner,
+and completes the suspended syscall with the generic error status and zero
+detail registers. It never constructs cancellation authority from a task name.
+
+Token substitution into another executor and replay after successful
+cancellation both return `OwnerMismatch` without changing the live owner's
+state. Cancellation fabricates no message and consumes no endpoint sequence: a
+later ordinary delivery remains retrievable and receives sequence one. This is
+a kernel mechanism for a future capability-authorized manager. No cancellation
+syscall, ambient cross-task authority, or user-facing cancellation policy is
+introduced by this increment.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes 672
+tests. The native kernel release build and UEFI bootloader release builds for
+`deadline_receive_probe`, `deadline_receive_message_probe`, and `service_probe`
+pass through `mrml`; the boot profiles retain only their existing
+unreachable-pattern warning. This is deterministic unit and cross-build
+evidence, not KVM, WHP, or physical-hardware execution.
+
+Patent review: `NOT_TRIGGERED` — exact one-use cancellation of a retained wait
+owner and deterministic error completion are conventional asynchronous syscall
+lifecycle handling. See `docs/patents/REVIEW_LOG.md`.
