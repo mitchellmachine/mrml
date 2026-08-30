@@ -1465,3 +1465,18 @@ from the former anonymous inventory rejection through selection of
 COMDAT inventory: unsupported COFF feature`. Import objects are not yet decoded
 as link inputs and no PE import table is emitted, so std execution is not
 claimed.
+
+Selected code short imports now decode to ordinary global text definitions
+whose exact payload is a six-byte AMD64 indirect-jump thunk. The thunk carries
+a typed `(library, symbol)` IAT relocation rather than a guessed ordinary link
+symbol. Generic layout validates and retains that relocation but never patches
+it; the PE driver fails explicitly with `selected PE import table emission is
+unsupported` until descriptor, name, and writable IAT layout exist end to end.
+This preserves ordinary call resolution without exposing the import-library
+member name as authority or treating an IAT address as code.
+
+With that representation, the pinned `std::thread::available_parallelism`
+probe advances into the selected 10,065,474-byte std archive member and stops at
+the next typed boundary: `COFF object 2 archive group 1 member 3 text fragment
+0: unsupported COFF TLS section`. TLS content and lifecycle remain unimplemented;
+no std link or execution claim is made.

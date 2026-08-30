@@ -45,6 +45,7 @@ pub enum LinkerError {
     InvalidCoff,
     InvalidCoffAssociation,
     UnsupportedCoffSection,
+    UnsupportedCoffTls,
     UnsupportedCoffSymbol,
     UnsupportedCoffRelocation,
     UnsupportedCoffRelocationTarget,
@@ -79,6 +80,7 @@ impl core::fmt::Display for LinkerError {
             Self::InvalidCoff => "invalid bounded COFF input",
             Self::InvalidCoffAssociation => "invalid COFF COMDAT association",
             Self::UnsupportedCoffSection => "unsupported COFF section",
+            Self::UnsupportedCoffTls => "unsupported COFF TLS section",
             Self::UnsupportedCoffSymbol => "unsupported COFF symbol",
             Self::UnsupportedCoffRelocation => "unsupported COFF relocation",
             Self::UnsupportedCoffRelocationTarget => "unsupported COFF relocation target",
@@ -455,6 +457,12 @@ pub enum LinkRelocationTarget<'a> {
     /// A COFF object-local writable definition whose final RVA is assigned by
     /// the PE serializer after the generic text/read-only layout is frozen.
     PeWritableSymbol(&'a str),
+    /// The address of one loader-populated PE import slot. The containing
+    /// synthetic text input is the callable global thunk.
+    PeImportAddress {
+        library: &'a str,
+        symbol: &'a str,
+    },
     InputText(usize),
     ReadonlyData(usize),
     /// A validated `mov reg, [rip + GOT]` whose fixed-image target is local
@@ -828,6 +836,12 @@ pub struct CoffObjectSymbol<'a> {
     pub kind: CoffObjectSymbolKind,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoffShortImport<'a> {
+    pub symbol: &'a str,
+    pub library: &'a str,
+}
+
 pub struct CoffObjectSymbols<'a> {
     object: &'a [u8],
     symbol_offset: usize,
@@ -836,6 +850,96 @@ pub struct CoffObjectSymbols<'a> {
     string_size: usize,
     import_name: Option<&'a str>,
     index: usize,
+}
+
+fn decode_x86_64_coff_short_import_header(
+    object: &[u8],
+) -> Result<Option<CoffShortImport<'_>>, LinkerError> {
+    if object.get(..4) != Some(b"\0\0\xff\xff") {
+        return Ok(None);
+    }
+    if read_u16(object, 4)? != 0
+        || read_u16(object, 6)? != 0x8664
+        || read_u16(object, 16)? != 0
+        || read_u16(object, 18)? != 4
+    {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let payload_size = usize::try_from(read_u32(object, 12)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let payload_end = 20usize
+        .checked_add(payload_size)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if payload_end != object.len() {
+        return Err(LinkerError::InvalidCoff);
+    }
+    let payload = object.get(20..payload_end).ok_or(LinkerError::InvalidCoff)?;
+    let name_end = payload
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or(LinkerError::InvalidCoff)?;
+    let library_start = name_end
+        .checked_add(1)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let library_end = payload[library_start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map(|offset| library_start + offset)
+        .ok_or(LinkerError::InvalidCoff)?;
+    if name_end == 0 || library_end == library_start || library_end + 1 != payload.len() {
+        return Err(LinkerError::InvalidCoff);
+    }
+    let symbol = core::str::from_utf8(&payload[..name_end])
+        .map_err(|_| LinkerError::InvalidCoff)?;
+    validate_symbol(symbol)?;
+    let library = core::str::from_utf8(&payload[library_start..library_end])
+        .map_err(|_| LinkerError::InvalidCoff)?;
+    validate_pe_import_library(library)?;
+    Ok(Some(CoffShortImport { symbol, library }))
+}
+
+fn validate_pe_import_library(library: &str) -> Result<(), LinkerError> {
+    if library.is_empty()
+        || !library.ends_with(".dll")
+        || !library
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    Ok(())
+}
+
+pub fn x86_64_coff_short_import(
+    object: &[u8],
+) -> Result<Option<CoffShortImport<'_>>, LinkerError> {
+    decode_x86_64_coff_short_import_header(object)
+}
+
+pub fn decode_x86_64_coff_short_import<'data, 'relocations, 'definitions>(
+    object: &'data [u8],
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+) -> Result<Option<LinkInput<'data, 'relocations, 'definitions>>, LinkerError> {
+    let Some(import) = decode_x86_64_coff_short_import_header(object)? else {
+        return Ok(None);
+    };
+    const THUNK: &[u8] = &[0xff, 0x25, 0, 0, 0, 0];
+    relocation_storage[0] = LinkRelocation {
+        offset: 2,
+        target: LinkRelocationTarget::PeImportAddress {
+            library: import.library,
+            symbol: import.symbol,
+        },
+        addend: -4,
+    };
+    Ok(Some(LinkInput {
+        symbol: import.symbol,
+        symbol_target: LinkDefinitionTarget::Text(0),
+        additional_definitions: &[],
+        text: THUNK,
+        readonly_data: &[],
+        relocations: &relocation_storage[..1],
+    }))
 }
 
 impl<'a> Iterator for CoffObjectSymbols<'a> {
@@ -906,60 +1010,14 @@ impl ElfLinkSectionSelections {
 pub fn inventory_x86_64_coff_symbols(
     object: &[u8],
 ) -> Result<CoffObjectSymbolInventory<'_>, LinkerError> {
-    if object.get(..4) == Some(b"\0\0\xff\xff") {
-        if read_u16(object, 4)? != 0
-            || read_u16(object, 6)? != 0x8664
-            || read_u16(object, 16)? != 0
-            || read_u16(object, 18)? != 4
-        {
-            return Err(LinkerError::UnsupportedCoff);
-        }
-        let payload_size = usize::try_from(read_u32(object, 12)?)
-            .map_err(|_| LinkerError::OffsetOverflow)?;
-        let payload_end = 20usize
-            .checked_add(payload_size)
-            .ok_or(LinkerError::OffsetOverflow)?;
-        if payload_end != object.len() {
-            return Err(LinkerError::InvalidCoff);
-        }
-        let payload = object.get(20..payload_end).ok_or(LinkerError::InvalidCoff)?;
-        let name_end = payload
-            .iter()
-            .position(|byte| *byte == 0)
-            .ok_or(LinkerError::InvalidCoff)?;
-        let library_start = name_end
-            .checked_add(1)
-            .ok_or(LinkerError::OffsetOverflow)?;
-        let library_end = payload[library_start..]
-            .iter()
-            .position(|byte| *byte == 0)
-            .map(|offset| library_start + offset)
-            .ok_or(LinkerError::InvalidCoff)?;
-        if name_end == 0
-            || library_end == library_start
-            || library_end + 1 != payload.len()
-        {
-            return Err(LinkerError::InvalidCoff);
-        }
-        let name = core::str::from_utf8(&payload[..name_end])
-            .map_err(|_| LinkerError::InvalidCoff)?;
-        validate_symbol(name)?;
-        let library = core::str::from_utf8(&payload[library_start..library_end])
-            .map_err(|_| LinkerError::InvalidCoff)?;
-        if !library.ends_with(".dll")
-            || !library.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-            })
-        {
-            return Err(LinkerError::UnsupportedCoff);
-        }
+    if let Some(import) = decode_x86_64_coff_short_import_header(object)? {
         return Ok(CoffObjectSymbolInventory {
             object,
             symbol_offset: 0,
             symbol_count: 0,
             symbols_end: 0,
             string_size: 0,
-            import_name: Some(name),
+            import_name: Some(import.symbol),
         });
     }
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
@@ -4615,6 +4673,8 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             readonly_sections.insert(section + 1)?;
         } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
             unwind_sections.insert(section + 1)?;
+        } else if name.starts_with(".tls$") {
+            return Err(LinkerError::UnsupportedCoffTls);
         } else if (name.starts_with(".data$") || name.starts_with(".bss$")) && size != 0 {
             writable_sections.insert(section + 1)?;
         } else if name == ".llvmbc" || name == ".llvmcmd" {
@@ -8664,6 +8724,10 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 | LinkRelocationTarget::RequiredSymbol(symbol)
                 | LinkRelocationTarget::LocalSymbol(symbol)
                 | LinkRelocationTarget::PeWritableSymbol(symbol) => validate_symbol(symbol)?,
+                LinkRelocationTarget::PeImportAddress { library, symbol } => {
+                    validate_pe_import_library(library)?;
+                    validate_symbol(symbol)?;
+                }
                 LinkRelocationTarget::InputText(offset) if offset > input.text.len() => {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
@@ -8685,7 +8749,8 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
             }
             if !matches!(
                 relocation.target,
-                LinkRelocationTarget::RequiredSymbol(_) | LinkRelocationTarget::PeWritableSymbol(_)
+                LinkRelocationTarget::RequiredSymbol(_)
+                    | LinkRelocationTarget::PeWritableSymbol(_)
             ) {
                 relocation
                     .offset
@@ -8741,7 +8806,8 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     resolve_symbol(inputs, &layouts, symbol)?;
                     continue;
                 }
-                LinkRelocationTarget::PeWritableSymbol(_) => continue,
+                LinkRelocationTarget::PeWritableSymbol(_)
+                | LinkRelocationTarget::PeImportAddress { .. } => continue,
                 _ => {}
             }
             let place = layout
@@ -8756,6 +8822,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 }
                 LinkRelocationTarget::RequiredSymbol(_) => unreachable!(),
                 LinkRelocationTarget::PeWritableSymbol(_) => unreachable!(),
+                LinkRelocationTarget::PeImportAddress { .. } => unreachable!(),
                 LinkRelocationTarget::InputText(offset) => layout
                     .text
                     .checked_add(offset)
@@ -10423,6 +10490,27 @@ mod tests {
                 name: "WaitOnAddress",
                 kind: CoffObjectSymbolKind::Definition,
             }])
+        );
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let input = decode_x86_64_coff_short_import(&object, &mut relocations)
+            .unwrap()
+            .unwrap();
+        assert_eq!(input.symbol, "WaitOnAddress");
+        assert_eq!(input.text, &[0xff, 0x25, 0, 0, 0, 0]);
+        assert_eq!(
+            input.relocations,
+            &[LinkRelocation {
+                offset: 2,
+                target: LinkRelocationTarget::PeImportAddress {
+                    library: "api-ms-win-core-synch-l1-2-0.dll",
+                    symbol: "WaitOnAddress",
+                },
+                addend: -4,
+            }]
         );
 
         let mut data_import = object.clone();

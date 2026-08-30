@@ -10842,3 +10842,11 @@ documented COFF short-import header and payload during bounded archive symbol
 inventory. It introduces no import encoding, symbol-resolution algorithm,
 loader behavior, compression, or cryptographic mechanism. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Typed PE import thunks
+
+Patent review: **NOT_TRIGGERED**. This increment represents the conventional
+AMD64 PE import-library code thunk as fixed instruction bytes plus a typed IAT
+target and retains fail-closed serialization. It introduces no new import
+encoding, loader algorithm, compression, cryptography, or symbol-resolution
+policy. This technical screen is not legal advice or patent clearance.

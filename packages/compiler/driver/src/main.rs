@@ -18,6 +18,7 @@ use mrml_rustc::{
     PeWritableRelocationTarget,
     TargetLayout, compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
+    decode_x86_64_coff_short_import,
     decode_x86_64_coff_runtime_functions_with_section_identities,
     decode_x86_64_coff_section_identity_readonly_fragment,
     decode_x86_64_coff_text_fragment_with_section_identities_from_inventory,
@@ -29,6 +30,7 @@ use mrml_rustc::{
     link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
     x86_64_coff_section_identity_readonly_fragment_count,
+    x86_64_coff_short_import,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
     x86_64_coff_writable_section_count,
 };
@@ -678,15 +680,22 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
+        let coff_short_import = match format {
+            ObjectFormat::Coff => x86_64_coff_short_import(object).map_err(|error| {
+                anyhow!("COFF object {} short import: {}", object_index, error)
+            })?,
+            ObjectFormat::Elf64 => None,
+        };
         let coff_comdat_sections = match format {
-            ObjectFormat::Coff => Some(
+            ObjectFormat::Coff if coff_short_import.is_none() => Some(
                 inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
                     anyhow!("COFF object {} COMDAT inventory: {}", object_index, error)
                 })?,
             ),
-            ObjectFormat::Elf64 => None,
+            ObjectFormat::Coff | ObjectFormat::Elf64 => None,
         };
         let text_fragment_count = match format {
+            ObjectFormat::Coff if coff_short_import.is_some() => 1,
             ObjectFormat::Coff => x86_64_coff_text_fragment_count(object).map_err(|error| {
                 anyhow!(
                     "COFF object {} text fragment count: {}",
@@ -697,6 +706,7 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             ObjectFormat::Elf64 => 1,
         };
         let readonly_fragment_count = match format {
+            ObjectFormat::Coff if coff_short_import.is_some() => 0,
             ObjectFormat::Coff => x86_64_coff_section_identity_readonly_fragment_count(
                 object,
                 coff_comdat_sections
@@ -731,6 +741,14 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                 .split_first_mut()
                 .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
             let (input, selection_policy) = match format {
+                ObjectFormat::Coff if coff_short_import.is_some() => (
+                    decode_x86_64_coff_short_import(object, arena)
+                        .map_err(|error| {
+                            anyhow!("COFF object {} short import decode: {}", object_index, error)
+                        })?
+                        .ok_or_else(|| anyhow!("COFF short import changed after inventory"))?,
+                    CoffTextComdatSelection::None,
+                ),
                 ObjectFormat::Coff if fragment_index < text_fragment_count => {
                     let inventory = coff_comdat_sections
                         .as_ref()
@@ -872,6 +890,12 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
     for (object_index, object) in objects.iter().enumerate() {
         let object_fragments = match format {
             ObjectFormat::Coff => {
+                if x86_64_coff_short_import(object)
+                    .map_err(|error| anyhow!("COFF object {} short import: {}", object_index, error))?
+                    .is_some()
+                {
+                    1
+                } else {
                 let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
                     anyhow!("COFF object {} COMDAT inventory: {}", object_index, error)
                 })?;
@@ -894,6 +918,7 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
                             })?,
                     )
                     .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?
+                }
             }
             ObjectFormat::Elf64 => 1,
         };
@@ -1547,6 +1572,13 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             {
                 return Err(anyhow!(
                     "selected code relocation writable target is undefined: {}",
+                    symbol
+                ));
+            }
+            if let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target {
+                return Err(anyhow!(
+                    "selected PE import table emission is unsupported: {}!{}",
+                    library,
                     symbol
                 ));
             }

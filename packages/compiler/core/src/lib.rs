@@ -61,10 +61,10 @@ pub use linker::{
     LinkRelocationTarget, LinkedImage, LinkerError, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS,
     MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
     MAX_LINK_TOTAL_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, PeImage,
-    PeReadonlyAbsoluteRelocation, PeReadonlyAbsoluteRelocations,
+    CoffShortImport, PeReadonlyAbsoluteRelocation, PeReadonlyAbsoluteRelocations,
     PeRuntimeFunction, PeWritableComdatSelection, PeWritableData, PeWritableRelocation,
     PeWritableRelocationTarget, decode_unix_archive,
-    decode_x86_64_coff_readonly_absolute_relocation,
+    decode_x86_64_coff_readonly_absolute_relocation, decode_x86_64_coff_short_import,
     decode_x86_64_coff_readonly_absolute_relocation_for_fragment,
     decode_x86_64_coff_readonly_absolute_relocations_from_inventory,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
@@ -93,7 +93,8 @@ pub use linker::{
     x86_64_coff_section_identity_readonly_fragment_count,
     x86_64_coff_standalone_readonly_fragment_count, x86_64_coff_text_fragment_comdat_selection,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
-    x86_64_coff_unwind_section_count, x86_64_coff_writable_section_count,
+    x86_64_coff_short_import, x86_64_coff_unwind_section_count,
+    x86_64_coff_writable_section_count,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,
