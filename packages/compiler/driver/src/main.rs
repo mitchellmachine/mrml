@@ -103,6 +103,13 @@ struct SelectedLinkInputs<'data, 'relocations, 'definitions> {
     archive_member: Vector<u16>,
     source_object: Vector<usize>,
     comdat_selection: Vector<CoffTextComdatSelection>,
+    section_rebindings: Vector<CoffSectionRebinding>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CoffSectionRebinding {
+    discarded: CoffSectionIdentity,
+    selected: CoffSectionIdentity,
 }
 
 fn resolve_duplicate_coff_definition(
@@ -143,6 +150,78 @@ fn resolve_duplicate_coff_definition(
         _ => false,
     };
     compatible.then_some((effective_selection, replace))
+}
+
+fn typed_coff_input_section(
+    input: LinkInput<'_, '_, '_>,
+) -> Result<Option<(CoffSectionIdentity, bool)>> {
+    let mut typed = None;
+    for definition in core::iter::once(LinkDefinition {
+        symbol: input.symbol,
+        target: input.symbol_target,
+    })
+    .chain(input.additional_definitions.iter().copied())
+    {
+        let candidate = match definition.target {
+            LinkDefinitionTarget::CoffTextSection { identity, .. } => Some((identity, true)),
+            LinkDefinitionTarget::CoffSection { identity, .. } => Some((identity, false)),
+            _ => None,
+        };
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        if typed.replace(candidate).is_some() {
+            return Err(anyhow!("link input defines multiple typed COFF sections"));
+        }
+    }
+    Ok(typed)
+}
+
+fn record_coff_section_rebinding(
+    rebindings: &mut Vector<CoffSectionRebinding>,
+    earlier: LinkInput<'_, '_, '_>,
+    current: LinkInput<'_, '_, '_>,
+    replace: bool,
+) -> Result<()> {
+    let Some((earlier_identity, earlier_is_text)) = typed_coff_input_section(earlier)? else {
+        return Ok(());
+    };
+    let Some((current_identity, current_is_text)) = typed_coff_input_section(current)? else {
+        return Ok(());
+    };
+    if earlier_is_text != current_is_text {
+        return Err(anyhow!(
+            "duplicate COFF definitions use incompatible typed section kinds"
+        ));
+    }
+    let (discarded, selected) = if replace {
+        (earlier_identity, current_identity)
+    } else {
+        (current_identity, earlier_identity)
+    };
+    if discarded == selected {
+        return Ok(());
+    }
+    for rebinding in rebindings.iter_mut() {
+        if rebinding.selected == discarded {
+            rebinding.selected = selected;
+        }
+    }
+    if let Some(existing) = rebindings
+        .iter()
+        .find(|rebinding| rebinding.discarded == discarded)
+    {
+        if existing.selected != selected {
+            return Err(anyhow!("conflicting selected COFF section rebinding"));
+        }
+        return Ok(());
+    }
+    rebindings
+        .try_push(CoffSectionRebinding {
+            discarded,
+            selected,
+        })
+        .map_err(|_| anyhow!("selected COFF section rebinding capacity exceeded"))
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -1269,6 +1348,8 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         .map_err(|_| anyhow!("could not allocate selected link member list"))?;
     let mut selected_comdat = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected COMDAT list"))?;
+    let mut section_rebindings = Vector::with_capacity(inputs.len())
+        .map_err(|_| anyhow!("could not allocate selected COFF section rebindings"))?;
     let mut selected_source_object = Vector::with_capacity(inputs.len())
         .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     for index in selection.indices() {
@@ -1296,6 +1377,12 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
                 inputs[*index],
                 current_selection,
             ) {
+                record_coff_section_rebinding(
+                    &mut section_rebindings,
+                    selected[earlier],
+                    inputs[*index],
+                    replace,
+                )?;
                 if replace {
                     selected[earlier] = inputs[*index];
                     selected_group[earlier] = archive_group[*index];
@@ -1336,6 +1423,7 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         archive_member: selected_member,
         source_object: selected_source_object,
         comdat_selection: selected_comdat,
+        section_rebindings,
     })
 }
 
@@ -1449,8 +1537,9 @@ fn retain_input_archive_member<'data, 'relocations, 'definitions>(
         {
             let earlier_selection = selected.comdat_selection[earlier];
             let current_selection = comdat_selection[index];
+            let earlier_input = selected.inputs[earlier];
             let Some((effective_selection, replace)) = resolve_duplicate_coff_definition(
-                selected.inputs[earlier],
+                earlier_input,
                 earlier_selection,
                 inputs[index],
                 current_selection,
@@ -1464,6 +1553,12 @@ fn retain_input_archive_member<'data, 'relocations, 'definitions>(
                     current_selection
                 ));
             };
+            record_coff_section_rebinding(
+                &mut selected.section_rebindings,
+                earlier_input,
+                inputs[index],
+                replace,
+            )?;
             if replace {
                 selected.inputs[earlier] = inputs[index];
                 selected.archive_group[earlier] = archive_group[index];
@@ -1871,6 +1966,79 @@ fn selected_writable_data<'data, 'relocations>(
     Ok(output)
 }
 
+fn selected_coff_section_length(
+    selected: &SelectedLinkInputs<'_, '_, '_>,
+    identity: CoffSectionIdentity,
+) -> Result<Option<usize>> {
+    let mut length = None;
+    for input in &selected.inputs {
+        let Some((candidate, is_text)) = typed_coff_input_section(*input)? else {
+            continue;
+        };
+        if candidate != identity {
+            continue;
+        }
+        if length.is_some() {
+            return Err(anyhow!("selected COFF section identity is ambiguous"));
+        }
+        length = Some(if is_text {
+            input.text.len()
+        } else {
+            input.readonly_data.len()
+        });
+    }
+    Ok(length)
+}
+
+fn rebind_selected_readonly_comdat_target<'data>(
+    selected: &SelectedLinkInputs<'data, '_, '_>,
+    relocation: PeReadonlyAbsoluteRelocation<'data>,
+) -> Result<PeReadonlyAbsoluteRelocation<'data>> {
+    let Some(original) = relocation.target_identity else {
+        return Ok(relocation);
+    };
+    if selected_coff_section_length(selected, original)?.is_some() {
+        return Ok(relocation);
+    }
+    let mut rebound = original;
+    for _ in 0..selected.section_rebindings.len() {
+        let Some(rebinding) = selected
+            .section_rebindings
+            .iter()
+            .find(|candidate| candidate.discarded == rebound)
+        else {
+            break;
+        };
+        rebound = rebinding.selected;
+    }
+    if rebound == original {
+        return Ok(relocation);
+    }
+    if selected
+        .section_rebindings
+        .iter()
+        .any(|candidate| candidate.discarded == rebound)
+    {
+        return Err(anyhow!("selected COFF section rebinding contains a cycle"));
+    }
+    let selected_length = selected_coff_section_length(selected, rebound)?.ok_or_else(|| {
+        anyhow!(
+            "selected COFF section rebinding target is undefined: object {}, section {}",
+            rebound.object(),
+            rebound.section()
+        )
+    })?;
+    if relocation.target_offset > selected_length {
+        return Err(anyhow!(
+            "selected COFF section rebinding offset exceeds its target"
+        ));
+    }
+    Ok(PeReadonlyAbsoluteRelocation {
+        target_identity: Some(rebound),
+        ..relocation
+    })
+}
+
 fn selected_readonly_absolute_relocations<'data>(
     objects: &[&'data [u8]],
     _archive_group: &[u16],
@@ -1943,8 +2111,9 @@ fn selected_readonly_absolute_relocations<'data>(
                     if output.len() == MAX_PE_READONLY_RELOCATIONS {
                         return Err(anyhow!("too many selected COFF readonly relocations"));
                     }
+                    let relocation = rebind_selected_readonly_comdat_target(selected, *relocation)?;
                     output
-                        .try_push(*relocation)
+                        .try_push(relocation)
                         .map_err(|_| anyhow!("could not allocate selected COFF readonly list"))?;
                 }
             }
@@ -3193,6 +3362,99 @@ mod tests {
     }
 
     #[test]
+    fn rebinds_readonly_comdat_losers_to_exact_selected_sections() {
+        let winner_identity = CoffSectionIdentity::new(3, 7).unwrap();
+        let loser_identity = CoffSectionIdentity::new(5, 11).unwrap();
+        let winner_definitions = [LinkDefinition {
+            symbol: ".text$shared",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: winner_identity,
+                offset: 0,
+            },
+        }];
+        let loser_definitions = [LinkDefinition {
+            symbol: ".text$shared",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: loser_identity,
+                offset: 0,
+            },
+        }];
+        let winner = LinkInput {
+            symbol: "shared",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &winner_definitions,
+            text: &[0x90, 0x90, 0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let loser = LinkInput {
+            additional_definitions: &loser_definitions,
+            text: &[0xcc, 0xc3],
+            ..winner
+        };
+        let selected = selected_link_inputs(
+            &[winner, loser],
+            &[0, 0],
+            &[0, 0],
+            &[2, 4],
+            &[CoffTextComdatSelection::Any; 2],
+            "shared",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs.len(), 1);
+        assert_eq!(
+            &selected.section_rebindings[..],
+            &[CoffSectionRebinding {
+                discarded: loser_identity,
+                selected: winner_identity,
+            }]
+        );
+
+        let relocation = PeReadonlyAbsoluteRelocation {
+            readonly_owner: ".rdata$shared",
+            readonly_identity: Some(CoffSectionIdentity::new(5, 13).unwrap()),
+            readonly_offset: 8,
+            target_symbol: ".text$shared",
+            target_identity: Some(loser_identity),
+            target_offset: 2,
+            addend: -7,
+            kind: mrml_rustc::linker::PeReadonlyRelocationKind::Address64,
+        };
+        let rebound = rebind_selected_readonly_comdat_target(&selected, relocation).unwrap();
+        assert_eq!(rebound.target_identity, Some(winner_identity));
+        assert_eq!(rebound.target_offset, relocation.target_offset);
+        assert_eq!(rebound.addend, relocation.addend);
+        assert_eq!(rebound.readonly_identity, relocation.readonly_identity);
+        assert_eq!(rebound.kind, relocation.kind);
+
+        let unproven = selected_link_inputs(
+            &[winner],
+            &[0],
+            &[0],
+            &[2],
+            &[CoffTextComdatSelection::Any],
+            "shared",
+        )
+        .unwrap();
+        assert_eq!(
+            rebind_selected_readonly_comdat_target(&unproven, relocation)
+                .unwrap()
+                .target_identity,
+            Some(loser_identity)
+        );
+        assert!(
+            rebind_selected_readonly_comdat_target(
+                &selected,
+                PeReadonlyAbsoluteRelocation {
+                    target_offset: winner.text.len() + 1,
+                    ..relocation
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn retains_exact_text_sections_referenced_by_readonly_relocations() {
         let identity = CoffSectionIdentity::new(9, 25).unwrap();
         let entry = LinkInput {
@@ -3433,10 +3695,18 @@ mod tests {
             readonly_data: &[],
             relocations: &entry_relocations,
         };
+        let winner_identity = CoffSectionIdentity::new(2, 5).unwrap();
+        let winner_definitions = [LinkDefinition {
+            symbol: ".text$shared",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: winner_identity,
+                offset: 0,
+            },
+        }];
         let winner = LinkInput {
             symbol: "shared",
             symbol_target: LinkDefinitionTarget::Text(0),
-            additional_definitions: &[],
+            additional_definitions: &winner_definitions,
             text: &[0xc3],
             readonly_data: &[],
             relocations: &[],
@@ -3453,10 +3723,18 @@ mod tests {
             readonly_data: &[],
             relocations: &[],
         };
+        let loser_identity = CoffSectionIdentity::new(3, 13).unwrap();
+        let loser_definitions = [LinkDefinition {
+            symbol: ".text$shared",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: loser_identity,
+                offset: 0,
+            },
+        }];
         let loser = LinkInput {
             symbol: "shared",
             symbol_target: LinkDefinitionTarget::Text(0),
-            additional_definitions: &[],
+            additional_definitions: &loser_definitions,
             text: &[0xcc],
             readonly_data: &[],
             relocations: &[],
@@ -3518,6 +3796,13 @@ mod tests {
                 .inputs
                 .iter()
                 .any(|input| input.symbol == "late_helper")
+        );
+        assert_eq!(
+            &selected.section_rebindings[..],
+            &[CoffSectionRebinding {
+                discarded: loser_identity,
+                selected: winner_identity,
+            }]
         );
     }
 
