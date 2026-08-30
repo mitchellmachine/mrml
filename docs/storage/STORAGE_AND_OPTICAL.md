@@ -554,6 +554,30 @@ generation, reserved-field, range, and overlap validation is conventional
 hostile-input parsing and introduces no new storage algorithm. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+AHCI service-side launch consumption is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+The userspace adapter copies the bounded record only through the exact read-only
+launch capability installed by the kernel. The installed-projection binder then
+decodes it, exact-matches the provider-generation register, rejects invalid or
+aliased capability tokens, and exposes the fixed six-role register order through
+typed accessors; copied identity bytes still cannot manufacture authority. The
+focused Linux AHCI suite passes all 95 tests. Native entry/register capture,
+launch-buffer wiping at entry, capability-backed mapping construction,
+active-port reconstruction, concrete cache/IOMMU backends, supervised teardown,
+active execution, and physical-device evidence remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Bounded read-only launch-data copying and
+fixed-order installed capability-token validation are conventional service-entry
+plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

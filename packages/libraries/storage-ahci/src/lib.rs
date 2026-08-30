@@ -126,7 +126,7 @@ pub use service_launch::{
 };
 pub use service_launch_record::{
     AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
-    BoundAhciServiceLaunch,
+    BoundAhciServiceLaunch, InstalledAhciServiceLaunch,
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,

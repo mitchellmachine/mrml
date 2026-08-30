@@ -69,6 +69,29 @@ impl<R> AhciUserspaceSyscalls<R> {
 }
 
 impl<R: AhciRawSyscall> AhciUserspaceSyscalls<R> {
+    /// Copies immutable startup data through the exact launch-data capability
+    /// installed by the kernel. The capability token is authority; the copied
+    /// record contains identity and geometry only.
+    pub fn read_launch_data(
+        &mut self,
+        capability: Capability,
+        output: &mut [u8],
+    ) -> Result<(), AhciUserspaceSyscallError> {
+        if output.len() != crate::AHCI_SERVICE_LAUNCH_BYTES {
+            return Err(AhciUserspaceSyscallError::Range);
+        }
+        let mut frame = AhciSyscallFrame {
+            rax: READ_SHARED_BUFFER,
+            rdi: capability.token(),
+            rsi: 0,
+            rdx: output.as_mut_ptr() as u64,
+            r10: output.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)
+    }
+
     fn invoke(&mut self, frame: &mut AhciSyscallFrame) -> Result<(), AhciUserspaceSyscallError> {
         unsafe { self.raw.invoke(frame) };
         if frame.rax == 0 {
@@ -522,6 +545,28 @@ mod tests {
                 SEND_BUFFER,
             ]
         );
+    }
+
+    #[test]
+    fn launch_data_copy_uses_only_the_installed_read_capability() {
+        let raw = OperationRaw {
+            operations: [0; 7],
+            count: 0,
+            received_capabilities: 0,
+        };
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut output = [0; crate::AHCI_SERVICE_LAUNCH_BYTES];
+        syscalls
+            .read_launch_data(Capability::from_token(TOKEN), &mut output)
+            .unwrap();
+        assert_eq!(output, [0x5a; crate::AHCI_SERVICE_LAUNCH_BYTES]);
+        assert_eq!(syscalls.raw.operations[0], READ_SHARED_BUFFER);
+        assert_eq!(syscalls.raw.count, 1);
+        assert_eq!(
+            syscalls.read_launch_data(Capability::from_token(TOKEN), &mut []),
+            Err(AhciUserspaceSyscallError::Range)
+        );
+        assert_eq!(syscalls.raw.count, 1);
     }
 
     #[test]

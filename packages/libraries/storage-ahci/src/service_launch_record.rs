@@ -3,10 +3,13 @@
 use crate::{
     service_launch::validate_ahci_service_state, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout,
     AhciServiceLaunchSpec, AhciServiceLaunchSpecError, AHCI_SERVICE_AUTHORITY_COUNT,
+    AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
+    AHCI_DEVICE_AUTHORITY_INDEX, AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
+    AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX, AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
     AHCI_SERVICE_LAUNCH_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{BlockProviderDevice, OpaqueHandle};
-use mrml_kernel::{DeviceServiceLaunchAttachment, IsolationServiceSpec, ObjectId};
+use mrml_kernel::{Capability, DeviceServiceLaunchAttachment, IsolationServiceSpec, ObjectId};
 
 const MAGIC: [u8; 8] = *b"MRMLAHC1";
 const VERSION: u16 = 1;
@@ -66,6 +69,8 @@ pub enum AhciServiceLaunchRecordError {
     InvalidCpuMapping,
     OverlappingCpuMappings,
     BindingMismatch,
+    InvalidInstalledCapability,
+    DuplicateInstalledCapability,
     Launch(AhciServiceLaunchSpecError),
 }
 
@@ -75,6 +80,12 @@ pub struct BoundAhciServiceLaunch {
     cpu_mappings: [AhciServiceCpuMapping; 4],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledAhciServiceLaunch {
+    record: AhciServiceLaunchRecord,
+    authorities: [Capability; AHCI_SERVICE_AUTHORITY_COUNT],
+}
+
 impl BoundAhciServiceLaunch {
     pub const fn spec(self) -> AhciServiceLaunchSpec {
         self.spec
@@ -82,6 +93,71 @@ impl BoundAhciServiceLaunch {
 
     pub const fn cpu_mappings(self) -> [AhciServiceCpuMapping; 4] {
         self.cpu_mappings
+    }
+}
+
+impl InstalledAhciServiceLaunch {
+    /// Binds copied launch bytes to the fixed authority-token order installed
+    /// by `NativeDeviceServiceEntry`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the native entry path constructed by the kernel for
+    /// this exact AHCI domain. `bytes` must have been copied through its
+    /// read-only launch-data capability, `provider_generation` must be the entry
+    /// register value, and `authorities` must be the six separately projected
+    /// entry capabilities in canonical register order. Record bytes carry no
+    /// authority and cannot substitute any of these capabilities.
+    pub unsafe fn from_installed_projection(
+        bytes: &[u8],
+        provider_generation: u64,
+        authorities: [Capability; AHCI_SERVICE_AUTHORITY_COUNT],
+    ) -> Result<Self, AhciServiceLaunchRecordError> {
+        let record = AhciServiceLaunchRecord::decode(bytes)?;
+        if provider_generation == 0 || record.provider_generation() != provider_generation {
+            return Err(AhciServiceLaunchRecordError::BindingMismatch);
+        }
+        for (index, capability) in authorities.iter().enumerate() {
+            let token = capability.token();
+            if token == 0 || token >> 32 == 0 {
+                return Err(AhciServiceLaunchRecordError::InvalidInstalledCapability);
+            }
+            if authorities[..index].contains(capability) {
+                return Err(AhciServiceLaunchRecordError::DuplicateInstalledCapability);
+            }
+        }
+        Ok(Self {
+            record,
+            authorities,
+        })
+    }
+
+    pub const fn record(self) -> AhciServiceLaunchRecord {
+        self.record
+    }
+
+    pub const fn device(self) -> Capability {
+        self.authorities[AHCI_DEVICE_AUTHORITY_INDEX]
+    }
+
+    pub const fn command_list(self) -> Capability {
+        self.authorities[AHCI_COMMAND_LIST_AUTHORITY_INDEX]
+    }
+
+    pub const fn received_fis(self) -> Capability {
+        self.authorities[AHCI_RECEIVED_FIS_AUTHORITY_INDEX]
+    }
+
+    pub const fn command_tables(self) -> Capability {
+        self.authorities[AHCI_COMMAND_TABLES_AUTHORITY_INDEX]
+    }
+
+    pub const fn device_write_data(self) -> Capability {
+        self.authorities[AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX]
+    }
+
+    pub const fn device_read_data(self) -> Capability {
+        self.authorities[AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX]
     }
 }
 
@@ -598,6 +674,69 @@ mod tests {
                 .unwrap()
                 .bind(service(), attachment()),
             Err(AhciServiceLaunchRecordError::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn installed_projection_preserves_fixed_authority_order() {
+        let authorities = core::array::from_fn(|index| {
+            Capability::from_token(((index as u64 + 1) << 32) | (index as u64 + 1))
+        });
+        let installed = unsafe {
+            InstalledAhciServiceLaunch::from_installed_projection(
+                &record().encode(),
+                3,
+                authorities,
+            )
+        }
+        .unwrap();
+        assert_eq!(installed.record(), record());
+        assert_eq!(installed.device(), authorities[0]);
+        assert_eq!(installed.command_list(), authorities[1]);
+        assert_eq!(installed.received_fis(), authorities[2]);
+        assert_eq!(installed.command_tables(), authorities[3]);
+        assert_eq!(installed.device_write_data(), authorities[4]);
+        assert_eq!(installed.device_read_data(), authorities[5]);
+
+        assert_eq!(
+            unsafe {
+                InstalledAhciServiceLaunch::from_installed_projection(
+                    &record().encode(),
+                    4,
+                    authorities,
+                )
+            },
+            Err(AhciServiceLaunchRecordError::BindingMismatch)
+        );
+    }
+
+    #[test]
+    fn installed_projection_rejects_invalid_or_aliased_tokens() {
+        let mut authorities = core::array::from_fn(|index| {
+            Capability::from_token(((index as u64 + 1) << 32) | (index as u64 + 1))
+        });
+        authorities[2] = Capability::from_token(2);
+        assert_eq!(
+            unsafe {
+                InstalledAhciServiceLaunch::from_installed_projection(
+                    &record().encode(),
+                    3,
+                    authorities,
+                )
+            },
+            Err(AhciServiceLaunchRecordError::InvalidInstalledCapability)
+        );
+
+        authorities[2] = authorities[1];
+        assert_eq!(
+            unsafe {
+                InstalledAhciServiceLaunch::from_installed_projection(
+                    &record().encode(),
+                    3,
+                    authorities,
+                )
+            },
+            Err(AhciServiceLaunchRecordError::DuplicateInstalledCapability)
         );
     }
 }
