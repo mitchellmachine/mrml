@@ -814,11 +814,14 @@ PCI classes, and manifests do not authorize.
 - Failure isolated: **YES**
 - Existing-object reuse: **HIGH**
 
-The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
+The generation-1 block and generation-2 filesystem schemas and generated safe
+types are **PARTIALLY IMPLEMENTED**. Filesystem generation 1 remains immutable
+history. The block
 interface passes eleven focused tests and the filesystem interface's canonical
 probe, mount/unmount, lookup, read/write, create, flush, check, and format codecs plus
-exact-generation isolated transports pass thirteen focused Linux-host tests. Mount binds the volume generation
-and bounded options range and returns only a nonzero mount generation or typed failure.
+exact-generation isolated transports pass thirteen focused Linux-host tests. Mount
+binds the volume and bounded options range and returns a nonzero mount generation
+plus structurally valid root identity, or a typed failure with both fields zero.
 Unmount consumes the exact nonzero mount generation through the same endpoint
 and returns a nonzero completion serial or typed zero-serial failure.
 Lookup frames bind exact volume, mount, and directory
@@ -873,7 +876,7 @@ Linux storage-service suite passes 142 tests. This is compile and unit-test
 evidence, not a live installed-service or physical-device result.
 
 The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
-`org.mrml.library.storage.fat32`. It advertises the exact generation-1 filesystem
+`org.mrml.library.storage.fat32`. It advertises the exact generation-2 filesystem
 interface as an isolated service, and `mrml-storage` requires that dynamic
 binding separately from the block provider. Its initial read-only boot-sector
 parser validates FAT32 geometry, checked extents/FAT capacity, root-cluster and

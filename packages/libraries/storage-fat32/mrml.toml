@@ -18,9 +18,9 @@ supported = ["native-service", "microvm"]
 
 [[provides]]
 binding = "dynamic"
-fingerprint = "58b11da30dcaa7eac23bf94ec176e2cd14e642b9c8449c6639c4383782346fbc"
+fingerprint = "662a94c220ac3225dce9482f699ab09b06f35e412c01c003eb24b4340f2de6aa"
 form = "isolated-service"
-generation = 1
+generation = 2
 interface = "org.mrml.interface.storage.filesystem"
 
 [[target]]
@@ -60,8 +60,8 @@ target = "MRML_NATIVE"
 triple = "x86_64-unknown-uefi"
 
 [[dependency]]
-alias = "mrml_interface_storage_filesystem_v1"
-compile_name = "mrml-interface-storage-filesystem-v1"
+alias = "mrml_interface_storage_filesystem_v2"
+compile_name = "mrml-interface-storage-filesystem-v2"
 package = "org.mrml.interface.storage.filesystem"
 scope = "compile"
 

@@ -365,10 +365,10 @@ adapter exercises the generated request/response contract for Zstd and ZIM,
 but is not native loader dispatch; neither Rust's native ABI nor a package name
 is the stable interface.
 
-This is a prerequisite for a future filesystem interface generation that can
-return mount lifecycle identity and root-object identity separately. It does not
-define that interface, grant a root capability, or reinterpret generation-1
-mount responses.
+Filesystem interface generation 2 now uses the bounded response record to return
+mount lifecycle identity and root-object identity separately. It does not grant
+a root capability or reinterpret generation-1 mount responses; generation 1
+remains checked in as immutable history.
 
 - Complexity impact: **LOW**
 - TCB impact: **NONE**

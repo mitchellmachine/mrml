@@ -7388,12 +7388,19 @@ mixtures fail closed. The isolated lookup transport retains the exact endpoint
 generation and rejects memory beyond its admitted bound before invocation. Five
 focused Linux-host interface tests pass.
 
-Canonical filesystem mount framing now establishes the generation consumed by
-lookup without conflating it with authority. The request binds the exact volume
-handle and bounded options range; success carries one nonzero generation, while
-every typed failure carries zero. The isolated transport retains the exact
-provider endpoint and rejects oversized memory before invocation. The focused
-Linux-host interface suite passes six tests.
+Canonical filesystem generation-2 mount framing now establishes both the
+lifecycle generation consumed by lookup and an explicit root identity without
+conflating either with authority. The request binds the exact volume handle and
+bounded options range; success carries one nonzero generation and structurally
+valid root handle, while every typed failure carries zero for both. The isolated
+transport retains the exact provider endpoint and rejects oversized memory before
+invocation. Generation 1 remains immutable history. The focused Linux-host
+interface suite passes thirteen tests, including missing-root and mixed-status
+rejection.
+
+Patent review: `NOT_TRIGGERED` — a bounded named mount response containing
+separate lifecycle and root identities is a conventional IPC/filesystem contract
+mechanism. See `docs/patents/REVIEW_LOG.md`.
 
 Canonical unmount framing closes the same exact lifecycle without accepting a
 zero or stale-by-construction mount generation. It routes through the retained

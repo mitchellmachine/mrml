@@ -1,5 +1,5 @@
 use crate::{Fat32ServiceSyscalls, ReceivedFat32Envelope};
-use mrml_interface_storage_filesystem_v1::{PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES};
+use mrml_interface_storage_filesystem_v2::{PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES};
 use mrml_kernel::Capability;
 
 const SEND_BUFFER: u64 = 4;
@@ -161,7 +161,7 @@ unsafe impl<R: Fat32RawSyscall> Fat32ServiceSyscalls for Fat32UserspaceSyscalls<
 mod tests {
     use super::*;
     use crate::Fat32ServiceLoop;
-    use mrml_interface_storage_filesystem_v1::{
+    use mrml_interface_storage_filesystem_v2::{
         decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
     };
 

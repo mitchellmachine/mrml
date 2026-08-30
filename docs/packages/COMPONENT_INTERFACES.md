@@ -403,25 +403,24 @@ language/code-generation primitives do not become one giant Store component.
 The generation resolver, not an application filesystem search, selects an exact
 provider:
 
-Storage now has two **PARTIALLY IMPLEMENTED** generation-1 schemas:
-`org.mrml.interface.storage.block-provider` and
-`org.mrml.interface.storage.filesystem`. They select isolated service providers
+Storage now has a **PARTIALLY IMPLEMENTED** generation-1 block-provider schema
+and generation-2 filesystem schema. Filesystem generation 1 remains checked in
+as immutable history. They select isolated service providers
 because transports own device/DMA state and filesystems parse hostile media.
 AHCI and FAT32 packages may be libraries, but runtime composition is a supervised
 exact-generation endpoint rather than DLL/SO path search. Compatible updates use
 cleanup-gated restart without reboot; names and manifests grant no authority.
 The schema tool now accepts version 2 solely to express bounded, uniquely named
 multi-field response records while preserving version-1 output byte-for-byte.
-This removes the representation blocker for a future filesystem generation to
-return mount and root identities separately, but no generation-2 filesystem
-contract or root capability exists yet. Response fields remain data; runtime-
-delivered capabilities authorize.
+Filesystem generation 2 uses that record to return mount lifecycle and root-object
+identities separately. Neither response field is a capability; runtime-delivered
+capabilities authorize, and provider mount/open state remains unimplemented.
 The storage-side fixed registry exercises cleanup before candidate launch,
 health-check before publication, quarantine on cleanup uncertainty, and an
 unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
 model evidence; the FAT32-specific route now exercises compatible replacement,
 while installed supervisor/provider restart remains unproved.
-The filesystem interface now has a canonical generation-1 probe byte codec and
+The filesystem interface now has a canonical generation-2 probe byte codec and
 an isolated transport that retains the exact endpoint generation; three focused
 tests pass on both hosts. Its lookup operation now also has canonical request and
 response codecs binding volume, mount, and directory generations plus one

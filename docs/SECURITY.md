@@ -1157,9 +1157,10 @@ identity field to remain zero.
 
 Filesystem mount framing likewise carries state identity, not authority. A
 canonical request binds one exact volume handle and bounded options view; a
-successful response carries only a nonzero mount generation, while typed errors
-must carry zero. Exact endpoint routing and the runtime's separately delivered
-capabilities remain the authorization boundary.
+successful generation-2 response carries a nonzero mount generation and one
+structurally valid root identity, while typed errors must carry zero for both.
+The root identity cannot encode a capability. Exact endpoint routing and the
+runtime's separately delivered capabilities remain the authorization boundary.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

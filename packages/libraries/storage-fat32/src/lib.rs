@@ -7,7 +7,7 @@
 mod service_loop;
 mod userspace_syscall_adapter;
 
-use mrml_interface_storage_filesystem_v1::{
+use mrml_interface_storage_filesystem_v2::{
     decode_probe_request, encode_probe_response, FilesystemTransport, ProbeError, ProtocolError,
     PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
 };
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn provider_probe_uses_canonical_interface_bytes() {
-        use mrml_interface_storage_filesystem_v1::{
+        use mrml_interface_storage_filesystem_v2::{
             decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
         };
 
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn provider_probe_distinguishes_invalid_call_from_unsupported_media() {
-        use mrml_interface_storage_filesystem_v1::{
+        use mrml_interface_storage_filesystem_v2::{
             decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
         };
 

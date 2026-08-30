@@ -19,12 +19,14 @@ remain independently attributable.
 ## Current priority
 
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
-gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
-schemas define bounded opaque-handle operations for isolated library providers.
+gate. Canonical generation-1 `storage.block-provider` and generation-2
+`storage.filesystem` schemas define bounded opaque-handle operations for isolated
+library providers. Filesystem generation 1 remains checked in as immutable history.
 The block interface passes one focused test; the filesystem interface's canonical
 probe, mount/unmount, lookup, read/write, create, flush, check, and format codecs plus
-exact-generation isolated transports pass thirteen focused tests on Linux. Mount returns only a nonzero
-generation or typed zero-generation error; mount and lookup invocations preserve
+exact-generation isolated transports pass thirteen focused tests on Linux. Mount
+returns a nonzero lifecycle generation and a structurally valid root identity, or
+a typed response with both fields zero; mount and lookup invocations preserve
 the exact provider endpoint generation and reject memory beyond its admitted bound. Unmount binds
 that exact nonzero generation and returns only a nonzero completion serial or
 typed zero-serial failure. The read boundary binds exact volume, mount, file,
@@ -54,7 +56,7 @@ pass 50 provider tests and 136 storage tests. The AHCI service entry/IPC adapter
 remains next after the FAT32 service path.
 
 The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
-`org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
+`org.mrml.library.storage.fat32`. Its isolated generation-2 filesystem binding
 and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversal,
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
@@ -71,12 +73,12 @@ checking, formatting, writes, installed supervisor launch, and hardware evidence
 remain next in dependency order; this lookup returns metadata and grants no open
 authority.
 
-The build frontend now **PARTIALLY IMPLEMENTS** schema version 2 multi-field
-responses as the bounded prerequisite for resolving the mount/root bootstrap.
-Version-1 generation remains byte-identical, and version 2 neither transfers
-capabilities nor defines a filesystem generation by itself. The next filesystem
-contract must return mount lifecycle identity and root-object identity explicitly
-before provider mount/open state is implemented.
+The build frontend and filesystem contract now **PARTIALLY IMPLEMENT** the
+mount/root bootstrap representation. Schema version 2 supports bounded named
+multi-field responses, and filesystem generation 2 returns mount lifecycle
+identity and root-object identity separately. Version-1 generation remains
+byte-identical; neither response field transfers or grants a capability. Provider
+mount state and capability-authorized open remain next.
 
 The FAT32 and Zstd isolated-service syscall adapters now apply the same receive-
 result bound as AHCI: kernel-reported payload and capability counts cannot

@@ -1,6 +1,6 @@
 #![no_std]
 
-#[path = "../1.rs"]
+#[path = "../2.rs"]
 mod generated;
 
 pub use generated::*;
@@ -11,7 +11,7 @@ pub const ABI_CALL_HEADER_BYTES: usize = 72;
 pub const PROBE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
 pub const PROBE_RESPONSE_BYTES: usize = 16;
 pub const MOUNT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
-pub const MOUNT_RESPONSE_BYTES: usize = 16;
+pub const MOUNT_RESPONSE_BYTES: usize = 24;
 pub const UNMOUNT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
 pub const UNMOUNT_RESPONSE_BYTES: usize = 16;
 pub const READ_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
@@ -511,14 +511,23 @@ pub fn decode_mount_request(
         .ok_or(ProtocolError::InvalidRequest)
 }
 
-pub fn encode_mount_response(result: Result<MountResponse, MountError>) -> [u8; 16] {
+pub fn encode_mount_response(
+    result: Result<MountResponse, MountError>,
+) -> [u8; MOUNT_RESPONSE_BYTES] {
     let mut bytes = [0; MOUNT_RESPONSE_BYTES];
-    let (status, generation) = match result {
-        Ok(generation) => (0, generation),
-        Err(error) => (error as u32, 0),
+    let (status, generation, root_index, root_generation) = match result {
+        Ok(response) => (
+            0,
+            response.generation,
+            response.root.index(),
+            response.root.generation(),
+        ),
+        Err(error) => (error as u32, 0, 0, 0),
     };
     bytes[0..4].copy_from_slice(&status.to_le_bytes());
     bytes[8..16].copy_from_slice(&generation.to_le_bytes());
+    bytes[16..20].copy_from_slice(&root_index.to_le_bytes());
+    bytes[20..24].copy_from_slice(&root_generation.to_le_bytes());
     bytes
 }
 
@@ -530,12 +539,24 @@ pub fn decode_mount_response(
     }
     let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let generation = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    let root_index = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    let root_generation = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
     match status {
-        0 if generation != 0 => Ok(Ok(generation)),
-        1 if generation == 0 => Ok(Err(MountError::InvalidRequest)),
-        2 if generation == 0 => Ok(Err(MountError::StaleObject)),
-        3 if generation == 0 => Ok(Err(MountError::PermissionDenied)),
-        4 if generation == 0 => Ok(Err(MountError::InconsistentFilesystem)),
+        0 if generation != 0 => OpaqueHandle::new(root_index, root_generation)
+            .map(|root| Ok(MountResponse { generation, root }))
+            .ok_or(ProtocolError::InvalidResponse),
+        1 if generation == 0 && root_index == 0 && root_generation == 0 => {
+            Ok(Err(MountError::InvalidRequest))
+        }
+        2 if generation == 0 && root_index == 0 && root_generation == 0 => {
+            Ok(Err(MountError::StaleObject))
+        }
+        3 if generation == 0 && root_index == 0 && root_generation == 0 => {
+            Ok(Err(MountError::PermissionDenied))
+        }
+        4 if generation == 0 && root_index == 0 && root_generation == 0 => {
+            Ok(Err(MountError::InconsistentFilesystem))
+        }
         _ => Err(ProtocolError::InvalidResponse),
     }
 }
@@ -1536,7 +1557,10 @@ mod tests {
             _memory: &mut [u8],
         ) -> Result<[u8; MOUNT_RESPONSE_BYTES], ProtocolError> {
             self.seen = Some(endpoint);
-            Ok(encode_mount_response(Ok(12)))
+            Ok(encode_mount_response(Ok(MountResponse {
+                generation: 12,
+                root: OpaqueHandle::new(3, 9).unwrap(),
+            })))
         }
     }
 
@@ -1554,7 +1578,10 @@ mod tests {
         let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
         assert_eq!(
             decode_mount_response(&transport.mount(&request, &mut [0; 32]).unwrap()),
-            Ok(Ok(12))
+            Ok(Ok(MountResponse {
+                generation: 12,
+                root: OpaqueHandle::new(3, 9).unwrap(),
+            }))
         );
         assert_eq!(transport.service.seen, Some(endpoint));
         assert_eq!(
@@ -1566,7 +1593,19 @@ mod tests {
             Err(ProtocolError::InvalidRequest)
         );
         assert_eq!(
-            decode_mount_response(&encode_mount_response(Ok(0))),
+            decode_mount_response(&encode_mount_response(Ok(MountResponse {
+                generation: 0,
+                root: OpaqueHandle::new(3, 9).unwrap(),
+            }))),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut missing_root = encode_mount_response(Ok(MountResponse {
+            generation: 12,
+            root: OpaqueHandle::new(3, 9).unwrap(),
+        }));
+        missing_root[20..24].fill(0);
+        assert_eq!(
+            decode_mount_response(&missing_root),
             Err(ProtocolError::InvalidResponse)
         );
         let mut invalid = encode_mount_response(Err(MountError::PermissionDenied));

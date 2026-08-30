@@ -6,14 +6,14 @@ version = 2
 default = false
 id = "org.mrml.interface.storage.filesystem"
 kind = "interface"
-name = "mrml-interface-storage-filesystem-v1"
+name = "mrml-interface-storage-filesystem-v2"
 profile = "interface"
 
 [interface]
 abi = "mrml-call-v1"
-fingerprint = "58b11da30dcaa7eac23bf94ec176e2cd14e642b9c8449c6639c4383782346fbc"
-generation = 1
-schema = "1.mri"
+fingerprint = "662a94c220ac3225dce9482f699ab09b06f35e412c01c003eb24b4340f2de6aa"
+generation = 2
+schema = "2.mri"
 
 [[target]]
 arch = "x86_64"
@@ -29,10 +29,10 @@ environment = "mrml"
 
 [[artifact]]
 kind = "lib"
-name = "mrml_interface_storage_filesystem_v1"
+name = "mrml_interface_storage_filesystem_v2"
 
 [rust]
-crate_name = "mrml_interface_storage_filesystem_v1"
+crate_name = "mrml_interface_storage_filesystem_v2"
 crate_type = "lib"
 source = "packages/interfaces/org.mrml.interface.storage.filesystem/src/lib.rs"
 
