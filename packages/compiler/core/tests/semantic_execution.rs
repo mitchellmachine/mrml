@@ -85,6 +85,11 @@ const RUSTC_WIDE_CHECKED_CAST_LAZY_FALLBACK_SOURCE: &str = concat!(
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or_else(|| fallback) }",
 );
 const MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.checked_cast_signed().unwrap() }";
+const MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.checked_cast_unsigned().unwrap() }";
+const RUSTC_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE: &str = concat!(
+    "#![feature(integer_cast_extras)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.checked_cast_unsigned().unwrap() }",
+);
 const MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.checked_cast_signed().expect(\"wide sign cast\") }";
 const RUSTC_WIDE_CHECKED_CAST_EXPECT_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
@@ -1651,6 +1656,10 @@ fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
             MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE,
             [i128::MIN as u128, (-1i128) as u128],
         ),
+        (
+            MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE,
+            [i128::MIN as u128, (-1i128) as u128],
+        ),
     ] {
         let code = compile(source);
         for input in inputs {
@@ -1672,6 +1681,8 @@ fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
         let mode = mode.to_string_lossy();
         let source = if mode.starts_with("unsigned-expect") {
             MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE
+        } else if mode.starts_with("unsigned-unwrap") {
+            MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE
         } else if mode.starts_with("expect") {
             MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE
         } else {
@@ -1695,6 +1706,8 @@ fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
         "expect-maximum",
         "unsigned-expect-minimum",
         "unsigned-expect-negative-one",
+        "unsigned-unwrap-minimum",
+        "unsigned-unwrap-negative-one",
     ] {
         let output = current_semantic_test_command()
             .args([
@@ -1718,7 +1731,7 @@ fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
 }
 
 #[test]
-fn mrml_v1_wide_checked_sign_cast_expect_matches_valid_oracle_words() {
+fn mrml_v1_wide_checked_sign_cast_trapping_consumers_match_valid_oracle_words() {
     let inputs = [0u128, 1, 17, 1u128 << 64, i128::MAX as u128];
     let code = compile(MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE);
     let actual = inputs
@@ -1740,6 +1753,16 @@ fn mrml_v1_wide_checked_sign_cast_expect_matches_valid_oracle_words() {
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, rustc_mrml_v1_observations(RUSTC_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE, "for input in [0i128, 1, 17, 1i128 << 64, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
+
+    let code = compile(MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(RUSTC_WIDE_CHECKED_CAST_UNSIGNED_UNWRAP_SOURCE, "for input in [0i128, 1, 17, 1i128 << 64, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
 }
 
 #[test]

@@ -89,9 +89,9 @@ passes 821 unit tests, 351 replacement tests, and 128 semantic-execution tests;
 defaulting in both directions and eager or lazy custom signed fallbacks match exact
 ORACLE-0003 results across both words at zero, signed boundaries, and all-ones
 input. Isolated Linux children confirm checked `unwrap` and `expect` trap at
-both invalid unsigned boundaries, and reverse-direction checked `expect` traps
-for negative signed inputs. Valid checked `expect` in both directions matches
-both oracle words.
+both invalid unsigned boundaries, and reverse-direction checked `unwrap` and
+`expect` trap for negative signed inputs. Valid checked trapping consumers in
+both directions match both oracle words.
 Scoped-unsafe `unwrap_unchecked` matches both oracle
 words for valid inputs while safe use fails closed; invalid unchecked input is
 Rust UB and was not executed. Windows gnullvm was not run. Patent review:
