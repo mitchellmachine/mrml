@@ -1141,6 +1141,7 @@ pub struct RecoveredRuntimeAssignment<'a, const CANDIDATES: usize, const DOMAINS
     service: DeploymentService<CANDIDATES>,
     recovery: DeploymentRecoveryState,
     assignment: RuntimeDomainAssignmentPlan<'a, DOMAINS>,
+    inspect: Capability,
 }
 
 /// Authenticated deployment recovery retained beside the exact activated
@@ -1211,23 +1212,22 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
         &mut self.assignment
     }
 
-    pub fn into_parts(
-        self,
-    ) -> (
-        DeploymentService<CANDIDATES>,
-        DeploymentRecoveryState,
-        RuntimeDomainAssignmentPlan<'a, DOMAINS>,
-    ) {
-        (self.service, self.recovery, self.assignment)
-    }
-
     /// Seals every assigned package while retaining the authenticated
     /// deployment owner and recovery evidence that selected the release.
-    pub fn seal(
+    pub fn seal<const CAPS: usize>(
         self,
-    ) -> Result<RecoveredDeploymentRuntimeInventory<CANDIDATES, DOMAINS>, ReleaseInventoryError>
-    {
-        let release = self.assignment.seal()?;
+        capabilities: &CapabilitySpace<CAPS>,
+    ) -> Result<
+        RecoveredDeploymentRuntimeInventory<CANDIDATES, DOMAINS>,
+        RecoveredRuntimeAssignmentSealError,
+    > {
+        self.service
+            .authorize(capabilities, self.inspect, Rights::READ)
+            .map_err(RecoveredRuntimeAssignmentSealError::Deployment)?;
+        let release = self
+            .assignment
+            .seal()
+            .map_err(RecoveredRuntimeAssignmentSealError::Release)?;
         Ok(RecoveredDeploymentRuntimeInventory {
             owner: RecoveredDeploymentOwner {
                 service: self.service,
@@ -1236,6 +1236,12 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
             release,
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredRuntimeAssignmentSealError {
+    Deployment(DeploymentError),
+    Release(ReleaseInventoryError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1389,6 +1395,7 @@ pub fn recover_and_read_runtime_assignment<
         service,
         recovery,
         assignment,
+        inspect,
     })
 }
 
@@ -1455,6 +1462,7 @@ pub fn recover_and_read_runtime_assignment_shared_backend<
         service,
         recovery,
         assignment,
+        inspect,
     })
 }
 
@@ -2171,7 +2179,7 @@ mod tests {
             release_reads: 0,
         };
         let mut shared_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
-        let shared_assignment =
+        let mut shared_assignment =
             recover_and_read_runtime_assignment_shared_backend::<1, 1, 3, 1, 1, 1, 1, _, _>(
                 root,
                 &checkpoint_file,
@@ -2197,6 +2205,23 @@ mod tests {
         );
         assert_eq!(shared_backend.checkpoint_reads, 1);
         assert_eq!(shared_backend.release_reads, 1);
+        shared_assignment
+            .assignment_mut()
+            .assign_from_policy(|record| {
+                mrml_kernel::RuntimeDomainAssignment::new(
+                    record.package_id,
+                    ObjectId(0x5256_4f4b_4544),
+                )
+            })
+            .unwrap();
+        capabilities.revoke(inspect).unwrap();
+        assert!(matches!(
+            shared_assignment.seal(&capabilities),
+            Err(RecoveredRuntimeAssignmentSealError::Deployment(
+                DeploymentError::Unauthorized
+            ))
+        ));
+        let inspect = capabilities.insert(root, Rights::READ).unwrap();
         let mut checkpoint_backend = StableBackend {
             bytes: checkpoint_block,
         };
@@ -2243,7 +2268,7 @@ mod tests {
                 mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
             })
             .unwrap();
-        let recovered_inventory = recovered_assignment.seal().unwrap();
+        let recovered_inventory = recovered_assignment.seal(&capabilities).unwrap();
         assert_eq!(recovered_inventory.owner().recovery(), retained_recovery);
         assert_eq!(
             recovered_inventory

@@ -7129,6 +7129,18 @@ Patent review: `NOT_TRIGGERED` — this extends the existing generational
 liveness check to the remaining policy-bound registration entry. See
 `docs/patents/REVIEW_LOG.md`.
 
+Recovered deployment runtime assignment now retains the exact deployment
+inspection handle that selected the activated release and reauthorizes exact
+`READ` immediately before sealing the assigned inventory. The intermediate
+owner no longer exposes its raw assignment plan through an `into_parts` escape;
+revocation after recovery leaves no sealed release or Total admission input.
+Deployment passes 6 focused tests, configuration passes 53, and the native
+service image builds in release mode.
+
+Patent review: `NOT_TRIGGERED` — this extends conventional commit-time exact
+capability revalidation to an existing deployment publication boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

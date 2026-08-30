@@ -2153,7 +2153,9 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
             mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x434f_4e46_4947))
         })
         .unwrap_or_else(|_| halt());
-    let inventory = runtime.seal().unwrap_or_else(|_| halt());
+    let inventory = runtime
+        .seal(&deployment_capabilities)
+        .unwrap_or_else(|_| halt());
     if inventory.release().release().len() != 1
         || inventory.release().system_generation() != 33
         || inventory.release().policy_generation() != 1

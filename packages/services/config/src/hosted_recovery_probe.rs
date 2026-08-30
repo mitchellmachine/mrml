@@ -1355,6 +1355,7 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
             component,
             component_read,
             deployment,
+            &deployment_capabilities,
             &bindings,
         )
         .map_err(|_| HostedRecoveryProbeError::Admission)?;

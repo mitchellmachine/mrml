@@ -4059,3 +4059,8 @@ replan against a newly created live task generation.
 Direct persisted restart-policy registration now uses that same live-runtime
 commit boundary. Valid policy authority and revisions cannot publish a retired
 caller-supplied task generation as a running service.
+
+Recovered deployment runtime assignment now revalidates its retained exact
+inspection handle when sealing the authenticated assigned release. Revocation
+after release recovery cannot produce a detached sealed inventory for Total
+admission, and the intermediate owner no longer exposes the raw plan.

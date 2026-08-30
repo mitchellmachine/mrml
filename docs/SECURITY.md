@@ -1034,3 +1034,8 @@ slot generation cannot be published from a prepared recovery decision.
 The direct persisted-policy registration helper also requires the exact task
 generation to be live in its supplied runtime. Configuration authority governs
 policy access; it does not convert a stale task name into lifecycle authority.
+
+Recovered deployment assignment retains the exact `READ` handle that selected
+the active release and reauthorizes it at seal. Its intermediate owner cannot be
+split into a raw assignment plan, so revocation covers the derived inventory
+until it becomes a sealed, identity-bound release input to admission.

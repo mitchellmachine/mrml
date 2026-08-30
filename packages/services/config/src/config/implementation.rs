@@ -3793,6 +3793,7 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         'release,
         const CANDIDATES: usize,
         const DOMAINS: usize,
+        const DEPLOYMENT_CAPS: usize,
         A: CapabilityAuthorizer + ?Sized,
     >(
         self,
@@ -3803,6 +3804,7 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         component: IsolationPolicySetting,
         component_read: Capability,
         mut deployment: RecoveredRuntimeAssignment<'release, CANDIDATES, DOMAINS>,
+        deployment_capabilities: &CapabilitySpace<DEPLOYMENT_CAPS>,
         bindings: &[RuntimeDomainPolicyBinding<'_>],
     ) -> Result<
         RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>,
@@ -3832,8 +3834,15 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
             .assign_runtime_domains(capabilities, deployment.assignment_mut(), bindings)
             .map_err(RecoveredAssignedTotalAdmissionError::Assignment)?;
         let deployment = deployment
-            .seal()
-            .map_err(RecoveredAssignedTotalAdmissionError::Release)?;
+            .seal(deployment_capabilities)
+            .map_err(|error| match error {
+                mrml_deployment::RecoveredRuntimeAssignmentSealError::Deployment(error) => {
+                    RecoveredAssignedTotalAdmissionError::Deployment(error)
+                }
+                mrml_deployment::RecoveredRuntimeAssignmentSealError::Release(error) => {
+                    RecoveredAssignedTotalAdmissionError::Release(error)
+                }
+            })?;
         let (deployment, release) = deployment.into_parts();
         let total = policy
             .bind_release_inventory(release)
@@ -3980,6 +3989,7 @@ pub enum RecoveredInstalledTotalAdmissionBuildError<E> {
 pub enum RecoveredAssignedTotalAdmissionError {
     Installed(ConfigError),
     Policy(ConfigError),
+    Deployment(mrml_deployment::DeploymentError),
     Assignment(RecoveredRuntimeDomainPolicyError),
     Release(ReleaseInventoryError),
 }
