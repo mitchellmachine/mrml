@@ -10727,3 +10727,16 @@ hardware execution is claimed.
 Patent review: `NOT_TRIGGERED` — preserving initialized descriptor-state
 provenance in a typed stack handle is conventional fail-closed API design. See
 `docs/patents/REVIEW_LOG.md`.
+
+Storage provider retirement now transfers its exact `TaskTermination` and
+non-replayable dispatch token together through one consuming `into_parts`
+operation. This prevents the service boundary from silently discarding the
+termination audit record while taking ownership of the dispatch token. The
+Linux-host storage release suite passes 163 tests and its release build passes;
+the new test exact-matches the retired task, scheduler edge, successor task, and
+successor context in memory. It does not exercise active page tables or hardware
+context entry.
+
+Patent review: `NOT_TRIGGERED` — retaining an audit record beside a linear
+lifecycle token is conventional typed state transfer. See
+`docs/patents/REVIEW_LOG.md`.

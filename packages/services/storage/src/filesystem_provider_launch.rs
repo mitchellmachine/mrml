@@ -205,8 +205,8 @@ impl NativeFilesystemProviderRetirement {
         &self.dispatch
     }
 
-    pub fn into_dispatch(self) -> TaskTerminationDispatch {
-        self.dispatch
+    pub fn into_parts(self) -> (TaskTermination, TaskTerminationDispatch) {
+        (self.termination, self.dispatch)
     }
 }
 
@@ -689,8 +689,55 @@ mod tests {
     };
     use mrml_kernel::{
         IsolationServiceSpec, MemoryBackingBackendRequest, MemoryPhysicalBacking, MemoryPoolTable,
-        TotalMicrovmClass,
+        Priority, ScheduleOutcome, TotalMicrovmClass,
     };
+
+    #[test]
+    fn retirement_transfers_exact_termination_with_opaque_dispatch() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let exiting = runtime
+            .create(
+                Priority::NORMAL,
+                UserContext::new(
+                    mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let successor_context = UserContext::new(
+            mrml_kernel::PhysAddr::new(0x30_0000).unwrap(),
+            0x50_0000,
+            0x7100_0000,
+        )
+        .unwrap();
+        let successor = runtime.create(Priority::NORMAL, successor_context).unwrap();
+        assert!(matches!(
+            runtime.start(),
+            ScheduleOutcome::Switch { to, .. } if to == exiting
+        ));
+        let termination = runtime.terminate_current().unwrap();
+        let dispatch = runtime.dispatch_after_termination(termination).unwrap();
+        let retirement = NativeFilesystemProviderRetirement {
+            termination,
+            dispatch,
+        };
+
+        let (retained_termination, retained_dispatch) = retirement.into_parts();
+        assert_eq!(retained_termination.task, exiting);
+        assert_eq!(
+            retained_termination.next,
+            ScheduleOutcome::Switch {
+                from: Some(exiting),
+                to: successor,
+            }
+        );
+        assert_eq!(
+            retained_dispatch.user(),
+            Some((successor, successor_context))
+        );
+    }
 
     #[derive(Default)]
     struct NativeBackingBackend {
