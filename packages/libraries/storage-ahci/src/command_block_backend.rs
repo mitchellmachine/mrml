@@ -77,6 +77,10 @@ impl<R, M, D> AhciCommandBackendTeardown<R, M, D> {
         self.mapping
     }
 
+    pub(crate) const fn port(&self) -> &ActiveAhciPort {
+        &self.port
+    }
+
     pub const fn data_region(&self) -> AhciDataDmaRegion {
         self.data_region
     }

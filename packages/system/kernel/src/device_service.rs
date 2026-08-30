@@ -323,14 +323,35 @@ pub enum NativeDeviceServiceTaskError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeDeviceServiceActivationError {
+    WrongRuntime,
+    Runtime(TaskRuntimeError),
+    NotConstructionTarget,
+    ContextMismatch,
+    SourceAuthorityMismatch,
+    TargetAuthorityMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeDeviceServiceTask<const N: usize> {
+    runtime: u64,
     source_task: TaskId,
     task: TaskId,
     page_table_root: PhysAddr,
+    installed_context: UserContext,
+    source_service_endpoint: Capability,
+    service_endpoint_object: ObjectId,
     entry: NativeDeviceServiceEntry<N>,
 }
 
 impl<const N: usize> NativeDeviceServiceTask<N> {
+    pub fn belongs_to_runtime<const TASKS: usize, const CAPABILITIES: usize>(
+        self,
+        runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    ) -> bool {
+        self.runtime == runtime.identity()
+    }
+
     pub const fn source_task(self) -> TaskId {
         self.source_task
     }
@@ -346,6 +367,92 @@ impl<const N: usize> NativeDeviceServiceTask<N> {
     pub const fn entry(self) -> NativeDeviceServiceEntry<N> {
         self.entry
     }
+
+    /// Revalidates the complete construction snapshot immediately before a
+    /// native device-service task is made scheduler-visible.
+    ///
+    /// The retained task is only a proof for its exact runtime, installed
+    /// register context, source authorities, and projected target authority
+    /// set. Mapping work may take place after construction, so none of those
+    /// prepare-time facts are trusted without this final exact check.
+    pub fn validate_activation_state<const TASKS: usize, const CAPABILITIES: usize>(
+        self,
+        runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    ) -> Result<(), NativeDeviceServiceActivationError> {
+        if !self.belongs_to_runtime(runtime) {
+            return Err(NativeDeviceServiceActivationError::WrongRuntime);
+        }
+        if !runtime
+            .construction_pending(self.task)
+            .map_err(NativeDeviceServiceActivationError::Runtime)?
+        {
+            return Err(NativeDeviceServiceActivationError::NotConstructionTarget);
+        }
+        if *runtime
+            .context(self.task)
+            .map_err(NativeDeviceServiceActivationError::Runtime)?
+            != self.installed_context
+        {
+            return Err(NativeDeviceServiceActivationError::ContextMismatch);
+        }
+        runtime
+            .context(self.entry.supervisor_task())
+            .map_err(NativeDeviceServiceActivationError::Runtime)?;
+
+        let source = runtime
+            .capabilities(self.source_task)
+            .map_err(NativeDeviceServiceActivationError::Runtime)?;
+        if source
+            .authorize(
+                self.entry.attachment().launch_data(),
+                Rights::READ.union(Rights::DELEGATE),
+            )
+            != Ok(self.entry.attachment().launch_data_object())
+            || source.authorize(
+                self.source_service_endpoint,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            ) != Ok(self.service_endpoint_object)
+        {
+            return Err(NativeDeviceServiceActivationError::SourceAuthorityMismatch);
+        }
+        for authority in self.entry.attachment().authorities() {
+            if source.authorize(
+                authority.source(),
+                authority.target_rights().union(Rights::DELEGATE),
+            ) != Ok(authority.object())
+            {
+                return Err(NativeDeviceServiceActivationError::SourceAuthorityMismatch);
+            }
+        }
+
+        let target = runtime
+            .capabilities(self.task)
+            .map_err(NativeDeviceServiceActivationError::Runtime)?;
+        let expected_count = N
+            .checked_add(2)
+            .ok_or(NativeDeviceServiceActivationError::TargetAuthorityMismatch)?;
+        if target.occupied_count() != expected_count
+            || target.authorize_exact(self.entry.service_endpoint(), Rights::SIGNAL)
+                != Ok(self.service_endpoint_object)
+            || target.authorize_exact(self.entry.launch_data(), Rights::READ)
+                != Ok(self.entry.attachment().launch_data_object())
+        {
+            return Err(NativeDeviceServiceActivationError::TargetAuthorityMismatch);
+        }
+        for (capability, authority) in self
+            .entry
+            .authorities()
+            .into_iter()
+            .zip(self.entry.attachment().authorities())
+        {
+            if target.authorize_exact(capability, authority.target_rights())
+                != Ok(authority.object())
+            {
+                return Err(NativeDeviceServiceActivationError::TargetAuthorityMismatch);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -355,6 +462,13 @@ pub struct NativeDeviceServiceRetirement<const N: usize> {
 }
 
 impl<const N: usize> NativeDeviceServiceRetirement<N> {
+    pub(crate) const fn from_task_and_context(
+        task: NativeDeviceServiceTask<N>,
+        context: UserContext,
+    ) -> Self {
+        Self { task, context }
+    }
+
     pub const fn task(self) -> NativeDeviceServiceTask<N> {
         self.task
     }
@@ -366,14 +480,56 @@ impl<const N: usize> NativeDeviceServiceRetirement<N> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeDeviceServiceRetirementError {
+    WrongRuntime,
     NotCurrent,
     RootMismatch,
     Runtime(TaskRuntimeError),
 }
 
+pub(crate) fn validate_native_device_service_retirement_state<
+    const N: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    task: NativeDeviceServiceTask<N>,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<UserContext, NativeDeviceServiceRetirementError> {
+    if !task.belongs_to_runtime(runtime) {
+        return Err(NativeDeviceServiceRetirementError::WrongRuntime);
+    }
+    let context = *runtime
+        .context(task.task)
+        .map_err(NativeDeviceServiceRetirementError::Runtime)?;
+    if context.page_table() != task.page_table_root {
+        return Err(NativeDeviceServiceRetirementError::RootMismatch);
+    }
+    Ok(context)
+}
+
+pub(crate) fn validate_current_native_device_service_retirement_state<
+    const N: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    task: NativeDeviceServiceTask<N>,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<UserContext, NativeDeviceServiceRetirementError> {
+    if runtime.current() != Some(task.task) {
+        return Err(NativeDeviceServiceRetirementError::NotCurrent);
+    }
+    validate_native_device_service_retirement_state(task, runtime)
+}
+
 /// Retires the exact current native device-service task after device-specific
 /// quiescence has completed outside the kernel.
-pub fn retire_current_native_device_service_task<
+///
+/// # Safety
+///
+/// The caller must prove that the represented device has stopped accepting
+/// work, completed or failed closed every in-flight operation, and revoked its
+/// device and DMA access. Supervised services must use a supervisor-owned
+/// retirement composition so lifecycle state cannot remain `Running`.
+pub unsafe fn retire_current_native_device_service_task<
     const N: usize,
     const TASKS: usize,
     const CAPABILITIES: usize,
@@ -382,15 +538,7 @@ pub fn retire_current_native_device_service_task<
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
 ) -> Result<(crate::TaskTermination, NativeDeviceServiceRetirement<N>), NativeDeviceServiceRetirementError>
 {
-    if runtime.current() != Some(task.task) {
-        return Err(NativeDeviceServiceRetirementError::NotCurrent);
-    }
-    let context = *runtime
-        .context(task.task)
-        .map_err(NativeDeviceServiceRetirementError::Runtime)?;
-    if context.page_table() != task.page_table_root {
-        return Err(NativeDeviceServiceRetirementError::RootMismatch);
-    }
+    let context = validate_current_native_device_service_retirement_state(task, runtime)?;
     let (termination, retired_context) = runtime
         .terminate_current_with_context()
         .map_err(NativeDeviceServiceRetirementError::Runtime)?;
@@ -515,9 +663,13 @@ pub fn prepare_native_device_service_task<
         .context_mut(target_task)
         .expect("successful projection preserves target task") = installed;
     Ok(NativeDeviceServiceTask {
+        runtime: runtime.identity(),
         source_task,
         task: target_task,
         page_table_root: context.page_table(),
+        installed_context: installed,
+        source_service_endpoint: service_endpoint,
+        service_endpoint_object,
         entry,
     })
 }
@@ -695,6 +847,195 @@ mod tests {
     }
 
     #[test]
+    fn activation_snapshot_rejects_context_and_target_authority_drift() {
+        let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
+        let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+
+        let installed = *runtime.context(target).unwrap();
+        runtime.context_mut(target).unwrap().rax = 0x55;
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::ContextMismatch)
+        );
+        *runtime.context_mut(target).unwrap() = installed;
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+
+        let extra = runtime
+            .capabilities_mut(target)
+            .unwrap()
+            .insert(ObjectId(0xfe), Rights::READ)
+            .unwrap();
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::TargetAuthorityMismatch)
+        );
+        runtime.capabilities_mut(target).unwrap().revoke(extra).unwrap();
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+
+        runtime
+            .capabilities_mut(target)
+            .unwrap()
+            .revoke(task.entry().authorities()[0])
+            .unwrap();
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::TargetAuthorityMismatch)
+        );
+    }
+
+    #[test]
+    fn activation_snapshot_rejects_untracked_source_revocation() {
+        let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
+        let (attachment, _, source_authorities) =
+            attachment(&mut runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        let projected = task.entry().authorities()[0];
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+
+        runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .revoke(source_authorities[0])
+            .unwrap();
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(projected, Rights::CONTROL),
+            Ok(ObjectId(0x90))
+        );
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::SourceAuthorityMismatch)
+        );
+    }
+
+    #[test]
+    fn activation_snapshot_rejects_retired_source_task() {
+        let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
+        let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+        assert!(matches!(
+            runtime.start(),
+            crate::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        runtime.terminate_current_with_context().unwrap();
+
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::Runtime(
+                TaskRuntimeError::MissingTask
+            ))
+        );
+        assert_eq!(runtime.construction_pending(target), Ok(true));
+    }
+
+    #[test]
+    fn activation_snapshot_rejects_retired_distinct_supervisor_task() {
+        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let source = runtime.create(Priority::NORMAL, context(0x20_0000)).unwrap();
+        let supervisor = runtime.create(Priority::NORMAL, context(0x28_0000)).unwrap();
+        let target = runtime
+            .create_for_construction(Priority::NORMAL, context(0x30_0000))
+            .unwrap();
+        let service_endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0xa0), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let launch_data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let authority = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x90), Rights::CONTROL.union(Rights::DELEGATE))
+            .unwrap();
+        let attachment = DeviceServiceLaunchAttachment::new(
+            spec(IsolationPlacement::NativeService),
+            13,
+            ObjectId(0x80),
+            3,
+            256,
+            launch_data,
+            [(ObjectId(0x90), authority, Rights::CONTROL)],
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            service_endpoint,
+            supervisor,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+        assert!(matches!(
+            runtime.start(),
+            crate::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        assert!(matches!(
+            runtime.yield_current(),
+            Ok(crate::ScheduleOutcome::Switch { to, .. }) if to == supervisor
+        ));
+        runtime.terminate_current_with_context().unwrap();
+
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::Runtime(
+                TaskRuntimeError::MissingTask
+            ))
+        );
+        assert_eq!(runtime.construction_pending(target), Ok(true));
+    }
+
+    #[test]
     fn projected_reply_endpoint_authorizes_delivery_and_revokes_transitively() {
         let (mut runtime, source, target) = runtime();
         let source_endpoint = endpoint(&mut runtime, source);
@@ -720,7 +1061,10 @@ mod tests {
         )
         .unwrap();
         let entry = task.entry();
-        runtime.activate_constructed_task(target).unwrap();
+        let activation = runtime
+            .prepare_constructed_task_activation(target)
+            .unwrap();
+        activation.commit();
 
         let mut reply_endpoint = Endpoint::new(ObjectId(0xa0));
         assert_eq!(
@@ -1015,14 +1359,18 @@ mod tests {
             ObjectId(0xa2),
         )
         .unwrap();
-        runtime.activate_constructed_task(target).unwrap();
+        let activation = runtime
+            .prepare_constructed_task_activation(target)
+            .unwrap();
+        activation.commit();
         assert_eq!(task.page_table_root(), PhysAddr::new(0x30_0000).unwrap());
         assert!(matches!(
             runtime.start(),
             crate::ScheduleOutcome::Switch { to, .. } if to == source
         ));
         assert_eq!(
-            retire_current_native_device_service_task(task, &mut runtime),
+            // SAFETY: this controlled test uses no device or DMA backend.
+            unsafe { retire_current_native_device_service_task(task, &mut runtime) },
             Err(NativeDeviceServiceRetirementError::NotCurrent)
         );
         runtime.yield_current().unwrap();
@@ -1031,14 +1379,18 @@ mod tests {
         let installed = *runtime.context(target).unwrap();
         *runtime.context_mut(target).unwrap() = context(0x40_0000);
         assert_eq!(
-            retire_current_native_device_service_task(task, &mut runtime),
+            // SAFETY: this controlled test uses no device or DMA backend.
+            unsafe { retire_current_native_device_service_task(task, &mut runtime) },
             Err(NativeDeviceServiceRetirementError::RootMismatch)
         );
         assert_eq!(runtime.current(), Some(target));
 
         *runtime.context_mut(target).unwrap() = installed;
-        let (termination, retired) =
-            retire_current_native_device_service_task(task, &mut runtime).unwrap();
+        // SAFETY: this controlled test uses no device or DMA backend.
+        let (termination, retired) = unsafe {
+            retire_current_native_device_service_task(task, &mut runtime)
+        }
+        .unwrap();
         assert_eq!(termination.task(), target);
         assert_eq!(retired.task(), task);
         assert_eq!(retired.context(), installed);
@@ -1046,5 +1398,49 @@ mod tests {
             runtime.context(target),
             Err(TaskRuntimeError::MissingTask)
         ));
+    }
+
+    #[test]
+    fn native_device_task_cannot_retire_same_token_in_another_runtime() {
+        let (mut owner_runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut owner_runtime, source);
+        let (attachment, _, _) = attachment(&mut owner_runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut owner_runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+
+        let (mut other, other_source, other_target) = runtime();
+        assert_eq!((other_source, other_target), (source, target));
+        let activation = other
+            .prepare_constructed_task_activation(other_target)
+            .unwrap();
+        activation.commit();
+        assert!(matches!(
+            other.start(),
+            crate::ScheduleOutcome::Switch { to, .. } if to == other_source
+        ));
+        other.yield_current().unwrap();
+        assert_eq!(other.current(), Some(other_target));
+        let before_context = *other.context(other_target).unwrap();
+        let before_load = other.load();
+
+        assert_eq!(
+            // SAFETY: this controlled test uses no device or DMA backend.
+            unsafe { retire_current_native_device_service_task(task, &mut other) },
+            Err(NativeDeviceServiceRetirementError::WrongRuntime)
+        );
+        assert_eq!(other.current(), Some(other_target));
+        assert_eq!(*other.context(other_target).unwrap(), before_context);
+        assert_eq!(other.load(), before_load);
+        assert_eq!(owner_runtime.construction_pending(target), Ok(true));
     }
 }

@@ -8,19 +8,22 @@ use crate::{
     AhciServiceCpuMappingRemovalError, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
     InstalledAhciAbarMapping, PreparedAhciNativeServiceTask,
 };
-use mrml_kernel::{Capability, CapabilitySpace, TaskRuntime, TaskRuntimeError};
+use mrml_kernel::{
+    Capability, CapabilitySpace, NativeDeviceServiceActivationError, RestartPolicy, ServiceError,
+    ServiceId, ServiceSupervisor, SupervisedServiceTask, TaskRuntime,
+};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AhciServiceMappingTeardown {
     abar: Option<InstalledAhciAbarMapping>,
     cpu: AhciInstalledCpuMappings,
 }
 
 impl AhciServiceMappingTeardown {
-    pub const fn abar(self) -> Option<InstalledAhciAbarMapping> {
+    pub const fn abar(&self) -> Option<InstalledAhciAbarMapping> {
         self.abar
     }
-    pub const fn cpu(self) -> AhciInstalledCpuMappings {
+    pub const fn cpu(&self) -> AhciInstalledCpuMappings {
         self.cpu
     }
     pub fn complete(&self) -> bool {
@@ -28,7 +31,7 @@ impl AhciServiceMappingTeardown {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum AhciServiceMappingInstallError<E> {
     DescriptorMismatch,
     Abar(AhciAbarMappingError),
@@ -43,7 +46,7 @@ pub enum AhciServiceMappingInstallError<E> {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum AhciServiceMappingRemovalError<E> {
     Cpu {
         error: AhciServiceCpuMappingRemovalError<E>,
@@ -55,19 +58,31 @@ pub enum AhciServiceMappingRemovalError<E> {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl<E> AhciServiceMappingRemovalError<E> {
+    pub fn into_retained(self) -> AhciServiceMappingTeardown {
+        match self {
+            Self::Cpu { retained, .. } | Self::Abar { retained, .. } => retained,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct MappedAhciNativeServiceTask {
     prepared: PreparedAhciNativeServiceTask,
     mappings: AhciServiceMappingTeardown,
 }
 
 impl MappedAhciNativeServiceTask {
-    pub const fn prepared(self) -> PreparedAhciNativeServiceTask {
+    pub const fn prepared(&self) -> PreparedAhciNativeServiceTask {
         self.prepared
     }
 
-    pub const fn mappings(self) -> AhciServiceMappingTeardown {
-        self.mappings
+    pub const fn abar_mapping(&self) -> Option<InstalledAhciAbarMapping> {
+        self.mappings.abar()
+    }
+
+    pub const fn cpu_mappings(&self) -> AhciInstalledCpuMappings {
+        self.mappings.cpu()
     }
 
     pub const fn into_parts(self) -> (PreparedAhciNativeServiceTask, AhciServiceMappingTeardown) {
@@ -75,29 +90,52 @@ impl MappedAhciNativeServiceTask {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ActiveAhciNativeServiceTask {
     mapped: MappedAhciNativeServiceTask,
+    binding: SupervisedServiceTask,
 }
 
 impl ActiveAhciNativeServiceTask {
-    pub const fn mapped(self) -> MappedAhciNativeServiceTask {
-        self.mapped
+    pub const fn mapped(&self) -> &MappedAhciNativeServiceTask {
+        &self.mapped
+    }
+
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service()
+    }
+
+    pub(crate) const fn binding(&self) -> SupervisedServiceTask {
+        self.binding
+    }
+
+    pub(crate) fn into_parts(self) -> (SupervisedServiceTask, MappedAhciNativeServiceTask) {
+        (self.binding, self.mapped)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciServiceActivationError {
+    Native(NativeDeviceServiceActivationError),
+    Service(ServiceError),
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct AhciServiceActivationFailure {
-    error: TaskRuntimeError,
+    error: AhciServiceActivationError,
     mapped: MappedAhciNativeServiceTask,
 }
 
 impl AhciServiceActivationFailure {
-    pub const fn error(self) -> TaskRuntimeError {
+    pub const fn error(&self) -> AhciServiceActivationError {
         self.error
     }
 
-    pub const fn mapped(self) -> MappedAhciNativeServiceTask {
+    pub const fn mapped(&self) -> &MappedAhciNativeServiceTask {
+        &self.mapped
+    }
+
+    pub fn into_mapped(self) -> MappedAhciNativeServiceTask {
         self.mapped
     }
 }
@@ -105,24 +143,53 @@ impl AhciServiceActivationFailure {
 pub fn activate_mapped_ahci_service_task<
     const TASKS: usize,
     const CAPABILITIES: usize,
+    const SERVICES: usize,
 >(
     mapped: MappedAhciNativeServiceTask,
+    restart_policy: RestartPolicy,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
 ) -> Result<ActiveAhciNativeServiceTask, AhciServiceActivationFailure> {
-    let task = mapped.prepared().task().task();
-    match runtime.activate_constructed_task(task) {
-        Ok(()) => Ok(ActiveAhciNativeServiceTask { mapped }),
-        Err(error) => Err(AhciServiceActivationFailure { error, mapped }),
+    let prepared = mapped.prepared();
+    let native_task = prepared.task();
+    if let Err(error) = native_task.validate_activation_state(runtime) {
+        return Err(AhciServiceActivationFailure {
+            error: AhciServiceActivationError::Native(error),
+            mapped,
+        });
+    }
+    let task = native_task.task();
+    let object = prepared.launch().spec().service().domain();
+    // SAFETY: the mapped owner proves that native task construction and every
+    // launch-bound AHCI mapping completed. Its retained native-task identity is
+    // checked against this exact runtime above, and the lifecycle object is
+    // derived from the same bound launch rather than accepted from a caller.
+    match unsafe {
+        supervisor.register_and_activate_constructed(
+            object,
+            task,
+            restart_policy,
+            runtime,
+        )
+    } {
+        Ok(binding) => {
+            debug_assert_eq!(binding.task(), task);
+            Ok(ActiveAhciNativeServiceTask { mapped, binding })
+        }
+        Err(error) => Err(AhciServiceActivationFailure {
+            error: AhciServiceActivationError::Service(error),
+            mapped,
+        }),
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PreparedAhciServiceMappingError<E> {
     InvalidBoundLaunch(AhciServiceLaunchRecordError),
     Mapping(AhciServiceMappingInstallError<E>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct PreparedAhciServiceMappingFailure<E> {
     prepared: PreparedAhciNativeServiceTask,
     error: PreparedAhciServiceMappingError<E>,
@@ -412,6 +479,26 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct AddressSpaceEraser {
+        erased: Option<(mrml_kernel::TaskId, UserContext)>,
+    }
+
+    impl mrml_kernel::ServiceAddressSpaceEraser for AddressSpaceEraser {
+        type Error = ();
+
+        fn erase(
+            &mut self,
+            task: mrml_kernel::TaskId,
+            context: UserContext,
+        ) -> Result<(), Self::Error> {
+            if self.erased.replace((task, context)).is_some() {
+                return Err(());
+            }
+            Ok(())
+        }
+    }
+
     unsafe impl AhciServiceCpuMappingBackend for CpuBackend {
         type Error = u64;
 
@@ -661,8 +748,8 @@ mod tests {
         .unwrap();
         assert_eq!(mapped.prepared(), prepared);
         assert_eq!(mapped.prepared().launch(), launch);
-        assert!(mapped.mappings().abar().is_some());
-        assert!(mapped.mappings().cpu().fully_installed());
+        assert!(mapped.abar_mapping().is_some());
+        assert!(mapped.cpu_mappings().fully_installed());
         assert_eq!(abar_backend.mapping, Some(record().mapping()));
         assert!(cpu_backend.installed.iter().all(Option::is_some));
     }
@@ -715,6 +802,7 @@ mod tests {
             &mut cpu_backend,
         )
         .unwrap();
+        let expected_prepared = mapped.prepared();
         assert_eq!(runtime.construction_pending(target), Ok(true));
         assert_eq!(runtime.load().runnable(), 1);
         assert!(matches!(
@@ -725,14 +813,155 @@ mod tests {
             runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Continue(source))
         );
-        let active = crate::activate_mapped_ahci_service_task(mapped, &mut runtime).unwrap();
-        assert_eq!(active.mapped(), mapped);
+        let mut supervisor = ServiceSupervisor::<2>::new();
+        let installed_context = *runtime.context(target).unwrap();
+        runtime.context_mut(target).unwrap().rax = 1;
+        let failure = crate::activate_mapped_ahci_service_task(
+            mapped,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut runtime,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.error(),
+            crate::AhciServiceActivationError::Native(
+                mrml_kernel::NativeDeviceServiceActivationError::ContextMismatch,
+            )
+        );
+        assert_eq!(runtime.construction_pending(target), Ok(true));
+        assert_eq!(runtime.load().runnable(), 1);
+        assert!(abar_backend.mapping.is_some());
+        assert!(cpu_backend.installed.iter().all(Option::is_some));
+        *runtime.context_mut(target).unwrap() = installed_context;
+        let active = crate::activate_mapped_ahci_service_task(
+            failure.into_mapped(),
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut runtime,
+        )
+        .unwrap();
+        assert_eq!(active.mapped().prepared(), expected_prepared);
+        assert!(active.mapped().abar_mapping().is_some());
+        assert!(active.mapped().cpu_mappings().fully_installed());
+        assert_eq!(supervisor.task(active.service()), Ok(Some(target)));
+        assert_eq!(
+            supervisor.state(active.service()),
+            Ok(mrml_kernel::ServiceState::Running)
+        );
+        assert_eq!(
+            supervisor.register(
+                service().domain(),
+                mrml_kernel::TaskId::from_token((8u64 << 32) | 7),
+            ),
+            Err(ServiceError::ObjectAlreadyRegistered)
+        );
         assert_eq!(runtime.construction_pending(target), Ok(false));
         assert_eq!(runtime.load().runnable(), 2);
         assert!(matches!(
             runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target
         ));
+    }
+
+    #[test]
+    fn mapped_activation_rejects_same_task_token_from_another_runtime() {
+        let (mut owner_runtime, _, prepared, _, _) = native_tasks();
+        let owner_target = prepared.task().task();
+        let (mut other_runtime, _, other_prepared, _, _) = native_tasks();
+        let other_target = other_prepared.task().task();
+        assert_eq!(owner_target, other_target);
+        let (capabilities, map, control, cpu) = authorities();
+        let mut abar_backend = AbarBackend::default();
+        let mut cpu_backend = CpuBackend::default();
+        let mapped = crate::install_prepared_ahci_service_mappings(
+            prepared,
+            descriptor(),
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        )
+        .unwrap();
+        let expected_prepared = mapped.prepared();
+        let expected_abar = mapped.abar_mapping();
+        let expected_cpu = mapped.cpu_mappings();
+        let before = other_runtime.load();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+
+        let failure = crate::activate_mapped_ahci_service_task(
+            mapped,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut other_runtime,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.error(),
+            crate::AhciServiceActivationError::Native(
+                mrml_kernel::NativeDeviceServiceActivationError::WrongRuntime,
+            )
+        );
+        assert_eq!(failure.mapped().prepared(), expected_prepared);
+        assert_eq!(failure.mapped().abar_mapping(), expected_abar);
+        assert_eq!(failure.mapped().cpu_mappings(), expected_cpu);
+        assert_eq!(other_runtime.load(), before);
+        assert_eq!(
+            other_runtime.construction_pending(other_target),
+            Ok(true)
+        );
+        assert_eq!(
+            owner_runtime.construction_pending(owner_target),
+            Ok(true)
+        );
+        assert!(abar_backend.mapping.is_some());
+        assert!(cpu_backend.installed.iter().all(Option::is_some));
+        let mapped = failure.into_mapped();
+
+        let existing = supervisor
+            .register(
+                ObjectId(0x99),
+                mrml_kernel::TaskId::from_token((9u64 << 32) | 7),
+            )
+            .unwrap();
+        let owner_before = owner_runtime.load();
+        let failure = crate::activate_mapped_ahci_service_task(
+            mapped,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut owner_runtime,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.error(),
+            crate::AhciServiceActivationError::Service(ServiceError::Full)
+        );
+        assert_eq!(failure.mapped().prepared(), expected_prepared);
+        assert_eq!(failure.mapped().abar_mapping(), expected_abar);
+        assert_eq!(failure.mapped().cpu_mappings(), expected_cpu);
+        assert_eq!(supervisor.state(existing), Ok(mrml_kernel::ServiceState::Running));
+        assert_eq!(owner_runtime.load(), owner_before);
+        assert_eq!(
+            owner_runtime.construction_pending(owner_target),
+            Ok(true)
+        );
+        let mapped = failure.into_mapped();
+
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let active = crate::activate_mapped_ahci_service_task(
+            mapped,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut owner_runtime,
+        )
+        .unwrap();
+        assert_eq!(supervisor.task(active.service()), Ok(Some(owner_target)));
+        assert_eq!(
+            supervisor.state(active.service()),
+            Ok(mrml_kernel::ServiceState::Running)
+        );
     }
 
     #[test]
@@ -833,14 +1062,39 @@ mod tests {
 
     #[test]
     fn data_and_dma_cleanup_gate_mapping_withdrawal() {
+        let (mut runtime, source, prepared, mismatched_native, _) = native_tasks();
+        let task = prepared.task();
+        let target = task.task();
         let (capabilities, map, control, cpu) = authorities();
         let mut abar_backend = AbarBackend::default();
         let mut cpu_backend = CpuBackend::default();
-        let state = install_ahci_service_mappings(
-            record(), descriptor(), map, control, cpu, &capabilities,
-            &mut abar_backend, &mut cpu_backend,
+        let mapped = crate::install_prepared_ahci_service_mappings(
+            prepared,
+            descriptor(),
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
         )
         .unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let active = crate::activate_mapped_ahci_service_task(
+            mapped,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut runtime,
+        )
+        .unwrap();
+        let service_id = active.service();
+        let installed_context = *runtime.context(target).unwrap();
+        assert_eq!(supervisor.task(service_id), Ok(Some(target)));
+        assert!(matches!(
+            runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+
         let launch = record();
         let mut command_list = [0xa5; 1024];
         let mut received_fis = [0xa5; 256];
@@ -884,55 +1138,162 @@ mod tests {
             Err(_) => panic!("active backend must yield teardown ownership"),
         };
         let mut dma_backend = DmaBackend::default();
-        let error = match crate::quiesce_ahci_command_backend(teardown, state, &mut dma_backend) {
+        let error = match crate::quiesce_active_ahci_service_task(
+            active,
+            teardown,
+            &mut dma_backend,
+            &supervisor,
+            &mut runtime,
+        ) {
+            Ok(_) => panic!("a non-current service task must not freeze"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.lifecycle_error(),
+            Some(
+                mrml_kernel::SupervisedNativeDeviceServiceRetirementError::Native(
+                    mrml_kernel::NativeDeviceServiceRetirementError::NotCurrent,
+                )
+            )
+        );
+        let (_, active, teardown) = error
+            .into_lifecycle_parts()
+            .unwrap_or_else(|_| panic!("lifecycle denial must retain active ownership"));
+        assert!(matches!(
+            runtime.yield_current().unwrap(),
+            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == target
+        ));
+        assert!(matches!(
+            supervisor.freeze_current_native_device_service(
+                active.binding(),
+                mismatched_native,
+                &mut runtime,
+            ),
+            Err(
+                mrml_kernel::SupervisedNativeDeviceServiceRetirementError::Service(
+                    ServiceError::TaskMismatch,
+                )
+            )
+        ));
+        assert_eq!(runtime.current(), Some(target));
+        let error = match crate::quiesce_active_ahci_service_task(
+            active,
+            teardown,
+            &mut dma_backend,
+            &supervisor,
+            &mut runtime,
+        ) {
             Ok(_) => panic!("first data sanitization must fail"),
             Err(error) => error,
         };
-        let crate::AhciServiceDeviceQuiesceError::Pending(pending) = error.failure() else {
+        let Some(crate::AhciServiceDeviceQuiesceError::Pending(pending)) = error.device_error()
+        else {
             panic!("expected retryable data cleanup");
         };
-        assert!(pending.mappings().abar().is_some());
-        assert_eq!(dma_backend.removals, 0);
-        let quiesced = crate::resume_ahci_command_backend_teardown(error, &mut dma_backend)
-            .unwrap_or_else(|_| panic!("retry must complete"));
-        let (mut runtime, source, prepared, wrong_task, launch) = native_tasks();
-        let task = prepared.task();
-        let (binding, _, launch, quiesced) =
-            match crate::bind_quiesced_ahci_service_task(wrong_task, launch, quiesced) {
-                Ok(_) => panic!("wrong attachment generation must not bind"),
-                Err(error) => error,
-            };
-        assert_eq!(binding, crate::AhciServiceTaskBindingError::TaskAttachmentMismatch);
-        let owner = crate::bind_quiesced_ahci_service_task(task, launch, quiesced)
-            .unwrap_or_else(|_| panic!("exact task and launch must bind"));
-        runtime.activate_constructed_task(task.task()).unwrap();
-        runtime
-            .activate_constructed_task(wrong_task.task())
-            .unwrap();
+        assert!(!pending.mapping_withdrawal_pending());
+        assert_eq!(runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
+        assert_eq!(
+            runtime.create(Priority::NORMAL, installed_context),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.capabilities_mut(source).map(|_| ()),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
+        );
         assert!(matches!(
-            runtime.start(),
-            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source
+            runtime.terminate_current(),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
         ));
-        let error = match crate::retire_quiesced_ahci_service_task(owner, &mut runtime) {
-            Ok(_) => panic!("wrong current task must not retire"),
+        assert_eq!(
+            runtime.yield_current(),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.revoke_capability(source, Capability::from_token(0)),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert!(matches!(
+            runtime.detach_domain(source),
+            Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
+        ));
+        assert_eq!(dma_backend.removals, 0);
+        let owner = crate::resume_active_ahci_service_task_quiescence(error, &mut dma_backend)
+            .unwrap_or_else(|_| panic!("retry must complete"));
+        assert_eq!(owner.service(), service_id);
+
+        let mut wrong_supervisor = ServiceSupervisor::<1>::new();
+        let wrong_service = wrong_supervisor
+            .register_in_runtime(service().domain(), target, &runtime)
+            .unwrap();
+        // SAFETY: this test backend models truthful stop, sanitization, and DMA
+        // withdrawal; the returned owner remains held through typed cleanup.
+        let error = match unsafe {
+            crate::retire_quiesced_ahci_service_task(
+                owner,
+                &mut wrong_supervisor,
+                &mut runtime,
+            )
+        } {
+            Ok(_) => panic!("another supervisor must not accept the binding"),
             Err(error) => error,
         };
         assert_eq!(
             error.error(),
-            mrml_kernel::NativeDeviceServiceRetirementError::NotCurrent
+            mrml_kernel::SupervisedNativeDeviceServiceRetirementError::Service(
+                ServiceError::InvalidService,
+            )
         );
-        runtime.yield_current().unwrap();
-        let retired = crate::retire_quiesced_ahci_service_task(error.into_owner(), &mut runtime)
-            .unwrap_or_else(|_| panic!("exact current task must retire"));
-        assert_eq!(retired.retirement().task(), task);
+        assert_eq!(
+            wrong_supervisor.state(wrong_service),
+            Ok(mrml_kernel::ServiceState::Running)
+        );
+        assert_eq!(
+            supervisor.state(service_id),
+            Ok(mrml_kernel::ServiceState::Running)
+        );
+        assert_eq!(supervisor.pending_cleanup(service_id), Ok(None));
+        // SAFETY: the same truthful model proof is retained across the failed
+        // supervisor attempt and dispatch remains withheld through cleanup.
+        let retired = unsafe {
+            crate::retire_quiesced_ahci_service_task(
+                error.into_owner(),
+                &mut supervisor,
+                &mut runtime,
+            )
+        }
+        .unwrap_or_else(|_| panic!("exact frozen task must retire"));
+        let cleanup = supervisor
+            .pending_cleanup(service_id)
+            .unwrap()
+            .expect("retirement must retain cleanup");
+        assert_eq!(retired.service(), service_id);
+        assert_eq!(cleanup.task(), target);
+        assert_eq!(supervisor.task(service_id), Ok(None));
+        assert_eq!(
+            supervisor.state(service_id),
+            Ok(mrml_kernel::ServiceState::Exited)
+        );
+        assert_eq!(supervisor.pending_cleanup(service_id), Ok(Some(cleanup)));
+        let mut early_eraser = AddressSpaceEraser::default();
+        assert_eq!(
+            supervisor.complete_cleanup(cleanup, &mut early_eraser),
+            Err(mrml_kernel::ServiceCleanupError::Service(
+                ServiceError::ConstructedLifecycleRequired,
+            ))
+        );
+        assert_eq!(early_eraser.erased, None);
         cpu_backend.fail_remove_object = Some(22);
-        let error = match crate::remove_retired_ahci_service_mappings(
-            retired,
-            control,
-            &capabilities,
-            &mut abar_backend,
-            &mut cpu_backend,
-        ) {
+        // SAFETY: these test backends report success only after removing their
+        // exact recorded mapping; the retained owner is never dispatched here.
+        let error = match unsafe {
+            crate::remove_retired_ahci_service_mappings(
+                retired,
+                control,
+                &capabilities,
+                &mut abar_backend,
+                &mut cpu_backend,
+            )
+        } {
             Ok(_) => panic!("injected CPU mapping removal must fail"),
             Err(error) => error,
         };
@@ -945,20 +1306,76 @@ mod tests {
             Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
         );
         cpu_backend.fail_remove_object = None;
-        let removed = crate::remove_retired_ahci_service_mappings(
-            error.into_owner(),
-            control,
-            &capabilities,
-            &mut abar_backend,
-            &mut cpu_backend,
-        )
+        // SAFETY: the same exact model mappings are retained across the failed
+        // attempt and both backends truthfully remove them on this retry.
+        let removed = unsafe {
+            crate::remove_retired_ahci_service_mappings(
+                error.into_owner(),
+                control,
+                &capabilities,
+                &mut abar_backend,
+                &mut cpu_backend,
+            )
+        }
         .unwrap_or_else(|_| panic!("mapping-removal retry must complete"));
         assert!(abar_backend.mapping.is_none());
         assert!(cpu_backend.installed.iter().all(Option::is_none));
-        let dispatched = crate::dispatch_retired_ahci_service_task(removed, &mut runtime)
+        let mut eraser = AddressSpaceEraser::default();
+        // SAFETY: mapping withdrawal completed above and this model eraser
+        // truthfully records exact erasure before returning success.
+        let error = match unsafe {
+            crate::complete_retired_ahci_service_cleanup(
+                removed,
+                &mut wrong_supervisor,
+                &mut eraser,
+            )
+        } {
+            Ok(_) => panic!("another supervisor must not accept cleanup"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error.error(),
+            mrml_kernel::ServiceCleanupError::Service(ServiceError::InvalidService)
+        ));
+        assert_eq!(eraser.erased, None);
+        // SAFETY: the retained owner still proves mapping withdrawal and the
+        // exact model eraser truthfully completes the address-space removal.
+        let cleaned = unsafe {
+            crate::complete_retired_ahci_service_cleanup(
+                error.into_owner(),
+                &mut supervisor,
+                &mut eraser,
+            )
+        }
+        .unwrap_or_else(|_| panic!("exact address-space cleanup must complete"));
+        assert_eq!(eraser.erased, Some((target, installed_context)));
+        assert_eq!(supervisor.pending_cleanup(service_id), Ok(None));
+
+        let mut lifecycle_management = CapabilitySpace::<1>::new();
+        let lifecycle_control = lifecycle_management
+            .insert(service().domain(), Rights::CONTROL)
+            .unwrap();
+        assert!(matches!(
+            supervisor.prepare_restart_at(
+                service_id,
+                &lifecycle_management,
+                lifecycle_control,
+                Priority::NORMAL,
+                installed_context,
+                0,
+            ),
+            Err(ServiceError::ConstructedLifecycleRequired)
+        ));
+
+        let dispatched = crate::dispatch_retired_ahci_service_task(cleaned, &mut runtime)
             .unwrap_or_else(|_| panic!("exact retained termination must dispatch"));
-        assert_eq!(dispatched.dispatch().user().map(|(task, _)| task), Some(wrong_task.task()));
-        let (_, _, _, _, _, data) = dispatched.into_parts();
+        assert_eq!(dispatched.service(), service_id);
+        assert_eq!(
+            dispatched.dispatch().user().map(|(task, _)| task),
+            Some(source)
+        );
+        let (retirement, _, _, _, data) = dispatched.into_parts();
+        assert_eq!(retirement.native().task(), task);
         assert_eq!(data.sanitizations, 2);
         assert_eq!(dma_backend.removals, 1);
     }

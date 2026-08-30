@@ -10274,6 +10274,56 @@ Patent review: `NOT_TRIGGERED` — exact current-task/root validation followed b
 ordinary task-domain retirement is conventional lifecycle enforcement. See
 `docs/patents/REVIEW_LOG.md`.
 
+Constructed native-service activation and AHCI retirement now have one
+supervisor/runtime-bound lifecycle **IMPLEMENTED IN SOURCE**. `TaskRuntime`
+retains the preflight/commit scheduler mechanism privately;
+`ServiceSupervisor` validates the exact vacant slot, object/task/runtime
+uniqueness, construction state, blocked scheduler state, and wake before any
+mutation. It publishes the `Running` service record before infallibly clearing
+construction state and committing the wake. Runtime-backed ordinary
+registration rejects construction-pending tasks, while equal `TaskId` tokens
+from distinct runtimes remain distinct bindings.
+
+The consuming AHCI path freezes the exact current constructed task before
+device quiescence. The runtime retains that task's domain and capabilities but
+has no current task, does not select a successor, and rejects scheduler and
+mutable-domain operations until the freeze is resolved. AHCI then stops the
+engine, completes or fails closed outstanding work, sanitizes data, and
+withdraws DMA. Every failure returns the non-copy owner for retry or fail-stop.
+Only the exact supervisor/runtime/native-task binding can retire the frozen task
+to `Exited`; the selected successor remains undispatched while non-copy CPU and
+ABAR mapping owners are withdrawn and the exact supervisor cleanup erases the
+retired address space. Mapping, erasure, and device backend success cross
+documented unsafe trust boundaries. Constructed services cannot use generic
+exit, cleanup, or restart paths, and delayed termination dispatch is bound to
+the originating runtime.
+
+The Linux kernel suite passes all 705 tests, AHCI passes all 137 tests, and the
+configuration service passes all 55 tests. Linux and `MRML_NATIVE` release
+builds pass for the kernel and AHCI library; the AHCI service-image profile
+passes its `MRML_NATIVE` release build, and the bootloader passes its UEFI
+release build. Focused tests cover publication rejection, equal task tokens in
+distinct runtimes, mismatched service/native tasks, quiescence retry, frozen
+mutation denial, collision-equivalent supervisors and cleanup tickets, mapping
+retry, constructed restart denial, and cross-runtime dispatch with owner
+retention. This is kernel/scheduler unit, controlled backend, and compile
+evidence, not installed CPL3 or `INT 0x80`, active page-table/TLB/IOMMU,
+KVM/WHP, or physical-AHCI evidence.
+
+Complexity impact: MEDIUM
+TCB impact: MEDIUM
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: PARTIAL
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — composing existing task freeze, device
+quiescence, supervisor retirement, mapping withdrawal, cleanup, and delayed
+dispatch through linear typed owners is conventional fail-closed lifecycle
+synchronization. See `docs/patents/REVIEW_LOG.md`.
+
 Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
 memory-resource root. The kernel reserves exactly one `Shared` page from an
 explicit pool into the source task, retains its typed table generation, and

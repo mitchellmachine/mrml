@@ -571,8 +571,8 @@ mod tests {
     };
     use mrml_kernel::{
         arch::x86_64::UserContext, CapabilitySpace, ControlEvent, Endpoint, IsolationPlacement,
-        NativeDeviceServiceEntryError, PhysAddr, Priority, Rights, SyscallRequest,
-        TotalMicrovmClass,
+        NativeDeviceServiceEntryError, PhysAddr, Priority, RestartPolicy, Rights,
+        ServiceSupervisor, SyscallRequest, TotalMicrovmClass,
     };
 
     fn service() -> IsolationServiceSpec {
@@ -925,7 +925,20 @@ mod tests {
         .unwrap();
         assert_eq!(installed_entry.service_endpoint(), entry.service_endpoint());
         assert_eq!(installed_entry.supervisor_task(), entry.supervisor_task());
-        runtime.activate_constructed_task(target).unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        // SAFETY: this synthetic test's complete construction contract is the
+        // installed entry register set and projected reply capability it
+        // exercises; it performs no MMIO or DMA operation.
+        unsafe {
+            supervisor
+                .register_and_activate_constructed(
+                    launch.spec().service().domain(),
+                    target,
+                    RestartPolicy::ONCE_IMMEDIATE,
+                    &mut runtime,
+                )
+                .unwrap();
+        }
         let mut endpoint = Endpoint::new(ObjectId(40));
         let response = [0x5a; FLUSH_RESPONSE_BYTES];
 

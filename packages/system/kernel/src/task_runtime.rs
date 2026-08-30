@@ -14,7 +14,7 @@ use crate::{
     IpcError, KernelScheduleError, KernelScheduler, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, OwnershipMailbox,
     PAGE_SIZE, PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId,
-    TaskMigration, UserReturnError,
+    TaskMigration, TaskState, UserReturnError,
 };
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
@@ -169,6 +169,7 @@ pub enum ControlEvent {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FaultRetirement {
+    runtime: u64,
     pub task: TaskId,
     pub context: UserContext,
     pub vector: u8,
@@ -178,6 +179,7 @@ pub struct FaultRetirement {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TaskViolationRetirement {
+    runtime: u64,
     pub task: TaskId,
     pub context: UserContext,
     pub violation: TaskProtocolViolation,
@@ -186,8 +188,20 @@ pub struct TaskViolationRetirement {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TaskTermination {
+    runtime: u64,
     task: TaskId,
     next: ScheduleOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FrozenTaskIdentity {
+    runtime: u64,
+    task: TaskId,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct FrozenTask {
+    identity: FrozenTaskIdentity,
 }
 
 impl TaskTermination {
@@ -313,6 +327,7 @@ impl TaskTerminationDispatch {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskTerminationDispatchError {
+    RetirementRuntimeMismatch,
     InvalidOutcome,
     WrongSource,
     CurrentMismatch,
@@ -635,8 +650,34 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     scheduler: KernelScheduler<TASKS>,
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
+    pending_device_quiescence: Option<FrozenTaskIdentity>,
     pending_retirement: Option<PendingRetirement>,
     issued_dispatch: Option<TaskTerminationDispatchIdentity>,
+}
+
+pub(crate) struct ConstructedTaskActivation<'a, const TASKS: usize, const CAPS: usize> {
+    runtime: &'a mut TaskRuntime<TASKS, CAPS>,
+    task: TaskId,
+    domain_slot: usize,
+    wake: WakePlan,
+}
+
+impl<const TASKS: usize, const CAPS: usize> ConstructedTaskActivation<'_, TASKS, CAPS> {
+    pub(crate) fn commit(self) {
+        let domain = self.runtime.domains[self.domain_slot]
+            .as_mut()
+            .expect("exclusive activation ownership preserves the prepared domain slot");
+        assert_eq!(
+            domain.task, self.task,
+            "exclusive activation ownership preserves the prepared task generation"
+        );
+        assert!(
+            domain.construction_pending && domain.blocked_receive.is_none(),
+            "exclusive activation ownership preserves prepared construction state"
+        );
+        domain.construction_pending = false;
+        self.runtime.scheduler.commit_wake(self.wake);
+    }
 }
 
 /// A task runtime whose complete fixed-capacity kernel footprint has one exact
@@ -737,6 +778,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             scheduler,
             domains: array::from_fn(|_| None),
             delegations: [None; MAX_TASK_DELEGATIONS],
+            pending_device_quiescence: None,
             pending_retirement: None,
             issued_dispatch: None,
         })
@@ -765,6 +807,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         context: UserContext,
         construction_pending: bool,
     ) -> Result<TaskId, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         let slot = self
             .domains
             .iter()
@@ -801,8 +844,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
-    /// Makes one completely constructed task scheduler-visible exactly once.
-    pub fn activate_constructed_task(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
+    pub(crate) fn prepare_constructed_task_activation(
+        &mut self,
+        task: TaskId,
+    ) -> Result<ConstructedTaskActivation<'_, TASKS, CAPS>, TaskRuntimeError> {
         self.ensure_scheduler_mutable()?;
         let slot = self.domain_slot(task)?;
         let domain = self.domains[slot]
@@ -814,29 +859,78 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if domain.blocked_receive.is_some() {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        if self
+            .scheduler
+            .state(task)
+            .map_err(TaskRuntimeError::Scheduler)?
+            != TaskState::Blocked
+        {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
         let wake = self
             .scheduler
             .prepare_wake(task)
             .map_err(TaskRuntimeError::Scheduler)?;
-        self.scheduler.commit_wake(wake);
-        self.domains[slot]
-            .as_mut()
-            .ok_or(TaskRuntimeError::IntegrityFailure)?
-            .construction_pending = false;
-        Ok(())
+        Ok(ConstructedTaskActivation {
+            runtime: self,
+            task,
+            domain_slot: slot,
+            wake,
+        })
+    }
+
+    /// Stops the exact current task without selecting a successor while a
+    /// privileged device owner quiesces authority derived from that task.
+    /// Every scheduler and mutable-domain entry remains fail-closed until the
+    /// returned owner is retired through `terminate_frozen_with_context`.
+    pub(crate) fn freeze_current_for_device_quiescence(
+        &mut self,
+        expected: TaskId,
+    ) -> Result<FrozenTask, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let current = self
+            .scheduler
+            .current()
+            .ok_or(TaskRuntimeError::NoCurrentTask)?;
+        if current != expected {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let slot = self.domain_slot(current)?;
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if domain.construction_pending || domain.blocked_receive.is_some() {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let plan = self
+            .scheduler
+            .prepare_current_freeze()
+            .map_err(TaskRuntimeError::Scheduler)?;
+        let identity = FrozenTaskIdentity {
+            runtime: self.identity,
+            task: current,
+        };
+        self.pending_device_quiescence = Some(identity);
+        self.scheduler.commit_current_freeze(plan);
+        Ok(FrozenTask { identity })
     }
 
     pub fn start(&mut self) -> ScheduleOutcome {
-        if self.issued_dispatch.is_some() {
-            return self
-                .current()
-                .map_or(ScheduleOutcome::Idle, ScheduleOutcome::Continue);
+        if self.pending_device_quiescence.is_some()
+            || self.pending_retirement.is_some()
+            || self.issued_dispatch.is_some()
+        {
+            return ScheduleOutcome::Idle;
         }
         self.scheduler.start()
     }
 
     pub const fn ticks(&self) -> u64 {
         self.scheduler.ticks()
+    }
+
+    pub(crate) const fn identity(&self) -> u64 {
+        self.identity
     }
 
     pub fn load(&self) -> SchedulerLoad {
@@ -1080,6 +1174,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         task: TaskId,
     ) -> Result<&mut CapabilitySpace<CAPS>, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -1150,6 +1245,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         task: TaskId,
         capability: Capability,
     ) -> Result<(), TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         self.capabilities(task)?
             .describe(capability)
             .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
@@ -1169,6 +1265,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         first: Capability,
         second: Capability,
     ) -> Result<(), TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if first == second {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
@@ -1366,6 +1463,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         );
         let next = self.scheduler.commit_current_termination(termination_plan);
         let retirement = FaultRetirement {
+            runtime: self.identity,
             task: current,
             context: domain.context,
             vector,
@@ -1415,6 +1513,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         );
         let next = self.scheduler.commit_current_termination(termination_plan);
         let retirement = TaskViolationRetirement {
+            runtime: self.identity,
             task: current,
             context: domain.context,
             violation,
@@ -1440,6 +1539,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         termination: TaskTermination,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
         self.ensure_no_issued_dispatch()?;
+        if termination.runtime != self.identity {
+            return Err(TaskTerminationDispatchError::RetirementRuntimeMismatch);
+        }
         let target = self.validate_dispatch_target(termination.task, termination.next)?;
         self.consume_pending_termination(termination)?;
         Ok(self.issue_dispatch(termination.task, target))
@@ -1452,6 +1554,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         retirement: FaultRetirement,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
         self.ensure_no_issued_dispatch()?;
+        if retirement.runtime != self.identity {
+            return Err(TaskTerminationDispatchError::RetirementRuntimeMismatch);
+        }
         let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
         match self.pending_retirement {
             Some(PendingRetirement::Fault(pending)) if pending == retirement => {}
@@ -1471,6 +1576,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         retirement: TaskViolationRetirement,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
         self.ensure_no_issued_dispatch()?;
+        if retirement.runtime != self.identity {
+            return Err(TaskTerminationDispatchError::RetirementRuntimeMismatch);
+        }
         let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
         match self.pending_retirement {
             Some(PendingRetirement::Violation(pending)) if pending == retirement => {}
@@ -1587,7 +1695,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn ensure_no_pending_retirement(&self) -> Result<(), TaskRuntimeError> {
-        if self.pending_retirement.is_some() {
+        if self.pending_device_quiescence.is_some() || self.pending_retirement.is_some() {
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_no_device_quiescence(&self) -> Result<(), TaskRuntimeError> {
+        if self.pending_device_quiescence.is_some() {
             Err(TaskRuntimeError::RetirementDispatchPending)
         } else {
             Ok(())
@@ -1595,7 +1711,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn ensure_scheduler_mutable(&self) -> Result<(), TaskRuntimeError> {
-        if self.pending_retirement.is_some() || self.issued_dispatch.is_some() {
+        if self.pending_device_quiescence.is_some()
+            || self.pending_retirement.is_some()
+            || self.issued_dispatch.is_some()
+        {
             Err(TaskRuntimeError::RetirementDispatchPending)
         } else {
             Ok(())
@@ -1610,10 +1729,65 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
     }
 
+    pub(crate) fn terminate_frozen_with_context(
+        &mut self,
+        frozen: &FrozenTask,
+    ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
+        if frozen.identity.runtime != self.identity
+            || self.pending_device_quiescence != Some(frozen.identity)
+        {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        if self.pending_retirement.is_some() || self.issued_dispatch.is_some() {
+            return Err(TaskRuntimeError::RetirementDispatchPending);
+        }
+        if self.scheduler.current().is_some() {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let task = frozen.identity.task;
+        let slot = self.domain_slot(task)?;
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if domain.construction_pending
+            || domain.blocked_receive.is_some()
+            || self
+                .scheduler
+                .state(task)
+                .map_err(TaskRuntimeError::Scheduler)?
+                != TaskState::Blocked
+        {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let removal = self
+            .scheduler
+            .prepare_frozen_termination(task)
+            .map_err(TaskRuntimeError::Scheduler)?;
+        let peer_plan = self.prepare_peer_death_publication(domain)?;
+        self.revoke_task_delegations(task)?;
+
+        let domain = self.domains[slot]
+            .take()
+            .expect("device freeze preserves the prevalidated domain owner");
+        self.commit_peer_death_publication(peer_plan, domain.task, PeerDeathReason::Exited);
+        let next = self.scheduler.commit_frozen_termination(task, removal);
+        let termination = TaskTermination {
+            runtime: self.identity,
+            task,
+            next,
+        };
+        self.pending_device_quiescence = None;
+        self.pending_retirement = Some(PendingRetirement::Termination(termination));
+        Ok((termination, domain.context))
+    }
+
     pub(crate) fn terminate_current_with_context(
         &mut self,
     ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
-        if self.pending_retirement.is_some() || self.issued_dispatch.is_some() {
+        if self.pending_device_quiescence.is_some()
+            || self.pending_retirement.is_some()
+            || self.issued_dispatch.is_some()
+        {
             return Err(TaskRuntimeError::RetirementDispatchPending);
         }
         let current = self
@@ -1639,6 +1813,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         self.commit_peer_death_publication(peer_plan, domain.task, PeerDeathReason::Exited);
         let next = self.scheduler.commit_current_termination(termination_plan);
         let termination = TaskTermination {
+            runtime: self.identity,
             task: current,
             next,
         };
@@ -1659,6 +1834,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         target_task: TaskId,
         requested: &[(Capability, Rights)],
     ) -> Result<Message, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if source_task == target_task {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
@@ -1736,6 +1912,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         task: TaskId,
         requested: &[(Capability, Rights)],
     ) -> Result<Message, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if requested.is_empty() {
             return Err(TaskRuntimeError::Ipc(IpcError::CapabilityShape));
         }
@@ -1797,6 +1974,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         payload: &[u8],
         requested: &[(Capability, Rights)],
     ) -> Result<(u64, Message), TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if sender == receiver {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
@@ -1909,6 +2087,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         payload: &[u8],
         requested: &[(Capability, Rights)],
     ) -> Result<u64, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if !self.scheduler.contains(sender) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
@@ -1985,6 +2164,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn receive_ipc(&mut self, task: TaskId) -> Result<Message, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -2096,6 +2276,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         first_capability: Capability,
         second_capability: Capability,
     ) -> Result<(), TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if first == second {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
@@ -2154,6 +2335,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn receive_control(&mut self, task: TaskId) -> Result<ControlEvent, TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -2543,6 +2725,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         blocked: BlockedReceive,
     ) -> Result<(), TaskRuntimeError> {
+        self.ensure_no_device_quiescence()?;
         if blocked.identity.runtime != self.identity {
             return Err(TaskRuntimeError::ReceiveWaitMismatch);
         }
@@ -3079,6 +3262,7 @@ mod tests {
         );
         assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
+                runtime: terminated.runtime,
                 task: exiting,
                 next: ScheduleOutcome::Continue(replacement),
             }),
@@ -3086,6 +3270,7 @@ mod tests {
         );
         assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
+                runtime: terminated.runtime,
                 task: exiting,
                 next: ScheduleOutcome::Switch {
                     from: Some(replacement),
@@ -3096,6 +3281,7 @@ mod tests {
         );
         assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
+                runtime: terminated.runtime,
                 task: exiting,
                 next: ScheduleOutcome::Switch {
                     from: Some(exiting),
@@ -3106,6 +3292,7 @@ mod tests {
         );
         assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
+                runtime: terminated.runtime,
                 task: replacement,
                 next: ScheduleOutcome::Switch {
                     from: Some(replacement),
@@ -3176,12 +3363,14 @@ mod tests {
     #[test]
     fn termination_dispatch_exact_matches_idle_runtime_state() {
         let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let runtime_identity = runtime.identity;
         let task = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
             .unwrap();
         runtime.start();
         assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
+                runtime: runtime_identity,
                 task,
                 next: ScheduleOutcome::Idle,
             }),
@@ -3204,6 +3393,10 @@ mod tests {
         assert_eq!(other_task, task);
         other_runtime.start();
         let other_termination = other_runtime.terminate_current().unwrap();
+        assert_eq!(
+            other_runtime.dispatch_after_termination(termination),
+            Err(TaskTerminationDispatchError::RetirementRuntimeMismatch)
+        );
         let other_dispatch = other_runtime
             .dispatch_after_termination(other_termination)
             .unwrap();
@@ -3229,6 +3422,68 @@ mod tests {
                 to: replacement,
             }
         );
+    }
+
+    #[test]
+    fn fault_and_violation_dispatch_reject_cross_runtime_collisions() {
+        let mut fault_owner = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let fault_task = fault_owner
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let mut fault_other = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let fault_other_task = fault_other
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        assert_eq!(fault_task, fault_other_task);
+        fault_owner.start();
+        fault_other.start();
+        let disposition = TrapDisposition::TerminateUser {
+            vector: 6,
+            address: None,
+        };
+        let fault = fault_owner.terminate_current_fault(disposition).unwrap();
+        let other_fault = fault_other.terminate_current_fault(disposition).unwrap();
+        assert_eq!(fault.task, other_fault.task);
+        assert_eq!(fault.next, other_fault.next);
+        assert_eq!(
+            fault_other.dispatch_after_fault(fault),
+            Err(TaskTerminationDispatchError::RetirementRuntimeMismatch)
+        );
+        let other_fault_dispatch = fault_other.dispatch_after_fault(other_fault).unwrap();
+        let fault_dispatch = fault_owner.dispatch_after_fault(fault).unwrap();
+        assert!(other_fault_dispatch.is_idle());
+        assert!(fault_dispatch.is_idle());
+
+        let mut violation_owner = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let violation_task = violation_owner
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let mut violation_other = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let violation_other_task = violation_other
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert_eq!(violation_task, violation_other_task);
+        violation_owner.start();
+        violation_other.start();
+        let violation = TaskProtocolViolation::InvalidUserReturn(UserReturnError::InvalidStack);
+        let retired = violation_owner
+            .terminate_current_violation(violation)
+            .unwrap();
+        let other_retired = violation_other
+            .terminate_current_violation(violation)
+            .unwrap();
+        assert_eq!(retired.task, other_retired.task);
+        assert_eq!(retired.next, other_retired.next);
+        assert_eq!(
+            violation_other.dispatch_after_violation(retired),
+            Err(TaskTerminationDispatchError::RetirementRuntimeMismatch)
+        );
+        let other_violation_dispatch = violation_other
+            .dispatch_after_violation(other_retired)
+            .unwrap();
+        let violation_dispatch = violation_owner.dispatch_after_violation(retired).unwrap();
+        assert!(other_violation_dispatch.is_idle());
+        assert!(violation_dispatch.is_idle());
     }
 
     #[test]
@@ -3339,6 +3594,23 @@ mod tests {
                 .0,
             2
         );
+    }
+
+    #[test]
+    fn constructed_activation_rejects_scheduler_state_drift_before_mutation() {
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create_for_construction(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.scheduler.wake(task).unwrap();
+        let before = runtime.load();
+
+        assert!(matches!(
+            runtime.prepare_constructed_task_activation(task),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert_eq!(runtime.construction_pending(task), Ok(true));
+        assert_eq!(runtime.load(), before);
     }
 
     #[test]

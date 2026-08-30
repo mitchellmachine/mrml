@@ -116,9 +116,10 @@ pub use deadline_receive_syscall::{
 pub use device_service::{
     DeviceServiceAuthority, DeviceServiceLaunchAttachment,
     DeviceServiceLaunchAttachmentError, MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES,
-    NativeDeviceServiceEntry, NativeDeviceServiceEntryError, NativeDeviceServiceRetirement,
-    NativeDeviceServiceRetirementError, NativeDeviceServiceTask, NativeDeviceServiceTaskError,
-    prepare_native_device_service_task, retire_current_native_device_service_task,
+    NativeDeviceServiceActivationError, NativeDeviceServiceEntry, NativeDeviceServiceEntryError,
+    NativeDeviceServiceRetirement, NativeDeviceServiceRetirementError, NativeDeviceServiceTask,
+    NativeDeviceServiceTaskError, prepare_native_device_service_task,
+    retire_current_native_device_service_task,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
@@ -286,7 +287,11 @@ pub use service_lifecycle::{
     ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
     ServiceDeadlineCancellationError, ServiceError, ServiceFault, ServiceId, ServiceRecovery,
     ServiceRecoveryError, ServiceRegistrationPlan, ServiceRestartCommit, ServiceRetirement,
-    ServiceState, ServiceSupervisor, ServiceViolation,
+    ServiceState, ServiceSupervisor, ServiceViolation, SupervisedNativeDeviceServiceDispatch,
+    SupervisedNativeDeviceServiceDispatchError, SupervisedNativeDeviceServiceFreeze,
+    SupervisedNativeDeviceServiceFrozenRetirementError,
+    SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError,
+    SupervisedServiceTask,
 };
 pub use shared_buffer_syscall::{
     SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedBufferUserAccess,

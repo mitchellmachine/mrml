@@ -3707,17 +3707,32 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             #[cfg(not(feature = "component-service-probe"))]
             let supervisor = &mut supervisor_storage;
             let service_a = supervisor
-                .register_with_policy(ObjectId(0xa0), receiver, RestartPolicy::ONCE_IMMEDIATE)
+                .register_with_policy_in_runtime(
+                    ObjectId(0xa0),
+                    receiver,
+                    RestartPolicy::ONCE_IMMEDIATE,
+                    runtime,
+                )
                 .unwrap_or_else(|_| halt());
             let service_b = supervisor
-                .register_with_policy(ObjectId(0xa1), sender, RestartPolicy::ONCE_IMMEDIATE)
+                .register_with_policy_in_runtime(
+                    ObjectId(0xa1),
+                    sender,
+                    RestartPolicy::ONCE_IMMEDIATE,
+                    runtime,
+                )
                 .unwrap_or_else(|_| halt());
             #[cfg(any(
                 feature = "service-restart-request-probe",
                 feature = "deadline-receive-cancel-probe"
             ))]
             let service_c = supervisor
-                .register_with_policy(ObjectId(0xa2), manager, RestartPolicy::ONCE_IMMEDIATE)
+                .register_with_policy_in_runtime(
+                    ObjectId(0xa2),
+                    manager,
+                    RestartPolicy::ONCE_IMMEDIATE,
+                    runtime,
+                )
                 .unwrap_or_else(|_| halt());
             let mut management = CapabilitySpace::<3>::new();
             let control_a = management

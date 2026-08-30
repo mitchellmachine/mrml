@@ -163,17 +163,19 @@ pub use service_cpu_mapping::{
     install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
 };
 pub use service_device_teardown::{
-    AhciCommandBackendQuiesceError, AhciRetiredMappingRemovalError,
+    ActiveAhciServiceQuiesceError, AhciCommandBackendQuiesceError,
+    AhciRetiredMappingRemovalError, AhciRetiredServiceCleanupError,
     AhciServiceDeviceQuiesceError, AhciServiceDispatchError, AhciServiceTaskBindingError,
     AhciServiceTaskRetirementError, DispatchedAhciServiceTask,
     PendingAhciServiceDeviceTeardown, QuiescedAhciCommandBackend,
-    QuiescedAhciServiceMappings, QuiescedAhciServiceTask, RetiredAhciServiceMappingsRemoved,
-    RetiredAhciServiceTask,
-    bind_quiesced_ahci_service_task, quiesce_ahci_command_backend,
-    quiesce_ahci_service_device, remove_quiesced_ahci_service_mappings,
-    remove_retired_ahci_service_mappings,
-    resume_ahci_command_backend_teardown, resume_ahci_service_device_teardown,
-    retire_quiesced_ahci_service_task, dispatch_retired_ahci_service_task,
+    QuiescedAhciServiceMappings, QuiescedAhciServiceTask,
+    RetiredAhciServiceCleanupComplete, RetiredAhciServiceMappingsRemoved,
+    RetiredAhciServiceTask, complete_retired_ahci_service_cleanup,
+    dispatch_retired_ahci_service_task, quiesce_active_ahci_service_task,
+    quiesce_ahci_command_backend, quiesce_ahci_service_device,
+    remove_quiesced_ahci_service_mappings, remove_retired_ahci_service_mappings,
+    resume_active_ahci_service_task_quiescence, resume_ahci_command_backend_teardown,
+    resume_ahci_service_device_teardown, retire_quiesced_ahci_service_task,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
@@ -190,9 +192,10 @@ pub use service_launch_record::{
 pub use service_mapping_lifecycle::{
     activate_mapped_ahci_service_task, install_ahci_service_mappings,
     install_prepared_ahci_service_mappings, remove_ahci_service_mappings,
-    ActiveAhciNativeServiceTask, AhciServiceActivationFailure, AhciServiceMappingInstallError,
-    AhciServiceMappingRemovalError, AhciServiceMappingTeardown, MappedAhciNativeServiceTask,
-    PreparedAhciServiceMappingError, PreparedAhciServiceMappingFailure,
+    ActiveAhciNativeServiceTask, AhciServiceActivationError, AhciServiceActivationFailure,
+    AhciServiceMappingInstallError, AhciServiceMappingRemovalError, AhciServiceMappingTeardown,
+    MappedAhciNativeServiceTask, PreparedAhciServiceMappingError,
+    PreparedAhciServiceMappingFailure,
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,

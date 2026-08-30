@@ -1506,6 +1506,51 @@ binding, and documenting non-authorizing identity reconstruction are
 conventional type-safety hardening. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+Mapped AHCI activation through delayed dispatch now forms one consuming
+supervisor/runtime-bound lifecycle **IMPLEMENTED IN SOURCE**. Activation derives
+the lifecycle object from the non-copy mapped launch owner, validates the exact
+runtime and native task, publishes `Running`, and only then wakes the constructed
+task. Equal `TaskId` tokens from distinct runtimes remain separate bindings;
+ordinary registration cannot publish a construction-pending task.
+
+Retirement freezes the exact current task before AHCI quiescence, leaving no
+current or selected successor while retaining the complete task domain. Runtime
+mutation fails closed until the retained owner either advances or remains
+fail-stopped. The AHCI path then stops the engine, completes or fails closed
+outstanding work, sanitizes the data buffer, and withdraws DMA. Only the exact
+supervisor/runtime/native-task binding can retire the freeze to `Exited`.
+Successor dispatch remains withheld while non-copy CPU and ABAR mapping owners
+are removed and exact supervisor cleanup erases the retired address space.
+Device, mapping, and erasure backend success is covered by explicit unsafe
+truthfulness contracts. Constructed services reject generic exit, cleanup, and
+restart, and the delayed termination cannot be consumed by another runtime.
+
+The Linux kernel suite passes all 705 tests, AHCI passes all 137 tests, and the
+configuration service passes all 55 tests. Linux and `MRML_NATIVE` release
+builds pass for the kernel and AHCI library; the AHCI service-image profile
+passes its `MRML_NATIVE` release build, and the bootloader passes its UEFI
+release build. Focused tests cover quiescence and mapping retry, frozen mutation
+denial, mismatched binding/native tasks, equal task-token and supervisor-ticket
+collisions, generic restart denial, and cross-runtime dispatch with owner
+recovery. This is supervisor/scheduler unit, controlled backend, and compile
+evidence only; it does not prove installed CPL3 entry or `INT 0x80`, active
+page-table switching, TLB or IOMMU invalidation, KVM/WHP execution, or physical
+AHCI behavior.
+
+Complexity impact: MEDIUM
+TCB impact: MEDIUM
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: PARTIAL
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Composing existing task freeze, device
+quiescence, supervisor retirement, mapping withdrawal, cleanup, and delayed
+dispatch through linear typed owners is conventional fail-closed lifecycle
+synchronization. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

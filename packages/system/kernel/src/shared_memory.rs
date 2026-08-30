@@ -2426,7 +2426,9 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == faulted));
         let mut supervisor = ServiceSupervisor::<1>::new();
         let object = ObjectId(0xa5);
-        let service = supervisor.register(object, faulted).unwrap();
+        let service = supervisor
+            .register_in_runtime(object, faulted, &runtime)
+            .unwrap();
         let mut management = CapabilitySpace::<1>::new();
         let control = management.insert(object, Rights::CONTROL).unwrap();
 

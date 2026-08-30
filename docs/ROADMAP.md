@@ -53,7 +53,11 @@ mechanisms: all AHCI modules moved intact to
 `org.mrml.library.storage.ahci`, which provides the generation-1 block interface;
 the storage policy service has no static AHCI module. Windows and Arch Linux each
 pass 50 provider tests and 136 storage tests. The AHCI service entry/IPC adapter
-remains next after the FAT32 service path.
+has since advanced through launch binding, task construction, mapping, entry
+adaptation, atomic supervised activation, execution freeze, device/DMA
+quiescence, supervisor-bound retirement, mapping withdrawal, exact cleanup, and
+delayed dispatch as described below. Installed entry execution remains
+unfinished, and physical AHCI integration remains unverified.
 
 The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-2 filesystem binding
@@ -1645,6 +1649,53 @@ Patent review: `NOT_TRIGGERED` — preserving existing endpoint and task token
 namespaces in Rust types, carrying their validated provenance in an opaque
 binding, and documenting non-authorizing identity reconstruction are
 conventional type-safety hardening. See `docs/patents/REVIEW_LOG.md`.
+
+Mapped AHCI activation through delayed dispatch now forms one consuming
+supervisor/runtime-bound lifecycle **IMPLEMENTED IN SOURCE**.
+`activate_mapped_ahci_service_task` derives the lifecycle object from its
+non-copy mapped launch owner, validates the retained native task against the
+exact runtime, and publishes `Running` as one preflight/commit transition before
+waking the constructed task. Runtime-backed ordinary registration rejects
+construction-pending tasks; the supervisor distinguishes equal `TaskId` tokens
+from distinct runtimes while rejecting duplicates within one runtime.
+
+Retirement first freezes the exact current constructed task without selecting a
+successor. Scheduler and mutable-domain entries fail closed while the task
+domain and capabilities remain retained. The AHCI owner then stops the engine,
+completes or fails closed outstanding work, sanitizes data, and withdraws DMA.
+Only the exact supervisor, runtime, binding, and native task can consume that
+freeze into `Exited` plus a pending cleanup ticket. Successor dispatch remains
+withheld across retryable CPU/ABAR mapping removal and exact address-space
+erasure. Mapping, erasure, and device-backend success claims are explicit unsafe
+contracts. Generic exit, cleanup, and restart reject constructed services, and
+the final termination owner cannot dispatch in a different runtime even when
+task tokens and pending outcomes collide.
+
+The Linux kernel suite passes all 705 tests, AHCI passes all 137 tests, and the
+configuration service passes all 55 tests. Linux and `MRML_NATIVE` release
+builds pass for the kernel and AHCI library; the AHCI service-image profile
+passes its `MRML_NATIVE` release build, and the bootloader passes its UEFI
+release build. Focused cases cover activation failure atomicity, cross-runtime
+task tokens, mismatched binding/native pairs, quiescence retry, frozen mutation
+denial, collision-equivalent supervisor cleanup, mapping retry, generic restart
+denial, and cross-runtime dispatch owner recovery. This is unit, controlled
+backend, and compile evidence only. It does not execute an installed CPL3 entry
+or `INT 0x80`, switch an active service page table, invalidate a TLB or IOMMU,
+run under KVM/WHP, or exercise physical AHCI hardware.
+
+Complexity impact: MEDIUM
+TCB impact: MEDIUM
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: PARTIAL
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — composing existing task freeze, device
+quiescence, supervisor retirement, mapping withdrawal, cleanup, and delayed
+dispatch through linear typed owners is conventional fail-closed lifecycle
+synchronization. See `docs/patents/REVIEW_LOG.md`.
 
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See

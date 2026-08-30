@@ -1544,7 +1544,7 @@ mod tests {
             .unwrap();
         runtime.start();
         let mut supervisor = ServiceSupervisor::<1>::new();
-        let retired_service = supervisor.register(object, task).unwrap();
+        let retired_service = supervisor.register_in_runtime(object, task, &runtime).unwrap();
         let retirement = supervisor.exit_current(&mut runtime).unwrap();
         supervisor
             .complete_cleanup(retirement.cleanup, &mut Eraser)
@@ -2009,9 +2009,15 @@ mod tests {
             .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
             .unwrap();
         let mut supervisor = ServiceSupervisor::<3>::new();
-        let receiver_service = supervisor.register(receiver_object, receiver).unwrap();
-        let manager_service = supervisor.register(manager_object, manager).unwrap();
-        supervisor.register(sender_object, sender).unwrap();
+        let receiver_service = supervisor
+            .register_in_runtime(receiver_object, receiver, &runtime)
+            .unwrap();
+        let manager_service = supervisor
+            .register_in_runtime(manager_object, manager, &runtime)
+            .unwrap();
+        supervisor
+            .register_in_runtime(sender_object, sender, &runtime)
+            .unwrap();
         let sender_endpoint = runtime
             .capabilities_mut(sender)
             .unwrap()

@@ -156,6 +156,10 @@ impl<const N: usize> CapabilitySpace<N> {
         self.entries.iter().all(|entry| !entry.occupied)
     }
 
+    pub(crate) fn occupied_count(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.occupied).count()
+    }
+
     pub fn authorize(
         &self,
         capability: Capability,

@@ -220,7 +220,11 @@ pub(crate) struct CurrentTerminationPlan {
     task: TaskId,
 }
 
-struct TaskRemovalPlan {
+pub(crate) struct CurrentFreezePlan {
+    task: TaskId,
+}
+
+pub(crate) struct TaskRemovalPlan {
     task: TaskId,
 }
 
@@ -586,6 +590,13 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
         self.scheduler.task(task).is_ok()
     }
 
+    pub(crate) fn state(&self, task: TaskId) -> Result<TaskState, KernelScheduleError> {
+        self.scheduler
+            .task(task)
+            .map(|task| task.state)
+            .map_err(KernelScheduleError::Scheduler)
+    }
+
     pub const fn ticks(&self) -> u64 {
         self.ticks
     }
@@ -630,6 +641,55 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
             .set_state(current, TaskState::Blocked)
             .map_err(KernelScheduleError::Scheduler)?;
         Ok(self.select_replacement(Some(current)))
+    }
+
+    pub(crate) fn prepare_current_freeze(
+        &self,
+    ) -> Result<CurrentFreezePlan, KernelScheduleError> {
+        let task = self.current.ok_or(KernelScheduleError::NoCurrentTask)?;
+        self.scheduler
+            .task(task)
+            .map_err(KernelScheduleError::Scheduler)?;
+        Ok(CurrentFreezePlan { task })
+    }
+
+    pub(crate) fn commit_current_freeze(&mut self, plan: CurrentFreezePlan) {
+        self.current = None;
+        let task = self
+            .scheduler
+            .task_mut(plan.task)
+            .expect("exclusively owned scheduler preserves prepared freeze identity");
+        task.state = TaskState::Blocked;
+        task.budget = 0;
+    }
+
+    pub(crate) fn prepare_frozen_termination(
+        &self,
+        task: TaskId,
+    ) -> Result<TaskRemovalPlan, KernelScheduleError> {
+        if self.current.is_some() {
+            return Err(KernelScheduleError::CurrentTaskCannotMigrate);
+        }
+        let scheduled = self
+            .scheduler
+            .task(task)
+            .map_err(KernelScheduleError::Scheduler)?;
+        if scheduled.state != TaskState::Blocked {
+            return Err(KernelScheduleError::CurrentTaskCannotMigrate);
+        }
+        self.scheduler
+            .prepare_remove(task)
+            .map_err(KernelScheduleError::Scheduler)
+    }
+
+    pub(crate) fn commit_frozen_termination(
+        &mut self,
+        task: TaskId,
+        removal: TaskRemovalPlan,
+    ) -> ScheduleOutcome {
+        debug_assert_eq!(removal.task, task);
+        self.scheduler.commit_remove(removal);
+        self.select_replacement(Some(task))
     }
 
     pub fn terminate_current(&mut self) -> Result<ScheduleOutcome, KernelScheduleError> {
