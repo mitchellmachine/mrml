@@ -282,6 +282,7 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
         transfer,
         memory,
         binding,
+        local_page_table_root,
         association.filesystem_binding.endpoint_object,
         supervisor_task_object,
         association.filesystem_binding.module_object,

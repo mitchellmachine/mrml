@@ -1242,6 +1242,7 @@ pub struct NativeComponentServiceCopyReadTransferTask {
     construction: NativeComponentServiceReadTransferTask,
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferCopyTaskBinding,
+    page_table_root: crate::PhysAddr,
 }
 
 impl NativeComponentServiceCopyReadTransferTask {
@@ -1253,6 +1254,9 @@ impl NativeComponentServiceCopyReadTransferTask {
     }
     pub const fn binding(self) -> ComponentServiceReadTransferCopyTaskBinding {
         self.binding
+    }
+    pub const fn page_table_root(self) -> crate::PhysAddr {
+        self.page_table_root
     }
 
     pub fn source_attachment<const TASKS: usize, const CAPABILITIES: usize>(
@@ -1775,13 +1779,25 @@ pub fn prepare_native_component_service_task_from_copy_read_transfer_attachment<
     transfer: ComponentServiceReadTransferAttachment,
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferCopyTaskBinding,
+    page_table_root: crate::PhysAddr,
     service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferError>
 {
     let mapping = binding.mapping();
-    if binding.local_task() != target_task
+    let target_root = runtime
+        .context(target_task)
+        .map_err(|error| {
+            NativeComponentServiceCopyReadTransferError::Construction(
+                NativeComponentServiceReadTransferRootError::Task(
+                    NativeComponentServiceTaskError::Runtime(error),
+                ),
+            )
+        })?
+        .page_table();
+    if target_root != page_table_root
+        || binding.local_task() != target_task
         || binding.provider_task() != transfer.provider_task()
         || mapping.memory_object() != memory.memory_object()
         || mapping.shared_object() != memory.shared_object()
@@ -1825,6 +1841,7 @@ pub fn prepare_native_component_service_task_from_copy_read_transfer_attachment<
         construction,
         memory,
         binding,
+        page_table_root,
     })
 }
 
@@ -5314,12 +5331,14 @@ mod tests {
             transfer,
             root,
             binding,
+            crate::PhysAddr::new(0x30_0000).unwrap(),
             ObjectId(0x90),
             ObjectId(0x91),
             ObjectId(0x92),
         )
         .unwrap();
         assert_eq!(active.binding(), binding);
+        assert_eq!(active.page_table_root().get(), 0x30_0000);
         assert_eq!(active.source_attachment(&runtime).unwrap(), transfer);
         assert!(mapping_backend.installed.is_some());
         let state = match teardown_native_component_service_copy_read_transfer(

@@ -10524,3 +10524,15 @@ this remains scheduler, in-memory policy, and recording-backend evidence.
 Patent review: `NOT_TRIGGERED` — exact construction record matching and staged
 revocation, unmapping, scrubbing, and accounting are conventional capability
 and resource lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
+The copy-mediated native task record now retains the exact page-table root and
+the kernel constructor exact-matches it against the target task context before
+any target capability projection. This moves address-space identity into the
+kernel-owned lifecycle record needed by a future retirement ticket instead of
+leaving it as storage-side convention. The Linux-host release kernel suite
+passes 652 tests; storage's 162-test release suite exercises the matching root
+and rejects substitution. Active-root retirement remains **PLANNED**.
+
+Patent review: `NOT_TRIGGERED` — exact matching and retention of an existing
+page-table identity is conventional lifecycle boundary validation. See
+`docs/patents/REVIEW_LOG.md`.
