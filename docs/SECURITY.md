@@ -1044,3 +1044,8 @@ In-memory and storage-backed deployment assignment use the same prepared owner.
 Seal requires both live exact inspection authority and equality with the
 deployment service's current `ActivatedSystemRelease`; an old but correctly
 signed release cannot survive a later activation through a prepared plan.
+
+Configured isolation preparation does not detach a kernel reservation from its
+configuration authority. Its linear owner reapplies exact policy reads and
+revision checks and exact-matches the launch specification before backend
+construction; denial cancels the reservation without fallback or launch.

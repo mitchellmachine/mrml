@@ -21,7 +21,8 @@ use mrml_kernel::{
     RestartPolicy, Rights, RoutedIsolationService, RuntimeDomainAssignment,
     RuntimeDomainAssignmentPlan, RuntimeDomainPolicyAssignmentError, ServiceAddressSpaceEraser,
     ServiceCleanupError, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState,
-    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError, prepare_isolation_service_route,
+    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError,
+    launch_prepared_isolation_service_route, prepare_isolation_service_route,
     route_isolation_service,
 };
 use mrml_storage::{
@@ -6003,6 +6004,77 @@ pub enum ConfiguredIsolationPreparationError {
     Admission(mrml_kernel::IsolationLaunchError),
 }
 
+pub struct PreparedConfiguredIsolationServiceRoute {
+    route: PreparedIsolationServiceRoute,
+    plan: IsolationPolicyApplicationPlan,
+    boot_override: Option<BootIsolationOverride>,
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+}
+
+impl PreparedConfiguredIsolationServiceRoute {
+    pub const fn spec(&self) -> IsolationServiceSpec {
+        self.route.spec()
+    }
+
+    pub fn cancel<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<(), mrml_kernel::IsolationLaunchError> {
+        self.route.cancel(admission)
+    }
+
+    pub fn launch<
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: IsolationServiceBackend,
+    >(
+        self,
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        backend: &mut B,
+    ) -> Result<
+        RoutedIsolationService<B::Endpoint>,
+        ConfiguredIsolationRouteError<B::Error, B::Endpoint>,
+    > {
+        let refreshed = configured_isolation_service_spec(
+            configuration,
+            capabilities,
+            self.plan,
+            self.boot_override,
+            self.bounds,
+            self.identity,
+            admission,
+        );
+        match refreshed {
+            Ok(spec) if spec == self.route.spec() => {}
+            Ok(_) => {
+                self.route.cancel(admission).map_err(|error| {
+                    ConfiguredIsolationRouteError::Route(IsolationServiceRouteError::Admission(
+                        error,
+                    ))
+                })?;
+                return Err(ConfiguredIsolationRouteError::Configuration(
+                    ConfigError::IsolationPolicyMismatch,
+                ));
+            }
+            Err(error) => {
+                self.route.cancel(admission).map_err(|rollback| {
+                    ConfiguredIsolationRouteError::Route(IsolationServiceRouteError::Admission(
+                        rollback,
+                    ))
+                })?;
+                return Err(ConfiguredIsolationRouteError::Configuration(error));
+            }
+        }
+        launch_prepared_isolation_service_route(admission, backend, self.route)
+            .map_err(ConfiguredIsolationRouteError::Route)
+    }
+}
+
 fn configured_isolation_service_spec<
     const SETTINGS: usize,
     const AUDIT: usize,
@@ -6050,7 +6122,7 @@ pub fn prepare_configured_isolation_service_route<
     bounds: IsolationServiceBounds,
     identity: IsolationServiceIdentity,
     admission: &mut IsolationAdmissionTable<DOMAINS>,
-) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+) -> Result<PreparedConfiguredIsolationServiceRoute, ConfiguredIsolationPreparationError> {
     let spec = configured_isolation_service_spec(
         configuration,
         capabilities,
@@ -6061,8 +6133,15 @@ pub fn prepare_configured_isolation_service_route<
         admission,
     )
     .map_err(ConfiguredIsolationPreparationError::Configuration)?;
-    prepare_isolation_service_route(admission, spec)
-        .map_err(ConfiguredIsolationPreparationError::Admission)
+    let route = prepare_isolation_service_route(admission, spec)
+        .map_err(ConfiguredIsolationPreparationError::Admission)?;
+    Ok(PreparedConfiguredIsolationServiceRoute {
+        route,
+        plan,
+        boot_override: None,
+        bounds,
+        identity,
+    })
 }
 
 /// Applies one authority-free trusted-loader overlay after revalidating the
@@ -6082,7 +6161,7 @@ pub fn prepare_boot_configured_isolation_service_route<
     bounds: IsolationServiceBounds,
     identity: IsolationServiceIdentity,
     admission: &mut IsolationAdmissionTable<DOMAINS>,
-) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+) -> Result<PreparedConfiguredIsolationServiceRoute, ConfiguredIsolationPreparationError> {
     let spec = configured_isolation_service_spec(
         configuration,
         capabilities,
@@ -6093,8 +6172,15 @@ pub fn prepare_boot_configured_isolation_service_route<
         admission,
     )
     .map_err(ConfiguredIsolationPreparationError::Configuration)?;
-    prepare_isolation_service_route(admission, spec)
-        .map_err(ConfiguredIsolationPreparationError::Admission)
+    let route = prepare_isolation_service_route(admission, spec)
+        .map_err(ConfiguredIsolationPreparationError::Admission)?;
+    Ok(PreparedConfiguredIsolationServiceRoute {
+        route,
+        plan,
+        boot_override: Some(boot_override),
+        bounds,
+        identity,
+    })
 }
 
 /// Revalidates persistent policy, package bounds, kernel policy generation,

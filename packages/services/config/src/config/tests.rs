@@ -6082,6 +6082,18 @@ mod tests {
             component_read,
         )
         .unwrap();
+        let mut stale_prepared_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 1)
+                .unwrap();
+        let stale_prepared = prepare_configured_isolation_service_route(
+            &configuration,
+            &capabilities,
+            stale_plan,
+            bounds,
+            identity,
+            &mut stale_prepared_admission,
+        )
+        .unwrap();
         let mut replacement = ConfigTransaction::<1>::new(1);
         component
             .stage(
@@ -6093,6 +6105,23 @@ mod tests {
         configuration
             .commit(&capabilities, root, &replacement)
             .unwrap();
+        let mut stale_prepared_backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        assert!(matches!(
+            stale_prepared.launch(
+                &configuration,
+                &capabilities,
+                &mut stale_prepared_admission,
+                &mut stale_prepared_backend,
+            ),
+            Err(ConfiguredIsolationRouteError::Configuration(
+                ConfigError::RevisionConflict { current: 2 }
+            ))
+        ));
+        let (native, microvm) = stale_prepared_backend.into_parts();
+        assert_eq!((native.launches, microvm.launches), (0, 0));
         let mut stale_admission =
             IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 1)
                 .unwrap();
@@ -6148,6 +6177,37 @@ mod tests {
             ))
         ));
         let (native, microvm) = wrong_backend.into_parts();
+        assert_eq!((native.launches, microvm.launches), (0, 0));
+
+        let mut revoked_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 2)
+                .unwrap();
+        let revoked = prepare_configured_isolation_service_route(
+            &configuration,
+            &capabilities,
+            current_plan,
+            bounds,
+            identity,
+            &mut revoked_admission,
+        )
+        .unwrap();
+        capabilities.revoke(component_read).unwrap();
+        let mut revoked_backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        assert!(matches!(
+            revoked.launch(
+                &configuration,
+                &capabilities,
+                &mut revoked_admission,
+                &mut revoked_backend,
+            ),
+            Err(ConfiguredIsolationRouteError::Configuration(
+                ConfigError::Unauthorized(CapabilityError::Invalid)
+            ))
+        ));
+        let (native, microvm) = revoked_backend.into_parts();
         assert_eq!((native.launches, microvm.launches), (0, 0));
     }
 }

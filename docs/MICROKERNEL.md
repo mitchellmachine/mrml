@@ -7153,6 +7153,18 @@ Patent review: `NOT_TRIGGERED` — this is conventional capability and generatio
 revalidation at the existing assignment seal transition. See
 `docs/patents/REVIEW_LOG.md`.
 
+Configured isolation preparation now returns a configuration-bound linear owner
+rather than exposing the raw kernel admission reservation. Immediately before
+backend construction it reapplies the exact policy reads and revisions,
+recomputes and exact-compares the service specification, and then commits the
+same reservation. Revision drift or capability revocation cancels the
+reservation and invokes neither native nor microVM backend. Configuration
+passes 53 focused tests.
+
+Patent review: `NOT_TRIGGERED` — this is conventional policy/capability
+revalidation and rollback at an existing prepared-launch boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

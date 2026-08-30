@@ -4069,3 +4069,8 @@ All deployment runtime-assignment entry points now return the same linear
 prepared owner. Sealing requires the retained exact `READ` capability and the
 same still-active release identity, so revocation and intervening activation
 both fail before producing an admission-ready inventory.
+
+Prepared configured-isolation routes now retain the policy application inputs
+and revalidate them before backend construction. Revision drift, exact-read
+revocation, or specification substitution cancels the kernel reservation and
+starts neither placement backend.
