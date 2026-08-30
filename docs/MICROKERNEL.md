@@ -7281,6 +7281,16 @@ Patent review: `NOT_TRIGGERED` — this moves conventional checked integer
 arithmetic earlier in the existing activation state machine. See
 `docs/patents/REVIEW_LOG.md`.
 
+Authenticated deployment publication now constructs and validates the complete
+successor recovery-state record before consuming the prepared file receipt.
+Recovery epoch exhaustion or invalid replacement binding therefore leaves the
+receipt and live deployment state unchanged. The prepared file exposes only its
+immutable object and generation for this preflight. Deployment remains 7
+focused Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this reorders existing checked encoding ahead
+of an existing commit point. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

@@ -444,6 +444,10 @@ pub enum FileWriteCommitError {
 }
 
 impl<const N: usize> PreparedFileWrite<N> {
+    pub const fn object(&self) -> StorageObjectId {
+        self.state.object
+    }
+
     pub const fn generation(&self) -> u64 {
         self.state.generation
     }

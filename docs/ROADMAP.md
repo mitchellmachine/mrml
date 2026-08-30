@@ -4125,3 +4125,7 @@ failure, leaving both staged state and receipt disposition explicit.
 Deployment activation sequence exhaustion is now a preparation/preview gate.
 Terminal arithmetic fails before candidate-state mutation and before either
 stable publication path can consume its storage receipt.
+
+Authenticated deployment recovery-state replacement is now fully encoded before
+stable-file receipt consumption. Recovery-epoch exhaustion and invalid successor
+bindings fail without publishing the prepared file or changing live activation.

@@ -1105,3 +1105,8 @@ Activation-sequence exhaustion is rejected before deployment candidate
 preparation and stable-publication receipt consumption. A terminal counter
 cannot leave a newly prepared candidate or convert a receipt into an orphaned
 activation attempt.
+
+Authenticated deployment publication preflights the complete replacement
+recovery-state record, including checked epoch advance and prepared file
+identity, before consuming the file receipt. Encoding failure leaves recovery
+state, activation, and receipt unchanged.

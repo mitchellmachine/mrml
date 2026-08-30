@@ -828,10 +828,6 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         if !current.matches_active(service.active) {
             return Err(AuthenticatedActivationCommitError::RecoveryStateMismatch);
         }
-        let file = self
-            .file
-            .commit_transaction_authorized(storage_authority, receipt)
-            .map_err(|(_, error)| AuthenticatedActivationCommitError::Storage(error))?;
         let replacement = encode_deployment_recovery_state_with_release(
             current.epoch().checked_add(1).ok_or(
                 AuthenticatedActivationCommitError::Deployment(
@@ -841,10 +837,14 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
             service.root,
             self.active,
             self.active_release,
-            file.object(),
-            file.generation(),
+            self.file.object(),
+            self.file.generation(),
         )
         .map_err(AuthenticatedActivationCommitError::Deployment)?;
+        let file = self
+            .file
+            .commit_transaction_authorized(storage_authority, receipt)
+            .map_err(|(_, error)| AuthenticatedActivationCommitError::Storage(error))?;
         state_store
             .compare_and_store(&expected, &replacement)
             .map_err(AuthenticatedActivationCommitError::StateStore)?;
@@ -2662,6 +2662,46 @@ mod tests {
         assert_eq!(service.active(&capabilities, inspect), Ok(None));
         let mut transaction =
             StorageTransaction::<1, 2>::new(StorageTransactionId::new(70).unwrap(), 2).unwrap();
+        stable.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let mut recovery_state = RecoveryStateStore {
+            bytes: encode_empty_deployment_recovery_state(u64::MAX).unwrap(),
+        };
+        assert!(matches!(
+            stable.commit_authenticated(
+                &mut service,
+                &capabilities,
+                control,
+                &authority,
+                &mut receipt,
+                &mut recovery_state,
+            ),
+            Err(AuthenticatedActivationCommitError::Deployment(
+                DeploymentError::GenerationExhausted
+            ))
+        ));
+        assert_eq!(receipt.remaining(), 1);
+        assert_eq!(service.active(&capabilities, inspect), Ok(None));
+
+        let (_, next, metadata, images) = stable_layout(&checkpoint);
+        let stable = prepare_stable_activation(
+            &service,
+            prepared,
+            &current,
+            &authority,
+            file,
+            principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut backend,
+        )
+        .unwrap();
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(69).unwrap(), 2).unwrap();
         stable.admit(&mut transaction).unwrap();
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
