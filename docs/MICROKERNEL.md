@@ -7408,7 +7408,9 @@ generations, exact-matches volume/mount/root on every geometry lookup, and remov
 the complete record on unmount. Duplicate, capacity, stale, and generation-
 exhaustion paths preserve state; maximum generations are issued once and never
 wrap. This is provider-local identity state, not an open capability or live
-syscall dispatch. The focused Linux-host provider suite passes thirty-seven tests.
+syscall dispatch. Exact unmount allocates one fresh nonzero completion serial only
+after removing the record; replay is stale, and serial exhaustion preserves the
+live record. The focused Linux-host provider suite passes thirty-eight tests.
 
 Patent review: `NOT_TRIGGERED` — bounded slots, monotonic generations, exact
 identity matching, and atomic record removal are conventional resource-lifecycle

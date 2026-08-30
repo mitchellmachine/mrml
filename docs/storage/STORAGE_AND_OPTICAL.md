@@ -906,7 +906,9 @@ only parsed `Fat32Geometry`, allocates fresh independent mount and root
 generations, exact-matches volume/mount/root on access, and atomically invalidates
 the pair on unmount. Duplicate, capacity, stale, and permanent generation-
 exhaustion failures preserve state. The table grants no capability and is not yet
-wired to the syscall loop. Thirty-seven focused Linux-host tests pass. The
+wired to the syscall loop. Exact unmount returns a fresh nonzero completion serial
+only after removal; replay is stale, and serial exhaustion preserves the live
+record. Thirty-eight focused Linux-host tests pass. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows

@@ -78,7 +78,14 @@ pub enum Fat32MountError {
     AlreadyMounted,
     Capacity,
     GenerationExhausted,
+    CompletionExhausted,
     StaleMount,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fat32Unmounted {
+    pub serial: u64,
+    pub root: OpaqueHandle,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +100,7 @@ pub struct Fat32MountTable<const N: usize> {
     mounts: [Option<Fat32Mount>; N],
     next_mount_generation: Option<u64>,
     next_root_generation: Option<u32>,
+    next_completion_serial: Option<u64>,
 }
 
 impl<const N: usize> Fat32MountTable<N> {
@@ -101,6 +109,7 @@ impl<const N: usize> Fat32MountTable<N> {
             mounts: [None; N],
             next_mount_generation: Some(1),
             next_root_generation: Some(1),
+            next_completion_serial: Some(1),
         }
     }
 
@@ -162,7 +171,7 @@ impl<const N: usize> Fat32MountTable<N> {
         &mut self,
         volume: OpaqueHandle,
         generation: u64,
-    ) -> Result<OpaqueHandle, Fat32MountError> {
+    ) -> Result<Fat32Unmounted, Fat32MountError> {
         let slot = self
             .mounts
             .iter()
@@ -172,19 +181,24 @@ impl<const N: usize> Fat32MountTable<N> {
                 })
             })
             .ok_or(Fat32MountError::StaleMount)?;
+        let serial = self
+            .next_completion_serial
+            .ok_or(Fat32MountError::CompletionExhausted)?;
         let root = self.mounts[slot]
             .take()
             .ok_or(Fat32MountError::StaleMount)?
             .root;
-        Ok(root)
+        self.next_completion_serial = serial.checked_add(1);
+        Ok(Fat32Unmounted { serial, root })
     }
 
     #[cfg(test)]
-    const fn with_next_generations(mount: u64, root: u32) -> Self {
+    const fn with_next_generations(mount: u64, root: u32, completion: u64) -> Self {
         Self {
             mounts: [None; N],
             next_mount_generation: Some(mount),
             next_root_generation: Some(root),
+            next_completion_serial: Some(completion),
         }
     }
 }
@@ -1124,7 +1138,17 @@ mod tests {
             mounts.geometry(volume, first.generation + 1, first.root),
             Err(Fat32MountError::StaleMount)
         );
-        assert_eq!(mounts.unmount(volume, first.generation), Ok(first.root));
+        assert_eq!(
+            mounts.unmount(volume, first.generation),
+            Ok(Fat32Unmounted {
+                serial: 1,
+                root: first.root,
+            })
+        );
+        assert_eq!(
+            mounts.unmount(volume, first.generation),
+            Err(Fat32MountError::StaleMount)
+        );
         assert_eq!(
             mounts.geometry(volume, first.generation, first.root),
             Err(Fat32MountError::StaleMount)
@@ -1139,14 +1163,45 @@ mod tests {
     fn mount_generation_exhaustion_never_reuses_lifecycle_or_root_identity() {
         let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
         let volume = OpaqueHandle::new(4, 7).unwrap();
-        let mut mounts = Fat32MountTable::<1>::with_next_generations(u64::MAX, u32::MAX);
+        let mut mounts =
+            Fat32MountTable::<1>::with_next_generations(u64::MAX, u32::MAX, u64::MAX);
         let final_mount = mounts.mount(volume, geometry).unwrap();
         assert_eq!(final_mount.generation, u64::MAX);
         assert_eq!(final_mount.root.generation(), u32::MAX);
-        mounts.unmount(volume, final_mount.generation).unwrap();
+        assert_eq!(
+            mounts.unmount(volume, final_mount.generation),
+            Ok(Fat32Unmounted {
+                serial: u64::MAX,
+                root: final_mount.root,
+            })
+        );
         assert_eq!(
             mounts.mount(volume, geometry),
             Err(Fat32MountError::GenerationExhausted)
+        );
+    }
+
+    #[test]
+    fn unmount_completion_exhaustion_preserves_the_exact_live_mount() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let mut mounts = Fat32MountTable::<1>::with_next_generations(1, 1, u64::MAX);
+        let first = mounts.mount(volume, geometry).unwrap();
+        assert_eq!(
+            mounts.unmount(volume, first.generation),
+            Ok(Fat32Unmounted {
+                serial: u64::MAX,
+                root: first.root,
+            })
+        );
+        let second = mounts.mount(volume, geometry).unwrap();
+        assert_eq!(
+            mounts.unmount(volume, second.generation),
+            Err(Fat32MountError::CompletionExhausted)
+        );
+        assert_eq!(
+            mounts.geometry(volume, second.generation, second.root),
+            Ok(geometry)
         );
     }
 

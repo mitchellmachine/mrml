@@ -1166,7 +1166,10 @@ The FAT32 mount table likewise stores identity and validated geometry only. It
 requires exact volume, mount generation, and root handle equality; unmount removes
 the record so both identities become stale. Slot reuse advances independent
 generations, and exhaustion fails permanently rather than wrapping. The table
-does not create an open capability or authorize block access.
+does not create an open capability or authorize block access. Unmount publishes a
+fresh nonzero completion serial only after exact removal. Replay is stale, while
+serial exhaustion leaves the mount live so uncertainty cannot masquerade as
+successful revocation.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

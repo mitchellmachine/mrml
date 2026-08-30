@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loop pass thirty-seven
+isolated syscall-backed receive/reply loop pass thirty-eight
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -76,7 +76,9 @@ authority.
 The mount table accepts only already-validated geometry, issues fresh independent
 mount and root generations, exact-matches both, invalidates them together on
 unmount, and permanently fails after generation exhaustion. It grants no open
-authority and is not yet wired to the provider syscall loop.
+authority. Exact unmount issues one fresh nonzero completion serial only after
+record removal; serial exhaustion preserves the live mount rather than reporting
+an ambiguous completion. The table is not yet wired to the provider syscall loop.
 
 The build frontend and filesystem contract now **PARTIALLY IMPLEMENT** the
 mount/root bootstrap representation. Schema version 2 supports bounded named
