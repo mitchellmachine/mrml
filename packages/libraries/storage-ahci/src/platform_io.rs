@@ -8,6 +8,13 @@ pub trait AhciMonotonicDelay {
     fn delay_at_least_microseconds(&mut self, microseconds: u32) -> Result<(), ()>;
 }
 
+#[cfg(target_arch = "x86_64")]
+impl AhciMonotonicDelay for mrml_kernel::arch::x86_64::ApStartupTiming {
+    fn delay_at_least_microseconds(&mut self, microseconds: u32) -> Result<(), ()> {
+        self.wait_micros(microseconds).map_err(|_| ())
+    }
+}
+
 /// One owner for register and timing mechanism required by AHCI dispatch.
 pub struct AhciPlatformIo<R, D> {
     registers: R,
@@ -125,5 +132,13 @@ mod tests {
             AhciPlatformIo::from_installed_mapping(invalid, Delay::default())
         }
         .is_none());
+    }
+
+    #[test]
+    fn kernel_calibrated_tsc_delay_preserves_invalid_duration_failure() {
+        let mut timing = mrml_kernel::arch::x86_64::ApStartupTiming::from_tsc_hz(1_000_000)
+            .unwrap();
+        assert_eq!(timing.delay_at_least_microseconds(0), Err(()));
+        assert_eq!(timing.delay_at_least_microseconds(1_000_001), Err(()));
     }
 }

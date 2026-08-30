@@ -1309,6 +1309,30 @@ from authenticated mapping data and pairing it with an existing timing contract
 is conventional device-service initialization. See
 `docs/patents/REVIEW_LOG.md`.
 
+The AHCI monotonic-delay contract now accepts the kernel's existing calibrated
+invariant-TSC timing primitive **PARTIALLY IMPLEMENTED IN SOURCE**. The adapter
+delegates the exact requested microseconds to `ApStartupTiming::wait_micros`,
+which already rejects zero, over-one-second, uncalibrated, and overflowed
+durations rather than guessing a frequency. This reuses the kernel's bounded
+clock admission instead of adding a sleep syscall or service-local calibration.
+The focused Linux suite passes all 127 tests and both Linux release and
+`MRML_NATIVE` release builds pass. The new test exercises only invalid-duration
+failure without waiting; installed CPL3 TSC availability, detected frequency,
+elapsed-time accuracy, reset timing, and physical hardware remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — adapting an existing checked invariant-TSC
+delay primitive to an existing driver timing trait is conventional clock
+plumbing. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
