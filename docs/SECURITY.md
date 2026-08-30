@@ -1086,3 +1086,8 @@ Neither external services nor storage-internal composition can select the
 legacy receipt-only file commit after preparation. It has been removed; the
 prepared-file publication boundary always requires the retained live storage
 authority table.
+
+An unverified component-service launch cannot be decomposed into a committable
+isolation route. Exact authenticated consumer/provider service-image identities
+must produce the typed verified owner first; mismatch retains the original
+reservation so it can be cancelled without backend launch or fallback.

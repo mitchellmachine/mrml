@@ -3553,7 +3553,25 @@ fn application_main() -> Result<()> {
         }
     }
     if let Some(launch) = component_launch.take() {
-        let route = launch.into_route();
+        let consumer_artifact = *service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified KVM component consumer"))?
+            .artifact()
+            .digest();
+        let provider_artifact = *provider_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified KVM component provider"))?
+            .artifact()
+            .digest();
+        let route = launch
+            .verify(
+                ArtifactKind::ServiceImage,
+                &consumer_artifact,
+                ArtifactKind::ServiceImage,
+                &provider_artifact,
+            )
+            .map_err(|(_, error)| anyhow!("KVM component artifact seal failed: {:?}", error))?
+            .into_route();
         if let Some(prepared) = complete_isolation_preparation.as_mut() {
             prepared.restore(route).map_err(|(error, _)| {
                 anyhow!("KVM transformed complete route restore failed: {:?}", error)

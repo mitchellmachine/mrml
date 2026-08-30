@@ -459,6 +459,14 @@ pub struct PreparedComponentServiceLaunch {
     interface_fingerprint: [u8; 32],
 }
 
+/// Component launch whose exact retained executable identities have been
+/// revalidated. Only this state may release the underlying isolation route to
+/// the placement-specific construction path.
+#[derive(Debug, Eq, PartialEq)]
+pub struct VerifiedComponentServiceLaunch {
+    route: PreparedIsolationServiceRoute,
+}
+
 impl PreparedComponentServiceLaunch {
     pub fn bind(
         route: PreparedIsolationServiceRoute,
@@ -560,8 +568,29 @@ impl PreparedComponentServiceLaunch {
         Ok(())
     }
 
-    pub fn into_route(self) -> PreparedIsolationServiceRoute {
-        self.route
+    pub fn verify(
+        self,
+        consumer_kind: ArtifactKind,
+        consumer_digest: &[u8; 64],
+        provider_kind: ArtifactKind,
+        provider_digest: &[u8; 64],
+    ) -> Result<VerifiedComponentServiceLaunch, (Self, ComponentServiceArtifactError)> {
+        if let Err(error) = self.verify_artifacts(
+            consumer_kind,
+            consumer_digest,
+            provider_kind,
+            provider_digest,
+        ) {
+            return Err((self, error));
+        }
+        Ok(VerifiedComponentServiceLaunch { route: self.route })
+    }
+
+    pub fn cancel<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<(), IsolationLaunchError> {
+        self.route.cancel(admission)
     }
 
     /// Consumes an exact component launch that could not be constructed and
@@ -573,6 +602,16 @@ impl PreparedComponentServiceLaunch {
         reason: IsolationUnavailableReason,
     ) -> Result<(), IsolationLaunchError> {
         self.route.unavailable(admission, reason)
+    }
+}
+
+impl VerifiedComponentServiceLaunch {
+    pub const fn spec(&self) -> IsolationServiceSpec {
+        self.route.spec()
+    }
+
+    pub fn into_route(self) -> PreparedIsolationServiceRoute {
+        self.route
     }
 }
 
@@ -855,14 +894,17 @@ pub fn launch_prepared_component_service<B: IsolationServiceBackend, const DOMAI
     RoutedIsolationService<B::Endpoint>,
     PreparedComponentServiceRouteError<B::Error, B::Endpoint>,
 > {
-    if let Err(error) = launch.verify_artifacts(
+    let launch = match launch.verify(
         consumer_kind,
         consumer_digest,
         provider_kind,
         provider_digest,
     ) {
-        return Err(PreparedComponentServiceRouteError::Artifact { launch, error });
-    }
+        Ok(launch) => launch,
+        Err((launch, error)) => {
+            return Err(PreparedComponentServiceRouteError::Artifact { launch, error });
+        }
+    };
     launch_prepared_isolation_service_route(admission, backend, launch.into_route())
         .map_err(PreparedComponentServiceRouteError::Route)
 }
@@ -2168,7 +2210,17 @@ mod tests {
             Err(ComponentServiceArtifactError::ProviderArtifactMismatch)
         );
         assert_eq!(table.running().count(), 0);
-        launch.into_route().commit(&mut table, 0x55aa_u64).unwrap();
+        launch
+            .verify(
+                ArtifactKind::ServiceImage,
+                &[0x18; 64],
+                ArtifactKind::ServiceImage,
+                &[0x2f; 64],
+            )
+            .unwrap()
+            .into_route()
+            .commit(&mut table, 0x55aa_u64)
+            .unwrap();
         assert!(table.total_microvm_report().satisfied());
     }
 
@@ -2353,7 +2405,7 @@ mod tests {
         assert_eq!(launch.spec(), spec);
         assert_eq!((backend.native_launches, backend.microvm_launches), (0, 0));
         assert_eq!(table.running().count(), 0);
-        launch.into_route().cancel(&mut table).unwrap();
+        launch.cancel(&mut table).unwrap();
     }
 
     #[test]

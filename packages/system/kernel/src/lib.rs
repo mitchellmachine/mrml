@@ -160,11 +160,11 @@ pub use isolation::{
     PreparedComponentServiceRouteError, PreparedIsolationApplicationRoute, PreparedIsolationLaunch,
     PreparedIsolationServiceRoute, ReservedIsolationVcpus, RoutedIsolationApplication,
     RoutedIsolationService, RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport,
-    UnavailableIsolationDomain, bind_component_service_handoff, launch_prepared_component_service,
-    launch_prepared_isolation_application_route, launch_prepared_isolation_service_route,
-    prepare_component_service_handoff, prepare_isolation_application_route,
-    prepare_isolation_service_route, reserve_isolation_vcpus, route_isolation_application,
-    route_isolation_service,
+    UnavailableIsolationDomain, VerifiedComponentServiceLaunch, bind_component_service_handoff,
+    launch_prepared_component_service, launch_prepared_isolation_application_route,
+    launch_prepared_isolation_service_route, prepare_component_service_handoff,
+    prepare_isolation_application_route, prepare_isolation_service_route, reserve_isolation_vcpus,
+    route_isolation_application, route_isolation_service,
 };
 pub use isolation_monitor::{
     HostSubstrateCounts, IsolationMonitorError, IsolationStatusSnapshot,

@@ -4107,3 +4107,8 @@ grant generation or consume its transaction receipt.
 The old receipt-only prepared-file commit is removed. All service publication
 and storage-internal composition paths are forced through commit-time
 storage-authority revalidation.
+
+Prepared component-service launch ownership now advances through an explicit
+verified-artifact state. The unverified owner cannot release its raw isolation
+route; KVM/WHP integration and the common launch helper must consume exact
+service-image kinds and digests before route restoration or commit.

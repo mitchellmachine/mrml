@@ -7240,6 +7240,17 @@ authority-checkpoint rule.
 Patent review: `NOT_TRIGGERED` — this narrows an existing API surface and adds
 no mechanism. See `docs/patents/REVIEW_LOG.md`.
 
+Prepared component-service launches no longer expose their raw isolation route.
+Exact consumer/provider `ServiceImage` kinds and authenticated digests must be
+consumed into a distinct verified-launch owner before the route can enter KVM,
+WHP, standalone, or complete-set publication. Artifact mismatch retains the
+full uncommitted launch for explicit cancellation. Kernel passes 633 focused
+Linux tests and the Linux KVM runner builds; no WHP execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — this is a conventional typestate restriction
+over the existing digest comparison and isolation reservation. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
