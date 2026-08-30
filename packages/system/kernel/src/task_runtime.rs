@@ -39,6 +39,7 @@ pub enum TaskRuntimeError {
     ActiveDelegations,
     DelegationTableFull,
     ConstructionTargetNotPristine,
+    TerminationDispatchPending,
 }
 
 impl TaskRuntimeError {
@@ -236,6 +237,8 @@ pub enum TaskTerminationDispatchError {
     InvalidOutcome,
     WrongSource,
     CurrentMismatch,
+    NoPendingTermination,
+    TerminationMismatch,
     Runtime(TaskRuntimeError),
 }
 
@@ -416,6 +419,7 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     scheduler: KernelScheduler<TASKS>,
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
+    pending_termination: Option<TaskTermination>,
 }
 
 /// A task runtime whose complete fixed-capacity kernel footprint has one exact
@@ -514,6 +518,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             scheduler,
             domains: array::from_fn(|_| None),
             delegations: [None; MAX_TASK_DELEGATIONS],
+            pending_termination: None,
         })
     }
 
@@ -1062,7 +1067,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     /// selected successor before disclosing the context that a privileged
     /// caller may install. Caller-provided or stale outcomes are data only.
     pub fn dispatch_after_termination(
-        &self,
+        &mut self,
         termination: TaskTermination,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
         match termination.next {
@@ -1070,6 +1075,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 if self.current().is_some() {
                     return Err(TaskTerminationDispatchError::CurrentMismatch);
                 }
+                self.consume_pending_termination(termination)?;
                 Ok(TaskTerminationDispatch {
                     target: TaskTerminationDispatchTarget::Idle,
                 })
@@ -1087,6 +1093,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 let context = *self
                     .context(to)
                     .map_err(TaskTerminationDispatchError::Runtime)?;
+                self.consume_pending_termination(termination)?;
                 Ok(TaskTerminationDispatch {
                     target: TaskTerminationDispatchTarget::User { task: to, context },
                 })
@@ -1097,9 +1104,26 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
     }
 
+    fn consume_pending_termination(
+        &mut self,
+        termination: TaskTermination,
+    ) -> Result<(), TaskTerminationDispatchError> {
+        let pending = self
+            .pending_termination
+            .ok_or(TaskTerminationDispatchError::NoPendingTermination)?;
+        if pending != termination {
+            return Err(TaskTerminationDispatchError::TerminationMismatch);
+        }
+        self.pending_termination = None;
+        Ok(())
+    }
+
     pub(crate) fn terminate_current_with_context(
         &mut self,
     ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
+        if self.pending_termination.is_some() {
+            return Err(TaskRuntimeError::TerminationDispatchPending);
+        }
         let current = self
             .scheduler
             .current()
@@ -1122,13 +1146,12 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         self.commit_peer_death_publication(peer_plan, domain.task, PeerDeathReason::Exited);
         let next = self.scheduler.commit_current_termination(termination_plan);
-        Ok((
-            TaskTermination {
-                task: current,
-                next,
-            },
-            domain.context,
-        ))
+        let termination = TaskTermination {
+            task: current,
+            next,
+        };
+        self.pending_termination = Some(termination);
+        Ok((termination, domain.context))
     }
 
     /// Atomically derives a bounded capability set into a fresh task domain for
@@ -2232,6 +2255,10 @@ mod tests {
             }
         );
         assert_eq!(
+            runtime.terminate_current(),
+            Err(TaskRuntimeError::TerminationDispatchPending)
+        );
+        assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {
                 task: exiting,
                 next: ScheduleOutcome::Continue(replacement),
@@ -2258,11 +2285,25 @@ mod tests {
             }),
             Err(TaskTerminationDispatchError::CurrentMismatch)
         );
+        assert_eq!(
+            runtime.dispatch_after_termination(TaskTermination {
+                task: replacement,
+                next: ScheduleOutcome::Switch {
+                    from: Some(replacement),
+                    to: replacement,
+                },
+            }),
+            Err(TaskTerminationDispatchError::TerminationMismatch)
+        );
         let dispatch = runtime.dispatch_after_termination(terminated).unwrap();
         assert!(!dispatch.is_idle());
         assert_eq!(
             dispatch.user(),
             Some((replacement, context(0x30_0000, 0x50_0000)))
+        );
+        assert_eq!(
+            runtime.dispatch_after_termination(terminated),
+            Err(TaskTerminationDispatchError::NoPendingTermination)
         );
         assert_eq!(runtime.context(exiting), Err(TaskRuntimeError::MissingTask));
         assert_eq!(
@@ -2291,6 +2332,10 @@ mod tests {
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(dispatch.is_idle());
         assert_eq!(dispatch.user(), None);
+        assert_eq!(
+            runtime.dispatch_after_termination(termination),
+            Err(TaskTerminationDispatchError::NoPendingTermination)
+        );
     }
 
     #[test]

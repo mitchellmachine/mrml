@@ -7,7 +7,8 @@ use crate::{
     Capability, CapabilityError, CapabilitySpace, FaultRetirement, MemoryBackingKind,
     MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
     Priority, Rights, ScheduleOutcome, TaskId, TaskProtocolViolation, TaskRuntime,
-    TaskRuntimeError, TaskTermination, TaskViolationRetirement,
+    TaskRuntimeError, TaskTerminationDispatch, TaskTerminationDispatchError,
+    TaskViolationRetirement,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +58,7 @@ pub enum ServiceError {
     InvalidCleanupTicket,
     Unauthorized(CapabilityError),
     Runtime(TaskRuntimeError),
+    Dispatch(TaskTerminationDispatchError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,12 +110,13 @@ impl RestartPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ServiceRetirement {
     pub service: ServiceId,
     pub task: TaskId,
     pub next: ScheduleOutcome,
     pub cleanup: ServiceCleanupTicket,
+    pub dispatch: TaskTerminationDispatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -640,9 +643,13 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .current()
             .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
         let plan = self.prepare_current_retirement(current, now)?;
-        let (TaskTermination { next, .. }, context) = runtime
+        let (termination, context) = runtime
             .terminate_current_with_context()
             .map_err(ServiceError::Runtime)?;
+        let next = termination.next;
+        let dispatch = runtime
+            .dispatch_after_termination(termination)
+            .map_err(ServiceError::Dispatch)?;
         let cleanup = ServiceCleanupTicket {
             service: plan.service,
             task: plan.task,
@@ -654,6 +661,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             task: cleanup.task,
             next,
             cleanup,
+            dispatch,
         })
     }
 

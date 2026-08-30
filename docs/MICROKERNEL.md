@@ -10786,3 +10786,19 @@ table evidence.
 Patent review: `NOT_TRIGGERED` — one-use issuance tracking for a validated
 dispatch token is conventional replay-resistant lifecycle state. See
 `docs/patents/REVIEW_LOG.md`.
+
+One-use dispatch authority is now enforced in `TaskRuntime`, not only in the
+storage receipt. Voluntary termination records one exact pending scheduler
+outcome; another voluntary retirement is rejected until it is resolved,
+structurally plausible substituted records cannot consume it, validation
+failure retains it, and successful dispatch atomically clears it. Reusing the
+same termination then fails even if its successor remains current. The native
+application and service-supervisor owners explicitly consume this transition,
+and service retirement returns the resulting opaque token. The Linux-host
+release kernel suite passes 653 tests, storage passes 163 tests, and both release
+builds pass. This proves the in-memory runtime state machine, not privileged
+context installation.
+
+Patent review: `NOT_TRIGGERED` — runtime-owned single-pending transition state
+and consume-on-success validation are conventional scheduler replay prevention.
+See `docs/patents/REVIEW_LOG.md`.
