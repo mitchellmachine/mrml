@@ -50,6 +50,26 @@ pub enum FilesystemProviderLaunchError<E> {
     Backend(E),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemProviderTeardownError<I, E> {
+    receipt: FilesystemProviderLaunchReceipt<I>,
+    error: E,
+}
+
+impl<I, E> FilesystemProviderTeardownError<I, E> {
+    pub const fn receipt(&self) -> &FilesystemProviderLaunchReceipt<I> {
+        &self.receipt
+    }
+
+    pub const fn error(&self) -> &E {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (FilesystemProviderLaunchReceipt<I>, E) {
+        (self.receipt, self.error)
+    }
+}
+
 /// Placement-specific construction boundary for an isolated filesystem
 /// provider with one exact block dependency.
 ///
@@ -74,6 +94,20 @@ pub unsafe trait FilesystemProviderLaunchBackend {
         block_endpoint: Capability,
         transfer: ComponentServiceReadTransferAttachment,
     ) -> Result<Self::Instance, Self::Error>;
+}
+
+/// Placement-specific teardown boundary for a successfully launched provider.
+///
+/// # Safety
+///
+/// Implementations must advance `instance` only after each cleanup stage is
+/// confirmed. On failure it must retain the exact live resources and progress
+/// needed for a safe retry. Success means the complete provider domain and all
+/// projections owned by the instance are retired.
+pub unsafe trait FilesystemProviderTeardownBackend: FilesystemProviderLaunchBackend {
+    type TeardownError;
+
+    fn teardown(&mut self, instance: &mut Self::Instance) -> Result<(), Self::TeardownError>;
 }
 
 pub fn launch_filesystem_provider<B: FilesystemProviderLaunchBackend, const CAPABILITIES: usize>(
@@ -132,6 +166,16 @@ fn receipt<I>(
     }
 }
 
+pub fn teardown_filesystem_provider<B: FilesystemProviderTeardownBackend>(
+    mut receipt: FilesystemProviderLaunchReceipt<B::Instance>,
+    backend: &mut B,
+) -> Result<(), FilesystemProviderTeardownError<B::Instance, B::TeardownError>> {
+    match backend.teardown(&mut receipt.instance) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(FilesystemProviderTeardownError { receipt, error }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,8 +187,20 @@ mod tests {
 
     struct Backend {
         fail: bool,
+        fail_teardown: bool,
         calls: usize,
+        teardown_calls: usize,
         observed: [u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
+    }
+
+    unsafe impl FilesystemProviderTeardownBackend for Backend {
+        type TeardownError = ();
+
+        fn teardown(&mut self, instance: &mut Self::Instance) -> Result<(), Self::TeardownError> {
+            self.teardown_calls += 1;
+            *instance += 1;
+            if self.fail_teardown { Err(()) } else { Ok(()) }
+        }
     }
 
     unsafe impl FilesystemProviderLaunchBackend for Backend {
@@ -253,7 +309,9 @@ mod tests {
         let transfer = transfer_attachment(&mut capabilities);
         let mut backend = Backend {
             fail: false,
+            fail_teardown: false,
             calls: 0,
+            teardown_calls: 0,
             observed: [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         };
         let receipt = launch_filesystem_provider(
@@ -287,7 +345,9 @@ mod tests {
         let transfer = transfer_attachment(&mut capabilities);
         let mut backend = Backend {
             fail: false,
+            fail_teardown: false,
             calls: 0,
+            teardown_calls: 0,
             observed: [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         };
         assert_eq!(
@@ -338,5 +398,26 @@ mod tests {
             Err(FilesystemProviderLaunchError::Backend(()))
         );
         assert_eq!(backend.calls, 1);
+    }
+
+    #[test]
+    fn teardown_failure_returns_exact_progressed_receipt_for_retry() {
+        let mut backend = Backend {
+            fail: false,
+            fail_teardown: true,
+            calls: 0,
+            teardown_calls: 0,
+            observed: [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
+        };
+        let receipt = receipt(association().handoff(), 40);
+        let failure = teardown_filesystem_provider(receipt, &mut backend).unwrap_err();
+        assert_eq!(backend.teardown_calls, 1);
+        assert_eq!(*failure.receipt().instance(), 41);
+        assert_eq!(failure.receipt().association_generation(), 12);
+        assert_eq!(failure.error(), &());
+        let (receipt, ()) = failure.into_parts();
+        backend.fail_teardown = false;
+        assert_eq!(teardown_filesystem_provider(receipt, &mut backend), Ok(()));
+        assert_eq!(backend.teardown_calls, 2);
     }
 }

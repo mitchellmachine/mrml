@@ -999,9 +999,12 @@ placement backend to project the handoff read-only and attenuate that endpoint,
 erases its temporary encoding, and returns a generation-bound receipt only on
 successful construction. The receipt now retains the backend's exact live
 instance or cleanup owner, so successful placement cannot discard the only path
-to later teardown. This is a service-lifecycle contract; a concrete installed
-placement backend remains **PLANNED**. Storage passes 157 focused Linux-host
-tests. The
+to later teardown. Teardown passes that retained instance back to its placement
+backend by mutable reference; a failure returns the complete generation-bound
+receipt with any exact backend progress preserved for retry, while only
+confirmed success consumes it. This is a service-lifecycle contract; a concrete
+installed placement backend remains **PLANNED**. Storage passes 158 focused
+Linux-host tests. The
 `mrml-fat32-service.efi` entry first copies and validates the exact 144-byte
 filesystem/block launch attachment through the kernel-projected read-only
 capability, retains the separately projected block endpoint capability, erases
