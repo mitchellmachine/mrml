@@ -837,6 +837,35 @@ Patent review: `NOT_TRIGGERED` — dependency-ordered construction, reverse
 rollback, and resumable combined cleanup are conventional resource transaction
 controls. See `docs/patents/REVIEW_LOG.md`.
 
+Live AHCI device quiescence is now ordered before mapping withdrawal and bound
+to the command backend's exact owned state **IMPLEMENTED IN SOURCE**. A healthy
+backend can yield only one non-copyable teardown owner containing its active
+port, ABAR mapping, data-DMA region, register adapter, command-memory adapter,
+and data adapter. Teardown stops and verifies the port engine, clears and
+read-verifies the command-list/FIS bases, zeroes and verifies command memory,
+sanitizes the data range, and revokes the exact DMA layout before producing the
+typed state that permits CPU/ABAR mapping removal. Data or DMA uncertainty
+retains the exact owner and all adapters for retry. A fail-stopped backend that
+has already lost active-port ownership yields a distinct quarantine owner and
+cannot enter ordinary quiescence. The focused Linux AHCI suite passes all 109
+tests and its release build passes. Concrete cache maintenance, page-table and
+IOMMU invalidation, wiring this owner into supervisor task termination, the
+native service binary, active execution, and physical-device evidence remain
+unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — exact-owner typestate and dependency-ordered
+device/DMA/mapping cleanup are conventional resource-lifecycle controls. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

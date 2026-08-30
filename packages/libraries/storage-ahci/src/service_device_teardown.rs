@@ -3,8 +3,8 @@
 use crate::{
     reclaim_stopped_ahci_port_dma, remove_ahci_service_mappings, revoke_ahci_port_dma,
     stop_ahci_port_engine, ActiveAhciPort, AhciAbarMapping, AhciAbarRemovalBackend,
-    AhciCleanupFailure, AhciCommandMemoryIo, AhciDataBufferIo, AhciDataDmaRegion,
-    AhciEngineFailure, AhciPortDmaBackend, AhciRegisterIo,
+    AhciCleanupFailure, AhciCommandBackendTeardown, AhciCommandMemoryIo, AhciDataBufferIo,
+    AhciDataDmaRegion, AhciEngineFailure, AhciPortDmaBackend, AhciRegisterIo,
     AhciServiceCpuMappingBackend, AhciServiceMappingRemovalError, AhciServiceMappingTeardown,
     InstalledAhciPortDma,
 };
@@ -57,6 +57,122 @@ pub enum AhciServiceDeviceQuiesceError {
         mappings: AhciServiceMappingTeardown,
     },
     Pending(PendingAhciServiceDeviceTeardown),
+}
+
+pub struct AhciCommandBackendQuiesceError<R, M, D> {
+    failure: AhciServiceDeviceQuiesceError,
+    data_region: AhciDataDmaRegion,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+impl<R, M, D> AhciCommandBackendQuiesceError<R, M, D> {
+    pub const fn failure(&self) -> &AhciServiceDeviceQuiesceError {
+        &self.failure
+    }
+}
+
+pub struct QuiescedAhciCommandBackend<R, M, D> {
+    mappings: QuiescedAhciServiceMappings,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+impl<R, M, D> QuiescedAhciCommandBackend<R, M, D> {
+    pub const fn mappings(&self) -> QuiescedAhciServiceMappings {
+        self.mappings
+    }
+
+    pub fn into_parts(self) -> (QuiescedAhciServiceMappings, R, M, D) {
+        (
+            self.mappings,
+            self.registers,
+            self.command_memory,
+            self.data_io,
+        )
+    }
+}
+
+pub fn quiesce_ahci_command_backend<
+    R: AhciRegisterIo,
+    M: AhciCommandMemoryIo,
+    D: AhciDataBufferIo,
+    B: AhciPortDmaBackend,
+>(
+    backend: AhciCommandBackendTeardown<R, M, D>,
+    mappings: AhciServiceMappingTeardown,
+    dma_backend: &mut B,
+) -> Result<QuiescedAhciCommandBackend<R, M, D>, AhciCommandBackendQuiesceError<R, M, D>> {
+    let (mapping, port, data_region, mut registers, mut command_memory, mut data_io) =
+        backend.into_parts();
+    match quiesce_ahci_service_device(
+        mapping,
+        port,
+        mappings,
+        data_region,
+        &mut registers,
+        &mut command_memory,
+        &mut data_io,
+        dma_backend,
+    ) {
+        Ok(mappings) => Ok(QuiescedAhciCommandBackend {
+            mappings,
+            registers,
+            command_memory,
+            data_io,
+        }),
+        Err(failure) => Err(AhciCommandBackendQuiesceError {
+            failure,
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        }),
+    }
+}
+
+pub fn resume_ahci_command_backend_teardown<D: AhciDataBufferIo, B: AhciPortDmaBackend, R, M>(
+    error: AhciCommandBackendQuiesceError<R, M, D>,
+    dma_backend: &mut B,
+) -> Result<QuiescedAhciCommandBackend<R, M, D>, AhciCommandBackendQuiesceError<R, M, D>> {
+    let AhciCommandBackendQuiesceError {
+        failure,
+        data_region,
+        registers,
+        command_memory,
+        mut data_io,
+    } = error;
+    let AhciServiceDeviceQuiesceError::Pending(pending) = failure else {
+        return Err(AhciCommandBackendQuiesceError {
+            failure,
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        });
+    };
+    match resume_ahci_service_device_teardown(
+        pending,
+        data_region,
+        &mut data_io,
+        dma_backend,
+    ) {
+        Ok(mappings) => Ok(QuiescedAhciCommandBackend {
+            mappings,
+            registers,
+            command_memory,
+            data_io,
+        }),
+        Err(pending) => Err(AhciCommandBackendQuiesceError {
+            failure: AhciServiceDeviceQuiesceError::Pending(pending),
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

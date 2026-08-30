@@ -43,6 +43,68 @@ pub struct AhciCommandBlockBackend<'a, const N: usize, R, M, D> {
     durability_serial: u64,
 }
 
+/// Exact live mechanism state handed to the service teardown path.
+pub struct AhciCommandBackendTeardown<R, M, D> {
+    mapping: AhciAbarMapping,
+    port: ActiveAhciPort,
+    data_region: AhciDataDmaRegion,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+impl<R, M, D> AhciCommandBackendTeardown<R, M, D> {
+    pub const fn mapping(&self) -> AhciAbarMapping {
+        self.mapping
+    }
+
+    pub const fn data_region(&self) -> AhciDataDmaRegion {
+        self.data_region
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (AhciAbarMapping, ActiveAhciPort, AhciDataDmaRegion, R, M, D) {
+        (
+            self.mapping,
+            self.port,
+            self.data_region,
+            self.registers,
+            self.command_memory,
+            self.data_io,
+        )
+    }
+}
+
+/// State retained when a fail-stopped backend has lost its active-port owner.
+pub struct QuarantinedAhciCommandBackend<R, M, D> {
+    mapping: AhciAbarMapping,
+    data_region: AhciDataDmaRegion,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+impl<R, M, D> QuarantinedAhciCommandBackend<R, M, D> {
+    pub const fn mapping(&self) -> AhciAbarMapping {
+        self.mapping
+    }
+
+    pub const fn data_region(&self) -> AhciDataDmaRegion {
+        self.data_region
+    }
+
+    pub fn into_parts(self) -> (AhciAbarMapping, AhciDataDmaRegion, R, M, D) {
+        (
+            self.mapping,
+            self.data_region,
+            self.registers,
+            self.command_memory,
+            self.data_io,
+        )
+    }
+}
+
 impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -97,8 +159,35 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
         self.owner.is_some()
     }
 
-    pub fn into_parts(self) -> (Option<ActiveAhciPort>, R, M, D) {
-        (self.owner, self.registers, self.memory, self.data_io)
+    pub fn into_teardown(
+        self,
+    ) -> Result<AhciCommandBackendTeardown<R, M, D>, QuarantinedAhciCommandBackend<R, M, D>> {
+        let Self {
+            mapping,
+            owner,
+            data_region,
+            registers,
+            memory,
+            data_io,
+            ..
+        } = self;
+        match owner {
+            Some(port) => Ok(AhciCommandBackendTeardown {
+                mapping,
+                port,
+                data_region,
+                registers,
+                command_memory: memory,
+                data_io,
+            }),
+            None => Err(QuarantinedAhciCommandBackend {
+                mapping,
+                data_region,
+                registers,
+                command_memory: memory,
+                data_io,
+            }),
+        }
     }
 }
 
@@ -531,7 +620,11 @@ mod tests {
             Err(AhciBlockIoError::MediaChanged)
         );
         assert!(backend.is_available());
-        let (_, _, _, data_io) = backend.into_parts();
+        let teardown = match backend.into_teardown() {
+            Ok(teardown) => teardown,
+            Err(_) => panic!("healthy backend must retain its teardown owner"),
+        };
+        let (_, _, _, _, _, data_io) = teardown.into_parts();
         assert_eq!(
             (
                 data_io.completed_reads,
@@ -591,5 +684,13 @@ mod tests {
             Err(AhciBlockIoError::IoFailure)
         );
         assert!(!backend.is_available());
+        let quarantine = match backend.into_teardown() {
+            Ok(_) => panic!("fail-stopped backend must not yield an active port"),
+            Err(quarantine) => quarantine,
+        };
+        assert_eq!(quarantine.mapping(), mapping());
+        assert_eq!(quarantine.data_region(), data);
+        let (_, _, _, _, data_io) = quarantine.into_parts();
+        assert_eq!(data_io.sanitizes, 1);
     }
 }

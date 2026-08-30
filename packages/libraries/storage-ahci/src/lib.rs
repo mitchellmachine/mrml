@@ -108,7 +108,10 @@ pub use block_io_adapter::{
     AhciBlockControlAdapter, AhciBlockControlBackend, AhciBlockControlError, AhciBlockIoAdapter,
     AhciBlockIoBackend, AhciBlockIoError,
 };
-pub use command_block_backend::{AhciCommandBlockBackend, AhciDataBufferIo};
+pub use command_block_backend::{
+    AhciCommandBackendTeardown, AhciCommandBlockBackend, AhciDataBufferIo,
+    QuarantinedAhciCommandBackend,
+};
 pub use control_service_loop::{
     AhciControlServiceLoop, AhciControlServiceLoopError, AhciControlServiceSyscalls,
     ReceivedAhciControlEnvelope,
@@ -138,9 +141,11 @@ pub use service_cpu_mapping::{
     install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
 };
 pub use service_device_teardown::{
-    AhciServiceDeviceQuiesceError, PendingAhciServiceDeviceTeardown,
-    QuiescedAhciServiceMappings, quiesce_ahci_service_device,
-    remove_quiesced_ahci_service_mappings, resume_ahci_service_device_teardown,
+    AhciCommandBackendQuiesceError, AhciServiceDeviceQuiesceError,
+    PendingAhciServiceDeviceTeardown, QuiescedAhciCommandBackend,
+    QuiescedAhciServiceMappings, quiesce_ahci_command_backend,
+    quiesce_ahci_service_device, remove_quiesced_ahci_service_mappings,
+    resume_ahci_command_backend_teardown, resume_ahci_service_device_teardown,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,

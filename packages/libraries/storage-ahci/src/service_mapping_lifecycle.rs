@@ -237,7 +237,7 @@ mod tests {
     }
 
     struct Data {
-        fail_sanitize: bool,
+        sanitize_failures: usize,
         sanitizations: usize,
     }
 
@@ -248,7 +248,12 @@ mod tests {
         fn complete_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
         fn sanitize(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
             self.sanitizations += 1;
-            if self.fail_sanitize { Err(()) } else { Ok(()) }
+            if self.sanitize_failures == 0 {
+                Ok(())
+            } else {
+                self.sanitize_failures -= 1;
+                Err(())
+            }
         }
     }
 
@@ -494,43 +499,60 @@ mod tests {
         )
         .unwrap();
         let launch = record();
-        let mut registers = Registers::active();
         let mut command_list = [0xa5; 1024];
         let mut received_fis = [0xa5; 256];
         let mut command_tables = [0xa5; 1024];
-        let mut command_memory = crate::AhciMappedCommandMemory::new(
+        let command_memory = crate::AhciMappedCommandMemory::new(
             launch.layout(),
             &mut command_list,
             &mut received_fis,
             &mut command_tables,
         )
         .unwrap();
-        let mut data = Data { fail_sanitize: true, sanitizations: 0 };
-        let mut dma_backend = DmaBackend::default();
-        let error = crate::quiesce_ahci_service_device(
+        let mut io_capabilities = CapabilitySpace::<2>::new();
+        let read_data = io_capabilities
+            .insert(
+                launch.data().memory_object,
+                Rights::PIN.union(Rights::MAP).union(Rights::WRITE),
+            )
+            .unwrap();
+        let write_data = io_capabilities
+            .insert(
+                launch.data().memory_object,
+                Rights::PIN.union(Rights::MAP).union(Rights::READ),
+            )
+            .unwrap();
+        let backend = crate::AhciCommandBlockBackend::new(
+            &io_capabilities,
+            launch.device().session,
+            launch.device().media_generation,
+            read_data,
+            write_data,
+            launch.data(),
             launch.mapping(),
             ActiveAhciPort::from_layout(launch.layout()),
-            state,
-            launch.data(),
-            &mut registers,
-            &mut command_memory,
-            &mut data,
-            &mut dma_backend,
+            Registers::active(),
+            command_memory,
+            Data { sanitize_failures: 1, sanitizations: 0 },
         )
-        .unwrap_err();
-        let crate::AhciServiceDeviceQuiesceError::Pending(pending) = error else {
+        .unwrap();
+        let teardown = match backend.into_teardown() {
+            Ok(teardown) => teardown,
+            Err(_) => panic!("active backend must yield teardown ownership"),
+        };
+        let mut dma_backend = DmaBackend::default();
+        let error = match crate::quiesce_ahci_command_backend(teardown, state, &mut dma_backend) {
+            Ok(_) => panic!("first data sanitization must fail"),
+            Err(error) => error,
+        };
+        let crate::AhciServiceDeviceQuiesceError::Pending(pending) = error.failure() else {
             panic!("expected retryable data cleanup");
         };
         assert!(pending.mappings().abar().is_some());
         assert_eq!(dma_backend.removals, 0);
-        data.fail_sanitize = false;
-        let quiesced = crate::resume_ahci_service_device_teardown(
-            pending,
-            launch.data(),
-            &mut data,
-            &mut dma_backend,
-        )
-        .unwrap();
+        let quiesced = crate::resume_ahci_command_backend_teardown(error, &mut dma_backend)
+            .unwrap_or_else(|_| panic!("retry must complete"));
+        let (quiesced, _, _, data) = quiesced.into_parts();
         assert_eq!(data.sanitizations, 2);
         assert_eq!(dma_backend.removals, 1);
         let state = crate::remove_quiesced_ahci_service_mappings(

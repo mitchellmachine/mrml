@@ -719,6 +719,34 @@ Patent review: **NOT_TRIGGERED**. Dependency-ordered construction, reverse
 rollback, and resumable combined cleanup are conventional resource transaction
 controls. See [the patent review log](../patents/REVIEW_LOG.md).
 
+Live AHCI device quiescence is now ordered before mapping withdrawal and bound
+to the command backend's exact owned state **IMPLEMENTED IN SOURCE**. A healthy
+backend yields one non-copyable owner containing its active port, ABAR mapping,
+data-DMA region, register adapter, command-memory adapter, and data adapter.
+Teardown stops and verifies the engine, clears and read-verifies command-list
+and FIS bases, zeroes and verifies command memory, sanitizes the data range, and
+revokes the exact DMA layout before issuing the typed state that permits CPU and
+ABAR mapping removal. Data or DMA uncertainty retains the exact owner and all
+adapters for retry. A backend that fail-stopped and lost active-port ownership
+yields a distinct quarantine owner and cannot enter ordinary quiescence. The
+focused Linux AHCI suite passes all 109 tests and its release build passes.
+Concrete cache maintenance, page-table and IOMMU invalidation, supervisor task-
+termination wiring, the native service binary, active execution, and physical-
+device evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Exact-owner typestate and dependency-ordered
+device/DMA/mapping cleanup are conventional resource-lifecycle controls. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
