@@ -5,7 +5,8 @@ use crate::{
     remove_ahci_service_abar, remove_ahci_service_cpu_mappings, AhciAbarDescriptor,
     AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError,
     AhciInstalledCpuMappings, AhciServiceCpuMappingBackend, AhciServiceCpuMappingError,
-    AhciServiceCpuMappingRemovalError, AhciServiceLaunchRecord, InstalledAhciAbarMapping,
+    AhciServiceCpuMappingRemovalError, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
+    InstalledAhciAbarMapping, PreparedAhciNativeServiceTask,
 };
 use mrml_kernel::{Capability, CapabilitySpace};
 
@@ -52,6 +53,101 @@ pub enum AhciServiceMappingRemovalError<E> {
         error: AhciAbarRemovalError,
         retained: AhciServiceMappingTeardown,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MappedAhciNativeServiceTask {
+    prepared: PreparedAhciNativeServiceTask,
+    mappings: AhciServiceMappingTeardown,
+}
+
+impl MappedAhciNativeServiceTask {
+    pub const fn prepared(self) -> PreparedAhciNativeServiceTask {
+        self.prepared
+    }
+
+    pub const fn mappings(self) -> AhciServiceMappingTeardown {
+        self.mappings
+    }
+
+    pub const fn into_parts(self) -> (PreparedAhciNativeServiceTask, AhciServiceMappingTeardown) {
+        (self.prepared, self.mappings)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PreparedAhciServiceMappingError<E> {
+    InvalidBoundLaunch(AhciServiceLaunchRecordError),
+    Mapping(AhciServiceMappingInstallError<E>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedAhciServiceMappingFailure<E> {
+    prepared: PreparedAhciNativeServiceTask,
+    error: PreparedAhciServiceMappingError<E>,
+}
+
+impl<E> PreparedAhciServiceMappingFailure<E> {
+    pub const fn prepared(&self) -> PreparedAhciNativeServiceTask {
+        self.prepared
+    }
+
+    pub const fn error(&self) -> &PreparedAhciServiceMappingError<E> {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (PreparedAhciNativeServiceTask, PreparedAhciServiceMappingError<E>) {
+        (self.prepared, self.error)
+    }
+}
+
+/// Installs only mappings named by the prepared task's bound launch.
+#[allow(clippy::too_many_arguments)]
+pub fn install_prepared_ahci_service_mappings<
+    A: AhciAbarMappingBackend + AhciAbarRemovalBackend,
+    D: AhciServiceCpuMappingBackend,
+    const C: usize,
+>(
+    prepared: PreparedAhciNativeServiceTask,
+    descriptor: AhciAbarDescriptor,
+    abar_mapping_capability: Capability,
+    abar_control_capability: Capability,
+    cpu_mapping_capabilities: [Capability; 4],
+    capabilities: &CapabilitySpace<C>,
+    abar_backend: &mut A,
+    cpu_backend: &mut D,
+) -> Result<MappedAhciNativeServiceTask, PreparedAhciServiceMappingFailure<D::Error>> {
+    let launch = prepared.launch();
+    let spec = launch.spec();
+    let record = AhciServiceLaunchRecord::new(
+        spec.service().system_generation(),
+        spec.service().provider_generation(),
+        spec.attachment().attachment_generation(),
+        spec.device(),
+        spec.mapping(),
+        spec.layout(),
+        spec.data(),
+        launch.cpu_mappings(),
+    )
+    .map_err(|error| PreparedAhciServiceMappingFailure {
+        prepared,
+        error: PreparedAhciServiceMappingError::InvalidBoundLaunch(error),
+    })?;
+    install_ahci_service_mappings(
+        record,
+        descriptor,
+        abar_mapping_capability,
+        abar_control_capability,
+        cpu_mapping_capabilities,
+        capabilities,
+        abar_backend,
+        cpu_backend,
+    )
+    .map(|mappings| MappedAhciNativeServiceTask { prepared, mappings })
+    .map_err(|error| PreparedAhciServiceMappingFailure {
+        prepared,
+        error: PreparedAhciServiceMappingError::Mapping(error),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -414,7 +510,7 @@ mod tests {
     fn native_tasks() -> (
         TaskRuntime<3, 8>,
         mrml_kernel::TaskId,
-        mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        crate::PreparedAhciNativeServiceTask,
         mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
         crate::BoundAhciServiceLaunch,
     ) {
@@ -469,12 +565,12 @@ mod tests {
             };
             (create(8), create(9))
         };
-        let correct = prepare_native_device_service_task(
+        let bound = record().bind(service(), correct_attachment).unwrap();
+        let correct = crate::prepare_bound_ahci_native_service_task(
             &mut runtime,
             source,
             target,
-            service(),
-            correct_attachment,
+            bound,
             ObjectId(40),
             ObjectId(41),
             ObjectId(42),
@@ -491,8 +587,62 @@ mod tests {
             ObjectId(42),
         )
         .unwrap();
-        let bound = record().bind(service(), correct_attachment).unwrap();
         (runtime, source, correct, wrong, bound)
+    }
+
+    #[test]
+    fn prepared_task_installs_only_its_bound_mapping_set() {
+        let (_, _, prepared, _, launch) = native_tasks();
+        let (capabilities, map, control, cpu) = authorities();
+        let mut abar_backend = AbarBackend::default();
+        let mut cpu_backend = CpuBackend::default();
+        let mapped = crate::install_prepared_ahci_service_mappings(
+            prepared,
+            descriptor(),
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        )
+        .unwrap();
+        assert_eq!(mapped.prepared(), prepared);
+        assert_eq!(mapped.prepared().launch(), launch);
+        assert!(mapped.mappings().abar().is_some());
+        assert!(mapped.mappings().cpu().fully_installed());
+        assert_eq!(abar_backend.mapping, Some(record().mapping()));
+        assert!(cpu_backend.installed.iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn prepared_mapping_failure_returns_task_owner_before_mutation() {
+        let (_, _, prepared, _, _) = native_tasks();
+        let (capabilities, map, control, cpu) = authorities();
+        let mut abar_backend = AbarBackend::default();
+        let mut cpu_backend = CpuBackend::default();
+        let mut wrong = descriptor();
+        wrong.configuration_generation += 1;
+        let failure = crate::install_prepared_ahci_service_mappings(
+            prepared,
+            wrong,
+            map,
+            control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        )
+        .unwrap_err();
+        assert_eq!(failure.prepared(), prepared);
+        assert_eq!(
+            failure.error(),
+            &crate::PreparedAhciServiceMappingError::Mapping(
+                AhciServiceMappingInstallError::DescriptorMismatch
+            )
+        );
+        assert!(abar_backend.mapping.is_none());
+        assert!(cpu_backend.installed.iter().all(Option::is_none));
     }
 
     #[test]
@@ -655,7 +805,8 @@ mod tests {
         assert_eq!(dma_backend.removals, 0);
         let quiesced = crate::resume_ahci_command_backend_teardown(error, &mut dma_backend)
             .unwrap_or_else(|_| panic!("retry must complete"));
-        let (mut runtime, source, task, wrong_task, launch) = native_tasks();
+        let (mut runtime, source, prepared, wrong_task, launch) = native_tasks();
+        let task = prepared.task();
         let (binding, _, launch, quiesced) =
             match crate::bind_quiesced_ahci_service_task(wrong_task, launch, quiesced) {
                 Ok(_) => panic!("wrong attachment generation must not bind"),

@@ -1467,6 +1467,33 @@ Patent review: `NOT_TRIGGERED` — typed composition of an existing bound launch
 with existing atomic task construction and rollback is conventional lifecycle
 plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+Prepared AHCI tasks now compose with exact pre-launch mapping installation
+**IMPLEMENTED IN SOURCE**. The transition reconstructs the canonical record only
+from its retained bound launch, exact-matches the discovered ABAR descriptor,
+then installs the ABAR and four launch-named CPU mappings through the existing
+rollback-complete lifecycle. Success retains the prepared task/launch owner and
+the complete mapping teardown state together. Every failure returns the same
+prepared owner; retained or uncertain mappings remain carried by the existing
+typed mapping error for explicit cleanup. Tests prove exact successful mapping
+of the bound set and descriptor substitution returning the task owner before any
+ABAR or CPU backend mutation. The AHCI Linux suite passes all 134 tests and both
+Linux and `MRML_NATIVE` release builds pass. This is controlled backend and
+capability-runtime evidence, not active page-table, IOMMU, installed-task, or
+physical AHCI execution evidence.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — retaining task ownership while invoking the
+existing exact mapping and rollback lifecycle is conventional resource
+composition. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
