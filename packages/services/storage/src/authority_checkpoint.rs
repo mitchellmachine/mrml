@@ -2120,6 +2120,12 @@ mod tests {
             ),
             (8, 1)
         );
+        recovery_state.fail_load = true;
+        let pending = match pending.resolve(&recovery_state) {
+            Err((pending, PendingAuthorityResolutionError::State(1))) => pending,
+            _ => panic!("state-load uncertainty released reconstructed authority"),
+        };
+        recovery_state.fail_load = false;
         let pending = match pending.resolve(&recovery_state) {
             Err((pending, PendingAuthorityResolutionError::StateMismatch)) => pending,
             _ => panic!("unchanged state did not retain pending authority"),
@@ -2213,6 +2219,12 @@ mod tests {
             ),
             (8, 1)
         );
+        recovery_state.fail_load = true;
+        let pending = match pending.resolve(&recovery_state) {
+            Err((pending, PendingAuthorityResolutionError::State(1))) => pending,
+            _ => panic!("state-load uncertainty released validated recovery"),
+        };
+        recovery_state.fail_load = false;
         let pending = match pending.resolve(&recovery_state) {
             Err((pending, PendingAuthorityResolutionError::StateMismatch)) => pending,
             _ => panic!("stale state released validated recovery"),
