@@ -373,7 +373,7 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         feature = "deadline-receive-cancel-probe",
         not(feature = "deadline-receive-message-probe")
     ))]
-    if status != mrml_kernel::SyscallCompletionStatus::Error.code()
+    if status != mrml_kernel::SyscallCompletionStatus::Cancelled.code()
         || length | word0 | word1 | word2 != 0
     {
         halt();

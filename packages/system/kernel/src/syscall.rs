@@ -15,6 +15,7 @@ pub enum SyscallCompletionStatus {
     Success = 0,
     Error = 1,
     TimedOut = 2,
+    Cancelled = 3,
 }
 
 impl SyscallCompletionStatus {
@@ -257,6 +258,14 @@ impl UserCallFrame {
 
     pub fn complete_timeout(&mut self) {
         self.rax = SyscallCompletionStatus::TimedOut.code();
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
+    pub fn complete_cancelled(&mut self) {
+        self.rax = SyscallCompletionStatus::Cancelled.code();
         self.rdx = 0;
         self.r10 = 0;
         self.r8 = 0;
@@ -876,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_error_completion_is_detail_free() {
+    fn terminal_receive_completions_are_distinct_and_detail_free() {
         let mut frame = valid_yield_frame();
         frame.rdx = u64::MAX;
         frame.r10 = u64::MAX;
@@ -899,6 +908,23 @@ mod tests {
         assert_ne!(
             SyscallCompletionStatus::TimedOut.code(),
             SyscallCompletionStatus::Error.code()
+        );
+        frame.rdx = u64::MAX;
+        frame.r10 = u64::MAX;
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_cancelled();
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (SyscallCompletionStatus::Cancelled.code(), 0, 0, 0, 0)
+        );
+        assert_ne!(
+            SyscallCompletionStatus::Cancelled.code(),
+            SyscallCompletionStatus::Error.code()
+        );
+        assert_ne!(
+            SyscallCompletionStatus::Cancelled.code(),
+            SyscallCompletionStatus::TimedOut.code()
         );
     }
 

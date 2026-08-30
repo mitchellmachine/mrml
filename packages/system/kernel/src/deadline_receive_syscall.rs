@@ -189,7 +189,7 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
         runtime
             .context_mut(task)
             .expect("cancellation preserves the prevalidated task context")
-            .complete_error();
+            .complete_cancelled();
         Ok(())
     }
 
@@ -620,7 +620,10 @@ mod tests {
         executor.cancel(&mut runtime, cancellation).unwrap();
         assert!(!executor.has_pending(receiver).unwrap());
         let context = runtime.context(receiver).unwrap();
-        assert_eq!(context.rax, crate::SyscallCompletionStatus::Error.code());
+        assert_eq!(
+            context.rax,
+            crate::SyscallCompletionStatus::Cancelled.code()
+        );
         assert_eq!(
             (context.rdx, context.r10, context.r8, context.r9),
             (0, 0, 0, 0)

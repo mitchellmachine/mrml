@@ -11847,3 +11847,30 @@ or physical-hardware verification is claimed.
 Patent review: `NOT_TRIGGERED` — selecting an existing bounded guest profile and
 exactly matching a mode-specific regression marker is conventional hosted test
 runner routing. See `docs/patents/REVIEW_LOG.md`.
+
+Deadline-receive completion now distinguishes all three terminal outcomes in
+the pointer-free syscall ABI. Existing codes remain stable (`Success = 0`,
+generic `Error = 1`, and `TimedOut = 2`), while an authorized cancellation wakes
+the exact blocked receiver with the new `Cancelled = 3` status. Every result
+register other than the status is cleared. The cancellation manager still
+receives its separate detail-free success response; it cannot choose or forge
+the blocked receiver's completion status.
+
+Both syscall-frame representations expose the same detail-clearing completion,
+and the deadline executor uses it only after exact token cancellation succeeds.
+Focused tests require cancellation to differ from both generic failure and
+timeout. The service cancellation probe now accepts only `Cancelled` before it
+emits `0x2c`, so a regression to generic failure cannot satisfy the profile.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes all 679
+tests. Native kernel and cancellation service-image release builds pass; the
+service image emits its existing 13 dead-code warnings. The matching
+`uefi-x86_64` cancellation bootloader release profile passes with its existing
+unreachable-pattern warning. Two noncanonical `uefi`/`UEFI` target requests
+were rejected as `UnsupportedTarget` before compilation and are not evidence.
+This is unit and cross-build evidence only; no hosted guest or physical machine
+executed the updated completion.
+
+Patent review: `NOT_TRIGGERED` — assigning a distinct bounded integer result to
+an existing cancellation transition is conventional syscall result typing. See
+`docs/patents/REVIEW_LOG.md`.

@@ -2435,7 +2435,7 @@ mod tests {
         );
         assert_eq!(
             runtime.context(receiver).unwrap().rax,
-            crate::SyscallCompletionStatus::Error.code()
+            crate::SyscallCompletionStatus::Cancelled.code()
         );
         assert_eq!(
             supervisor.cancel_deadline_receive(

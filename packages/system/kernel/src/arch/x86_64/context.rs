@@ -262,6 +262,14 @@ impl UserContext {
         self.r9 = 0;
     }
 
+    pub fn complete_cancelled(&mut self) {
+        self.rax = SyscallCompletionStatus::Cancelled.code();
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
     pub const fn instruction_pointer(&self) -> u64 {
         self.rip
     }
@@ -571,6 +579,16 @@ mod tests {
         context.r9 = u64::MAX;
         context.complete_timeout();
         assert_eq!(context.rax, SyscallCompletionStatus::TimedOut.code());
+        assert_eq!(context.rdx, 0);
+        assert_eq!(context.r10, 0);
+        assert_eq!(context.r8, 0);
+        assert_eq!(context.r9, 0);
+        context.rdx = u64::MAX;
+        context.r10 = u64::MAX;
+        context.r8 = u64::MAX;
+        context.r9 = u64::MAX;
+        context.complete_cancelled();
+        assert_eq!(context.rax, SyscallCompletionStatus::Cancelled.code());
         assert_eq!(context.rdx, 0);
         assert_eq!(context.r10, 0);
         assert_eq!(context.r8, 0);
