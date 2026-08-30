@@ -2118,12 +2118,15 @@ fn application_main() -> Result<()> {
         arguments.len() == 9 && arguments[5] == "deadline-receive-message-probe";
     let deadline_receive_cancel_mode =
         arguments.len() == 9 && arguments[5] == "deadline-receive-cancel-probe";
+    let deadline_receive_cancel_denied_mode =
+        arguments.len() == 9 && arguments[5] == "deadline-receive-cancel-denied-probe";
     let deadline_receive_mode = arguments.len() == 9
         && matches!(
             arguments[5].as_str(),
             "deadline-receive-probe"
                 | "deadline-receive-message-probe"
                 | "deadline-receive-cancel-probe"
+                | "deadline-receive-cancel-denied-probe"
         );
     let service_mode = arguments.len() == 9
         && matches!(
@@ -2132,6 +2135,7 @@ fn application_main() -> Result<()> {
                 | "deadline-receive-probe"
                 | "deadline-receive-message-probe"
                 | "deadline-receive-cancel-probe"
+                | "deadline-receive-cancel-denied-probe"
         );
     let component_release_input_mode =
         arguments.len() == 15 && arguments[5] == "component-release-inputs";
@@ -4341,7 +4345,9 @@ fn application_main() -> Result<()> {
         return Err(anyhow!("WHP block-service probe exceeded its stage bound"));
     }
     if deadline_receive_mode {
-        let expected = if deadline_receive_cancel_mode {
+        let expected = if deadline_receive_cancel_denied_mode {
+            0x2d
+        } else if deadline_receive_cancel_mode {
             0x2c
         } else if deadline_receive_message_mode {
             0x2b

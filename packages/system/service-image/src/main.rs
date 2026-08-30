@@ -349,9 +349,14 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
             in("rdi") 1u64,
             #[cfg(any(
                 feature = "deadline-receive-message-probe",
-                feature = "deadline-receive-cancel-probe"
+                all(
+                    feature = "deadline-receive-cancel-probe",
+                    not(feature = "deadline-receive-cancel-denied-probe")
+                )
             ))]
             in("rdi") 1_000_000u64,
+            #[cfg(feature = "deadline-receive-cancel-denied-probe")]
+            in("rdi") 1u64,
             in("rsi") 0u64,
             inlateout("rdx") length,
             inlateout("r10") word0,
@@ -371,9 +376,16 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     }
     #[cfg(all(
         feature = "deadline-receive-cancel-probe",
-        not(feature = "deadline-receive-message-probe")
+        not(feature = "deadline-receive-message-probe"),
+        not(feature = "deadline-receive-cancel-denied-probe")
     ))]
     if status != mrml_kernel::SyscallCompletionStatus::Cancelled.code()
+        || length | word0 | word1 | word2 != 0
+    {
+        halt();
+    }
+    #[cfg(feature = "deadline-receive-cancel-denied-probe")]
+    if status != mrml_kernel::SyscallCompletionStatus::TimedOut.code()
         || length | word0 | word1 | word2 != 0
     {
         halt();
@@ -405,9 +417,12 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
             in("eax") 0x2bu32,
             #[cfg(all(
                 feature = "deadline-receive-cancel-probe",
-                not(feature = "deadline-receive-message-probe")
+                not(feature = "deadline-receive-message-probe"),
+                not(feature = "deadline-receive-cancel-denied-probe")
             ))]
             in("eax") 0x2cu32,
+            #[cfg(feature = "deadline-receive-cancel-denied-probe")]
+            in("eax") 0x2du32,
             options(nomem, nostack)
         )
     };
@@ -1335,9 +1350,11 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
             options(nostack)
         )
     };
-    if status != mrml_kernel::SyscallCompletionStatus::Success.code()
-        || detail0 | detail1 | detail2 | detail3 != 0
-    {
+    #[cfg(not(feature = "deadline-receive-cancel-denied-probe"))]
+    let expected = mrml_kernel::SyscallCompletionStatus::Success.code();
+    #[cfg(feature = "deadline-receive-cancel-denied-probe")]
+    let expected = mrml_kernel::SyscallCompletionStatus::Error.code();
+    if status != expected || detail0 | detail1 | detail2 | detail3 != 0 {
         halt();
     }
     unsafe { yield_now() };

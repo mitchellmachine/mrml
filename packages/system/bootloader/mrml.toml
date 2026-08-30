@@ -38,6 +38,9 @@ name = "deadline-receive-message-probe"
 name = "deadline-receive-cancel-probe"
 
 [[feature]]
+name = "deadline-receive-cancel-denied-probe"
+
+[[feature]]
 name = "emulated-ap-timing"
 
 [[feature]]
@@ -201,6 +204,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe", "deadline-receive-probe", "deadline-receive-cancel-probe"]
 name = "deadline_receive_cancel_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "deadline-receive-probe", "deadline-receive-cancel-probe", "deadline-receive-cancel-denied-probe"]
+name = "deadline_receive_cancel_denied_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

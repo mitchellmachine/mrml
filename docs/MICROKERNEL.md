@@ -11874,3 +11874,34 @@ executed the updated completion.
 Patent review: `NOT_TRIGGERED` — assigning a distinct bounded integer result to
 an existing cancellation transition is conventional syscall result typing. See
 `docs/patents/REVIEW_LOG.md`.
+
+The adversarial `deadline_receive_cancel_denied_probe` profile now proves that
+cancellation authority is not inferred from service identity or mere object
+possession. The sender receives only a task-local `READ` handle for the exact
+receiver service object, then submits the otherwise canonical operation-14
+request. It requires a detail-free generic error from that request. The blocked
+receiver must remain owned by its original deadline, complete only as
+`TimedOut`, and emit the distinct proof marker `0x2d`. Thus denial followed by
+an accidental cancellation, escrow loss, or indefinite suspension cannot
+satisfy the profile.
+
+The KVM and WHP runners select the same timer-capable three-service guest for
+this mode and bind `0x2d` only to the denial profile. KVM's canonical proof
+validator now admits exactly `0x2a` through `0x2d`; tests accept the exact denial
+marker while rejecting cross-mode substitution and the noncanonical `0x2e`.
+
+Both the denied and successful-cancellation service-image release profiles
+cross-build with their existing 13 dead-code warnings, and both corresponding
+`uefi-x86_64` bootloader profiles cross-build with the existing unreachable-
+pattern warning. The Linux KVM runner's 16 tests and release build pass, the
+latter with its existing 25 CUDA/PTX warnings. WHP source has symmetric routing,
+but its Windows build remains unavailable because `cross_host_rust_target` is
+absent. Whole-file rustfmt checking continues to expose unrelated pre-existing
+drift in the large service, boot, and runner sources; only the newly changed
+hunks were kept rustfmt-conformant. `/dev/kvm` is absent, so this is unit and
+cross-build evidence, not a hosted proof-port observation or physical-hardware
+result.
+
+Patent review: `NOT_TRIGGERED` — exercising capability denial while requiring
+the pre-existing timeout to remain authoritative is conventional adversarial
+authorization testing. See `docs/patents/REVIEW_LOG.md`.

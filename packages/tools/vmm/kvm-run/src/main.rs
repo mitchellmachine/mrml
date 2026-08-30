@@ -1038,6 +1038,7 @@ enum LaunchMode {
     DeadlineReceiveProbe,
     DeadlineReceiveMessageProbe,
     DeadlineReceiveCancelProbe,
+    DeadlineReceiveCancelDeniedProbe,
     InvalidReturnProbe,
     BufferDriftProbe,
     ComponentServiceProbe,
@@ -1071,6 +1072,7 @@ impl LaunchMode {
             "deadline-receive-probe" => Ok(Self::DeadlineReceiveProbe),
             "deadline-receive-message-probe" => Ok(Self::DeadlineReceiveMessageProbe),
             "deadline-receive-cancel-probe" => Ok(Self::DeadlineReceiveCancelProbe),
+            "deadline-receive-cancel-denied-probe" => Ok(Self::DeadlineReceiveCancelDeniedProbe),
             "invalid-return-probe" => Ok(Self::InvalidReturnProbe),
             "buffer-drift-probe" => Ok(Self::BufferDriftProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
@@ -1088,7 +1090,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -1148,7 +1150,7 @@ fn require_buffer_drift_stage(exit: VmExit, expected: u32) -> Result<()> {
 
 #[cfg(any(test, target_os = "linux"))]
 fn require_deadline_receive_proof(exit: VmExit, expected: u32) -> Result<()> {
-    if !matches!(expected, 0x2a | 0x2b | 0x2c) {
+    if !matches!(expected, 0x2a | 0x2b | 0x2c | 0x2d) {
         return Err(anyhow!("deadline-receive proof is not canonical"));
     }
     if exit
@@ -2309,6 +2311,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
+            | LaunchMode::DeadlineReceiveCancelDeniedProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
@@ -2329,6 +2332,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
+            | LaunchMode::DeadlineReceiveCancelDeniedProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::BlockServiceProbe
@@ -2369,6 +2373,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
+            | LaunchMode::DeadlineReceiveCancelDeniedProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
@@ -3252,6 +3257,7 @@ fn application_main() -> Result<()> {
         | LaunchMode::DeadlineReceiveProbe
         | LaunchMode::DeadlineReceiveMessageProbe
         | LaunchMode::DeadlineReceiveCancelProbe
+        | LaunchMode::DeadlineReceiveCancelDeniedProbe
         | LaunchMode::ServicePreemptionProbe => {
             system.prepare_timer_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout)
         }
@@ -3368,6 +3374,7 @@ fn application_main() -> Result<()> {
                 LaunchMode::DeadlineReceiveProbe
                     | LaunchMode::DeadlineReceiveMessageProbe
                     | LaunchMode::DeadlineReceiveCancelProbe
+                    | LaunchMode::DeadlineReceiveCancelDeniedProbe
                     | LaunchMode::ServicePreemptionProbe
                     | LaunchMode::SmpServiceMigrationProbe
             );
@@ -3470,6 +3477,7 @@ fn application_main() -> Result<()> {
                 | LaunchMode::DeadlineReceiveProbe
                 | LaunchMode::DeadlineReceiveMessageProbe
                 | LaunchMode::DeadlineReceiveCancelProbe
+                | LaunchMode::DeadlineReceiveCancelDeniedProbe
                 | LaunchMode::ServiceRestartRequestProbe
         ) {
             guest = guest
@@ -3576,6 +3584,7 @@ fn application_main() -> Result<()> {
                     | LaunchMode::DeadlineReceiveProbe
                     | LaunchMode::DeadlineReceiveMessageProbe
                     | LaunchMode::DeadlineReceiveCancelProbe
+                    | LaunchMode::DeadlineReceiveCancelDeniedProbe
                     | LaunchMode::ServiceRestartRequestProbe
             ) && (guest.service_entry_at(2) != Some(service_entry)
                 || guest.service_page_table_root_at(2)
@@ -4286,11 +4295,13 @@ fn application_main() -> Result<()> {
         LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
+            | LaunchMode::DeadlineReceiveCancelDeniedProbe
     ) {
         let expected = match mode {
             LaunchMode::DeadlineReceiveProbe => 0x2a,
             LaunchMode::DeadlineReceiveMessageProbe => 0x2b,
             LaunchMode::DeadlineReceiveCancelProbe => 0x2c,
+            LaunchMode::DeadlineReceiveCancelDeniedProbe => 0x2d,
             _ => unreachable!(),
         };
         require_deadline_receive_proof(exit, expected)?;
@@ -4857,6 +4868,7 @@ fn application_main() -> Result<()> {
         | LaunchMode::DeadlineReceiveProbe
         | LaunchMode::DeadlineReceiveMessageProbe
         | LaunchMode::DeadlineReceiveCancelProbe
+        | LaunchMode::DeadlineReceiveCancelDeniedProbe
         | LaunchMode::InvalidReturnProbe
         | LaunchMode::BufferDriftProbe
             if marker != [0; 4] =>
@@ -5783,6 +5795,10 @@ mod tests {
             LaunchMode::DeadlineReceiveCancelProbe
         );
         assert_eq!(
+            LaunchMode::parse("deadline-receive-cancel-denied-probe").unwrap(),
+            LaunchMode::DeadlineReceiveCancelDeniedProbe
+        );
+        assert_eq!(
             LaunchMode::parse("invalid-return-probe").unwrap(),
             LaunchMode::InvalidReturnProbe
         );
@@ -5941,7 +5957,20 @@ mod tests {
         );
         assert!(require_deadline_receive_proof(VmExit::Halted, 0x2a).is_err());
         assert!(require_deadline_receive_proof(proof, 0x2c).is_err());
+        assert!(
+            require_deadline_receive_proof(
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x2d,
+                },
+                0x2d,
+            )
+            .is_ok()
+        );
         assert!(require_deadline_receive_proof(proof, 0x2d).is_err());
+        assert!(require_deadline_receive_proof(proof, 0x2e).is_err());
     }
 
     #[test]

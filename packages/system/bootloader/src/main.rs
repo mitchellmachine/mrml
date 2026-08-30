@@ -3737,11 +3737,18 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 })
                 .unwrap_or_else(|_| halt());
             #[cfg(feature = "deadline-receive-cancel-probe")]
-            let deadline_receiver_control = runtime
+            let deadline_receiver_authority = runtime
                 .capabilities_mut(sender)
                 .and_then(|space| {
                     space
-                        .insert(ObjectId(0xa0), Rights::CONTROL)
+                        .insert(
+                            ObjectId(0xa0),
+                            if cfg!(feature = "deadline-receive-cancel-denied-probe") {
+                                Rights::READ
+                            } else {
+                                Rights::CONTROL
+                            },
+                        )
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
@@ -3845,7 +3852,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             }
             #[cfg(feature = "deadline-receive-cancel-probe")]
             {
-                sender_context.rbp = deadline_receiver_control.token();
+                sender_context.rbp = deadline_receiver_authority.token();
             }
             #[cfg(feature = "block-service-probe")]
             {

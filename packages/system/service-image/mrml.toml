@@ -37,6 +37,9 @@ name = "deadline-receive-message-probe"
 name = "deadline-receive-cancel-probe"
 
 [[feature]]
+name = "deadline-receive-cancel-denied-probe"
+
+[[feature]]
 name = "preemption-probe"
 
 [[artifact]]
@@ -123,6 +126,11 @@ targets = ["MRML_NATIVE"]
 [[feature_profile]]
 features = ["deadline-receive-probe", "deadline-receive-cancel-probe"]
 name = "deadline_receive_cancel_probe"
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = ["deadline-receive-probe", "deadline-receive-cancel-probe", "deadline-receive-cancel-denied-probe"]
+name = "deadline_receive_cancel_denied_probe"
 targets = ["MRML_NATIVE"]
 
 [[target_triple]]
