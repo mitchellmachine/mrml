@@ -2772,6 +2772,15 @@ live composition remains pending.
    KVM/WHP probe now instantiates the loop as a separately provisioned hosted
    service task against a volatile one-page in-image backend. A hosted or
    physical device backend plus physical durability evidence remain pending.
+   Capability cleanup is now gated by that same exact envelope admission. A
+   zero-capability request with hostile token bytes, a malformed token, or a
+   mismatched count cannot trigger revocation; later denial or copy failure
+   still releases an admitted leaf. The 163-test focused Linux storage suite
+   and release build pass. This is deterministic service evidence only.
+
+   Patent review: `NOT_TRIGGERED` — tying cleanup eligibility to the canonical
+   capability envelope is conventional fail-closed resource handling. See
+   `docs/patents/REVIEW_LOG.md`.
    The syscall decoder now admits capability-selected shared-buffer reads and
    writes with implicit exact access modes, nonempty transfers capped at 1 MiB,
    checked shared offsets, complete canonical user ranges, and zero reserved

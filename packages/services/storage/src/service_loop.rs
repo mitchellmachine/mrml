@@ -143,6 +143,7 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
     ) -> Result<(), BlockServiceLoopError<S::Error>> {
         scratch.fill(0);
         response_buffer.fill(0);
+        let mut received_capability = None;
         let result = self.serve_received_inner(
             service,
             device_backend,
@@ -153,9 +154,10 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
             capability_tokens,
             scratch,
             response_buffer,
+            &mut received_capability,
         );
-        let release = (capability_tokens[0] != 0)
-            .then(|| syscalls.release_received(Capability::from_token(capability_tokens[0])))
+        let release = received_capability
+            .map(|capability| syscalls.release_received(capability))
             .transpose()
             .map(|_| ())
             .map_err(BlockServiceLoopError::Syscall);
@@ -182,6 +184,7 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response_buffer: &mut [u8; BLOCK_RESPONSE_BYTES],
+        received_capability: &mut Option<Capability>,
     ) -> Result<(), BlockServiceLoopError<S::Error>> {
         if envelope.payload_length != BLOCK_REQUEST_BYTES || envelope.capability_count > 1 {
             return Err(BlockServiceLoopError::InvalidEnvelope);
@@ -195,6 +198,9 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
                 && (capability_tokens[0] == 0 || capability_tokens[0] >> 32 == 0))
         {
             return Err(BlockServiceLoopError::InvalidEnvelope);
+        }
+        if envelope.capability_count == 1 {
+            *received_capability = Some(Capability::from_token(capability_tokens[0]));
         }
         let length = request.byte_length();
         if length > scratch.len() {
@@ -342,6 +348,7 @@ mod tests {
         reads: usize,
         writes: usize,
         sends: usize,
+        releases: usize,
         fail_read: bool,
         response: [u8; BLOCK_RESPONSE_BYTES],
     }
@@ -363,6 +370,7 @@ mod tests {
                 reads: 0,
                 writes: 0,
                 sends: 0,
+                releases: 0,
                 fail_read: false,
                 response: [0; BLOCK_RESPONSE_BYTES],
             }
@@ -428,6 +436,7 @@ mod tests {
 
         fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
             if capability.token() == BUFFER_TOKEN {
+                self.releases += 1;
                 Ok(())
             } else {
                 Err(3)
@@ -594,7 +603,27 @@ mod tests {
             Err(BlockServiceLoopError::InvalidEnvelope)
         );
         assert_eq!((device.calls, syscalls.reads, syscalls.sends), (0, 0, 0));
+        assert_eq!(syscalls.releases, 0);
         assert!(scratch.iter().all(|byte| *byte == 0));
+
+        for (capability_count, token) in [(0, BUFFER_TOKEN), (1, 7)] {
+            let mut invalid = Syscalls::request(request_value, capability_count);
+            invalid.token = token;
+            assert_eq!(
+                loop_state.serve_one(
+                    &service,
+                    &mut device,
+                    &mut invalid,
+                    principal(1),
+                    &mut request,
+                    &mut capabilities,
+                    &mut scratch,
+                    &mut response,
+                ),
+                Err(BlockServiceLoopError::InvalidEnvelope)
+            );
+            assert_eq!((invalid.reads, invalid.writes, invalid.sends, invalid.releases), (0, 0, 0, 0));
+        }
 
         syscalls = Syscalls::request(request_value, 1);
         loop_state
@@ -611,6 +640,7 @@ mod tests {
             .unwrap();
         assert_eq!(syscalls.response().status(), BlockStatus::Denied);
         assert_eq!((device.calls, syscalls.reads, syscalls.sends), (0, 0, 1));
+        assert_eq!(syscalls.releases, 1);
 
         syscalls = Syscalls::request(
             BlockRequest::Write {

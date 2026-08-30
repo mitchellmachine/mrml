@@ -754,6 +754,11 @@ release the admitted leaf. Its 68 focused Linux tests and release build pass.
 The optional IDE loop applies that same admission-gated cleanup rule. Its 28
 focused Linux tests and release build pass; missing, malformed, and undeclared
 token bytes perform no release. Neither result is physical-device evidence.
+The central storage block loop now also records cleanup eligibility only after
+the decoded operation and exact zero-or-one capability envelope agree. Hostile
+token bytes on a capability-free operation, malformed tokens, and count mismatch
+cannot invoke release; later denial or copy failure still releases an admitted
+leaf. Its 163 focused Linux tests and release build pass.
 The FAT32 adapter now also rejects kernel-reported receive lengths or capability
 counts beyond the exact supplied buffers before publishing a typed envelope;
 its focused Linux suite passes 34 tests. The sibling Zstd service adapter applies
