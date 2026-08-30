@@ -10910,3 +10910,14 @@ physical protocol-violation/context-switch evidence.
 Patent review: `NOT_TRIGGERED` — one-use validation of a typed protocol-
 violation retirement before successor entry is conventional scheduler control-
 flow integrity. See `docs/patents/REVIEW_LOG.md`.
+
+The direct UEFI user-fault probe now consumes its validated fault-dispatch token
+through the typed CPU0 transition stack instead of looking up the successor and
+calling the older raw-context entry wrapper. The `user-probe` UEFI release
+profile cross-builds with one pre-existing unused-variable warning. This proves
+the feature-selected architecture boundary compiles; the probe was not executed
+under QEMU, WHP, KVM, or physical hardware in this increment.
+
+Patent review: `NOT_TRIGGERED` — consuming an existing linear scheduler token
+at an existing context-entry boundary is conventional control-flow integrity.
+See `docs/patents/REVIEW_LOG.md`.

@@ -2050,11 +2050,15 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             .unwrap_or_else(|_| halt());
         match dispatch.user().map(|(task, _)| task) {
             Some(to) if retired.vector == 6 => {
-                let context = match runtime.context(to) {
-                    Ok(context) => context as *const UserContext,
-                    Err(_) => halt(),
+                if dispatch.user().map(|(task, _)| task) != Some(to) {
+                    halt();
+                }
+                let transition_stack = unsafe {
+                    CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
+                        .unwrap_or_else(|_| halt())
                 };
-                unsafe { enter_user_probe_context(&*context) };
+                let _ = unsafe { dispatch.enter_user_on_stack(transition_stack) };
+                halt();
             }
             None if dispatch.is_idle() && retired.vector == 3 => {}
             _ => halt(),
