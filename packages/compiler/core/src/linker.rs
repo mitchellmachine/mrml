@@ -463,6 +463,12 @@ pub enum LinkRelocationTarget<'a> {
         library: &'a str,
         symbol: &'a str,
     },
+    /// An exact selected COFF TLS section. PE TLS directory, template, index,
+    /// and thread-lifecycle layout remain a later serializer gate.
+    PeTlsSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
     InputText(usize),
     ReadonlyData(usize),
     /// A validated `mov reg, [rip + GOT]` whose fixed-image target is local
@@ -4619,6 +4625,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
     let mut other_text_sections = CoffSectionSet::empty();
     let mut unwind_sections = CoffSectionSet::empty();
     let mut writable_sections = CoffSectionSet::empty();
+    let mut tls_sections = CoffSectionSet::empty();
     let mut metadata_sections = CoffSectionSet::empty();
     let mut debug_sections = CoffSectionSet::empty();
     let mut relocation_table = (0usize, 0usize);
@@ -4674,7 +4681,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
         } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
             unwind_sections.insert(section + 1)?;
         } else if name.starts_with(".tls$") {
-            return Err(LinkerError::UnsupportedCoffTls);
+            tls_sections.insert(section + 1)?;
         } else if (name.starts_with(".data$") || name.starts_with(".bss$")) && size != 0 {
             writable_sections.insert(section + 1)?;
         } else if name == ".llvmbc" || name == ".llvmcmd" {
@@ -4797,6 +4804,8 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 || unwind_sections
                     .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 || writable_sections
+                    .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
+                || tls_sections
                     .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 || metadata_sections
                     .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
@@ -5026,6 +5035,30 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     symbols_end,
                     string_size,
                 )?),
+                i64::from(field_addend) - 4,
+            )
+        } else if target_section > 0
+            && tls_sections
+                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
+        {
+            let section = u16::try_from(target_section)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let target_header = 20 + (usize::from(section) - 1) * 40;
+            let size = usize::try_from(read_u32(object, target_header + 16)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let offset = usize::try_from(read_u32(object, target_offset + 8)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            if offset > size {
+                return Err(LinkerError::InvalidRelocationOffset);
+            }
+            (
+                LinkRelocationTarget::PeTlsSection {
+                    identity: CoffSectionIdentity::new(
+                        object_identity.ok_or(LinkerError::UnsupportedCoffTls)?,
+                        section,
+                    )?,
+                    offset,
+                },
                 i64::from(field_addend) - 4,
             )
         } else {
@@ -8728,6 +8761,12 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     validate_pe_import_library(library)?;
                     validate_symbol(symbol)?;
                 }
+                LinkRelocationTarget::PeTlsSection { identity, .. }
+                    if identity.object == 0 || identity.section == 0 =>
+                {
+                    return Err(LinkerError::InvalidCoff);
+                }
+                LinkRelocationTarget::PeTlsSection { .. } => {}
                 LinkRelocationTarget::InputText(offset) if offset > input.text.len() => {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
@@ -8807,7 +8846,8 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     continue;
                 }
                 LinkRelocationTarget::PeWritableSymbol(_)
-                | LinkRelocationTarget::PeImportAddress { .. } => continue,
+                | LinkRelocationTarget::PeImportAddress { .. }
+                | LinkRelocationTarget::PeTlsSection { .. } => continue,
                 _ => {}
             }
             let place = layout
@@ -8823,6 +8863,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 LinkRelocationTarget::RequiredSymbol(_) => unreachable!(),
                 LinkRelocationTarget::PeWritableSymbol(_) => unreachable!(),
                 LinkRelocationTarget::PeImportAddress { .. } => unreachable!(),
+                LinkRelocationTarget::PeTlsSection { .. } => unreachable!(),
                 LinkRelocationTarget::InputText(offset) => layout
                     .text
                     .checked_add(offset)

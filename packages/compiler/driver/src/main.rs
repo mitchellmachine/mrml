@@ -1582,6 +1582,13 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                     symbol
                 ));
             }
+            if let LinkRelocationTarget::PeTlsSection { identity, .. } = relocation.target {
+                return Err(anyhow!(
+                    "selected PE TLS target is unsupported: object {}, section {}",
+                    identity.object(),
+                    identity.section()
+                ));
+            }
             if let LinkRelocationTarget::CoffSection { identity, .. } = relocation.target
                 && !section_identity_defined(identity)
             {
