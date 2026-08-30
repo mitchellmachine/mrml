@@ -19,6 +19,7 @@ mod component_memory;
 mod component_queue;
 mod cpu_resource;
 mod deadline_receive_syscall;
+mod device_service;
 mod early;
 mod framebuffer;
 mod grant;
@@ -111,6 +112,12 @@ pub use cpu_resource::{
 pub use deadline_receive_syscall::{
     DeadlineReceiveCancellation, DeadlineReceiveCancellationEscrow, DeadlineReceiveStart,
     DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor,
+};
+pub use device_service::{
+    DeviceServiceAuthority, DeviceServiceLaunchAttachment,
+    DeviceServiceLaunchAttachmentError, MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES,
+    NativeDeviceServiceEntry, NativeDeviceServiceEntryError, NativeDeviceServiceTask,
+    NativeDeviceServiceTaskError, prepare_native_device_service_task,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

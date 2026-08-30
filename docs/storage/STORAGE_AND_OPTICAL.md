@@ -481,6 +481,35 @@ bounded DMA-buffer state machine are conventional driver safety plumbing and
 introduce no new storage algorithm. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The kernel-side native device-service launch prerequisite is now **PARTIALLY
+IMPLEMENTED IN SOURCE** as a provider-neutral fixed-capacity attachment. It
+exact-authorizes one read-only launch record and one to six independently
+delegable source handles, atomically projects only their requested non-delegable
+rights into a pristine native-service task, and installs those fresh task-local
+handles in the six remaining fixed entry registers. Wrong objects, overbroad or
+duplicate source handles, target `DELEGATE`, occupied registers, projection
+failure, and counts outside 1–6 publish no runnable entry. Entry failure revokes
+every projected leaf, while later source-root revocation independently reaches
+each descendant. The focused Linux kernel suite passes all 685 tests. This does
+not yet define AHCI launch-data bytes or bind the six slots to exact device,
+command-memory, and directional data-memory roles; mapping construction, the
+service binary, supervised teardown, active execution, and physical-device
+evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Bounded attenuation through the existing
+atomic capability-projection graph and fixed native entry registers is
+conventional least-authority service construction. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

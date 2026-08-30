@@ -599,6 +599,33 @@ Patent review: `NOT_TRIGGERED` — directional cache-visibility callbacks and a
 bounded DMA-buffer state machine are conventional driver safety plumbing and
 introduce no new storage algorithm. See `docs/patents/REVIEW_LOG.md`.
 
+The kernel-side native device-service launch prerequisite is now **PARTIALLY
+IMPLEMENTED IN SOURCE** without creating an AHCI-specific authority model. A
+fixed-capacity attachment exact-authorizes one read-only launch record plus one
+to six separately delegable source handles, atomically projects only their
+requested non-delegable rights into a pristine native-service task, and installs
+those fresh local handles in the six remaining fixed entry registers. Wrong
+objects, overbroad source handles, duplicate handles, target `DELEGATE`, occupied
+registers, projection failure, and capacity outside 1–6 fail closed; entry
+failure revokes every projected leaf, and later source-root revocation reaches
+each descendant independently. The Linux kernel suite passes all 685 tests.
+AHCI-specific launch-data encoding, exact six-authority role binding, mapping
+construction, service binary entry, supervised teardown, and active execution
+remain separate gates.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — bounded attenuation through the existing atomic
+capability-projection graph and fixed native entry registers is conventional
+least-authority service construction. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

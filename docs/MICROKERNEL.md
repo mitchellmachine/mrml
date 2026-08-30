@@ -10220,6 +10220,34 @@ Patent review: `NOT_TRIGGERED` — this only composes existing capability
 attenuation, target construction, and transitive rollback paths. See
 `docs/patents/REVIEW_LOG.md`.
 
+Native device-service construction now **PARTIALLY IMPLEMENTS IN SOURCE** a
+fixed-capacity multi-authority attachment without widening the component
+dependency attachment. One read-only launch record and one to six exact
+delegable source handles enter the existing atomic construction projector; the
+fresh task receives only requested non-delegable rights, placed in the six
+remaining native-entry registers beside the established service identity and
+launch-data fields. The attachment rejects wrong objects, overbroad source
+handles, duplicates, empty or delegated target rights, and counts outside the
+architectural register budget. A non-pristine context or later entry failure
+revokes every projected leaf and preserves the original context. Source-root
+revocation remains independently transitive for every successful projection.
+The Linux-host kernel suite passes 685 tests. Device-specific launch record
+encoding, role binding, mapping/backing construction, teardown, and installed
+execution remain separate gates.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — this is fixed-capacity use of the existing
+capability attenuation, construction projection, register ABI, and transitive
+revocation mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
 memory-resource root. The kernel reserves exactly one `Shared` page from an
 explicit pool into the source task, retains its typed table generation, and
