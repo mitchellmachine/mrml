@@ -1,5 +1,7 @@
 use super::{TrapFrame, VirtAddr};
-use crate::{BufferCompletion, PAGE_SIZE, PhysAddr, TaskId, UserCallFrame};
+use crate::{
+    BufferCompletion, PAGE_SIZE, PhysAddr, SyscallCompletionStatus, TaskId, UserCallFrame,
+};
 use core::arch::{asm, global_asm};
 
 global_asm!(
@@ -245,7 +247,15 @@ impl UserContext {
     }
 
     pub fn complete_error(&mut self) {
-        self.rax = 1;
+        self.rax = SyscallCompletionStatus::Error.code();
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
+    pub fn complete_timeout(&mut self) {
+        self.rax = SyscallCompletionStatus::TimedOut.code();
         self.rdx = 0;
         self.r10 = 0;
         self.r8 = 0;
@@ -551,6 +561,16 @@ mod tests {
         assert_eq!(context.r9, 0);
         context.complete_error();
         assert_eq!(context.rax, 1);
+        assert_eq!(context.rdx, 0);
+        assert_eq!(context.r10, 0);
+        assert_eq!(context.r8, 0);
+        assert_eq!(context.r9, 0);
+        context.rdx = u64::MAX;
+        context.r10 = u64::MAX;
+        context.r8 = u64::MAX;
+        context.r9 = u64::MAX;
+        context.complete_timeout();
+        assert_eq!(context.rax, SyscallCompletionStatus::TimedOut.code());
         assert_eq!(context.rdx, 0);
         assert_eq!(context.r10, 0);
         assert_eq!(context.r8, 0);

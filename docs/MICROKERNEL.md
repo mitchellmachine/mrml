@@ -11228,3 +11228,25 @@ execution was performed for this increment.
 Patent review: `NOT_TRIGGERED` — applying one existing exact deadline mechanism
 to a second typed receive class is conventional event-loop parity. See
 `docs/patents/REVIEW_LOG.md`.
+
+The pointer-free syscall ABI now defines a typed completion-status namespace:
+success is zero, generic denial or malformed-request failure is one, and timeout
+is two. Both the live interrupt frame and a suspended `UserContext` can complete
+a timeout while clearing every payload/count return register. This keeps expiry
+distinct from protocol failure and prevents stale message bytes from being
+observed when a deadline resumes a receive syscall.
+
+No request operation exposes deadlines yet, and no timer path writes this status
+in the service dispatcher. This increment defines and tests only the completion
+contract required before that integration.
+
+The Linux-host kernel suite passes 659 tests. Focused frame and suspended-context
+coverage proves timeout has a distinct status and zeroes all auxiliary return
+registers. The affected Linux kernel release build and service plus
+component-service UEFI release profiles cross-build with the existing
+configuration-specific warnings. This is in-memory and cross-build evidence
+only; no QEMU or physical-hardware execution was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — assigning a distinct bounded syscall completion
+code to timeout is a conventional ABI result convention. See
+`docs/patents/REVIEW_LOG.md`.

@@ -6,6 +6,20 @@ pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
 pub const MAX_SHARED_BUFFER_SYSCALL_BYTES: usize = 1024 * 1024;
 pub const CAPABILITY_TRANSFER_DESCRIPTOR_BYTES: usize = 16;
 pub const RECEIVED_CAPABILITY_TOKEN_BYTES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u64)]
+pub enum SyscallCompletionStatus {
+    Success = 0,
+    Error = 1,
+    TimedOut = 2,
+}
+
+impl SyscallCompletionStatus {
+    pub const fn code(self) -> u64 {
+        self as u64
+    }
+}
 const USER_RETURN_FLAGS: u64 = 2
     | (1 << 0)
     | (1 << 2)
@@ -231,7 +245,15 @@ impl UserCallFrame {
     }
 
     pub fn complete_error(&mut self) {
-        self.rax = 1;
+        self.rax = SyscallCompletionStatus::Error.code();
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
+    pub fn complete_timeout(&mut self) {
+        self.rax = SyscallCompletionStatus::TimedOut.code();
         self.rdx = 0;
         self.r10 = 0;
         self.r8 = 0;
@@ -761,6 +783,19 @@ mod tests {
         assert_eq!(
             (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
             (1, 0, 0, 0, 0)
+        );
+        frame.rdx = u64::MAX;
+        frame.r10 = u64::MAX;
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_timeout();
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (SyscallCompletionStatus::TimedOut.code(), 0, 0, 0, 0)
+        );
+        assert_ne!(
+            SyscallCompletionStatus::TimedOut.code(),
+            SyscallCompletionStatus::Error.code()
         );
     }
 
