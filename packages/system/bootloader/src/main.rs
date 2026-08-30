@@ -42,6 +42,7 @@ use mrml_kernel::UserCallFrame;
 use mrml_kernel::arch::x86_64::LocalApicController;
 #[cfg(any(
     feature = "timer-probe",
+    feature = "deadline-receive-probe",
     feature = "preemption-probe",
     feature = "service-preemption-probe",
     feature = "smp-scheduler-probe",
@@ -57,6 +58,7 @@ use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
 use mrml_kernel::arch::x86_64::ServiceAddressSpace;
 #[cfg(any(
     feature = "timer-probe",
+    feature = "deadline-receive-probe",
     feature = "preemption-probe",
     feature = "service-preemption-probe",
     feature = "smp-scheduler-probe",
@@ -164,6 +166,7 @@ use mrml_kernel::{PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGues
 #[cfg(any(
     feature = "application-probe",
     feature = "timer-probe",
+    feature = "deadline-receive-probe",
     feature = "preemption-probe",
     feature = "service-preemption-probe",
     feature = "user-probe",
@@ -248,6 +251,7 @@ const TIMER_READY_PORT: u16 = 0x4d54;
 const TIMER_TICK_PORT: u16 = 0x4d55;
 #[cfg(any(
     feature = "timer-probe",
+    feature = "deadline-receive-probe",
     feature = "preemption-probe",
     feature = "service-preemption-probe",
     feature = "smp-scheduler-probe",
@@ -516,6 +520,10 @@ static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; SERVICE_TASK_
 #[cfg(feature = "service-probe")]
 static mut SERVICE_PENDING_INLINE_WAITS: [Option<mrml_kernel::BlockedReceive>;
     SERVICE_TASK_CAPACITY] = [None; SERVICE_TASK_CAPACITY];
+#[cfg(feature = "deadline-receive-probe")]
+static mut SERVICE_DEADLINE_RECEIVES: Option<mrml_kernel::DeadlineReceiveSyscallExecutor<
+    SERVICE_TASK_CAPACITY,
+>> = None;
 #[cfg(feature = "buffer-drift-probe")]
 static mut BUFFER_DRIFT_ARMED: bool = false;
 #[cfg(feature = "service-probe")]
@@ -789,6 +797,7 @@ unsafe extern "C" {
     fn mrml_exception_fail_stop() -> !;
     #[cfg(any(
         feature = "timer-probe",
+        feature = "deadline-receive-probe",
         feature = "preemption-probe",
         feature = "service-preemption-probe",
         feature = "smp-scheduler-probe",
@@ -997,7 +1006,29 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
             UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
         match request {
-            SyscallRequest::ReceiveFor { .. } => frame.complete_error(),
+            SyscallRequest::ReceiveFor { timeout } => {
+                #[cfg(feature = "deadline-receive-probe")]
+                {
+                    let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    match executor.start(runtime, timeout).unwrap_or_else(|_| halt()) {
+                        mrml_kernel::DeadlineReceiveStart::Ready(message) => {
+                            frame.complete_message(message.payload())
+                        }
+                        mrml_kernel::DeadlineReceiveStart::TimedOut => frame.complete_timeout(),
+                        mrml_kernel::DeadlineReceiveStart::Blocked(
+                            ScheduleOutcome::Switch { to, .. },
+                        ) => enter_service_task(runtime, to),
+                        mrml_kernel::DeadlineReceiveStart::Blocked(_) => halt(),
+                    }
+                }
+                #[cfg(not(feature = "deadline-receive-probe"))]
+                {
+                    let _ = timeout;
+                    frame.complete_error();
+                }
+            }
             SyscallRequest::Receive => match runtime
                 .receive_or_block_current()
                 .unwrap_or_else(|_| halt())
@@ -1667,6 +1698,42 @@ unsafe fn publish_periodic_balance_tick(expected_tick: u32) {
 
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_timer_dispatch(frame: *const HardwareTrapFrame) -> ! {
+    #[cfg(feature = "deadline-receive-probe")]
+    unsafe {
+        let frame = frame.as_ref().unwrap_or_else(|| halt());
+        let normalized = frame.normalize(0, 0);
+        if normalized.vector != u64::from(TIMER_VECTOR) || normalized.cs & 3 != 3 {
+            halt();
+        }
+        let page_table: u64;
+        asm!("mov {}, cr3", out(reg) page_table, options(nomem, nostack, preserves_flags));
+        let interrupted = UserContext::from_external_interrupt(
+            PhysAddr::new(page_table).unwrap_or_else(|_| halt()),
+            &normalized,
+            TIMER_VECTOR,
+        )
+        .unwrap_or_else(|_| halt());
+        let runtime = (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
+            .as_mut()
+            .unwrap_or_else(|| halt());
+        let current = runtime.current().unwrap_or_else(|| halt());
+        *runtime.context_mut(current).unwrap_or_else(|_| halt()) = interrupted;
+        let executor = (*core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES))
+            .as_mut()
+            .unwrap_or_else(|| halt());
+        let tick = executor.timer_tick(runtime).unwrap_or_else(|_| halt());
+        let next = match tick.scheduling() {
+            ScheduleOutcome::Continue(task) => task,
+            ScheduleOutcome::Switch { to, .. } => to,
+            ScheduleOutcome::Idle => halt(),
+        };
+        let context = runtime
+            .context(next)
+            .map(|context| context as *const UserContext)
+            .unwrap_or_else(|_| halt());
+        LocalApicTimer::acknowledge();
+        enter_service_probe_context(&*context)
+    }
     #[cfg(feature = "smp-periodic-balance-probe")]
     unsafe {
         let frame = frame.as_ref().unwrap_or_else(|| halt());
@@ -1825,6 +1892,7 @@ unsafe extern "sysv64" fn mrml_timer_dispatch(frame: *const HardwareTrapFrame) -
     #[cfg(not(any(
         feature = "preemption-probe",
         feature = "service-preemption-probe",
+        feature = "deadline-receive-probe",
         feature = "smp-scheduler-probe",
         feature = "smp-periodic-balance-probe"
     )))]
@@ -3656,6 +3724,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_a]));
             }
             core::ptr::addr_of_mut!(SERVICE_RECEIVER_SIGNAL).write(Some(receiver_capability));
+            #[cfg(feature = "deadline-receive-probe")]
+            core::ptr::addr_of_mut!(SERVICE_DEADLINE_RECEIVES).write(Some(
+                mrml_kernel::DeadlineReceiveSyscallExecutor::new(),
+            ));
+            #[cfg(feature = "deadline-receive-probe")]
+            LocalApicTimer::periodic(TIMER_VECTOR, 100_000, TimerDivide::By16)
+                .and_then(|timer| timer.enable())
+                .unwrap_or_else(|_| halt());
             let context = (*runtime_pointer)
                 .as_ref()
                 .and_then(|runtime| runtime.context(receiver).ok())
@@ -5466,6 +5542,7 @@ unsafe fn install_descriptor_state(
     }
     #[cfg(any(
         feature = "timer-probe",
+        feature = "deadline-receive-probe",
         feature = "preemption-probe",
         feature = "service-preemption-probe",
         feature = "smp-scheduler-probe",

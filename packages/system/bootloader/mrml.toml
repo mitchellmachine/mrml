@@ -29,6 +29,9 @@ name = "block-service-probe"
 name = "component-service-probe"
 
 [[feature]]
+name = "deadline-receive-probe"
+
+[[feature]]
 name = "emulated-ap-timing"
 
 [[feature]]
@@ -177,6 +180,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe", "component-service-probe"]
 name = "component_service_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "deadline-receive-probe"]
+name = "deadline_receive_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

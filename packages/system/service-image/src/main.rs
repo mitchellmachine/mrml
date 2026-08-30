@@ -1049,7 +1049,8 @@ unsafe fn yield_now() {
     not(feature = "preemption-probe"),
     not(feature = "block-service-loop"),
     not(feature = "invalid-return-probe"),
-    not(feature = "buffer-drift-probe")
+    not(feature = "buffer-drift-probe"),
+    not(feature = "deadline-receive-probe")
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
@@ -1209,6 +1210,22 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         halt();
     }
     unsafe { terminate(3) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "deadline-receive-probe"))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_sender(
+    _endpoint: u64,
+    _receiver: u64,
+    _root_capability: u64,
+    _setting_capability: u64,
+    _generation: u64,
+    _supervision_read: u64,
+    _supervised_service: u64,
+) -> ! {
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]

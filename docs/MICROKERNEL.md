@@ -11417,3 +11417,34 @@ execution remain the next gate.
 Patent review: `NOT_TRIGGERED` — a minimal service program that invokes and
 checks a timeout syscall is conventional ABI integration testing. See
 `docs/patents/REVIEW_LOG.md`.
+
+The bootloader now exposes a dedicated `deadline_receive_probe` UEFI feature
+profile that routes operation 13 through the shared
+`DeadlineReceiveSyscallExecutor`. The profile installs and enables a local-APIC
+periodic timer only after the service runtime and exact pending-receive owner
+table exist. Its timer gate accepts only the configured vector from CPL3,
+captures the interrupted task's exact address-space context, advances and
+expires the same runtime, acknowledges the interrupt, and resumes only the
+scheduler-selected context. The timeout completion therefore comes from the
+retained generational wait owner rather than a task name or a profile-local
+wakeup convention.
+
+The probe's second service task deliberately spins instead of sending, so a
+message cannot race the receiver's one-tick deadline. Existing service profiles
+continue to reject operation 13 rather than accepting a timeout without this
+timer composition.
+
+The Linux-host kernel suite passes 666 tests. The default and dedicated
+deadline service-image release profiles build through the canonical `mrml`
+frontend; the deadline image reports 14 expected dead-code warnings because its
+minimal receiver and inert sender do not invoke the configuration and
+supervision helpers. The default, service, component-service, and dedicated
+deadline UEFI bootloader release profiles also cross-build, with only their
+existing configuration-specific warnings. This is unit-test and cross-build
+evidence only: the new interrupt path has not run under QEMU, KVM, WHP, or
+physical hardware, so live timeout proof remains the next gate.
+
+Patent review: `NOT_TRIGGERED` — composing a conventional periodic timer
+interrupt, retained pending-syscall owner, typed timeout completion, and
+scheduler resume does not introduce a new substantial mechanism. See
+`docs/patents/REVIEW_LOG.md`.
