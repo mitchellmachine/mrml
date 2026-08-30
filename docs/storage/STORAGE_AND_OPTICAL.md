@@ -1002,9 +1002,10 @@ successful construction. Storage passes 157 focused Linux-host tests. The
 filesystem/block launch attachment through the kernel-projected read-only
 capability, retains the separately projected block endpoint capability, erases
 the temporary bytes, sends a generation-bound ready message, and then serves
-calls until fail-stop or supervised replacement. Concrete kernel task
-construction and block-call routing through the retained binding remain
-**PLANNED**. Prior Windows evidence
+calls until fail-stop or supervised replacement. The kernel's reusable native
+task-construction transaction now derives and tracks the exact two target-space
+capabilities and installs the ABI atomically. Concrete placement-backend use and
+block-call routing through the retained binding remain **PLANNED**. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows
 as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. The
 validated backend now makes the block-provider health check mandatory during

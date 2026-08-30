@@ -72,8 +72,11 @@ no authority. The MRML-native service entry now accepts only the fixed kernel
 register ABI, copies the exact 144-byte record through the projected read-only
 capability, validates the filesystem module and provider generation, retains the
 separate block endpoint capability, erases the temporary record, and sends ready
-only afterward. Concrete kernel task construction and block-call routing through
-that retained binding remain next.
+only afterward. The kernel now has a reusable native task-construction
+transaction that atomically derives and tracks the two exact target-space
+capabilities and installs this ABI, rolling them back on entry failure. A
+concrete placement backend and block-call routing through the retained binding
+remain next.
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The

@@ -152,6 +152,10 @@ impl<const N: usize> CapabilitySpace<N> {
         })
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.iter().all(|entry| !entry.occupied)
+    }
+
     pub fn authorize(
         &self,
         capability: Capability,

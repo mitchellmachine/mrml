@@ -6,7 +6,8 @@ use mrml_package_format::{
 
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
-    CpuResourceError, ObjectId, Rights, VcpuReservationId, arch::x86_64::UserContext,
+    CpuResourceError, ObjectId, Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId,
+    arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,13 +364,13 @@ impl ComponentServiceLaunchAttachment {
             return Err(ComponentServiceLaunchAttachmentError::InvalidLength);
         }
         let actual_data = capabilities
-            .authorize_exact(launch_data, Rights::READ)
+            .authorize_exact(launch_data, Rights::READ.union(Rights::DELEGATE))
             .map_err(ComponentServiceLaunchAttachmentError::Capability)?;
         if actual_data != launch_data_object {
             return Err(ComponentServiceLaunchAttachmentError::WrongLaunchDataObject);
         }
         let actual_endpoint = capabilities
-            .authorize_exact(dependency_endpoint, Rights::SIGNAL)
+            .authorize_exact(dependency_endpoint, Rights::SIGNAL.union(Rights::DELEGATE))
             .map_err(ComponentServiceLaunchAttachmentError::Capability)?;
         if actual_endpoint != dependency_endpoint_object {
             return Err(ComponentServiceLaunchAttachmentError::WrongDependencyEndpoint);
@@ -559,6 +560,129 @@ impl NativeComponentServiceEntry {
         context.r11 = u64::from(self.launch_data_bytes);
         context.r10 = self.consumer_module_object.0;
         Ok(context)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceTask {
+    task: TaskId,
+    entry: NativeComponentServiceEntry,
+}
+
+impl NativeComponentServiceTask {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn entry(self) -> NativeComponentServiceEntry {
+        self.entry
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceTaskError {
+    WrongPlacement,
+    Runtime(TaskRuntimeError),
+    Entry(NativeComponentServiceEntryError),
+    Rollback {
+        entry: NativeComponentServiceEntryError,
+        cleanup: TaskRuntimeError,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILITIES: usize>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    spec: IsolationServiceSpec,
+    attachment: ComponentServiceLaunchAttachment,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    consumer_module_object: ObjectId,
+) -> Result<NativeComponentServiceTask, NativeComponentServiceTaskError> {
+    if spec.placement() != IsolationPlacement::NativeService {
+        return Err(NativeComponentServiceTaskError::WrongPlacement);
+    }
+    let context = *runtime
+        .context(target_task)
+        .map_err(NativeComponentServiceTaskError::Runtime)?;
+    let projection = runtime
+        .project_capabilities_for_construction(
+            source_task,
+            target_task,
+            &[
+                (attachment.launch_data(), Rights::READ),
+                (attachment.dependency_endpoint(), Rights::SIGNAL),
+            ],
+        )
+        .map_err(NativeComponentServiceTaskError::Runtime)?;
+    let mut projected = projection.capabilities();
+    let launch_data = projected
+        .next()
+        .expect("two requested construction projections produce two handles");
+    let dependency_endpoint = projected
+        .next()
+        .expect("two requested construction projections produce two handles");
+    debug_assert!(projected.next().is_none());
+    let entry = match NativeComponentServiceEntry::new(
+        spec,
+        attachment,
+        service_endpoint_object,
+        supervisor_task_object,
+        consumer_module_object,
+        launch_data,
+        dependency_endpoint,
+        runtime
+            .capabilities(target_task)
+            .expect("successful projection preserves the target domain"),
+    ) {
+        Ok(entry) => entry,
+        Err(error) => {
+            return rollback_native_projection(
+                runtime,
+                target_task,
+                launch_data,
+                dependency_endpoint,
+                error,
+            );
+        }
+    };
+    let installed = match entry.install(context) {
+        Ok(installed) => installed,
+        Err((_, error, _)) => {
+            return rollback_native_projection(
+                runtime,
+                target_task,
+                launch_data,
+                dependency_endpoint,
+                error,
+            );
+        }
+    };
+    *runtime
+        .context_mut(target_task)
+        .expect("successful projection preserves the target context") = installed;
+    Ok(NativeComponentServiceTask {
+        task: target_task,
+        entry,
+    })
+}
+
+fn rollback_native_projection<const TASKS: usize, const CAPABILITIES: usize>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    target_task: TaskId,
+    launch_data: Capability,
+    dependency_endpoint: Capability,
+    entry: NativeComponentServiceEntryError,
+) -> Result<NativeComponentServiceTask, NativeComponentServiceTaskError> {
+    let data_cleanup = runtime.revoke_capability(target_task, launch_data).err();
+    let endpoint_cleanup = runtime
+        .revoke_capability(target_task, dependency_endpoint)
+        .err();
+    match data_cleanup.or(endpoint_cleanup) {
+        Some(cleanup) => Err(NativeComponentServiceTaskError::Rollback { entry, cleanup }),
+        None => Err(NativeComponentServiceTaskError::Entry(entry)),
     }
 }
 
@@ -2658,15 +2782,19 @@ mod tests {
     }
 
     #[test]
-    fn attached_component_launch_projects_only_exact_read_and_signal_authority() {
+    fn attached_component_launch_owns_only_narrow_delegable_source_authority() {
         let mut table =
             IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
                 .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let launch = component_launch(&mut table, spec);
         let mut capabilities = CapabilitySpace::<2>::new();
-        let data = capabilities.insert(ObjectId(0x80), Rights::READ).unwrap();
-        let endpoint = capabilities.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let data = capabilities
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = capabilities
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -2706,8 +2834,12 @@ mod tests {
     fn native_entry_uses_only_fresh_target_space_attachment_capabilities() {
         let spec = service_spec(IsolationPlacement::NativeService);
         let mut source = CapabilitySpace::<2>::new();
-        let source_data = source.insert(ObjectId(0x80), Rights::READ).unwrap();
-        let source_endpoint = source.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let source_data = source
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let source_endpoint = source
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -2766,8 +2898,12 @@ mod tests {
     fn native_entry_rejects_wrong_target_objects_and_overbroad_rights() {
         let spec = service_spec(IsolationPlacement::NativeService);
         let mut source = CapabilitySpace::<2>::new();
-        let source_data = source.insert(ObjectId(0x80), Rights::READ).unwrap();
-        let source_endpoint = source.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let source_data = source
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let source_endpoint = source
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -2832,6 +2968,169 @@ mod tests {
     }
 
     #[test]
+    fn native_task_construction_projects_tracks_and_installs_exact_entry() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut runtime = TaskRuntime::<2, 4>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let target = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x30_0000).unwrap(),
+                    0x50_0000,
+                    0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let prepared = prepare_native_component_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec,
+            attachment,
+            ObjectId(0x90),
+            ObjectId(0x91),
+            ObjectId(0x92),
+        )
+        .unwrap();
+        assert_eq!(prepared.task(), target);
+        let entry = prepared.entry();
+        let context = runtime.context(target).unwrap();
+        assert_eq!(context.r13, 0x90);
+        assert_eq!(context.r14, 0x91);
+        assert_eq!(context.r12, spec.provider_generation());
+        assert_eq!(context.r15, entry.launch_data().token());
+        assert_eq!(context.rbx, entry.dependency_endpoint().token());
+        assert_eq!(context.r11, 144);
+        assert_eq!(context.r10, 0x92);
+        runtime.revoke_capability(source, data).unwrap();
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize(entry.launch_data(), Rights::READ,),
+            Err(CapabilityError::Invalid)
+        );
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(entry.dependency_endpoint(), Rights::SIGNAL,),
+            Ok(ObjectId(0x81))
+        );
+    }
+
+    #[test]
+    fn native_task_construction_rolls_back_projection_before_entry_failure() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut runtime = TaskRuntime::<2, 4>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let target_context = UserContext::new(
+            crate::PhysAddr::new(0x30_0000).unwrap(),
+            0x50_0000,
+            0x7100_0000,
+        )
+        .unwrap();
+        let target = runtime
+            .create(crate::Priority::NORMAL, target_context)
+            .unwrap();
+        let data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_native_component_service_task(
+                &mut runtime,
+                source,
+                target,
+                spec,
+                attachment,
+                ObjectId(0x90),
+                ObjectId(0x90),
+                ObjectId(0x92),
+            ),
+            Err(NativeComponentServiceTaskError::Entry(
+                NativeComponentServiceEntryError::InvalidIdentity
+            ))
+        );
+        assert_eq!(runtime.context(target).unwrap(), &target_context);
+        let target_capabilities = runtime.capabilities_mut(target).unwrap();
+        assert!(
+            target_capabilities
+                .insert(ObjectId(1), Rights::READ)
+                .is_ok()
+        );
+        assert!(
+            target_capabilities
+                .insert(ObjectId(2), Rights::SIGNAL)
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn attachment_identity_or_rights_substitution_fails_before_backend_launch() {
         let mut table =
             IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
@@ -2840,9 +3139,14 @@ mod tests {
         let launch = component_launch(&mut table, spec);
         let mut capabilities = CapabilitySpace::<2>::new();
         let data = capabilities
-            .insert(ObjectId(0x80), Rights::READ.union(Rights::WRITE))
+            .insert(
+                ObjectId(0x80),
+                Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
             .unwrap();
-        let endpoint = capabilities.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let endpoint = capabilities
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         assert_eq!(
             ComponentServiceLaunchAttachment::new(
                 spec,
@@ -2862,8 +3166,12 @@ mod tests {
         );
 
         let mut capabilities = CapabilitySpace::<2>::new();
-        let data = capabilities.insert(ObjectId(0x80), Rights::READ).unwrap();
-        let endpoint = capabilities.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let data = capabilities
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = capabilities
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let other = IsolationServiceSpec::new(
             ObjectId(0x44),
             spec.interface(),

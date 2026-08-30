@@ -36,6 +36,7 @@ pub enum TaskRuntimeError {
     ActiveControlPeers,
     ActiveDelegations,
     DelegationTableFull,
+    ConstructionTargetNotPristine,
 }
 
 impl TaskRuntimeError {
@@ -988,6 +989,87 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             },
             domain.context,
         ))
+    }
+
+    /// Atomically derives a bounded capability set into a fresh task domain for
+    /// kernel-owned construction and records every parent/child edge for
+    /// transitive revocation.
+    ///
+    /// This is not an IPC shortcut: it accepts no payload or endpoint and only
+    /// an otherwise pristine destination domain. Source handles must carry
+    /// `DELEGATE`; the requested rights become the exact target handles.
+    pub fn project_capabilities_for_construction(
+        &mut self,
+        source_task: TaskId,
+        target_task: TaskId,
+        requested: &[(Capability, Rights)],
+    ) -> Result<Message, TaskRuntimeError> {
+        if source_task == target_task {
+            return Err(TaskRuntimeError::SameTaskIpc);
+        }
+        if requested.is_empty() {
+            return Err(TaskRuntimeError::Ipc(IpcError::CapabilityShape));
+        }
+        Message::validate_shape(0, requested.len()).map_err(TaskRuntimeError::Ipc)?;
+        if !self.scheduler.contains(source_task) || !self.scheduler.contains(target_task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let source_slot = self
+            .domain_slot(source_task)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let target_slot = self
+            .domain_slot(target_task)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let source = self.domains[source_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        source
+            .capabilities
+            .validate_derivations(requested)
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
+        let target = self.domains[target_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if !target.capabilities.is_empty()
+            || target.inbox_count != 0
+            || target.peers.iter().any(Option::is_some)
+            || target.peer_deaths.iter().any(Option::is_some)
+            || self.delegations.iter().flatten().any(|delegation| {
+                delegation.source_task == target_task || delegation.destination_task == target_task
+            })
+        {
+            return Err(TaskRuntimeError::ConstructionTargetNotPristine);
+        }
+        target
+            .capabilities
+            .validate_derivation_capacity(requested.len())
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
+        let delegation_slots = self.prepare_delegation_slots(requested.len())?;
+        self.validate_delegation_graph()?;
+        let (source, target) = two_domains_mut(&mut self.domains, source_slot, target_slot)
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        let message = Message::transfer(
+            &[],
+            requested,
+            &source.capabilities,
+            &mut target.capabilities,
+        )
+        .map_err(TaskRuntimeError::Ipc)?;
+        for (((source, _), destination), slot) in requested
+            .iter()
+            .zip(message.capabilities())
+            .zip(delegation_slots)
+        {
+            self.delegations[slot] = Some(Delegation {
+                source_task,
+                source: *source,
+                destination_task: target_task,
+                destination,
+            });
+        }
+        Ok(message)
     }
 
     /// Transfers a message and attenuated capabilities between two distinct
@@ -2067,6 +2149,117 @@ mod tests {
                 .unwrap()
                 .0,
             2
+        );
+    }
+
+    #[test]
+    fn construction_projection_is_exact_atomic_and_transitively_revocable() {
+        let mut runtime = TaskRuntime::<2, 4>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let target = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let projection = runtime
+            .project_capabilities_for_construction(
+                source,
+                target,
+                &[(data, Rights::READ), (endpoint, Rights::SIGNAL)],
+            )
+            .unwrap();
+        assert!(projection.payload().is_empty());
+        assert_eq!(projection.capability_count(), 2);
+        let mut capabilities = projection.capabilities();
+        let target_data = capabilities.next().unwrap();
+        let target_endpoint = capabilities.next().unwrap();
+        assert_eq!(capabilities.next(), None);
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(target_data, Rights::READ),
+            Ok(ObjectId(0x80))
+        );
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(target_endpoint, Rights::SIGNAL),
+            Ok(ObjectId(0x81))
+        );
+        runtime.revoke_capability(source, data).unwrap();
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize(target_data, Rights::READ),
+            Err(crate::CapabilityError::Invalid)
+        );
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(target_endpoint, Rights::SIGNAL),
+            Ok(ObjectId(0x81))
+        );
+    }
+
+    #[test]
+    fn construction_projection_rejects_nonpristine_or_overbroad_targets_without_partial_authority()
+    {
+        let mut runtime = TaskRuntime::<3, 3>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let clean = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let occupied = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        runtime
+            .capabilities_mut(occupied)
+            .unwrap()
+            .insert(ObjectId(0x99), Rights::READ)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .project_capabilities_for_construction(source, occupied, &[(data, Rights::READ)],)
+                .err(),
+            Some(TaskRuntimeError::ConstructionTargetNotPristine)
+        );
+        assert_eq!(
+            runtime
+                .project_capabilities_for_construction(source, clean, &[(data, Rights::WRITE)],)
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        let projection = runtime
+            .project_capabilities_for_construction(source, clean, &[(data, Rights::READ)])
+            .unwrap();
+        let projected = projection.capabilities().next().unwrap();
+        assert_eq!(
+            runtime
+                .capabilities(clean)
+                .unwrap()
+                .authorize_exact(projected, Rights::READ),
+            Ok(ObjectId(0x80))
         );
     }
 

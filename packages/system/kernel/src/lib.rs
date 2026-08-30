@@ -158,7 +158,8 @@ pub use isolation::{
     IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
     IsolationServiceSpec, IsolationServiceSpecError, IsolationUnavailableReason,
     IsolationVcpuReservationError, NativeComponentServiceEntry,
-    NativeComponentServiceEntryError, PreparedComponentServiceLaunch,
+    NativeComponentServiceEntryError, NativeComponentServiceTask,
+    NativeComponentServiceTaskError, PreparedComponentServiceLaunch,
     PreparedAttachedComponentServiceRouteError, PreparedComponentServiceRouteError,
     PreparedIsolationApplicationRoute, PreparedIsolationLaunch, PreparedIsolationServiceRoute,
     ReservedIsolationVcpus, RoutedIsolationApplication,
@@ -166,7 +167,7 @@ pub use isolation::{
     UnavailableIsolationDomain, VerifiedComponentServiceLaunch, bind_component_service_handoff,
     launch_prepared_component_service, launch_prepared_component_service_with_attachment,
     launch_prepared_isolation_application_route, launch_prepared_isolation_service_route,
-    prepare_component_service_handoff,
+    prepare_component_service_handoff, prepare_native_component_service_task,
     prepare_isolation_application_route, prepare_isolation_service_route, reserve_isolation_vcpus,
     route_isolation_application, route_isolation_service,
 };

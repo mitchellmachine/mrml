@@ -7252,8 +7252,9 @@ over the existing digest comparison and isolation reservation. See
 `docs/patents/REVIEW_LOG.md`.
 
 Component-service launch now has an additive attached construction path for one
-exact read-only launch-data object and one separately attenuated dependency
-endpoint. Attachment creation requires exact `READ` and `SIGNAL` capabilities,
+read-only launch-data object and one separately attenuated dependency endpoint.
+Attachment creation requires narrow `READ|DELEGATE` and `SIGNAL|DELEGATE`
+source capabilities,
 binds the admitted domain, SystemRelease, policy, association, object, and
 dependency generations, and rejects overbroad or substituted authority before
 either placement backend runs. The selected backend must construct both
@@ -7263,10 +7264,14 @@ a distinct entry-preparation step that revalidates the freshly projected
 target-space `READ` and `SIGNAL` capabilities, never exposes the source-space
 tokens, and installs the service endpoint, supervisor, provider generation,
 consumer module, attachment length, and projected tokens only into an otherwise
-empty user-context register ABI. Occupied launch registers fail without losing
-the entry or context. Kernel passes 637 focused Linux-host tests. Concrete task
-construction must still invoke this preparation before the FAT32 installed entry
-can consume the attachment.
+empty user-context register ABI. A kernel-owned construction projection now
+requires an otherwise pristine target task, atomically derives exact `READ` and
+exact `SIGNAL` handles, records both ancestry edges for transitive revocation,
+and composes them with entry installation. Entry failure revokes both projected
+handles before returning and preserves the original context. Kernel passes 641
+focused Linux-host tests. A concrete placement backend must still invoke this
+task-construction transaction before the FAT32 installed entry can consume the
+attachment.
 
 Patent review: `NOT_TRIGGERED` — this adds conventional capability attenuation
 and atomic launch sequencing to the existing isolation transaction. See
@@ -7547,9 +7552,10 @@ volume/session binding. Handoff object IDs remain non-authorizing data. The
 MRML-native entry now consumes the fixed native register ABI, copies the exact
 144-byte handoff through the projected read-only capability, validates its
 filesystem module and provider generation, retains the distinct block endpoint
-capability, erases the temporary bytes, and only then sends ready. Concrete
-kernel task construction still must invoke the entry preparation, and the entry's
-block-call routing is not yet connected. The focused FAT32 suite passes
+capability, erases the temporary bytes, and only then sends ready. The reusable
+native task-construction transaction now supplies that ABI, but a concrete
+placement backend does not yet invoke it and the entry's block-call routing is
+not yet connected. The focused FAT32 suite passes
 ninety-nine Linux-host tests.
 
 The storage policy service now bridges non-authorizing filesystem lookup identity
