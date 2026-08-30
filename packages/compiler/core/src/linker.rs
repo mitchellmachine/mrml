@@ -591,6 +591,9 @@ pub enum LinkRelocationTarget<'a> {
 pub enum LinkDefinitionTarget {
     Text(usize),
     ReadonlyData(usize),
+    /// Defines the loader-populated IAT slot associated with a selected PE
+    /// short-import thunk. The driver contextualizes references before layout.
+    PeImportAddress,
     /// Defines an exact non-global COFF text section without inventing a name.
     CoffTextSection {
         identity: CoffSectionIdentity,
@@ -3080,7 +3083,9 @@ fn definition_coff_section_identity(target: LinkDefinitionTarget) -> Option<Coff
     match target {
         LinkDefinitionTarget::CoffTextSection { identity, .. }
         | LinkDefinitionTarget::CoffSection { identity, .. } => Some(identity),
-        LinkDefinitionTarget::Text(_) | LinkDefinitionTarget::ReadonlyData(_) => None,
+        LinkDefinitionTarget::Text(_)
+        | LinkDefinitionTarget::ReadonlyData(_)
+        | LinkDefinitionTarget::PeImportAddress => None,
     }
 }
 
@@ -9271,6 +9276,7 @@ fn validate_definition_target(
     let valid = match target {
         LinkDefinitionTarget::Text(offset) => offset <= input.text.len(),
         LinkDefinitionTarget::ReadonlyData(offset) => offset <= input.readonly_data.len(),
+        LinkDefinitionTarget::PeImportAddress => true,
         LinkDefinitionTarget::CoffTextSection { identity, offset } => {
             identity.object != 0 && identity.section != 0 && offset <= input.text.len()
         }
@@ -9295,6 +9301,7 @@ fn resolve_symbol(
             return match target {
                 LinkDefinitionTarget::Text(offset) => layout.text.checked_add(offset),
                 LinkDefinitionTarget::ReadonlyData(offset) => layout.readonly.checked_add(offset),
+                LinkDefinitionTarget::PeImportAddress => None,
                 LinkDefinitionTarget::CoffTextSection { .. } => None,
                 LinkDefinitionTarget::CoffSection { .. } => None,
             }

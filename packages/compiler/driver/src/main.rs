@@ -68,6 +68,7 @@ struct LinkObjectRefs<'a> {
     bytes: Vector<&'a [u8]>,
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
+    import_alias: Vector<Option<&'a str>>,
 }
 
 enum LinkFile {
@@ -137,6 +138,7 @@ fn application_main() -> Result<()> {
             &object_refs.bytes,
             &object_refs.archive_group,
             &object_refs.archive_member,
+            &object_refs.import_alias,
             &arguments[arguments.len() - 3],
             output,
         );
@@ -228,7 +230,7 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            write_linked_pe(&[object.bytes()], &[0], &[0], function, output)?;
+            write_linked_pe(&[object.bytes()], &[0], &[0], &[None], function, output)?;
         }
         EmitKind::ElfExecutable => {
             write_linked_elf(&[object.bytes()], &[0], &[0], function, output)?;
@@ -425,6 +427,8 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
         .map_err(|_| anyhow!("could not allocate link input origin list"))?;
     let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+    let mut import_alias = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
     if !objects
         .iter()
         .any(|object| object.as_ref().get(..8) == Some(b"!<arch>\n"))
@@ -438,6 +442,9 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             archive_member
                 .try_push(0)
                 .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+            import_alias
+                .try_push(None)
+                .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
         }
         if refs.is_empty() {
             return Err(anyhow!("link input list contains no object members"));
@@ -446,6 +453,7 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             bytes: refs,
             archive_group,
             archive_member,
+            import_alias,
         });
     }
     let mut referenced = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
@@ -501,6 +509,19 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                             error
                         )
                     })?;
+                    let import_alias = short_import_alias(
+                        format,
+                        archive.members()[candidate.member_index].bytes,
+                        archive.symbols(),
+                        candidate.member_index,
+                    )?;
+                    if let Some(alias) = import_alias
+                        && !defined.iter().any(|defined| *defined == alias)
+                    {
+                        defined
+                            .try_push(alias)
+                            .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+                    }
                     if !defined.iter().any(|defined| *defined == candidate.symbol) {
                         return Err(anyhow!(
                             "archive group {} member {} ({}) symbol index for {} does not match its object member",
@@ -533,6 +554,14 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                             .map_err(|_| anyhow!("archive member identity overflow"))?,
                     )
                     .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+                import_alias
+                    .try_push(short_import_alias(
+                        format,
+                        member.bytes,
+                        archive.symbols(),
+                        member_index,
+                    )?)
+                    .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
             }
             next_archive_group = next_archive_group
                 .checked_add(1)
@@ -546,6 +575,9 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             archive_member
                 .try_push(0)
                 .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+            import_alias
+                .try_push(None)
+                .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
             if indexed_selection_safe && indexed_selection_initialized {
                 scan_link_object_symbols(object, format, &mut referenced, &mut defined)?;
             }
@@ -558,7 +590,27 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
         bytes: refs,
         archive_group,
         archive_member,
+        import_alias,
     })
+}
+
+fn short_import_alias<'a>(
+    format: ObjectFormat,
+    object: &[u8],
+    symbols: &[mrml_rustc::ArchiveSymbol<'a>],
+    member_index: usize,
+) -> Result<Option<&'a str>> {
+    if format != ObjectFormat::Coff {
+        return Ok(None);
+    }
+    let Some(import) = x86_64_coff_short_import(object).map_err(mrml_error::message)? else {
+        return Ok(None);
+    };
+    Ok(symbols.iter().find_map(|candidate| {
+        (candidate.member_index == member_index
+            && candidate.symbol.strip_prefix("__imp_") == Some(import.symbol))
+        .then_some(candidate.symbol)
+    }))
 }
 
 fn scan_link_object_symbols<'a>(
@@ -665,11 +717,15 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     objects: &[&'data [u8]],
     object_archive_group: &[u16],
     object_archive_member: &[u16],
+    object_import_alias: &[Option<&'data str>],
     format: ObjectFormat,
     relocation_arenas: &'relocations mut [[LinkRelocation<'data>; MAX_LINK_RELOCATIONS]],
     definition_arenas: &'definitions mut [[LinkDefinition<'data>; MAX_LINK_DEFINITIONS]],
 ) -> Result<DecodedLinkInputs<'data, 'relocations, 'definitions>> {
-    if objects.len() != object_archive_group.len() || objects.len() != object_archive_member.len() {
+    if objects.len() != object_archive_group.len()
+        || objects.len() != object_archive_member.len()
+        || objects.len() != object_import_alias.len()
+    {
         return Err(anyhow!("link input origin count mismatch"));
     }
     let mut inputs = Vector::with_capacity(relocation_arenas.len())
@@ -703,8 +759,10 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             ObjectFormat::Coff if coff_short_import.is_some() => 1,
             ObjectFormat::Coff => x86_64_coff_text_fragment_count(object).map_err(|error| {
                 anyhow!(
-                    "COFF object {} text fragment count: {}",
+                    "COFF object {} archive group {} member {} text fragment count: {}",
                     object_index,
+                    object_archive_group[object_index],
+                    object_archive_member[object_index],
                     error
                 )
             })?,
@@ -746,14 +804,21 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                 .split_first_mut()
                 .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
             let (input, selection_policy) = match format {
-                ObjectFormat::Coff if coff_short_import.is_some() => (
-                    decode_x86_64_coff_short_import(object, arena)
+                ObjectFormat::Coff if coff_short_import.is_some() => {
+                    let mut input = decode_x86_64_coff_short_import(object, arena)
                         .map_err(|error| {
                             anyhow!("COFF object {} short import decode: {}", object_index, error)
                         })?
-                        .ok_or_else(|| anyhow!("COFF short import changed after inventory"))?,
-                    CoffTextComdatSelection::None,
-                ),
+                        .ok_or_else(|| anyhow!("COFF short import changed after inventory"))?;
+                    if let Some(alias) = object_import_alias[object_index] {
+                        definitions[0] = LinkDefinition {
+                            symbol: alias,
+                            target: LinkDefinitionTarget::PeImportAddress,
+                        };
+                        input.additional_definitions = &definitions[..1];
+                    }
+                    (input, CoffTextComdatSelection::None)
+                }
                 ObjectFormat::Coff if fragment_index < text_fragment_count => {
                     let inventory = coff_comdat_sections
                         .as_ref()
@@ -890,7 +955,15 @@ fn relocation_arenas<'a>(
     Ok(arenas)
 }
 
-fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<usize> {
+fn expanded_fragment_count(
+    objects: &[&[u8]],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    format: ObjectFormat,
+) -> Result<usize> {
+    if objects.len() != archive_group.len() || objects.len() != archive_member.len() {
+        return Err(anyhow!("link input origin count mismatch"));
+    }
     let mut count = 0usize;
     for (object_index, object) in objects.iter().enumerate() {
         let object_fragments = match format {
@@ -907,8 +980,8 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
                 x86_64_coff_text_fragment_count(object)
                     .map_err(|error| {
                         anyhow!(
-                            "COFF object {} text fragment count: {}",
-                            object_index,
+                            "COFF object {} archive group {} member {} text fragment count: {}",
+                            object_index, archive_group[object_index], archive_member[object_index],
                             error
                         )
                     })?
@@ -1384,6 +1457,22 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
     let writable_target_defined = |symbol: &str| {
         writable_data.iter().any(|data| data.symbol == symbol)
     };
+    let import_target = |symbol: &str| {
+        inputs.iter().find_map(|input| {
+            let defines_import = input.additional_definitions.iter().any(|definition| {
+                definition.symbol == symbol
+                    && definition.target == LinkDefinitionTarget::PeImportAddress
+            });
+            defines_import.then(|| {
+                input.relocations.iter().find_map(|relocation| match relocation.target {
+                    LinkRelocationTarget::PeImportAddress { library, symbol } => {
+                        Some((library, symbol))
+                    }
+                    _ => None,
+                })
+            })?
+        })
+    };
     let mut contextual = Vector::with_capacity(inputs.len())
         .map_err(|_| anyhow!("could not allocate contextual PE link inputs"))?;
     let mut remaining = arenas;
@@ -1396,12 +1485,22 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
         }
         for (index, relocation) in input.relocations.iter().copied().enumerate() {
             arena[index] = match relocation.target {
-                LinkRelocationTarget::Symbol(symbol)
-                    if !link_target_defined(symbol) && writable_target_defined(symbol) =>
-                {
-                    LinkRelocation {
-                        target: LinkRelocationTarget::PeWritableSymbol(symbol),
-                        ..relocation
+                LinkRelocationTarget::Symbol(symbol) => {
+                    if let Some((library, import)) = import_target(symbol) {
+                        LinkRelocation {
+                            target: LinkRelocationTarget::PeImportAddress {
+                                library,
+                                symbol: import,
+                            },
+                            ..relocation
+                        }
+                    } else if !link_target_defined(symbol) && writable_target_defined(symbol) {
+                        LinkRelocation {
+                            target: LinkRelocationTarget::PeWritableSymbol(symbol),
+                            ..relocation
+                        }
+                    } else {
+                        relocation
                     }
                 }
                 _ => relocation,
@@ -1426,16 +1525,23 @@ fn write_linked_pe(
     objects: &[&[u8]],
     archive_group: &[u16],
     archive_member: &[u16],
+    import_alias: &[Option<&str>],
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let fragment_count = expanded_fragment_count(objects, ObjectFormat::Coff)?;
+    let fragment_count = expanded_fragment_count(
+        objects,
+        archive_group,
+        archive_member,
+        ObjectFormat::Coff,
+    )?;
     let mut arenas = relocation_arenas(fragment_count)?;
     let mut definitions = definition_arenas(fragment_count)?;
     let decoded = decode_link_inputs(
         objects,
         archive_group,
         archive_member,
+        import_alias,
         ObjectFormat::Coff,
         &mut arenas,
         &mut definitions,
@@ -2003,6 +2109,23 @@ mod tests {
         let import = short_import_object();
         assert!(x86_64_coff_short_import(&import).unwrap().is_some());
         assert_eq!(writable_fragment_count(&[&import]).unwrap(), 0);
+
+        let mut archive = Vector::with_capacity(1024).unwrap();
+        archive.try_extend_from_slice(b"!<arch>\n").unwrap();
+        let mut index = std::vec![0, 0, 0, 1, 0, 0, 0, 0];
+        index.extend_from_slice(b"__imp_WaitOnAddress\0");
+        let member_offset = u32::try_from(8 + 60 + index.len()).unwrap();
+        index[4..8].copy_from_slice(&member_offset.to_be_bytes());
+        append_archive_member(&mut archive, "/", &index);
+        append_archive_member(&mut archive, "import.o/", &import);
+        let archives = [archive];
+        let refs = link_object_refs(
+            &archives,
+            ObjectFormat::Coff,
+            "__imp_WaitOnAddress",
+        )
+        .unwrap();
+        assert_eq!(&refs.import_alias[..], &[Some("__imp_WaitOnAddress")]);
     }
 
     #[test]
@@ -2079,6 +2202,50 @@ mod tests {
         assert_eq!(
             defined_contextual[0].relocations[0].target,
             LinkRelocationTarget::Symbol("marker")
+        );
+
+        let import_definition = [LinkDefinition {
+            symbol: "__imp_WaitOnAddress",
+            target: LinkDefinitionTarget::PeImportAddress,
+        }];
+        let import_relocation = [LinkRelocation {
+            offset: 2,
+            target: LinkRelocationTarget::PeImportAddress {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                symbol: "WaitOnAddress",
+            },
+            addend: -4,
+        }];
+        let import = LinkInput {
+            symbol: "WaitOnAddress",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &import_definition,
+            text: &[0xff, 0x25, 0, 0, 0, 0],
+            readonly_data: &[],
+            relocations: &import_relocation,
+        };
+        let alias_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("__imp_WaitOnAddress"),
+            addend: -4,
+        }];
+        let alias_user = LinkInput {
+            relocations: &alias_relocation,
+            ..input
+        };
+        let mut import_arenas = relocation_arenas(2).unwrap();
+        let import_contextual = contextualize_pe_writable_relocations(
+            &[alias_user, import],
+            &[],
+            &mut import_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            import_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeImportAddress {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                symbol: "WaitOnAddress",
+            }
         );
     }
 
