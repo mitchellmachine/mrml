@@ -407,12 +407,24 @@ remain **PLANNED**. WHP/KVM runner regression parity remains 11/12.
 The next storage dependency gate is now **PARTIALLY IMPLEMENTED** as a typed
 ABAR mapping request. It requires a live `MAP | READ | WRITE` capability for the
 exact device object, nonzero descriptor and mapping generations, and an aligned
-non-wrapping virtual range. The backend contract is supervisor-only, RW/NX,
-exact-range, and generation-bound; every authority, substitution, range, or
-backend failure publishes no mapping. Storage passes 138 tests on Windows and
-Arch Linux. This is not MMIO execution or hardware evidence. Controller reset,
-port/signature discovery, DMA, interrupts, ATA/ATAPI, NCQ, and physical
-validation remain **PLANNED**.
+non-wrapping lower-half virtual range. Because the isolated native provider
+executes at CPL3, the backend contract is now exact-driver-task user RW/NX,
+exact-range, and generation-bound rather than supervisor-only. The typed x86
+permission selects PAT index 3 with PWT and PCD; the backend must separately
+establish that index 3 is UC, exclude cacheable aliases, and install no mapping
+in an ordinary application or another task. Generic user-buffer copies reject
+device-selector leaves, generic protection cannot change privilege or memory
+class, and active inspection aggregates effective permissions across every
+paging level. The abstract mapping record itself still carries no task/root
+proof. Every authority, substitution, range, or backend failure publishes no
+mapping. Storage passes 138 tests on Linux; the kernel page-table suite passes
+708 tests on Linux. KVM now sets and reads back the same reset PAT layout as
+WHP before synthetic long-mode entry; its Linux suite passes 23 tests with one
+manual performance test ignored, but this host has no `/dev/kvm`. This is source
+and controlled unit evidence, not an installed AHCI mapper, bare-metal PAT-MSR
+proof, alias proof, active-root/TLB/IOMMU execution, CPL3 entry, or hardware
+evidence. Controller reset, port/signature discovery, DMA, interrupts,
+ATA/ATAPI, NCQ, and physical validation remain **PLANNED**.
 
 The following native-storage dependency gate is now **PARTIALLY IMPLEMENTED**
 as bounded global AHCI register initialization. An unsafe native adapter is

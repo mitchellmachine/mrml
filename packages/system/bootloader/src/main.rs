@@ -5727,7 +5727,7 @@ unsafe fn arm_buffer_drift_probe() {
         .ok()
         .flatten()
         .unwrap_or_else(|| halt());
-    if !leaf.user() || !leaf.writable() || leaf.executable() {
+    if !leaf.user() || !leaf.writable() || leaf.executable() || leaf.device_pat_index_three() {
         halt();
     }
     let mapping = Mapping::new(

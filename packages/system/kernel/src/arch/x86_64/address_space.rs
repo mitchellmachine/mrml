@@ -113,6 +113,9 @@ impl Mapping {
         let user_half = virtual_start.get() < 1u64 << 47 && virtual_last.get() < 1u64 << 47;
         let kernel_half = virtual_start.get() >= 0xffff_8000_0000_0000
             && virtual_last.get() >= 0xffff_8000_0000_0000;
+        if permissions.device_memory() && permissions.executable() {
+            return Err(AddressSpaceError::InvalidMapping);
+        }
         if (permissions.user() && !user_half)
             || (!permissions.user() && !permissions.low_supervisor_mmio() && !kernel_half)
             || (permissions.low_supervisor_mmio() && !user_half)
@@ -271,7 +274,9 @@ impl<const MAPPINGS: usize> AddressSpace<MAPPINGS> {
                     && end <= mapping.virtual_end()
             })
             .ok_or(UserBufferError::Unmapped)?;
-        if access == UserBufferAccess::Write && !mapping.permissions().writable() {
+        if mapping.permissions().device_memory()
+            || (access == UserBufferAccess::Write && !mapping.permissions().writable())
+        {
             return Err(UserBufferError::AccessDenied);
         }
         let offset = virtual_address - mapping.virtual_start().get();
@@ -382,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn user_pages_are_confined_but_supervisor_mmio_may_be_low() {
+    fn user_pages_are_confined_but_exact_mmio_may_be_low() {
         assert_eq!(
             Mapping::new(
                 VirtAddr::new(0xffff_8000_0000_0000).unwrap(),
@@ -392,14 +397,38 @@ mod tests {
             ),
             Err(AddressSpaceError::WrongPrivilegeHalf)
         );
-        assert!(
+        assert!(Mapping::new(
+            VirtAddr::new(0x4000).unwrap(),
+            PhysAddr::new(0).unwrap(),
+            1,
+            PagePermissions::KERNEL_MMIO_READ_WRITE,
+        )
+        .is_ok());
+        assert!(Mapping::new(
+            VirtAddr::new(0x6000).unwrap(),
+            PhysAddr::new(0x2000).unwrap(),
+            1,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .is_ok());
+        assert_eq!(
             Mapping::new(
-                VirtAddr::new(0x4000).unwrap(),
-                PhysAddr::new(0).unwrap(),
+                VirtAddr::new(0xffff_8000_0000_0000).unwrap(),
+                PhysAddr::new(0x3000).unwrap(),
                 1,
-                PagePermissions::KERNEL_MMIO_READ_WRITE,
-            )
-            .is_ok()
+                PagePermissions::USER_MMIO_READ_WRITE,
+            ),
+            Err(AddressSpaceError::WrongPrivilegeHalf)
+        );
+        let executable_device = PagePermissions((1 << 1) | (1 << 2) | (1 << 4));
+        assert_eq!(
+            Mapping::new(
+                VirtAddr::new(0x7000).unwrap(),
+                PhysAddr::new(0x4000).unwrap(),
+                1,
+                executable_device,
+            ),
+            Err(AddressSpaceError::InvalidMapping)
         );
         assert_eq!(
             Mapping::new(
@@ -442,7 +471,7 @@ mod tests {
 
     #[test]
     fn user_buffer_resolution_binds_complete_range_access_and_translation() {
-        let mut space = AddressSpace::<2>::new();
+        let mut space = AddressSpace::<1>::new();
         space
             .map(
                 Mapping::new(
@@ -472,7 +501,7 @@ mod tests {
 
     #[test]
     fn user_buffer_resolution_rejects_empty_overflow_and_read_only_output() {
-        let mut space = AddressSpace::<1>::new();
+        let mut space = AddressSpace::<2>::new();
         space
             .map(
                 Mapping::new(
@@ -480,6 +509,17 @@ mod tests {
                     PhysAddr::new(0x30_0000).unwrap(),
                     1,
                     PagePermissions::USER_READ,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        space
+            .map(
+                Mapping::new(
+                    VirtAddr::new(0xa000).unwrap(),
+                    PhysAddr::new(0x31_0000).unwrap(),
+                    1,
+                    PagePermissions::USER_MMIO_READ_WRITE,
                 )
                 .unwrap(),
             )
@@ -494,6 +534,14 @@ mod tests {
         );
         assert_eq!(
             space.resolve_user_buffer(0x8000, 1, 64, UserBufferAccess::Write),
+            Err(UserBufferError::AccessDenied)
+        );
+        assert_eq!(
+            space.resolve_user_buffer(0xa000, 4, 64, UserBufferAccess::Read),
+            Err(UserBufferError::AccessDenied)
+        );
+        assert_eq!(
+            space.resolve_user_buffer(0xa000, 4, 64, UserBufferAccess::Write),
             Err(UserBufferError::AccessDenied)
         );
         assert_eq!(

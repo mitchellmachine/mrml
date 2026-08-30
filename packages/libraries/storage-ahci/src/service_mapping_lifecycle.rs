@@ -388,7 +388,7 @@ mod tests {
         fail_remove: bool,
     }
 
-    impl AhciAbarMappingBackend for AbarBackend {
+    unsafe impl AhciAbarMappingBackend for AbarBackend {
         fn map_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()> {
             if self.mapping.replace(mapping).is_some() {
                 return Err(());
@@ -397,7 +397,7 @@ mod tests {
         }
     }
 
-    impl AhciAbarRemovalBackend for AbarBackend {
+    unsafe impl AhciAbarRemovalBackend for AbarBackend {
         fn unmap_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()> {
             if self.fail_remove || self.mapping != Some(mapping) {
                 return Err(());

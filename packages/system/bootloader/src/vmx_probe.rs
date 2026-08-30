@@ -115,7 +115,11 @@ unsafe fn physical_pages() -> Result<[PhysAddr; PAGE_COUNT], ()> {
             .leaf(VirtAddr::new(virtual_address).map_err(|_| ())?)
             .map_err(|_| ())?
             .ok_or(())?;
-        if !leaf.writable() || leaf.user() || leaf.physical().get() & (PAGE_SIZE - 1) != 0 {
+        if !leaf.writable()
+            || leaf.user()
+            || leaf.device_pat_index_three()
+            || leaf.physical().get() & (PAGE_SIZE - 1) != 0
+        {
             return Err(());
         }
         if pages[..index].contains(&leaf.physical()) {

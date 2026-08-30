@@ -1,13 +1,18 @@
 //! Capability-bound preparation of one validated AHCI ABAR mapping.
 //!
 //! This module does not access controller registers. The platform mapper remains
-//! responsible for installing a supervisor-only, read/write, non-executable MMIO
-//! mapping and for invalidating it when either generation is retired.
+//! responsible for installing the range only in the exact isolated driver task,
+//! user-accessible there, read/write, non-executable, and with the x86 device-PAT
+//! selector. It must independently prove that PAT index 3 is UC, exclude
+//! cacheable aliases, and invalidate the mapping when either generation retires.
+//! No ordinary application or other task may receive the mapping.
 
-use crate::AhciAbarDescriptor;
+use crate::{AHCI_ABAR_MINIMUM_BYTES, AhciAbarDescriptor};
+use mrml_kernel::arch::x86_64::PagePermissions;
 use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 
 pub const AHCI_MMIO_PAGE_BYTES: u64 = 4096;
+pub const AHCI_ABAR_PAGE_PERMISSIONS: PagePermissions = PagePermissions::USER_MMIO_READ_WRITE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciAbarMapping {
@@ -23,21 +28,56 @@ pub struct AhciAbarMapping {
 pub enum AhciAbarMappingError {
     Capability(CapabilityError),
     WrongDeviceObject,
+    InvalidDescriptor,
     InvalidMappingGeneration,
     InvalidVirtualRange,
     BackendRejected,
 }
 
-pub trait AhciAbarMappingBackend {
-    /// Installs an NX MMIO mapping for exactly this prepared range.
+fn descriptor_is_well_formed(descriptor: AhciAbarDescriptor) -> bool {
+    let Some(physical_end) = descriptor.physical_base.checked_add(descriptor.bytes) else {
+        return false;
+    };
+    descriptor.location.device <= 31
+        && descriptor.location.function <= 7
+        && descriptor.configuration_generation != 0
+        && descriptor.vendor_id != 0
+        && descriptor.vendor_id != u16::MAX
+        && descriptor.physical_base != 0
+        && descriptor.physical_base <= u64::from(u32::MAX)
+        && descriptor.bytes >= AHCI_ABAR_MINIMUM_BYTES
+        && descriptor.bytes.is_power_of_two()
+        && descriptor.physical_base & (descriptor.bytes - 1) == 0
+        && physical_end <= 1u64 << 32
+}
+
+/// Privileged installation boundary for one isolated AHCI driver address space.
+///
+/// # Safety
+///
+/// The backend value must be bound to the exact target task/address-space root.
+/// A successful call must install only [`AHCI_ABAR_PAGE_PERMISSIONS`] for the
+/// exact range, with PAT index 3 proved UC and no cacheable alias. It must not
+/// expose the range to another task or ordinary application.
+pub unsafe trait AhciAbarMappingBackend {
+    /// Installs an exact task-local MMIO mapping using
+    /// [`AHCI_ABAR_PAGE_PERMISSIONS`].
     ///
-    /// The backend must not broaden the range or make it user-accessible. It
-    /// must bind revocation to both generations retained in `mapping`.
+    /// The backend must already be bound to the isolated driver address space;
+    /// it must not broaden the range, install the leaf in any other task, or
+    /// create a cacheable alias. It must establish that x86 PAT index 3 is UC
+    /// and bind revocation to both generations retained in `mapping`.
     fn map_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()>;
 }
 
 /// Privileged withdrawal boundary for one exact installed ABAR mapping.
-pub trait AhciAbarRemovalBackend {
+///
+/// # Safety
+///
+/// Success must mean that every CPU translation for the exact task-bound range
+/// is absent and no consumer can access it. Failure must retain the mapping or
+/// fail-stop every possible consumer.
+pub unsafe trait AhciAbarRemovalBackend {
     /// Success confirms that the mapping and required translation-cache state
     /// are absent. Failure retains the mapping or fail-stops every consumer.
     fn unmap_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()>;
@@ -97,11 +137,17 @@ pub fn map_ahci_abar<const N: usize, B: AhciAbarMappingBackend>(
     if mapping_generation == 0 {
         return Err(AhciAbarMappingError::InvalidMappingGeneration);
     }
+    if !descriptor_is_well_formed(descriptor) {
+        return Err(AhciAbarMappingError::InvalidDescriptor);
+    }
+    let virtual_end = virtual_base
+        .checked_add(descriptor.bytes)
+        .ok_or(AhciAbarMappingError::InvalidVirtualRange)?;
     if virtual_base == 0
         || virtual_base % AHCI_MMIO_PAGE_BYTES != 0
         || descriptor.physical_base % AHCI_MMIO_PAGE_BYTES != 0
         || descriptor.bytes % AHCI_MMIO_PAGE_BYTES != 0
-        || virtual_base.checked_add(descriptor.bytes).is_none()
+        || virtual_end > 1 << 47
     {
         return Err(AhciAbarMappingError::InvalidVirtualRange);
     }
@@ -178,7 +224,7 @@ mod tests {
         reject_unmap: bool,
     }
 
-    impl AhciAbarMappingBackend for RecordingBackend {
+    unsafe impl AhciAbarMappingBackend for RecordingBackend {
         fn map_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()> {
             if self.reject {
                 return Err(());
@@ -188,7 +234,7 @@ mod tests {
         }
     }
 
-    impl AhciAbarRemovalBackend for RecordingBackend {
+    unsafe impl AhciAbarRemovalBackend for RecordingBackend {
         fn unmap_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()> {
             if self.reject_unmap || self.mapping != Some(mapping) {
                 return Err(());
@@ -231,7 +277,7 @@ mod tests {
             capability,
             object,
             descriptor(),
-            0xffff_9000_0000_0000,
+            0x20_0000,
             9,
             &mut backend,
         )
@@ -240,6 +286,10 @@ mod tests {
         assert_eq!(mapping.configuration_generation, 7);
         assert_eq!(mapping.mapping_generation, 9);
         assert_eq!(mapping.bytes, 0x2000);
+        assert_eq!(
+            AHCI_ABAR_PAGE_PERMISSIONS,
+            PagePermissions::USER_MMIO_READ_WRITE
+        );
     }
 
     #[test]
@@ -330,6 +380,11 @@ mod tests {
                 AhciAbarMappingError::InvalidVirtualRange,
             ),
             (
+                (1 << 47) - 0x1000,
+                1,
+                AhciAbarMappingError::InvalidVirtualRange,
+            ),
+            (
                 0x8000_0000,
                 0,
                 AhciAbarMappingError::InvalidMappingGeneration,
@@ -348,6 +403,54 @@ mod tests {
                 Err(expected)
             );
         }
+
+        let valid = descriptor();
+        for invalid in [
+            AhciAbarDescriptor {
+                configuration_generation: 0,
+                ..valid
+            },
+            AhciAbarDescriptor {
+                physical_base: 0,
+                ..valid
+            },
+            AhciAbarDescriptor { bytes: 0, ..valid },
+            AhciAbarDescriptor {
+                bytes: 0x1000,
+                ..valid
+            },
+            AhciAbarDescriptor {
+                bytes: 0x3000,
+                ..valid
+            },
+            AhciAbarDescriptor {
+                physical_base: 0x1_0000_0000,
+                ..valid
+            },
+            AhciAbarDescriptor {
+                location: PciFunctionLocation {
+                    device: 32,
+                    ..valid.location
+                },
+                ..valid
+            },
+        ] {
+            let mut backend = RecordingBackend::default();
+            assert_eq!(
+                map_ahci_abar(
+                    &capabilities,
+                    capability,
+                    object,
+                    invalid,
+                    0x8000_0000,
+                    1,
+                    &mut backend,
+                ),
+                Err(AhciAbarMappingError::InvalidDescriptor)
+            );
+            assert_eq!(backend.mapping, None);
+        }
+
         let mut backend = RecordingBackend {
             mapping: None,
             reject: true,

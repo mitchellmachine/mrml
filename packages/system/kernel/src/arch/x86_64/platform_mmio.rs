@@ -233,7 +233,11 @@ pub fn verify_active_platform_mmio(
             .get()
             .checked_add(offset)
             .ok_or(PlatformMmioError::InvalidRange)?;
-        if leaf.physical().get() != expected || !leaf.writable() || leaf.executable() || leaf.user()
+        if leaf.physical().get() != expected
+            || !leaf.writable()
+            || leaf.executable()
+            || leaf.user()
+            || !leaf.device_pat_index_three()
         {
             return Err(PlatformMmioError::MappingMismatch);
         }

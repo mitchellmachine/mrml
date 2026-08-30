@@ -80,7 +80,7 @@ impl ApTrampolinePage for ActiveApTrampolinePage {
             return None;
         }
         let leaf = self.tables.leaf(VirtAddr::new(physical).ok()?).ok()??;
-        if leaf.physical().get() != physical || leaf.user() {
+        if leaf.physical().get() != physical || leaf.user() || leaf.device_pat_index_three() {
             return None;
         }
         Some(TrampolinePermissions {

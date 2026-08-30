@@ -1809,7 +1809,7 @@ fn prepare_transition(
         &mut tables,
         ap_trampoline,
         1,
-        PagePermissions::KERNEL_MMIO_READ_WRITE,
+        PagePermissions::KERNEL_LOW_READ_WRITE,
     )?;
     map_identity(
         &mut tables,
@@ -1842,7 +1842,7 @@ fn prepare_transition(
             &mut tables,
             frame,
             1,
-            PagePermissions::KERNEL_MMIO_READ_WRITE,
+            PagePermissions::KERNEL_LOW_READ_WRITE,
         )?;
         frame_index += 1;
     }

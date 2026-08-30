@@ -6,7 +6,7 @@
 //! publication. Port engines, DMA, commands, interrupts, ATA/ATAPI, and NCQ are
 //! later layers.
 
-use crate::{AhciAbarMapping, AHCI_ABAR_MINIMUM_BYTES};
+use crate::{AhciAbarMapping, AHCI_ABAR_MINIMUM_BYTES, AHCI_MMIO_PAGE_BYTES};
 
 pub const AHCI_CAP_OFFSET: u32 = 0x00;
 pub const AHCI_GHC_OFFSET: u32 = 0x04;
@@ -97,13 +97,16 @@ pub trait AhciRegisterIo {
     fn write_u32(&mut self, offset: u32, value: u32) -> Result<(), ()>;
 }
 
-/// Volatile access to one already-authorized supervisor ABAR mapping.
+/// Volatile access to one already-authorized task-local user ABAR mapping.
 ///
 /// # Safety
 ///
-/// The creator must keep the exact mapping live and exclusively assigned to
-/// this driver for the complete value lifetime. Revocation must stop all users
-/// before unmapping the range. Construction does not itself grant authority.
+/// The creator must prove that the exact lower-half, page-aligned mapping is
+/// installed only in this isolated driver task with
+/// `AHCI_ABAR_PAGE_PERMISSIONS`, that PAT index 3 is UC, and that no cacheable
+/// alias exists. It must keep the mapping live and exclusively assigned for the
+/// complete value lifetime. Revocation must stop every user before unmapping.
+/// Construction does not itself grant authority or verify the active root.
 pub struct NativeAhciRegisterIo {
     base: *mut u8,
     bytes: usize,
@@ -111,13 +114,20 @@ pub struct NativeAhciRegisterIo {
 
 impl NativeAhciRegisterIo {
     pub unsafe fn new(mapping: AhciAbarMapping) -> Option<Self> {
+        let virtual_end = mapping.virtual_base.checked_add(mapping.bytes)?;
+        if mapping.configuration_generation == 0
+            || mapping.mapping_generation == 0
+            || mapping.virtual_base == 0
+            || !mapping.virtual_base.is_multiple_of(AHCI_MMIO_PAGE_BYTES)
+            || !mapping.physical_base.is_multiple_of(AHCI_MMIO_PAGE_BYTES)
+            || !mapping.bytes.is_multiple_of(AHCI_MMIO_PAGE_BYTES)
+            || virtual_end > 1 << 47
+        {
+            return None;
+        }
         let base = usize::try_from(mapping.virtual_base).ok()?;
         let bytes = usize::try_from(mapping.bytes).ok()?;
-        if base == 0
-            || base % core::mem::align_of::<u32>() != 0
-            || bytes < AHCI_ABAR_MINIMUM_BYTES as usize
-            || base.checked_add(bytes).is_none()
-        {
+        if bytes < AHCI_ABAR_MINIMUM_BYTES as usize || base.checked_add(bytes).is_none() {
             return None;
         }
         Some(Self {
@@ -316,7 +326,7 @@ mod tests {
             configuration_generation: 7,
             mapping_generation: 9,
             physical_base: 0xf7f0_0000,
-            virtual_base: 0xffff_9000_0000_0000,
+            virtual_base: 0x20_0000,
             bytes: 0x2000,
         }
     }
@@ -414,6 +424,22 @@ mod tests {
 
         invalid = mapping();
         invalid.virtual_base += 1;
+        assert!(unsafe { NativeAhciRegisterIo::new(invalid) }.is_none());
+
+        invalid = mapping();
+        invalid.virtual_base = 0xffff_9000_0000_0000;
+        assert!(unsafe { NativeAhciRegisterIo::new(invalid) }.is_none());
+
+        invalid = mapping();
+        invalid.physical_base += 1;
+        assert!(unsafe { NativeAhciRegisterIo::new(invalid) }.is_none());
+
+        invalid = mapping();
+        invalid.bytes += 1;
+        assert!(unsafe { NativeAhciRegisterIo::new(invalid) }.is_none());
+
+        invalid = mapping();
+        invalid.configuration_generation = 0;
         assert!(unsafe { NativeAhciRegisterIo::new(invalid) }.is_none());
 
         invalid = mapping();

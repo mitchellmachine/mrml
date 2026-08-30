@@ -324,6 +324,13 @@ access. The security/acceptance gate is canonical in
   Failure retains the exact frozen owner for retry or fail-stop, and successor
   dispatch remains withheld through cleanup; generic exit, cleanup, and restart
   remain unavailable to constructed device services.
+- Direct CPL3 device MMIO is user-accessible only in the exact isolated driver
+  address space, never ambient user memory. Its leaf must be read/write, NX, and
+  use the dedicated device-PAT selector; the privileged mapper must separately
+  prove that the selected PAT entry is UC, exclude cacheable aliases, and bind
+  active-root and translation-cache withdrawal to the device/mapping
+  generations. Generic syscall/user-buffer copies reject device-selector leaves
+  so non-volatile byte-copy machinery cannot access registers.
 - Restart commit publishes and returns the exact service/task generations as
   one typed result, so recovery and service dispatch do not rediscover task
   identity through a fallible lookup after creation.

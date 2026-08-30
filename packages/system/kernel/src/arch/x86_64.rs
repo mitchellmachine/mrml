@@ -140,10 +140,14 @@ impl PagePermissions {
     pub const KERNEL_LOW_READ_EXECUTE: Self = Self((1 << 1) | (1 << 3));
     pub const KERNEL_SHARED_READ: Self = Self(1 << 3);
     pub const KERNEL_SHARED_READ_WRITE: Self = Self((1 << 0) | (1 << 3));
-    pub const KERNEL_MMIO_READ_WRITE: Self = Self((1 << 0) | (1 << 3));
+    pub const KERNEL_MMIO_READ_WRITE: Self = Self((1 << 0) | (1 << 3) | (1 << 4));
     pub const USER_READ: Self = Self(1 << 2);
     pub const USER_READ_WRITE: Self = Self((1 << 2) | (1 << 0));
     pub const USER_READ_EXECUTE: Self = Self((1 << 2) | (1 << 1));
+    /// Task-local device memory. The leaf encoder selects PAT index 3 by
+    /// setting PWT and PCD; the platform must independently establish that
+    /// index 3 is UC before permitting native MMIO access.
+    pub const USER_MMIO_READ_WRITE: Self = Self((1 << 0) | (1 << 2) | (1 << 4));
 
     pub const fn writable(self) -> bool {
         self.0 & (1 << 0) != 0
@@ -160,6 +164,10 @@ impl PagePermissions {
     pub const fn low_supervisor_mmio(self) -> bool {
         self.0 & (1 << 3) != 0
     }
+
+    pub const fn device_memory(self) -> bool {
+        self.0 & (1 << 4) != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +176,7 @@ pub enum PageError {
     Unaligned,
     PhysicalAddressTooLarge,
     WritableExecutable,
+    ExecutableDeviceMemory,
     InvalidEntry,
 }
 
@@ -185,12 +194,20 @@ impl PageTableEntry {
         if permissions.writable() && permissions.executable() {
             return Err(PageError::WritableExecutable);
         }
+        if permissions.device_memory() && permissions.executable() {
+            return Err(PageError::ExecutableDeviceMemory);
+        }
         let mut bits = frame.get() | 1;
         if permissions.writable() {
             bits |= 1 << 1;
         }
         if permissions.user() {
             bits |= 1 << 2;
+        }
+        if permissions.device_memory() {
+            // For a 4 KiB leaf, PWT=1 and PCD=1 select PAT index 3. Native
+            // MMIO consumers must separately verify that IA32_PAT[3] is UC.
+            bits |= (1 << 3) | (1 << 4);
         }
         if !permissions.executable() {
             bits |= 1 << 63;
@@ -250,5 +267,29 @@ mod tests {
             Err(PageError::WritableExecutable)
         );
         assert_eq!(data.frame(), Ok(frame));
+    }
+
+    #[test]
+    fn mmio_leaves_select_pat_index_three_and_remain_nx() {
+        let frame = PhysAddr::new(0x3000).unwrap();
+        let user = PageTableEntry::leaf(frame, PagePermissions::USER_MMIO_READ_WRITE).unwrap();
+        assert_ne!(user.bits() & (1 << 1), 0);
+        assert_ne!(user.bits() & (1 << 2), 0);
+        assert_eq!(user.bits() & ((1 << 3) | (1 << 4)), (1 << 3) | (1 << 4));
+        assert_ne!(user.bits() & (1 << 63), 0);
+
+        let kernel = PageTableEntry::leaf(frame, PagePermissions::KERNEL_MMIO_READ_WRITE).unwrap();
+        assert_eq!(kernel.bits() & (1 << 2), 0);
+        assert_eq!(kernel.bits() & ((1 << 3) | (1 << 4)), (1 << 3) | (1 << 4));
+        assert_ne!(kernel.bits() & (1 << 63), 0);
+
+        let ordinary = PageTableEntry::leaf(frame, PagePermissions::USER_READ_WRITE).unwrap();
+        assert_eq!(ordinary.bits() & ((1 << 3) | (1 << 4)), 0);
+
+        let executable_device = PagePermissions((1 << 1) | (1 << 4));
+        assert_eq!(
+            PageTableEntry::leaf(frame, executable_device),
+            Err(PageError::ExecutableDeviceMemory)
+        );
     }
 }

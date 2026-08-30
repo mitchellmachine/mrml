@@ -91,7 +91,7 @@ pub use ahci_flush::{
 pub use ahci_mapping::{
     install_ahci_service_abar, map_ahci_abar, remove_ahci_service_abar, AhciAbarMapping,
     AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError,
-    InstalledAhciAbarMapping, AHCI_MMIO_PAGE_BYTES,
+    InstalledAhciAbarMapping, AHCI_ABAR_PAGE_PERMISSIONS, AHCI_MMIO_PAGE_BYTES,
 };
 pub use ahci_port::{
     discover_ahci_ports, AhciPortDeviceKind, AhciPortDiscoveryError, AhciPortError,

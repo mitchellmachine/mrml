@@ -736,21 +736,27 @@ ECAM allocation. Cross-purpose physical overlap, arithmetic overflow, capacity
 exhaustion, or any range not wholly contained in a normalized firmware
 `Mmio` region aborts construction. Before native code receives a mapped pointer,
 the active page tables are checked page by page against the manifest: physical
-identity must be exact and every leaf must be supervisor-only, writable, and
-non-executable under the dedicated MMIO permission class. A returned mapping
-token therefore proves the current page-table state, not merely an intended
-address-space policy record. Verified tokens are deliberately non-copyable. A
-native VT-d constructor consumes one token into a coupled unit containing the
-sole volatile register adapter and its capability-derived invalidator, so later
+identity must be exact, and R/W, U/S, and NX are accumulated across all four
+levels so the effective mapping must be supervisor-only, writable, and
+non-executable under the dedicated MMIO permission class. That permission also
+sets PWT and PCD on every 4 KiB leaf; active verification rejects an absent or
+partial device selector. Generic permission protection cannot cross either the
+user/supervisor or normal/device class. A returned mapping token therefore
+proves the current page-table identity, effective access, and PAT-index-3
+selector, not merely an intended address-space policy record. Verified tokens
+are deliberately non-copyable. A native VT-d constructor consumes one token
+into a coupled unit containing the sole volatile register adapter and its
+capability-derived invalidator, so later
 binding cannot substitute an independently constructed invalidator or authorize
 two adapters from the same proof. Construction rejects a capability-reported
 register extent larger than the verified mapping before returning the unit. The
-remaining unsafe boundary requires the mapping to be uncached, uniquely owned,
-and stable; active-PTE verification alone does not prove cache attributes or the
-absence of aliases. The initial DRHD page is deliberately described as
-bootstrap-only. CAP and ECAP are decoded into one shared `VtdRegisterLayout`
-used by both mapping and invalidation code, covering the fixed status registers,
-the reported IOTLB register, and the complete reported primary fault array.
+remaining unsafe boundary must establish that active IA32_PAT index 3 is UC and
+that the mapping is uniquely owned and stable; PTE selector verification does
+not prove the PAT-MSR value or the absence of aliases. The initial DRHD page is
+deliberately described as bootstrap-only. CAP and ECAP are decoded into one
+shared `VtdRegisterLayout` used by both mapping and invalidation code, covering
+the fixed status registers, the reported IOTLB register, and the complete
+reported primary fault array.
 Zero/invalid offsets and arithmetic failures are rejected; the architectural
 field maxima produce a bounded five-page extent. Extending a bootstrap
 requirement preserves its exact DRHD base and identity, requires the complete
@@ -9969,11 +9975,26 @@ hardware was implemented or exercised.
 The next native-storage authority boundary is now **PARTIALLY IMPLEMENTED** as
 a typed ABAR mapping request. It requires a live `MAP | READ | WRITE`
 capability for the exact device object, nonzero configuration and mapping
-generations, and an aligned non-wrapping virtual range. Its platform contract is
-an exact supervisor RW/NX mapping bound to both generations. Missing rights,
+generations, and an aligned non-wrapping lower-half virtual range. The provider
+runs at CPL3, so the platform contract is an exact-driver-task user RW/NX
+mapping bound to both generations, never a mapping for another task or ordinary
+application. `USER_MMIO_READ_WRITE` and `KERNEL_MMIO_READ_WRITE` are distinct
+from normal memory and encode PWT=PCD=1, selecting PAT index 3 for 4 KiB leaves;
+device mappings cannot be executable, and generic user-buffer resolution rejects
+them for both reads and writes. The active platform-MMIO verifier also rejects
+leaves missing either selector bit, but that existing verifier is kernel-only;
+the AHCI user mapping still lacks an installed equivalent. Missing rights,
 stale handles, object substitution, malformed ranges, and mapper failure publish
-nothing. Storage passes 138 tests on Windows and Arch Linux. No volatile MMIO,
-reset, DMA, interrupt, command, NCQ, or physical behavior was exercised.
+nothing. Storage passes 138 tests on Linux and the kernel passes 708 tests on
+Linux. The unsafe backend still must be pre-bound to the exact task/root, prove
+IA32_PAT index 3 is UC, exclude aliases, and provide active-root/TLB/IOMMU
+lifecycle; the mapping record itself carries no task/root proof. WHP already set
+and read back the reset PAT layout; KVM now performs the same exact MSR
+transaction before synthetic long-mode entry. KVM's Linux suite passes 23 tests
+with one manual performance test ignored, but `/dev/kvm` was absent, so no live
+ioctl or guest execution was exercised. No installed CPL3 entry, volatile AHCI
+MMIO, reset, DMA, interrupt, command, NCQ, WHP, or physical behavior was
+exercised.
 
 Configuration now **PARTIALLY IMPLEMENTS** one transactional bridge from that
 typed verifier to the existing installed recovery owner. Correlation,

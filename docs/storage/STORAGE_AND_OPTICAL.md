@@ -269,13 +269,30 @@ The first ABAR authority boundary is now **PARTIALLY IMPLEMENTED** without
 claiming controller access. After the typed PCI snapshot validates the function
 and BAR geometry, `map_ahci_abar` requires one live capability carrying
 `MAP | READ | WRITE` for the expected device object, nonzero configuration and
-mapping generations, and an aligned non-wrapping virtual range. Its backend
-contract permits only a supervisor read/write, non-executable mapping of that
-exact range and binds revocation to both generations. Missing rights, stale
+mapping generations, and an aligned non-wrapping lower-half virtual range. The
+isolated native provider runs at CPL3, so its backend may map the ABAR
+user-accessible only in that exact driver task, read/write and non-executable;
+ordinary applications and all other tasks remain excluded. The canonical x86
+permission selects PAT index 3 with PWT and PCD. The backend must independently
+prove that index 3 is UC, exclude cacheable aliases, and bind revocation to both
+generations. Generic syscall/user-buffer copying rejects device-selector leaves.
+Generic protection cannot change privilege or normal/device class, and active
+inspection aggregates effective R/W, U/S, and NX across every paging level.
+The backend traits are unsafe, but `AhciAbarMapping` itself carries no task/root
+proof; a concrete pre-bound adapter remains required. Missing rights, stale
 handles, object substitution, malformed ranges, and backend refusal fail before
-publication. Storage passes 138 tests on Windows and Arch Linux. No ABAR
-register was accessed; HBA reset, port enumeration, DMA, interrupts, ATA/ATAPI,
-NCQ, native PCI enumeration, and physical evidence remain **PLANNED**.
+publication. Storage passes 138 tests on Linux and the kernel page-table suite
+passes 708 tests on Linux. KVM now exact-sets and reads back the same reset PAT
+layout already used by WHP before synthetic long-mode entry. Its Linux suite
+passes 23 tests with one manual performance test ignored, but `/dev/kvm` is
+absent. No installed ABAR mapper, bare-metal PAT-MSR validation, alias exclusion,
+active-root/TLB/IOMMU path, CPL3 entry, register access, or physical behavior was
+exercised; those remain **PLANNED**.
+
+Patent review: **NOT_TRIGGERED**. Conventional x86-64 four-level permission
+aggregation, 4 KiB PWT/PCD PAT-index selection, exact PAT MSR set/readback, and
+ordinary user-copy exclusion add no new storage algorithm or interoperability
+protocol. See [the patent review log](../patents/REVIEW_LOG.md).
 
 The global-register initialization gate is now **PARTIALLY IMPLEMENTED** for
 the bounded Canadian software-driver scope. `NativeAhciRegisterIo` admits only

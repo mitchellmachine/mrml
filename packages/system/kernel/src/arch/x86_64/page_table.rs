@@ -11,6 +11,7 @@ use crate::{
 };
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
+const LEAF_DEVICE_PAT_INDEX_THREE: u64 = (1 << 3) | (1 << 4);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PageTableBuildError {
@@ -58,6 +59,7 @@ pub struct ActiveLeaf {
     writable: bool,
     executable: bool,
     user: bool,
+    device_pat_index_three: bool,
 }
 
 impl ActiveLeaf {
@@ -73,6 +75,86 @@ impl ActiveLeaf {
     pub const fn user(self) -> bool {
         self.user
     }
+    /// Whether this 4 KiB leaf selects PAT index 3 through PWT=PCD=1.
+    /// This is an encoding fact, not proof that the active PAT maps index 3
+    /// to UC or that no cacheable aliases exist.
+    pub const fn device_pat_index_three(self) -> bool {
+        self.device_pat_index_three
+    }
+}
+
+fn decode_leaf_entry(bits: u64) -> Result<Option<ActiveLeaf>, PageTableBuildError> {
+    if bits & 1 == 0 {
+        return Ok(None);
+    }
+    let allowed =
+        ADDRESS_MASK | (1 << 63) | LEAF_ACCESSED_DIRTY | 0b111 | LEAF_DEVICE_PAT_INDEX_THREE;
+    if bits & !allowed != 0 {
+        return Err(PageTableBuildError::MappingMismatch);
+    }
+    let device_pat_bits = bits & LEAF_DEVICE_PAT_INDEX_THREE;
+    if device_pat_bits != 0 && device_pat_bits != LEAF_DEVICE_PAT_INDEX_THREE {
+        return Err(PageTableBuildError::MappingMismatch);
+    }
+    let physical =
+        PhysAddr::new(bits & ADDRESS_MASK).map_err(|_| PageTableBuildError::MappingMismatch)?;
+    Ok(Some(ActiveLeaf {
+        physical,
+        writable: bits & (1 << 1) != 0,
+        executable: bits & (1 << 63) == 0,
+        user: bits & (1 << 2) != 0,
+        device_pat_index_three: device_pat_bits == LEAF_DEVICE_PAT_INDEX_THREE,
+    }))
+}
+
+fn active_leaf_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    address: VirtAddr,
+) -> Result<Option<ActiveLeaf>, PageTableBuildError> {
+    let mut table = root;
+    let mut effective_writable = true;
+    let mut effective_executable = true;
+    let mut effective_user = true;
+    for index in [
+        address.pml4_index(),
+        address.pdpt_index(),
+        address.directory_index(),
+    ] {
+        let entry = store.read(table, index)?;
+        if entry & 1 == 0 {
+            return Ok(None);
+        }
+        if entry & (1 << 7) != 0 || entry & !((1 << 63) | 0xfff | ADDRESS_MASK) != 0 {
+            return Err(PageTableBuildError::InvalidIntermediate);
+        }
+        effective_writable &= entry & (1 << 1) != 0;
+        effective_user &= entry & (1 << 2) != 0;
+        effective_executable &= entry & (1 << 63) == 0;
+        table = PhysAddr::new(entry & ADDRESS_MASK)
+            .map_err(|_| PageTableBuildError::InvalidIntermediate)?;
+    }
+    let bits = store.read(table, address.table_index())?;
+    let Some(mut leaf) = decode_leaf_entry(bits)? else {
+        return Ok(None);
+    };
+    leaf.writable &= effective_writable;
+    leaf.user &= effective_user;
+    leaf.executable &= effective_executable;
+    Ok(Some(leaf))
+}
+
+fn validate_user_buffer_leaf(
+    leaf: ActiveLeaf,
+    access: UserBufferAccess,
+) -> Result<(), UserBufferError> {
+    if !leaf.user()
+        || leaf.device_pat_index_three()
+        || (access == UserBufferAccess::Write && !leaf.writable())
+    {
+        return Err(UserBufferError::AccessDenied);
+    }
+    Ok(())
 }
 
 /// Minimal storage contract for physical 4 KiB page-table frames. A platform
@@ -424,6 +506,11 @@ impl<S: PageTableStore> PageTableBuilder<S> {
         expected: Mapping,
         final_permissions: PagePermissions,
     ) -> Result<(), PageTableBuildError> {
+        if expected.permissions().user() != final_permissions.user()
+            || expected.permissions().device_memory() != final_permissions.device_memory()
+        {
+            return Err(PageTableBuildError::MappingMismatch);
+        }
         for page in 0..expected.pages() {
             let (virtual_address, physical_address) = mapping_page(expected, page)?;
             let (table, index) = self.leaf_location(virtual_address)?;
@@ -1014,24 +1101,7 @@ impl ActivePageTables {
     }
 
     pub fn leaf(&self, address: VirtAddr) -> Result<Option<ActiveLeaf>, PageTableBuildError> {
-        let tables = PageTableBuilder::from_existing_root(IdentityMappedPageTables, self.root);
-        let (table, index) = tables.leaf_location(address)?;
-        let bits = tables.store.read(table, index)?;
-        if bits & 1 == 0 {
-            return Ok(None);
-        }
-        let allowed = ADDRESS_MASK | (1 << 63) | LEAF_ACCESSED_DIRTY | 0b111;
-        if bits & !allowed != 0 {
-            return Err(PageTableBuildError::MappingMismatch);
-        }
-        let physical =
-            PhysAddr::new(bits & ADDRESS_MASK).map_err(|_| PageTableBuildError::MappingMismatch)?;
-        Ok(Some(ActiveLeaf {
-            physical,
-            writable: bits & (1 << 1) != 0,
-            executable: bits & (1 << 63) == 0,
-            user: bits & (1 << 2) != 0,
-        }))
+        active_leaf_from_store(&IdentityMappedPageTables, self.root, address)
     }
 
     /// Validates every active leaf touched by a bounded user copy. The caller
@@ -1068,9 +1138,7 @@ impl ActivePageTables {
                 .leaf(VirtAddr::new(page).map_err(|_| UserBufferError::Overflow)?)
                 .map_err(|_| UserBufferError::Unmapped)?
                 .ok_or(UserBufferError::Unmapped)?;
-            if !leaf.user() || (access == UserBufferAccess::Write && !leaf.writable()) {
-                return Err(UserBufferError::AccessDenied);
-            }
+            validate_user_buffer_leaf(leaf, access)?;
             if page == last_page {
                 break;
             }
@@ -1453,7 +1521,7 @@ mod tests {
             VirtAddr::new(0x8000).unwrap(),
             PhysAddr::new(0x8000).unwrap(),
             1,
-            PagePermissions::KERNEL_MMIO_READ_WRITE,
+            PagePermissions::KERNEL_LOW_READ_WRITE,
         )
         .unwrap();
         builder.map(mapping).unwrap();
@@ -1487,7 +1555,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            builder.protect(executable, PagePermissions::KERNEL_MMIO_READ_WRITE),
+            builder.protect(executable, PagePermissions::KERNEL_LOW_READ_WRITE),
             Ok(())
         );
         assert_eq!(builder.unmap_exact(mapping), Ok(()));
@@ -1496,6 +1564,120 @@ mod tests {
             builder.unmap_exact(mapping),
             Err(PageTableBuildError::NotMapped)
         );
+
+        let user = Mapping::new(
+            VirtAddr::new(0xa000).unwrap(),
+            PhysAddr::new(0xa000).unwrap(),
+            1,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        builder.map(user).unwrap();
+        assert_eq!(
+            builder.protect(user, PagePermissions::USER_MMIO_READ_WRITE),
+            Err(PageTableBuildError::MappingMismatch)
+        );
+        assert_eq!(
+            builder.protect(user, PagePermissions::KERNEL_LOW_READ_WRITE),
+            Err(PageTableBuildError::MappingMismatch)
+        );
+        assert_eq!(builder.verify_mapped(user), Ok(()));
+    }
+
+    #[test]
+    fn exact_mapping_rejects_device_cache_selector_substitution() {
+        let store = Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        };
+        let mut builder = PageTableBuilder::new(store).unwrap();
+        let device = Mapping::new(
+            VirtAddr::new(0x9000).unwrap(),
+            PhysAddr::new(0x40_0000).unwrap(),
+            1,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .unwrap();
+        builder.map(device).unwrap();
+        let (table, index) = builder.leaf_location(device.virtual_start()).unwrap();
+        let substituted =
+            builder.store().read(table, index).unwrap() & !LEAF_DEVICE_PAT_INDEX_THREE;
+        builder.store.write(table, index, substituted).unwrap();
+
+        assert_eq!(
+            builder.verify_mapped(device),
+            Err(PageTableBuildError::MappingMismatch)
+        );
+        let ordinary = Mapping::new(
+            device.virtual_start(),
+            device.physical_start(),
+            device.pages(),
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        assert_eq!(builder.verify_mapped(ordinary), Ok(()));
+    }
+
+    #[test]
+    fn active_leaf_decode_rejects_partial_device_selector() {
+        let frame = PhysAddr::new(0x40_0000).unwrap();
+        let device = PageTableEntry::leaf(frame, PagePermissions::USER_MMIO_READ_WRITE)
+            .unwrap()
+            .bits();
+        let decoded = decode_leaf_entry(device).unwrap().unwrap();
+        assert_eq!(decoded.physical(), frame);
+        assert!(decoded.writable());
+        assert!(decoded.user());
+        assert!(!decoded.executable());
+        assert!(decoded.device_pat_index_three());
+        assert_eq!(
+            validate_user_buffer_leaf(decoded, UserBufferAccess::Read),
+            Err(UserBufferError::AccessDenied)
+        );
+
+        for partial in [device & !(1 << 3), device & !(1 << 4)] {
+            assert_eq!(
+                decode_leaf_entry(partial),
+                Err(PageTableBuildError::MappingMismatch)
+            );
+        }
+        let normal = PageTableEntry::leaf(frame, PagePermissions::USER_READ_WRITE)
+            .unwrap()
+            .bits();
+        let normal = decode_leaf_entry(normal).unwrap().unwrap();
+        assert!(!normal.device_pat_index_three());
+        assert_eq!(
+            validate_user_buffer_leaf(normal, UserBufferAccess::Write),
+            Ok(())
+        );
+
+        let store = Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        };
+        let mapping = Mapping::new(
+            VirtAddr::new(0x20_0000).unwrap(),
+            frame,
+            1,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .unwrap();
+        let mut builder = PageTableBuilder::new(store).unwrap();
+        builder.map(mapping).unwrap();
+        let root = builder.root();
+        let root_index = mapping.virtual_start().pml4_index();
+        let parent = builder.store.read(root, root_index).unwrap();
+        builder
+            .store
+            .write(root, root_index, parent & !((1 << 1) | (1 << 2)))
+            .unwrap();
+        let effective =
+            active_leaf_from_store(builder.store(), builder.root(), mapping.virtual_start())
+                .unwrap()
+                .unwrap();
+        assert!(!effective.writable());
+        assert!(!effective.user());
+        assert!(effective.device_pat_index_three());
     }
 
     #[test]

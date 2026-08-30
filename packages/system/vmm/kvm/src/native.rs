@@ -44,14 +44,18 @@ const KVM_SET_USER_MEMORY_REGION: c_ulong = 0x4020_ae46;
 const KVM_RUN: c_ulong = 0xae80;
 const KVM_GET_REGS: c_ulong = 0x8090_ae81;
 const KVM_GET_SREGS: c_ulong = 0x8138_ae83;
+const KVM_GET_MSRS: c_ulong = 0xc008_ae88;
 const KVM_SET_REGS: c_ulong = 0x4090_ae82;
 const KVM_SET_SREGS: c_ulong = 0x4138_ae84;
+const KVM_SET_MSRS: c_ulong = 0x4008_ae89;
 const KVM_INTERRUPT: c_ulong = 0x4004_ae86;
 const KVM_SET_CPUID2: c_ulong = 0x4008_ae90;
 const KVM_GET_LAPIC: c_ulong = 0x8400_ae8e;
 const KVM_GET_MP_STATE: c_ulong = 0x8004_ae98;
 const KVM_SET_MP_STATE: c_ulong = 0x4004_ae99;
 const KVM_MP_STATE_UNINITIALIZED: u32 = 1;
+const IA32_PAT: u32 = 0x277;
+const RESET_PAT: u64 = 0x0007_0406_0007_0406;
 const MIN_RUN_BYTES: usize = 88;
 const MAX_RUN_BYTES: usize = 1024 * 1024;
 const KVM_CAP_USER_MEMORY: u32 = 3;
@@ -100,6 +104,35 @@ struct KvmCpuidSet {
 #[repr(C)]
 struct KvmMpState {
     state: u32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct KvmMsrEntry {
+    index: u32,
+    reserved: u32,
+    data: u64,
+}
+
+#[repr(C)]
+struct KvmMsrsOne {
+    count: u32,
+    padding: u32,
+    entries: [KvmMsrEntry; 1],
+}
+
+impl KvmMsrsOne {
+    const fn pat(data: u64) -> Self {
+        Self {
+            count: 1,
+            padding: 0,
+            entries: [KvmMsrEntry {
+                index: IA32_PAT,
+                reserved: 0,
+                data,
+            }],
+        }
+    }
 }
 
 #[repr(C)]
@@ -632,6 +665,32 @@ impl KvmRunCancellation {
 }
 
 impl KvmVcpu {
+    fn set_reset_pat(&self) -> Result<(), KvmError> {
+        let configured = KvmMsrsOne::pat(RESET_PAT);
+        let set = unsafe { ioctl(self.file.0, KVM_SET_MSRS, &configured) };
+        if set < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        if set != 1 {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        let mut observed = KvmMsrsOne::pat(0);
+        let get = unsafe { ioctl(self.file.0, KVM_GET_MSRS, &mut observed) };
+        if get < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        if get != 1
+            || observed.count != 1
+            || observed.padding != 0
+            || observed.entries[0].index != IA32_PAT
+            || observed.entries[0].reserved != 0
+            || observed.entries[0].data != RESET_PAT
+        {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        Ok(())
+    }
+
     fn configure_reset_vector(&mut self) -> Result<(), KvmError> {
         let mut special = KvmSpecialRegisters::zeroed();
         if unsafe { ioctl(self.file.0, KVM_GET_SREGS, &mut special) } < 0 {
@@ -865,6 +924,7 @@ impl KvmVcpu {
         special.cr3 = cr3;
         special.cr4 |= 1 << 5;
         special.efer |= (1 << 8) | (1 << 10) | (1 << 11);
+        self.set_reset_pat()?;
         if unsafe { ioctl(self.file.0, KVM_SET_SREGS, &special) } < 0 {
             return Err(KvmError::SystemCall);
         }
@@ -2488,14 +2548,25 @@ mod tests {
         assert_eq!(KVM_RUN, 0xae80);
         assert_eq!(KVM_GET_REGS, 0x8090_ae81);
         assert_eq!(KVM_GET_SREGS, 0x8138_ae83);
+        assert_eq!(KVM_GET_MSRS, 0xc008_ae88);
         assert_eq!(KVM_SET_REGS, 0x4090_ae82);
         assert_eq!(KVM_SET_SREGS, 0x4138_ae84);
+        assert_eq!(KVM_SET_MSRS, 0x4008_ae89);
         assert_eq!(KVM_SET_CPUID2, 0x4008_ae90);
         assert_eq!(core::mem::size_of::<KvmCpuidEntry2>(), 40);
         assert_eq!(core::mem::size_of::<KvmCpuidSet>(), 5_128);
         assert_eq!(core::mem::size_of::<KvmRegisters>(), 144);
         assert_eq!(core::mem::size_of::<KvmSegment>(), 24);
         assert_eq!(core::mem::size_of::<KvmSpecialRegisters>(), 312);
+        assert_eq!(core::mem::size_of::<KvmMsrEntry>(), 16);
+        assert_eq!(core::mem::size_of::<KvmMsrsOne>(), 24);
+        assert_eq!(core::mem::offset_of!(KvmMsrsOne, entries), 8);
+        let pat = KvmMsrsOne::pat(RESET_PAT);
+        assert_eq!(pat.count, 1);
+        assert_eq!(pat.padding, 0);
+        assert_eq!(pat.entries[0].index, IA32_PAT);
+        assert_eq!(pat.entries[0].reserved, 0);
+        assert_eq!(pat.entries[0].data, RESET_PAT);
         assert_eq!(core::mem::align_of::<KvmRegisters>(), 8);
         assert_eq!(core::mem::offset_of!(KvmRegisters, rip), 128);
         assert_eq!(core::mem::offset_of!(KvmSpecialRegisters, cr3), 240);
