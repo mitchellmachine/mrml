@@ -989,7 +989,11 @@ authority substitution, cross-SystemRelease pairing, invalid block geometry,
 and zero association generations. The resulting non-authorizing launch handoff
 has one canonical zero-reserved encoding that binds both module, provider,
 interface, endpoint, volume, session, SystemRelease, and association generations;
-malformed or substituted records fail closed. A filesystem-provider launch
+malformed or substituted records fail closed. The provider-neutral encoding now
+lives in the block-provider interface contract, where any exact consumer can
+decode the dependency without linking the storage policy service; the storage
+wrapper additionally requires filesystem interface generation 3. The shared
+interface passes 13 focused Linux-host tests. A filesystem-provider launch
 coordinator separately authorizes the exact block endpoint, requires the
 placement backend to project the handoff read-only and attenuate that endpoint,
 erases its temporary encoding, and returns a generation-bound receipt only on

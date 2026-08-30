@@ -1,9 +1,15 @@
 #![no_std]
 
+mod dependency_handoff;
+
 #[path = "../1.rs"]
 mod generated;
 
 pub use generated::*;
+pub use dependency_handoff::{
+    BLOCK_PROVIDER_DEPENDENCY_HANDOFF_BYTES, BlockProviderDependencyHandoff,
+    BlockProviderDependencyHandoffError,
+};
 
 pub const MAX_BLOCK_TRANSFER_BYTES: u64 = 1024 * 1024;
 pub const MAX_DEVICE_CATALOG_BYTES: u64 = 64 * 1024;
