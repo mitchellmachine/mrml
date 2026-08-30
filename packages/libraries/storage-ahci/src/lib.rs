@@ -143,6 +143,8 @@ pub use native_service_state::{
     AhciNativeServicePreparationError, AhciNativeServiceState, AhciNativeServiceStateError,
     bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
 };
+#[cfg(target_arch = "x86_64")]
+pub use native_service_state::bootstrap_and_prepare_x86_coherent_ahci_service;
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
     bootstrap_installed_ahci_service,

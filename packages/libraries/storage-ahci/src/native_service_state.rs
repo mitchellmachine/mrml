@@ -19,9 +19,41 @@ pub enum AhciNativeServiceStateError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciNativeServicePreparationError {
     Bootstrap(AhciServiceBootstrapError),
+    CoherenceAdmission,
     MappedMemory(AhciNativeMappedMemoryError),
     ActivePort(AhciNativePortReconstructionError),
     ServiceState(AhciNativeServiceStateError),
+}
+
+/// Authenticates and prepares a service whose exact x86-64 DMA mapping has
+/// already been proven hardware coherent by the platform owner.
+///
+/// # Safety
+///
+/// In addition to [`bootstrap_and_prepare_installed_ahci_service`], the caller
+/// must satisfy [`crate::AhciX86CoherentDataSync::new`] for the launch data
+/// extent. This function does not create that platform evidence.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn bootstrap_and_prepare_x86_coherent_ahci_service<'a, 'm, A, B, R>(
+    syscalls: &mut AhciUserspaceSyscalls<B>,
+    entry: AhciServiceEntryRegisters,
+    launch_scratch: &mut [u8; AHCI_SERVICE_LAUNCH_BYTES],
+    capabilities: &'a mut A,
+    registers: R,
+) -> Result<
+    AhciNativeServiceState<'a, 'm, A, R, crate::AhciX86CoherentDataSync>,
+    AhciNativeServicePreparationError,
+>
+where
+    A: AhciDataCapabilityAuthorizer,
+    B: AhciRawSyscall,
+    R: AhciRegisterIo,
+{
+    let launch = bootstrap_installed_ahci_entry(syscalls, entry, launch_scratch)
+        .map_err(AhciNativeServicePreparationError::Bootstrap)?;
+    let sync = unsafe { crate::AhciX86CoherentDataSync::new(launch.record().data()) }
+        .ok_or(AhciNativeServicePreparationError::CoherenceAdmission)?;
+    unsafe { prepare_installed_ahci_service_state(capabilities, launch, registers, sync) }
 }
 
 /// Authenticates the native entry projection, wipes its copied bytes, and then
@@ -368,6 +400,26 @@ mod tests {
         launch_with_mappings([0x30_0000, 0x31_0000, 0x32_0000, 0x40_0000])
     }
 
+    fn entry(installed: InstalledAhciServiceLaunch) -> AhciServiceEntryRegisters {
+        unsafe {
+            AhciServiceEntryRegisters::from_installed_registers(
+                1,
+                2,
+                3,
+                (10 << 32) | 1,
+                AHCI_SERVICE_LAUNCH_BYTES as u64,
+                9,
+                installed.device().token(),
+                installed.command_list().token(),
+                installed.received_fis().token(),
+                installed.command_tables().token(),
+                installed.device_write_data().token(),
+                installed.device_read_data().token(),
+            )
+        }
+        .unwrap()
+    }
+
     fn memory<'a>(
         launch: InstalledAhciServiceLaunch,
         command_list: &'a mut [u8; 1024],
@@ -551,23 +603,7 @@ mod tests {
         let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
         let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
         let installed = launch_with_mappings(bases);
-        let entry = unsafe {
-            AhciServiceEntryRegisters::from_installed_registers(
-                1,
-                2,
-                3,
-                (10 << 32) | 1,
-                AHCI_SERVICE_LAUNCH_BYTES as u64,
-                9,
-                installed.device().token(),
-                installed.command_list().token(),
-                installed.received_fis().token(),
-                installed.command_tables().token(),
-                installed.device_write_data().token(),
-                installed.device_read_data().token(),
-            )
-        }
-        .unwrap();
+        let entry = entry(installed);
         let mut syscalls = AhciUserspaceSyscalls::new(
             BootRaw {
                 bytes: installed.record().encode(),
@@ -591,6 +627,43 @@ mod tests {
                 &mut authorizer,
                 Registers,
                 Sync,
+            )
+        }
+        .unwrap();
+        assert_eq!(launch_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
+        assert_eq!(state.device(), installed.record().device());
+        drop(state);
+        assert_eq!(authorizer.calls, 2);
+        assert_eq!(syscalls.into_raw().calls, 1);
+    }
+
+    #[test]
+    fn coherent_entry_selects_visibility_adapter_at_single_unsafe_boundary() {
+        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
+        let installed = launch_with_mappings(bases);
+        let mut syscalls = AhciUserspaceSyscalls::new(
+            BootRaw {
+                bytes: installed.record().encode(),
+                calls: 0,
+            },
+            1,
+            2,
+        )
+        .unwrap();
+        let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
+        let mut authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
+        let state = unsafe {
+            bootstrap_and_prepare_x86_coherent_ahci_service(
+                &mut syscalls,
+                entry(installed),
+                &mut launch_scratch,
+                &mut authorizer,
+                Registers,
             )
         }
         .unwrap();

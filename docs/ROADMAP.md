@@ -1207,6 +1207,31 @@ Patent review: `NOT_TRIGGERED` — exact descriptor validation and conventional
 compiler acquire/release fences for an already proven coherent DMA mapping are
 ordinary driver plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+The x86-64 coherent AHCI path now has one authenticated preparation boundary
+**PARTIALLY IMPLEMENTED IN SOURCE**. The unsafe entry transition documents the
+complete platform-coherence precondition once, authenticates and erases the
+launch projection, derives the exact data extent from that projection, admits
+the coherent visibility adapter, and runs the same mapped-memory, live-port,
+capability, and backend preparation chain. Callers cannot inject a different
+data descriptor or independently construct the synchronization adapter through
+this path. The focused Linux suite passes all 123 tests and both Linux release
+and `MRML_NATIVE` release builds pass. The test supplies aligned host memory and
+a controlled register/syscall model; no kernel-issued coherence evidence,
+IOMMU, installed service image, or physical device is exercised.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — centralizing an existing unsafe coherence
+precondition while composing existing typed startup stages is conventional
+boundary reduction. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
