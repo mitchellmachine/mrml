@@ -430,6 +430,20 @@ before returning. The focused Linux suite passes 76 tests and its release build
 passes. No installed service entry, supervisor launch, hardware I/O, or physical
 evidence is claimed.
 
+AHCI now has one allocation-free dispatch service for the launch-bound
+generation-1 endpoint. One maximum-size receive is routed only to the existing
+exact enumerate, read/write, or flush/reset loop, preserving their canonical
+decoders, capability shapes, release-before-reply ordering, and erasure rules.
+Data and control calls borrow one retained backend owner rather than creating
+parallel device state. Unknown sizes and capability over-counts dispatch,
+release, and reply zero times. The 78-test focused Linux suite and release build
+pass; installed entry, supervisor launch, and physical-device execution remain
+unverified.
+
+Patent review: **NOT_TRIGGERED**. Exact bounded message-shape routing through
+existing operation adapters is conventional service dispatch. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

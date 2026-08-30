@@ -23,6 +23,7 @@ mod block_io_adapter;
 mod command_block_backend;
 mod control_service_loop;
 mod data_service_loop;
+mod dispatch_service;
 mod service_loop;
 mod userspace_syscall_adapter;
 
@@ -105,6 +106,10 @@ pub use control_service_loop::{
 pub use data_service_loop::{
     AhciDataServiceLoopError, AhciDataServiceSyscalls, AhciReadWriteServiceLoop,
     ReceivedAhciDataEnvelope,
+};
+pub use dispatch_service::{
+    AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls,
+    ReceivedAhciDispatchEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,

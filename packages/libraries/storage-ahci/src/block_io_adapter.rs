@@ -44,6 +44,28 @@ pub trait AhciBlockIoBackend {
     ) -> Result<(), AhciBlockIoError>;
 }
 
+impl<B: AhciBlockIoBackend + ?Sized> AhciBlockIoBackend for &mut B {
+    fn read(
+        &mut self,
+        device: BlockProviderDevice,
+        lba: u64,
+        sector_count: u32,
+        output: &mut [u8],
+    ) -> Result<(), AhciBlockIoError> {
+        (**self).read(device, lba, sector_count, output)
+    }
+
+    fn write(
+        &mut self,
+        device: BlockProviderDevice,
+        lba: u64,
+        sector_count: u32,
+        input: &[u8],
+    ) -> Result<(), AhciBlockIoError> {
+        (**self).write(device, lba, sector_count, input)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciBlockControlError {
     PermissionDenied,
@@ -54,6 +76,16 @@ pub enum AhciBlockControlError {
 pub trait AhciBlockControlBackend {
     fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError>;
     fn reset(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError>;
+}
+
+impl<B: AhciBlockControlBackend + ?Sized> AhciBlockControlBackend for &mut B {
+    fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+        (**self).flush(device)
+    }
+
+    fn reset(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+        (**self).reset(device)
+    }
 }
 
 pub struct AhciBlockControlAdapter<'a, B> {

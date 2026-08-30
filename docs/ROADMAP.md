@@ -551,6 +551,20 @@ a revocation attempt. Focused Linux tests cover all seven syscall mappings,
 hostile returned counts, and rejected cleanup metadata, bringing AHCI to 76
 passing tests. Installed service entry and supervisor launch remain planned.
 
+The AHCI provider now has one allocation-free generation-1 dispatch service for
+its launch-bound endpoint. It receives once into the maximum canonical request,
+routes only exact enumerate, data, or control payload sizes, and reuses the
+existing operation loops so capability shape, release-before-reply, buffer
+erasure, and protocol decoding do not diverge. Read/write and flush/reset borrow
+one retained backend owner per call; the router creates no second device owner.
+Unknown sizes and capability over-counts reach no operation, release, or reply.
+All 78 focused Linux tests and the release build pass. A concrete installed
+entry and supervisor launch remain next.
+
+Patent review: `NOT_TRIGGERED` — routing existing canonical operations by exact
+bounded message shape through their existing adapters is conventional service
+dispatch. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
