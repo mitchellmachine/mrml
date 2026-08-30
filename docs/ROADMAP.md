@@ -1232,6 +1232,32 @@ Patent review: `NOT_TRIGGERED` — centralizing an existing unsafe coherence
 precondition while composing existing typed startup stages is conventional
 boundary reduction. See `docs/patents/REVIEW_LOG.md`.
 
+Coherent AHCI entry preparation now constructs register access only after
+authenticated launch decode **PARTIALLY IMPLEMENTED IN SOURCE**. Instead of
+accepting a preconstructed ABAR adapter, the transition gives the exact decoded
+mapping to a one-shot factory and publishes a distinct `RegisterMapping` error
+if that factory rejects it. The failure path proves launch scratch is already
+zeroed and neither directional capability authorization nor service-state
+publication occurs. This removes the circular assumption that entry code knows
+the ABAR virtual mapping before reading its authorized launch record. The
+focused Linux suite passes all 123 tests and both Linux release and
+`MRML_NATIVE` release builds pass. The injected factory remains controlled
+model evidence; a native volatile adapter, installed page tables, and physical
+hardware are not exercised.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — delayed construction of an exact decoded MMIO
+view through a fail-closed one-shot factory is conventional initialization
+ordering. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

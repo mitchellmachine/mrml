@@ -20,6 +20,7 @@ pub enum AhciNativeServiceStateError {
 pub enum AhciNativeServicePreparationError {
     Bootstrap(AhciServiceBootstrapError),
     CoherenceAdmission,
+    RegisterMapping,
     MappedMemory(AhciNativeMappedMemoryError),
     ActivePort(AhciNativePortReconstructionError),
     ServiceState(AhciNativeServiceStateError),
@@ -32,14 +33,16 @@ pub enum AhciNativeServicePreparationError {
 ///
 /// In addition to [`bootstrap_and_prepare_installed_ahci_service`], the caller
 /// must satisfy [`crate::AhciX86CoherentDataSync::new`] for the launch data
-/// extent. This function does not create that platform evidence.
+/// extent. `register_factory` must construct only the exact launch-bound ABAR
+/// view it receives and retain exclusive device assignment. This function does
+/// not create either form of platform evidence.
 #[cfg(target_arch = "x86_64")]
-pub unsafe fn bootstrap_and_prepare_x86_coherent_ahci_service<'a, 'm, A, B, R>(
+pub unsafe fn bootstrap_and_prepare_x86_coherent_ahci_service<'a, 'm, A, B, R, F>(
     syscalls: &mut AhciUserspaceSyscalls<B>,
     entry: AhciServiceEntryRegisters,
     launch_scratch: &mut [u8; AHCI_SERVICE_LAUNCH_BYTES],
     capabilities: &'a mut A,
-    registers: R,
+    register_factory: F,
 ) -> Result<
     AhciNativeServiceState<'a, 'm, A, R, crate::AhciX86CoherentDataSync>,
     AhciNativeServicePreparationError,
@@ -48,9 +51,12 @@ where
     A: AhciDataCapabilityAuthorizer,
     B: AhciRawSyscall,
     R: AhciRegisterIo,
+    F: FnOnce(crate::AhciAbarMapping) -> Option<R>,
 {
     let launch = bootstrap_installed_ahci_entry(syscalls, entry, launch_scratch)
         .map_err(AhciNativeServicePreparationError::Bootstrap)?;
+    let registers = register_factory(launch.record().mapping())
+        .ok_or(AhciNativeServicePreparationError::RegisterMapping)?;
     let sync = unsafe { crate::AhciX86CoherentDataSync::new(launch.record().data()) }
         .ok_or(AhciNativeServicePreparationError::CoherenceAdmission)?;
     unsafe { prepare_installed_ahci_service_state(capabilities, launch, registers, sync) }
@@ -663,7 +669,7 @@ mod tests {
                 entry(installed),
                 &mut launch_scratch,
                 &mut authorizer,
-                Registers,
+                |mapping| (mapping == installed.record().mapping()).then_some(Registers),
             )
         }
         .unwrap();
@@ -672,5 +678,37 @@ mod tests {
         drop(state);
         assert_eq!(authorizer.calls, 2);
         assert_eq!(syscalls.into_raw().calls, 1);
+
+        let mut rejected_syscalls = AhciUserspaceSyscalls::new(
+            BootRaw {
+                bytes: installed.record().encode(),
+                calls: 0,
+            },
+            1,
+            2,
+        )
+        .unwrap();
+        let mut rejected_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
+        let mut rejected_authorizer = Authorizer {
+            object: ObjectId(23),
+            calls: 0,
+            reject: false,
+        };
+        let rejected = unsafe {
+            bootstrap_and_prepare_x86_coherent_ahci_service(
+                &mut rejected_syscalls,
+                entry(installed),
+                &mut rejected_scratch,
+                &mut rejected_authorizer,
+                |_| None::<Registers>,
+            )
+        };
+        assert!(matches!(
+            rejected,
+            Err(AhciNativeServicePreparationError::RegisterMapping)
+        ));
+        assert_eq!(rejected_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
+        assert_eq!(rejected_authorizer.calls, 0);
+        assert_eq!(rejected_syscalls.into_raw().calls, 1);
     }
 }
