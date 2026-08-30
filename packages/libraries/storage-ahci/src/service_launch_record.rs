@@ -9,7 +9,11 @@ use crate::{
     AHCI_SERVICE_LAUNCH_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{BlockProviderDevice, OpaqueHandle};
-use mrml_kernel::{Capability, DeviceServiceLaunchAttachment, IsolationServiceSpec, ObjectId};
+use mrml_kernel::{
+    prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
+    IsolationServiceSpec, NativeDeviceServiceTask, NativeDeviceServiceTaskError, ObjectId,
+    TaskId, TaskRuntime,
+};
 
 const MAGIC: [u8; 8] = *b"MRMLAHC1";
 const VERSION: u16 = 1;
@@ -84,6 +88,81 @@ pub struct BoundAhciServiceLaunch {
 pub struct InstalledAhciServiceLaunch {
     record: AhciServiceLaunchRecord,
     authorities: [Capability; AHCI_SERVICE_AUTHORITY_COUNT],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedAhciNativeServiceTask {
+    task: NativeDeviceServiceTask<AHCI_SERVICE_AUTHORITY_COUNT>,
+    launch: BoundAhciServiceLaunch,
+}
+
+impl PreparedAhciNativeServiceTask {
+    pub const fn task(self) -> NativeDeviceServiceTask<AHCI_SERVICE_AUTHORITY_COUNT> {
+        self.task
+    }
+
+    pub const fn launch(self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+
+    pub const fn into_parts(
+        self,
+    ) -> (
+        NativeDeviceServiceTask<AHCI_SERVICE_AUTHORITY_COUNT>,
+        BoundAhciServiceLaunch,
+    ) {
+        (self.task, self.launch)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciNativeServiceTaskPreparationFailure {
+    error: NativeDeviceServiceTaskError,
+    launch: BoundAhciServiceLaunch,
+}
+
+impl AhciNativeServiceTaskPreparationFailure {
+    pub const fn error(self) -> NativeDeviceServiceTaskError {
+        self.error
+    }
+
+    pub const fn launch(self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+}
+
+/// Projects one already-bound AHCI launch into a fresh native service task.
+///
+/// The bound launch remains paired with the prepared task for later mapping,
+/// dispatch, and teardown checks. Kernel construction owns atomic capability
+/// attenuation and rollback; failure returns the unchanged launch for retry.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_bound_ahci_native_service_task<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    launch: BoundAhciServiceLaunch,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    service_module_object: ObjectId,
+) -> Result<PreparedAhciNativeServiceTask, AhciNativeServiceTaskPreparationFailure> {
+    let spec = launch.spec();
+    match prepare_native_device_service_task(
+        runtime,
+        source_task,
+        target_task,
+        spec.service(),
+        spec.attachment(),
+        service_endpoint_object,
+        supervisor_task_object,
+        service_module_object,
+    ) {
+        Ok(task) => Ok(PreparedAhciNativeServiceTask { task, launch }),
+        Err(error) => Err(AhciNativeServiceTaskPreparationFailure { error, launch }),
+    }
 }
 
 impl BoundAhciServiceLaunch {
@@ -484,7 +563,8 @@ mod tests {
         BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
     use mrml_kernel::{
-        CapabilitySpace, IsolationPlacement, Rights, TotalMicrovmClass,
+        arch::x86_64::UserContext, CapabilitySpace, IsolationPlacement,
+        NativeDeviceServiceEntryError, PhysAddr, Priority, Rights, TotalMicrovmClass,
     };
 
     fn service() -> IsolationServiceSpec {
@@ -603,6 +683,132 @@ mod tests {
             &capabilities,
         )
         .unwrap()
+    }
+
+    fn runtime_launch(
+        occupied_entry: bool,
+    ) -> (
+        TaskRuntime<2, 8>,
+        TaskId,
+        TaskId,
+        BoundAhciServiceLaunch,
+    ) {
+        let mut runtime = TaskRuntime::<2, 8>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                Priority::NORMAL,
+                UserContext::new(PhysAddr::new(0x50_0000).unwrap(), 0x40_0000, 0x7000_0000)
+                    .unwrap(),
+            )
+            .unwrap();
+        let target = runtime
+            .create(
+                Priority::NORMAL,
+                UserContext::new(PhysAddr::new(0x60_0000).unwrap(), 0x40_0000, 0x7000_0000)
+                    .unwrap(),
+            )
+            .unwrap();
+        if occupied_entry {
+            runtime.context_mut(target).unwrap().r13 = 1;
+        }
+        let launch_data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(30), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let record = record();
+        let roles = [
+            (record.mapping.device_object, Rights::CONTROL),
+            (
+                record.layout.command_list.memory_object,
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                record.layout.received_fis.memory_object,
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                record.layout.command_tables.memory_object,
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                record.data.memory_object,
+                Rights::PIN.union(Rights::MAP).union(Rights::WRITE),
+            ),
+            (
+                record.data.memory_object,
+                Rights::PIN.union(Rights::MAP).union(Rights::READ),
+            ),
+        ];
+        let mut handles = [Capability::from_token(0); AHCI_SERVICE_AUTHORITY_COUNT];
+        for (index, (object, rights)) in roles.into_iter().enumerate() {
+            handles[index] = runtime
+                .capabilities_mut(source)
+                .unwrap()
+                .insert(object, rights.union(Rights::DELEGATE))
+                .unwrap();
+        }
+        let authorities = core::array::from_fn(|index| {
+            let (object, rights) = roles[index];
+            (object, handles[index], rights)
+        });
+        let attachment = DeviceServiceLaunchAttachment::new(
+            service(),
+            8,
+            ObjectId(30),
+            9,
+            AHCI_SERVICE_LAUNCH_BYTES as u32,
+            launch_data,
+            authorities,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let bound = record.bind(service(), attachment).unwrap();
+        (runtime, source, target, bound)
+    }
+
+    #[test]
+    fn bound_launch_prepares_exact_native_task_and_preserves_pairing() {
+        let (mut runtime, source, target, launch) = runtime_launch(false);
+        let prepared = prepare_bound_ahci_native_service_task(
+            &mut runtime,
+            source,
+            target,
+            launch,
+            ObjectId(40),
+            ObjectId(41),
+            ObjectId(42),
+        )
+        .unwrap();
+        assert_eq!(prepared.launch(), launch);
+        assert_eq!(prepared.task().task(), target);
+        assert_eq!(prepared.task().source_task(), source);
+        assert_eq!(prepared.task().entry().attachment(), launch.spec().attachment());
+        assert_eq!(prepared.task().entry().provider_generation(), 3);
+    }
+
+    #[test]
+    fn task_preparation_failure_rolls_back_and_returns_unchanged_launch() {
+        let (mut runtime, source, target, launch) = runtime_launch(true);
+        let original_context = *runtime.context(target).unwrap();
+        let failure = prepare_bound_ahci_native_service_task(
+            &mut runtime,
+            source,
+            target,
+            launch,
+            ObjectId(40),
+            ObjectId(41),
+            ObjectId(42),
+        )
+        .unwrap_err();
+        assert_eq!(failure.launch(), launch);
+        assert_eq!(
+            failure.error(),
+            NativeDeviceServiceTaskError::Entry(
+                NativeDeviceServiceEntryError::LaunchRegistersOccupied
+            )
+        );
+        assert_eq!(*runtime.context(target).unwrap(), original_context);
     }
 
     #[test]

@@ -183,8 +183,9 @@ pub use service_launch::{
     AhciServiceLaunchSpecError,
 };
 pub use service_launch_record::{
+    prepare_bound_ahci_native_service_task, AhciNativeServiceTaskPreparationFailure,
     AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
-    BoundAhciServiceLaunch, InstalledAhciServiceLaunch,
+    BoundAhciServiceLaunch, InstalledAhciServiceLaunch, PreparedAhciNativeServiceTask,
 };
 pub use service_mapping_lifecycle::{
     AhciServiceMappingInstallError, AhciServiceMappingRemovalError,

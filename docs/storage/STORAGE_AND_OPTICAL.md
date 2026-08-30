@@ -1297,6 +1297,34 @@ composition of existing launch, authorization, timing, and dispatch mechanisms
 are conventional service integration. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+Bound AHCI launches now compose directly with kernel native-device task
+construction **IMPLEMENTED IN SOURCE**. One typed transition consumes the
+already-validated launch, projects its exact read-only record and six attenuated
+authority roles into a fresh native task through the kernel's existing atomic
+construction path, and returns the task and unchanged bound launch as one owner
+for later mapping, dispatch, and teardown. Any construction or rollback error
+returns that same bound launch for explicit retry. Focused tests prove exact
+task/source/attachment/provider pairing and an occupied-entry failure that
+preserves the target context while returning the launch; the kernel's existing
+construction test covers removal of every partially projected target handle.
+The AHCI Linux suite passes all 132 tests, the kernel Linux suite passes all 686
+tests, and both Linux and `MRML_NATIVE` AHCI release builds pass. This is unit
+and simulated capability-runtime evidence, not installed task scheduling,
+service-image invocation, IOMMU operation, or physical-device evidence.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Typed composition of an existing bound launch
+with existing atomic task construction and rollback is conventional lifecycle
+plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
