@@ -10194,3 +10194,16 @@ installed service shared page.
 Patent review: `NOT_TRIGGERED` — tracked local capability attenuation and
 transitive revocation are conventional capability-lifecycle mechanisms. See
 `docs/patents/REVIEW_LOG.md`.
+
+The isolation layer now **PARTIALLY IMPLEMENTS IN SOURCE** preparation of a
+read-transfer attachment directly from one exact
+`MAP|READ|WRITE|CONTROL|DELEGATE` shared-memory root. It requires a distinct live
+provider task, validates the object generation and one-page byte bound before
+splitting authority, and returns only the tracked local-read and provider-write
+handles. Root revocation invalidates both. The Linux-host kernel suite passes
+646 tests. Physical backing, mapping installation, and installed launch remain
+separate unfinished gates.
+
+Patent review: `NOT_TRIGGERED` — this is conventional exact-rights validation,
+attenuation, and rollback composition over the existing capability mechanism.
+See `docs/patents/REVIEW_LOG.md`.

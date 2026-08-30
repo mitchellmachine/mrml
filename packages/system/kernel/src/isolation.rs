@@ -461,6 +461,17 @@ pub enum ComponentServiceReadTransferAttachmentError {
     CapabilityAlias,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferPreparationError {
+    InvalidProvider,
+    Root(TaskRuntimeError),
+    Attachment(ComponentServiceReadTransferAttachmentError),
+    Rollback {
+        attachment: ComponentServiceReadTransferAttachmentError,
+        cleanup: TaskRuntimeError,
+    },
+}
+
 impl ComponentServiceReadTransferAttachment {
     pub fn new<const C: usize>(
         provider_task: TaskId,
@@ -529,6 +540,93 @@ impl ComponentServiceReadTransferAttachment {
     }
     pub const fn provider_write(self) -> Capability {
         self.provider_write
+    }
+}
+
+/// Splits one exact shared-memory construction root into the two tracked source
+/// handles required by a dependency read path.
+pub fn prepare_component_service_read_transfer_attachment<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    provider_task: TaskId,
+    shared_object: ObjectId,
+    shared_generation: u64,
+    shared_bytes: u32,
+    shared_root: Capability,
+) -> Result<ComponentServiceReadTransferAttachment, ComponentServiceReadTransferPreparationError> {
+    if provider_task == source_task {
+        return Err(ComponentServiceReadTransferPreparationError::InvalidProvider);
+    }
+    runtime
+        .context(provider_task)
+        .map_err(ComponentServiceReadTransferPreparationError::Root)?;
+    if shared_object.0 == 0 {
+        return Err(ComponentServiceReadTransferPreparationError::Attachment(
+            ComponentServiceReadTransferAttachmentError::InvalidIdentity,
+        ));
+    }
+    if shared_generation == 0 {
+        return Err(ComponentServiceReadTransferPreparationError::Attachment(
+            ComponentServiceReadTransferAttachmentError::InvalidGeneration,
+        ));
+    }
+    if shared_bytes == 0 || shared_bytes > 4096 {
+        return Err(ComponentServiceReadTransferPreparationError::Attachment(
+            ComponentServiceReadTransferAttachmentError::InvalidLength,
+        ));
+    }
+    let root_rights = Rights::MAP
+        .union(Rights::READ)
+        .union(Rights::WRITE)
+        .union(Rights::CONTROL)
+        .union(Rights::DELEGATE);
+    runtime
+        .authorize_capability_exact(source_task, shared_root, root_rights, shared_object)
+        .map_err(ComponentServiceReadTransferPreparationError::Root)?;
+    let local_rights = Rights::MAP.union(Rights::READ).union(Rights::DELEGATE);
+    let provider_rights = Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE);
+    let split = runtime
+        .derive_capabilities_for_construction_source(
+            source_task,
+            &[(shared_root, local_rights), (shared_root, provider_rights)],
+        )
+        .map_err(ComponentServiceReadTransferPreparationError::Root)?;
+    let mut handles = split.capabilities();
+    let local_read = handles
+        .next()
+        .expect("two preflighted local derivations produce two handles");
+    let provider_write = handles
+        .next()
+        .expect("two preflighted local derivations produce two handles");
+    debug_assert!(handles.next().is_none());
+    match ComponentServiceReadTransferAttachment::new(
+        provider_task,
+        shared_object,
+        shared_generation,
+        shared_bytes,
+        local_read,
+        provider_write,
+        runtime
+            .capabilities(source_task)
+            .expect("successful local derivation preserves the source domain"),
+    ) {
+        Ok(attachment) => Ok(attachment),
+        Err(attachment) => {
+            let first = runtime.revoke_capability(source_task, local_read).err();
+            let second = runtime.revoke_capability(source_task, provider_write).err();
+            match first.or(second) {
+                Some(cleanup) => Err(ComponentServiceReadTransferPreparationError::Rollback {
+                    attachment,
+                    cleanup,
+                }),
+                None => Err(ComponentServiceReadTransferPreparationError::Attachment(
+                    attachment,
+                )),
+            }
+        }
     }
 }
 
@@ -3379,6 +3477,70 @@ mod tests {
                 &capabilities,
             ),
             Err(ComponentServiceReadTransferAttachmentError::CapabilityAlias)
+        );
+    }
+
+    #[test]
+    fn read_transfer_preparation_splits_one_exact_root_and_tracks_revocation() {
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let provider = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x30_0000).unwrap(),
+                    0x50_0000,
+                    0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let root_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let root = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0xa0), root_rights)
+            .unwrap();
+        let attachment = prepare_component_service_read_transfer_attachment(
+            &mut runtime,
+            source,
+            provider,
+            ObjectId(0xa0),
+            9,
+            4096,
+            root,
+        )
+        .unwrap();
+        assert_eq!(attachment.provider_task(), provider);
+        assert_eq!(attachment.shared_object(), ObjectId(0xa0));
+        runtime.revoke_capability(source, root).unwrap();
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize(attachment.local_read(), Rights::READ),
+            Err(CapabilityError::Invalid)
+        );
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize(attachment.provider_write(), Rights::WRITE),
+            Err(CapabilityError::Invalid)
         );
     }
 
