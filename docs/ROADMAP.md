@@ -1024,6 +1024,32 @@ Patent review: `NOT_TRIGGERED` — a direct architecture-ABI register bridge for
 an existing syscall mechanism is conventional low-level plumbing. See
 `docs/patents/REVIEW_LOG.md`.
 
+The AHCI native mapped-memory boundary is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. One documented unsafe constructor revalidates all four installed CPU
+virtual mappings before creating any reference, proves their page-rounded
+ranges do not overlap, and exposes only each object's exact byte length rather
+than mapping padding. It then seals those views into the existing bounded
+command-memory and synchronized data-buffer adapters. The focused in-process
+test uses aligned host pages and proves the final command-list word and exact
+data extent are reachable; it is not page-table, IOMMU, installed-kernel, or
+hardware evidence. The Linux suite passes all 113 tests, and both Linux release
+and `MRML_NATIVE` release builds pass. Concrete cache synchronization, native
+binary entry and dispatch, installed execution, and physical-device evidence
+remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — converting already validated, disjoint native
+mappings into exact bounded slices is conventional memory-adapter plumbing. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

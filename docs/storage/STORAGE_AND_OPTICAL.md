@@ -880,6 +880,32 @@ Patent review: **NOT_TRIGGERED**. A direct architecture-ABI register bridge for
 an existing syscall mechanism is conventional low-level plumbing. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The AHCI native mapped-memory boundary is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. One documented unsafe constructor revalidates all four installed CPU
+virtual mappings before creating any reference, proves their page-rounded
+ranges do not overlap, and exposes only each object's exact byte length rather
+than mapping padding. It then seals those views into the existing bounded
+command-memory and synchronized data-buffer adapters. The focused in-process
+test uses aligned host pages and proves the final command-list word and exact
+data extent are reachable; it is not page-table, IOMMU, installed-kernel, or
+hardware evidence. The Linux suite passes all 113 tests, and both Linux release
+and `MRML_NATIVE` release builds pass. Concrete cache synchronization, native
+binary entry and dispatch, installed execution, and physical-device evidence
+remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Converting already validated, disjoint native
+mappings into exact bounded slices is conventional memory-adapter plumbing. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
