@@ -1070,6 +1070,18 @@ fn selected_runtime_functions<'data>(
             .iter()
             .any(|source| *source == object_index);
         if selected_object {
+            if x86_64_coff_short_import(objects[object_index])
+                .map_err(|error| {
+                    anyhow!(
+                        "COFF object {} selected short import: {}",
+                        object_index,
+                        error
+                    )
+                })?
+                .is_some()
+            {
+                continue;
+            }
             for function in decode_x86_64_coff_runtime_functions_with_section_identities(
                 objects[object_index],
                 u16::try_from(object_index + 1)
@@ -1157,7 +1169,19 @@ fn writable_relocation_arenas<'a>(
 
 fn writable_fragment_count(objects: &[&[u8]]) -> Result<usize> {
     let mut count = 0usize;
-    for object in objects {
+    for (object_index, object) in objects.iter().enumerate() {
+        if x86_64_coff_short_import(object)
+            .map_err(|error| {
+                anyhow!(
+                    "COFF object {} writable short import: {}",
+                    object_index,
+                    error
+                )
+            })?
+            .is_some()
+        {
+            continue;
+        }
         count = count
             .checked_add(
                 x86_64_coff_writable_section_count(object)
@@ -1182,6 +1206,18 @@ fn selected_writable_data<'data, 'relocations>(
         .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
     let mut remaining = arenas;
     for object_index in 0..objects.len() {
+        if x86_64_coff_short_import(objects[object_index])
+            .map_err(|error| {
+                anyhow!(
+                    "COFF object {} selected writable short import: {}",
+                    object_index,
+                    error
+                )
+            })?
+            .is_some()
+        {
+            continue;
+        }
         let group = archive_group[object_index];
         let member = archive_member[object_index];
         let owner = selected
@@ -1250,6 +1286,18 @@ fn selected_readonly_absolute_relocations<'data>(
             .iter()
             .any(|source| *source == object_index);
         if selected_object {
+            if x86_64_coff_short_import(objects[object_index])
+                .map_err(|error| {
+                    anyhow!(
+                        "COFF object {} selected read-only short import: {}",
+                        object_index,
+                        error
+                    )
+                })?
+                .is_some()
+            {
+                continue;
+            }
             let object = objects[object_index];
             let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
                 anyhow!(
@@ -1870,6 +1918,17 @@ mod tests {
         }
     }
 
+    fn short_import_object() -> std::vec::Vec<u8> {
+        let payload = b"WaitOnAddress\0api-ms-win-core-synch-l1-2-0.dll\0";
+        let mut object = std::vec![0u8; 20 + payload.len()];
+        object[..4].copy_from_slice(b"\0\0\xff\xff");
+        object[6..8].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        object[18..20].copy_from_slice(&4u16.to_le_bytes());
+        object[20..].copy_from_slice(payload);
+        object
+    }
+
     #[test]
     fn parses_only_supported_object_formats() {
         assert_eq!(
@@ -1911,6 +1970,13 @@ mod tests {
         assert_eq!(decoded.members()[0].name, "objects/helper.o");
         assert_eq!(decoded.members()[0].bytes, b"object");
         assert!(!decoded.members()[0].external);
+    }
+
+    #[test]
+    fn excludes_validated_short_imports_from_coff_data_metadata() {
+        let import = short_import_object();
+        assert!(x86_64_coff_short_import(&import).unwrap().is_some());
+        assert_eq!(writable_fragment_count(&[&import]).unwrap(), 0);
     }
 
     #[test]
