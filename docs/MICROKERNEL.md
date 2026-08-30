@@ -10551,3 +10551,19 @@ and TLB invalidation remain **PLANNED**.
 Patent review: `NOT_TRIGGERED` — retaining and exact-matching a task's existing
 context before conventional capability and memory cleanup is ordinary lifecycle
 enforcement. See `docs/patents/REVIEW_LOG.md`.
+
+The memory-resource table now exposes a revoke-only native mapping backend
+contract, distinct from mapping installation. It capability-preflights the
+exact generational mapping, invokes native withdrawal and required translation
+invalidation first, and retires policy/accounting state only after backend
+success; a backend failure leaves the mapping record live for fail-stop or
+retry handling. The x86-64 active-service revoker implements this contract by
+reconstructing and exact-matching the complete virtual, physical, length, and
+permission tuple before active leaf removal. The Linux-host release kernel
+suite passes 652 tests and the release build passes. Tests exercise policy
+ordering and inactive in-memory page-table mechanics; no active CR3 or physical
+CPU execution is claimed yet.
+
+Patent review: `NOT_TRIGGERED` — revoke-before-policy-retirement ordering and
+exact page-table tuple validation are conventional memory lifecycle mechanisms.
+See `docs/patents/REVIEW_LOG.md`.

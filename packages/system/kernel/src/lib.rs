@@ -221,6 +221,7 @@ pub use memory::{
 pub use memory_resource::{
     MemoryBackingBackendRequest, MemoryBackingKind, MemoryBackingOperationError, MemoryMapping,
     MemoryMappingBackend, MemoryMappingBackendRequest, MemoryMappingId,
+    MemoryMappingRevocationBackend,
     MemoryMappingOperationError, MemoryMappingPair, MemoryMappingPairOperationError,
     MemoryMappingPairRemovalError, MemoryMappingPairRemovalState, MemoryObjectBackingBackend,
     MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError,

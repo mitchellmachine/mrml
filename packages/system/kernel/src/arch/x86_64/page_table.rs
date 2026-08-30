@@ -6,8 +6,8 @@ use super::{
 };
 use crate::{
     Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind, MemoryMappingBackend,
-    MemoryMappingBackendRequest, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, ObjectId, PAGE_SIZE, PhysAddr, Rights,
+    MemoryMappingBackendRequest, MemoryMappingRevocationBackend, MemoryObjectId, MemoryPoolId,
+    MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE, PhysAddr, Rights,
 };
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
@@ -675,34 +675,40 @@ impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
         if request.target() != self.target {
             return Err(InactivePageTableMappingError::WrongTarget);
         }
-        let physical = request
-            .physical()
-            .ok_or(InactivePageTableMappingError::MissingPhysicalBacking)?;
-        let mapping = request.mapping();
-        let access = mapping.access();
-        let permissions = if access == Rights::READ {
-            PagePermissions::USER_READ
-        } else if access == Rights::READ.union(Rights::WRITE) {
-            PagePermissions::USER_READ_WRITE
-        } else if access == Rights::READ.union(Rights::EXECUTE) {
-            PagePermissions::USER_READ_EXECUTE
-        } else {
-            return Err(InactivePageTableMappingError::UnsupportedAccess);
-        };
-        let virtual_address = mapping
-            .virtual_page()
-            .checked_mul(PAGE_SIZE)
-            .ok_or(InactivePageTableMappingError::InvalidMapping)?;
-        let virtual_start = VirtAddr::new(virtual_address)
-            .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
-        Mapping::new(
-            virtual_start,
-            physical.start(),
-            mapping.pages(),
-            permissions,
-        )
-        .map_err(|_| InactivePageTableMappingError::InvalidMapping)
+        native_user_mapping(request)
     }
+}
+
+fn native_user_mapping(
+    request: MemoryMappingBackendRequest,
+) -> Result<Mapping, InactivePageTableMappingError> {
+    let physical = request
+        .physical()
+        .ok_or(InactivePageTableMappingError::MissingPhysicalBacking)?;
+    let mapping = request.mapping();
+    let access = mapping.access();
+    let permissions = if access == Rights::READ {
+        PagePermissions::USER_READ
+    } else if access == Rights::READ.union(Rights::WRITE) {
+        PagePermissions::USER_READ_WRITE
+    } else if access == Rights::READ.union(Rights::EXECUTE) {
+        PagePermissions::USER_READ_EXECUTE
+    } else {
+        return Err(InactivePageTableMappingError::UnsupportedAccess);
+    };
+    let virtual_address = mapping
+        .virtual_page()
+        .checked_mul(PAGE_SIZE)
+        .ok_or(InactivePageTableMappingError::InvalidMapping)?;
+    let virtual_start = VirtAddr::new(virtual_address)
+        .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
+    Mapping::new(
+        virtual_start,
+        physical.start(),
+        mapping.pages(),
+        permissions,
+    )
+    .map_err(|_| InactivePageTableMappingError::InvalidMapping)
 }
 
 // SAFETY: construction requires an inactive, exclusively owned hierarchy.
@@ -909,6 +915,26 @@ impl GuestMappingRevoker for ActiveServiceMappingRevoker<'_> {
             .map_err(ActiveMappingRevocationError::PageTable)?;
         self.retired = true;
         Ok(())
+    }
+}
+
+// SAFETY: construction binds this one-use adapter to one exact active mapping
+// and root. The request is converted back into its complete native mapping and
+// exact-matched before unmap_exact clears any leaf and invalidates every page.
+unsafe impl MemoryMappingRevocationBackend for ActiveServiceMappingRevoker<'_> {
+    type Error = ActiveMappingRevocationError;
+
+    fn revoke(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+        let mapping =
+            native_user_mapping(request).map_err(|_| ActiveMappingRevocationError::WrongMapping)?;
+        if mapping != self.expected {
+            return Err(ActiveMappingRevocationError::WrongMapping);
+        }
+        let bytes = mapping
+            .pages()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(ActiveMappingRevocationError::WrongMapping)?;
+        self.revoke_guest_mapping(mapping.virtual_start().get(), bytes)
     }
 }
 

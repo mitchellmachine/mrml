@@ -108,6 +108,22 @@ pub unsafe trait MemoryMappingBackend {
     fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error>;
 }
 
+/// Privileged adapter for withdrawing one exact native mapping without also
+/// granting installation authority.
+///
+/// # Safety
+///
+/// `revoke` may return success only after the exact request is absent and all
+/// required CPU, device, VMM, and translation-cache invalidation is complete.
+/// Failure must retain the mapping or fail-stop every consumer. The request is
+/// validated data and never substitutes for the capability checks completed by
+/// the policy table before this method is invoked.
+pub unsafe trait MemoryMappingRevocationBackend {
+    type Error;
+
+    fn revoke(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error>;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryMappingOperationError<E> {
     Policy(MemoryResourceError),
@@ -1174,6 +1190,25 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         Ok(())
     }
 
+    /// Withdraws an exact native mapping through a revoke-only backend before
+    /// retiring its generational policy record.
+    pub fn revoke_mapping<B: MemoryMappingRevocationBackend, const C: usize>(
+        &mut self,
+        mapping: MemoryMappingId,
+        target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+        backend: &mut B,
+    ) -> Result<(), MemoryMappingOperationError<B::Error>> {
+        let (entry, pool, next_generation, next_mappings) = self
+            .prepare_mapping_release(mapping, target_capability, capabilities)
+            .map_err(MemoryMappingOperationError::Policy)?;
+        backend
+            .revoke(mapping_backend_request(entry))
+            .map_err(MemoryMappingOperationError::Backend)?;
+        self.commit_mapping_release(mapping, entry, pool, next_generation, next_mappings);
+        Ok(())
+    }
+
     pub fn mapping_info<const C: usize>(
         &self,
         mapping: MemoryMappingId,
@@ -1659,6 +1694,24 @@ mod tests {
         }
 
         fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            self.remove_calls += 1;
+            if self.fail_remove {
+                return Err("remove");
+            }
+            if self.installed != Some(request) {
+                return Err("substitution");
+            }
+            self.installed = None;
+            Ok(())
+        }
+    }
+
+    // SAFETY: the test revoker clears only the exact copied request on success
+    // and retains it unchanged on every failure.
+    unsafe impl MemoryMappingRevocationBackend for RecordingMappingBackend {
+        type Error = &'static str;
+
+        fn revoke(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
             self.remove_calls += 1;
             if self.fail_remove {
                 return Err("remove");
@@ -2348,6 +2401,40 @@ mod tests {
                 .unwrap()
                 .active_mappings(),
             0
+        );
+
+        let mapping = table
+            .install_mapping(
+                object,
+                object_cap,
+                target,
+                0x240,
+                0,
+                1,
+                Rights::READ,
+                &caps,
+                &mut backend,
+            )
+            .unwrap();
+        let request = backend.installed.unwrap();
+        backend.fail_remove = true;
+        assert_eq!(
+            table.revoke_mapping(mapping, target, &caps, &mut backend),
+            Err(MemoryMappingOperationError::Backend("remove"))
+        );
+        assert_eq!(backend.installed, Some(request));
+        assert_eq!(
+            table.mapping_info(mapping, target, &caps),
+            Ok(request.mapping())
+        );
+        backend.fail_remove = false;
+        table
+            .revoke_mapping(mapping, target, &caps, &mut backend)
+            .unwrap();
+        assert_eq!(backend.installed, None);
+        assert_eq!(
+            table.mapping_info(mapping, target, &caps),
+            Err(MemoryResourceError::InvalidMapping)
         );
     }
 
