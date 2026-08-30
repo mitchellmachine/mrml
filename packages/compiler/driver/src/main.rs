@@ -51,7 +51,9 @@ const MAX_CONSTANTS: usize = 64;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_EXPRESSION_NODES: usize = 256;
 #[cfg_attr(test, allow(dead_code))]
-const MAX_LINKED_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PE_LINKED_BYTES: usize = 4 * 1024 * 1024;
+#[cfg_attr(test, allow(dead_code))]
+const MAX_ELF_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_EXECUTABLE_BYTES: usize = 3 * 1024 * 1024;
 
@@ -2423,7 +2425,7 @@ fn write_linked_pe(
             output,
         );
     }
-    write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(
+    write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_PE_LINKED_BYTES>(
         &contextual_inputs,
         &runtime_functions,
         &writable_data,
@@ -2805,7 +2807,9 @@ fn write_linked_elf(
             &selected, entry, output,
         );
     }
-    write_selected_elf_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry, output)
+    write_selected_elf_image::<MAX_EXECUTABLE_BYTES, MAX_ELF_PAYLOAD_BYTES>(
+        &selected, entry, output,
+    )
 }
 
 fn write_selected_elf_image<const MAX_IMAGE: usize, const MAX_PAYLOAD: usize>(
