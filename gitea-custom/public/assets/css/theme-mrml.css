@@ -1,0 +1,202 @@
+gitea-theme-meta-info {
+  --theme-display-name: "MRML";
+}
+
+:root {
+  --is-dark-theme: true;
+
+  --fonts-proportional: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  --fonts-monospace: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace !important;
+
+  --color-primary: #ffca67;
+  --color-primary-contrast: #20190d;
+  --color-primary-dark-1: #efb955;
+  --color-primary-dark-2: #d9a245;
+  --color-primary-light-1: #ffd47f;
+  --color-primary-light-2: #ffdfa0;
+  --color-primary-light-3: #ffe9bf;
+  --color-primary-light-4: #fff2dc;
+  --color-primary-light-5: #fff8ec;
+  --color-primary-light-6: #fffaf2;
+  --color-primary-light-7: #fffcf7;
+
+  --color-body: #0b0d10;
+  --color-nav-bg: #0d1014;
+  --color-footer: #0b0d10;
+  --color-menu: #12161b;
+  --color-card: #12161b;
+  --color-box-header: #12161b;
+  --color-box-body: #0f1318;
+  --color-input-background: #0f1318;
+  --color-input-toggle-background: #171c22;
+
+  --color-text: #f4f0e8;
+  --color-text-dark: #f4f0e8;
+  --color-text-light: #a8afb8;
+  --color-text-light-1: #b6bdc5;
+  --color-text-light-2: #89929d;
+  --color-text-light-3: #737d88;
+
+  --color-border: #2a3038;
+  --color-secondary: #1a2027;
+  --color-secondary-dark-1: #202730;
+  --color-secondary-dark-2: #262e38;
+  --color-secondary-dark-3: #303946;
+  --color-secondary-dark-4: #3b4654;
+  --color-secondary-alpha-10: rgb(255 202 103 / 10%);
+  --color-secondary-alpha-20: rgb(255 202 103 / 20%);
+
+  --color-active: rgb(255 202 103 / 12%);
+  --color-hover: rgb(255 255 255 / 4%);
+  --color-light: #171c22;
+  --color-markup-code-block: #0d1014;
+  --color-code-bg: #101419;
+  --color-code-sidebar-bg: #0d1014;
+}
+
+html,
+body {
+  background:
+    radial-gradient(circle at 82% 8%, rgb(255 202 103 / 8%), transparent 24rem),
+    linear-gradient(180deg, #0d1014, #0b0d10 36rem) fixed;
+}
+
+.ui.menu,
+.ui.segment,
+.ui.card,
+.ui.table,
+.repository.file.list,
+.repository.view.issue .comment-list .comment > .content {
+  border-color: var(--color-border) !important;
+}
+
+.ui.menu,
+.ui.segment,
+.ui.card,
+.ui.table {
+  box-shadow: none !important;
+}
+
+.ui.primary.button,
+.ui.green.button,
+.ui.button.primary {
+  background: var(--color-primary) !important;
+  color: var(--color-primary-contrast) !important;
+  border-color: var(--color-primary) !important;
+}
+
+.ui.primary.button:hover,
+.ui.green.button:hover,
+.ui.button.primary:hover {
+  background: #ffd47f !important;
+  border-color: #ffd47f !important;
+}
+
+a,
+.ui.breadcrumb a,
+.repo-title a {
+  text-underline-offset: .18em;
+}
+
+.repository-title .repo-icon,
+.svg.gitea-git,
+.svg.octicon-repo {
+  color: var(--color-primary) !important;
+}
+
+header .navbar,
+.page-header,
+.ui.menu.bar {
+  backdrop-filter: blur(14px);
+}
+
+footer.page-footer {
+  border-top: 1px solid var(--color-border);
+}
+
+.markup h1,
+.markup h2,
+.markup h3,
+.markup h4,
+.repository .repo-title,
+.ui.header {
+  letter-spacing: -0.02em;
+}
+
+.markup code,
+.markup pre,
+.code-view,
+.file-view.code-view {
+  font-family: var(--fonts-monospace) !important;
+}
+
+::selection {
+  background: rgb(255 202 103 / 28%);
+}
+
+/* ---------------------------------------------------------
+   MRML navigation / HiDPI wordmark refinements
+   --------------------------------------------------------- */
+
+/* Keep the global navigation close to the proportions of mrml.ca. */
+.ui.menu.bar,
+header .navbar {
+  min-height: 3.75rem !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  background: rgb(13 16 20 / 94%) !important;
+}
+
+/* Gitea's brand image is quite small by default. The MRML logo is SVG,
+   so increasing its CSS size remains perfectly sharp on HiDPI displays. */
+.ui.menu.bar .brand,
+header .navbar .brand {
+  min-width: 6.9rem;
+  padding-inline: 1.55rem !important;
+}
+
+.ui.menu.bar .brand img,
+header .navbar .brand img,
+.ui.menu.bar .brand svg,
+header .navbar .brand svg {
+  width: 5.15rem !important;
+  height: auto !important;
+  max-width: none !important;
+  max-height: 2rem !important;
+  display: block;
+}
+
+/* Keep top-level navigation readable without visually competing with MRML. */
+.ui.menu.bar > .item,
+header .navbar > .item {
+  min-height: 3.75rem;
+  padding-inline: 1.25rem !important;
+  font-size: 1rem;
+  font-weight: 520;
+}
+
+.ui.menu.bar > .item:hover,
+header .navbar > .item:hover {
+  background: rgb(255 202 103 / 6%) !important;
+}
+
+.ui.menu.bar > .active.item,
+header .navbar > .active.item {
+  background: rgb(255 202 103 / 9%) !important;
+}
+
+/* Slightly tighten the header on small screens without shrinking the mark. */
+@media (max-width: 48rem) {
+  .ui.menu.bar .brand,
+  header .navbar .brand {
+    min-width: 5.6rem;
+    padding-inline: 1rem !important;
+  }
+
+  .ui.menu.bar .brand img,
+  header .navbar .brand img,
+  .ui.menu.bar .brand svg,
+  header .navbar .brand svg {
+    width: 4.45rem !important;
+    max-height: 1.8rem !important;
+  }
+}
