@@ -4139,3 +4139,8 @@ Ordinary stable deployment commit now returns its complete prepared activation
 with every pre-publication failure. Storage revocation leaves the receipt and
 live deployment state unchanged while preserving the exact successor for an
 explicit caller decision.
+
+Authenticated stable deployment failure now distinguishes `Prepared` from
+`CheckpointPublished`. Pre-receipt errors retain the complete prepared owner;
+post-receipt recovery-store uncertainty retains the exact durable file and
+pending activation identities while leaving the live service inactive.

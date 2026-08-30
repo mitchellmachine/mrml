@@ -7312,6 +7312,18 @@ ambiguous partial state. Deployment remains 7 focused Linux tests.
 Patent review: `NOT_TRIGGERED` — this preserves linear ownership across the
 existing pre-publication error boundary. See `docs/patents/REVIEW_LOG.md`.
 
+Authenticated stable activation now exposes an explicit two-phase failure
+owner. Any validation, recovery-state load/decode, encoding, storage authority,
+or receipt failure returns the complete prepared activation. Once the file
+receipt is consumed, compare-and-store uncertainty instead returns the exact
+published file generation, pending activation token, expected activation and
+release identities, and store error; it never mislabels that state as prepared.
+Deployment passes 8 focused Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this is conventional typed uncertainty and
+linear ownership at an existing authenticated commit boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

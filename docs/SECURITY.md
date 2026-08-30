@@ -1119,3 +1119,9 @@ receipt boundary; final service mutation only consumes that owner.
 Ordinary stable activation denial retains the complete prepared deployment
 owner alongside its typed error. No failed control, stale-state, storage, or
 receipt check silently discards the staged successor or changes live activation.
+
+Authenticated activation never conflates recovery-store uncertainty with a
+retryable prepared file. Before receipt consumption, failures return the full
+prepared owner. After file publication, compare-and-store failure returns a
+`CheckpointPublished` owner containing the exact file generation and pending
+activation identity; live activation remains unchanged for explicit recovery.

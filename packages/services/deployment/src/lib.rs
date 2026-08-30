@@ -834,50 +834,112 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
         state_store: &mut S,
-    ) -> Result<StableActivation<EXTENTS>, AuthenticatedActivationCommitError<S::Error>> {
-        let validated = service
-            .validate_activation(capabilities, control, self.activation)
-            .map_err(AuthenticatedActivationCommitError::Deployment)?;
+    ) -> Result<StableActivation<EXTENTS>, AuthenticatedActivationCommitFailure<EXTENTS, S::Error>>
+    {
+        let validated = match service.validate_activation(capabilities, control, self.activation) {
+            Ok(validated) => validated,
+            Err(error) => {
+                return Err(AuthenticatedActivationCommitFailure::Prepared {
+                    prepared: self,
+                    error: AuthenticatedActivationCommitError::Deployment(error),
+                });
+            }
+        };
         if validated.active != self.active {
-            return Err(AuthenticatedActivationCommitError::StaleActivation);
+            return Err(AuthenticatedActivationCommitFailure::Prepared {
+                prepared: self,
+                error: AuthenticatedActivationCommitError::StaleActivation,
+            });
         }
         if validated.active_release != self.active_release {
-            return Err(AuthenticatedActivationCommitError::StaleActivation);
+            return Err(AuthenticatedActivationCommitFailure::Prepared {
+                prepared: self,
+                error: AuthenticatedActivationCommitError::StaleActivation,
+            });
         }
         let mut expected = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
-        state_store
-            .load_authenticated(&mut expected)
-            .map_err(AuthenticatedActivationCommitError::StateStore)?;
-        let current = decode_deployment_recovery_state(&expected)
-            .map_err(AuthenticatedActivationCommitError::Deployment)?;
-        if !current.matches_active(service.active) {
-            return Err(AuthenticatedActivationCommitError::RecoveryStateMismatch);
+        if let Err(error) = state_store.load_authenticated(&mut expected) {
+            return Err(AuthenticatedActivationCommitFailure::Prepared {
+                prepared: self,
+                error: AuthenticatedActivationCommitError::StateStore(error),
+            });
         }
-        let replacement = encode_deployment_recovery_state_with_release(
-            current.epoch().checked_add(1).ok_or(
-                AuthenticatedActivationCommitError::Deployment(
-                    DeploymentError::GenerationExhausted,
-                ),
-            )?,
+        let current = match decode_deployment_recovery_state(&expected) {
+            Ok(current) => current,
+            Err(error) => {
+                return Err(AuthenticatedActivationCommitFailure::Prepared {
+                    prepared: self,
+                    error: AuthenticatedActivationCommitError::Deployment(error),
+                });
+            }
+        };
+        if !current.matches_active(service.active) {
+            return Err(AuthenticatedActivationCommitFailure::Prepared {
+                prepared: self,
+                error: AuthenticatedActivationCommitError::RecoveryStateMismatch,
+            });
+        }
+        let next_epoch = match current.epoch().checked_add(1) {
+            Some(epoch) => epoch,
+            None => {
+                return Err(AuthenticatedActivationCommitFailure::Prepared {
+                    prepared: self,
+                    error: AuthenticatedActivationCommitError::Deployment(
+                        DeploymentError::GenerationExhausted,
+                    ),
+                });
+            }
+        };
+        let replacement = match encode_deployment_recovery_state_with_release(
+            next_epoch,
             service.root,
             self.active,
             self.active_release,
             self.file.object(),
             self.file.generation(),
-        )
-        .map_err(AuthenticatedActivationCommitError::Deployment)?;
-        let file = self
-            .file
-            .commit_transaction_authorized(storage_authority, receipt)
-            .map_err(|(_, error)| AuthenticatedActivationCommitError::Storage(error))?;
-        state_store
-            .compare_and_store(&expected, &replacement)
-            .map_err(AuthenticatedActivationCommitError::StateStore)?;
+        ) {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                return Err(AuthenticatedActivationCommitFailure::Prepared {
+                    prepared: self,
+                    error: AuthenticatedActivationCommitError::Deployment(error),
+                });
+            }
+        };
+        let Self {
+            file,
+            activation,
+            active,
+            active_release,
+        } = self;
+        let file = match file.commit_transaction_authorized(storage_authority, receipt) {
+            Ok(file) => file,
+            Err((file, error)) => {
+                return Err(AuthenticatedActivationCommitFailure::Prepared {
+                    prepared: Self {
+                        file,
+                        activation,
+                        active,
+                        active_release,
+                    },
+                    error: AuthenticatedActivationCommitError::Storage(error),
+                });
+            }
+        };
+        if let Err(error) = state_store.compare_and_store(&expected, &replacement) {
+            return Err(AuthenticatedActivationCommitFailure::CheckpointPublished {
+                file,
+                activation,
+                active,
+                active_release,
+                error,
+            });
+        }
         let active = service.publish_validated_activation(validated);
         Ok(StableActivation {
             file,
             active,
-            active_release: self.active_release,
+            active_release,
         })
     }
 }
@@ -916,6 +978,20 @@ pub enum AuthenticatedActivationCommitError<E> {
     Storage(FileWriteCommitError),
     Deployment(DeploymentError),
     StateStore(E),
+}
+
+pub enum AuthenticatedActivationCommitFailure<const EXTENTS: usize, E> {
+    Prepared {
+        prepared: PreparedStableActivation<EXTENTS>,
+        error: AuthenticatedActivationCommitError<E>,
+    },
+    CheckpointPublished {
+        file: FileState<EXTENTS>,
+        activation: PreparedActivation,
+        active: ActivatedSystemGeneration,
+        active_release: Option<ActivatedSystemRelease>,
+        error: E,
+    },
 }
 
 pub trait DeploymentRecoveryStateStore {
@@ -1716,12 +1792,14 @@ mod tests {
 
     struct RecoveryStateStore {
         bytes: [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        fail_compare: bool,
     }
 
     impl RecoveryStateStore {
         fn empty() -> Self {
             Self {
                 bytes: encode_empty_deployment_recovery_state(1).unwrap(),
+                fail_compare: false,
             }
         }
     }
@@ -1742,6 +1820,9 @@ mod tests {
             expected: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
             replacement: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
         ) -> Result<(), Self::Error> {
+            if self.fail_compare {
+                return Err(2);
+            }
             if self.bytes != *expected {
                 return Err(1);
             }
@@ -2276,6 +2357,7 @@ mod tests {
             .unwrap();
         let state_store = RecoveryStateStore {
             bytes: recovery_state,
+            fail_compare: false,
         };
         let mut shared_backend = SharedRuntimeBackend {
             checkpoint: checkpoint_block,
@@ -2685,6 +2767,7 @@ mod tests {
             .unwrap();
         let mut recovery_state = RecoveryStateStore {
             bytes: encode_empty_deployment_recovery_state(u64::MAX).unwrap(),
+            fail_compare: false,
         };
         assert!(matches!(
             stable.commit_authenticated(
@@ -2695,9 +2778,12 @@ mod tests {
                 &mut receipt,
                 &mut recovery_state,
             ),
-            Err(AuthenticatedActivationCommitError::Deployment(
-                DeploymentError::GenerationExhausted
-            ))
+            Err(AuthenticatedActivationCommitFailure::Prepared {
+                error: AuthenticatedActivationCommitError::Deployment(
+                    DeploymentError::GenerationExhausted
+                ),
+                ..
+            })
         ));
         assert_eq!(receipt.remaining(), 1);
         assert_eq!(service.active(&capabilities, inspect), Ok(None));
@@ -2775,16 +2861,17 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = stable
-            .commit_authenticated(
-                &mut service,
-                &capabilities,
-                control,
-                &authority,
-                &mut receipt,
-                &mut recovery_state,
-            )
-            .unwrap();
+        let stable = match stable.commit_authenticated(
+            &mut service,
+            &capabilities,
+            control,
+            &authority,
+            &mut receipt,
+            &mut recovery_state,
+        ) {
+            Ok(stable) => stable,
+            Err(_) => panic!("authenticated stable activation failed"),
+        };
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.active(), preview);
         assert_eq!(service.active(&capabilities, inspect), Ok(Some(preview)));
@@ -2839,5 +2926,82 @@ mod tests {
                 DeploymentStorageError::Read(FileReadError::Backend(4))
             ))
         ));
+    }
+
+    #[test]
+    fn authenticated_store_uncertainty_returns_published_checkpoint_owner() {
+        let (capabilities, control, inspect) = authority();
+        let root = ObjectId(0x4445_504c_4f59);
+        let mut service = DeploymentService::<1>::new(root).unwrap();
+        let candidate = service
+            .stage(&capabilities, control, candidate(8, 0x51))
+            .unwrap();
+        let activation = service
+            .prepare_activation(&capabilities, control, candidate, None)
+            .unwrap();
+        let active = service.preview_activation(activation).unwrap();
+        let checkpoint = encode_deployment_checkpoint(root, active).unwrap();
+        let (current, next, metadata, images) = stable_layout(&checkpoint);
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let file = authority
+            .insert(
+                object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                principal(),
+            )
+            .unwrap();
+        let mut backend = StableBackend {
+            bytes: [0; BLOCK_BYTES],
+        };
+        let prepared = prepare_stable_activation(
+            &service,
+            activation,
+            &current,
+            &authority,
+            file,
+            principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut backend,
+        )
+        .unwrap();
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(72).unwrap(), 2).unwrap();
+        prepared.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let mut recovery_state = RecoveryStateStore::empty();
+        recovery_state.fail_compare = true;
+        let failure = prepared.commit_authenticated(
+            &mut service,
+            &capabilities,
+            control,
+            &authority,
+            &mut receipt,
+            &mut recovery_state,
+        );
+        let Err(AuthenticatedActivationCommitFailure::CheckpointPublished {
+            file,
+            activation: retained_activation,
+            active: retained_active,
+            active_release,
+            error,
+        }) = failure
+        else {
+            panic!("store uncertainty did not return the published checkpoint owner");
+        };
+        assert_eq!(file.generation(), 2);
+        assert_eq!(retained_activation, activation);
+        assert_eq!(retained_active, active);
+        assert_eq!(active_release, None);
+        assert_eq!(error, 2);
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(service.active(&capabilities, inspect), Ok(None));
     }
 }
