@@ -22,8 +22,8 @@ Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
 schemas define bounded opaque-handle operations for isolated library providers.
 The block interface passes one focused test; the filesystem interface's canonical
-probe, mount/unmount, lookup, read/write, and create codecs plus exact-generation
-isolated transports pass ten focused tests on Linux. Mount returns only a nonzero
+probe, mount/unmount, lookup, read/write, create, and flush codecs plus exact-generation
+isolated transports pass eleven focused tests on Linux. Mount returns only a nonzero
 generation or typed zero-generation error; mount and lookup invocations preserve
 the exact provider endpoint generation and reject memory beyond its admitted bound. Unmount binds
 that exact nonzero generation and returns only a nonzero completion serial or
@@ -34,8 +34,10 @@ The write boundary independently binds an immutable nonempty input and requires
 nonzero bounded progress, preserving `ReadOnly`, permission, capacity, and I/O
 failures as distinct results. Create binds the exact parent and bounded nonempty name, preserves the
 provider-defined generation-1 kind value, and returns only a nonzero object
-identity or typed zero-identity failure. The storage service will
-bind exact admitted generations and restart through complete cleanup rather than
+identity or typed zero-identity failure. Flush binds the exact mounted volume and
+retained provider endpoint; successful durability evidence is a nonzero serial,
+while typed failures carry zero. The storage service will bind exact admitted
+generations and restart through complete cleanup rather than
 load path-selected code or reboot. The fixed-capacity registry is now
 **PARTIALLY IMPLEMENTED** with separate authorities, exact generation changes,
 cleanup-before-launch, health-check-before-publication, quarantine, unavailable

@@ -440,7 +440,10 @@ and caller-bounded; `ReadOnly`, permission, capacity, and I/O failures remain
 distinct. Canonical create framing binds the exact parent and bounded name,
 preserves the provider-defined generation-1 kind value, rejects nonzero alignment
 padding, and returns only a nonzero object identity or typed zero-identity error.
-The complete suite passes ten Linux-host tests. The FAT32 provider now consumes
+Canonical flush framing binds the exact volume and mount generation through the
+retained provider endpoint. Success carries one nonzero durability serial, while
+typed stale-object, permission, and I/O errors carry zero. The complete suite
+passes eleven Linux-host tests. The FAT32 provider now consumes
 the probe boundary through
 an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The

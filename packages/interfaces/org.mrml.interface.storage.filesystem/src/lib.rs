@@ -20,6 +20,8 @@ pub const WRITE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
 pub const WRITE_RESPONSE_BYTES: usize = 16;
 pub const CREATE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
 pub const CREATE_RESPONSE_BYTES: usize = 16;
+pub const FLUSH_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
+pub const FLUSH_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
@@ -150,6 +152,21 @@ pub trait FilesystemCreateEndpoint {
     ) -> Result<[u8; CREATE_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait FilesystemFlushTransport {
+    fn flush(
+        &mut self,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemFlushEndpoint {
+    fn invoke_flush(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub struct IsolatedFilesystemTransport<E> {
     endpoint: OpaqueHandle,
     maximum_memory_bytes: usize,
@@ -274,6 +291,16 @@ impl<E: FilesystemCreateEndpoint> FilesystemCreateTransport for IsolatedFilesyst
         }
         decode_create_request(request, memory.len() as u64)?;
         self.service.invoke_create(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemFlushEndpoint> FilesystemFlushTransport for IsolatedFilesystemTransport<E> {
+    fn flush(
+        &mut self,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError> {
+        decode_flush_request(request)?;
+        self.service.invoke_flush(self.endpoint, request)
     }
 }
 
@@ -989,6 +1016,82 @@ pub fn decode_create_response(
     }
 }
 
+pub fn encode_flush_request(
+    volume: OpaqueHandle,
+    generation: u64,
+) -> Result<[u8; FLUSH_REQUEST_BYTES], ProtocolError> {
+    let request = FlushRequest { volume, generation };
+    if !request.validate() || generation == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; FLUSH_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_FLUSH.to_le_bytes());
+    bytes[56..64].copy_from_slice(&16_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(FLUSH_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&generation.to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_flush_request(
+    bytes: &[u8; FLUSH_REQUEST_BYTES],
+) -> Result<FlushRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_FLUSH
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 16
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != FLUSH_RESPONSE_BYTES as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let generation = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+    if generation == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    Ok(FlushRequest { volume, generation })
+}
+
+pub fn encode_flush_response(result: Result<FlushResponse, FlushError>) -> [u8; 16] {
+    let mut bytes = [0; FLUSH_RESPONSE_BYTES];
+    let (status, serial) = match result {
+        Ok(serial) => (0, serial),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&serial.to_le_bytes());
+    bytes
+}
+
+pub fn decode_flush_response(
+    bytes: &[u8; FLUSH_RESPONSE_BYTES],
+) -> Result<Result<FlushResponse, FlushError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let serial = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if serial != 0 => Ok(Ok(serial)),
+        1 if serial == 0 => Ok(Err(FlushError::StaleObject)),
+        2 if serial == 0 => Ok(Err(FlushError::PermissionDenied)),
+        3 if serial == 0 => Ok(Err(FlushError::IoFailure)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1442,6 +1545,62 @@ mod tests {
         invalid[8] = 1;
         assert_eq!(
             decode_create_response(&invalid),
+            Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    struct FlushEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemFlushEndpoint for FlushEndpoint {
+        fn invoke_flush(
+            &mut self,
+            endpoint: OpaqueHandle,
+            _request: &[u8; FLUSH_REQUEST_BYTES],
+        ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            Ok(encode_flush_response(Ok(14)))
+        }
+    }
+
+    #[test]
+    fn flush_codec_binds_exact_mount_and_nonzero_durability_serial() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let request = encode_flush_request(volume, 12).unwrap();
+        assert_eq!(
+            decode_flush_request(&request),
+            Ok(FlushRequest {
+                volume,
+                generation: 12,
+            })
+        );
+        let service = FlushEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_flush_response(&transport.flush(&request).unwrap()),
+            Ok(Ok(14))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        assert_eq!(
+            encode_flush_request(volume, 0),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut stale = request;
+        stale[52..56].copy_from_slice(&OP_UNMOUNT.to_le_bytes());
+        assert_eq!(
+            decode_flush_request(&stale),
+            Err(ProtocolError::InvalidHeader)
+        );
+        assert_eq!(
+            decode_flush_response(&encode_flush_response(Ok(0))),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut invalid = encode_flush_response(Err(FlushError::PermissionDenied));
+        invalid[8] = 1;
+        assert_eq!(
+            decode_flush_response(&invalid),
             Err(ProtocolError::InvalidResponse)
         );
     }

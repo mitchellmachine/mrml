@@ -816,8 +816,8 @@ PCI classes, and manifests do not authorize.
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
 interface passes eleven focused tests and the filesystem interface's canonical
-probe, mount/unmount, lookup, read/write, and create codecs plus exact-generation
-isolated transports pass ten focused Linux-host tests. Mount binds the volume generation
+probe, mount/unmount, lookup, read/write, create, and flush codecs plus exact-generation
+isolated transports pass eleven focused Linux-host tests. Mount binds the volume generation
 and bounded options range and returns only a nonzero mount generation or typed failure.
 Unmount consumes the exact nonzero mount generation through the same endpoint
 and returns a nonzero completion serial or typed zero-serial failure.
@@ -834,7 +834,9 @@ and nonzero bounded completion while retaining `ReadOnly`, permission, capacity,
 and I/O failure as distinct statuses. The fixed-capacity module registry is
 Create binds exact volume, mount, parent-directory, bounded nonempty name, and
 provider-defined kind data. Reserved alignment bytes and status/object mixtures
-fail closed; a returned object identity is non-authorizing. The fixed-capacity module registry is
+fail closed; a returned object identity is non-authorizing. Flush binds the exact
+mounted volume and retained provider endpoint. Success carries a nonzero durability
+serial; typed stale-object, permission, and I/O failures carry zero. The fixed-capacity module registry is
 also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
 endpoint signal authorities separately; exact-matches all generations; permits

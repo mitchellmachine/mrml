@@ -7428,6 +7428,16 @@ Patent review: `NOT_TRIGGERED` — canonical parent/name framing, zero padding,
 opaque provider-kind carriage, and typed identity responses are conventional IPC
 and directory-operation mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
+Canonical filesystem flush framing binds the exact volume and nonzero mount
+generation through the retained provider endpoint. Success carries one nonzero
+durability serial; stale-object, permission, and I/O failures carry zero, so
+status/serial mixtures fail closed. The serial is evidence, not authority. The
+focused Linux-host interface suite passes eleven tests.
+
+Patent review: `NOT_TRIGGERED` — exact-generation flush framing, typed statuses,
+and nonzero durability-serial validation are conventional IPC and filesystem
+lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
 completion-count validation, and typed read errors are conventional IPC and file
 I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.

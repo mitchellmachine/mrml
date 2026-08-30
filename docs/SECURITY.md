@@ -1183,3 +1183,8 @@ provider endpoint, and nonempty bounded name. The generation-1 `kind` remains
 provider-validated data rather than authority. Success returns only a nonzero
 object identity; typed failure carries zero, and reserved alignment bytes cannot
 hide alternate semantics.
+
+Filesystem flush requests bind the exact volume and nonzero mount generation to
+the retained provider endpoint. A successful response carries a nonzero
+durability serial as evidence rather than authority; stale-object, permission,
+and I/O failures carry zero, and status/serial mixtures fail closed.
