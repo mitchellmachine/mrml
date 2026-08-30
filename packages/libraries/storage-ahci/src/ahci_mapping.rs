@@ -36,6 +36,38 @@ pub trait AhciAbarMappingBackend {
     fn map_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()>;
 }
 
+/// Privileged withdrawal boundary for one exact installed ABAR mapping.
+pub trait AhciAbarRemovalBackend {
+    /// Success confirms that the mapping and required translation-cache state
+    /// are absent. Failure retains the mapping or fail-stops every consumer.
+    fn unmap_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledAhciAbarMapping {
+    mapping: AhciAbarMapping,
+}
+
+impl InstalledAhciAbarMapping {
+    pub const fn mapping(self) -> AhciAbarMapping {
+        self.mapping
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciAbarRemovalError {
+    Capability {
+        error: CapabilityError,
+        retained: InstalledAhciAbarMapping,
+    },
+    WrongDeviceObject {
+        retained: InstalledAhciAbarMapping,
+    },
+    BackendRejected {
+        retained: InstalledAhciAbarMapping,
+    },
+}
+
 pub fn map_ahci_abar<const N: usize, B: AhciAbarMappingBackend>(
     capabilities: &CapabilitySpace<N>,
     capability: Capability,
@@ -78,6 +110,52 @@ pub fn map_ahci_abar<const N: usize, B: AhciAbarMappingBackend>(
     Ok(mapping)
 }
 
+pub fn install_ahci_service_abar<const N: usize, B: AhciAbarMappingBackend>(
+    capabilities: &CapabilitySpace<N>,
+    capability: Capability,
+    device_object: ObjectId,
+    descriptor: AhciAbarDescriptor,
+    virtual_base: u64,
+    mapping_generation: u64,
+    backend: &mut B,
+) -> Result<InstalledAhciAbarMapping, AhciAbarMappingError> {
+    map_ahci_abar(
+        capabilities,
+        capability,
+        device_object,
+        descriptor,
+        virtual_base,
+        mapping_generation,
+        backend,
+    )
+    .map(|mapping| InstalledAhciAbarMapping { mapping })
+}
+
+pub fn remove_ahci_service_abar<const N: usize, B: AhciAbarRemovalBackend>(
+    installed: InstalledAhciAbarMapping,
+    capabilities: &CapabilitySpace<N>,
+    control: Capability,
+    backend: &mut B,
+) -> Result<AhciAbarMapping, AhciAbarRemovalError> {
+    let object = capabilities
+        .authorize_exact(control, Rights::CONTROL)
+        .map_err(|error| AhciAbarRemovalError::Capability {
+            error,
+            retained: installed,
+        })?;
+    if object != installed.mapping.device_object {
+        return Err(AhciAbarRemovalError::WrongDeviceObject {
+            retained: installed,
+        });
+    }
+    backend
+        .unmap_read_write_nx(installed.mapping)
+        .map_err(|_| AhciAbarRemovalError::BackendRejected {
+            retained: installed,
+        })?;
+    Ok(installed.mapping)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +165,7 @@ mod tests {
     struct RecordingBackend {
         mapping: Option<AhciAbarMapping>,
         reject: bool,
+        reject_unmap: bool,
     }
 
     impl AhciAbarMappingBackend for RecordingBackend {
@@ -95,6 +174,16 @@ mod tests {
                 return Err(());
             }
             self.mapping = Some(mapping);
+            Ok(())
+        }
+    }
+
+    impl AhciAbarRemovalBackend for RecordingBackend {
+        fn unmap_read_write_nx(&mut self, mapping: AhciAbarMapping) -> Result<(), ()> {
+            if self.reject_unmap || self.mapping != Some(mapping) {
+                return Err(());
+            }
+            self.mapping = None;
             Ok(())
         }
     }
@@ -252,6 +341,7 @@ mod tests {
         let mut backend = RecordingBackend {
             mapping: None,
             reject: true,
+            reject_unmap: false,
         };
         assert_eq!(
             map_ahci_abar(
@@ -265,5 +355,59 @@ mod tests {
             ),
             Err(AhciAbarMappingError::BackendRejected)
         );
+    }
+
+    #[test]
+    fn installed_mapping_requires_exact_control_and_retains_uncertain_cleanup() {
+        let map_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let (mut capabilities, mapping_capability, object) = authority(map_rights);
+        let control = capabilities.insert(object, Rights::CONTROL).unwrap();
+        let mut backend = RecordingBackend::default();
+        let installed = install_ahci_service_abar(
+            &capabilities,
+            mapping_capability,
+            object,
+            descriptor(),
+            0x8000_0000,
+            9,
+            &mut backend,
+        )
+        .unwrap();
+        backend.reject_unmap = true;
+        let error = remove_ahci_service_abar(installed, &capabilities, control, &mut backend)
+            .unwrap_err();
+        let AhciAbarRemovalError::BackendRejected { retained } = error else {
+            panic!("expected retained ABAR mapping");
+        };
+        assert_eq!(backend.mapping, Some(retained.mapping()));
+        backend.reject_unmap = false;
+        assert_eq!(
+            remove_ahci_service_abar(retained, &capabilities, control, &mut backend),
+            Ok(installed.mapping())
+        );
+        assert_eq!(backend.mapping, None);
+    }
+
+    #[test]
+    fn wrong_control_object_never_reaches_unmap_backend() {
+        let map_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let (mut capabilities, mapping_capability, object) = authority(map_rights);
+        let wrong = capabilities.insert(ObjectId(42), Rights::CONTROL).unwrap();
+        let mut backend = RecordingBackend::default();
+        let installed = install_ahci_service_abar(
+            &capabilities,
+            mapping_capability,
+            object,
+            descriptor(),
+            0x8000_0000,
+            9,
+            &mut backend,
+        )
+        .unwrap();
+        assert!(matches!(
+            remove_ahci_service_abar(installed, &capabilities, wrong, &mut backend),
+            Err(AhciAbarRemovalError::WrongDeviceObject { .. })
+        ));
+        assert_eq!(backend.mapping, Some(installed.mapping()));
     }
 }

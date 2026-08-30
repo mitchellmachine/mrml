@@ -81,8 +81,9 @@ pub use ahci_flush::{
     flush_ahci_cache, AhciFlushError, AhciFlushFailure, AHCI_FLUSH_COMPLETION_POLL_LIMIT,
 };
 pub use ahci_mapping::{
-    map_ahci_abar, AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError,
-    AHCI_MMIO_PAGE_BYTES,
+    AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend,
+    AhciAbarRemovalError, InstalledAhciAbarMapping, AHCI_MMIO_PAGE_BYTES,
+    install_ahci_service_abar, map_ahci_abar, remove_ahci_service_abar,
 };
 pub use ahci_port::{
     discover_ahci_ports, AhciPortDeviceKind, AhciPortDiscoveryError, AhciPortError,

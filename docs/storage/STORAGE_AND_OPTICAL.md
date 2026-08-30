@@ -671,6 +671,30 @@ Patent review: **NOT_TRIGGERED**. Adapting exact typed memory objects and target
 capabilities to the existing memory-resource mapping lifecycle is conventional
 kernel resource plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
 
+ABAR MMIO mapping now has an owned teardown lifecycle **IMPLEMENTED IN SOURCE**.
+Installation continues to require exact device `MAP|READ|WRITE` and yields an
+`InstalledAhciAbarMapping`; withdrawal independently requires exact device
+`CONTROL`, exact-matches the object before any backend call, and consumes the
+owner only after confirmed unmap and translation-cache invalidation. Wrong-
+object control never reaches the backend, and uncertain removal returns the
+exact installed mapping for retry. The Linux AHCI suite passes all 105 tests.
+Combined ABAR/CPU rollback, active-port quiescence ordering, concrete page-table
+and IOMMU invalidation, supervisor task teardown, the native binary, and
+physical-device evidence remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Separately authorized exact MMIO installation
+and retryable withdrawal are conventional device-mapping lifecycle controls. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

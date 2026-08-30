@@ -788,6 +788,30 @@ Patent review: `NOT_TRIGGERED` — adapting exact typed memory objects and targe
 capabilities to the existing memory-resource mapping lifecycle is conventional
 kernel resource plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+ABAR MMIO mapping now has an owned teardown lifecycle **IMPLEMENTED IN SOURCE**.
+Installation still requires the exact device `MAP|READ|WRITE` capability and
+produces an `InstalledAhciAbarMapping`; withdrawal independently requires exact
+device `CONTROL`, exact-matches the object before the backend, and consumes the
+owner only after backend-confirmed unmap and translation-cache invalidation.
+Wrong-object control reaches no backend, while uncertain unmap returns the exact
+installed mapping for bounded retry. The Linux AHCI suite passes all 105 tests.
+Combined ABAR/CPU-mapping rollback, active-port quiescence ordering, concrete
+page-table/IOMMU invalidation, supervisor task teardown, the native binary, and
+physical-device evidence remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — separately authorized exact MMIO installation
+and retryable withdrawal are conventional device-mapping lifecycle controls. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
