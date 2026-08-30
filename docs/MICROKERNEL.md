@@ -7473,7 +7473,11 @@ usable handle. Activation alone publishes a fresh opaque handle; cancellation,
 close, and unmount advance the slot generation, stale replays fail, and maximum
 generation permanently retires the slot. The lookup's non-authorizing object
 number is never interchangeable with this handle. The focused Linux-host FAT32
-suite passes seventy-nine tests.
+suite passes eighty tests. Active-handle file reads now rebind the exact live
+mount/root entry, validate the complete FAT chain, publish atomically, and erase
+staging and cluster scratch. A stale handle causes no block I/O and leaves caller
+output untouched; syscall exposure remains pending a preserved next interface
+generation rather than modifying generation 2 in place.
 
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding

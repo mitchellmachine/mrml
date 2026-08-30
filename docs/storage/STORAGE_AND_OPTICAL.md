@@ -948,7 +948,11 @@ kernel over-counts. The provider also separates open reservation from activation
 in a fixed-capacity table. Reservations authorize no reads; activation alone
 publishes an opaque handle, while cancellation, close, and unmount advance
 generations and invalidate stale state. Generation exhaustion retires the slot
-permanently. Seventy-nine focused Linux-host tests pass. The storage service
+permanently. Active handles now drive bounded file-range reads through the exact
+mount/root entry and a fully validated FAT chain; stale handles perform no block
+I/O or output mutation, and staging plus cluster scratch are erased. Eighty
+focused Linux-host tests pass. A provider open/read syscall requires a future
+preserved interface generation. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

@@ -577,6 +577,12 @@ pub enum Fat32OpenError {
     StaleHandle,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32OpenReadError {
+    Open(Fat32OpenError),
+    Filesystem(Fat32Error),
+}
+
 pub struct Fat32MountedProvider<B, const N: usize, const O: usize = 64> {
     backend: B,
     mounts: Fat32MountTable<N>,
@@ -809,6 +815,16 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
         generation: u64,
         handle: OpaqueHandle,
     ) -> Result<Fat32ShortDirectoryEntry, Fat32OpenError> {
+        self.open_record(volume, generation, handle)
+            .map(|record| record.entry)
+    }
+
+    fn open_record(
+        &self,
+        volume: OpaqueHandle,
+        generation: u64,
+        handle: OpaqueHandle,
+    ) -> Result<Fat32OpenRecord, Fat32OpenError> {
         let slot = usize::try_from(handle.index()).map_err(|_| Fat32OpenError::StaleHandle)?;
         let state = self.open.get(slot).ok_or(Fat32OpenError::StaleHandle)?;
         let record = state
@@ -826,7 +842,7 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
             .map_err(|error| {
                 Fat32OpenError::Identity(Fat32ObjectIdentityError::Lifecycle(error))
             })?;
-        Ok(record.entry)
+        Ok(record)
     }
 
     #[cfg(test)]
@@ -856,6 +872,59 @@ impl<B: Fat32MountBackend, const N: usize, const O: usize> Fat32MountedProvider<
         self.mounts
             .mount(volume, geometry)
             .map_err(Fat32MountAdmissionError::Lifecycle)
+    }
+}
+
+impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
+    Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N, O>
+{
+    pub fn read_open_file<const C: usize>(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+        handle: OpaqueHandle,
+        offset: u64,
+        output: &mut [u8],
+        staging: &mut [u8],
+        cluster_scratch: &mut [u8],
+    ) -> Result<(), Fat32OpenReadError> {
+        let record = self
+            .open_record(volume, generation, handle)
+            .map_err(Fat32OpenReadError::Open)?;
+        let geometry = self
+            .mounts
+            .geometry(record.volume, record.mount_generation, record.root)
+            .map_err(|error| {
+                Fat32OpenReadError::Open(Fat32OpenError::Identity(
+                    Fat32ObjectIdentityError::Lifecycle(error),
+                ))
+            })?;
+        let offset = u32::try_from(offset)
+            .map_err(|_| Fat32OpenReadError::Filesystem(Fat32Error::InvalidFileRange))?;
+        let mut reader = Fat32BlockFilesystemReader::new(volume, geometry, &mut self.backend);
+        let chain = if record.entry.file_size == 0 {
+            None
+        } else {
+            Some(
+                read_fat32_cluster_chain::<C, _>(
+                    geometry,
+                    record.entry.first_cluster,
+                    &mut reader,
+                )
+                .map_err(Fat32OpenReadError::Filesystem)?,
+            )
+        };
+        read_fat32_file_range(
+            geometry,
+            record.entry,
+            chain.as_ref(),
+            offset,
+            output,
+            staging,
+            cluster_scratch,
+            &mut reader,
+        )
+        .map_err(Fat32OpenReadError::Filesystem)
     }
 }
 
@@ -2133,9 +2202,17 @@ mod tests {
             memory.fill(0);
             match request.lba {
                 0 => memory[..FAT32_BOOT_SECTOR_BYTES].copy_from_slice(&boot_sector()),
-                4 | 132 => memory[8..12].copy_from_slice(&0x0fff_ffff_u32.to_le_bytes()),
+                4 | 132 => {
+                    memory[8..12].copy_from_slice(&0x0fff_ffff_u32.to_le_bytes());
+                    memory[20..24].copy_from_slice(&0x0fff_ffff_u32.to_le_bytes());
+                }
                 260 => {
                     memory[..32].copy_from_slice(&short_entry(b"KERNEL  MRP", 0x20, 5, 4096));
+                }
+                263 => {
+                    for (index, byte) in memory.iter_mut().enumerate() {
+                        *byte = index as u8;
+                    }
                 }
                 _ => {
                     return Ok(encode_read_response(Err(BlockReadError::IoFailure)));
@@ -2820,6 +2897,66 @@ mod tests {
             provider.reserve_open(volume, mounted.generation, mounted.root, object),
             Err(Fat32OpenError::Capacity)
         );
+    }
+
+    #[test]
+    fn active_open_handle_reads_exact_file_range_and_close_blocks_io() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = FilesystemImageTransport {
+            session,
+            calls: [0; 8],
+            count: 0,
+        };
+        let mut block_scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut block_scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let entry = file_entry(5, 4096);
+        let object = provider
+            .identify_root_entry(volume, mounted.generation, mounted.root, entry)
+            .unwrap();
+        let handle = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .and_then(|reservation| provider.activate_open(reservation))
+            .unwrap();
+        let mut output = [0xcc; 8];
+        let mut staging = [0xdd; 8];
+        let mut cluster_scratch = [0xee; 4096];
+        provider
+            .read_open_file::<1>(
+                volume,
+                mounted.generation,
+                handle,
+                3,
+                &mut output,
+                &mut staging,
+                &mut cluster_scratch,
+            )
+            .unwrap();
+        assert_eq!(output, [3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(staging, [0; 8]);
+        assert_eq!(cluster_scratch, [0; 4096]);
+        provider.close_open(handle).unwrap();
+        output.fill(0xcc);
+        assert_eq!(
+            provider.read_open_file::<1>(
+                volume,
+                mounted.generation,
+                handle,
+                3,
+                &mut output,
+                &mut staging,
+                &mut cluster_scratch,
+            ),
+            Err(Fat32OpenReadError::Open(Fat32OpenError::StaleHandle))
+        );
+        assert_eq!(output, [0xcc; 8]);
+        let backend = provider.into_backend();
+        let transport = backend.into_transport();
+        assert_eq!(&transport.calls[..transport.count], &[0, 4, 132, 263]);
     }
 
     #[test]

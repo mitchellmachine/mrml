@@ -1262,6 +1262,10 @@ publishing any read-usable state. Only activation returns an opaque handle;
 cancellation, close, and unmount advance its generation, and exhaustion retires
 the slot. A lookup object number or unactivated reservation is never accepted as
 provider read authority.
+Provider file reads resolve only an active opaque handle, revalidate its exact
+mount lifecycle, and validate the complete FAT chain before publishing bytes.
+Stale handles leave output unchanged, while transient staging and cluster data
+are erased after every attempted read.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
