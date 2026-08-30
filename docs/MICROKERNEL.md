@@ -10248,6 +10248,32 @@ Patent review: `NOT_TRIGGERED` — this is fixed-capacity use of the existing
 capability attenuation, construction projection, register ABI, and transitive
 revocation mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
+Native device-service tasks now expose a typed voluntary-retirement operation
+**IMPLEMENTED IN SOURCE** for callers that have already completed their
+device-specific quiescence protocol. Each prepared task retains its original
+page-table root. Retirement requires the exact current generational task and
+rechecks that root before removing its complete task-local revocation domain;
+wrong-current and substituted-root attempts preserve the live task unchanged.
+Success returns the scheduler termination and retired context for privileged
+successor dispatch and later resource cleanup. The Linux-host kernel suite
+passes 686 tests and the release build passes. No device-specific cleanup runs
+in the kernel, and binding a concrete device-quiescence proof to retirement,
+successor dispatch, active page-table withdrawal, and installed execution
+remain unfinished.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — exact current-task/root validation followed by
+ordinary task-domain retirement is conventional lifecycle enforcement. See
+`docs/patents/REVIEW_LOG.md`.
+
 Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
 memory-resource root. The kernel reserves exactly one `Shared` page from an
 explicit pool into the source task, retains its typed table generation, and

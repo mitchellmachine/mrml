@@ -8,7 +8,7 @@
 
 use crate::{
     Capability, CapabilityError, CapabilitySpace, IsolationPlacement, IsolationServiceSpec,
-    ObjectId, Rights, TaskId, TaskRuntime, TaskRuntimeError,
+    ObjectId, PhysAddr, Rights, TaskId, TaskRuntime, TaskRuntimeError,
 };
 use crate::arch::x86_64::UserContext;
 
@@ -309,6 +309,7 @@ pub enum NativeDeviceServiceTaskError {
 pub struct NativeDeviceServiceTask<const N: usize> {
     source_task: TaskId,
     task: TaskId,
+    page_table_root: PhysAddr,
     entry: NativeDeviceServiceEntry<N>,
 }
 
@@ -321,9 +322,70 @@ impl<const N: usize> NativeDeviceServiceTask<N> {
         self.task
     }
 
+    pub const fn page_table_root(self) -> PhysAddr {
+        self.page_table_root
+    }
+
     pub const fn entry(self) -> NativeDeviceServiceEntry<N> {
         self.entry
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeDeviceServiceRetirement<const N: usize> {
+    task: NativeDeviceServiceTask<N>,
+    context: UserContext,
+}
+
+impl<const N: usize> NativeDeviceServiceRetirement<N> {
+    pub const fn task(self) -> NativeDeviceServiceTask<N> {
+        self.task
+    }
+
+    pub const fn context(self) -> UserContext {
+        self.context
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeDeviceServiceRetirementError {
+    NotCurrent,
+    RootMismatch,
+    Runtime(TaskRuntimeError),
+}
+
+/// Retires the exact current native device-service task after device-specific
+/// quiescence has completed outside the kernel.
+pub fn retire_current_native_device_service_task<
+    const N: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    task: NativeDeviceServiceTask<N>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<(crate::TaskTermination, NativeDeviceServiceRetirement<N>), NativeDeviceServiceRetirementError>
+{
+    if runtime.current() != Some(task.task) {
+        return Err(NativeDeviceServiceRetirementError::NotCurrent);
+    }
+    let context = *runtime
+        .context(task.task)
+        .map_err(NativeDeviceServiceRetirementError::Runtime)?;
+    if context.page_table() != task.page_table_root {
+        return Err(NativeDeviceServiceRetirementError::RootMismatch);
+    }
+    let (termination, retired_context) = runtime
+        .terminate_current_with_context()
+        .map_err(NativeDeviceServiceRetirementError::Runtime)?;
+    debug_assert_eq!(termination.task(), task.task);
+    debug_assert_eq!(retired_context, context);
+    Ok((
+        termination,
+        NativeDeviceServiceRetirement {
+            task,
+            context: retired_context,
+        },
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -402,6 +464,7 @@ pub fn prepare_native_device_service_task<
     Ok(NativeDeviceServiceTask {
         source_task,
         task: target_task,
+        page_table_root: context.page_table(),
         entry,
     })
 }
@@ -710,5 +773,52 @@ mod tests {
                 ),
             Ok(ObjectId(0x91))
         );
+    }
+
+    #[test]
+    fn native_device_retirement_exact_matches_current_task_and_root() {
+        let (mut runtime, source, target) = runtime();
+        let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            ObjectId(0xa1),
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        assert_eq!(task.page_table_root(), PhysAddr::new(0x30_0000).unwrap());
+        assert!(matches!(
+            runtime.start(),
+            crate::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        assert_eq!(
+            retire_current_native_device_service_task(task, &mut runtime),
+            Err(NativeDeviceServiceRetirementError::NotCurrent)
+        );
+        runtime.yield_current().unwrap();
+        assert_eq!(runtime.current(), Some(target));
+
+        let installed = *runtime.context(target).unwrap();
+        *runtime.context_mut(target).unwrap() = context(0x40_0000);
+        assert_eq!(
+            retire_current_native_device_service_task(task, &mut runtime),
+            Err(NativeDeviceServiceRetirementError::RootMismatch)
+        );
+        assert_eq!(runtime.current(), Some(target));
+
+        *runtime.context_mut(target).unwrap() = installed;
+        let (termination, retired) =
+            retire_current_native_device_service_task(task, &mut runtime).unwrap();
+        assert_eq!(termination.task(), target);
+        assert_eq!(retired.task(), task);
+        assert_eq!(retired.context(), installed);
+        assert!(matches!(
+            runtime.context(target),
+            Err(TaskRuntimeError::MissingTask)
+        ));
     }
 }

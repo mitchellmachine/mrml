@@ -626,6 +626,31 @@ Patent review: `NOT_TRIGGERED` — bounded attenuation through the existing atom
 capability-projection graph and fixed native entry registers is conventional
 least-authority service construction. See `docs/patents/REVIEW_LOG.md`.
 
+The generic native device-service task now has a typed voluntary-retirement
+operation **IMPLEMENTED IN SOURCE** for use after device-specific quiescence.
+The task retains its construction-time page-table root; retirement requires it
+to be the exact current generational task and revalidates that root before the
+runtime removes the complete task-local revocation domain. Wrong-current and
+root-substitution attempts leave the task runnable and unchanged. Exact success
+returns the scheduler termination plus the retired context for subsequent
+dispatch and resource cleanup. The Linux kernel suite passes all 686 tests and
+the release build passes. Binding an AHCI quiescence result to this generic
+retirement, dispatching the selected successor, concrete mapping invalidation,
+and installed native execution remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — exact current-task/root validation followed by
+ordinary task-domain retirement is conventional lifecycle enforcement. See
+`docs/patents/REVIEW_LOG.md`.
+
 AHCI now **PARTIALLY IMPLEMENTS IN SOURCE** the typed role binding above that
 provider-neutral attachment. Exactly six roles are required in fixed order:
 device `CONTROL`; independent command-list, received-FIS, and command-table
