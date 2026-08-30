@@ -328,8 +328,15 @@ struct TaskDomain<const CAPS: usize> {
     inbox_head: u8,
     inbox_tail: u8,
     inbox_count: u8,
+    blocked_receive: Option<BlockedReceiveKind>,
     peers: [Option<TaskId>; TASK_CONTROL_PEERS],
     peer_deaths: [Option<PeerDeath>; TASK_CONTROL_PEERS],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BlockedReceiveKind {
+    Ipc,
+    Control,
 }
 
 #[derive(Clone, Copy)]
@@ -360,7 +367,7 @@ struct PeerDeathPublicationPlan {
     domain_slot: usize,
     relation_slot: usize,
     death_slot: usize,
-    wake: WakePlan,
+    wake: Option<WakePlan>,
 }
 
 type PeerDeathPublicationSet = [Option<PeerDeathPublicationPlan>; TASK_CONTROL_PEERS];
@@ -627,6 +634,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             inbox_head: 0,
             inbox_tail: 0,
             inbox_count: 0,
+            blocked_receive: None,
             peers: [None; TASK_CONTROL_PEERS],
             peer_deaths: [None; TASK_CONTROL_PEERS],
         });
@@ -1699,9 +1707,12 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .map_err(TaskRuntimeError::Ipc)?;
         let _ = self.prepare_delegation_slots(requested.len())?;
         let inbox_plan = self.prepare_inbox_delivery(receiver_slot)?;
-        let wake_plan = self
-            .scheduler
-            .prepare_wake(receiver)
+        let wake_plan = self.domains[receiver_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .blocked_receive
+            .map(|_| self.scheduler.prepare_wake(receiver))
+            .transpose()
             .map_err(TaskRuntimeError::Scheduler)?;
         let (sequence, message) = self.send_ipc_prepared(
             sender,
@@ -1722,7 +1733,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         });
         domain.inbox_tail = inbox_plan.next_tail;
         domain.inbox_count = inbox_plan.next_count;
-        self.scheduler.commit_wake(wake_plan);
+        if let Some(wake_plan) = wake_plan {
+            domain
+                .blocked_receive
+                .take()
+                .expect("prepared message wake preserves a compatible receive wait");
+            self.scheduler.commit_wake(wake_plan);
+        }
         Ok(sequence)
     }
 
@@ -1935,10 +1952,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         match self.receive_control(current) {
             Ok(event) => Ok(Ok(event)),
             Err(TaskRuntimeError::InboxEmpty) => self
-                .scheduler
-                .block_current()
-                .map(Err)
-                .map_err(TaskRuntimeError::Scheduler),
+                .block_current_for_receive(current, BlockedReceiveKind::Control)
+                .map(Err),
             Err(error) => Err(error),
         }
     }
@@ -1997,9 +2012,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 .iter()
                 .position(Option::is_none)
                 .ok_or(TaskRuntimeError::IntegrityFailure)?;
-            let wake = self
-                .scheduler
-                .prepare_wake(peer)
+            let wake = (domain.blocked_receive == Some(BlockedReceiveKind::Control))
+                .then(|| self.scheduler.prepare_wake(peer))
+                .transpose()
                 .map_err(TaskRuntimeError::Scheduler)?;
             plan[count] = Some(PeerDeathPublicationPlan {
                 domain_slot,
@@ -2031,7 +2046,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 peer: retired,
                 reason,
             });
-            self.scheduler.commit_wake(publication.wake);
+            if let Some(wake) = publication.wake {
+                assert_eq!(
+                    domain.blocked_receive.take(),
+                    Some(BlockedReceiveKind::Control)
+                );
+                self.scheduler.commit_wake(wake);
+            }
         }
     }
 
@@ -2192,12 +2213,35 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         match self.receive_ipc(current) {
             Ok(message) => Ok(Ok(message)),
             Err(TaskRuntimeError::InboxEmpty) => self
-                .scheduler
-                .block_current()
-                .map(Err)
-                .map_err(TaskRuntimeError::Scheduler),
+                .block_current_for_receive(current, BlockedReceiveKind::Ipc)
+                .map(Err),
             Err(error) => Err(error),
         }
+    }
+
+    fn block_current_for_receive(
+        &mut self,
+        current: TaskId,
+        kind: BlockedReceiveKind,
+    ) -> Result<ScheduleOutcome, TaskRuntimeError> {
+        let slot = self.domain_slot(current)?;
+        if self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .blocked_receive
+            .is_some()
+        {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let outcome = self
+            .scheduler
+            .block_current()
+            .map_err(TaskRuntimeError::Scheduler)?;
+        self.domains[slot]
+            .as_mut()
+            .expect("blocking preserves the prevalidated current domain")
+            .blocked_receive = Some(kind);
+        Ok(outcome)
     }
 }
 
@@ -5013,6 +5057,103 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+        let observer_slot = runtime.domain_slot(observer).unwrap();
+        assert_eq!(
+            runtime.domains[observer_slot]
+                .as_ref()
+                .unwrap()
+                .blocked_receive,
+            None
+        );
+    }
+
+    #[test]
+    fn peer_death_does_not_miswake_an_ipc_waiter() {
+        let mut runtime = TaskRuntime::<3, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let peer = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let control_object = ObjectId(0x76);
+        let observer_control = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(control_object, Rights::SIGNAL)
+            .unwrap();
+        let peer_control = runtime
+            .capabilities_mut(peer)
+            .unwrap()
+            .insert(control_object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                observer,
+                peer,
+                &Endpoint::new(control_object),
+                observer_control,
+                peer_control,
+            )
+            .unwrap();
+        let message_object = ObjectId(0x77);
+        let message_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(message_object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(message_object);
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert!(matches!(
+            runtime.receive_or_block_current(),
+            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == peer
+        ));
+
+        let retirement = runtime
+            .terminate_current_fault(TrapDisposition::TerminateUser {
+                vector: 14,
+                address: Some(0x1234),
+            })
+            .unwrap();
+        assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == sender));
+        let observer_slot = runtime.domain_slot(observer).unwrap();
+        assert_eq!(
+            runtime.domains[observer_slot]
+                .as_ref()
+                .unwrap()
+                .blocked_receive,
+            Some(BlockedReceiveKind::Ipc)
+        );
+        assert!(
+            runtime.domains[observer_slot]
+                .as_ref()
+                .unwrap()
+                .peer_deaths
+                .iter()
+                .any(Option::is_some)
+        );
+
+        runtime
+            .deliver_ipc(
+                sender,
+                observer,
+                &mut endpoint,
+                message_capability,
+                b"wake",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.domains[observer_slot]
+                .as_ref()
+                .unwrap()
+                .blocked_receive,
+            None
+        );
+        assert_eq!(runtime.peek_ipc_shape(observer).unwrap().payload_length, 4);
     }
 
     #[test]

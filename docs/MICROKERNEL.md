@@ -11112,3 +11112,23 @@ This is in-memory and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — assigning a non-wrapping instance generation
 to exact-match a one-use token is conventional stale-handle prevention. See
 `docs/patents/REVIEW_LOG.md`.
+
+Each task domain now retains whether its current scheduler block waits for an
+ordinary IPC message or for the broader typed control stream. Queued messages
+wake either compatible receive mode and consume the exact wait state. Peer-death
+publication wakes only a control waiter; for an IPC-only waiter it records the
+typed death without spuriously making the task runnable. The wait kind travels
+inside the complete domain during migration and is never supplied by message
+data or a task name.
+
+The Linux-host kernel suite passes 655 tests. New coverage proves a peer death
+does not miswake an IPC waiter, that the death remains queued, and that a later
+ordinary message consumes the compatible wait. Storage passes 163 tests, Zstd
+passes 27, and configuration passes 53; their affected Linux release builds
+pass. The default, service, component-service, invalid-return, and buffer-drift
+UEFI release profiles cross-build with the existing configuration-specific
+warnings. This is in-memory and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — recording a bounded wait discriminator and
+waking only compatible waiters is conventional typed event-loop behavior. See
+`docs/patents/REVIEW_LOG.md`.
