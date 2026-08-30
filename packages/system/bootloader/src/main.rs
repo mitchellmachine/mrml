@@ -1998,24 +1998,27 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                 let retired = runtime
                     .terminate_current_fault(_disposition)
                     .unwrap_or_else(|_| halt());
-                let next = match retired.next {
-                    ScheduleOutcome::Switch { to, .. }
-                        if retired.vector == 3 && retired.address.is_none() =>
-                    {
-                        to
-                    }
-                    _ => halt(),
-                };
+                let dispatch = runtime
+                    .dispatch_after_fault(retired)
+                    .unwrap_or_else(|_| halt());
+                let next = dispatch
+                    .user()
+                    .map(|(task, _)| task)
+                    .filter(|_| retired.vector == 3 && retired.address.is_none())
+                    .unwrap_or_else(|| halt());
                 if runtime.context(retired.task).is_ok() {
                     halt();
                 }
                 core::ptr::addr_of_mut!(UEFI_SERVICE_RECOVERED).write(true);
                 uefi_service_trace(0x91);
-                let context = runtime
-                    .context(next)
-                    .map(|context| context as *const UserContext)
-                    .unwrap_or_else(|_| halt());
-                enter_service_preemption_context(&*context)
+                if dispatch.user().map(|(task, _)| task) != Some(next) {
+                    halt();
+                }
+                let transition_stack =
+                    CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
+                        .unwrap_or_else(|_| halt());
+                let _ = dispatch.enter_user_on_stack(transition_stack);
+                halt()
             }
             #[cfg(not(feature = "uefi-service-preemption-probe"))]
             halt()
@@ -2042,15 +2045,18 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             Ok(retired) => retired,
             Err(_) => halt(),
         };
-        match retired.next {
-            ScheduleOutcome::Switch { to, .. } if retired.vector == 6 => {
+        let dispatch = runtime
+            .dispatch_after_fault(retired)
+            .unwrap_or_else(|_| halt());
+        match dispatch.user().map(|(task, _)| task) {
+            Some(to) if retired.vector == 6 => {
                 let context = match runtime.context(to) {
                     Ok(context) => context as *const UserContext,
                     Err(_) => halt(),
                 };
                 unsafe { enter_user_probe_context(&*context) };
             }
-            ScheduleOutcome::Idle if retired.vector == 3 => {}
+            None if dispatch.is_idle() && retired.vector == 3 => {}
             _ => halt(),
         }
         unsafe {
@@ -2099,10 +2105,11 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                 let fault = supervisor
                     .fault_current(runtime, _disposition)
                     .unwrap_or_else(|_| halt());
-                let peer = match fault.retirement.next {
-                    ScheduleOutcome::Switch { to, .. } => to,
-                    _ => halt(),
-                };
+                let peer = fault
+                    .dispatch
+                    .user()
+                    .map(|(task, _)| task)
+                    .unwrap_or_else(|| halt());
                 complete_service_cleanup(supervisor, fault.cleanup);
                 let ControlEvent::PeerDied(death) =
                     runtime.receive_control(peer).unwrap_or_else(|_| halt())
@@ -2148,7 +2155,7 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             let fault = supervisor
                 .fault_current_at(runtime, _disposition, 0)
                 .unwrap_or_else(|_| halt());
-            if !matches!(fault.retirement.next, ScheduleOutcome::Idle) {
+            if !fault.dispatch.is_idle() {
                 halt();
             }
             complete_service_cleanup(supervisor, fault.cleanup);

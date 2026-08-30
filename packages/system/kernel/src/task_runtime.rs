@@ -39,7 +39,7 @@ pub enum TaskRuntimeError {
     ActiveDelegations,
     DelegationTableFull,
     ConstructionTargetNotPristine,
-    TerminationDispatchPending,
+    RetirementDispatchPending,
 }
 
 impl TaskRuntimeError {
@@ -162,7 +162,7 @@ pub struct FaultRetirement {
     pub context: UserContext,
     pub vector: u8,
     pub address: Option<u64>,
-    pub next: ScheduleOutcome,
+    next: ScheduleOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,6 +263,8 @@ pub enum TaskTerminationDispatchError {
     CurrentMismatch,
     NoPendingTermination,
     TerminationMismatch,
+    NoPendingFault,
+    FaultMismatch,
     Runtime(TaskRuntimeError),
 }
 
@@ -444,6 +446,7 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
     pending_termination: Option<TaskTermination>,
+    pending_fault: Option<FaultRetirement>,
 }
 
 /// A task runtime whose complete fixed-capacity kernel footprint has one exact
@@ -543,6 +546,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             domains: array::from_fn(|_| None),
             delegations: [None; MAX_TASK_DELEGATIONS],
             pending_termination: None,
+            pending_fault: None,
         })
     }
 
@@ -1031,13 +1035,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             PeerDeathReason::Faulted { vector, address },
         );
         let next = self.scheduler.commit_current_termination(termination_plan);
-        Ok(FaultRetirement {
+        let retirement = FaultRetirement {
             task: current,
             context: domain.context,
             vector,
             address,
             next,
-        })
+        };
+        self.pending_fault = Some(retirement);
+        Ok(retirement)
     }
 
     /// Retires a userspace domain for a kernel-recognized protocol violation.
@@ -1100,21 +1106,45 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         termination: TaskTermination,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
-        match termination.next {
+        let target = self.validate_dispatch_target(termination.task, termination.next)?;
+        self.consume_pending_termination(termination)?;
+        Ok(TaskTerminationDispatch { target })
+    }
+
+    /// Exact-matches a fault retirement to the runtime's one pending fault
+    /// transition before disclosing its selected successor context.
+    pub fn dispatch_after_fault(
+        &mut self,
+        retirement: FaultRetirement,
+    ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
+        let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
+        let pending = self
+            .pending_fault
+            .ok_or(TaskTerminationDispatchError::NoPendingFault)?;
+        if pending != retirement {
+            return Err(TaskTerminationDispatchError::FaultMismatch);
+        }
+        self.pending_fault = None;
+        Ok(TaskTerminationDispatch { target })
+    }
+
+    fn validate_dispatch_target(
+        &self,
+        source: TaskId,
+        outcome: ScheduleOutcome,
+    ) -> Result<TaskTerminationDispatchTarget, TaskTerminationDispatchError> {
+        match outcome {
             ScheduleOutcome::Idle => {
                 if self.current().is_some() {
                     return Err(TaskTerminationDispatchError::CurrentMismatch);
                 }
-                self.consume_pending_termination(termination)?;
-                Ok(TaskTerminationDispatch {
-                    target: TaskTerminationDispatchTarget::Idle,
-                })
+                Ok(TaskTerminationDispatchTarget::Idle)
             }
             ScheduleOutcome::Switch {
                 from: Some(from),
                 to,
             } => {
-                if from != termination.task {
+                if from != source {
                     return Err(TaskTerminationDispatchError::WrongSource);
                 }
                 if self.current() != Some(to) {
@@ -1123,10 +1153,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 let context = *self
                     .context(to)
                     .map_err(TaskTerminationDispatchError::Runtime)?;
-                self.consume_pending_termination(termination)?;
-                Ok(TaskTerminationDispatch {
-                    target: TaskTerminationDispatchTarget::User { task: to, context },
-                })
+                Ok(TaskTerminationDispatchTarget::User { task: to, context })
             }
             ScheduleOutcome::Continue(_) | ScheduleOutcome::Switch { from: None, .. } => {
                 Err(TaskTerminationDispatchError::InvalidOutcome)
@@ -1149,8 +1176,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn ensure_no_pending_termination(&self) -> Result<(), TaskRuntimeError> {
-        if self.pending_termination.is_some() {
-            Err(TaskRuntimeError::TerminationDispatchPending)
+        if self.pending_termination.is_some() || self.pending_fault.is_some() {
+            Err(TaskRuntimeError::RetirementDispatchPending)
         } else {
             Ok(())
         }
@@ -1159,8 +1186,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub(crate) fn terminate_current_with_context(
         &mut self,
     ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
-        if self.pending_termination.is_some() {
-            return Err(TaskRuntimeError::TerminationDispatchPending);
+        if self.pending_termination.is_some() || self.pending_fault.is_some() {
+            return Err(TaskRuntimeError::RetirementDispatchPending);
         }
         let current = self
             .scheduler
@@ -2249,6 +2276,30 @@ mod tests {
             runtime.context(replacement).unwrap().instruction_pointer(),
             0x50_0000
         );
+        assert_eq!(
+            runtime.timer_tick(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.context_mut(replacement).map(|_| ()),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.dispatch_after_fault(FaultRetirement {
+                vector: 13,
+                ..retired
+            }),
+            Err(TaskTerminationDispatchError::FaultMismatch)
+        );
+        let dispatch = runtime.dispatch_after_fault(retired).unwrap();
+        assert_eq!(
+            dispatch.user(),
+            Some((replacement, context(0x30_0000, 0x50_0000)))
+        );
+        assert_eq!(
+            runtime.dispatch_after_fault(retired),
+            Err(TaskTerminationDispatchError::NoPendingFault)
+        );
     }
 
     #[test]
@@ -2294,23 +2345,23 @@ mod tests {
         );
         assert_eq!(
             runtime.terminate_current(),
-            Err(TaskRuntimeError::TerminationDispatchPending)
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         assert_eq!(
             runtime.yield_current(),
-            Err(TaskRuntimeError::TerminationDispatchPending)
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         assert_eq!(
             runtime.timer_tick(),
-            Err(TaskRuntimeError::TerminationDispatchPending)
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         assert_eq!(
             runtime.preempt_current(context(0x30_0000, 0x50_0000)),
-            Err(TaskRuntimeError::TerminationDispatchPending)
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         assert_eq!(
             runtime.context_mut(replacement).map(|_| ()),
-            Err(TaskRuntimeError::TerminationDispatchPending)
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         assert_eq!(
             runtime.dispatch_after_termination(TaskTermination {

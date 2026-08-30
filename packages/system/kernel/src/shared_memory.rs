@@ -2477,7 +2477,10 @@ mod tests {
         };
 
         assert_eq!(recovery.retired, service);
-        assert!(matches!(recovery.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert_eq!(
+            recovery.dispatch.user().map(|(task, _)| task),
+            Some(observer)
+        );
         assert_eq!(runtime.current(), Some(observer));
         assert_eq!(backend.calls[0], (0x4000, crate::PAGE_SIZE));
         assert_eq!(memory.region(mapping), Err(crate::VmError::StaleMapping));

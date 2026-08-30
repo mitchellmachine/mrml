@@ -10872,3 +10872,24 @@ context-switch evidence.
 Patent review: `NOT_TRIGGERED` — removing a redundant copyable schedule record
 in favor of one linear lifecycle token is conventional control-flow integrity
 hardening. See `docs/patents/REVIEW_LOG.md`.
+
+Recoverable user-fault retirement now records one exact pending fault transition
+inside `TaskRuntime`. Until the runtime validates that exact retirement and
+issues its non-copyable dispatch token, timer scheduling, yielding, preemption,
+additional retirement, and mutable successor-context access fail closed.
+Substituted fault evidence does not consume the pending state, and successful
+issuance is one use. `ServiceFault` and composite `ServiceRecovery` carry the
+opaque dispatch instead of exposing a raw recovery schedule outcome. Direct
+UEFI user-fault and service-preemption paths validate through this runtime gate;
+the latter consumes the token at its installed transition-stack boundary. The
+Linux-host kernel suite passes 653 tests and its release build passes. User,
+service-preemption, service, invalid-return, buffer-drift, and service-restart-
+request UEFI release profiles cross-build with one pre-existing unused-variable
+warning. This is in-memory and cross-build evidence; it is not QEMU or physical
+fault/context-switch evidence. Direct user-probe entry still uses its existing
+architecture entry path after token validation and remains a later consumption
+integration step.
+
+Patent review: `NOT_TRIGGERED` — retaining and exact-matching one pending fault
+transition before successor dispatch is conventional fail-closed scheduler
+lifecycle validation. See `docs/patents/REVIEW_LOG.md`.

@@ -6,10 +6,12 @@ use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
     Capability, CapabilityError, CapabilitySpace, FaultRetirement, MemoryBackingKind,
     MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
-    Priority, Rights, ScheduleOutcome, TaskId, TaskProtocolViolation, TaskRuntime,
-    TaskRuntimeError, TaskTerminationDispatch, TaskTerminationDispatchError,
-    TaskViolationRetirement,
+    Priority, Rights, TaskId, TaskProtocolViolation, TaskRuntime, TaskRuntimeError,
+    TaskTerminationDispatch, TaskTerminationDispatchError, TaskViolationRetirement,
 };
+
+#[cfg(test)]
+use crate::ScheduleOutcome;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceId {
@@ -118,11 +120,12 @@ pub struct ServiceRetirement {
     pub dispatch: TaskTerminationDispatch,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ServiceFault {
     pub service: ServiceId,
     pub retirement: FaultRetirement,
     pub cleanup: ServiceCleanupTicket,
+    pub dispatch: TaskTerminationDispatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,12 +135,12 @@ pub struct ServiceViolation {
     pub cleanup: ServiceCleanupTicket,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ServiceRecovery {
     pub retired: ServiceId,
     pub replacement: ServiceId,
     pub task: TaskId,
-    pub next: ScheduleOutcome,
+    pub dispatch: TaskTerminationDispatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -683,6 +686,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let retirement = runtime
             .terminate_current_fault(disposition)
             .map_err(ServiceError::Runtime)?;
+        let dispatch = runtime
+            .dispatch_after_fault(retirement)
+            .map_err(ServiceError::Dispatch)?;
         let cleanup = ServiceCleanupTicket {
             service: plan.service,
             task: plan.task,
@@ -693,6 +699,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             service: cleanup.service,
             retirement,
             cleanup,
+            dispatch,
         })
     }
 
@@ -833,7 +840,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             retired: fault.service,
             replacement: replacement.service(),
             task: replacement.task(),
-            next: fault.retirement.next,
+            dispatch: fault.dispatch,
         })
     }
 
@@ -2005,7 +2012,10 @@ mod tests {
         assert_eq!(recovery.retired, retired);
         assert_ne!(recovery.replacement, retired);
         assert_ne!(recovery.task, faulted);
-        assert!(matches!(recovery.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert_eq!(
+            recovery.dispatch.user().map(|(task, _)| task),
+            Some(observer)
+        );
         assert_eq!(runtime.current(), Some(observer));
         assert_eq!(eraser.erased, Some((faulted, retired_context)));
         assert_eq!(runtime.context(recovery.task), Ok(&fresh_context));
