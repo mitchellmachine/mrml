@@ -2400,6 +2400,11 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     executable
         .try_resize(MAX_IMAGE, 0)
         .map_err(|_| anyhow!("could not initialize bounded PE image output"))?;
+    let code_relocation_count = inputs.iter().try_fold(0usize, |count, input| {
+        count
+            .checked_add(input.relocations.len())
+            .ok_or_else(|| anyhow!("selected code relocation count overflow"))
+    })?;
     let length =
         link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<MAX_LINKED>(
             inputs,
@@ -2411,8 +2416,9 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
         )
         .map_err(|error| {
             anyhow!(
-                "could not serialize linked PE image: {} (runtime functions {}, read-only relocations {})",
+                "could not serialize linked PE image: {} (code relocations {}, runtime functions {}, read-only relocations {})",
                 error,
+                code_relocation_count,
                 runtime_functions.len(),
                 readonly_absolute_relocations.len()
             )

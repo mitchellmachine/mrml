@@ -15,7 +15,9 @@ pub const MAX_LINK_FRAGMENTS: usize = 8192;
 /// family while the aggregate selected-relocation bound remains independent.
 pub const MAX_LINK_RELOCATIONS: usize = 512;
 /// Aggregate relocations across retained fragments do not share one arena.
-pub const MAX_LINK_TOTAL_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
+/// The pinned ORACLE-0003 Windows `std` path reaches 14,183 code relocations
+/// after its bounded late archive dependency frontiers are retained.
+pub const MAX_LINK_TOTAL_RELOCATIONS: usize = 16_384;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
 /// Object-wide PE read-only fixups are separate from per-fragment code arenas.
 pub const MAX_PE_READONLY_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
