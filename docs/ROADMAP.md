@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loops pass eighty
+isolated syscall-backed receive/reply loops pass eighty-one
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -89,10 +89,12 @@ a slot at generation exhaustion. Reads therefore cannot substitute the lookup's
 non-authorizing object number for an active provider handle.
 Bounded file-range reads now resolve that active handle back to its exact
 mount/root entry, validate the complete FAT chain, preserve caller output when
-the handle is stale, and erase staging plus cluster scratch after dispatch. A
-Provider open now has a canonical generation-3 request/response contract while
-read dispatch remains the next provider wiring step. Generations 1 and 2 remain
-checked in unchanged.
+the handle is stale, and erase staging plus cluster scratch after dispatch.
+Provider open now has a canonical generation-3 request/response contract, and
+FAT32 consumes that contract atomically: only a live exact lookup identity can
+publish a revocable provider handle, capacity is typed, and stale lifecycle
+substitution returns no handle. Open service-loop dispatch and read dispatch
+remain next. Generations 1 and 2 remain checked in unchanged.
 The mount table accepts only already-validated geometry, issues fresh independent
 mount and root generations, exact-matches both, invalidates them together on
 unmount, and permanently fails after generation exhaustion. It grants no open

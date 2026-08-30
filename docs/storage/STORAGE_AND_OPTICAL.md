@@ -948,10 +948,14 @@ kernel over-counts. The provider also separates open reservation from activation
 in a fixed-capacity table. Reservations authorize no reads; activation alone
 publishes an opaque handle, while cancellation, close, and unmount advance
 generations and invalidate stale state. Generation exhaustion retires the slot
-permanently. Active handles now drive bounded file-range reads through the exact
+permanently. Canonical generation-3 open transport now atomically validates the
+exact volume/mount/directory/object tuple and publishes only its revocable opaque
+handle; capacity and stale failures carry no handle. Active handles drive
+bounded file-range reads through the exact
 mount/root entry and a fully validated FAT chain; stale handles perform no block
-I/O or output mutation, and staging plus cluster scratch are erased. Eighty
-focused Linux-host tests pass. Filesystem interface generation 3 now adds one
+I/O or output mutation, and staging plus cluster scratch are erased. Eighty-one
+focused Linux-host tests pass.
+Filesystem interface generation 3 now adds one
 canonical provider-open operation that binds the exact volume, mount generation,
 directory handle, and non-authorizing lookup object and returns a distinct opaque
 handle. Generations 1 and 2 remain immutable history; open/read service dispatch

@@ -17,13 +17,14 @@ use mrml_interface_storage_block_provider_v1::{
     ProtocolError as BlockProtocolError, ReadError as BlockReadError,
 };
 use mrml_interface_storage_filesystem_v3::{
-    decode_lookup_request, decode_mount_request, decode_probe_request, decode_unmount_request,
-    encode_lookup_response, encode_mount_response, encode_probe_response, encode_unmount_response,
-    FilesystemLookupTransport, FilesystemMountTransport, FilesystemTransport,
-    FilesystemUnmountTransport, LookupError, MountError, MountResponse, OpaqueHandle, ProbeError,
-    ProtocolError, UnmountError, LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES, MOUNT_REQUEST_BYTES,
-    MOUNT_RESPONSE_BYTES, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES,
-    UNMOUNT_RESPONSE_BYTES,
+    decode_lookup_request, decode_mount_request, decode_open_request, decode_probe_request,
+    decode_unmount_request, encode_lookup_response, encode_mount_response, encode_open_response,
+    encode_probe_response, encode_unmount_response, FilesystemLookupTransport,
+    FilesystemMountTransport, FilesystemOpenTransport, FilesystemTransport,
+    FilesystemUnmountTransport, LookupError, MountError, MountResponse, OpaqueHandle, OpenError,
+    ProbeError, ProtocolError, UnmountError, LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES,
+    MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES, OPEN_REQUEST_BYTES, OPEN_RESPONSE_BYTES,
+    PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
 };
 
 pub use service_loop::{
@@ -958,6 +959,34 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize> FilesystemMo
             }
         });
         Ok(encode_mount_response(result))
+    }
+}
+
+impl<B, const N: usize, const O: usize> FilesystemOpenTransport
+    for Fat32MountedProvider<B, N, O>
+{
+    fn open(
+        &mut self,
+        request: &[u8; OPEN_REQUEST_BYTES],
+    ) -> Result<[u8; OPEN_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_open_request(request)?;
+        let result = self
+            .reserve_open(
+                request.volume,
+                request.generation,
+                request.directory,
+                request.object,
+            )
+            .and_then(|reservation| self.activate_open(reservation))
+            .map_err(|error| match error {
+                Fat32OpenError::Identity(Fat32ObjectIdentityError::Lifecycle(_))
+                | Fat32OpenError::Identity(Fat32ObjectIdentityError::StaleObject)
+                | Fat32OpenError::StaleHandle => OpenError::StaleObject,
+                Fat32OpenError::Capacity => OpenError::Capacity,
+                Fat32OpenError::Identity(_)
+                | Fat32OpenError::InvalidReservation => OpenError::InvalidRequest,
+            });
+        Ok(encode_open_response(result))
     }
 }
 
@@ -3111,6 +3140,54 @@ mod tests {
         );
         assert_eq!(lookup.provider.backend.transport.count, 1);
         assert_eq!(directory_scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn canonical_open_transport_publishes_only_revocable_provider_handle() {
+        use mrml_interface_storage_filesystem_v3::{
+            decode_open_response, encode_open_request,
+        };
+
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let entry = file_entry(5, 4096);
+        let object = provider
+            .identify_root_entry(volume, mounted.generation, mounted.root, entry)
+            .unwrap();
+        let request = encode_open_request(
+            volume,
+            mounted.generation,
+            mounted.root,
+            object,
+        )
+        .unwrap();
+        let response = FilesystemOpenTransport::open(&mut provider, &request).unwrap();
+        let handle = decode_open_response(&response).unwrap().unwrap();
+        assert_eq!(provider.open_entry(volume, mounted.generation, handle), Ok(entry));
+        assert_ne!(u64::from(handle.index()), object);
+        assert_eq!(
+            decode_open_response(&FilesystemOpenTransport::open(&mut provider, &request).unwrap()),
+            Ok(Err(OpenError::Capacity))
+        );
+        provider.close_open(handle).unwrap();
+        let replacement = decode_open_response(
+            &FilesystemOpenTransport::open(&mut provider, &request).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(replacement, handle);
+        provider.unmount(volume, mounted.generation).unwrap();
+        assert_eq!(
+            decode_open_response(&FilesystemOpenTransport::open(&mut provider, &request).unwrap()),
+            Ok(Err(OpenError::StaleObject))
+        );
     }
 
     #[test]

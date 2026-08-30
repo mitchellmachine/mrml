@@ -7488,6 +7488,13 @@ zero handle payload. The generated fingerprint is
 Fourteen focused Linux-host codec tests pass; generations 1 and 2 remain checked
 in unchanged.
 
+FAT32 now implements canonical generation-3 open transport. One decoded request
+exact-matches the live volume, mount generation, directory root, and lookup
+object, then atomically reserves and activates a revocable provider handle.
+Capacity and stale lifecycle failures return typed zero-handle responses; close
+and unmount still invalidate generations. The focused FAT32 suite passes
+eighty-one Linux-host tests.
+
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
 authenticates the exact provider/mount/parent/object mapping; `OPEN_CHILD` on the

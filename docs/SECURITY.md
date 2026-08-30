@@ -1271,6 +1271,10 @@ mount generation, directory handle, and nonzero lookup object. Its successful
 response is a structurally distinct generational provider handle; typed failures
 must carry an all-zero handle payload. Interface generations 1 and 2 are not
 redefined.
+The FAT32 transport implements that open contract as one provider-local atomic
+transition. It validates the exact live tuple before reserving, activates the
+reservation before returning success, and maps stale or exhausted state to typed
+zero-handle failures.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
