@@ -621,7 +621,7 @@ non-aliasing checks are conventional native service ABI binding. See
 
 Pre-launch AHCI CPU mapping construction is now **PARTIALLY IMPLEMENTED IN
 SOURCE** as a backend-neutral transaction over four mappings. The launcher must
-hold four exact, separate `MAP|READ|WRITE` capabilities for command-list,
+hold four exact, separate `MAP|READ|WRITE|INSPECT` capabilities for command-list,
 received-FIS, command-table, and data memory; none becomes a projected runtime
 role. All authority/object pairs are checked before a backend call. The
 transaction installs page-rounded RW/NX mappings in canonical record order,
@@ -644,6 +644,32 @@ Existing-object reuse: HIGH
 Patent review: **NOT_TRIGGERED**. Capability-preflighted fixed-order mapping,
 reverse rollback, and explicit retained cleanup state are conventional resource
 transaction handling. See [the patent review log](../patents/REVIEW_LOG.md).
+
+The transaction's concrete kernel memory-resource adapter is now **IMPLEMENTED
+IN SOURCE**. It exact-matches each public object and allocation generation to a
+typed `MemoryObjectId`, requires physical backing equal to the canonical page-
+rounded record range, and independently exact-matches one `MAP|CONTROL` target
+address-space capability. It installs and withdraws through `MemoryPoolTable`
+and retains every generational `MemoryMappingId` until backend-confirmed removal.
+A focused integration test drives four physically backed objects through full
+installation and retirement and rejects allocation-generation substitution; the
+Linux AHCI suite passes all 103 tests. This proves policy with a simulated
+backend, not active x86 page tables, cache, IOMMU, bare metal, or physical
+hardware. Inactive-page-table wiring, ABAR lifecycle coupling, the native binary,
+and supervision remain unimplemented.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Adapting exact typed memory objects and target
+capabilities to the existing memory-resource mapping lifecycle is conventional
+kernel resource plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
 
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new

@@ -5,7 +5,10 @@ use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights
 
 const CPU_MAPPING_COUNT: usize = 4;
 const PAGE_BYTES: u64 = 4096;
-const MAPPING_RIGHTS: Rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+pub const AHCI_SERVICE_CPU_MAPPING_RIGHTS: Rights = Rights::MAP
+    .union(Rights::READ)
+    .union(Rights::WRITE)
+    .union(Rights::INSPECT);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciServiceCpuMappingRequest {
@@ -117,7 +120,7 @@ pub fn install_ahci_service_cpu_mappings<
         .enumerate()
     {
         let object = capabilities
-            .authorize_exact(capability, MAPPING_RIGHTS)
+            .authorize_exact(capability, AHCI_SERVICE_CPU_MAPPING_RIGHTS)
             .map_err(|error| AhciServiceCpuMappingError::Capability { index, error })?;
         if object != request.memory_object {
             return Err(AhciServiceCpuMappingError::WrongMemoryObject(index));
@@ -172,7 +175,7 @@ pub fn remove_ahci_service_cpu_mappings<B: AhciServiceCpuMappingBackend>(
     Ok(state)
 }
 
-fn mapping_requests(
+pub(crate) fn mapping_requests(
     record: AhciServiceLaunchRecord,
 ) -> [AhciServiceCpuMappingRequest; CPU_MAPPING_COUNT] {
     let layout = record.layout();
@@ -311,7 +314,10 @@ mod tests {
         let mut space = CapabilitySpace::new();
         let capabilities = core::array::from_fn(|index| {
             space
-                .insert(ObjectId(index as u64 + 20), MAPPING_RIGHTS)
+                .insert(
+                    ObjectId(index as u64 + 20),
+                    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
+                )
                 .unwrap()
         });
         (space, capabilities)

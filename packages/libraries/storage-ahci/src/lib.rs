@@ -24,6 +24,7 @@ mod command_block_backend;
 mod control_service_loop;
 mod data_service_loop;
 mod dispatch_service;
+mod kernel_service_cpu_mapping;
 mod mapped_command_memory;
 mod mapped_data_buffer;
 mod service_bootstrap;
@@ -117,6 +118,10 @@ pub use dispatch_service::{
     AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls,
     ReceivedAhciDispatchEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
+pub use kernel_service_cpu_mapping::{
+    KernelAhciServiceCpuMappingAdapter, KernelAhciServiceCpuMappingAdapterError,
+    KernelAhciServiceCpuMappingOperationError,
+};
 pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use service_bootstrap::{
@@ -124,6 +129,7 @@ pub use service_bootstrap::{
     bootstrap_installed_ahci_service,
 };
 pub use service_cpu_mapping::{
+    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
     AhciInstalledCpuMappings, AhciServiceCpuMappingBackend, AhciServiceCpuMappingError,
     AhciServiceCpuMappingRemovalError, AhciServiceCpuMappingRequest,
     install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
