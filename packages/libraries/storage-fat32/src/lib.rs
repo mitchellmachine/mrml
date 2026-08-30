@@ -5,6 +5,7 @@
 //! Native MRML storage does not inherit FAT authority or namespace semantics.
 
 mod service_loop;
+mod launch_binding;
 mod dispatch_service;
 mod mount_service_loop;
 mod lookup_service_loop;
@@ -35,6 +36,7 @@ use mrml_interface_storage_filesystem_v3::{
 pub use service_loop::{
     Fat32ServiceLoop, Fat32ServiceLoopError, Fat32ServiceSyscalls, ReceivedFat32Envelope,
 };
+pub use launch_binding::{Fat32LaunchBinding, Fat32LaunchBindingError};
 pub use dispatch_service::{
     Fat32DispatchService, Fat32DispatchServiceError, Fat32DispatchSyscalls,
     ReceivedFat32DispatchEnvelope, FAT32_DISPATCH_REQUEST_BYTES, FAT32_DISPATCH_RESPONSE_BYTES,

@@ -61,9 +61,14 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loops pass ninety-five
+isolated syscall-backed receive/reply loops pass ninety-seven
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
+Its launch-binding constructor decodes the neutral filesystem/block dependency,
+exact-matches the filesystem module and provider generation, and separately
+requires the attenuated `SIGNAL` capability for the encoded block endpoint before
+constructing the runtime-proven volume/session binding. Encoded identities grant
+no authority. The installed service entry does not yet receive this attachment.
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The

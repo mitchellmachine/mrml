@@ -7532,7 +7532,13 @@ dispatch, supports both shared-buffer directions, and bounds variable replies.
 One router owns the mounted provider state across probe, mount, unmount, lookup,
 open, and read calls; it rejects unsupported write-side operations and releases
 a structurally valid transferred leaf even when later header validation fails.
-The focused FAT32 suite passes ninety-five Linux-host tests.
+The FAT32 provider now consumes the neutral filesystem/block dependency handoff
+through an unsafe runtime-authenticated launch constructor. It exact-matches the
+filesystem module and provider generation, requires the separately attenuated
+block endpoint capability with exact `SIGNAL`, and only then constructs the
+volume/session binding. Handoff object IDs remain non-authorizing data. The
+installed service entry does not yet receive the attachment. The focused FAT32
+suite passes ninety-seven Linux-host tests.
 
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
