@@ -2,7 +2,9 @@ use crate::{
     FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES, FilesystemBlockAssociation,
     FilesystemBlockAssociationHandoff,
 };
-use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, Rights};
+use mrml_kernel::{
+    Capability, CapabilityError, CapabilitySpace, ComponentServiceReadTransferAttachment, Rights,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesystemProviderLaunchReceipt {
@@ -34,6 +36,8 @@ impl FilesystemProviderLaunchReceipt {
 pub enum FilesystemProviderLaunchError<E> {
     Capability(CapabilityError),
     WrongEndpointAuthority,
+    WrongTransferAuthority,
+    TransferTooSmall,
     Backend(E),
 }
 
@@ -43,10 +47,11 @@ pub enum FilesystemProviderLaunchError<E> {
 /// # Safety
 ///
 /// Implementations must create a fresh provider domain, project `handoff` as
-/// read-only launch data, attenuate `block_endpoint` to its existing rights,
-/// bind both projections to that same domain generation, and publish no
-/// endpoint or ready signal unless all projections and provider construction
-/// succeed. Failure must revoke and erase every partial projection and domain.
+/// read-only launch data, attenuate `block_endpoint` to exact SIGNAL, project
+/// the attachment's local read and delegable provider-write handles, bind all
+/// projections to that same domain generation, and publish no endpoint or ready
+/// signal unless every projection and provider construction succeeds. Failure
+/// must revoke and erase every partial projection and domain.
 pub unsafe trait FilesystemProviderLaunchBackend {
     type Error;
 
@@ -55,25 +60,48 @@ pub unsafe trait FilesystemProviderLaunchBackend {
         association: FilesystemBlockAssociation,
         handoff: &[u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         block_endpoint: Capability,
+        transfer: ComponentServiceReadTransferAttachment,
     ) -> Result<(), Self::Error>;
 }
 
 pub fn launch_filesystem_provider<B: FilesystemProviderLaunchBackend, const CAPABILITIES: usize>(
     capabilities: &CapabilitySpace<CAPABILITIES>,
     block_endpoint_capability: Capability,
+    transfer: ComponentServiceReadTransferAttachment,
     association: FilesystemBlockAssociation,
     backend: &mut B,
 ) -> Result<FilesystemProviderLaunchReceipt, FilesystemProviderLaunchError<B::Error>> {
     let endpoint_object = capabilities
-        .authorize_exact(block_endpoint_capability, Rights::SIGNAL)
+        .authorize_exact(
+            block_endpoint_capability,
+            Rights::SIGNAL.union(Rights::DELEGATE),
+        )
         .map_err(FilesystemProviderLaunchError::Capability)?;
     if endpoint_object != association.block_binding.endpoint_object {
         return Err(FilesystemProviderLaunchError::WrongEndpointAuthority);
     }
+    let local_object = capabilities
+        .authorize_exact(
+            transfer.local_read(),
+            Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+        )
+        .map_err(FilesystemProviderLaunchError::Capability)?;
+    let write_object = capabilities
+        .authorize_exact(
+            transfer.provider_write(),
+            Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+        )
+        .map_err(FilesystemProviderLaunchError::Capability)?;
+    if local_object != transfer.shared_object() || write_object != transfer.shared_object() {
+        return Err(FilesystemProviderLaunchError::WrongTransferAuthority);
+    }
+    if transfer.shared_bytes() < association.logical_block_bytes {
+        return Err(FilesystemProviderLaunchError::TransferTooSmall);
+    }
     let handoff = association.handoff();
     let mut encoded = handoff.encode();
     let launched = backend
-        .launch(association, &encoded, block_endpoint_capability)
+        .launch(association, &encoded, block_endpoint_capability, transfer)
         .map_err(FilesystemProviderLaunchError::Backend);
     encoded.fill(0);
     launched?;
@@ -96,6 +124,7 @@ mod tests {
     use mrml_interface_storage_block_provider_v1::OpaqueHandle as BlockOpaqueHandle;
     use mrml_interface_storage_filesystem_v3::OpaqueHandle as FilesystemOpaqueHandle;
     use mrml_kernel::ObjectId;
+    use mrml_kernel::arch::x86_64::UserContext;
 
     struct Backend {
         fail: bool,
@@ -111,9 +140,11 @@ mod tests {
             association: FilesystemBlockAssociation,
             handoff: &[u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
             block_endpoint: Capability,
+            transfer: ComponentServiceReadTransferAttachment,
         ) -> Result<(), Self::Error> {
             assert_eq!(association.association_generation, 12);
             assert_ne!(block_endpoint.token(), 0);
+            assert_eq!(transfer.shared_bytes(), 4096);
             self.calls += 1;
             self.observed = *handoff;
             if self.fail { Err(()) } else { Ok(()) }
@@ -151,20 +182,72 @@ mod tests {
         }
     }
 
+    fn provider_task() -> mrml_kernel::TaskId {
+        let mut runtime = mrml_kernel::TaskRuntime::<1, 1>::new(100, 1).unwrap();
+        runtime
+            .create(
+                mrml_kernel::Priority::NORMAL,
+                UserContext::new(
+                    mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+    }
+
+    fn transfer_attachment<const C: usize>(
+        capabilities: &mut CapabilitySpace<C>,
+    ) -> ComponentServiceReadTransferAttachment {
+        let local_read = capabilities
+            .insert(
+                ObjectId(0x80),
+                Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let provider_write = capabilities
+            .insert(
+                ObjectId(0x80),
+                Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        ComponentServiceReadTransferAttachment::new(
+            provider_task(),
+            ObjectId(0x80),
+            6,
+            4096,
+            local_read,
+            provider_write,
+            capabilities,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn exact_endpoint_launches_with_canonical_handoff_and_returns_bound_receipt() {
         let association = association();
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let endpoint = capabilities
-            .insert(association.block_binding.endpoint_object, Rights::SIGNAL)
+            .insert(
+                association.block_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
             .unwrap();
+        let transfer = transfer_attachment(&mut capabilities);
         let mut backend = Backend {
             fail: false,
             calls: 0,
             observed: [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         };
-        let receipt =
-            launch_filesystem_provider(&capabilities, endpoint, association, &mut backend).unwrap();
+        let receipt = launch_filesystem_provider(
+            &capabilities,
+            endpoint,
+            transfer,
+            association,
+            &mut backend,
+        )
+        .unwrap();
         assert_eq!(backend.calls, 1);
         assert_eq!(
             FilesystemBlockAssociationHandoff::decode(&backend.observed),
@@ -179,26 +262,61 @@ mod tests {
     #[test]
     fn substituted_endpoint_and_backend_failure_never_become_success_receipts() {
         let association = association();
-        let mut capabilities = CapabilitySpace::<1>::new();
-        let substituted = capabilities.insert(ObjectId(22), Rights::SIGNAL).unwrap();
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let substituted = capabilities
+            .insert(ObjectId(22), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let transfer = transfer_attachment(&mut capabilities);
         let mut backend = Backend {
             fail: false,
             calls: 0,
             observed: [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         };
         assert_eq!(
-            launch_filesystem_provider(&capabilities, substituted, association, &mut backend,),
+            launch_filesystem_provider(
+                &capabilities,
+                substituted,
+                transfer,
+                association,
+                &mut backend,
+            ),
             Err(FilesystemProviderLaunchError::WrongEndpointAuthority)
         );
         assert_eq!(backend.calls, 0);
 
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut oversized = association;
+        oversized.logical_block_bytes = 8192;
+        let mut capabilities = CapabilitySpace::<3>::new();
         let endpoint = capabilities
-            .insert(association.block_binding.endpoint_object, Rights::SIGNAL)
+            .insert(
+                oversized.block_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
             .unwrap();
+        let transfer = transfer_attachment(&mut capabilities);
+        assert_eq!(
+            launch_filesystem_provider(&capabilities, endpoint, transfer, oversized, &mut backend,),
+            Err(FilesystemProviderLaunchError::TransferTooSmall)
+        );
+        assert_eq!(backend.calls, 0);
+
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let endpoint = capabilities
+            .insert(
+                association.block_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let transfer = transfer_attachment(&mut capabilities);
         backend.fail = true;
         assert_eq!(
-            launch_filesystem_provider(&capabilities, endpoint, association, &mut backend),
+            launch_filesystem_provider(
+                &capabilities,
+                endpoint,
+                transfer,
+                association,
+                &mut backend,
+            ),
             Err(FilesystemProviderLaunchError::Backend(()))
         );
         assert_eq!(backend.calls, 1);

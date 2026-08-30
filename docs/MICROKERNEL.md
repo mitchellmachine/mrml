@@ -10166,3 +10166,17 @@ WHP, IOMMU, or physical storage device was exercised.
 Patent review: `NOT_TRIGGERED` — this is conventional bounded IPC plus
 direction-scoped shared-buffer transfer over the existing block protocol. See
 `docs/patents/REVIEW_LOG.md`.
+
+The storage launch coordinator now **PARTIALLY IMPLEMENTS IN SOURCE** the same
+construction contract. A filesystem provider launch requires exact delegable
+block-endpoint authority plus the separately validated local-read/provider-write
+attachment for one shared object; its byte extent must cover the associated
+logical block before the backend is called. The backend contract must project
+all handles into one fresh domain and erase every partial result on failure.
+The Linux-host storage suite passes 157 tests. This does not yet provide a
+concrete installed storage backend that allocates the shared object and invokes
+kernel construction, nor any hosted or physical-device execution evidence.
+
+Patent review: `NOT_TRIGGERED` — this is conventional preflight validation and
+least-authority construction plumbing for the existing service launch path. See
+`docs/patents/REVIEW_LOG.md`.
