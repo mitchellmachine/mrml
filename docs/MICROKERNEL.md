@@ -10598,3 +10598,15 @@ exclusion behavior remain unverified on physical hardware.
 Patent review: `NOT_TRIGGERED` — coupling task-domain retirement to immediate
 mapping withdrawal is conventional fail-closed lifecycle ordering. See
 `docs/patents/REVIEW_LOG.md`.
+
+Opening the current x86-64 page-table hierarchy now snapshots RFLAGS and rejects
+the operation when the interrupt-enable flag is set. This turns one part of the
+active-mutation safety contract into a checked precondition while leaving CPU
+ownership, identity mapping, and concurrent-mutation exclusion as explicit
+unsafe caller obligations. The Linux-host release kernel suite passes 652 tests
+and the release build passes; the flag predicate is unit-tested, but no
+privileged active-CR3 execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — checking the architectural interrupt-enable
+flag before privileged page-table mutation is a conventional critical-section
+precondition. See `docs/patents/REVIEW_LOG.md`.

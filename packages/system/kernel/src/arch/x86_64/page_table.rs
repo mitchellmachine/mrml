@@ -15,6 +15,7 @@ const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PageTableBuildError {
     Storage,
+    InterruptsEnabled,
     InvalidIntermediate,
     AlreadyMapped,
     NotMapped,
@@ -850,6 +851,10 @@ pub struct ActivePageTables {
     root: PhysAddr,
 }
 
+const fn interrupts_disabled(flags: u64) -> bool {
+    flags & (1 << 9) == 0
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActiveMappingRevocationError {
     WrongRoot,
@@ -963,8 +968,22 @@ impl ActivePageTables {
     /// Every page-table frame reachable from the current CR3 must be mapped at
     /// its identical supervisor-writable virtual address and owned exclusively
     /// by this CPU for the duration of each mutation. Interrupts and concurrent
-    /// address-space mutation must be excluded by the caller.
+    /// address-space mutation must be excluded by the caller. This constructor
+    /// rejects a snapshot with IF set but does not disable or later restore
+    /// interrupts for the caller.
     pub unsafe fn current() -> Result<Self, PageTableBuildError> {
+        let flags: u64;
+        unsafe {
+            asm!(
+                "pushfq",
+                "pop {}",
+                out(reg) flags,
+                options(nomem, preserves_flags)
+            )
+        };
+        if !interrupts_disabled(flags) {
+            return Err(PageTableBuildError::InterruptsEnabled);
+        }
         let root: u64;
         unsafe { asm!("mov {}, cr3", out(reg) root, options(nomem, nostack, preserves_flags)) };
         let root = PhysAddr::new(root & ADDRESS_MASK)
@@ -1498,6 +1517,8 @@ mod tests {
 
     #[test]
     fn active_service_revoker_rejects_wrong_root_before_mutation() {
+        assert!(interrupts_disabled(2));
+        assert!(!interrupts_disabled(2 | (1 << 9)));
         let mut active = ActivePageTables {
             root: PhysAddr::new(0x1000).unwrap(),
         };
