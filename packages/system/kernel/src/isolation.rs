@@ -6,7 +6,7 @@ use mrml_package_format::{
 
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
-    CpuResourceError, ObjectId, Rights, VcpuReservationId,
+    CpuResourceError, ObjectId, Rights, VcpuReservationId, arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -427,6 +427,138 @@ impl ComponentServiceLaunchAttachment {
         self.domain == spec.domain()
             && self.system_generation == spec.system_generation()
             && self.policy_generation == spec.policy_generation()
+    }
+}
+
+/// Native-service entry state built only after the attachment capabilities have
+/// been projected into the fresh target capability space.
+///
+/// Source attachment tokens are deliberately not exposed. Capability tokens
+/// are local to one capability space, so a native placement backend must use
+/// freshly derived target-space handles from its atomic domain construction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceEntry {
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    provider_generation: u64,
+    consumer_module_object: ObjectId,
+    launch_data_bytes: u32,
+    launch_data: Capability,
+    dependency_endpoint: Capability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceEntryError {
+    InvalidIdentity,
+    AttachmentMismatch,
+    LaunchDataCapability(CapabilityError),
+    WrongLaunchDataObject,
+    DependencyCapability(CapabilityError),
+    WrongDependencyEndpoint,
+    LaunchRegistersOccupied,
+}
+
+impl NativeComponentServiceEntry {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<const C: usize>(
+        spec: IsolationServiceSpec,
+        attachment: ComponentServiceLaunchAttachment,
+        service_endpoint_object: ObjectId,
+        supervisor_task_object: ObjectId,
+        consumer_module_object: ObjectId,
+        launch_data: Capability,
+        dependency_endpoint: Capability,
+        target_capabilities: &CapabilitySpace<C>,
+    ) -> Result<Self, NativeComponentServiceEntryError> {
+        if service_endpoint_object.0 == 0
+            || supervisor_task_object.0 == 0
+            || consumer_module_object.0 == 0
+            || service_endpoint_object == supervisor_task_object
+        {
+            return Err(NativeComponentServiceEntryError::InvalidIdentity);
+        }
+        if !attachment.matches(spec) {
+            return Err(NativeComponentServiceEntryError::AttachmentMismatch);
+        }
+        let actual_data = target_capabilities
+            .authorize_exact(launch_data, Rights::READ)
+            .map_err(NativeComponentServiceEntryError::LaunchDataCapability)?;
+        if actual_data != attachment.launch_data_object() {
+            return Err(NativeComponentServiceEntryError::WrongLaunchDataObject);
+        }
+        let actual_dependency = target_capabilities
+            .authorize_exact(dependency_endpoint, Rights::SIGNAL)
+            .map_err(NativeComponentServiceEntryError::DependencyCapability)?;
+        if actual_dependency != attachment.dependency_endpoint_object() {
+            return Err(NativeComponentServiceEntryError::WrongDependencyEndpoint);
+        }
+        Ok(Self {
+            service_endpoint_object,
+            supervisor_task_object,
+            provider_generation: spec.provider_generation(),
+            consumer_module_object,
+            launch_data_bytes: attachment.launch_data_bytes(),
+            launch_data,
+            dependency_endpoint,
+        })
+    }
+
+    pub const fn service_endpoint_object(self) -> ObjectId {
+        self.service_endpoint_object
+    }
+
+    pub const fn supervisor_task_object(self) -> ObjectId {
+        self.supervisor_task_object
+    }
+
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+
+    pub const fn consumer_module_object(self) -> ObjectId {
+        self.consumer_module_object
+    }
+
+    pub const fn launch_data_bytes(self) -> u32 {
+        self.launch_data_bytes
+    }
+
+    pub const fn launch_data(self) -> Capability {
+        self.launch_data
+    }
+
+    pub const fn dependency_endpoint(self) -> Capability {
+        self.dependency_endpoint
+    }
+
+    /// Installs the fixed native-service entry ABI into a fresh user context.
+    /// Existing register payloads are rejected rather than overwritten.
+    pub fn install(
+        self,
+        mut context: UserContext,
+    ) -> Result<UserContext, (Self, NativeComponentServiceEntryError, UserContext)> {
+        if context.r15 != 0
+            || context.r14 != 0
+            || context.r13 != 0
+            || context.r12 != 0
+            || context.r11 != 0
+            || context.r10 != 0
+            || context.rbx != 0
+        {
+            return Err((
+                self,
+                NativeComponentServiceEntryError::LaunchRegistersOccupied,
+                context,
+            ));
+        }
+        context.r13 = self.service_endpoint_object.0;
+        context.r14 = self.supervisor_task_object.0;
+        context.r12 = self.provider_generation;
+        context.r15 = self.launch_data.token();
+        context.rbx = self.dependency_endpoint.token();
+        context.r11 = u64::from(self.launch_data_bytes);
+        context.r10 = self.consumer_module_object.0;
+        Ok(context)
     }
 }
 
@@ -2568,6 +2700,135 @@ mod tests {
         assert_eq!(attachment.launch_data(), data);
         assert_eq!(attachment.dependency_endpoint(), endpoint);
         assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn native_entry_uses_only_fresh_target_space_attachment_capabilities() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut source = CapabilitySpace::<2>::new();
+        let source_data = source.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let source_endpoint = source.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            source_data,
+            ObjectId(0x81),
+            7,
+            source_endpoint,
+            &source,
+        )
+        .unwrap();
+        let mut target = CapabilitySpace::<3>::new();
+        let unrelated = target.insert(ObjectId(0x99), Rights::READ).unwrap();
+        let target_data = target.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let target_endpoint = target.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let entry = NativeComponentServiceEntry::new(
+            spec,
+            attachment,
+            ObjectId(0x90),
+            ObjectId(0x91),
+            ObjectId(0x92),
+            target_data,
+            target_endpoint,
+            &target,
+        )
+        .unwrap();
+        assert_ne!(entry.launch_data(), unrelated);
+        assert_eq!(entry.launch_data(), target_data);
+        assert_eq!(entry.dependency_endpoint(), target_endpoint);
+        assert_eq!(entry.service_endpoint_object(), ObjectId(0x90));
+        assert_eq!(entry.supervisor_task_object(), ObjectId(0x91));
+        assert_eq!(entry.consumer_module_object(), ObjectId(0x92));
+        assert_eq!(entry.provider_generation(), spec.provider_generation());
+        assert_eq!(entry.launch_data_bytes(), 144);
+        assert_ne!(entry.launch_data(), source_data);
+        assert_ne!(entry.dependency_endpoint(), source_endpoint);
+        let context = UserContext::new(
+            crate::PhysAddr::new(0x20_0000).unwrap(),
+            0x40_0000,
+            0x7000_0000,
+        )
+        .unwrap();
+        let installed = entry.install(context).unwrap();
+        assert_eq!(installed.r13, 0x90);
+        assert_eq!(installed.r14, 0x91);
+        assert_eq!(installed.r12, spec.provider_generation());
+        assert_eq!(installed.r15, target_data.token());
+        assert_eq!(installed.rbx, target_endpoint.token());
+        assert_eq!(installed.r11, 144);
+        assert_eq!(installed.r10, 0x92);
+    }
+
+    #[test]
+    fn native_entry_rejects_wrong_target_objects_and_overbroad_rights() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut source = CapabilitySpace::<2>::new();
+        let source_data = source.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let source_endpoint = source.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            source_data,
+            ObjectId(0x81),
+            7,
+            source_endpoint,
+            &source,
+        )
+        .unwrap();
+        let mut target = CapabilitySpace::<5>::new();
+        let wrong_data = target.insert(ObjectId(0x82), Rights::READ).unwrap();
+        let overbroad_data = target
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let endpoint = target.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let wrong_endpoint = target.insert(ObjectId(0x83), Rights::SIGNAL).unwrap();
+        let exact_data = target.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let create = |data, dependency| {
+            NativeComponentServiceEntry::new(
+                spec,
+                attachment,
+                ObjectId(0x90),
+                ObjectId(0x91),
+                ObjectId(0x92),
+                data,
+                dependency,
+                &target,
+            )
+        };
+        assert_eq!(
+            create(wrong_data, endpoint),
+            Err(NativeComponentServiceEntryError::WrongLaunchDataObject)
+        );
+        assert_eq!(
+            create(overbroad_data, endpoint),
+            Err(NativeComponentServiceEntryError::LaunchDataCapability(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        assert_eq!(
+            create(exact_data, wrong_endpoint),
+            Err(NativeComponentServiceEntryError::WrongDependencyEndpoint)
+        );
+        let entry = create(exact_data, endpoint).unwrap();
+        let mut occupied = UserContext::new(
+            crate::PhysAddr::new(0x20_0000).unwrap(),
+            0x40_0000,
+            0x7000_0000,
+        )
+        .unwrap();
+        occupied.r15 = 1;
+        let (_, error, returned) = entry.install(occupied).unwrap_err();
+        assert_eq!(
+            error,
+            NativeComponentServiceEntryError::LaunchRegistersOccupied
+        );
+        assert_eq!(returned.r15, 1);
     }
 
     #[test]

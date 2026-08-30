@@ -7258,8 +7258,15 @@ binds the admitted domain, SystemRelease, policy, association, object, and
 dependency generations, and rejects overbroad or substituted authority before
 either placement backend runs. The selected backend must construct both
 projections atomically before the route commits; backend failure records the
-domain unavailable and never tries another placement. Kernel passes 635 focused
-Linux-host tests.
+domain unavailable and never tries another placement. Native placement now has
+a distinct entry-preparation step that revalidates the freshly projected
+target-space `READ` and `SIGNAL` capabilities, never exposes the source-space
+tokens, and installs the service endpoint, supervisor, provider generation,
+consumer module, attachment length, and projected tokens only into an otherwise
+empty user-context register ABI. Occupied launch registers fail without losing
+the entry or context. Kernel passes 637 focused Linux-host tests. Concrete task
+construction must still invoke this preparation before the FAT32 installed entry
+can consume the attachment.
 
 Patent review: `NOT_TRIGGERED` — this adds conventional capability attenuation
 and atomic launch sequencing to the existing isolation transaction. See
