@@ -6072,10 +6072,11 @@ or zero default, and trapping consumers use the shared illegal-instruction
 path. Zero-parameter lazy fallbacks are evaluated only on `None`; compositional
 wide option consumers remain unsupported and fail closed. Both x86-64 ABIs
 compile the terminal forms. The canonical Linux gate
-passes 817 unit tests, 351 replacement tests, and 127 semantic-execution tests;
+passes 818 unit tests, 351 replacement tests, and 128 semantic-execution tests;
 defaulting in both directions and eager or lazy custom signed fallbacks match exact
 ORACLE-0003 results across both words at zero, signed boundaries, and all-ones
 input. Isolated Linux children confirm checked `unwrap` traps at both invalid
-unsigned boundaries. Scoped-unsafe `unwrap_unchecked` also matches both oracle
+unsigned boundaries. Valid checked `expect` also matches both oracle words.
+Scoped-unsafe `unwrap_unchecked` matches both oracle
 words for valid inputs while safe use fails closed; invalid unchecked input is
 Rust UB and was not executed. Windows gnullvm was not run.
