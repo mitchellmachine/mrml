@@ -1238,6 +1238,118 @@ pub struct NativeComponentServiceMappedReadTransferTask {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceCopyReadTransferTask {
+    construction: NativeComponentServiceReadTransferTask,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferCopyTaskBinding,
+}
+
+impl NativeComponentServiceCopyReadTransferTask {
+    pub const fn construction(self) -> NativeComponentServiceReadTransferTask {
+        self.construction
+    }
+    pub const fn memory(self) -> ComponentServiceReadTransferMemoryRoot {
+        self.memory
+    }
+    pub const fn binding(self) -> ComponentServiceReadTransferCopyTaskBinding {
+        self.binding
+    }
+
+    pub fn source_attachment<const TASKS: usize, const CAPABILITIES: usize>(
+        self,
+        runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    ) -> Result<ComponentServiceReadTransferAttachment, ComponentServiceReadTransferPreparationError>
+    {
+        let construction = self.construction();
+        let capabilities = runtime
+            .capabilities(construction.source_task())
+            .map_err(ComponentServiceReadTransferPreparationError::Root)?;
+        ComponentServiceReadTransferAttachment::new(
+            self.binding().provider_task(),
+            self.memory().shared_object(),
+            self.memory().generation(),
+            self.memory().bytes(),
+            construction.source_local_read(),
+            construction.source_provider_write(),
+            capabilities,
+        )
+        .map_err(ComponentServiceReadTransferPreparationError::Attachment)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceCopyReadTransferTeardown {
+    active: NativeComponentServiceCopyReadTransferTask,
+    authority_revoked: bool,
+    mapping_removed: bool,
+    backing_released: bool,
+}
+
+impl NativeComponentServiceCopyReadTransferTeardown {
+    pub const fn new(active: NativeComponentServiceCopyReadTransferTask) -> Self {
+        Self {
+            active,
+            authority_revoked: false,
+            mapping_removed: false,
+            backing_released: false,
+        }
+    }
+    pub const fn active(self) -> NativeComponentServiceCopyReadTransferTask {
+        self.active
+    }
+    pub const fn authority_revoked(self) -> bool {
+        self.authority_revoked
+    }
+    pub const fn mapping_removed(self) -> bool {
+        self.mapping_removed
+    }
+    pub const fn backing_released(self) -> bool {
+        self.backing_released
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceCopyReadTransferTeardownError<M, B> {
+    TaskStillLive {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        task: TaskId,
+    },
+    Authority {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: TaskRuntimeError,
+    },
+    Runtime {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: TaskRuntimeError,
+    },
+    LocalMapping {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: MemoryMappingOperationError<M>,
+    },
+    Backing {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: MemoryBackingOperationError<B>,
+    },
+    Object {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: MemoryResourceError,
+    },
+}
+
+impl<M, B> NativeComponentServiceCopyReadTransferTeardownError<M, B> {
+    pub const fn state(&self) -> NativeComponentServiceCopyReadTransferTeardown {
+        match self {
+            Self::TaskStillLive { state, .. }
+            | Self::Authority { state, .. }
+            | Self::Runtime { state, .. }
+            | Self::LocalMapping { state, .. }
+            | Self::Backing { state, .. }
+            | Self::Object { state, .. } => *state,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeComponentServiceMappedReadTransferTeardown {
     active: NativeComponentServiceMappedReadTransferTask,
     authority_revoked: bool,
@@ -1506,6 +1618,107 @@ pub fn teardown_native_component_service_mapped_read_transfer<
         )
 }
 
+pub fn teardown_native_component_service_copy_read_transfer<
+    M: MemoryMappingBackend,
+    B: MemoryObjectBackingBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    mut state: NativeComponentServiceCopyReadTransferTeardown,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    mapping_backend: &mut M,
+    backing_backend: &mut B,
+) -> Result<u64, NativeComponentServiceCopyReadTransferTeardownError<M::Error, B::Error>> {
+    let construction = state.active().construction();
+    match runtime.context(construction.task()) {
+        Ok(_) => {
+            return Err(
+                NativeComponentServiceCopyReadTransferTeardownError::TaskStillLive {
+                    state,
+                    task: construction.task(),
+                },
+            );
+        }
+        Err(TaskRuntimeError::MissingTask) => {}
+        Err(error) => {
+            return Err(
+                NativeComponentServiceCopyReadTransferTeardownError::Runtime { state, error },
+            );
+        }
+    }
+    if !state.authority_revoked {
+        if let Err(error) = runtime.revoke_capability_pair(
+            construction.source_task(),
+            construction.source_local_read(),
+            construction.source_provider_write(),
+        ) {
+            return Err(
+                NativeComponentServiceCopyReadTransferTeardownError::Authority { state, error },
+            );
+        }
+        state.authority_revoked = true;
+    }
+    if !state.mapping_removed {
+        let capabilities = runtime
+            .capabilities(construction.source_task())
+            .map_err(
+                |error| NativeComponentServiceCopyReadTransferTeardownError::Runtime {
+                    state,
+                    error,
+                },
+            )?;
+        let mapping = state.active().binding().mapping();
+        if let Err(error) = memory.remove_mapping(
+            mapping.mapping(),
+            mapping.local_target_capability(),
+            capabilities,
+            mapping_backend,
+        ) {
+            return Err(
+                NativeComponentServiceCopyReadTransferTeardownError::LocalMapping { state, error },
+            );
+        }
+        state.mapping_removed = true;
+    }
+    if !state.backing_released {
+        let capabilities = runtime
+            .capabilities(construction.source_task())
+            .map_err(
+                |error| NativeComponentServiceCopyReadTransferTeardownError::Runtime {
+                    state,
+                    error,
+                },
+            )?;
+        let root = state.active().memory();
+        if let Err(error) = memory.release_physical_backing(
+            root.memory_object(),
+            root.root(),
+            capabilities,
+            backing_backend,
+        ) {
+            return Err(
+                NativeComponentServiceCopyReadTransferTeardownError::Backing { state, error },
+            );
+        }
+        state.backing_released = true;
+    }
+    let root = state.active().memory();
+    let capabilities = runtime
+        .capabilities_mut(construction.source_task())
+        .map_err(
+            |error| NativeComponentServiceCopyReadTransferTeardownError::Runtime { state, error },
+        )?;
+    memory
+        .release_object(root.memory_object(), root.root(), capabilities)
+        .map_err(
+            |error| NativeComponentServiceCopyReadTransferTeardownError::Object { state, error },
+        )
+}
+
 impl NativeComponentServiceTask {
     pub const fn task(self) -> TaskId {
         self.task
@@ -1541,6 +1754,78 @@ pub enum NativeComponentServiceReadTransferRootError {
 pub enum NativeComponentServiceMappedReadTransferError {
     BindingMismatch,
     Construction(NativeComponentServiceReadTransferRootError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceCopyReadTransferError {
+    BindingMismatch,
+    Construction(NativeComponentServiceReadTransferRootError),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_native_component_service_task_from_copy_read_transfer_attachment<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    spec: IsolationServiceSpec,
+    launch_attachment: ComponentServiceLaunchAttachment,
+    transfer: ComponentServiceReadTransferAttachment,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferCopyTaskBinding,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    consumer_module_object: ObjectId,
+) -> Result<NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferError>
+{
+    let mapping = binding.mapping();
+    if binding.local_task() != target_task
+        || binding.provider_task() != transfer.provider_task()
+        || mapping.memory_object() != memory.memory_object()
+        || mapping.shared_object() != memory.shared_object()
+        || transfer.shared_object() != memory.shared_object()
+        || transfer.shared_generation() != memory.generation()
+        || transfer.shared_bytes() != memory.bytes()
+    {
+        return Err(NativeComponentServiceCopyReadTransferError::BindingMismatch);
+    }
+    let construction = match prepare_native_component_service_task_with_read_transfer(
+        runtime,
+        source_task,
+        target_task,
+        spec,
+        launch_attachment,
+        transfer,
+        service_endpoint_object,
+        supervisor_task_object,
+        consumer_module_object,
+    ) {
+        Ok(construction) => construction,
+        Err(task) => {
+            let first = runtime
+                .revoke_capability(source_task, transfer.local_read())
+                .err();
+            let second = runtime
+                .revoke_capability(source_task, transfer.provider_write())
+                .err();
+            let error = match first.or(second) {
+                Some(cleanup) => {
+                    NativeComponentServiceReadTransferRootError::Rollback { task, cleanup }
+                }
+                None => NativeComponentServiceReadTransferRootError::Task(task),
+            };
+            return Err(NativeComponentServiceCopyReadTransferError::Construction(
+                error,
+            ));
+        }
+    };
+    Ok(NativeComponentServiceCopyReadTransferTask {
+        construction,
+        memory,
+        binding,
+    })
 }
 
 /// Constructs the exact local task from an already prepared source attachment
@@ -4893,6 +5178,225 @@ mod tests {
             .unwrap();
         assert_eq!(usage.object_pages(), 0);
         assert_eq!(usage.live_objects(), 0);
+    }
+
+    #[test]
+    fn copy_read_transfer_constructs_and_tears_down_one_mapping() {
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let target = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x30_0000).unwrap(),
+                    0x50_0000,
+                    0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let provider = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x40_0000).unwrap(),
+                    0x60_0000,
+                    0x7200_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut memory = MemoryPoolTable::<1, 1, 1>::new(0x2b).unwrap();
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::CONTROL)
+            .union(Rights::INSPECT);
+        let (pool, pool_capability) = memory
+            .create_root(
+                1,
+                1,
+                0,
+                pool_rights,
+                runtime.capabilities_mut(source).unwrap(),
+            )
+            .unwrap();
+        let root = reserve_component_service_read_transfer_memory(
+            &mut memory,
+            pool,
+            pool_capability,
+            &mut runtime,
+            source,
+        )
+        .unwrap();
+        let physical =
+            MemoryPhysicalBacking::new(crate::PhysAddr::new(0x50_0000).unwrap(), 1).unwrap();
+        let mut backing = TransferBackingBackend::default();
+        bind_component_service_read_transfer_backing(
+            &mut memory,
+            root,
+            physical,
+            &runtime,
+            source,
+            &mut backing,
+        )
+        .unwrap();
+        let local_target = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                ObjectId(0x7300),
+                COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS,
+            )
+            .unwrap();
+        let mut mapping_backend = TransferMappingBackend::default();
+        let mapping = install_component_service_read_transfer_local_mapping(
+            &mut memory,
+            root,
+            local_target,
+            0x500,
+            &mut mapping_backend,
+            &runtime,
+            source,
+        )
+        .unwrap();
+        let binding =
+            bind_component_service_read_transfer_copy_tasks(mapping, target, provider, &runtime)
+                .unwrap();
+        let data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let launch = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let transfer = prepare_component_service_read_transfer_attachment(
+            &mut runtime,
+            source,
+            provider,
+            root.shared_object(),
+            root.generation(),
+            root.bytes(),
+            root.root(),
+        )
+        .unwrap();
+        let active = prepare_native_component_service_task_from_copy_read_transfer_attachment(
+            &mut runtime,
+            source,
+            target,
+            spec,
+            launch,
+            transfer,
+            root,
+            binding,
+            ObjectId(0x90),
+            ObjectId(0x91),
+            ObjectId(0x92),
+        )
+        .unwrap();
+        assert_eq!(active.binding(), binding);
+        assert_eq!(active.source_attachment(&runtime).unwrap(), transfer);
+        assert!(mapping_backend.installed.is_some());
+        let state = match teardown_native_component_service_copy_read_transfer(
+            NativeComponentServiceCopyReadTransferTeardown::new(active),
+            &mut runtime,
+            &mut memory,
+            &mut mapping_backend,
+            &mut backing,
+        ) {
+            Err(NativeComponentServiceCopyReadTransferTeardownError::TaskStillLive {
+                state,
+                task,
+            }) => {
+                assert_eq!(task, target);
+                state
+            }
+            other => panic!("unexpected live copy teardown result: {other:?}"),
+        };
+        runtime.start();
+        runtime.yield_current().unwrap();
+        assert_eq!(runtime.current(), Some(target));
+        assert_eq!(runtime.terminate_current().unwrap().task, target);
+        mapping_backend.fail_remove = true;
+        let state = match teardown_native_component_service_copy_read_transfer(
+            state,
+            &mut runtime,
+            &mut memory,
+            &mut mapping_backend,
+            &mut backing,
+        ) {
+            Err(NativeComponentServiceCopyReadTransferTeardownError::LocalMapping {
+                state,
+                error: MemoryMappingOperationError::Backend("remove"),
+            }) => state,
+            other => panic!("unexpected copy mapping teardown result: {other:?}"),
+        };
+        assert!(state.authority_revoked());
+        assert!(!state.mapping_removed());
+        mapping_backend.fail_remove = false;
+        backing.fail_release = true;
+        let state = match teardown_native_component_service_copy_read_transfer(
+            state,
+            &mut runtime,
+            &mut memory,
+            &mut mapping_backend,
+            &mut backing,
+        ) {
+            Err(NativeComponentServiceCopyReadTransferTeardownError::Backing {
+                state,
+                error: MemoryBackingOperationError::Backend("release"),
+            }) => state,
+            other => panic!("unexpected copy backing teardown result: {other:?}"),
+        };
+        assert!(state.mapping_removed());
+        assert!(!state.backing_released());
+        backing.fail_release = false;
+        assert_eq!(
+            teardown_native_component_service_copy_read_transfer(
+                state,
+                &mut runtime,
+                &mut memory,
+                &mut mapping_backend,
+                &mut backing,
+            ),
+            Ok(1)
+        );
+        let usage = memory
+            .usage(pool, pool_capability, runtime.capabilities(source).unwrap())
+            .unwrap();
+        assert_eq!(
+            (
+                usage.object_pages(),
+                usage.live_objects(),
+                usage.active_mappings()
+            ),
+            (0, 0, 0)
+        );
     }
 
     #[test]

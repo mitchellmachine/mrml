@@ -10508,3 +10508,19 @@ gate; no active page-table or physical execution is claimed.
 Patent review: `NOT_TRIGGERED` — installing one conventional read-only mapping
 and retaining typed task identities for a separately mediated copy path is
 ordinary capability lifecycle composition. See `docs/patents/REVIEW_LOG.md`.
+
+Native component construction and teardown now **PARTIALLY IMPLEMENT IN
+SOURCE** the single-mapping transfer lifecycle. Construction exact-matches the
+prepared directional attachment, charged memory root, read-only mapping, local
+task, and provider task before populating the fresh service task. Retryable
+teardown refuses a live consumer, revokes both source authority trees and all
+tracked descendants, removes the sole read-only mapping, scrubs/releases the
+backing, and returns the page charge. Injected mapping and backing failures
+retain exact progress and retries skip completed stages. The Linux-host release
+kernel suite passes 652 tests and the release build passes. Provider-side copy
+binding cleanup and storage launch ownership are still separate pending gates;
+this remains scheduler, in-memory policy, and recording-backend evidence.
+
+Patent review: `NOT_TRIGGERED` — exact construction record matching and staged
+revocation, unmapping, scrubbing, and accounting are conventional capability
+and resource lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.

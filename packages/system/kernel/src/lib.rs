@@ -167,6 +167,9 @@ pub use isolation::{
     IsolationServiceSpec, IsolationServiceSpecError, IsolationUnavailableReason,
     IsolationVcpuReservationError, NativeComponentServiceEntry,
     NativeComponentServiceEntryError, NativeComponentServiceReadTransferTask,
+    NativeComponentServiceCopyReadTransferError, NativeComponentServiceCopyReadTransferTask,
+    NativeComponentServiceCopyReadTransferTeardown,
+    NativeComponentServiceCopyReadTransferTeardownError,
     NativeComponentServiceMappedReadTransferError, NativeComponentServiceMappedReadTransferTask,
     NativeComponentServiceMappedReadTransferTeardown,
     NativeComponentServiceMappedReadTransferTeardownError,
@@ -184,6 +187,7 @@ pub use isolation::{
     prepare_component_service_handoff,
     prepare_component_service_read_transfer_attachment,
     prepare_native_component_service_task,
+    prepare_native_component_service_task_from_copy_read_transfer_attachment,
     prepare_native_component_service_task_from_mapped_read_transfer,
     prepare_native_component_service_task_from_mapped_read_transfer_attachment,
     prepare_native_component_service_task_from_read_transfer_root,
@@ -194,6 +198,7 @@ pub use isolation::{
     reserve_component_service_read_transfer_memory, reserve_isolation_vcpus,
     route_isolation_application, route_isolation_service,
     teardown_native_component_service_mapped_read_transfer,
+    teardown_native_component_service_copy_read_transfer,
 };
 pub use isolation_monitor::{
     HostSubstrateCounts, IsolationMonitorError, IsolationStatusSnapshot,
