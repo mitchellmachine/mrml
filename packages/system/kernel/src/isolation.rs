@@ -5692,17 +5692,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(termination.task, target);
+        let dispatch = runtime.dispatch_after_termination(termination).unwrap();
+        assert!(!dispatch.is_idle());
         assert_eq!(
-            runtime.dispatch_after_termination(termination),
-            Ok(crate::TaskTerminationDispatch::User {
-                task: provider,
-                context: UserContext::new(
+            dispatch.user(),
+            Some((
+                provider,
+                UserContext::new(
                     crate::PhysAddr::new(0x40_0000).unwrap(),
                     0x60_0000,
                     0x7200_0000,
                 )
                 .unwrap(),
-            })
+            ))
         );
         assert_eq!(
             state.retired_context().unwrap().page_table(),

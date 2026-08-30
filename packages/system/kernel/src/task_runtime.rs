@@ -177,9 +177,31 @@ pub struct TaskTermination {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TaskTerminationDispatch {
+enum TaskTerminationDispatchTarget {
     Idle,
     User { task: TaskId, context: UserContext },
+}
+
+/// An opaque successor dispatch minted only after exact runtime validation.
+///
+/// Callers may inspect the selected target but cannot construct a replacement
+/// proof from a task name or saved context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskTerminationDispatch {
+    target: TaskTerminationDispatchTarget,
+}
+
+impl TaskTerminationDispatch {
+    pub const fn is_idle(self) -> bool {
+        matches!(self.target, TaskTerminationDispatchTarget::Idle)
+    }
+
+    pub const fn user(self) -> Option<(TaskId, UserContext)> {
+        match self.target {
+            TaskTerminationDispatchTarget::Idle => None,
+            TaskTerminationDispatchTarget::User { task, context } => Some((task, context)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1021,7 +1043,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 if self.current().is_some() {
                     return Err(TaskTerminationDispatchError::CurrentMismatch);
                 }
-                Ok(TaskTerminationDispatch::Idle)
+                Ok(TaskTerminationDispatch {
+                    target: TaskTerminationDispatchTarget::Idle,
+                })
             }
             ScheduleOutcome::Switch {
                 from: Some(from),
@@ -1036,7 +1060,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 let context = *self
                     .context(to)
                     .map_err(TaskTerminationDispatchError::Runtime)?;
-                Ok(TaskTerminationDispatch::User { task: to, context })
+                Ok(TaskTerminationDispatch {
+                    target: TaskTerminationDispatchTarget::User { task: to, context },
+                })
             }
             ScheduleOutcome::Continue(_) | ScheduleOutcome::Switch { from: None, .. } => {
                 Err(TaskTerminationDispatchError::InvalidOutcome)
@@ -2205,12 +2231,11 @@ mod tests {
             }),
             Err(TaskTerminationDispatchError::CurrentMismatch)
         );
+        let dispatch = runtime.dispatch_after_termination(terminated).unwrap();
+        assert!(!dispatch.is_idle());
         assert_eq!(
-            runtime.dispatch_after_termination(terminated),
-            Ok(TaskTerminationDispatch::User {
-                task: replacement,
-                context: context(0x30_0000, 0x50_0000),
-            })
+            dispatch.user(),
+            Some((replacement, context(0x30_0000, 0x50_0000)))
         );
         assert_eq!(runtime.context(exiting), Err(TaskRuntimeError::MissingTask));
         assert_eq!(
@@ -2236,10 +2261,9 @@ mod tests {
         );
         let termination = runtime.terminate_current().unwrap();
         assert_eq!(termination.next, ScheduleOutcome::Idle);
-        assert_eq!(
-            runtime.dispatch_after_termination(termination),
-            Ok(TaskTerminationDispatch::Idle)
-        );
+        let dispatch = runtime.dispatch_after_termination(termination).unwrap();
+        assert!(dispatch.is_idle());
+        assert_eq!(dispatch.user(), None);
     }
 
     #[test]

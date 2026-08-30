@@ -10678,3 +10678,15 @@ not execute privileged context loading or active-CR3 mutation.
 Patent review: `NOT_TRIGGERED` — composing typed termination, retained teardown,
 and successor dispatch records is conventional fail-closed lifecycle state
 management. See `docs/patents/REVIEW_LOG.md`.
+
+The validated task-termination dispatch is now opaque outside the runtime that
+mints it. Safe downstream kernel and service code can inspect whether it names
+idle or the exact successor task and context, but cannot construct a dispatch
+proof from caller-selected identity or context data. The Linux-host release
+kernel suite passes 653 tests, storage passes 162 tests, and both release builds
+pass. This strengthens the software boundary before context installation; it
+does not add or exercise privileged context loading.
+
+Patent review: `NOT_TRIGGERED` — an opaque validated token with read-only
+accessors is conventional type-safe boundary enforcement. See
+`docs/patents/REVIEW_LOG.md`.
