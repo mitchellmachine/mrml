@@ -1216,6 +1216,32 @@ Patent review: **NOT_TRIGGERED**. Ordering authenticated launch decode before
 construction of its exact capability authorizer is conventional least-authority
 initialization. See [the patent review log](../patents/REVIEW_LOG.md).
 
+The native AHCI service state now owns a persistent authenticated dispatch loop
+**IMPLEMENTED IN SOURCE**. It repeatedly invokes the existing bounded
+`serve_one` transition while retaining the unique backend owner and returns on
+the first fail-closed dispatch error. The underlying transition erases the
+request, transferred-capability, and scratch buffers on every attempt. A focused
+test supplies an invalid first envelope, observes immediate termination with no
+operation dispatched, verifies all three buffers are clean, and confirms the
+backend remains available. The focused Linux suite passes all 129 tests and both
+Linux release and `MRML_NATIVE` release builds pass. This is controlled syscall
+and backend-model evidence; installed blocking receive behavior, executable
+entry integration, supervisor termination, and physical AHCI hardware remain
+unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Looping over the existing bounded authenticated
+dispatcher until its first error is conventional service control flow. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See
