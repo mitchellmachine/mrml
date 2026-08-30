@@ -371,6 +371,7 @@ mod tests {
         AhciPortDmaBackend, AhciPortDmaLayout, AhciRegisterIo, AhciServiceCpuMapping,
         AhciServiceCpuMappingRequest, PciFunctionLocation, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
     };
+    use core::cell::Cell;
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
@@ -443,7 +444,6 @@ mod tests {
 
     struct Data {
         sanitize_failures: usize,
-        sanitizations: usize,
     }
 
     impl crate::AhciDataBufferIo for Data {
@@ -460,7 +460,6 @@ mod tests {
             Ok(())
         }
         fn sanitize(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
-            self.sanitizations += 1;
             if self.sanitize_failures == 0 {
                 Ok(())
             } else {
@@ -482,6 +481,125 @@ mod tests {
         fn remove_layout(&mut self, _: AhciPortDmaLayout) -> Result<(), ()> {
             self.removals += 1;
             Ok(())
+        }
+    }
+
+    struct TeardownLease<'a> {
+        native: mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        launch: crate::BoundAhciServiceLaunch,
+        io_capabilities: CapabilitySpace<2>,
+        read_data: Capability,
+        write_data: Capability,
+        command_list: Option<&'a mut [u8; 1024]>,
+        received_fis: Option<&'a mut [u8; 256]>,
+        command_tables: Option<&'a mut [u8; 1024]>,
+        failures: usize,
+        substitute_mapping_generation: Option<u64>,
+        sanitize_failures: usize,
+        calls: &'a Cell<usize>,
+    }
+
+    impl<'a> TeardownLease<'a> {
+        fn new(
+            native: mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+            launch: crate::BoundAhciServiceLaunch,
+            command_list: &'a mut [u8; 1024],
+            received_fis: &'a mut [u8; 256],
+            command_tables: &'a mut [u8; 1024],
+            calls: &'a Cell<usize>,
+        ) -> Self {
+            let mut io_capabilities = CapabilitySpace::<2>::new();
+            let data = launch.spec().data();
+            let read_data = io_capabilities
+                .insert(
+                    data.memory_object,
+                    Rights::PIN.union(Rights::MAP).union(Rights::WRITE),
+                )
+                .unwrap();
+            let write_data = io_capabilities
+                .insert(
+                    data.memory_object,
+                    Rights::PIN.union(Rights::MAP).union(Rights::READ),
+                )
+                .unwrap();
+            Self {
+                native,
+                launch,
+                io_capabilities,
+                read_data,
+                write_data,
+                command_list: Some(command_list),
+                received_fis: Some(received_fis),
+                command_tables: Some(command_tables),
+                failures: 0,
+                substitute_mapping_generation: None,
+                sanitize_failures: 0,
+                calls,
+            }
+        }
+    }
+
+    unsafe impl<'a> crate::AhciServiceTeardownLease for TeardownLease<'a> {
+        type Registers = Registers;
+        type CommandMemory = crate::AhciMappedCommandMemory<'a>;
+        type DataIo = Data;
+        type Error = u8;
+
+        fn native_task(
+            &self,
+        ) -> mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
+            self.native
+        }
+
+        fn launch(&self) -> crate::BoundAhciServiceLaunch {
+            self.launch
+        }
+
+        unsafe fn reacquire(
+            mut self,
+        ) -> Result<
+            crate::AhciCommandBackendTeardown<Self::Registers, Self::CommandMemory, Self::DataIo>,
+            (Self::Error, Self),
+        > {
+            self.calls.set(self.calls.get() + 1);
+            if self.failures != 0 {
+                self.failures -= 1;
+                return Err((1, self));
+            }
+
+            let spec = self.launch.spec();
+            let mut mapping = spec.mapping();
+            let mut layout = spec.layout();
+            if let Some(generation) = self.substitute_mapping_generation {
+                mapping.mapping_generation = generation;
+                layout.mapping_generation = generation;
+            }
+            let command_memory = crate::AhciMappedCommandMemory::new(
+                layout,
+                self.command_list.take().expect("test lease is one-shot"),
+                self.received_fis.take().expect("test lease is one-shot"),
+                self.command_tables.take().expect("test lease is one-shot"),
+            )
+            .expect("test lease has exact command mappings");
+            let backend = crate::AhciCommandBlockBackend::new(
+                &mut self.io_capabilities,
+                spec.device().session,
+                spec.device().media_generation,
+                self.read_data,
+                self.write_data,
+                spec.data(),
+                mapping,
+                ActiveAhciPort::from_layout(layout),
+                Registers::active(),
+                command_memory,
+                Data {
+                    sanitize_failures: self.sanitize_failures,
+                },
+            )
+            .expect("test lease has exact retained data authority");
+            Ok(backend
+                .into_teardown()
+                .unwrap_or_else(|_| panic!("test lease must transfer active ownership")))
         }
     }
 
@@ -1096,10 +1214,125 @@ mod tests {
     }
 
     #[test]
+    fn colliding_runtime_lease_is_rejected_and_substitution_is_quarantined() {
+        let (mut runtime, source, prepared, _, _) = native_tasks();
+        let native = prepared.task();
+        let target = native.task();
+        let launch = prepared.launch();
+        let (_, _, other_prepared, _, _) = native_tasks();
+        let colliding_native = other_prepared.task();
+        assert_eq!(colliding_native.task(), native.task());
+        assert_ne!(colliding_native, native);
+        let (capabilities, map, _control, cpu) = authorities();
+        let mut abar_backend = AbarBackend::default();
+        let mut cpu_backend = CpuBackend::default();
+        let mapped = crate::install_prepared_ahci_service_mappings(
+            prepared,
+            descriptor(),
+            map,
+            _control,
+            cpu,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        )
+        .unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let active = crate::activate_mapped_ahci_service_task(
+            mapped,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut runtime,
+        )
+        .unwrap();
+        let service_id = active.service();
+        assert!(matches!(
+            runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        assert!(matches!(
+            runtime.yield_current().unwrap(),
+            mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == target
+        ));
+
+        let mut colliding_command_list = [0xa5; 1024];
+        let mut colliding_received_fis = [0xa5; 256];
+        let mut colliding_command_tables = [0xa5; 1024];
+        let colliding_calls = Cell::new(0);
+        let colliding_lease = TeardownLease::new(
+            colliding_native,
+            launch,
+            &mut colliding_command_list,
+            &mut colliding_received_fis,
+            &mut colliding_command_tables,
+            &colliding_calls,
+        );
+        let error = match crate::begin_active_ahci_service_exit(
+            active,
+            colliding_lease,
+            &supervisor,
+            &mut runtime,
+        ) {
+            Ok(_) => panic!("a runtime-collision lease must not freeze the task"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.binding_error(),
+            Some(crate::AhciServiceTeardownLeaseBindingError::NativeTaskMismatch)
+        );
+        let (active, colliding_lease) = error.into_parts();
+        drop(colliding_lease);
+        assert_eq!(colliding_calls.get(), 0);
+        assert_eq!(runtime.current(), Some(target));
+
+        let mut command_list = [0xa5; 1024];
+        let mut received_fis = [0xa5; 256];
+        let mut command_tables = [0xa5; 1024];
+        let lease_calls = Cell::new(0);
+        let mut lease = TeardownLease::new(
+            native,
+            launch,
+            &mut command_list,
+            &mut received_fis,
+            &mut command_tables,
+            &lease_calls,
+        );
+        lease.substitute_mapping_generation = Some(99);
+        let frozen =
+            crate::begin_active_ahci_service_exit(active, lease, &supervisor, &mut runtime)
+                .unwrap_or_else(|_| panic!("the exact manager lease must freeze"));
+        let error = match crate::reacquire_frozen_ahci_service_teardown(frozen) {
+            Ok(_) => panic!("substituted teardown state must not become quiescence authority"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.binding_error(),
+            Some(crate::AhciServiceTaskBindingError::MappingMismatch)
+        );
+        let quarantine = error
+            .into_quarantine()
+            .unwrap_or_else(|_| panic!("binding failure must retain one quarantine owner"));
+        assert_eq!(quarantine.service(), service_id);
+        assert_eq!(quarantine.task(), target);
+        assert_eq!(quarantine.launch(), launch);
+        assert_eq!(quarantine.acquired_mapping().mapping_generation, 99);
+        assert!(!quarantine.retained_mappings_complete());
+        assert_eq!(lease_calls.get(), 1);
+        assert_eq!(runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
+        assert!(abar_backend.mapping.is_some());
+        assert!(cpu_backend.installed.iter().all(Option::is_some));
+        assert_eq!(
+            supervisor.state(service_id),
+            Ok(mrml_kernel::ServiceState::Running)
+        );
+    }
+
+    #[test]
     fn data_and_dma_cleanup_gate_mapping_withdrawal() {
         let (mut runtime, source, prepared, mismatched_native, _) = native_tasks();
         let task = prepared.task();
         let target = task.task();
+        let launch = prepared.launch();
         let (capabilities, map, control, cpu) = authorities();
         let mut abar_backend = AbarBackend::default();
         let mut cpu_backend = CpuBackend::default();
@@ -1130,62 +1363,26 @@ mod tests {
             mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == source
         ));
 
-        let launch = record();
         let mut command_list = [0xa5; 1024];
         let mut received_fis = [0xa5; 256];
         let mut command_tables = [0xa5; 1024];
-        let command_memory = crate::AhciMappedCommandMemory::new(
-            launch.layout(),
+        let lease_calls = Cell::new(0);
+        let mut lease = TeardownLease::new(
+            task,
+            launch,
             &mut command_list,
             &mut received_fis,
             &mut command_tables,
-        )
-        .unwrap();
-        let mut io_capabilities = CapabilitySpace::<2>::new();
-        let read_data = io_capabilities
-            .insert(
-                launch.data().memory_object,
-                Rights::PIN.union(Rights::MAP).union(Rights::WRITE),
-            )
-            .unwrap();
-        let write_data = io_capabilities
-            .insert(
-                launch.data().memory_object,
-                Rights::PIN.union(Rights::MAP).union(Rights::READ),
-            )
-            .unwrap();
-        let backend = crate::AhciCommandBlockBackend::new(
-            &mut io_capabilities,
-            launch.device().session,
-            launch.device().media_generation,
-            read_data,
-            write_data,
-            launch.data(),
-            launch.mapping(),
-            ActiveAhciPort::from_layout(launch.layout()),
-            Registers::active(),
-            command_memory,
-            Data {
-                sanitize_failures: 1,
-                sanitizations: 0,
-            },
-        )
-        .unwrap();
-        let teardown = match backend.into_teardown() {
-            Ok(teardown) => teardown,
-            Err(_) => panic!("active backend must yield teardown ownership"),
-        };
+            &lease_calls,
+        );
+        lease.failures = 1;
+        lease.sanitize_failures = 1;
         let mut dma_backend = DmaBackend::default();
-        let error = match crate::quiesce_active_ahci_service_task(
-            active,
-            teardown,
-            &mut dma_backend,
-            &supervisor,
-            &mut runtime,
-        ) {
-            Ok(_) => panic!("a non-current service task must not freeze"),
-            Err(error) => error,
-        };
+        let error =
+            match crate::begin_active_ahci_service_exit(active, lease, &supervisor, &mut runtime) {
+                Ok(_) => panic!("a non-current service task must not freeze"),
+                Err(error) => error,
+            };
         assert_eq!(
             error.lifecycle_error(),
             Some(
@@ -1194,9 +1391,8 @@ mod tests {
                 )
             )
         );
-        let (_, active, teardown) = error
-            .into_lifecycle_parts()
-            .unwrap_or_else(|_| panic!("lifecycle denial must retain active ownership"));
+        let (active, lease) = error.into_parts();
+        assert_eq!(lease_calls.get(), 0);
         assert!(matches!(
             runtime.yield_current().unwrap(),
             mrml_kernel::ScheduleOutcome::Switch { to, .. } if to == target
@@ -1214,21 +1410,35 @@ mod tests {
             )
         ));
         assert_eq!(runtime.current(), Some(target));
-        let error = match crate::quiesce_active_ahci_service_task(
+
+        let wrong_supervisor = ServiceSupervisor::<1>::new();
+        let error = match crate::begin_active_ahci_service_exit(
             active,
-            teardown,
-            &mut dma_backend,
-            &supervisor,
+            lease,
+            &wrong_supervisor,
             &mut runtime,
         ) {
-            Ok(_) => panic!("first data sanitization must fail"),
+            Ok(_) => panic!("another supervisor must not freeze the service"),
             Err(error) => error,
         };
-        let Some(crate::AhciServiceDeviceQuiesceError::Pending(pending)) = error.device_error()
-        else {
-            panic!("expected retryable data cleanup");
-        };
-        assert!(!pending.mapping_withdrawal_pending());
+        assert_eq!(
+            error.lifecycle_error(),
+            Some(
+                mrml_kernel::SupervisedNativeDeviceServiceRetirementError::Service(
+                    ServiceError::InvalidService,
+                )
+            )
+        );
+        let (active, lease) = error.into_parts();
+        assert_eq!(lease_calls.get(), 0);
+        assert_eq!(runtime.current(), Some(target));
+
+        let frozen =
+            crate::begin_active_ahci_service_exit(active, lease, &supervisor, &mut runtime)
+                .unwrap_or_else(|_| panic!("exact current service must freeze"));
+        assert_eq!(frozen.service(), service_id);
+        assert_eq!(frozen.task(), target);
+        assert_eq!(lease_calls.get(), 0);
         assert_eq!(runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
         assert_eq!(
             runtime.create(Priority::NORMAL, installed_context),
@@ -1255,7 +1465,37 @@ mod tests {
             Err(mrml_kernel::TaskRuntimeError::RetirementDispatchPending)
         ));
         assert_eq!(dma_backend.removals, 0);
-        let owner = crate::resume_active_ahci_service_task_quiescence(error, &mut dma_backend)
+
+        let error = match crate::reacquire_frozen_ahci_service_teardown(frozen) {
+            Ok(_) => panic!("injected reacquisition failure must retain the freeze"),
+            Err(error) => error,
+        };
+        assert_eq!(error.lease_error(), Some(&1));
+        let (_, frozen) = error
+            .into_retry()
+            .unwrap_or_else(|_| panic!("lease failure must return the frozen owner"));
+        assert_eq!(lease_calls.get(), 1);
+        assert_eq!(runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
+        assert_eq!(dma_backend.removals, 0);
+        assert!(abar_backend.mapping.is_some());
+        assert!(cpu_backend.installed.iter().all(Option::is_some));
+
+        let reacquired = crate::reacquire_frozen_ahci_service_teardown(frozen)
+            .unwrap_or_else(|_| panic!("exact teardown reacquisition must succeed"));
+        assert_eq!(reacquired.service(), service_id);
+        assert_eq!(reacquired.task(), target);
+        assert_eq!(lease_calls.get(), 2);
+        let error = match crate::quiesce_reacquired_ahci_service(reacquired, &mut dma_backend) {
+            Ok(_) => panic!("first data sanitization must fail"),
+            Err(error) => error,
+        };
+        let crate::AhciServiceDeviceQuiesceError::Pending(pending) = error.device_error() else {
+            panic!("expected retryable data cleanup");
+        };
+        assert!(!pending.mapping_withdrawal_pending());
+        assert_eq!(runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
+        assert_eq!(dma_backend.removals, 0);
+        let owner = crate::resume_frozen_ahci_service_quiescence(error, &mut dma_backend)
             .unwrap_or_else(|_| panic!("retry must complete"));
         assert_eq!(owner.service(), service_id);
 
@@ -1408,9 +1648,8 @@ mod tests {
             dispatched.dispatch().user().map(|(task, _)| task),
             Some(source)
         );
-        let (retirement, _, _, _, data) = dispatched.into_parts();
+        let (retirement, _) = dispatched.into_parts();
         assert_eq!(retirement.native().task(), task);
-        assert_eq!(data.sanitizations, 2);
         assert_eq!(dma_backend.removals, 1);
     }
 }

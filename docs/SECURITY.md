@@ -316,6 +316,14 @@ access. The security/acceptance gate is canonical in
 - Service exit, fault, and violation reserve exact supervisor identity and
   restart-deadline state before runtime retirement; cleanup/stopped publication
   has no fallible identity check after the task is irreversibly retired.
+- Constructed device-service stop requests are data, not device-quiescence or
+  teardown authority. The manager must retain the exact runtime-bound active
+  owner and one-shot teardown lease, freeze the task before reacquisition,
+  quarantine substituted acquired state, and destroy borrowed register,
+  command-memory, and data-buffer views before retirement or unmapping.
+  Failure retains the exact frozen owner for retry or fail-stop, and successor
+  dispatch remains withheld through cleanup; generic exit, cleanup, and restart
+  remain unavailable to constructed device services.
 - Restart commit publishes and returns the exact service/task generations as
   one typed result, so recovery and service dispatch do not rediscover task
   identity through a fallible lookup after creation.

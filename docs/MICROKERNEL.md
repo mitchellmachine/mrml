@@ -10274,6 +10274,56 @@ Patent review: `NOT_TRIGGERED` — exact current-task/root validation followed b
 ordinary task-domain retirement is conventional lifecycle enforcement. See
 `docs/patents/REVIEW_LOG.md`.
 
+Freeze-first AHCI stop handling is **PARTIALLY IMPLEMENTED IN SOURCE** through
+one consuming manager/library boundary. A one-shot teardown lease carries the
+exact `NativeDeviceServiceTask`—including its opaque runtime identity—and bound
+launch beside the non-copy active-service owner. `begin_active_ahci_service_exit`
+exact-matches both before asking the supervisor to freeze the current task.
+Thus an operation-3 value, service/task token, launch bytes, or lease identity
+accessor remains non-authorizing, and denial returns both untouched owners
+without invoking controller reacquisition.
+
+After a successful freeze the runtime has no current or selected successor,
+while the supervisor deliberately remains `Running` until trusted quiescence
+can retire the task. Only then may the unsafe one-shot lease hook transfer the
+sole register, active-port, command-memory, and data-buffer teardown owners.
+Clean reacquisition failure returns that same lease with the frozen lifecycle
+for retry. Post-acquisition mapping/port/data substitution instead becomes an
+inseparable quarantine: the task stays frozen, the supervisor stays `Running`,
+and neither quiescence nor dispatch can proceed from the substituted state.
+
+Successful quiescence stops or fails closed outstanding work, sanitizes data,
+withdraws DMA, and destroys all borrowed register, command-memory, and
+data-buffer views while their CPU mappings remain live. The resulting lifecycle
+token contains no borrowed backend value, so task retirement and later CPU/ABAR
+unmapping cannot invalidate a retained Rust reference. Dispatch remains withheld
+through the existing exact supervisor cleanup.
+
+The Linux AHCI suite passes all 138 tests. Focused coverage includes equal task
+tokens from distinct runtimes, current-task and supervisor denial before lease
+invocation, retry after clean lease failure, acquired-state quarantine,
+frozen-runtime mutation denial, quiescence retry, and complete delayed cleanup.
+This is controlled unit evidence for the generic boundary only. No production
+controller-manager lease, installed operation-3 route, CPL3/`INT 0x80`, active
+page-table/TLB/IOMMU operation, KVM/WHP run, or physical AHCI execution exists
+in this increment.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — binding an existing manager owner to an
+existing runtime/supervisor freeze, retrying or quarantining the linear transfer,
+and dropping borrowed views before existing retirement/unmapping are
+conventional fail-closed lifecycle composition. The existing triggered review
+for actual native AHCI controller/DMA execution remains unchanged. See
+`docs/patents/REVIEW_LOG.md`.
+
 Constructed native-service activation and AHCI retirement now have one
 supervisor/runtime-bound lifecycle **IMPLEMENTED IN SOURCE**. `TaskRuntime`
 retains the preflight/commit scheduler mechanism privately;

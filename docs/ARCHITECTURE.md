@@ -416,7 +416,10 @@ lives in `org.mrml.library.storage.ahci`, advertises the block-provider interfac
 and passes 50 tests per host, including bounded capability-authorized command
 construction without issue; the AHCI-free policy service passes 136 after adding
 a test-only FAT32 restart route. This is a package/interface extraction, not yet
-a live AHCI provider endpoint. Installed supervisor composition remains planned.
+a live AHCI provider endpoint. Source-tested supervised construction,
+activation, and the typed freeze-first teardown boundary now exist, but a
+production controller-manager teardown lease, installed stop-request routing
+and entry execution, and live provider publication remain incomplete.
 This reuses canonical package resolution and cleanup-gated
 service restart, so compatible replacement needs no kernel reboot and cannot
 silently retain stale authority.

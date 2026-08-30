@@ -9,11 +9,11 @@ use crate::{
     BoundAhciServiceLaunch, InstalledAhciPortDma,
 };
 use mrml_kernel::{
-    Capability, CapabilitySpace, ServiceAddressSpaceEraser, ServiceCleanupError,
-    ServiceCleanupTicket, ServiceId, ServiceSupervisor, SupervisedNativeDeviceServiceDispatch,
-    SupervisedNativeDeviceServiceFreeze, SupervisedNativeDeviceServiceRetirement,
-    SupervisedNativeDeviceServiceRetirementError, TaskRuntime, TaskTerminationDispatch,
-    TaskTerminationDispatchError,
+    Capability, CapabilitySpace, NativeDeviceServiceTask, ServiceAddressSpaceEraser,
+    ServiceCleanupError, ServiceCleanupTicket, ServiceId, ServiceSupervisor,
+    SupervisedNativeDeviceServiceDispatch, SupervisedNativeDeviceServiceFreeze,
+    SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError, TaskId,
+    TaskRuntime, TaskTerminationDispatch, TaskTerminationDispatchError,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -188,13 +188,15 @@ pub enum AhciServiceTaskBindingError {
     DataRegionMismatch,
 }
 
-pub struct QuiescedAhciServiceTask<R, M, D> {
+/// Frozen service lifecycle after device/data/DMA quiescence and destruction
+/// of every borrowed register, command-memory, and data-buffer view.
+pub struct QuiescedAhciServiceTask {
     frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
-    backend: QuiescedAhciCommandBackend<R, M, D>,
+    mappings: QuiescedAhciServiceMappings,
 }
 
-impl<R, M, D> QuiescedAhciServiceTask<R, M, D> {
+impl QuiescedAhciServiceTask {
     pub const fn task(&self) -> mrml_kernel::TaskId {
         self.frozen.task()
     }
@@ -208,105 +210,300 @@ impl<R, M, D> QuiescedAhciServiceTask<R, M, D> {
     }
 }
 
-pub enum ActiveAhciServiceQuiesceError<R, M, D> {
-    Binding {
-        error: AhciServiceTaskBindingError,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciServiceTeardownLeaseBindingError {
+    NativeTaskMismatch,
+    LaunchMismatch,
+}
+
+/// One-shot manager authority retained for exactly one activated AHCI service.
+/// Identity accessors support exact matching but do not themselves authorize
+/// device reclamation.
+///
+/// # Safety
+///
+/// An implementation must be minted from the controller manager's exclusive
+/// assignment authority for exactly `native_task()` and `launch()`, including
+/// the native task's opaque runtime identity. Both identity accessors must be
+/// stable and side-effect-free for the lease's lifetime. The lease must remain
+/// non-duplicated while the service runs. Dropping it before successful
+/// acquisition must be inert and fail-stopped: no hardware access, unmapping,
+/// DMA revocation, assignment release/reissue, task resume, or dispatch.
+/// `reacquire` consumes that authority and may return success exactly once,
+/// atomically transferring the sole register, active-port, command-memory, and
+/// data-buffer teardown owners with no aliases.
+/// It runs only after the exact task is frozen and must not resume or dispatch
+/// it. On failure it must perform no acquisition mutation and return the same
+/// lease. `Error` must be diagnostic-only: it may retain no partial owner or
+/// alias and its destructor must have no lifecycle, mapping, DMA, or hardware
+/// effect. Returned view owners remain valid until successful quiescence drops
+/// them; their destructors may only release views and must not touch hardware,
+/// unmap, revoke DMA, or retain aliases.
+pub unsafe trait AhciServiceTeardownLease: Sized {
+    type Registers;
+    type CommandMemory;
+    type DataIo;
+    type Error;
+
+    fn native_task(&self) -> NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>;
+
+    fn launch(&self) -> BoundAhciServiceLaunch;
+
+    /// Transfers teardown mechanism after the exact bound task is frozen.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the matching consuming
+    /// [`FrozenAhciServiceExit`] and must not permit the task to resume or any
+    /// other issuer to access the controller during this call.
+    unsafe fn reacquire(
+        self,
+    ) -> Result<
+        AhciCommandBackendTeardown<Self::Registers, Self::CommandMemory, Self::DataIo>,
+        (Self::Error, Self),
+    >;
+}
+
+/// Manager-owned stop handoff created before any AHCI teardown state is
+/// reacquired. The exact service task is frozen and cannot run, while the
+/// one-shot controller-manager lease and all mapping owners remain retained.
+pub struct FrozenAhciServiceExit<L> {
+    frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    mappings: AhciServiceMappingTeardown,
+    lease: L,
+}
+
+impl<L> FrozenAhciServiceExit<L> {
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+
+    pub const fn launch(&self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+}
+
+pub enum AhciServiceExitFreezeError<L> {
+    LeaseBinding {
+        error: AhciServiceTeardownLeaseBindingError,
         active: crate::ActiveAhciNativeServiceTask,
-        backend: AhciCommandBackendTeardown<R, M, D>,
-    },
-    Device {
-        frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
-        launch: BoundAhciServiceLaunch,
-        error: AhciCommandBackendQuiesceError<R, M, D>,
+        lease: L,
     },
     Lifecycle {
         error: SupervisedNativeDeviceServiceRetirementError,
         active: crate::ActiveAhciNativeServiceTask,
-        backend: AhciCommandBackendTeardown<R, M, D>,
+        lease: L,
     },
 }
 
-impl<R, M, D> ActiveAhciServiceQuiesceError<R, M, D> {
-    pub const fn binding_error(&self) -> Option<AhciServiceTaskBindingError> {
+impl<L> AhciServiceExitFreezeError<L> {
+    pub const fn binding_error(&self) -> Option<AhciServiceTeardownLeaseBindingError> {
         match self {
-            Self::Binding { error, .. } => Some(*error),
-            Self::Device { .. } | Self::Lifecycle { .. } => None,
+            Self::LeaseBinding { error, .. } => Some(*error),
+            Self::Lifecycle { .. } => None,
         }
     }
 
     pub const fn lifecycle_error(&self) -> Option<SupervisedNativeDeviceServiceRetirementError> {
         match self {
+            Self::LeaseBinding { .. } => None,
             Self::Lifecycle { error, .. } => Some(*error),
-            Self::Binding { .. } | Self::Device { .. } => None,
         }
     }
 
-    pub const fn device_error(&self) -> Option<&AhciServiceDeviceQuiesceError> {
+    pub fn into_parts(self) -> (crate::ActiveAhciNativeServiceTask, L) {
         match self {
-            Self::Binding { .. } => None,
-            Self::Device { error, .. } => Some(error.failure()),
-            Self::Lifecycle { .. } => None,
-        }
-    }
-
-    pub fn into_binding_parts(
-        self,
-    ) -> Result<
-        (
-            AhciServiceTaskBindingError,
-            crate::ActiveAhciNativeServiceTask,
-            AhciCommandBackendTeardown<R, M, D>,
-        ),
-        Self,
-    > {
-        match self {
-            Self::Binding {
-                error,
-                active,
-                backend,
-            } => Ok((error, active, backend)),
-            other => Err(other),
-        }
-    }
-
-    pub fn into_lifecycle_parts(
-        self,
-    ) -> Result<
-        (
-            SupervisedNativeDeviceServiceRetirementError,
-            crate::ActiveAhciNativeServiceTask,
-            AhciCommandBackendTeardown<R, M, D>,
-        ),
-        Self,
-    > {
-        match self {
-            Self::Lifecycle {
-                error,
-                active,
-                backend,
-            } => Ok((error, active, backend)),
-            other => Err(other),
+            Self::LeaseBinding { active, lease, .. } | Self::Lifecycle { active, lease, .. } => {
+                (active, lease)
+            }
         }
     }
 }
 
-pub fn quiesce_active_ahci_service_task<
-    R: AhciRegisterIo,
-    M: AhciCommandMemoryIo,
-    D: AhciDataBufferIo,
-    B: AhciPortDmaBackend,
+/// Consumes the exact active AHCI owner when its current userspace task asks to
+/// stop. This transition performs no MMIO, command-memory, data-buffer, or DMA
+/// operation. Holding the typed active owner is the manager's authority; an
+/// untrusted operation number, status value, or service identifier is not.
+pub fn begin_active_ahci_service_exit<
+    L: AhciServiceTeardownLease,
     const TASKS: usize,
     const CAPABILITIES: usize,
     const SERVICES: usize,
 >(
     active: crate::ActiveAhciNativeServiceTask,
-    backend: AhciCommandBackendTeardown<R, M, D>,
-    dma_backend: &mut B,
+    lease: L,
     supervisor: &ServiceSupervisor<SERVICES>,
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
-) -> Result<QuiescedAhciServiceTask<R, M, D>, ActiveAhciServiceQuiesceError<R, M, D>> {
-    let spec = active.mapped().prepared().launch().spec();
-    let failure = if backend.mapping() != spec.mapping() {
+) -> Result<FrozenAhciServiceExit<L>, AhciServiceExitFreezeError<L>> {
+    let native = active.mapped().prepared().task();
+    let launch = active.mapped().prepared().launch();
+    let binding_error = if lease.native_task() != native {
+        Some(AhciServiceTeardownLeaseBindingError::NativeTaskMismatch)
+    } else if lease.launch() != launch {
+        Some(AhciServiceTeardownLeaseBindingError::LaunchMismatch)
+    } else {
+        None
+    };
+    if let Some(error) = binding_error {
+        return Err(AhciServiceExitFreezeError::LeaseBinding {
+            error,
+            active,
+            lease,
+        });
+    }
+    let frozen =
+        match supervisor.freeze_current_native_device_service(active.binding(), native, runtime) {
+            Ok(frozen) => frozen,
+            Err(error) => {
+                return Err(AhciServiceExitFreezeError::Lifecycle {
+                    error,
+                    active,
+                    lease,
+                });
+            }
+        };
+    let (binding, mapped) = active.into_parts();
+    let (prepared, mappings) = mapped.into_parts();
+    debug_assert_eq!(binding.service(), frozen.service());
+    Ok(FrozenAhciServiceExit {
+        frozen,
+        launch: prepared.launch(),
+        mappings,
+        lease,
+    })
+}
+
+pub struct ReacquiredAhciServiceTeardown<R, M, D> {
+    frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    mappings: AhciServiceMappingTeardown,
+    backend: AhciCommandBackendTeardown<R, M, D>,
+}
+
+impl<R, M, D> ReacquiredAhciServiceTeardown<R, M, D> {
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+}
+
+pub struct QuarantinedAhciServiceTeardown<R, M, D> {
+    frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    mappings: AhciServiceMappingTeardown,
+    backend: AhciCommandBackendTeardown<R, M, D>,
+}
+
+impl<R, M, D> QuarantinedAhciServiceTeardown<R, M, D> {
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+
+    pub const fn launch(&self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+
+    pub fn retained_mappings_complete(&self) -> bool {
+        self.mappings.complete()
+    }
+
+    pub const fn acquired_mapping(&self) -> AhciAbarMapping {
+        self.backend.mapping()
+    }
+}
+
+pub enum AhciServiceTeardownReacquisitionError<L, E, R, M, D> {
+    Lease {
+        error: E,
+        frozen: FrozenAhciServiceExit<L>,
+    },
+    Binding {
+        error: AhciServiceTaskBindingError,
+        quarantine: QuarantinedAhciServiceTeardown<R, M, D>,
+    },
+}
+
+impl<L, E, R, M, D> AhciServiceTeardownReacquisitionError<L, E, R, M, D> {
+    pub const fn lease_error(&self) -> Option<&E> {
+        match self {
+            Self::Lease { error, .. } => Some(error),
+            Self::Binding { .. } => None,
+        }
+    }
+
+    pub const fn binding_error(&self) -> Option<AhciServiceTaskBindingError> {
+        match self {
+            Self::Lease { .. } => None,
+            Self::Binding { error, .. } => Some(*error),
+        }
+    }
+
+    pub fn into_retry(self) -> Result<(E, FrozenAhciServiceExit<L>), Self> {
+        match self {
+            Self::Lease { error, frozen } => Ok((error, frozen)),
+            other => Err(other),
+        }
+    }
+
+    pub fn into_quarantine(self) -> Result<QuarantinedAhciServiceTeardown<R, M, D>, Self> {
+        match self {
+            Self::Binding { quarantine, .. } => Ok(quarantine),
+            other => Err(other),
+        }
+    }
+}
+
+/// Reacquires trusted teardown mechanism only after the exact task is frozen,
+/// then independently exact-matches the lease result to retained launch
+/// state before any device quiescence begins.
+///
+/// The unsafe implementation of [`AhciServiceTeardownLease`] supplies the sole
+/// authority-transfer proof. This safe wrapper consumes it only after the
+/// exact runtime-bound native task has been frozen. Successful quiescence later
+/// destroys all borrowed views before retirement or mapping withdrawal.
+pub fn reacquire_frozen_ahci_service_teardown<L: AhciServiceTeardownLease>(
+    frozen: FrozenAhciServiceExit<L>,
+) -> Result<
+    ReacquiredAhciServiceTeardown<L::Registers, L::CommandMemory, L::DataIo>,
+    AhciServiceTeardownReacquisitionError<L, L::Error, L::Registers, L::CommandMemory, L::DataIo>,
+> {
+    let FrozenAhciServiceExit {
+        frozen: lifecycle,
+        launch,
+        mappings,
+        lease,
+    } = frozen;
+    // SAFETY: the consuming owner contains the exact freeze whose native task
+    // and launch were matched to this lease before that freeze was created.
+    // No safe API exposes the frozen task for resume or controller issue.
+    let backend = match unsafe { lease.reacquire() } {
+        Ok(backend) => backend,
+        Err((error, lease)) => {
+            return Err(AhciServiceTeardownReacquisitionError::Lease {
+                error,
+                frozen: FrozenAhciServiceExit {
+                    frozen: lifecycle,
+                    launch,
+                    mappings,
+                    lease,
+                },
+            });
+        }
+    };
+    let spec = launch.spec();
+    let binding = if backend.mapping() != spec.mapping() {
         Some(AhciServiceTaskBindingError::MappingMismatch)
     } else if backend.port() != &ActiveAhciPort::from_layout(spec.layout()) {
         Some(AhciServiceTaskBindingError::PortMismatch)
@@ -315,33 +512,55 @@ pub fn quiesce_active_ahci_service_task<
     } else {
         None
     };
-    if let Some(error) = failure {
-        return Err(ActiveAhciServiceQuiesceError::Binding {
+    if let Some(error) = binding {
+        return Err(AhciServiceTeardownReacquisitionError::Binding {
             error,
-            active,
-            backend,
+            quarantine: QuarantinedAhciServiceTeardown {
+                frozen: lifecycle,
+                launch,
+                mappings,
+                backend,
+            },
         });
     }
+    Ok(ReacquiredAhciServiceTeardown {
+        frozen: lifecycle,
+        launch,
+        mappings,
+        backend,
+    })
+}
 
-    let native = active.mapped().prepared().task();
-    let frozen =
-        match supervisor.freeze_current_native_device_service(active.binding(), native, runtime) {
-            Ok(frozen) => frozen,
-            Err(error) => {
-                return Err(ActiveAhciServiceQuiesceError::Lifecycle {
-                    error,
-                    active,
-                    backend,
-                });
-            }
-        };
-    let (binding, mapped) = active.into_parts();
-    let (prepared, mappings) = mapped.into_parts();
-    debug_assert_eq!(binding.service(), frozen.service());
-    let launch = prepared.launch();
+pub struct FrozenAhciServiceQuiesceError<R, M, D> {
+    frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    error: AhciCommandBackendQuiesceError<R, M, D>,
+}
+
+impl<R, M, D> FrozenAhciServiceQuiesceError<R, M, D> {
+    pub const fn device_error(&self) -> &AhciServiceDeviceQuiesceError {
+        self.error.failure()
+    }
+}
+
+pub fn quiesce_reacquired_ahci_service<
+    R: AhciRegisterIo,
+    M: AhciCommandMemoryIo,
+    D: AhciDataBufferIo,
+    B: AhciPortDmaBackend,
+>(
+    owner: ReacquiredAhciServiceTeardown<R, M, D>,
+    dma_backend: &mut B,
+) -> Result<QuiescedAhciServiceTask, FrozenAhciServiceQuiesceError<R, M, D>> {
+    let ReacquiredAhciServiceTeardown {
+        frozen,
+        launch,
+        mappings,
+        backend,
+    } = owner;
     match quiesce_ahci_command_backend(backend, mappings, dma_backend) {
         Ok(backend) => Ok(quiesced_service_task(frozen, launch, backend)),
-        Err(error) => Err(ActiveAhciServiceQuiesceError::Device {
+        Err(error) => Err(FrozenAhciServiceQuiesceError {
             frozen,
             launch,
             error,
@@ -349,26 +568,18 @@ pub fn quiesce_active_ahci_service_task<
     }
 }
 
-pub fn resume_active_ahci_service_task_quiescence<
-    R,
-    M,
-    D: AhciDataBufferIo,
-    B: AhciPortDmaBackend,
->(
-    error: ActiveAhciServiceQuiesceError<R, M, D>,
+pub fn resume_frozen_ahci_service_quiescence<R, M, D: AhciDataBufferIo, B: AhciPortDmaBackend>(
+    error: FrozenAhciServiceQuiesceError<R, M, D>,
     dma_backend: &mut B,
-) -> Result<QuiescedAhciServiceTask<R, M, D>, ActiveAhciServiceQuiesceError<R, M, D>> {
-    let ActiveAhciServiceQuiesceError::Device {
+) -> Result<QuiescedAhciServiceTask, FrozenAhciServiceQuiesceError<R, M, D>> {
+    let FrozenAhciServiceQuiesceError {
         frozen,
         launch,
         error,
-    } = error
-    else {
-        return Err(error);
-    };
+    } = error;
     match resume_ahci_command_backend_teardown(error, dma_backend) {
         Ok(backend) => Ok(quiesced_service_task(frozen, launch, backend)),
-        Err(error) => Err(ActiveAhciServiceQuiesceError::Device {
+        Err(error) => Err(FrozenAhciServiceQuiesceError {
             frozen,
             launch,
             error,
@@ -380,37 +591,44 @@ fn quiesced_service_task<R, M, D>(
     frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
     backend: QuiescedAhciCommandBackend<R, M, D>,
-) -> QuiescedAhciServiceTask<R, M, D> {
+) -> QuiescedAhciServiceTask {
+    let (mappings, _, registers, command_memory, data_io) = backend.into_parts();
+    // These owners may borrow the service's CPU mappings. Destroy every view
+    // while the frozen address space and mappings are still live; the returned
+    // lifecycle token deliberately contains no generic backend value.
+    drop(data_io);
+    drop(command_memory);
+    drop(registers);
     QuiescedAhciServiceTask {
         frozen,
         launch,
-        backend,
+        mappings,
     }
 }
 
-pub struct RetiredAhciServiceTask<R, M, D> {
+pub struct RetiredAhciServiceTask {
     retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
-    backend: QuiescedAhciCommandBackend<R, M, D>,
+    mappings: QuiescedAhciServiceMappings,
 }
 
-impl<R, M, D> RetiredAhciServiceTask<R, M, D> {
+impl RetiredAhciServiceTask {
     pub const fn service(&self) -> ServiceId {
         self.retirement.service()
     }
 }
 
-pub struct AhciServiceTaskRetirementError<R, M, D> {
+pub struct AhciServiceTaskRetirementError {
     error: SupervisedNativeDeviceServiceRetirementError,
-    owner: QuiescedAhciServiceTask<R, M, D>,
+    owner: QuiescedAhciServiceTask,
 }
 
-impl<R, M, D> AhciServiceTaskRetirementError<R, M, D> {
+impl AhciServiceTaskRetirementError {
     pub const fn error(&self) -> SupervisedNativeDeviceServiceRetirementError {
         self.error
     }
 
-    pub fn into_owner(self) -> QuiescedAhciServiceTask<R, M, D> {
+    pub fn into_owner(self) -> QuiescedAhciServiceTask {
         self.owner
     }
 }
@@ -419,27 +637,24 @@ impl<R, M, D> AhciServiceTaskRetirementError<R, M, D> {
 ///
 /// # Safety
 ///
-/// The caller must establish that the supplied command and DMA backend
-/// implementations truthfully enforce engine stop, command completion or
-/// fail-closed cancellation, data sanitization, and DMA withdrawal. The
-/// returned owner must continue through typed mapping removal and exact
-/// supervisor cleanup before successor dispatch.
+/// The caller must establish that the backends which produced `owner`
+/// truthfully enforced engine stop, command completion or fail-closed
+/// cancellation, data sanitization, and DMA withdrawal. All borrowed backend
+/// views have already been destroyed. The returned owner must continue through
+/// typed mapping removal and exact supervisor cleanup before successor dispatch.
 pub unsafe fn retire_quiesced_ahci_service_task<
-    R,
-    M,
-    D,
     const TASKS: usize,
     const CAPABILITIES: usize,
     const SERVICES: usize,
 >(
-    owner: QuiescedAhciServiceTask<R, M, D>,
+    owner: QuiescedAhciServiceTask,
     supervisor: &mut ServiceSupervisor<SERVICES>,
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
-) -> Result<RetiredAhciServiceTask<R, M, D>, AhciServiceTaskRetirementError<R, M, D>> {
+) -> Result<RetiredAhciServiceTask, AhciServiceTaskRetirementError> {
     let QuiescedAhciServiceTask {
         frozen,
         launch,
-        backend,
+        mappings,
     } = owner;
     // SAFETY: the caller supplies the trusted-backend proof documented above;
     // the consuming owner proves that this path ran those backend operations.
@@ -448,7 +663,7 @@ pub unsafe fn retire_quiesced_ahci_service_task<
         Ok(retirement) => Ok(RetiredAhciServiceTask {
             retirement,
             launch,
-            backend,
+            mappings,
         }),
         Err(error) => {
             let retirement_error = error.error();
@@ -457,48 +672,35 @@ pub unsafe fn retire_quiesced_ahci_service_task<
                 owner: QuiescedAhciServiceTask {
                     frozen: error.into_frozen(),
                     launch,
-                    backend,
+                    mappings,
                 },
             })
         }
     }
 }
 
-pub struct RetiredAhciServiceMappingsRemoved<R, M, D> {
+pub struct RetiredAhciServiceMappingsRemoved {
     retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
-    registers: R,
-    command_memory: M,
-    data_io: D,
 }
 
-pub struct AhciRetiredMappingRemovalError<E, R, M, D> {
+pub struct AhciRetiredMappingRemovalError<E> {
     error: AhciServiceMappingRemovalError<E>,
     retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
-    data_region: AhciDataDmaRegion,
-    registers: R,
-    command_memory: M,
-    data_io: D,
 }
 
-impl<E, R, M, D> AhciRetiredMappingRemovalError<E, R, M, D> {
+impl<E> AhciRetiredMappingRemovalError<E> {
     pub const fn error(&self) -> &AhciServiceMappingRemovalError<E> {
         &self.error
     }
 
-    pub fn into_owner(self) -> RetiredAhciServiceTask<R, M, D> {
+    pub fn into_owner(self) -> RetiredAhciServiceTask {
         RetiredAhciServiceTask {
             retirement: self.retirement,
             launch: self.launch,
-            backend: QuiescedAhciCommandBackend {
-                mappings: QuiescedAhciServiceMappings {
-                    mappings: self.error.into_retained(),
-                },
-                data_region: self.data_region,
-                registers: self.registers,
-                command_memory: self.command_memory,
-                data_io: self.data_io,
+            mappings: QuiescedAhciServiceMappings {
+                mappings: self.error.into_retained(),
             },
         }
     }
@@ -514,26 +716,19 @@ impl<E, R, M, D> AhciRetiredMappingRemovalError<E, R, M, D> {
 pub unsafe fn remove_retired_ahci_service_mappings<
     A: AhciAbarRemovalBackend,
     B: AhciServiceCpuMappingBackend,
-    R,
-    M,
-    D,
     const C: usize,
 >(
-    owner: RetiredAhciServiceTask<R, M, D>,
+    owner: RetiredAhciServiceTask,
     abar_control_capability: Capability,
     capabilities: &CapabilitySpace<C>,
     abar_backend: &mut A,
     cpu_backend: &mut B,
-) -> Result<
-    RetiredAhciServiceMappingsRemoved<R, M, D>,
-    AhciRetiredMappingRemovalError<B::Error, R, M, D>,
-> {
+) -> Result<RetiredAhciServiceMappingsRemoved, AhciRetiredMappingRemovalError<B::Error>> {
     let RetiredAhciServiceTask {
         retirement,
         launch,
-        backend,
+        mappings,
     } = owner;
-    let (mappings, data_region, registers, command_memory, data_io) = backend.into_parts();
     match remove_quiesced_ahci_service_mappings(
         mappings,
         abar_control_capability,
@@ -543,45 +738,32 @@ pub unsafe fn remove_retired_ahci_service_mappings<
     ) {
         Ok(state) => {
             debug_assert!(state.complete());
-            Ok(RetiredAhciServiceMappingsRemoved {
-                retirement,
-                launch,
-                registers,
-                command_memory,
-                data_io,
-            })
+            Ok(RetiredAhciServiceMappingsRemoved { retirement, launch })
         }
         Err(error) => Err(AhciRetiredMappingRemovalError {
             error,
             retirement,
             launch,
-            data_region,
-            registers,
-            command_memory,
-            data_io,
         }),
     }
 }
 
-pub struct RetiredAhciServiceCleanupComplete<R, M, D> {
+pub struct RetiredAhciServiceCleanupComplete {
     retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
-    registers: R,
-    command_memory: M,
-    data_io: D,
 }
 
-pub struct AhciRetiredServiceCleanupError<E, R, M, D> {
+pub struct AhciRetiredServiceCleanupError<E> {
     error: ServiceCleanupError<E>,
-    owner: RetiredAhciServiceMappingsRemoved<R, M, D>,
+    owner: RetiredAhciServiceMappingsRemoved,
 }
 
-impl<E, R, M, D> AhciRetiredServiceCleanupError<E, R, M, D> {
+impl<E> AhciRetiredServiceCleanupError<E> {
     pub const fn error(&self) -> &ServiceCleanupError<E> {
         &self.error
     }
 
-    pub fn into_owner(self) -> RetiredAhciServiceMappingsRemoved<R, M, D> {
+    pub fn into_owner(self) -> RetiredAhciServiceMappingsRemoved {
         self.owner
     }
 }
@@ -596,59 +778,32 @@ impl<E, R, M, D> AhciRetiredServiceCleanupError<E, R, M, D> {
 /// addressed. Dispatch must remain withheld until this call succeeds.
 pub unsafe fn complete_retired_ahci_service_cleanup<
     E: ServiceAddressSpaceEraser,
-    R,
-    M,
-    D,
     const SERVICES: usize,
 >(
-    owner: RetiredAhciServiceMappingsRemoved<R, M, D>,
+    owner: RetiredAhciServiceMappingsRemoved,
     supervisor: &mut ServiceSupervisor<SERVICES>,
     eraser: &mut E,
-) -> Result<
-    RetiredAhciServiceCleanupComplete<R, M, D>,
-    AhciRetiredServiceCleanupError<E::Error, R, M, D>,
-> {
-    let RetiredAhciServiceMappingsRemoved {
-        retirement,
-        launch,
-        registers,
-        command_memory,
-        data_io,
-    } = owner;
+) -> Result<RetiredAhciServiceCleanupComplete, AhciRetiredServiceCleanupError<E::Error>> {
+    let RetiredAhciServiceMappingsRemoved { retirement, launch } = owner;
     // SAFETY: the caller supplies the backend-success and address-erasure proof;
     // the typed owner binds completed mapping steps to the exact retirement.
     match unsafe {
         supervisor.complete_supervised_native_device_service_cleanup(&retirement, eraser)
     } {
-        Ok(()) => Ok(RetiredAhciServiceCleanupComplete {
-            retirement,
-            launch,
-            registers,
-            command_memory,
-            data_io,
-        }),
+        Ok(()) => Ok(RetiredAhciServiceCleanupComplete { retirement, launch }),
         Err(error) => Err(AhciRetiredServiceCleanupError {
             error,
-            owner: RetiredAhciServiceMappingsRemoved {
-                retirement,
-                launch,
-                registers,
-                command_memory,
-                data_io,
-            },
+            owner: RetiredAhciServiceMappingsRemoved { retirement, launch },
         }),
     }
 }
 
-pub struct DispatchedAhciServiceTask<R, M, D> {
+pub struct DispatchedAhciServiceTask {
     retirement: SupervisedNativeDeviceServiceDispatch<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
     launch: BoundAhciServiceLaunch,
-    registers: R,
-    command_memory: M,
-    data_io: D,
 }
 
-impl<R, M, D> DispatchedAhciServiceTask<R, M, D> {
+impl DispatchedAhciServiceTask {
     pub const fn dispatch(&self) -> &TaskTerminationDispatch {
         self.retirement.dispatch()
     }
@@ -666,60 +821,33 @@ impl<R, M, D> DispatchedAhciServiceTask<R, M, D> {
     ) -> (
         SupervisedNativeDeviceServiceDispatch<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
         BoundAhciServiceLaunch,
-        R,
-        M,
-        D,
     ) {
-        (
-            self.retirement,
-            self.launch,
-            self.registers,
-            self.command_memory,
-            self.data_io,
-        )
+        (self.retirement, self.launch)
     }
 }
 
-pub struct AhciServiceDispatchError<R, M, D> {
+pub struct AhciServiceDispatchError {
     error: TaskTerminationDispatchError,
-    owner: RetiredAhciServiceCleanupComplete<R, M, D>,
+    owner: RetiredAhciServiceCleanupComplete,
 }
 
-impl<R, M, D> AhciServiceDispatchError<R, M, D> {
+impl AhciServiceDispatchError {
     pub const fn error(&self) -> TaskTerminationDispatchError {
         self.error
     }
 
-    pub fn into_owner(self) -> RetiredAhciServiceCleanupComplete<R, M, D> {
+    pub fn into_owner(self) -> RetiredAhciServiceCleanupComplete {
         self.owner
     }
 }
 
-pub fn dispatch_retired_ahci_service_task<
-    R,
-    M,
-    D,
-    const TASKS: usize,
-    const CAPABILITIES: usize,
->(
-    owner: RetiredAhciServiceCleanupComplete<R, M, D>,
+pub fn dispatch_retired_ahci_service_task<const TASKS: usize, const CAPABILITIES: usize>(
+    owner: RetiredAhciServiceCleanupComplete,
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
-) -> Result<DispatchedAhciServiceTask<R, M, D>, AhciServiceDispatchError<R, M, D>> {
-    let RetiredAhciServiceCleanupComplete {
-        retirement,
-        launch,
-        registers,
-        command_memory,
-        data_io,
-    } = owner;
+) -> Result<DispatchedAhciServiceTask, AhciServiceDispatchError> {
+    let RetiredAhciServiceCleanupComplete { retirement, launch } = owner;
     match retirement.dispatch(runtime) {
-        Ok(retirement) => Ok(DispatchedAhciServiceTask {
-            retirement,
-            launch,
-            registers,
-            command_memory,
-            data_io,
-        }),
+        Ok(retirement) => Ok(DispatchedAhciServiceTask { retirement, launch }),
         Err(error) => {
             let dispatch_error = error.error();
             Err(AhciServiceDispatchError {
@@ -727,9 +855,6 @@ pub fn dispatch_retired_ahci_service_task<
                 owner: RetiredAhciServiceCleanupComplete {
                     retirement: error.into_retirement(),
                     launch,
-                    registers,
-                    command_memory,
-                    data_io,
                 },
             })
         }

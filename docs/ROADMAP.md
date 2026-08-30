@@ -54,10 +54,12 @@ mechanisms: all AHCI modules moved intact to
 the storage policy service has no static AHCI module. Windows and Arch Linux each
 pass 50 provider tests and 136 storage tests. The AHCI service entry/IPC adapter
 has since advanced through launch binding, task construction, mapping, entry
-adaptation, atomic supervised activation, execution freeze, device/DMA
+adaptation, atomic supervised activation, a source-tested freeze-first stop
+handoff with one-shot runtime-bound teardown reacquisition, device/DMA
 quiescence, supervisor-bound retirement, mapping withdrawal, exact cleanup, and
-delayed dispatch as described below. Installed entry execution remains
-unfinished, and physical AHCI integration remains unverified.
+delayed dispatch as described below. A production controller-manager teardown
+lease, installed operation-3 routing and entry execution remain unfinished, and
+physical AHCI integration remains unverified.
 
 The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-2 filesystem binding
@@ -1423,8 +1425,10 @@ receiver validates that exact register projection, copies and erases the launch
 record, constructs the launch-bound directional authorizer, admits only a
 calibrated invariant-TSC delay, prepares native coherent ABAR/DMA state, and
 runs the persistent dispatcher over the single static buffer owner. The first
-dispatch error erases all working storage and requests normal task termination
-for supervisor cleanup. The canonical workspace lock and manifest checks pass;
+dispatch error erases all working storage and issues the existing operation-3
+stop request. The source-tested freeze-first manager handoff is separate; no
+installed syscall path yet routes that request into it. The canonical workspace
+lock and manifest checks pass;
 both the default and AHCI-profile `MRML_NATIVE` service-image release builds
 pass; focused AHCI Linux tests remain 130/130; and controlled PE disassembly
 confirms the entry register saves, argument moves, and receiver call. No service
@@ -1649,6 +1653,55 @@ Patent review: `NOT_TRIGGERED` — preserving existing endpoint and task token
 namespaces in Rust types, carrying their validated provenance in an opaque
 binding, and documenting non-authorizing identity reconstruction are
 conventional type-safety hardening. See `docs/patents/REVIEW_LOG.md`.
+
+Freeze-first AHCI stop handling is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`begin_active_ahci_service_exit` consumes the non-copy active-service owner only
+with a one-shot teardown lease bound to the exact native task, including its
+opaque runtime identity, and exact launch. Those bindings are checked before
+the supervisor freezes the current task. An operation number, status value,
+service ID, or lease identity accessor grants no teardown authority; binding or
+lifecycle denial returns the active owner and untouched lease without invoking
+reacquisition.
+
+Only after the exact task is frozen may the consuming lease transfer the sole
+register, active-port, command-memory, and data-buffer teardown owners.
+Reacquisition failure returns the same lease and frozen lifecycle for retry.
+Mapping, port, or data-region substitution after acquisition creates one typed
+quarantine retaining the frozen task, acquired backend, and mapping owners, so
+substituted state cannot become quiescence authority. Successful quiescence
+stops or fails closed outstanding work, sanitizes data, withdraws DMA, and
+destroys every borrowed register, command-memory, and data-buffer view while
+the frozen address space and mappings remain live. Only then may retirement and
+CPU/ABAR mapping withdrawal proceed; successor dispatch remains withheld
+through exact cleanup.
+
+The focused Linux AHCI suite passes all 138 tests. Coverage includes equal task
+tokens from different runtimes, pre-freeze current-task and supervisor denial
+without reacquisition, retry after lease-reacquisition failure, substituted
+state quarantine, frozen mutation denial, quiescence retry, and the existing
+retirement/unmap/cleanup/dispatch chain. This is typed API, controlled backend,
+and unit-test evidence only. The repository has no production
+controller-manager lease implementation or installed operation-3 routing, and
+no installed CPL3/`INT 0x80`, active page-table/TLB/IOMMU, KVM/WHP, or physical
+AHCI execution was exercised.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — binding an existing manager owner to the
+existing supervisor/runtime freeze and typed AHCI teardown, retrying failed
+owner transfer, quarantining substitution, and destroying borrowed views before
+existing retirement and mapping withdrawal are conventional fail-closed
+lifecycle composition. This adds no AHCI command, DMA, interrupt, parser,
+authority-model, or hardware-execution mechanism; the existing triggered review
+for actual native AHCI controller/DMA behavior is unchanged. See
+`docs/patents/REVIEW_LOG.md`.
 
 Mapped AHCI activation through delayed dispatch now forms one consuming
 supervisor/runtime-bound lifecycle **IMPLEMENTED IN SOURCE**.
