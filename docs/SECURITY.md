@@ -1171,6 +1171,12 @@ fresh nonzero completion serial only after exact removal. Replay is stale, while
 serial exhaustion leaves the mount live so uncertainty cannot masquerade as
 successful revocation.
 
+Mount admission reads sector zero only through an unsafe backend contract whose
+success must correspond to the exact supplied live volume handle and fill the
+complete sector. The provider validates the sector before lifecycle publication
+and erases scratch on every path. Backend failure or malformed media consumes no
+mount/root generation and publishes no record.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

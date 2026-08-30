@@ -209,6 +209,88 @@ impl<const N: usize> Default for Fat32MountTable<N> {
     }
 }
 
+/// Trusted exact-volume source for FAT32 mount admission.
+///
+/// # Safety
+///
+/// An implementation must read sector zero only from the block volume identified
+/// by the exact opaque handle supplied to `read_boot_sector`. Success must fill
+/// the complete destination from that same live volume generation.
+pub unsafe trait Fat32MountBackend {
+    type Error;
+
+    fn read_boot_sector(
+        &mut self,
+        volume: OpaqueHandle,
+        output: &mut [u8; FAT32_BOOT_SECTOR_BYTES],
+    ) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32MountAdmissionError<E> {
+    Backend(E),
+    InvalidFilesystem(Fat32Error),
+    Lifecycle(Fat32MountError),
+}
+
+pub struct Fat32MountedProvider<B, const N: usize> {
+    backend: B,
+    mounts: Fat32MountTable<N>,
+}
+
+impl<B, const N: usize> Fat32MountedProvider<B, N> {
+    pub const fn new(backend: B) -> Self {
+        Self {
+            backend,
+            mounts: Fat32MountTable::new(),
+        }
+    }
+
+    pub fn into_backend(self) -> B {
+        self.backend
+    }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
+    pub fn geometry(
+        &self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+    ) -> Result<Fat32Geometry, Fat32MountError> {
+        self.mounts.geometry(volume, generation, root)
+    }
+
+    pub fn unmount(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+    ) -> Result<Fat32Unmounted, Fat32MountError> {
+        self.mounts.unmount(volume, generation)
+    }
+}
+
+impl<B: Fat32MountBackend, const N: usize> Fat32MountedProvider<B, N> {
+    pub fn mount(
+        &mut self,
+        volume: OpaqueHandle,
+    ) -> Result<MountResponse, Fat32MountAdmissionError<B::Error>> {
+        let mut sector = [0; FAT32_BOOT_SECTOR_BYTES];
+        if let Err(error) = self.backend.read_boot_sector(volume, &mut sector) {
+            sector.fill(0);
+            return Err(Fat32MountAdmissionError::Backend(error));
+        }
+        let parsed = parse_fat32_boot_sector(&sector);
+        sector.fill(0);
+        let geometry = parsed.map_err(Fat32MountAdmissionError::InvalidFilesystem)?;
+        self.mounts
+            .mount(volume, geometry)
+            .map_err(Fat32MountAdmissionError::Lifecycle)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fat32FsInfo {
     pub free_cluster_count: Option<u32>,
@@ -1203,6 +1285,80 @@ mod tests {
             mounts.geometry(volume, second.generation, second.root),
             Ok(geometry)
         );
+    }
+
+    struct MountBackend {
+        sector: [u8; FAT32_BOOT_SECTOR_BYTES],
+        fail: bool,
+        requested: Option<OpaqueHandle>,
+        destination_was_zero: bool,
+    }
+
+    unsafe impl Fat32MountBackend for MountBackend {
+        type Error = u8;
+
+        fn read_boot_sector(
+            &mut self,
+            volume: OpaqueHandle,
+            output: &mut [u8; FAT32_BOOT_SECTOR_BYTES],
+        ) -> Result<(), Self::Error> {
+            self.requested = Some(volume);
+            self.destination_was_zero = output.iter().all(|byte| *byte == 0);
+            if self.fail {
+                output.fill(0xaa);
+                return Err(9);
+            }
+            *output = self.sector;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn mounted_provider_validates_exact_volume_before_publishing_state() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        assert_eq!(provider.backend.requested, Some(volume));
+        assert!(provider.backend.destination_was_zero);
+        assert_eq!(
+            provider
+                .geometry(volume, mounted.generation, mounted.root)
+                .unwrap(),
+            parse_fat32_boot_sector(&boot_sector()).unwrap()
+        );
+    }
+
+    #[test]
+    fn backend_and_parse_failures_publish_nothing_and_do_not_consume_generations() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: [0; FAT32_BOOT_SECTOR_BYTES],
+            fail: true,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1>::new(backend);
+        assert_eq!(
+            provider.mount(volume),
+            Err(Fat32MountAdmissionError::Backend(9))
+        );
+        provider.backend_mut().fail = false;
+        assert_eq!(
+            provider.mount(volume),
+            Err(Fat32MountAdmissionError::InvalidFilesystem(
+                Fat32Error::InvalidJump
+            ))
+        );
+        provider.backend_mut().sector = boot_sector();
+        let mounted = provider.mount(volume).unwrap();
+        assert_eq!(mounted.generation, 1);
+        assert_eq!(mounted.root.generation(), 1);
     }
 
     #[test]

@@ -7410,7 +7410,17 @@ exhaustion paths preserve state; maximum generations are issued once and never
 wrap. This is provider-local identity state, not an open capability or live
 syscall dispatch. Exact unmount allocates one fresh nonzero completion serial only
 after removing the record; replay is stale, and serial exhaustion preserves the
-live record. The focused Linux-host provider suite passes thirty-eight tests.
+live record.
+
+A narrow unsafe FAT32 mount backend now binds validation to an exact volume
+handle. It must fill the complete sector-zero scratch from that live volume;
+the provider parses before publication and erases scratch after success or
+failure. Backend errors and malformed filesystems publish no record and consume
+no lifecycle generation. The focused Linux-host provider suite passes forty tests.
+
+Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
+scratch erasure, and failure-atomic admission are conventional storage-parser and
+resource-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
 Patent review: `NOT_TRIGGERED` — bounded slots, monotonic generations, exact
 identity matching, and atomic record removal are conventional resource-lifecycle
