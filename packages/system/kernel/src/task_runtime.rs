@@ -202,7 +202,7 @@ struct InboxDeliveryPlan {
     next_count: u8,
 }
 
-type DelegationSet = [Option<(TaskId, Capability)>; MAX_TASK_DELEGATIONS + 1];
+type DelegationSet = [Option<(TaskId, Capability)>; MAX_TASK_DELEGATIONS + 2];
 
 #[derive(Clone, Copy)]
 struct TrackedRevocationPlan {
@@ -210,7 +210,7 @@ struct TrackedRevocationPlan {
     capability: CapabilityRevocationPlan,
 }
 
-type TrackedRevocationSet = [Option<TrackedRevocationPlan>; MAX_TASK_DELEGATIONS + 1];
+type TrackedRevocationSet = [Option<TrackedRevocationPlan>; MAX_TASK_DELEGATIONS + 2];
 
 struct PeerDeathPublicationPlan {
     domain_slot: usize,
@@ -731,12 +731,50 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(())
     }
 
+    /// Atomically revokes two distinct roots and every tracked descendant.
+    /// Complete generation and graph validation precedes all capability-space
+    /// mutation, so a stale second root cannot partially revoke the first.
+    pub fn revoke_capability_pair(
+        &mut self,
+        task: TaskId,
+        first: Capability,
+        second: Capability,
+    ) -> Result<(), TaskRuntimeError> {
+        if first == second {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        self.capabilities(task)?
+            .describe(first)
+            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+        self.capabilities(task)?
+            .describe(second)
+            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+        let first_tree = self.delegation_descendants(task, first)?.0;
+        let second_tree = self.delegation_descendants(task, second)?.0;
+        let mut tracked: DelegationSet = [None; MAX_TASK_DELEGATIONS + 2];
+        let mut count = 0usize;
+        for item in first_tree.into_iter().chain(second_tree).flatten() {
+            if tracked[..count].contains(&Some(item)) {
+                continue;
+            }
+            let slot = tracked
+                .get_mut(count)
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            *slot = Some(item);
+            count += 1;
+        }
+        let plan = self.prepare_tracked_revocation(&tracked, 0)?;
+        self.commit_tracked_revocation(plan);
+        self.remove_tracked(&tracked);
+        Ok(())
+    }
+
     fn delegation_descendants(
         &self,
         task: TaskId,
         capability: Capability,
     ) -> Result<(DelegationSet, usize), TaskRuntimeError> {
-        let mut tracked = [None; MAX_TASK_DELEGATIONS + 1];
+        let mut tracked = [None; MAX_TASK_DELEGATIONS + 2];
         tracked[0] = Some((task, capability));
         let mut count = 1usize;
         let mut changed = true;
@@ -818,7 +856,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
 
     fn revoke_task_delegations(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
         self.validate_delegation_graph()?;
-        let mut descendants = [None; MAX_TASK_DELEGATIONS + 1];
+        let mut descendants = [None; MAX_TASK_DELEGATIONS + 2];
         let mut count = 0usize;
         for edge in self.delegations.iter().flatten().copied() {
             if edge.source_task == task
@@ -2332,7 +2370,28 @@ mod tests {
             projected_handles.next().unwrap(),
         ];
         assert_eq!(projected_handles.next(), None);
-        runtime.revoke_capability(source, root).unwrap();
+        let stale_provider_write =
+            Capability::from_token(provider_write.token().wrapping_add(1_u64 << 32));
+        assert!(runtime
+            .revoke_capability_pair(source, local_read, stale_provider_write)
+            .is_err());
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize(local_read, Rights::READ),
+            Ok(ObjectId(0xa0))
+        );
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize(projected[0], Rights::READ),
+            Ok(ObjectId(0xa0))
+        );
+        runtime
+            .revoke_capability_pair(source, local_read, provider_write)
+            .unwrap();
         for (task, capability, rights) in [
             (source, local_read, Rights::READ),
             (source, provider_write, Rights::WRITE),
@@ -2347,6 +2406,13 @@ mod tests {
                 Err(crate::CapabilityError::Invalid)
             );
         }
+        assert_eq!(
+            runtime
+                .capabilities(source)
+                .unwrap()
+                .authorize_exact(root, root_rights),
+            Ok(ObjectId(0xa0))
+        );
     }
 
     #[test]
@@ -2762,7 +2828,7 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x92), Rights::READ)
             .unwrap();
-        let mut tracked = [None; MAX_TASK_DELEGATIONS + 1];
+        let mut tracked = [None; MAX_TASK_DELEGATIONS + 2];
         tracked[0] = Some((task, capability));
         tracked[1] = Some((task, capability));
 

@@ -10308,3 +10308,17 @@ is still unfinished and no installed or physical execution is claimed.
 Patent review: `NOT_TRIGGERED` — retaining capability ancestry handles for
 ordered revocation is conventional capability-lifecycle bookkeeping. See
 `docs/patents/REVIEW_LOG.md`.
+
+Task-runtime cleanup now **PARTIALLY IMPLEMENTS IN SOURCE** atomic revocation of
+two distinct capability roots and their combined transitive descendant graph.
+Both roots, every live task generation, every capability generation, and the
+deduplicated revocation plan are validated before mutation. A stale second root
+therefore leaves the first root and its target descendants live, while a valid
+pair removes both trees and deliberately preserves their broader construction
+root for memory teardown. The Linux-host release kernel suite passes 649 tests.
+This is capability-graph simulation evidence and not yet the complete composed
+service-transfer teardown transaction.
+
+Patent review: `NOT_TRIGGERED` — atomic preflight and revocation of a bounded
+capability set is conventional capability-lifecycle management. See
+`docs/patents/REVIEW_LOG.md`.
