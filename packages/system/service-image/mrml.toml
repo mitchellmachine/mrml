@@ -28,6 +28,9 @@ name = "invalid-return-probe"
 name = "buffer-drift-probe"
 
 [[feature]]
+name = "deadline-receive-probe"
+
+[[feature]]
 name = "preemption-probe"
 
 [[artifact]]
@@ -99,6 +102,11 @@ targets = ["MRML_NATIVE"]
 [[feature_profile]]
 features = ["buffer-drift-probe"]
 name = "buffer_drift_probe"
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = ["deadline-receive-probe"]
+name = "deadline_receive_probe"
 targets = ["MRML_NATIVE"]
 
 [[target_triple]]

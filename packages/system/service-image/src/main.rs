@@ -257,7 +257,8 @@ impl ServicePolicyAuthorizer for KernelAuthorizer {
     not(feature = "preemption-probe"),
     not(feature = "block-service-loop"),
     not(feature = "invalid-return-probe"),
-    not(feature = "buffer-drift-probe")
+    not(feature = "buffer-drift-probe"),
+    not(feature = "deadline-receive-probe")
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_receiver(
@@ -319,6 +320,51 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         halt();
     }
     unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "deadline-receive-probe"))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_receiver(
+    _endpoint: u64,
+    _sender: u64,
+    _generation: u64,
+    _shared_write: u64,
+    _shared_read: u64,
+    _restart_manager: u64,
+    _recovery_capability: u64,
+) -> ! {
+    let mut status = 13u64;
+    let mut length = 0u64;
+    let mut word0 = 0u64;
+    let mut word1 = 0u64;
+    let mut word2 = 0u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") 1u64,
+            in("rsi") 0u64,
+            inlateout("rdx") length,
+            inlateout("r10") word0,
+            inlateout("r8") word1,
+            inlateout("r9") word2,
+            options(nostack)
+        )
+    };
+    if status != mrml_kernel::SyscallCompletionStatus::TimedOut.code()
+        || length | word0 | word1 | word2 != 0
+    {
+        halt();
+    }
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") 0x4d58u16,
+            in("eax") 0x2au32,
+            options(nomem, nostack)
+        )
+    };
+    halt()
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]

@@ -11398,3 +11398,22 @@ QEMU or on physical hardware.
 Patent review: `NOT_TRIGGERED` — decoding a bounded relative timeout from one
 register and rejecting unsupported execution profiles is conventional syscall
 ABI validation. See `docs/patents/REVIEW_LOG.md`.
+
+The standalone service image now has a dedicated `deadline_receive_probe`
+feature profile. Its receiver issues operation 13 with a one-tick relative
+timeout, then accepts only the typed timeout status with all payload/count
+registers cleared before emitting the bounded service proof marker. It does not
+send a message, synthesize a wakeup, or accept generic error as timeout. The
+normal configuration-service receiver is excluded from this profile so the
+executable has one unambiguous entry implementation.
+
+Both the default and deadline-receive MRML-native service-image release profiles
+build through the canonical `mrml` frontend. The dedicated profile reports ten
+expected dead-code warnings for configuration and supervision helpers that its
+minimal receiver deliberately does not invoke. This is service-artifact
+cross-build evidence only; the bootloader timer/executor profile and live QEMU
+execution remain the next gate.
+
+Patent review: `NOT_TRIGGERED` — a minimal service program that invokes and
+checks a timeout syscall is conventional ABI integration testing. See
+`docs/patents/REVIEW_LOG.md`.
