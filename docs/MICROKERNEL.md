@@ -10295,3 +10295,16 @@ association or that installed tasks execute the mappings.
 Patent review: `NOT_TRIGGERED` — binding resource records to live generational
 task identities is conventional lifecycle bookkeeping. See
 `docs/patents/REVIEW_LOG.md`.
+
+Successful native read-transfer construction now **PARTIALLY IMPLEMENTS IN
+SOURCE** retention of both source-side split handles alongside the projected
+consumer handles. These source handles are the tracked ancestors needed to
+revoke consumer/provider descendants without first destroying the controlling
+memory root; they therefore preserve the required ordering for later task
+retirement, mapping removal, scrubbed backing release, and final object release.
+The Linux-host release kernel suite passes 649 tests. Complete composed teardown
+is still unfinished and no installed or physical execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — retaining capability ancestry handles for
+ordered revocation is conventional capability-lifecycle bookkeeping. See
+`docs/patents/REVIEW_LOG.md`.

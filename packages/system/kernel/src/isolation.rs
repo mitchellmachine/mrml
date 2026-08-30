@@ -1061,6 +1061,8 @@ pub struct NativeComponentServiceReadTransferTask {
     entry: NativeComponentServiceEntry,
     local_read: Capability,
     provider_write: Capability,
+    source_local_read: Capability,
+    source_provider_write: Capability,
 }
 
 impl NativeComponentServiceReadTransferTask {
@@ -1075,6 +1077,12 @@ impl NativeComponentServiceReadTransferTask {
     }
     pub const fn provider_write(self) -> Capability {
         self.provider_write
+    }
+    pub const fn source_local_read(self) -> Capability {
+        self.source_local_read
+    }
+    pub const fn source_provider_write(self) -> Capability {
+        self.source_provider_write
     }
 }
 
@@ -1290,6 +1298,8 @@ pub fn prepare_native_component_service_task_with_read_transfer<
         entry,
         local_read,
         provider_write,
+        source_local_read: transfer.local_read(),
+        source_provider_write: transfer.provider_write(),
     })
 }
 
@@ -4313,6 +4323,8 @@ mod tests {
         assert_eq!(context.r9, transfer.shared_generation());
         assert_eq!(context.r8, u64::from(transfer.shared_bytes()));
         assert_eq!(context.rdx, provider.token());
+        assert_eq!(prepared.source_local_read(), local_read);
+        assert_eq!(prepared.source_provider_write(), provider_write);
         let target_capabilities = runtime.capabilities(target).unwrap();
         assert_eq!(
             target_capabilities
@@ -4326,7 +4338,9 @@ mod tests {
             ),
             Ok(ObjectId(0xa0))
         );
-        runtime.revoke_capability(source, provider_write).unwrap();
+        runtime
+            .revoke_capability(source, prepared.source_provider_write())
+            .unwrap();
         assert_eq!(
             runtime
                 .capabilities(target)
