@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loops pass sixty-four
+isolated syscall-backed receive/reply loops pass sixty-seven
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -107,8 +107,11 @@ partially assembled output if any later read fails, and derives checked FAT-entr
 and data-cluster offsets from validated geometry. The provider now loads the
 root directory only after exact volume/mount/root lifecycle matching, validates
 the bounded mirrored FAT chain, parses clusters atomically until the end marker,
-and erases cluster scratch on every path. Stable non-authorizing lookup-object
-identity remains the next lookup dependency.
+and erases cluster scratch on every path. Validated root lookup now interns one
+stable nonzero object identity per exact mount/root/entry tuple in a fixed-capacity
+table. Repeated long-name/8.3 aliases return the same identity, exhaustion never
+wraps, volume labels are rejected, and unmount invalidates every associated
+object. Canonical lookup transport remains next.
 The storage service now provides the first concrete half of that composition:
 `FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
 to one owner-authenticated block session, validates full-block scratch geometry,

@@ -1228,6 +1228,12 @@ chain and parses each cluster into provider-local metadata, stopping only at a
 valid directory end marker or chain end. Read, parse, and capacity failures
 publish no directory batch and erase cluster scratch.
 
+Lookup object identity remains data, not authority. The provider allocates it
+only after exact lifecycle validation and unambiguous validated directory lookup,
+stably interns aliases for the same entry, bounds table capacity, and permanently
+fails after identity exhaustion rather than wrapping. Unmount deletes every
+record tied to that mount; stale identities cannot resolve after slot reuse.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

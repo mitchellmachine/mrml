@@ -495,16 +495,44 @@ pub enum Fat32MountAdmissionError<E> {
     Lifecycle(Fat32MountError),
 }
 
-pub struct Fat32MountedProvider<B, const N: usize> {
-    backend: B,
-    mounts: Fat32MountTable<N>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Fat32ObjectRecord {
+    volume: OpaqueHandle,
+    mount_generation: u64,
+    root: OpaqueHandle,
+    object: u64,
+    entry: Fat32ShortDirectoryEntry,
 }
 
-impl<B, const N: usize> Fat32MountedProvider<B, N> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32ObjectIdentityError {
+    Lifecycle(Fat32MountError),
+    InvalidEntry,
+    Capacity,
+    GenerationExhausted,
+    StaleObject,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32RootLookupError {
+    Lookup(Fat32Error),
+    Identity(Fat32ObjectIdentityError),
+}
+
+pub struct Fat32MountedProvider<B, const N: usize, const O: usize = 64> {
+    backend: B,
+    mounts: Fat32MountTable<N>,
+    objects: [Option<Fat32ObjectRecord>; O],
+    next_object: Option<u64>,
+}
+
+impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
     pub const fn new(backend: B) -> Self {
         Self {
             backend,
             mounts: Fat32MountTable::new(),
+            objects: [None; O],
+            next_object: Some(1),
         }
     }
 
@@ -530,11 +558,104 @@ impl<B, const N: usize> Fat32MountedProvider<B, N> {
         volume: OpaqueHandle,
         generation: u64,
     ) -> Result<Fat32Unmounted, Fat32MountError> {
-        self.mounts.unmount(volume, generation)
+        let completion = self.mounts.unmount(volume, generation)?;
+        for object in &mut self.objects {
+            if object.is_some_and(|object| {
+                object.volume == volume && object.mount_generation == generation
+            }) {
+                *object = None;
+            }
+        }
+        Ok(completion)
+    }
+
+    pub fn identify_root_entry(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+        entry: Fat32ShortDirectoryEntry,
+    ) -> Result<u64, Fat32ObjectIdentityError> {
+        self.mounts
+            .geometry(volume, generation, root)
+            .map_err(Fat32ObjectIdentityError::Lifecycle)?;
+        if entry.is_volume_label() {
+            return Err(Fat32ObjectIdentityError::InvalidEntry);
+        }
+        if let Some(existing) = self.objects.iter().flatten().find(|object| {
+            object.volume == volume
+                && object.mount_generation == generation
+                && object.root == root
+                && object.entry == entry
+        }) {
+            return Ok(existing.object);
+        }
+        let slot = self
+            .objects
+            .iter()
+            .position(Option::is_none)
+            .ok_or(Fat32ObjectIdentityError::Capacity)?;
+        let object = self
+            .next_object
+            .ok_or(Fat32ObjectIdentityError::GenerationExhausted)?;
+        self.next_object = object.checked_add(1);
+        self.objects[slot] = Some(Fat32ObjectRecord {
+            volume,
+            mount_generation: generation,
+            root,
+            object,
+            entry,
+        });
+        Ok(object)
+    }
+
+    pub fn root_entry(
+        &self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+        object: u64,
+    ) -> Result<Fat32ShortDirectoryEntry, Fat32ObjectIdentityError> {
+        if object == 0 {
+            return Err(Fat32ObjectIdentityError::StaleObject);
+        }
+        self.mounts
+            .geometry(volume, generation, root)
+            .map_err(Fat32ObjectIdentityError::Lifecycle)?;
+        self.objects
+            .iter()
+            .flatten()
+            .find(|record| {
+                record.volume == volume
+                    && record.mount_generation == generation
+                    && record.root == root
+                    && record.object == object
+            })
+            .map(|record| record.entry)
+            .ok_or(Fat32ObjectIdentityError::StaleObject)
+    }
+
+    pub fn lookup_root_entry<const E: usize>(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+        directory: &Fat32DirectoryBatch<E>,
+        name: &[u16],
+    ) -> Result<u64, Fat32RootLookupError> {
+        let entry = lookup_fat32_directory_entry(directory, name)
+            .map_err(Fat32RootLookupError::Lookup)?;
+        self.identify_root_entry(volume, generation, root, entry)
+            .map_err(Fat32RootLookupError::Identity)
+    }
+
+    #[cfg(test)]
+    fn set_next_object_for_test(&mut self, next: u64) {
+        self.next_object = Some(next);
     }
 }
 
-impl<B: Fat32MountBackend, const N: usize> Fat32MountedProvider<B, N> {
+impl<B: Fat32MountBackend, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
     pub fn mount(
         &mut self,
         volume: OpaqueHandle,
@@ -553,8 +674,8 @@ impl<B: Fat32MountBackend, const N: usize> Fat32MountedProvider<B, N> {
     }
 }
 
-impl<T: BlockProviderReadTransport, const N: usize> FilesystemMountTransport
-    for Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N>
+impl<T: BlockProviderReadTransport, const N: usize, const O: usize> FilesystemMountTransport
+    for Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N, O>
 {
     fn mount(
         &mut self,
@@ -586,7 +707,9 @@ impl<T: BlockProviderReadTransport, const N: usize> FilesystemMountTransport
     }
 }
 
-impl<B, const N: usize> FilesystemUnmountTransport for Fat32MountedProvider<B, N> {
+impl<B, const N: usize, const O: usize> FilesystemUnmountTransport
+    for Fat32MountedProvider<B, N, O>
+{
     fn unmount(
         &mut self,
         request: &[u8; UNMOUNT_REQUEST_BYTES],
@@ -1161,8 +1284,8 @@ pub enum Fat32RootDirectoryError {
     Filesystem(Fat32Error),
 }
 
-impl<T: BlockProviderReadTransport, const N: usize>
-    Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N>
+impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
+    Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N, O>
 {
     pub fn load_root_directory<const C: usize, const E: usize>(
         &mut self,
@@ -2182,6 +2305,120 @@ mod tests {
         let transport = provider.into_backend().into_transport();
         assert_eq!(&transport.calls[..transport.count], &[0, 4, 132, 260]);
         assert_eq!(block_scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn root_lookup_identity_is_stable_bounded_and_invalidated_by_unmount() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let directory = parse_fat32_short_directory::<2>(
+            parse_fat32_boot_sector(&boot_sector()).unwrap(),
+            &short_entry(b"KERNEL  MRP", 0x20, 5, 4096),
+        )
+        .unwrap();
+        let object = provider
+            .lookup_root_entry(
+                volume,
+                mounted.generation,
+                mounted.root,
+                &directory,
+                &ascii_utf16(b"kernel.mrp"),
+            )
+            .unwrap();
+        assert_eq!(object, 1);
+        assert_eq!(
+            provider.lookup_root_entry(
+                volume,
+                mounted.generation,
+                mounted.root,
+                &directory,
+                &ascii_utf16(b"KERNEL.MRP"),
+            ),
+            Ok(object)
+        );
+        assert_eq!(
+            provider.root_entry(volume, mounted.generation, mounted.root, object),
+            Ok(directory.entries()[0])
+        );
+
+        let other = Fat32ShortDirectoryEntry {
+            short_name: *b"RECOVERYMRP",
+            long_name: None,
+            attributes: 0x20,
+            first_cluster: 6,
+            file_size: 1024,
+        };
+        assert_eq!(
+            provider.identify_root_entry(volume, mounted.generation, mounted.root, other),
+            Err(Fat32ObjectIdentityError::Capacity)
+        );
+        provider.unmount(volume, mounted.generation).unwrap();
+        assert_eq!(
+            provider.root_entry(volume, mounted.generation, mounted.root, object),
+            Err(Fat32ObjectIdentityError::Lifecycle(Fat32MountError::StaleMount))
+        );
+        let remounted = provider.mount(volume).unwrap();
+        assert_eq!(
+            provider.lookup_root_entry(
+                volume,
+                remounted.generation,
+                remounted.root,
+                &directory,
+                &ascii_utf16(b"KERNEL.MRP"),
+            ),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn root_lookup_object_generation_exhaustion_never_reuses_identity() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        provider.set_next_object_for_test(u64::MAX);
+        let mounted = provider.mount(volume).unwrap();
+        let entry = file_entry(5, 1);
+        assert_eq!(
+            provider.identify_root_entry(volume, mounted.generation, mounted.root, entry),
+            Ok(u64::MAX)
+        );
+        provider.unmount(volume, mounted.generation).unwrap();
+        let remounted = provider.mount(volume).unwrap();
+        assert_eq!(
+            provider.identify_root_entry(volume, remounted.generation, remounted.root, entry),
+            Err(Fat32ObjectIdentityError::GenerationExhausted)
+        );
+    }
+
+    #[test]
+    fn root_lookup_rejects_volume_label_as_object_identity() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let mut label = file_entry(0, 0);
+        label.attributes = 0x08;
+        assert_eq!(
+            provider.identify_root_entry(volume, mounted.generation, mounted.root, label),
+            Err(Fat32ObjectIdentityError::InvalidEntry)
+        );
     }
 
     #[test]

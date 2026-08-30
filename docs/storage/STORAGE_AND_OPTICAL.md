@@ -934,8 +934,11 @@ derive FAT-entry and data-cluster offsets with checked arithmetic and validated
 geometry. Mounted root loading now exact-matches volume/mount/root identity,
 validates the bounded mirrored FAT chain, parses directory clusters until the
 end marker, and erases cluster scratch after success or failure. Stale roots fail
-before block I/O. Sixty-four focused Linux-host tests pass; stable non-authorizing
-lookup-object identity remains next. The storage service
+before block I/O. Validated root lookup now allocates stable monotonic nonzero
+object identities in a fixed-capacity table bound to the exact mount/root/entry.
+Aliases reuse identity, volume labels are rejected, exhaustion never wraps, and
+unmount invalidates the associated objects. Sixty-seven focused Linux-host tests
+pass; canonical lookup transport remains next. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the
