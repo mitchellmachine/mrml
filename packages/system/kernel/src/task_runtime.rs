@@ -175,8 +175,18 @@ pub struct TaskViolationRetirement {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TaskTermination {
-    pub task: TaskId,
-    pub next: ScheduleOutcome,
+    task: TaskId,
+    next: ScheduleOutcome,
+}
+
+impl TaskTermination {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn outcome(self) -> ScheduleOutcome {
+        self.next
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

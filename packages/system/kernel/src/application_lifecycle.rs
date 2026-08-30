@@ -186,7 +186,7 @@ impl<E: ServiceAddressSpaceEraser, const TASKS: usize, const CAPS: usize>
                     .runtime
                     .terminate_current_with_context()
                     .map_err(NativeApplicationError::Runtime)?;
-                if termination.task != active.task {
+                if termination.task() != active.task {
                     return Err(NativeApplicationError::WrongEndpoint);
                 }
                 self.runtime

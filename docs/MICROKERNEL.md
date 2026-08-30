@@ -10937,3 +10937,16 @@ cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — encoding mutually exclusive lifecycle states
 as one tagged union is conventional bounded state-machine representation. See
 `docs/patents/REVIEW_LOG.md`.
+
+Voluntary `TaskTermination` records are now opaque outside their defining
+runtime module. Kernel and service consumers can read the retired task and raw
+scheduler outcome through audit-only accessors, but cannot construct a
+caller-selected termination record for dispatch. Runtime-owned exact matching
+and the non-copyable successor token remain the authorization boundary. The
+Linux-host kernel suite passes 653 tests, storage passes 163 tests, and the
+configuration service passes 53 tests; kernel and storage Linux release builds
+pass. These checks exercise in-memory API and state-machine behavior only.
+
+Patent review: `NOT_TRIGGERED` — separating readable lifecycle evidence from
+runtime-only construction is conventional type-safe API hardening. See
+`docs/patents/REVIEW_LOG.md`.

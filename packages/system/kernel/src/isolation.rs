@@ -1786,7 +1786,7 @@ pub fn retire_current_native_component_service_copy_read_transfer<
     let (termination, retired_context) = runtime
         .terminate_current_with_context()
         .map_err(NativeComponentServiceCopyReadTransferRetirementError::Runtime)?;
-    debug_assert_eq!(termination.task, task);
+    debug_assert_eq!(termination.task(), task);
     debug_assert_eq!(retired_context, context);
     Ok((
         termination,
@@ -5585,7 +5585,7 @@ mod tests {
         runtime.start();
         runtime.yield_current().unwrap();
         assert_eq!(runtime.current(), Some(local_task));
-        assert_eq!(runtime.terminate_current().unwrap().task, local_task);
+        assert_eq!(runtime.terminate_current().unwrap().task(), local_task);
         provider_mapping.fail_remove = true;
         let state = match teardown_native_component_service_mapped_read_transfer(
             state,
@@ -5856,7 +5856,7 @@ mod tests {
                 &mut mapping_backend,
             )
             .unwrap();
-        assert_eq!(termination.task, target);
+        assert_eq!(termination.task(), target);
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(!dispatch.is_idle());
         assert_eq!(

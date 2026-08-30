@@ -854,9 +854,9 @@ mod tests {
         };
 
         let (retained_termination, retained_dispatch) = retirement.into_parts();
-        assert_eq!(retained_termination.task, exiting);
+        assert_eq!(retained_termination.task(), exiting);
         assert_eq!(
-            retained_termination.next,
+            retained_termination.outcome(),
             ScheduleOutcome::Switch {
                 from: Some(exiting),
                 to: successor,
@@ -1472,14 +1472,14 @@ mod tests {
                     error: mrml_kernel::MemoryMappingOperationError::Backend("revoke"),
                     ..
                 }
-            )) if termination.task == target
+            )) if termination.task() == target
         ));
         let retained = receipt.instance().teardown().unwrap();
         assert_eq!(
             retained.retired_context().unwrap().page_table(),
             local_mapping.root()
         );
-        assert_eq!(retained.retired_termination().unwrap().task, target);
+        assert_eq!(retained.retired_termination().unwrap().task(), target);
         assert!(!retained.mapping_removed());
         let successor = runtime.current().unwrap();
         let successor_context = *runtime.context(successor).unwrap();
@@ -1491,7 +1491,7 @@ mod tests {
         )
         .unwrap();
         let (termination, dispatch) = retirement.into_parts();
-        assert_eq!(termination.task, target);
+        assert_eq!(termination.task(), target);
         assert_eq!(dispatch.user(), Some((successor, successor_context)));
         let completed = receipt.instance().teardown().unwrap();
         assert!(completed.mapping_removed());
