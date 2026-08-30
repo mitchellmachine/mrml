@@ -1203,6 +1203,9 @@ any claimed transfer or wrong payload length fails before provider dispatch and
 produces no reply. Its block authority was installed separately through the
 runtime-proven binding, so request data cannot select or manufacture a block
 session. Local request and response buffers are erased after every outcome.
+The concrete register adapter expresses that rule with zero capability-buffer
+capacity and treats any nonzero kernel-reported count as a range failure before
+the provider sees the request.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

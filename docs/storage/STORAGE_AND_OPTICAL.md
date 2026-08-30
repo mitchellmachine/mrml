@@ -920,7 +920,9 @@ mount transport accepts only empty options, publishes the exact lifecycle/root
 response after validation, and maps stale backing sessions without creating
 state. A dedicated mount receive/reply loop requires the exact canonical payload
 size and zero transferred capabilities while options remain undefined, then
-dispatches through the already bound provider and erases local buffers. Fifty
+dispatches through the already bound provider and erases local buffers. Its
+register adapter uses a null/zero capability receive pair, rejects any reported
+capability transfer, and emits the exact mount response. Fifty-two
 focused Linux-host tests pass. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block

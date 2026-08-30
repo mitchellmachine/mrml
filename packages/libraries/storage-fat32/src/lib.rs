@@ -29,7 +29,8 @@ pub use mount_service_loop::{
     ReceivedFat32MountEnvelope,
 };
 pub use userspace_syscall_adapter::{
-    Fat32RawSyscall, Fat32SyscallFrame, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
+    Fat32MountUserspaceSyscalls, Fat32RawSyscall, Fat32SyscallFrame,
+    Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;

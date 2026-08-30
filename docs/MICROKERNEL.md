@@ -7428,8 +7428,10 @@ validated state publication. The focused Linux-host provider suite passes
 forty-seven tests. A separate mount receive/reply loop now requires the exact
 generation-2 payload size and zero transferred capabilities, dispatches only
 through the provider's preinstalled binding, and erases local buffers after
-success or failure. Together the focused provider suite passes fifty tests; a
-register-level mount syscall adapter is not yet implemented.
+success or failure. The concrete register adapter passes a null pointer with
+zero capability capacity, rejects any kernel-reported transfer, and sends the
+exact 24-byte response through the launch-bound reply endpoint/task. Together
+the focused provider suite passes fifty-two tests.
 
 Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and
