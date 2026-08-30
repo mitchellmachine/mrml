@@ -90,6 +90,11 @@ const RUSTC_WIDE_CHECKED_CAST_EXPECT_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.checked_cast_signed().expect(\"wide sign cast\") }",
 );
+const MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.checked_cast_unsigned().expect(\"wide sign cast\") }";
+const RUSTC_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE: &str = concat!(
+    "#![feature(integer_cast_extras)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.checked_cast_unsigned().expect(\"wide sign cast\") }",
+);
 const MRML_V1_WIDE_CHECKED_CAST_UNCHECKED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { unsafe { input.checked_cast_signed().unwrap_unchecked() } }";
 const RUSTC_WIDE_CHECKED_CAST_UNCHECKED_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
@@ -1633,12 +1638,22 @@ fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
     const CHILD: &str = "MRML_SEMANTIC_WIDE_CHECKED_SIGN_CAST_TRAP_CHILD";
 
     #[cfg(not(target_os = "windows"))]
-    for source in [
-        MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE,
-        MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE,
+    for (source, inputs) in [
+        (
+            MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE,
+            [i128::MIN as u128, u128::MAX],
+        ),
+        (
+            MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE,
+            [i128::MIN as u128, u128::MAX],
+        ),
+        (
+            MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE,
+            [i128::MIN as u128, (-1i128) as u128],
+        ),
     ] {
         let code = compile(source);
-        for input in [i128::MIN as u128, u128::MAX] {
+        for input in inputs {
             let pid = unsafe { fork() };
             assert!(pid >= 0, "fork failed");
             if pid == 0 {
@@ -1655,19 +1670,32 @@ fn mrml_v1_wide_checked_sign_cast_trapping_consumers_overflow_trap() {
     if let Some(mode) = std::env::var_os(CHILD) {
         unsafe { SetErrorMode(0x0001 | 0x0002) };
         let mode = mode.to_string_lossy();
-        let source = if mode.starts_with("expect") {
+        let source = if mode.starts_with("unsigned-expect") {
+            MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE
+        } else if mode.starts_with("expect") {
             MRML_V1_WIDE_CHECKED_CAST_EXPECT_SOURCE
         } else {
             MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE
         };
         let code = compile(source);
-        let input = if mode.ends_with("maximum") { u128::MAX } else { i128::MIN as u128 };
+        let input = if mode.ends_with("maximum") || mode.ends_with("negative-one") {
+            u128::MAX
+        } else {
+            i128::MIN as u128
+        };
         let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
         panic!("wide checked sign-cast trapping consumer unexpectedly returned");
     }
 
     #[cfg(target_os = "windows")]
-    for mode in ["unwrap-minimum", "unwrap-maximum", "expect-minimum", "expect-maximum"] {
+    for mode in [
+        "unwrap-minimum",
+        "unwrap-maximum",
+        "expect-minimum",
+        "expect-maximum",
+        "unsigned-expect-minimum",
+        "unsigned-expect-negative-one",
+    ] {
         let output = current_semantic_test_command()
             .args([
                 "--exact",
@@ -1701,6 +1729,17 @@ fn mrml_v1_wide_checked_sign_cast_expect_matches_valid_oracle_words() {
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, rustc_mrml_v1_observations(RUSTC_WIDE_CHECKED_CAST_EXPECT_SOURCE, "for input in [0u128, 1, 17, 1u128 << 64, i128::MAX as u128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
+
+    let inputs = [0u128, 1, 17, 1u128 << 64, i128::MAX as u128];
+    let code = compile(MRML_V1_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(RUSTC_WIDE_CHECKED_CAST_UNSIGNED_EXPECT_SOURCE, "for input in [0i128, 1, 17, 1i128 << 64, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"));
 }
 
 #[test]
