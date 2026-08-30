@@ -91,6 +91,21 @@ pub struct UserContext {
     page_table: PhysAddr,
 }
 
+/// The entry-stack top read from an initialized current-CPU descriptor state.
+/// This proves origin, not that mappings or CPU ownership remain valid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledEntryStack(u64);
+
+impl InstalledEntryStack {
+    pub(crate) const fn from_descriptor(top: u64) -> Self {
+        Self(top)
+    }
+
+    pub const fn top(self) -> u64 {
+        self.0
+    }
+}
+
 impl UserContext {
     pub fn new(page_table: PhysAddr, entry: u64, stack: u64) -> Result<Self, ContextError> {
         if page_table.get() == 0 {
@@ -275,7 +290,11 @@ pub unsafe fn enter_user_context(context: &UserContext) -> ! {
 /// `transition_stack` must be a nonzero canonical, 16-byte-aligned stack top
 /// mapped writable/supervisor in both address spaces. The remaining safety
 /// requirements of [`enter_user_context`] also apply.
-pub unsafe fn enter_user_context_on_stack(context: &UserContext, transition_stack: u64) -> ! {
+pub unsafe fn enter_user_context_on_stack(
+    context: &UserContext,
+    transition_stack: InstalledEntryStack,
+) -> ! {
+    let transition_stack = transition_stack.top();
     if transition_stack == 0
         || !transition_stack.is_multiple_of(16)
         || ((transition_stack << 16) as i64 >> 16) as u64 != transition_stack

@@ -37,8 +37,8 @@ pub use block_guest::{
     NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport, X86VirtualBlockPortIo,
 };
 pub use context::{
-    ContextError, USER_CODE_SELECTOR, USER_DATA_SELECTOR, USER_INITIAL_RFLAGS, UserContext,
-    UserContextTable, enter_user_context, enter_user_context_on_stack,
+    ContextError, InstalledEntryStack, USER_CODE_SELECTOR, USER_DATA_SELECTOR, USER_INITIAL_RFLAGS,
+    UserContext, UserContextTable, enter_user_context, enter_user_context_on_stack,
 };
 pub use descriptors::{
     AlignedTaskState, CPU_GDT_ENTRIES, CPU_TSS_SELECTOR, CpuDescriptorState, DescriptorError,

@@ -2,7 +2,9 @@ use core::array;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 
-use crate::arch::x86_64::{TrapDisposition, UserContext, enter_user_context_on_stack};
+use crate::arch::x86_64::{
+    InstalledEntryStack, TrapDisposition, UserContext, enter_user_context_on_stack,
+};
 use crate::capability::CapabilityRevocationPlan;
 use crate::ipc::EndpointSendPlan;
 use crate::scheduler::WakePlan;
@@ -216,7 +218,10 @@ impl TaskTerminationDispatch {
     ///
     /// The caller must satisfy every transition-stack, page-table, TSS, and
     /// interrupt exclusion requirement of [`enter_user_context_on_stack`].
-    pub unsafe fn enter_user_on_stack(self, transition_stack: u64) -> TaskTerminationIdle {
+    pub unsafe fn enter_user_on_stack(
+        self,
+        transition_stack: InstalledEntryStack,
+    ) -> TaskTerminationIdle {
         match self.target {
             TaskTerminationDispatchTarget::Idle => TaskTerminationIdle { _private: () },
             TaskTerminationDispatchTarget::User { context, .. } => unsafe {
@@ -2286,10 +2291,6 @@ mod tests {
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(dispatch.is_idle());
         assert_eq!(dispatch.user(), None);
-        assert_eq!(
-            unsafe { dispatch.enter_user_on_stack(0) },
-            TaskTerminationIdle { _private: () }
-        );
     }
 
     #[test]

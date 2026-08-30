@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use super::MAX_X86_64_CPUS;
+use super::{InstalledEntryStack, MAX_X86_64_CPUS};
 
 pub const CPU_GDT_ENTRIES: usize = 8;
 pub const CPU_TSS_SELECTOR: u16 = 0x08;
@@ -95,7 +95,9 @@ impl CpuDescriptorState {
     ///
     /// `state` must point to a live `CpuDescriptorState` owned by the current
     /// CPU and remain valid for the read.
-    pub unsafe fn entry_stack_top_from(state: *const Self) -> Result<u64, DescriptorError> {
+    pub unsafe fn entry_stack_top_from(
+        state: *const Self,
+    ) -> Result<InstalledEntryStack, DescriptorError> {
         if state.is_null() || !unsafe { core::ptr::addr_of!((*state).initialized).read() } {
             return Err(DescriptorError::InvalidTaskState);
         }
@@ -103,7 +105,7 @@ impl CpuDescriptorState {
         if !valid_stack(top) {
             return Err(DescriptorError::InvalidTaskState);
         }
-        Ok(top)
+        Ok(InstalledEntryStack::from_descriptor(top))
     }
 
     /// Builds and installs this CPU's private GDT, IDT, TSS, RSP0, and IST1.

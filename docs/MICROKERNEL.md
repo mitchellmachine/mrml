@@ -10713,3 +10713,17 @@ TSS state, and `IRETQ` execution remain unverified on physical hardware.
 Patent review: `NOT_TRIGGERED` — consuming a validated scheduler token at a
 conventional architecture context-switch boundary is ordinary lifecycle
 integration. See `docs/patents/REVIEW_LOG.md`.
+
+Transition-stack context entry now requires an opaque `InstalledEntryStack`
+obtained from the initialized current-CPU descriptor state; dispatch consumption
+can no longer accept a caller-selected scalar stack address. The token proves
+its descriptor-state origin only. Its unsafe contract still requires current-
+CPU ownership, live mappings in both roots, valid TSS state, and interrupt
+exclusion. The Linux-host release kernel suite passes 653 tests, the kernel
+release build passes, and the standard UEFI bootloader cross-build passes with
+one pre-existing unused-variable warning. No privileged transition or physical-
+hardware execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — preserving initialized descriptor-state
+provenance in a typed stack handle is conventional fail-closed API design. See
+`docs/patents/REVIEW_LOG.md`.
