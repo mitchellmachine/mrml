@@ -3412,6 +3412,10 @@ fn coff_is_xdata_section(name: &str) -> bool {
     name == ".xdata" || name.starts_with(".xdata$")
 }
 
+fn coff_is_readonly_data_section(name: &str) -> bool {
+    name == ".rdata" || name.starts_with(".rdata$") || name == ".00cfg"
+}
+
 pub fn x86_64_coff_readonly_absolute_relocation_count(object: &[u8]) -> Result<usize, LinkerError> {
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
@@ -3510,7 +3514,7 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation<'a>(
         )?;
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
-        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
+        if size == 0 || !coff_is_readonly_data_section(name) {
             continue;
         }
         let raw = usize::try_from(read_u32(object, header + 20)?)
@@ -3719,7 +3723,7 @@ fn coff_associative_readonly_start_for_root(
         )?;
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
-        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
+        if size == 0 || !coff_is_readonly_data_section(name) {
             continue;
         }
         let raw = usize::try_from(read_u32(object, header + 20)?)
@@ -3830,7 +3834,7 @@ fn decode_x86_64_coff_readonly_absolute_relocations_for_object<'a>(
         };
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
-        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
+        if size == 0 || !coff_is_readonly_data_section(name) {
             continue;
         }
         let raw = usize::try_from(read_u32(object, header + 20)?)
@@ -4102,7 +4106,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             text_sections.insert(section + 1)?;
         } else if coff_is_tls_section(name) {
             tls_sections.insert(section + 1)?;
-        } else if name == ".rdata" || name.starts_with(".rdata$") {
+        } else if coff_is_readonly_data_section(name) {
             let raw = usize::try_from(read_u32(object, header + 20)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
@@ -4976,7 +4980,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 );
             }
             text_ordinal += 1;
-        } else if name == ".rdata" || name.starts_with(".rdata$") {
+        } else if coff_is_readonly_data_section(name) {
             if contents.is_empty() {
                 ignored_empty_sections.insert(section + 1)?;
                 continue;
@@ -5465,7 +5469,7 @@ fn x86_64_coff_projected_readonly_fragment_count(
             string_size,
         )?;
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
-        if (name == ".rdata" || name.starts_with(".rdata$"))
+        if coff_is_readonly_data_section(name)
             && read_u32(object, header + 16)? != 0
             && inventory.section(section_number).is_some_and(|metadata| {
                 include_associative || metadata.selection != CoffTextComdatSelection::Associative
@@ -5550,7 +5554,7 @@ fn decode_x86_64_coff_projected_readonly_fragment<'data, 'definitions>(
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
         if size == 0
-            || !(name == ".rdata" || name.starts_with(".rdata$"))
+            || !coff_is_readonly_data_section(name)
             || (object_identity.is_none()
                 && metadata.selection == CoffTextComdatSelection::Associative)
         {
@@ -11834,6 +11838,39 @@ mod tests {
             12
         );
         assert_eq!(linked.bytes()[16], b'R');
+    }
+
+    #[test]
+    fn projects_typed_coff_guard_configuration_as_readonly_data() {
+        let mut object = coff_with_standalone_readonly_comdat();
+        object[60..68].fill(0);
+        object[60..66].copy_from_slice(b".00cfg");
+        let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
+        assert_eq!(
+            x86_64_coff_section_identity_readonly_fragment_count(&object, &inventory),
+            Ok(1)
+        );
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let readonly = decode_x86_64_coff_section_identity_readonly_fragment(
+            &object,
+            0,
+            &inventory,
+            11,
+            &mut definitions,
+        )
+        .unwrap();
+        assert_eq!(readonly.input.symbol, "literal");
+        assert_eq!(
+            readonly.input.symbol_target,
+            LinkDefinitionTarget::CoffSection {
+                identity: CoffSectionIdentity::new(11, 2).unwrap(),
+                offset: 0,
+            }
+        );
+        assert_eq!(readonly.input.readonly_data, b"R");
     }
 
     #[test]
