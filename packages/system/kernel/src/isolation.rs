@@ -7,11 +7,11 @@ use mrml_package_format::{
 use crate::{
     ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
     CpuResourceError, MemoryBackingKind, MemoryBackingOperationError, MemoryMappingBackend,
-    MemoryMappingOperationError, MemoryMappingPair, MemoryMappingPairOperationError,
-    MemoryMappingPairRemovalError, MemoryMappingPairRemovalState, MemoryObjectBackingBackend,
-    MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
-    ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime, TaskRuntimeError, VcpuReservationId,
-    arch::x86_64::UserContext,
+    MemoryMappingId, MemoryMappingOperationError, MemoryMappingPair,
+    MemoryMappingPairOperationError, MemoryMappingPairRemovalError, MemoryMappingPairRemovalState,
+    MemoryObjectBackingBackend, MemoryObjectId, MemoryPhysicalBacking, MemoryPoolId,
+    MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE, Rights, TaskId, TaskRuntime,
+    TaskRuntimeError, VcpuReservationId, arch::x86_64::UserContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -591,6 +591,63 @@ pub enum ComponentServiceReadTransferMappingError<F, S> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceReadTransferLocalMapping {
+    memory_object: MemoryObjectId,
+    shared_object: ObjectId,
+    mapping: MemoryMappingId,
+    local_target: ObjectId,
+    local_target_capability: Capability,
+    local_virtual_page: u64,
+}
+
+impl ComponentServiceReadTransferLocalMapping {
+    pub const fn memory_object(self) -> MemoryObjectId {
+        self.memory_object
+    }
+    pub const fn shared_object(self) -> ObjectId {
+        self.shared_object
+    }
+    pub const fn mapping(self) -> MemoryMappingId {
+        self.mapping
+    }
+    pub const fn local_target(self) -> ObjectId {
+        self.local_target
+    }
+    pub const fn local_target_capability(self) -> Capability {
+        self.local_target_capability
+    }
+    pub const fn local_virtual_page(self) -> u64 {
+        self.local_virtual_page
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferLocalMappingError<E> {
+    Runtime(TaskRuntimeError),
+    Target(CapabilityError),
+    Mapping(MemoryMappingOperationError<E>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceReadTransferCopyTaskBinding {
+    mapping: ComponentServiceReadTransferLocalMapping,
+    local_task: TaskId,
+    provider_task: TaskId,
+}
+
+impl ComponentServiceReadTransferCopyTaskBinding {
+    pub const fn mapping(self) -> ComponentServiceReadTransferLocalMapping {
+        self.mapping
+    }
+    pub const fn local_task(self) -> TaskId {
+        self.local_task
+    }
+    pub const fn provider_task(self) -> TaskId {
+        self.provider_task
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComponentServiceReadTransferTaskBinding {
     mappings: ComponentServiceReadTransferMappings,
     local_task: TaskId,
@@ -615,6 +672,87 @@ impl ComponentServiceReadTransferTaskBinding {
 pub enum ComponentServiceReadTransferTaskBindingError {
     Runtime(TaskRuntimeError),
     TaskAlias,
+}
+
+/// Installs only the consumer's backed read-only mapping. Provider writes use
+/// the distinct kernel-mediated copy projection and never request a write-only
+/// page-table mapping.
+#[allow(clippy::too_many_arguments)]
+pub fn install_component_service_read_transfer_local_mapping<
+    B: MemoryMappingBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    reservation: ComponentServiceReadTransferMemoryRoot,
+    local_target_capability: Capability,
+    local_virtual_page: u64,
+    backend: &mut B,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+) -> Result<
+    ComponentServiceReadTransferLocalMapping,
+    ComponentServiceReadTransferLocalMappingError<B::Error>,
+> {
+    let capabilities = runtime
+        .capabilities(source_task)
+        .map_err(ComponentServiceReadTransferLocalMappingError::Runtime)?;
+    let local_target = capabilities
+        .authorize_exact(
+            local_target_capability,
+            COMPONENT_SERVICE_READ_TRANSFER_TARGET_RIGHTS,
+        )
+        .map_err(ComponentServiceReadTransferLocalMappingError::Target)?;
+    let mapping = memory
+        .install_backed_mapping(
+            reservation.memory_object(),
+            reservation.root(),
+            local_target_capability,
+            local_virtual_page,
+            0,
+            1,
+            Rights::READ,
+            capabilities,
+            backend,
+        )
+        .map_err(ComponentServiceReadTransferLocalMappingError::Mapping)?;
+    Ok(ComponentServiceReadTransferLocalMapping {
+        memory_object: reservation.memory_object(),
+        shared_object: reservation.shared_object(),
+        mapping,
+        local_target,
+        local_target_capability,
+        local_virtual_page,
+    })
+}
+
+pub fn bind_component_service_read_transfer_copy_tasks<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    mapping: ComponentServiceReadTransferLocalMapping,
+    local_task: TaskId,
+    provider_task: TaskId,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<ComponentServiceReadTransferCopyTaskBinding, ComponentServiceReadTransferTaskBindingError>
+{
+    if local_task == provider_task {
+        return Err(ComponentServiceReadTransferTaskBindingError::TaskAlias);
+    }
+    runtime
+        .context(local_task)
+        .map_err(ComponentServiceReadTransferTaskBindingError::Runtime)?;
+    runtime
+        .context(provider_task)
+        .map_err(ComponentServiceReadTransferTaskBindingError::Runtime)?;
+    Ok(ComponentServiceReadTransferCopyTaskBinding {
+        mapping,
+        local_task,
+        provider_task,
+    })
 }
 
 /// Charges one exact shared page into the source task before backing, mapping,
@@ -4372,14 +4510,14 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x2a).unwrap();
+        let mut memory = MemoryPoolTable::<1, 1, 3>::new(0x2a).unwrap();
         let pool_rights = Rights::ALLOCATE
             .union(Rights::CONTROL)
             .union(Rights::INSPECT);
         let (pool, pool_capability) = memory
             .create_root(
                 1,
-                2,
+                3,
                 0,
                 pool_rights,
                 runtime.capabilities_mut(source).unwrap(),
@@ -4511,6 +4649,50 @@ mod tests {
         assert_eq!(binding.mappings(), mappings);
         assert_eq!(binding.local_task(), local_task);
         assert_eq!(binding.provider_task(), provider_task);
+        let mut copy_local_backend = TransferMappingBackend::default();
+        let local = install_component_service_read_transfer_local_mapping(
+            &mut memory,
+            reservation,
+            local_target,
+            0x500,
+            &mut copy_local_backend,
+            &runtime,
+            source,
+        )
+        .unwrap();
+        assert_eq!(local.memory_object(), reservation.memory_object());
+        assert_eq!(local.shared_object(), reservation.shared_object());
+        assert_eq!(local.local_target(), ObjectId(0x7100));
+        assert_eq!(local.local_target_capability(), local_target);
+        assert_eq!(local.local_virtual_page(), 0x500);
+        assert_eq!(
+            copy_local_backend.installed.unwrap().mapping().access(),
+            Rights::READ
+        );
+        assert_eq!(
+            bind_component_service_read_transfer_copy_tasks(
+                local, local_task, local_task, &runtime,
+            ),
+            Err(ComponentServiceReadTransferTaskBindingError::TaskAlias)
+        );
+        let copy_binding = bind_component_service_read_transfer_copy_tasks(
+            local,
+            local_task,
+            provider_task,
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(copy_binding.mapping(), local);
+        assert_eq!(copy_binding.local_task(), local_task);
+        assert_eq!(copy_binding.provider_task(), provider_task);
+        memory
+            .remove_mapping(
+                local.mapping(),
+                local.local_target_capability(),
+                runtime.capabilities(source).unwrap(),
+                &mut copy_local_backend,
+            )
+            .unwrap();
         let spec = service_spec(IsolationPlacement::NativeService);
         let data = runtime
             .capabilities_mut(source)

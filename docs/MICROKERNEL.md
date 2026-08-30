@@ -10493,3 +10493,18 @@ passing tests and the release build passes.
 Patent review: `NOT_TRIGGERED` — capability-authorized generational table
 revocation is conventional access-control lifecycle enforcement. See
 `docs/patents/REVIEW_LOG.md`.
+
+Component-service read transfers now **PARTIALLY IMPLEMENT IN SOURCE** a
+single-mapping construction path for copy-mediated providers. It installs the
+charged backing only as `READ` in the consumer target, records the exact local
+and provider task generations, and never accepts a provider target address or
+invokes a provider mapping backend. The focused lifecycle test proves the
+installed request is exactly read-only, rejects task aliasing, and removes the
+single mapping through the ordinary verified backend path. The Linux-host
+release kernel suite remains at 651 passing tests. Native task construction and
+teardown still use the older recording-only pair and remain the next migration
+gate; no active page-table or physical execution is claimed.
+
+Patent review: `NOT_TRIGGERED` — installing one conventional read-only mapping
+and retaining typed task identities for a separately mediated copy path is
+ordinary capability lifecycle composition. See `docs/patents/REVIEW_LOG.md`.
