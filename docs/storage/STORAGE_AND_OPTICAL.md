@@ -987,8 +987,8 @@ read transport bounds the borrowed output view, rejects insufficient staging,
 publishes only that view, and maps stale handles without block I/O. The isolated
 read loop accepts exactly one structurally valid writable-buffer capability,
 copies only successful bytes, releases before reply, and erases local buffers.
-Its register adapter rejects kernel over-counts. Ninety-one
-focused Linux-host tests pass.
+Its register adapter rejects kernel over-counts. The complete provider now
+passes 101 focused Linux-host tests.
 Filesystem interface generation 3 now adds one
 canonical provider-open operation that binds the exact volume, mount generation,
 directory handle, and non-authorizing lookup object and returns a distinct opaque
@@ -1001,10 +1001,12 @@ volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the
 512-byte FAT boot sector, and erases scratch after success, denial, mismatch, or
 backend failure. It grants no new right and makes no device call for a mismatched
-volume. Installed runtime construction of the proven association and dispatch
-from the service entry remain **PLANNED**. The storage policy service now also
-has a bounded filesystem open broker. It consumes an unsafe runtime-authenticated
-provider/mount/parent/object mapping as identity evidence only, requires the
+volume. The native provider entry now consumes the proven association and
+separately projected block endpoint, constructs the syscall-backed block-read
+transport, and runs the unified generation-3 filesystem dispatcher. Installed
+supervisor launch and active execution remain **PLANNED**. The storage policy
+service now also has a bounded filesystem open broker. It consumes an unsafe
+runtime-authenticated provider/mount/parent/object mapping as identity evidence only, requires the
 exact parent's `OPEN_CHILD` authority, derives only requested kind-valid rights,
 and tracks opened handles for mount-scoped transitive revocation. Broker and
 authority slots are reserved together without publishing authority, then exact
@@ -1073,10 +1075,11 @@ capability, retains the separately projected block endpoint capability, erases
 the temporary bytes, sends a generation-bound ready message, and then serves
 calls until fail-stop or supervised replacement. The kernel's reusable native
 task-construction transaction now derives and tracks the exact two target-space
-capabilities and installs the ABI atomically. Concrete placement-backend use and
-block-call routing through the retained binding remain **PLANNED**. Prior Windows evidence
-covered thirty-three tests. The MRML-native release binary builds on Windows
-as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. The
+capabilities and installs the ABI atomically. The entry constructs its concrete
+block-read transport from the retained binding and routes probe, mount, unmount,
+lookup, open, and read through one unified dispatcher. The 101-test focused
+Linux suite and MRML-native release build pass. No active installed launch,
+hosted guest execution, or physical filesystem evidence is claimed. The
 validated backend now makes the block-provider health check mandatory during
 replacement:
 it cleans and erases the old generation, launches the candidate, publishes only
@@ -1085,6 +1088,10 @@ becomes unavailable. Retry therefore launches fresh state. Storage passes 144
 tests on both hosts. This does not implement syscall-dispatched mount, lookup/open policy,
 check/repair, format, writes, installed-kernel launch, or physical interoperability
 evidence.
+
+Patent review: `NOT_TRIGGERED` — correcting dependency status from current
+source, focused tests, and a service-image build introduces no mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
 
 Patent review: `NOT_TRIGGERED` — two-phase open publication, bounded handle
 tables, generation invalidation, and lifecycle cleanup are conventional

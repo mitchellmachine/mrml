@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loops pass ninety-nine
+isolated syscall-backed receive/reply loops pass 101
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Its launch-binding constructor decodes the neutral filesystem/block dependency,
@@ -74,9 +74,13 @@ capability, validates the filesystem module and provider generation, retains the
 separate block endpoint capability, erases the temporary record, and sends ready
 only afterward. The kernel now has a reusable native task-construction
 transaction that atomically derives and tracks the two exact target-space
-capabilities and installs this ABI, rolling them back on entry failure. A
-concrete placement backend and block-call routing through the retained binding
-remain next.
+capabilities and installs this ABI, rolling them back on entry failure. The
+entry constructs the concrete syscall-backed block-read transport from that
+retained binding, creates the mounted provider, and runs the unified
+generation-3 probe/mount/unmount/lookup/open/read dispatcher. Its MRML-native
+release image builds successfully. Installed supervisor launch and active
+execution remain next; no hosted guest or physical filesystem evidence is
+claimed.
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
@@ -171,8 +175,14 @@ The storage service now provides the first concrete half of that composition:
 `FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
 to one owner-authenticated block session, validates full-block scratch geometry,
 rechecks `READ` on every block-zero access, copies only the 512-byte boot sector,
-and erases scratch on every path. Installing the runtime-proven binding and
-dispatching mount through the isolated provider loop remain next.
+and erases scratch on every path. The provider half now consumes the
+kernel-projected runtime binding at its native entry and routes block reads plus
+filesystem operations through the unified isolated dispatcher. End-to-end
+installed supervisor launch and active execution remain next.
+
+Patent review: `NOT_TRIGGERED` — correcting dependency status from current
+source, focused tests, and a service-image build introduces no mechanism. See
+`docs/patents/REVIEW_LOG.md`.
 
 The build frontend and filesystem contract now **PARTIALLY IMPLEMENT** the
 mount/root bootstrap representation. Schema version 2 supports bounded named
