@@ -1051,14 +1051,21 @@ pub fn recover_stable_authorities_and_commit<
     state_store: &mut S,
 ) -> Result<
     CommittedRecoveredStorageAuthorities<GRANTS>,
-    AuthorityRecoveryCommitError<B::Error, S::Error>,
+    AuthorityRecoveryCommitFailure<GRANTS, B::Error, S::Error>,
 > {
     let mut encoded_state = [0; AUTHORITY_RECOVERY_STATE_BYTES];
     state_store
         .load_authenticated(&mut encoded_state)
-        .map_err(AuthorityRecoveryCommitError::State)?;
-    let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(&encoded_state)
-        .map_err(AuthorityRecoveryCommitError::Checkpoint)?;
+        .map_err(|error| {
+            AuthorityRecoveryCommitFailure::BeforeCommit(AuthorityRecoveryCommitError::State(error))
+        })?;
+    let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(&encoded_state).map_err(
+        |error| {
+            AuthorityRecoveryCommitFailure::BeforeCommit(AuthorityRecoveryCommitError::Checkpoint(
+                error,
+            ))
+        },
+    )?;
     let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
     let recovered = recover_stable_authorities(
         file_state,
@@ -1071,7 +1078,9 @@ pub fn recover_stable_authorities_and_commit<
         input,
         backend,
     )
-    .map_err(AuthorityRecoveryCommitError::Storage)?;
+    .map_err(|error| {
+        AuthorityRecoveryCommitFailure::BeforeCommit(AuthorityRecoveryCommitError::Storage(error))
+    })?;
     let replacement = AuthenticatedAuthorityRecoveryState {
         accepted_epoch: guard.accepted_epoch,
         accepted_handle_generation: guard.accepted_handle_generation,
@@ -1079,9 +1088,15 @@ pub fn recover_stable_authorities_and_commit<
         accepted_root_generation: guard.accepted_root_generation,
     }
     .encode();
-    state_store
-        .compare_and_store(&encoded_state, &replacement)
-        .map_err(AuthorityRecoveryCommitError::State)?;
+    if let Err(error) = state_store.compare_and_store(&encoded_state, &replacement) {
+        return Err(AuthorityRecoveryCommitFailure::StateUncertain {
+            pending: PendingRecoveredStorageAuthorities {
+                recovered,
+                replacement,
+            },
+            error,
+        });
+    }
     Ok(CommittedRecoveredStorageAuthorities { recovered })
 }
 
@@ -1103,11 +1118,13 @@ pub fn recover_selected_stable_authorities_and_commit<
     state_store: &mut S,
 ) -> Result<
     CommittedRecoveredStorageAuthorities<GRANTS>,
-    AuthorityRecoveryCommitError<B::Error, S::Error>,
+    AuthorityRecoveryCommitFailure<GRANTS, B::Error, S::Error>,
 > {
-    issuer
-        .preflight_selection(selection)
-        .map_err(AuthorityRecoveryCommitError::Checkpoint)?;
+    issuer.preflight_selection(selection).map_err(|error| {
+        AuthorityRecoveryCommitFailure::BeforeCommit(AuthorityRecoveryCommitError::Checkpoint(
+            error,
+        ))
+    })?;
     recover_stable_authorities_and_commit(
         selection.file_state(),
         bootstrap_authority,
@@ -1233,6 +1250,46 @@ pub enum AuthorityRecoveryCommitError<StorageError, StateError> {
     Checkpoint(AuthorityCheckpointError),
     State(StateError),
     Storage(AuthorityStorageError<StorageError>),
+}
+
+pub enum AuthorityRecoveryCommitFailure<const N: usize, StorageError, StateError> {
+    BeforeCommit(AuthorityRecoveryCommitError<StorageError, StateError>),
+    StateUncertain {
+        pending: PendingRecoveredStorageAuthorities<N>,
+        error: StateError,
+    },
+}
+
+pub struct PendingRecoveredStorageAuthorities<const N: usize> {
+    recovered: RecoveredStorageAuthorities<N>,
+    replacement: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PendingAuthorityResolutionError<E> {
+    State(E),
+    StateMismatch,
+}
+
+impl<const N: usize> PendingRecoveredStorageAuthorities<N> {
+    pub fn resolve<S: AuthorityRecoveryStateStore>(
+        self,
+        state_store: &S,
+    ) -> Result<
+        CommittedRecoveredStorageAuthorities<N>,
+        (Self, PendingAuthorityResolutionError<S::Error>),
+    > {
+        let mut authenticated = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+        if let Err(error) = state_store.load_authenticated(&mut authenticated) {
+            return Err((self, PendingAuthorityResolutionError::State(error)));
+        }
+        if authenticated != self.replacement {
+            return Err((self, PendingAuthorityResolutionError::StateMismatch));
+        }
+        Ok(CommittedRecoveredStorageAuthorities {
+            recovered: self.recovered,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1970,20 +2027,20 @@ mod tests {
         let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
         let mut recovery_state = RecoveryStateBackend::new(8, 1);
         recovery_state.force_conflict = true;
-        assert!(matches!(
-            recover_stable_authorities_and_commit::<2, _, _, _, _>(
-                stable.file(),
-                &authority,
-                file,
-                principal(7),
-                2,
-                &mut issuer,
-                &mut recovered_bytes,
-                &mut backend,
-                &mut recovery_state,
-            ),
-            Err(AuthorityRecoveryCommitError::State(3))
-        ));
+        let pending = match recover_stable_authorities_and_commit::<2, _, _, _, _>(
+            stable.file(),
+            &authority,
+            file,
+            principal(7),
+            2,
+            &mut issuer,
+            &mut recovered_bytes,
+            &mut backend,
+            &mut recovery_state,
+        ) {
+            Err(AuthorityRecoveryCommitFailure::StateUncertain { pending, error: 3 }) => pending,
+            _ => panic!("state uncertainty did not retain reconstructed authority"),
+        };
         let unchanged =
             AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
                 .unwrap();
@@ -1994,6 +2051,18 @@ mod tests {
             ),
             (8, 1)
         );
+        let pending = match pending.resolve(&recovery_state) {
+            Err((pending, PendingAuthorityResolutionError::StateMismatch)) => pending,
+            _ => panic!("unchanged state did not retain pending authority"),
+        };
+        recovery_state.state = pending.replacement;
+        let committed = match pending.resolve(&recovery_state) {
+            Ok(committed) => committed,
+            Err(_) => panic!("exact authenticated replacement did not release authority"),
+        };
+        assert_eq!(committed.epoch(), 9);
+        assert_eq!(committed.len(), 1);
+        recovery_state = RecoveryStateBackend::new(8, 1);
 
         let admission = unsafe {
             OwnerApprovedAuthorityCheckpoint::new(

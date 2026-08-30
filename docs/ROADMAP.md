@@ -4149,3 +4149,8 @@ Published authenticated activation uncertainty now has an exact resolution
 path. Only authenticated state matching the retained successor epoch, file,
 activation, and checkpoint digest can complete live activation; mismatch keeps
 the published owner intact for later recovery.
+
+Non-validating storage-authority recovery now retains a non-authorizing pending
+owner on rollback-store uncertainty. Reconstructed handles remain private until
+a fresh authenticated load exactly equals the intended replacement; mismatch
+keeps them unavailable rather than forcing a lossy reboot-only outcome.

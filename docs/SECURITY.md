@@ -1130,3 +1130,8 @@ Resolving a published authenticated activation requires a fresh authenticated
 state load and exact equality with its retained epoch, stable-file identity,
 activation, and root/release-derived checkpoint digest. Stale or ambiguous
 state returns the same owner and cannot activate the candidate.
+
+Authority recovery does not release reconstructed capabilities when monotonic
+state persistence reports uncertainty. The pending owner exposes no handles and
+can resolve only when a new authenticated load exactly equals its retained
+replacement record; stale or different state keeps all authority private.

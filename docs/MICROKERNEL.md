@@ -7336,6 +7336,17 @@ Patent review: `NOT_TRIGGERED` — this composes existing authenticated-state,
 digest, capability, and generation checks into a bounded recovery transition.
 See `docs/patents/REVIEW_LOG.md`.
 
+Storage-authority recovery now preserves compare-and-store uncertainty without
+releasing reconstructed handles. `PendingRecoveredStorageAuthorities` retains
+the private table and exact authenticated replacement bytes; a fresh state load
+must equal that replacement byte-for-byte before it can become
+`CommittedRecoveredStorageAuthorities`. Mismatch retains the non-authorizing
+pending owner. Storage passes 142 focused Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this applies conventional typed uncertainty and
+exact authenticated-state comparison to the existing recovery transaction. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
