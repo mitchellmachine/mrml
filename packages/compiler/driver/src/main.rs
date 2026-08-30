@@ -1435,14 +1435,22 @@ fn retain_named_code_targets<'data, 'relocations, 'definitions>(
     archive_member: &[u16],
     source_object: &[usize],
     selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
+    frontier_start: usize,
 ) -> Result<bool> {
-    let target = selected.inputs.iter().find_map(|input| {
-        input.relocations.iter().find_map(|relocation| {
+    let mut targets = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate named archive dependency frontier"))?;
+    let frontier_end = selected.inputs.len();
+    let frontier = selected
+        .inputs
+        .get(frontier_start..frontier_end)
+        .ok_or_else(|| anyhow!("named archive dependency frontier is invalid"))?;
+    for input in frontier {
+        for relocation in input.relocations {
             let symbol = match relocation.target {
                 LinkRelocationTarget::Symbol(symbol)
                 | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
                 | LinkRelocationTarget::RequiredSymbol(symbol) => symbol,
-                _ => return None,
+                _ => continue,
             };
             let already_defined = selected.inputs.iter().any(|input| {
                 core::iter::once(LinkDefinition {
@@ -1460,9 +1468,9 @@ fn retain_named_code_targets<'data, 'relocations, 'definitions>(
                 })
             });
             if already_defined {
-                return None;
+                continue;
             }
-            inputs.iter().position(|input| {
+            let Some(target) = inputs.iter().position(|input| {
                 core::iter::once(LinkDefinition {
                     symbol: input.symbol,
                     target: input.symbol_target,
@@ -1476,20 +1484,37 @@ fn retain_named_code_targets<'data, 'relocations, 'definitions>(
                                 | LinkDefinitionTarget::CoffSection { .. }
                         )
                 })
-            })
-        })
-    });
-    let Some(target) = target else {
-        return Ok(false);
-    };
-    retain_input_archive_member(
-        inputs,
-        archive_group,
-        archive_member,
-        source_object,
-        selected,
-        target,
-    )
+            }) else {
+                continue;
+            };
+            let same_member = |candidate: usize| {
+                if archive_group[target] == 0 {
+                    candidate == target
+                } else {
+                    archive_group[candidate] == archive_group[target]
+                        && archive_member[candidate] == archive_member[target]
+                }
+            };
+            if targets.iter().copied().any(same_member) {
+                continue;
+            }
+            targets
+                .try_push(target)
+                .map_err(|_| anyhow!("named archive dependency frontier capacity exceeded"))?;
+        }
+    }
+    let mut changed = false;
+    for target in targets {
+        changed |= retain_input_archive_member(
+            inputs,
+            archive_group,
+            archive_member,
+            source_object,
+            selected,
+            target,
+        )?;
+    }
+    Ok(changed)
 }
 
 fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
@@ -2031,6 +2056,7 @@ fn write_linked_pe(
         &selected,
         &mut probe_writable_arenas,
     )?;
+    let writable_frontier_start = selected.inputs.len();
     retain_writable_section_targets(
         &decoded.inputs,
         &decoded.archive_group,
@@ -2040,12 +2066,22 @@ fn write_linked_pe(
         &probe_writable_data,
     )?;
     drop(probe_writable_data);
+    let named_frontier_start = selected.inputs.len();
     retain_named_code_targets(
         &decoded.inputs,
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
         &mut selected,
+        writable_frontier_start,
+    )?;
+    retain_named_code_targets(
+        &decoded.inputs,
+        &decoded.archive_group,
+        &decoded.archive_member,
+        &decoded.source_object,
+        &mut selected,
+        named_frontier_start,
     )?;
     loop {
         let readonly_absolute_relocations = selected_readonly_absolute_relocations(
@@ -3054,11 +3090,18 @@ mod tests {
             symbol: "callback",
             target: LinkDefinitionTarget::Text(4),
         }];
-        let sibling_relocations = [LinkRelocation {
-            offset: 0,
-            target: LinkRelocationTarget::Symbol("late_dependency"),
-            addend: -4,
-        }];
+        let sibling_relocations = [
+            LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("late_dependency"),
+                addend: -4,
+            },
+            LinkRelocation {
+                offset: 4,
+                target: LinkRelocationTarget::RequiredSymbol("late_sibling_dependency"),
+                addend: -4,
+            },
+        ];
         let sibling = LinkInput {
             symbol: "helper",
             symbol_target: LinkDefinitionTarget::Text(0),
@@ -3067,21 +3110,49 @@ mod tests {
             readonly_data: &[],
             relocations: &sibling_relocations,
         };
+        let transitive_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("transitive_dependency"),
+            addend: -4,
+        }];
         let dependency = LinkInput {
             symbol: "late_dependency",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &transitive_relocations,
+        };
+        let sibling_dependency = LinkInput {
+            symbol: "late_sibling_dependency",
             symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
             relocations: &[],
         };
-        let inputs = [entry, target, sibling, dependency];
+        let transitive_dependency = LinkInput {
+            symbol: "transitive_dependency",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let inputs = [
+            entry,
+            target,
+            sibling,
+            dependency,
+            sibling_dependency,
+            transitive_dependency,
+        ];
         let mut selected = selected_link_inputs(
             &inputs,
-            &[0, 4, 4, 5],
-            &[0, 7, 7, 9],
-            &[0, 8, 8, 10],
-            &[CoffTextComdatSelection::None; 4],
+            &[0, 4, 4, 5, 6, 7],
+            &[0, 7, 7, 9, 11, 13],
+            &[0, 8, 8, 10, 12, 14],
+            &[CoffTextComdatSelection::None; 6],
             "entry",
         )
         .unwrap();
@@ -3099,9 +3170,9 @@ mod tests {
         assert!(
             retain_exact_readonly_relocation_targets(
                 &inputs,
-                &[0, 4, 4, 5],
-                &[0, 7, 7, 9],
-                &[0, 8, 8, 10],
+                &[0, 4, 4, 5, 6, 7],
+                &[0, 7, 7, 9, 11, 13],
+                &[0, 8, 8, 10, 12, 14],
                 &mut selected,
                 &relocation,
             )
@@ -3115,21 +3186,42 @@ mod tests {
         assert!(
             retain_named_code_targets(
                 &inputs,
-                &[0, 4, 4, 5],
-                &[0, 7, 7, 9],
-                &[0, 8, 8, 10],
+                &[0, 4, 4, 5, 6, 7],
+                &[0, 7, 7, 9, 11, 13],
+                &[0, 8, 8, 10, 12, 14],
                 &mut selected,
+                1,
             )
             .unwrap()
         );
-        assert_eq!(selected.inputs.len(), 4);
+        assert_eq!(selected.inputs.len(), 5);
         assert_eq!(selected.inputs[3].symbol, "late_dependency");
+        assert_eq!(selected.inputs[4].symbol, "late_sibling_dependency");
+        assert!(
+            selected
+                .inputs
+                .iter()
+                .all(|input| input.symbol != "transitive_dependency")
+        );
+        assert!(
+            retain_named_code_targets(
+                &inputs,
+                &[0, 4, 4, 5, 6, 7],
+                &[0, 7, 7, 9, 11, 13],
+                &[0, 8, 8, 10, 12, 14],
+                &mut selected,
+                3,
+            )
+            .unwrap()
+        );
+        assert_eq!(selected.inputs.len(), 6);
+        assert_eq!(selected.inputs[5].symbol, "transitive_dependency");
         assert!(
             !retain_exact_readonly_relocation_targets(
                 &inputs,
-                &[0, 4, 4, 5],
-                &[0, 7, 7, 9],
-                &[0, 8, 8, 10],
+                &[0, 4, 4, 5, 6, 7],
+                &[0, 7, 7, 9, 11, 13],
+                &[0, 8, 8, 10, 12, 14],
                 &mut selected,
                 &relocation,
             )
