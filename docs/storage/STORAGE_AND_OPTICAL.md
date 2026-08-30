@@ -805,6 +805,31 @@ retryable unmapping and releasing dispatch only after completion is conventional
 resource-lifecycle sequencing. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The AHCI command path no longer borrows a kernel-owned `CapabilitySpace`
+representation **IMPLEMENTED IN SOURCE**. Command construction and backend
+admission instead require one narrow mutable exact-authorizer that receives
+only a capability and complete directional rights, then returns its resolved
+object or a capability error. The fixed-capacity capability space implements
+the same interface for kernel/model use. A recording non-table authorizer test
+proves both `PIN|MAP|WRITE` and `PIN|MAP|READ` are requested exactly and wrong-
+object resolution still prevents backend construction. The focused Linux AHCI
+suite passes all 110 tests and the release build passes. A raw userspace syscall
+implementation of this authorizer, native mapped-memory construction, the
+service binary, and installed execution remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Abstracting an existing exact capability check
+behind a minimal interface is conventional dependency inversion. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

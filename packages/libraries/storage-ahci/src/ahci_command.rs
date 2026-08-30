@@ -4,9 +4,12 @@
 //! interrupts. Any uncertainty after mutation quarantines the active layout.
 
 use crate::{
-    ActiveAhciPort, AhciCommandMemoryIo, AhciDmaRegion, AhciPortDmaLayout, AhciRegisterIo,
+    ActiveAhciPort, AhciCommandMemoryIo, AhciDataCapabilityAuthorizer, AhciDmaRegion,
+    AhciPortDmaLayout, AhciRegisterIo,
 };
-use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
+use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
+#[cfg(test)]
+use mrml_kernel::CapabilitySpace;
 
 const PORT_BASE: u32 = 0x100;
 const PORT_STRIDE: u32 = 0x80;
@@ -126,8 +129,12 @@ impl PreparedAhciCommand {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_ahci_dma_command<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo>(
-    capabilities: &CapabilitySpace<N>,
+pub fn prepare_ahci_dma_command<
+    A: AhciDataCapabilityAuthorizer,
+    R: AhciRegisterIo,
+    M: AhciCommandMemoryIo,
+>(
+    capabilities: &mut A,
     owner: ActiveAhciPort,
     data_capability: Capability,
     data: AhciDataDmaRegion,
@@ -418,11 +425,11 @@ mod tests {
 
     #[test]
     fn builds_exact_read_fis_header_and_single_prdt_without_issuing() {
-        let (capabilities, capability) = capabilities(Rights::WRITE);
+        let (mut capabilities, capability) = capabilities(Rights::WRITE);
         let mut registers = Registers::default();
         let mut memory = Memory::default();
         let prepared = prepare_ahci_dma_command(
-            &capabilities,
+            &mut capabilities,
             ActiveAhciPort::from_layout(layout()),
             capability,
             data(),
@@ -449,12 +456,12 @@ mod tests {
 
     #[test]
     fn write_uses_host_to_device_header_and_requires_read_authority() {
-        let (wrong, wrong_capability) = capabilities(Rights::WRITE);
+        let (mut wrong, wrong_capability) = capabilities(Rights::WRITE);
         let mut registers = Registers::default();
         let mut memory = Memory::default();
         assert!(matches!(
             prepare_ahci_dma_command(
-                &wrong,
+                &mut wrong,
                 ActiveAhciPort::from_layout(layout()),
                 wrong_capability,
                 data(),
@@ -470,9 +477,9 @@ mod tests {
                 ..
             })
         ));
-        let (capabilities, capability) = capabilities(Rights::READ);
+        let (mut capabilities, capability) = capabilities(Rights::READ);
         let prepared = prepare_ahci_dma_command(
-            &capabilities,
+            &mut capabilities,
             ActiveAhciPort::from_layout(layout()),
             capability,
             data(),
@@ -491,7 +498,7 @@ mod tests {
 
     #[test]
     fn busy_or_dirty_slot_returns_owner_without_memory_writes() {
-        let (capabilities, capability) = capabilities(Rights::WRITE);
+        let (mut capabilities, capability) = capabilities(Rights::WRITE);
         for (mut registers, mut memory) in [
             (
                 {
@@ -508,7 +515,7 @@ mod tests {
             }),
         ] {
             let failure = prepare_ahci_dma_command(
-                &capabilities,
+                &mut capabilities,
                 ActiveAhciPort::from_layout(layout()),
                 capability,
                 data(),
@@ -527,14 +534,14 @@ mod tests {
 
     #[test]
     fn partial_table_write_quarantines_active_layout() {
-        let (capabilities, capability) = capabilities(Rights::WRITE);
+        let (mut capabilities, capability) = capabilities(Rights::WRITE);
         let mut registers = Registers::default();
         let mut memory = Memory {
             reject_write: Some(4),
             ..Memory::default()
         };
         let failure = prepare_ahci_dma_command(
-            &capabilities,
+            &mut capabilities,
             ActiveAhciPort::from_layout(layout()),
             capability,
             data(),

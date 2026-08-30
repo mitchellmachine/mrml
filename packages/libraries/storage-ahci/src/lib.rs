@@ -110,7 +110,7 @@ pub use block_io_adapter::{
 };
 pub use command_block_backend::{
     AhciCommandBackendTeardown, AhciCommandBlockBackend, AhciDataBufferIo,
-    QuarantinedAhciCommandBackend,
+    AhciDataCapabilityAuthorizer, QuarantinedAhciCommandBackend,
 };
 pub use control_service_loop::{
     AhciControlServiceLoop, AhciControlServiceLoopError, AhciControlServiceSyscalls,

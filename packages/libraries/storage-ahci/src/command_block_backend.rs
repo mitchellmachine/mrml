@@ -13,7 +13,26 @@ use crate::{
     AhciFlushFailure, AhciRegisterIo, AhciResetIo,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
-use mrml_kernel::{Capability, CapabilitySpace, Rights};
+use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
+
+/// Exact userspace-facing authorization needed by the AHCI data path.
+pub trait AhciDataCapabilityAuthorizer {
+    fn authorize_exact(
+        &mut self,
+        capability: Capability,
+        rights: Rights,
+    ) -> Result<ObjectId, CapabilityError>;
+}
+
+impl<const N: usize> AhciDataCapabilityAuthorizer for CapabilitySpace<N> {
+    fn authorize_exact(
+        &mut self,
+        capability: Capability,
+        rights: Rights,
+    ) -> Result<ObjectId, CapabilityError> {
+        CapabilitySpace::authorize_exact(self, capability, rights)
+    }
+}
 
 pub trait AhciDataBufferIo {
     /// Zeroes the exact range and makes it device-writable.
@@ -28,8 +47,8 @@ pub trait AhciDataBufferIo {
     fn sanitize(&mut self, region: AhciDataDmaRegion) -> Result<(), ()>;
 }
 
-pub struct AhciCommandBlockBackend<'a, const N: usize, R, M, D> {
-    capabilities: &'a CapabilitySpace<N>,
+pub struct AhciCommandBlockBackend<'a, A, R, M, D> {
+    capabilities: &'a mut A,
     session: mrml_interface_storage_block_provider_v1::OpaqueHandle,
     media_generation: u64,
     read_data_capability: Capability,
@@ -105,10 +124,10 @@ impl<R, M, D> QuarantinedAhciCommandBackend<R, M, D> {
     }
 }
 
-impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
+impl<'a, A: AhciDataCapabilityAuthorizer, R, M, D> AhciCommandBlockBackend<'a, A, R, M, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        capabilities: &'a CapabilitySpace<N>,
+        capabilities: &'a mut A,
         session: mrml_interface_storage_block_provider_v1::OpaqueHandle,
         media_generation: u64,
         read_data_capability: Capability,
@@ -191,8 +210,8 @@ impl<'a, const N: usize, R, M, D> AhciCommandBlockBackend<'a, N, R, M, D> {
     }
 }
 
-impl<const N: usize, R: AhciResetIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
-    AhciBlockControlBackend for AhciCommandBlockBackend<'_, N, R, M, D>
+impl<A: AhciDataCapabilityAuthorizer, R: AhciResetIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
+    AhciBlockControlBackend for AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
         if device.session != self.session || device.media_generation != self.media_generation {
@@ -241,8 +260,8 @@ impl<const N: usize, R: AhciResetIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo
     }
 }
 
-impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
-    AhciBlockIoBackend for AhciCommandBlockBackend<'_, N, R, M, D>
+impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
+    AhciBlockIoBackend for AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn read(
         &mut self,
@@ -279,8 +298,8 @@ impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBuffe
     }
 }
 
-impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
-    AhciCommandBlockBackend<'_, N, R, M, D>
+impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
+    AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn execute(
         &mut self,
@@ -386,6 +405,7 @@ impl<const N: usize, R: AhciRegisterIo, M: AhciCommandMemoryIo, D: AhciDataBuffe
 mod tests {
     use super::*;
     use crate::{AhciDmaRegion, AhciPortDmaLayout};
+    use core::cell::Cell;
     use mrml_interface_storage_block_provider_v1::OpaqueHandle;
     use mrml_kernel::{ObjectId, Rights};
 
@@ -568,6 +588,81 @@ mod tests {
         }
     }
 
+    struct Authorizer {
+        calls: Cell<usize>,
+        object: ObjectId,
+    }
+
+    impl AhciDataCapabilityAuthorizer for Authorizer {
+        fn authorize_exact(
+            &mut self,
+            capability: Capability,
+            rights: Rights,
+        ) -> Result<ObjectId, CapabilityError> {
+            let expected = if capability == Capability::from_token(1) {
+                Rights::PIN.union(Rights::MAP).union(Rights::WRITE)
+            } else if capability == Capability::from_token(2) {
+                Rights::PIN.union(Rights::MAP).union(Rights::READ)
+            } else {
+                return Err(CapabilityError::Invalid);
+            };
+            if rights != expected {
+                return Err(CapabilityError::PermissionDenied);
+            }
+            self.calls.set(self.calls.get() + 1);
+            Ok(self.object)
+        }
+    }
+
+    #[test]
+    fn injected_authorizer_exact_matches_both_directional_data_rights() {
+        let data = AhciDataDmaRegion {
+            memory_object: ObjectId(40),
+            allocation_generation: 5,
+            physical_base: 0x8000,
+            bytes: 512,
+        };
+        let mut authorizer = Authorizer {
+            calls: Cell::new(0),
+            object: ObjectId(40),
+        };
+        assert!(AhciCommandBlockBackend::new(
+            &mut authorizer,
+            OpaqueHandle::new(4, 7).unwrap(),
+            12,
+            Capability::from_token(1),
+            Capability::from_token(2),
+            data,
+            mapping(),
+            ActiveAhciPort::from_layout(layout()),
+            Registers::ready(),
+            Memory::initialized(),
+            DataIo::default(),
+        )
+        .is_some());
+        assert_eq!(authorizer.calls.get(), 2);
+
+        let mut substituted = Authorizer {
+            calls: Cell::new(0),
+            object: ObjectId(41),
+        };
+        assert!(AhciCommandBlockBackend::new(
+            &mut substituted,
+            OpaqueHandle::new(4, 7).unwrap(),
+            12,
+            Capability::from_token(1),
+            Capability::from_token(2),
+            data,
+            mapping(),
+            ActiveAhciPort::from_layout(layout()),
+            Registers::ready(),
+            Memory::initialized(),
+            DataIo::default(),
+        )
+        .is_none());
+        assert_eq!(substituted.calls.get(), 1);
+    }
+
     #[test]
     fn repeated_read_and_write_traverse_complete_owned_lifecycle() {
         let mut capabilities = CapabilitySpace::<2>::new();
@@ -591,7 +686,7 @@ mod tests {
             bytes: 512,
         };
         let mut backend = AhciCommandBlockBackend::new(
-            &capabilities,
+            &mut capabilities,
             session,
             12,
             read_capability,
@@ -658,7 +753,7 @@ mod tests {
             bytes: 512,
         };
         let mut backend = AhciCommandBlockBackend::new(
-            &capabilities,
+            &mut capabilities,
             session,
             12,
             read_capability,

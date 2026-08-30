@@ -626,7 +626,7 @@ mod tests {
             )
             .unwrap();
         let backend = crate::AhciCommandBlockBackend::new(
-            &io_capabilities,
+            &mut io_capabilities,
             launch.device().session,
             launch.device().media_generation,
             read_data,

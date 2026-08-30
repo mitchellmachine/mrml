@@ -949,6 +949,31 @@ Patent review: `NOT_TRIGGERED` — retaining a scheduler result across ordered
 retryable unmapping and releasing dispatch only after completion is conventional
 resource-lifecycle sequencing. See `docs/patents/REVIEW_LOG.md`.
 
+The AHCI command path no longer depends on borrowing a kernel-owned
+`CapabilitySpace` representation **IMPLEMENTED IN SOURCE**. Command construction
+and backend admission instead require one narrow mutable exact-authorizer that
+accepts only a capability plus the complete directional rights and returns its
+resolved object or a capability error. The existing fixed-capacity capability
+space implements the same interface for kernel/model use, while a recording
+non-table authorizer test proves both `PIN|MAP|WRITE` and `PIN|MAP|READ` are
+requested exactly and wrong-object resolution still prevents construction. The
+focused Linux AHCI suite passes all 110 tests and the release build passes. A
+raw userspace syscall implementation of this authorizer, native mapped-memory
+construction, the service binary, and installed execution remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — abstracting an existing exact capability check
+behind a minimal interface is conventional dependency inversion. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
