@@ -10280,3 +10280,18 @@ service launch, KVM, WHP, IOMMU, or physical execution.
 Patent review: `NOT_TRIGGERED` — direction-specific shared-page mappings and
 exact target preflight are conventional least-authority memory projection. See
 `docs/patents/REVIEW_LOG.md`.
+
+Directional transfer mappings now **PARTIALLY IMPLEMENT IN SOURCE** an explicit
+task association. The coordinator binds the two already capability-authorized
+mapping targets to live, distinct generational consumer and provider tasks;
+task identities describe the selected peers while the separately validated
+mapping capabilities remain the address-space authority. Aliased or stale task
+identities fail before an association is returned, and the mapping identities
+and virtual pages remain unchanged for later construction and teardown. The
+Linux-host release kernel suite continues to pass 649 tests. This is typed
+association evidence only; it does not yet prove construction consumes the
+association or that installed tasks execute the mappings.
+
+Patent review: `NOT_TRIGGERED` — binding resource records to live generational
+task identities is conventional lifecycle bookkeeping. See
+`docs/patents/REVIEW_LOG.md`.

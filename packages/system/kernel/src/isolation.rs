@@ -568,6 +568,33 @@ pub enum ComponentServiceReadTransferMappingError<F, S> {
     Mapping(MemoryMappingPairOperationError<F, S>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceReadTransferTaskBinding {
+    mappings: ComponentServiceReadTransferMappings,
+    local_task: TaskId,
+    provider_task: TaskId,
+}
+
+impl ComponentServiceReadTransferTaskBinding {
+    pub const fn mappings(self) -> ComponentServiceReadTransferMappings {
+        self.mappings
+    }
+
+    pub const fn local_task(self) -> TaskId {
+        self.local_task
+    }
+
+    pub const fn provider_task(self) -> TaskId {
+        self.provider_task
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceReadTransferTaskBindingError {
+    Runtime(TaskRuntimeError),
+    TaskAlias,
+}
+
 /// Charges one exact shared page into the source task before backing, mapping,
 /// or provider construction can begin.
 pub fn reserve_component_service_read_transfer_memory<
@@ -704,6 +731,31 @@ pub fn install_component_service_read_transfer_mappings<
         provider_target,
         local_virtual_page,
         provider_virtual_page,
+    })
+}
+
+/// Associates the two already authorized mapping targets with exact live task
+/// generations. Task names identify the consumers; the mapping capabilities
+/// checked during installation remain the authority for their address spaces.
+pub fn bind_component_service_read_transfer_tasks<const TASKS: usize, const CAPABILITIES: usize>(
+    mappings: ComponentServiceReadTransferMappings,
+    local_task: TaskId,
+    provider_task: TaskId,
+    runtime: &TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<ComponentServiceReadTransferTaskBinding, ComponentServiceReadTransferTaskBindingError> {
+    if local_task == provider_task {
+        return Err(ComponentServiceReadTransferTaskBindingError::TaskAlias);
+    }
+    runtime
+        .context(local_task)
+        .map_err(ComponentServiceReadTransferTaskBindingError::Runtime)?;
+    runtime
+        .context(provider_task)
+        .map_err(ComponentServiceReadTransferTaskBindingError::Runtime)?;
+    Ok(ComponentServiceReadTransferTaskBinding {
+        mappings,
+        local_task,
+        provider_task,
     })
 }
 
@@ -3851,7 +3903,7 @@ mod tests {
 
     #[test]
     fn read_transfer_memory_reservation_charges_one_exact_shared_page() {
-        let mut runtime = TaskRuntime::<1, 4>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -3859,6 +3911,28 @@ mod tests {
                     crate::PhysAddr::new(0x20_0000).unwrap(),
                     0x40_0000,
                     0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let local_task = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x30_0000).unwrap(),
+                    0x50_0000,
+                    0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let provider_task = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x40_0000).unwrap(),
+                    0x60_0000,
+                    0x7200_0000,
                 )
                 .unwrap(),
             )
@@ -3984,6 +4058,20 @@ mod tests {
         assert_eq!(mappings.provider_target(), ObjectId(0x7200));
         assert_eq!(mappings.local_virtual_page(), 0x300);
         assert_eq!(mappings.provider_virtual_page(), 0x400);
+        assert_eq!(
+            bind_component_service_read_transfer_tasks(mappings, local_task, local_task, &runtime,),
+            Err(ComponentServiceReadTransferTaskBindingError::TaskAlias)
+        );
+        let binding = bind_component_service_read_transfer_tasks(
+            mappings,
+            local_task,
+            provider_task,
+            &runtime,
+        )
+        .unwrap();
+        assert_eq!(binding.mappings(), mappings);
+        assert_eq!(binding.local_task(), local_task);
+        assert_eq!(binding.provider_task(), provider_task);
         assert_eq!(
             local_mapping.installed.unwrap().mapping().access(),
             Rights::READ
