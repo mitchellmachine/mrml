@@ -8034,6 +8034,14 @@ struct InputLayout {
     readonly: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StaticLinkLayout {
+    length: usize,
+    text_length: usize,
+    readonly_offset: usize,
+    entry_offset: usize,
+}
+
 /// Links already-decoded MRML x86-64 fragments into one position-independent
 /// image. Input order is significant and makes the result reproducible.
 pub fn link_x86_64_static<const MAX_BYTES: usize>(
@@ -8108,9 +8116,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     Ok(PeImage { bytes, length })
 }
 
-/// Serializes a bounded PE image into caller-owned storage. Hosted drivers use
-/// this entry point so multi-megabyte output tiers do not become process-stack
-/// arrays; fixed-array callers retain the convenience wrapper above.
+/// Serializes a bounded PE image into caller-owned output storage while keeping
+/// the linked workspace as a fixed-array convenience for no-allocation callers.
 pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     const MAX_LINKED_BYTES: usize,
 >(
@@ -8121,14 +8128,47 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     readonly_absolute_relocations: &[PeReadonlyAbsoluteRelocation<'_>],
     bytes: &mut [u8],
 ) -> Result<usize, LinkerError> {
+    let mut linked_scratch = [0u8; MAX_LINKED_BYTES];
+    link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch(
+        inputs,
+        entry_symbol,
+        runtime_functions,
+        writable_data,
+        readonly_absolute_relocations,
+        bytes,
+        &mut linked_scratch,
+    )
+}
+
+/// Serializes a bounded PE image using distinct caller-owned output and linked
+/// workspaces. Hosted drivers use this path so multi-megabyte linked bytes stay
+/// off the process stack; fixed-array callers retain the wrapper above.
+pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch(
+    inputs: &[LinkInput<'_, '_, '_>],
+    entry_symbol: &str,
+    runtime_functions: &[PeRuntimeFunction<'_>],
+    writable_data: &[PeWritableData<'_, '_>],
+    readonly_absolute_relocations: &[PeReadonlyAbsoluteRelocation<'_>],
+    bytes: &mut [u8],
+    linked_scratch: &mut [u8],
+) -> Result<usize, LinkerError> {
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: usize = 0x1000;
     const HEADERS: usize = 0x200;
     const TEXT_RVA: usize = 0x1000;
     const IMAGE_BASE: usize = 0x0000_0001_4000_0000;
 
-    let linked =
-        link_x86_64_static_aligned::<MAX_LINKED_BYTES>(inputs, entry_symbol, SECTION_ALIGNMENT)?;
+    let mut linked_layouts = [InputLayout {
+        text: 0,
+        readonly: 0,
+    }; MAX_LINK_FRAGMENTS];
+    let linked = link_x86_64_static_aligned_into(
+        inputs,
+        entry_symbol,
+        SECTION_ALIGNMENT,
+        linked_scratch,
+        &mut linked_layouts,
+    )?;
     if runtime_functions.len() > MAX_PE_RUNTIME_FUNCTIONS {
         return Err(LinkerError::TooManyRelocations);
     }
@@ -8628,12 +8668,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             0xc000_0040,
         )?;
     }
-    copy_at(bytes, HEADERS, &linked.bytes[..linked.text_length])?;
+    copy_at(bytes, HEADERS, &linked_scratch[..linked.text_length])?;
     if readonly_size != 0 {
         copy_at(
             bytes,
             readonly_raw,
-            &linked.bytes[linked.readonly_offset..linked.length],
+            &linked_scratch[linked.readonly_offset..linked.length],
         )?;
     }
     let mut begin_rvas = [0u32; MAX_PE_RUNTIME_FUNCTIONS];
@@ -8642,9 +8682,9 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     for (index, function) in runtime_functions.iter().enumerate() {
         let begin = match function.begin_identity {
             Some(identity) => {
-                resolve_coff_section(inputs, &linked.layouts, identity, function.begin_offset)?
+                resolve_coff_section(inputs, &linked_layouts, identity, function.begin_offset)?
             }
-            None => resolve_symbol(inputs, &linked.layouts, function.begin_symbol)?
+            None => resolve_symbol(inputs, &linked_layouts, function.begin_symbol)?
                 .checked_add(function.begin_offset)
                 .ok_or(LinkerError::OffsetOverflow)?,
         }
@@ -8652,9 +8692,9 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
         .ok_or(LinkerError::OffsetOverflow)?;
         let end = match function.end_identity {
             Some(identity) => {
-                resolve_coff_section(inputs, &linked.layouts, identity, function.end_offset)?
+                resolve_coff_section(inputs, &linked_layouts, identity, function.end_offset)?
             }
-            None => resolve_symbol(inputs, &linked.layouts, function.end_symbol)?
+            None => resolve_symbol(inputs, &linked_layouts, function.end_symbol)?
                 .checked_add(function.end_offset)
                 .ok_or(LinkerError::OffsetOverflow)?,
         }
@@ -8777,14 +8817,14 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             let target_rva = match relocation.target {
                 PeWritableRelocationTarget::Readonly { owner, offset } => resolve_readonly_symbol(
                     inputs,
-                    &linked.layouts,
+                    &linked_layouts,
                     linked.readonly_offset,
                     readonly_rva,
                     owner,
                     offset,
                 )?,
                 PeWritableRelocationTarget::CoffSection { identity, offset } => {
-                    let target = resolve_coff_section(inputs, &linked.layouts, identity, offset)?;
+                    let target = resolve_coff_section(inputs, &linked_layouts, identity, offset)?;
                     if target < linked.readonly_offset {
                         TEXT_RVA
                             .checked_add(target)
@@ -8800,7 +8840,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                     }
                 }
                 PeWritableRelocationTarget::TextSymbol(symbol) => TEXT_RVA
-                    .checked_add(resolve_symbol(inputs, &linked.layouts, symbol)?)
+                    .checked_add(resolve_symbol(inputs, &linked_layouts, symbol)?)
                     .ok_or(LinkerError::OffsetOverflow)?,
                 PeWritableRelocationTarget::TlsSection { identity, offset } => {
                     let (target_index, target_offset) = writable_section(identity, offset)?;
@@ -8840,7 +8880,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             Some(identity) => {
                 let target = resolve_coff_section(
                     inputs,
-                    &linked.layouts,
+                    &linked_layouts,
                     identity,
                     relocation.readonly_offset,
                 )?;
@@ -8854,7 +8894,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             }
             None => resolve_readonly_symbol(
                 inputs,
-                &linked.layouts,
+                &linked_layouts,
                 linked.readonly_offset,
                 readonly_rva,
                 relocation.readonly_owner,
@@ -8869,7 +8909,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             )
             .ok_or(LinkerError::OffsetOverflow)?;
         let target_rva = if let Some(identity) = relocation.target_identity {
-            match resolve_coff_section(inputs, &linked.layouts, identity, relocation.target_offset)
+            match resolve_coff_section(inputs, &linked_layouts, identity, relocation.target_offset)
             {
                 Ok(target) if target < linked.readonly_offset => TEXT_RVA
                     .checked_add(target)
@@ -8888,7 +8928,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                 Err(error) => return Err(error),
             }
         } else {
-            match resolve_symbol(inputs, &linked.layouts, relocation.target_symbol) {
+            match resolve_symbol(inputs, &linked_layouts, relocation.target_symbol) {
                 Ok(offset) => TEXT_RVA
                     .checked_add(offset)
                     .ok_or(LinkerError::OffsetOverflow)?,
@@ -8939,7 +8979,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             }
         }
     }
-    for (input, layout) in inputs.iter().zip(linked.layouts.iter()) {
+    for (input, layout) in inputs.iter().zip(linked_layouts.iter()) {
         for relocation in input.relocations {
             if let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target {
                 let import_index = imports[..import_count]
@@ -9604,6 +9644,35 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
     entry_symbol: &str,
     section_alignment: usize,
 ) -> Result<LinkedImage<MAX_BYTES>, LinkerError> {
+    let mut bytes = [0u8; MAX_BYTES];
+    let mut layouts = [InputLayout {
+        text: 0,
+        readonly: 0,
+    }; MAX_LINK_FRAGMENTS];
+    let linked = link_x86_64_static_aligned_into(
+        inputs,
+        entry_symbol,
+        section_alignment,
+        &mut bytes,
+        &mut layouts,
+    )?;
+    Ok(LinkedImage {
+        bytes,
+        length: linked.length,
+        text_length: linked.text_length,
+        readonly_offset: linked.readonly_offset,
+        entry_offset: linked.entry_offset,
+        layouts,
+    })
+}
+
+fn link_x86_64_static_aligned_into(
+    inputs: &[LinkInput<'_, '_, '_>],
+    entry_symbol: &str,
+    section_alignment: usize,
+    output: &mut [u8],
+    layouts: &mut [InputLayout; MAX_LINK_FRAGMENTS],
+) -> Result<StaticLinkLayout, LinkerError> {
     if inputs.is_empty() {
         return Err(LinkerError::EmptyInput);
     }
@@ -9705,10 +9774,10 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
 
     // Pass 2: freeze layout before copying bytes, following a text-first,
     // read-only-data-second policy. The fixed arrays keep all bounds explicit.
-    let mut layouts = [InputLayout {
+    layouts.fill(InputLayout {
         text: 0,
         readonly: 0,
-    }; MAX_LINK_FRAGMENTS];
+    });
     let mut cursor = 0usize;
     for (layout, input) in layouts.iter_mut().zip(inputs) {
         cursor = align(cursor, 16)?;
@@ -9727,20 +9796,20 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
             .checked_add(input.readonly_data.len())
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    if cursor > MAX_BYTES {
+    if cursor > output.len() {
         return Err(LinkerError::LinkedOutputTooSmall {
             required: cursor,
-            capacity: MAX_BYTES,
+            capacity: output.len(),
         });
     }
 
-    let entry_offset = resolve_symbol(inputs, &layouts, entry_symbol)?;
-    let mut output = [0u8; MAX_BYTES];
+    let entry_offset = resolve_symbol(inputs, &*layouts, entry_symbol)?;
+    output[..cursor].fill(0);
 
     // Pass 3: disjoint copies are independently executable once layout is fixed.
     for (input, layout) in inputs.iter().zip(layouts.iter()) {
-        copy_at(&mut output, layout.text, input.text)?;
-        copy_at(&mut output, layout.readonly, input.readonly_data)?;
+        copy_at(output, layout.text, input.text)?;
+        copy_at(output, layout.readonly, input.readonly_data)?;
     }
 
     // Pass 4: each relocation patches a disjoint field validated above.
@@ -9748,7 +9817,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
         for relocation in input.relocations {
             match relocation.target {
                 LinkRelocationTarget::RequiredSymbol(symbol) => {
-                    resolve_symbol(inputs, &layouts, symbol)?;
+                    resolve_symbol(inputs, &*layouts, symbol)?;
                     continue;
                 }
                 LinkRelocationTarget::PeWritableSymbol(_)
@@ -9765,7 +9834,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 LinkRelocationTarget::Symbol(symbol)
                 | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
                 | LinkRelocationTarget::LocalSymbol(symbol) => {
-                    resolve_symbol(inputs, &layouts, symbol)?
+                    resolve_symbol(inputs, &*layouts, symbol)?
                 }
                 LinkRelocationTarget::RequiredSymbol(_) => unreachable!(),
                 LinkRelocationTarget::PeWritableSymbol(_) => unreachable!(),
@@ -9785,7 +9854,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     .checked_add(offset)
                     .ok_or(LinkerError::OffsetOverflow)?,
                 LinkRelocationTarget::CoffSection { identity, offset } => {
-                    resolve_coff_section(inputs, &layouts, identity, offset)?
+                    resolve_coff_section(inputs, &*layouts, identity, offset)?
                 }
             };
             let displacement = i64::try_from(target)
@@ -9832,13 +9901,11 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
         }
     }
 
-    Ok(LinkedImage {
-        bytes: output,
+    Ok(StaticLinkLayout {
         length: cursor,
         text_length,
         readonly_offset,
         entry_offset,
-        layouts,
     })
 }
 
@@ -13236,21 +13303,46 @@ mod tests {
         assert_eq!(&caller_owned[..caller_length], pe.bytes());
         assert!(caller_owned[caller_length..].iter().all(|byte| *byte == 0));
 
-        let mut too_small = [0u8; 512];
+        let mut scratch_owned = [0xa5; 2048];
+        let mut linked_scratch = [0xa5; 8192];
+        let scratch_length =
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch(
+                &[input],
+                "entry",
+                &[],
+                &[],
+                &[],
+                &mut scratch_owned,
+                &mut linked_scratch,
+            )
+            .unwrap();
+        assert_eq!(scratch_length, caller_length);
+        assert_eq!(&scratch_owned[..scratch_length], pe.bytes());
+        assert!(
+            scratch_owned[scratch_length..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(linked_scratch[4101..].iter().all(|byte| *byte == 0xa5));
+
+        let mut too_small = [0xa5; 512];
+        let mut adequate_linked_scratch = [0xa5; 8192];
         assert_eq!(
-            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<8192>(
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch(
                 &[input],
                 "entry",
                 &[],
                 &[],
                 &[],
                 &mut too_small,
+                &mut adequate_linked_scratch,
             ),
             Err(LinkerError::PeOutputTooSmall {
                 required: 1536,
                 capacity: 512,
             })
         );
+        assert!(too_small.iter().all(|byte| *byte == 0xa5));
         assert_eq!(
             std::format!(
                 "{}",
@@ -13262,14 +13354,16 @@ mod tests {
             "PE output capacity is too small (required 1536, capacity 512)"
         );
 
-        let mut linked_too_small = [0u8; 2048];
+        let mut linked_capacity_output = [0xa5; 2048];
+        let mut linked_too_small = [0xa5; 4096];
         assert_eq!(
-            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<4096>(
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch(
                 &[input],
                 "entry",
                 &[],
                 &[],
                 &[],
+                &mut linked_capacity_output,
                 &mut linked_too_small,
             ),
             Err(LinkerError::LinkedOutputTooSmall {
@@ -13277,6 +13371,8 @@ mod tests {
                 capacity: 4096,
             })
         );
+        assert!(linked_capacity_output.iter().all(|byte| *byte == 0xa5));
+        assert!(linked_too_small.iter().all(|byte| *byte == 0xa5));
     }
 
     #[test]

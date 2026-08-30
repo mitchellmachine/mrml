@@ -27,7 +27,7 @@ use mrml_rustc::{
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
     inventory_x86_64_coff_symbols, inventory_x86_64_elf_symbols,
     link_x86_64_elf_selected_executable,
-    link_x86_64_pe_with_data_unwind_and_readonly_relocations_into,
+    link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
     x86_64_coff_section_identity_readonly_fragment_count, x86_64_coff_short_import,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
@@ -2686,6 +2686,11 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             symbol
         ));
     }
+    let mut linked_scratch = Vector::with_capacity(MAX_LINKED)
+        .map_err(|_| anyhow!("could not allocate bounded PE linked-image scratch"))?;
+    linked_scratch
+        .try_resize(MAX_LINKED, 0)
+        .map_err(|_| anyhow!("could not initialize bounded PE linked-image scratch"))?;
     let mut executable = Vector::with_capacity(MAX_IMAGE)
         .map_err(|_| anyhow!("could not allocate bounded PE image output"))?;
     executable
@@ -2697,13 +2702,14 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             .ok_or_else(|| anyhow!("selected code relocation count overflow"))
     })?;
     let length =
-        link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<MAX_LINKED>(
+        link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked_scratch(
             inputs,
             entry,
             runtime_functions,
             writable_data,
             readonly_absolute_relocations,
             &mut executable,
+            &mut linked_scratch,
         )
         .map_err(|error| {
             anyhow!(
