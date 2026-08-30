@@ -10250,3 +10250,18 @@ allocator, installed service, IOMMU, KVM, WHP, or physical hardware.
 Patent review: `NOT_TRIGGERED` — exclusive zeroed allocation, scrubbed release,
 and retry-after-clean-failure are conventional memory-lifecycle mechanisms. See
 `docs/patents/REVIEW_LOG.md`.
+
+The memory-resource table now **PARTIALLY IMPLEMENTS IN SOURCE** transactional
+installation of two exact one-page backed mappings. A first-side failure
+publishes nothing; a second-side failure removes the already installed first
+mapping before returning. If that removal is itself uncertain, the result
+retains the exact first mapping generation and both backend errors so callers
+must complete explicit cleanup rather than treating a half-published pair as
+absent. Adversarial simulation covers both clean rollback and retained cleanup,
+and the Linux-host release kernel suite passes 649 tests. This mechanism is the
+mapping prerequisite for the service transfer page; it is not yet the
+service-specific directional binding or physical page-table evidence.
+
+Patent review: `NOT_TRIGGERED` — two-phase mapping publication with explicit
+rollback retention is conventional transactional resource management. See
+`docs/patents/REVIEW_LOG.md`.

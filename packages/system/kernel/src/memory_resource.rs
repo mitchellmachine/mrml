@@ -115,6 +115,33 @@ pub enum MemoryMappingOperationError<E> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryMappingPair {
+    first: MemoryMappingId,
+    second: MemoryMappingId,
+}
+
+impl MemoryMappingPair {
+    pub const fn first(self) -> MemoryMappingId {
+        self.first
+    }
+
+    pub const fn second(self) -> MemoryMappingId {
+        self.second
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryMappingPairOperationError<F, S> {
+    First(MemoryMappingOperationError<F>),
+    Second(MemoryMappingOperationError<S>),
+    Rollback {
+        second: MemoryMappingOperationError<S>,
+        first: MemoryMappingOperationError<F>,
+        retained_first: MemoryMappingId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryBackingKind {
     Anonymous,
     Shared,
@@ -871,6 +898,71 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
             .install(mapping_backend_request(prepared.entry))
             .map_err(MemoryMappingOperationError::Backend)?;
         Ok(self.commit_mapping(prepared))
+    }
+
+    /// Installs two backed mappings as one publication transaction.
+    ///
+    /// A clean second-side failure removes the first mapping before returning.
+    /// If that removal is uncertain, the exact retained mapping identity is
+    /// returned so the caller cannot mistake the first target for unmapped.
+    #[allow(clippy::too_many_arguments)]
+    pub fn install_backed_mapping_pair<
+        F: MemoryMappingBackend,
+        S: MemoryMappingBackend,
+        const C: usize,
+    >(
+        &mut self,
+        object: MemoryObjectId,
+        object_capability: Capability,
+        first_target_capability: Capability,
+        first_virtual_page: u64,
+        first_access: Rights,
+        first_backend: &mut F,
+        second_target_capability: Capability,
+        second_virtual_page: u64,
+        second_access: Rights,
+        second_backend: &mut S,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<MemoryMappingPair, MemoryMappingPairOperationError<F::Error, S::Error>> {
+        let first = self
+            .install_backed_mapping(
+                object,
+                object_capability,
+                first_target_capability,
+                first_virtual_page,
+                0,
+                1,
+                first_access,
+                capabilities,
+                first_backend,
+            )
+            .map_err(MemoryMappingPairOperationError::First)?;
+        match self.install_backed_mapping(
+            object,
+            object_capability,
+            second_target_capability,
+            second_virtual_page,
+            0,
+            1,
+            second_access,
+            capabilities,
+            second_backend,
+        ) {
+            Ok(second) => Ok(MemoryMappingPair { first, second }),
+            Err(second) => match self.remove_mapping(
+                first,
+                first_target_capability,
+                capabilities,
+                first_backend,
+            ) {
+                Ok(()) => Err(MemoryMappingPairOperationError::Second(second)),
+                Err(first_error) => Err(MemoryMappingPairOperationError::Rollback {
+                    second,
+                    first: first_error,
+                    retained_first: first,
+                }),
+            },
+        }
     }
 
     /// Retires one reservation only after its actual page-table/backend mapping
@@ -2452,6 +2544,113 @@ mod tests {
                 .active_mappings(),
             0
         );
+    }
+
+    #[test]
+    fn backed_mapping_pair_rolls_back_or_returns_exact_retained_first_mapping() {
+        let mut table = MemoryPoolTable::<1, 1, 2>::new(0x44).unwrap();
+        let mut caps = CapabilitySpace::<8>::new();
+        let (pool, pool_cap) = table.create_root(1, 2, 0, ROOT_RIGHTS, &mut caps).unwrap();
+        let (object, object_cap) = table
+            .allocate_object(
+                pool,
+                pool_cap,
+                1,
+                MemoryBackingKind::Shared,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let first_target = caps
+            .insert(ObjectId(0x7100), Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let second_target = caps
+            .insert(ObjectId(0x7200), Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let physical = MemoryPhysicalBacking::new(PhysAddr::new(0x50_0000).unwrap(), 1).unwrap();
+        let mut backing = RecordingBackingBackend::default();
+        table
+            .bind_physical_backing(object, object_cap, physical, &caps, &mut backing)
+            .unwrap();
+        let mut first_backend = RecordingMappingBackend {
+            fail_remove: true,
+            ..RecordingMappingBackend::default()
+        };
+        let mut second_backend = RecordingMappingBackend {
+            fail_install: true,
+            ..RecordingMappingBackend::default()
+        };
+
+        let retained = match table.install_backed_mapping_pair(
+            object,
+            object_cap,
+            first_target,
+            0x300,
+            Rights::READ,
+            &mut first_backend,
+            second_target,
+            0x400,
+            Rights::WRITE,
+            &mut second_backend,
+            &caps,
+        ) {
+            Err(MemoryMappingPairOperationError::Rollback {
+                second: MemoryMappingOperationError::Backend("install"),
+                first: MemoryMappingOperationError::Backend("remove"),
+                retained_first,
+            }) => retained_first,
+            other => panic!("unexpected pair result: {other:?}"),
+        };
+        assert!(first_backend.installed.is_some());
+        assert_eq!(
+            table
+                .usage(pool, pool_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            1
+        );
+
+        first_backend.fail_remove = false;
+        table
+            .remove_mapping(retained, first_target, &caps, &mut first_backend)
+            .unwrap();
+        assert_eq!(
+            table
+                .usage(pool, pool_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+        assert_eq!(
+            table.install_backed_mapping_pair(
+                object,
+                object_cap,
+                first_target,
+                0x300,
+                Rights::READ,
+                &mut first_backend,
+                second_target,
+                0x400,
+                Rights::WRITE,
+                &mut second_backend,
+                &caps,
+            ),
+            Err(MemoryMappingPairOperationError::Second(
+                MemoryMappingOperationError::Backend("install")
+            ))
+        );
+        assert!(first_backend.installed.is_none());
+        assert_eq!(
+            table
+                .usage(pool, pool_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+        table
+            .release_physical_backing(object, object_cap, &caps, &mut backing)
+            .unwrap();
+        assert_eq!(table.release_object(object, object_cap, &mut caps), Ok(1));
     }
 
     #[test]
