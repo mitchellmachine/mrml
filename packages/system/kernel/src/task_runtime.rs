@@ -44,6 +44,8 @@ pub enum TaskRuntimeError {
     ConstructionTargetNotPristine,
     RetirementDispatchPending,
     RuntimeIdentityExhausted,
+    ReceiveWaitGenerationExhausted,
+    ReceiveWaitMismatch,
 }
 
 impl TaskRuntimeError {
@@ -328,7 +330,8 @@ struct TaskDomain<const CAPS: usize> {
     inbox_head: u8,
     inbox_tail: u8,
     inbox_count: u8,
-    blocked_receive: Option<BlockedReceiveKind>,
+    blocked_receive: Option<BlockedReceiveIdentity>,
+    next_receive_wait_generation: u64,
     peers: [Option<TaskId>; TASK_CONTROL_PEERS],
     peer_deaths: [Option<PeerDeath>; TASK_CONTROL_PEERS],
 }
@@ -337,6 +340,35 @@ struct TaskDomain<const CAPS: usize> {
 enum BlockedReceiveKind {
     Ipc,
     Control,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BlockedReceiveIdentity {
+    runtime: u64,
+    task: TaskId,
+    generation: u64,
+    kind: BlockedReceiveKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use = "a blocked receive token must be retained for wake or cancellation"]
+pub struct BlockedReceive {
+    identity: BlockedReceiveIdentity,
+    outcome: ScheduleOutcome,
+}
+
+impl BlockedReceive {
+    pub const fn task(&self) -> TaskId {
+        self.identity.task
+    }
+
+    pub const fn outcome(&self) -> ScheduleOutcome {
+        self.outcome
+    }
+
+    pub const fn is_control(&self) -> bool {
+        matches!(self.identity.kind, BlockedReceiveKind::Control)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -635,6 +667,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             inbox_tail: 0,
             inbox_count: 0,
             blocked_receive: None,
+            next_receive_wait_generation: 1,
             peers: [None; TASK_CONTROL_PEERS],
             peer_deaths: [None; TASK_CONTROL_PEERS],
         });
@@ -1943,7 +1976,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
 
     pub fn receive_control_or_block_current(
         &mut self,
-    ) -> Result<Result<ControlEvent, ScheduleOutcome>, TaskRuntimeError> {
+    ) -> Result<Result<ControlEvent, BlockedReceive>, TaskRuntimeError> {
         self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
@@ -2012,7 +2045,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 .iter()
                 .position(Option::is_none)
                 .ok_or(TaskRuntimeError::IntegrityFailure)?;
-            let wake = (domain.blocked_receive == Some(BlockedReceiveKind::Control))
+            let wake = domain
+                .blocked_receive
+                .is_some_and(|wait| wait.kind == BlockedReceiveKind::Control)
                 .then(|| self.scheduler.prepare_wake(peer))
                 .transpose()
                 .map_err(TaskRuntimeError::Scheduler)?;
@@ -2048,7 +2083,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             });
             if let Some(wake) = publication.wake {
                 assert_eq!(
-                    domain.blocked_receive.take(),
+                    domain.blocked_receive.take().map(|wait| wait.kind),
                     Some(BlockedReceiveKind::Control)
                 );
                 self.scheduler.commit_wake(wake);
@@ -2204,7 +2239,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
 
     pub fn receive_or_block_current(
         &mut self,
-    ) -> Result<Result<Message, ScheduleOutcome>, TaskRuntimeError> {
+    ) -> Result<Result<Message, BlockedReceive>, TaskRuntimeError> {
         self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
@@ -2219,29 +2254,71 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
     }
 
-    fn block_current_for_receive(
+    /// Cancels one exact blocked receive and makes its task runnable. A stale,
+    /// substituted, or cross-runtime token changes neither wait nor scheduler
+    /// state.
+    pub fn cancel_blocked_receive(
         &mut self,
-        current: TaskId,
-        kind: BlockedReceiveKind,
-    ) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        let slot = self.domain_slot(current)?;
+        blocked: BlockedReceive,
+    ) -> Result<(), TaskRuntimeError> {
+        if blocked.identity.runtime != self.identity {
+            return Err(TaskRuntimeError::ReceiveWaitMismatch);
+        }
+        let slot = self
+            .domain_slot(blocked.identity.task)
+            .map_err(|_| TaskRuntimeError::ReceiveWaitMismatch)?;
         if self.domains[slot]
             .as_ref()
             .ok_or(TaskRuntimeError::IntegrityFailure)?
             .blocked_receive
-            .is_some()
+            != Some(blocked.identity)
         {
+            return Err(TaskRuntimeError::ReceiveWaitMismatch);
+        }
+        let wake = self
+            .scheduler
+            .prepare_wake(blocked.identity.task)
+            .map_err(TaskRuntimeError::Scheduler)?;
+        self.domains[slot]
+            .as_mut()
+            .expect("cancellation preserves the prevalidated task domain")
+            .blocked_receive = None;
+        self.scheduler.commit_wake(wake);
+        Ok(())
+    }
+
+    fn block_current_for_receive(
+        &mut self,
+        current: TaskId,
+        kind: BlockedReceiveKind,
+    ) -> Result<BlockedReceive, TaskRuntimeError> {
+        let slot = self.domain_slot(current)?;
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if domain.blocked_receive.is_some() {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        let generation = domain.next_receive_wait_generation;
+        let next_generation = generation
+            .checked_add(1)
+            .ok_or(TaskRuntimeError::ReceiveWaitGenerationExhausted)?;
+        let identity = BlockedReceiveIdentity {
+            runtime: self.identity,
+            task: current,
+            generation,
+            kind,
+        };
         let outcome = self
             .scheduler
             .block_current()
             .map_err(TaskRuntimeError::Scheduler)?;
-        self.domains[slot]
+        let domain = self.domains[slot]
             .as_mut()
-            .expect("blocking preserves the prevalidated current domain")
-            .blocked_receive = Some(kind);
-        Ok(outcome)
+            .expect("blocking preserves the prevalidated current domain");
+        domain.blocked_receive = Some(identity);
+        domain.next_receive_wait_generation = next_generation;
+        Ok(BlockedReceive { identity, outcome })
     }
 }
 
@@ -3757,9 +3834,15 @@ mod tests {
                 to: receiver
             }
         );
+        let blocked = match runtime.receive_or_block_current().unwrap() {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty IPC receive must block"),
+        };
+        assert_eq!(blocked.task(), receiver);
+        assert!(!blocked.is_control());
         assert!(matches!(
-            runtime.receive_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == sender
+            blocked.outcome(),
+            ScheduleOutcome::Switch { to, .. } if to == sender
         ));
         assert_eq!(
             runtime
@@ -3773,6 +3856,10 @@ mod tests {
                 )
                 .unwrap(),
             1
+        );
+        assert_eq!(
+            runtime.cancel_blocked_receive(blocked),
+            Err(TaskRuntimeError::ReceiveWaitMismatch)
         );
         runtime
             .deliver_ipc(
@@ -3837,6 +3924,79 @@ mod tests {
         assert_eq!(
             runtime.peek_ipc_shape(receiver),
             Err(TaskRuntimeError::InboxEmpty)
+        );
+    }
+
+    #[test]
+    fn blocked_receive_cancellation_exact_matches_runtime_and_generation() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == receiver));
+        let blocked = match runtime.receive_or_block_current().unwrap() {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty receive must issue a cancellation token"),
+        };
+
+        let mut other = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let other_receiver = other
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let other_sender = other
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert_eq!((other_receiver, other_sender), (receiver, sender));
+        assert!(matches!(other.start(), ScheduleOutcome::Switch { to, .. } if to == receiver));
+        let other_blocked = match other.receive_or_block_current().unwrap() {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("matching task IDs must issue a distinct token"),
+        };
+
+        assert_eq!(
+            other.cancel_blocked_receive(blocked),
+            Err(TaskRuntimeError::ReceiveWaitMismatch)
+        );
+        assert_eq!(other.cancel_blocked_receive(other_blocked), Ok(()));
+        assert_eq!(
+            other.cancel_blocked_receive(other_blocked),
+            Err(TaskRuntimeError::ReceiveWaitMismatch)
+        );
+        assert_eq!(runtime.cancel_blocked_receive(blocked), Ok(()));
+        assert_eq!(
+            runtime.cancel_blocked_receive(blocked),
+            Err(TaskRuntimeError::ReceiveWaitMismatch)
+        );
+        assert!(matches!(
+            runtime.yield_current(),
+            Ok(ScheduleOutcome::Switch { to, .. }) if to == receiver
+        ));
+    }
+
+    #[test]
+    fn blocked_receive_generation_exhaustion_does_not_block() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let slot = runtime.domain_slot(task).unwrap();
+        runtime.domains[slot]
+            .as_mut()
+            .unwrap()
+            .next_receive_wait_generation = u64::MAX;
+
+        assert!(matches!(
+            runtime.receive_or_block_current(),
+            Err(TaskRuntimeError::ReceiveWaitGenerationExhausted)
+        ));
+        assert_eq!(runtime.current(), Some(task));
+        assert_eq!(
+            runtime.domains[slot].as_ref().unwrap().blocked_receive,
+            None
         );
     }
 
@@ -4991,7 +5151,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
         assert!(matches!(
             runtime.receive_control_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == faulted
+            Ok(Err(blocked))
+                if matches!(blocked.outcome(), ScheduleOutcome::Switch { to, .. } if to == faulted)
         ));
 
         let retirement = runtime
@@ -5048,7 +5209,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
         assert!(matches!(
             runtime.receive_control_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == faulted
+            Ok(Err(blocked))
+                if matches!(blocked.outcome(), ScheduleOutcome::Switch { to, .. } if to == faulted)
         ));
         let retirement = runtime
             .terminate_current_fault(TrapDisposition::TerminateUser {
@@ -5109,7 +5271,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
         assert!(matches!(
             runtime.receive_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == peer
+            Ok(Err(blocked))
+                if matches!(blocked.outcome(), ScheduleOutcome::Switch { to, .. } if to == peer)
         ));
 
         let retirement = runtime
@@ -5124,7 +5287,8 @@ mod tests {
             runtime.domains[observer_slot]
                 .as_ref()
                 .unwrap()
-                .blocked_receive,
+                .blocked_receive
+                .map(|wait| wait.kind),
             Some(BlockedReceiveKind::Ipc)
         );
         assert!(
@@ -5186,7 +5350,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
         assert!(matches!(
             runtime.receive_control_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == violated
+            Ok(Err(blocked))
+                if matches!(blocked.outcome(), ScheduleOutcome::Switch { to, .. } if to == violated)
         ));
 
         let retirement = runtime
@@ -5291,7 +5456,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
         assert!(matches!(
             runtime.receive_control_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == violated
+            Ok(Err(blocked))
+                if matches!(blocked.outcome(), ScheduleOutcome::Switch { to, .. } if to == violated)
         ));
 
         let observer_slot = runtime.domain_slot(observer).unwrap();
@@ -5358,7 +5524,8 @@ mod tests {
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
         assert!(matches!(
             runtime.receive_control_or_block_current(),
-            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == violated
+            Ok(Err(blocked))
+                if matches!(blocked.outcome(), ScheduleOutcome::Switch { to, .. } if to == violated)
         ));
 
         runtime.scheduler.detach(observer).unwrap();

@@ -292,12 +292,12 @@ pub use syscall::{
     X86_USER_CALL_VECTOR, decode_capability_transfers,
 };
 pub use task_runtime::{
-    AccountedTaskRuntime, AccountedTaskRuntimeError, ControlEvent, DetachedTaskDomain,
-    DomainBalanceError, DomainBalanceOutcome, FaultRetirement, MAX_TASK_DELEGATIONS, PeerDeath,
-    PeerDeathReason, PeriodicDomainBalancer, QueuedMessageShape, ReceivedMessage,
-    TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES, TaskProtocolViolation, TaskRuntime, TaskRuntimeError,
-    TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError, TaskTerminationIdle,
-    TaskViolationRetirement, TimerDomainBalanceOutcome,
+    AccountedTaskRuntime, AccountedTaskRuntimeError, BlockedReceive, ControlEvent,
+    DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, FaultRetirement,
+    MAX_TASK_DELEGATIONS, PeerDeath, PeerDeathReason, PeriodicDomainBalancer, QueuedMessageShape,
+    ReceivedMessage, TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES, TaskProtocolViolation, TaskRuntime,
+    TaskRuntimeError, TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError,
+    TaskTerminationIdle, TaskViolationRetirement, TimerDomainBalanceOutcome,
 };
 pub use virtual_block::{
     AdmittedVirtualBlockRequest, CapabilitySelectedVirtualBlockBackend,

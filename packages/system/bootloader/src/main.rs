@@ -507,6 +507,7 @@ struct PendingBufferReceive {
     payload_capacity: usize,
     capabilities_address: u64,
     capability_capacity: usize,
+    wait: Option<mrml_kernel::BlockedReceive>,
 }
 
 #[cfg(feature = "service-probe")]
@@ -997,7 +998,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 .unwrap_or_else(|_| halt())
             {
                 Ok(message) => frame.complete_message(message.payload()),
-                Err(ScheduleOutcome::Switch { to, .. }) => {
+                Err(blocked) if matches!(blocked.outcome(), ScheduleOutcome::Switch { .. }) => {
+                    let ScheduleOutcome::Switch { to, .. } = blocked.outcome() else {
+                        halt()
+                    };
                     asm!(
                         "out dx, eax",
                         in("dx") SERVICE_CALL_PORT,
@@ -1148,6 +1152,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     payload_capacity: usize::from(payload_capacity),
                     capabilities_address,
                     capability_capacity: usize::from(capability_capacity),
+                    wait: None,
                 };
                 if !active_receive_is_valid(root, pending) {
                     frame.complete_error();
@@ -1169,7 +1174,16 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             .unwrap_or_else(|_| halt())
                         {
                             Ok(_) => halt(),
-                            Err(ScheduleOutcome::Switch { to, .. }) => {
+                            Err(blocked)
+                                if matches!(blocked.outcome(), ScheduleOutcome::Switch { .. }) =>
+                            {
+                                let ScheduleOutcome::Switch { to, .. } = blocked.outcome() else {
+                                    halt()
+                                };
+                                let pending = PendingBufferReceive {
+                                    wait: Some(blocked),
+                                    ..pending
+                                };
                                 insert_pending_buffer(pending_slot, pending);
                                 asm!(
                                     "out dx, eax",
@@ -4963,6 +4977,12 @@ unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive)
     if root != pending.page_table || pending.payload_capacity == 0 {
         return false;
     }
+    if pending
+        .wait
+        .is_some_and(|wait| wait.task() != pending.task || wait.is_control())
+    {
+        return false;
+    }
     if !unsafe {
         service_user_range_is_valid(
             root,
@@ -5201,6 +5221,7 @@ unsafe fn insert_pending_buffer(slot: usize, pending: PendingBufferReceive) {
     let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
     if slot >= buffers.len()
         || buffers[slot].is_some()
+        || pending.wait.is_none()
         || buffers
             .iter()
             .flatten()

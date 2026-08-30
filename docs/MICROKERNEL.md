@@ -11132,3 +11132,31 @@ warnings. This is in-memory and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — recording a bounded wait discriminator and
 waking only compatible waiters is conventional typed event-loop behavior. See
 `docs/patents/REVIEW_LOG.md`.
+
+Blocking IPC and control receives now return an opaque `BlockedReceive` token
+that binds the runtime instance, exact generational task, nonzero monotonic wait
+generation, wait kind, and resulting scheduler transition. Exact token
+cancellation consumes the live wait and makes that task runnable. Cross-runtime
+substitution, stale-task use, and replay return `ReceiveWaitMismatch` without
+changing scheduler state; generation exhaustion rejects before blocking. Token
+copies cannot amplify cancellation because only the one matching live runtime
+record can be consumed.
+
+The UEFI buffered-receive pending record retains this token alongside its
+already validated task, page-table root, and output ranges, and rejects a
+control-kind or wrong-task token. The direct inline receive path can observe the
+opaque token but does not yet retain it under a cancellation owner; syscall
+cancellation and deadline policy remain the next integration gate, and no
+task-name cancellation fallback is exposed.
+
+The Linux-host kernel suite passes 657 tests, including cross-runtime
+substitution, replay, automatic wake invalidation, and generation-exhaustion
+coverage. Storage passes 163 tests, Zstd passes 27, and configuration passes 53;
+their affected Linux release builds pass. The default, service,
+component-service, invalid-return, and buffer-drift UEFI release profiles
+cross-build with the existing configuration-specific warnings. This is
+in-memory and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — exact generational cancellation of a blocked
+wait is conventional replay-safe scheduler lifecycle handling. See
+`docs/patents/REVIEW_LOG.md`.
