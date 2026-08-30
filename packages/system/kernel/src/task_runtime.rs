@@ -207,6 +207,7 @@ enum TaskTerminationDispatchTarget {
 /// Callers may inspect the selected target but cannot construct a replacement
 /// proof from a task name or saved context.
 #[derive(Debug, Eq, PartialEq)]
+#[must_use = "a validated dispatch must be explicitly consumed"]
 pub struct TaskTerminationDispatch {
     target: TaskTerminationDispatchTarget,
 }
@@ -225,6 +226,16 @@ impl TaskTerminationDispatch {
         match self.target {
             TaskTerminationDispatchTarget::Idle => None,
             TaskTerminationDispatchTarget::User { task, context } => Some((task, context)),
+        }
+    }
+
+    /// Consumes a validated idle dispatch without entering userspace.
+    /// A user-target dispatch is returned unchanged to prevent accidental
+    /// authority loss or treatment as an idle transition.
+    pub fn into_idle(self) -> Result<TaskTerminationIdle, Self> {
+        match self.target {
+            TaskTerminationDispatchTarget::Idle => Ok(TaskTerminationIdle { _private: () }),
+            TaskTerminationDispatchTarget::User { .. } => Err(self),
         }
     }
 
@@ -2439,7 +2450,14 @@ mod tests {
             }),
             Err(TaskTerminationDispatchError::TerminationMismatch)
         );
-        let mut dispatch = runtime.dispatch_after_termination(terminated).unwrap();
+        let mut dispatch = match runtime
+            .dispatch_after_termination(terminated)
+            .unwrap()
+            .into_idle()
+        {
+            Err(dispatch) => dispatch,
+            Ok(_) => panic!("user dispatch must not consume as idle"),
+        };
         assert!(!dispatch.is_idle());
         assert_eq!(
             dispatch.user(),
@@ -2480,6 +2498,10 @@ mod tests {
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(dispatch.is_idle());
         assert_eq!(dispatch.user(), None);
+        assert_eq!(
+            dispatch.into_idle(),
+            Ok(TaskTerminationIdle { _private: () })
+        );
         assert_eq!(
             runtime.dispatch_after_termination(termination),
             Err(TaskTerminationDispatchError::NoPendingTermination)

@@ -189,11 +189,15 @@ impl<E: ServiceAddressSpaceEraser, const TASKS: usize, const CAPS: usize>
                 if termination.task() != active.task {
                     return Err(NativeApplicationError::WrongEndpoint);
                 }
-                self.runtime
+                let dispatch = self
+                    .runtime
                     .dispatch_after_termination(termination)
                     .map_err(|_| {
                         NativeApplicationError::Runtime(TaskRuntimeError::IntegrityFailure)
                     })?;
+                dispatch.into_idle().map_err(|_| {
+                    NativeApplicationError::Runtime(TaskRuntimeError::IntegrityFailure)
+                })?;
                 self.state = Some(NativeApplicationState::Cleanup {
                     endpoint: active,
                     context,

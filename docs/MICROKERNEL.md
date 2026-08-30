@@ -10950,3 +10950,21 @@ pass. These checks exercise in-memory API and state-machine behavior only.
 Patent review: `NOT_TRIGGERED` — separating readable lifecycle evidence from
 runtime-only construction is conventional type-safe API hardening. See
 `docs/patents/REVIEW_LOG.md`.
+
+Validated dispatch tokens are now `must_use` and provide a safe consuming
+`into_idle` operation. That operation returns a user-target token unchanged
+rather than silently treating it as idle. The dedicated native application and
+configuration-service teardown paths now require explicit idle consumption;
+UEFI idle branches that continue lifecycle work or halt also consume the exact
+token. The shared-runtime Zstd adapter intentionally remains outside this idle-
+only conversion because its valid provider retirement selects the authenticated
+caller; a later dispatch-handoff change must preserve that successor rather than
+discard or misclassify it. The Linux-host kernel suite passes 653 tests, Zstd
+passes 27 tests, and the configuration service passes 53 tests; all three Linux
+release builds pass. Component-service, invalid-return, and user UEFI release
+profiles cross-build with one pre-existing unused-variable warning. This is in-
+memory and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — explicit consuming acknowledgement of an idle
+scheduler result is conventional linear lifecycle handling. See
+`docs/patents/REVIEW_LOG.md`.

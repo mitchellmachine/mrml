@@ -559,11 +559,16 @@ impl<
         }
         let cleanup = match self.substrate.supervisor.state(endpoint.service) {
             Ok(ServiceState::Running) => {
-                self.substrate
+                let retirement = self
+                    .substrate
                     .supervisor
                     .exit_current(&mut self.substrate.runtime)
-                    .map_err(NativeConfigurationLaunchError::Service)?
-                    .cleanup
+                    .map_err(NativeConfigurationLaunchError::Service)?;
+                retirement
+                    .dispatch
+                    .into_idle()
+                    .map_err(|_| NativeConfigurationLaunchError::WrongEndpoint)?;
+                retirement.cleanup
             }
             Ok(ServiceState::Exited | ServiceState::Faulted) => self
                 .substrate
