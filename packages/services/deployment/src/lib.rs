@@ -1900,6 +1900,7 @@ mod tests {
 
     struct RecoveryStateStore {
         bytes: [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        fail_load: bool,
         fail_compare: bool,
     }
 
@@ -1907,6 +1908,7 @@ mod tests {
         fn empty() -> Self {
             Self {
                 bytes: encode_empty_deployment_recovery_state(1).unwrap(),
+                fail_load: false,
                 fail_compare: false,
             }
         }
@@ -1919,6 +1921,9 @@ mod tests {
             &self,
             output: &mut [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
         ) -> Result<(), Self::Error> {
+            if self.fail_load {
+                return Err(3);
+            }
             output.copy_from_slice(&self.bytes);
             Ok(())
         }
@@ -2465,6 +2470,7 @@ mod tests {
             .unwrap();
         let state_store = RecoveryStateStore {
             bytes: recovery_state,
+            fail_load: false,
             fail_compare: false,
         };
         let mut shared_backend = SharedRuntimeBackend {
@@ -2875,6 +2881,7 @@ mod tests {
             .unwrap();
         let mut recovery_state = RecoveryStateStore {
             bytes: encode_empty_deployment_recovery_state(u64::MAX).unwrap(),
+            fail_load: false,
             fail_compare: false,
         };
         assert!(matches!(
@@ -3107,6 +3114,13 @@ mod tests {
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(service.active(&capabilities, inspect), Ok(None));
 
+        recovery_state.fail_load = true;
+        let published =
+            match published.resolve(&mut service, &capabilities, control, &recovery_state) {
+                Err((published, PublishedActivationResolutionError::StateStore(3))) => published,
+                _ => panic!("state-load uncertainty did not retain published checkpoint"),
+            };
+        recovery_state.fail_load = false;
         let published =
             match published.resolve(&mut service, &capabilities, control, &recovery_state) {
                 Err((published, PublishedActivationResolutionError::RecoveryStateMismatch)) => {
