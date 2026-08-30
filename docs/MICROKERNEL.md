@@ -7422,6 +7422,18 @@ Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and
 resource-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
+The storage service now has a concrete interface-level sector-zero bridge for
+filesystem admission. Construction binds one opaque filesystem volume identity
+to one owner-authenticated block session and exact full-block scratch. Every read
+rechecks the independent `READ` right through `BlockService`, copies only the
+512-byte boot sector, and erases the full scratch on success or failure. Volume
+substitution, denial, and backend error publish zero output bytes. The focused
+Linux-host storage suite passes 144 tests.
+
+Patent review: `NOT_TRIGGERED` — exact session authorization, block-zero reads,
+bounded prefix copy, and scratch erasure are conventional storage-service boundary
+mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded slots, monotonic generations, exact
 identity matching, and atomic record removal are conventional resource-lifecycle
 mechanisms. See `docs/patents/REVIEW_LOG.md`.

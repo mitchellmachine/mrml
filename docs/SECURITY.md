@@ -1177,6 +1177,13 @@ complete sector. The provider validates the sector before lifecycle publication
 and erases scratch on every path. Backend failure or malformed media consumes no
 mount/root generation and publishes no record.
 
+The storage-side filesystem boot-sector reader binds a non-authorizing opaque
+volume identity to an already owner-authenticated block session. It rechecks the
+session's independent `READ` right on every block-zero operation, validates exact
+full-block scratch geometry, exposes only the first 512 bytes, and erases the
+complete scratch after success or failure. Volume substitution, denial, and
+backend failure publish zero output bytes.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

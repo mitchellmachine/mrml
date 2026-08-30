@@ -67,7 +67,7 @@ valid transferred leaf; absent or malformed token data cannot trigger revocation
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
-filesystem interface codec passes thirteen and storage passes 142, including a
+filesystem interface codec passes thirteen and storage passes 144, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
 does not change the modeled kernel epoch. Capability-authorized open policy,
 checking, formatting, writes, installed supervisor launch, and hardware evidence
@@ -83,6 +83,12 @@ An unsafe exact-volume backend contract now reads the complete boot sector for t
 specified live volume handle, validates it, erases scratch, and only then admits
 the lifecycle record. Backend and parser failures publish nothing and consume no
 generations. Concrete block-service composition remains next.
+The storage service now provides the first concrete half of that composition:
+`FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
+to one owner-authenticated block session, validates full-block scratch geometry,
+rechecks `READ` on every block-zero access, copies only the 512-byte boot sector,
+and erases scratch on every path. Cross-service transport into the FAT32 provider
+remains next.
 
 The build frontend and filesystem contract now **PARTIALLY IMPLEMENT** the
 mount/root bootstrap representation. Schema version 2 supports bounded named

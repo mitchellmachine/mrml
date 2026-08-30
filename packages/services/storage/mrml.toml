@@ -74,7 +74,6 @@ alias = "mrml_interface_storage_filesystem_v2"
 compile_name = "mrml-interface-storage-filesystem-v2"
 package = "org.mrml.interface.storage.filesystem"
 scope = "compile"
-test_only = true
 
 [[dependency]]
 alias = "mrml_storage_fat32"

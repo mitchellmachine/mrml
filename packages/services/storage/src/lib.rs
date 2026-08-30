@@ -19,6 +19,7 @@ mod create;
 mod directory;
 mod extent;
 mod file;
+mod filesystem_mount;
 mod format;
 mod identity;
 mod kernel_transport;
@@ -110,6 +111,9 @@ pub use file::{
     FileWriteCommitError, FileWriteError, FileWritePublishError, InitialFileError,
     InitialFileWriteBackend, MAX_FILE_READ_BYTES, MAX_FILE_WRITE_BYTES,
     MAX_PROTECTED_METADATA_RANGES, PreparedFileWrite, PreparedInitialFile, prepare_initial_file,
+};
+pub use filesystem_mount::{
+    FilesystemBootSectorError, FilesystemBootSectorReader, FILESYSTEM_BOOT_SECTOR_BYTES,
 };
 pub use format::{
     DirectoryEntry, DirectoryMetadata, FileMetadata, MetadataError, MetadataPointer, StorageName,

@@ -872,7 +872,7 @@ syscall adapter; installed supervisor execution remains **PLANNED**.
 The service-image block adapter now rejects kernel-returned payload or
 capability counts beyond its exact fixed receive arrays before constructing a
 `ReceivedBlockEnvelope`; the MRML-native block profile cross-builds and the
-Linux storage-service suite passes 142 tests. This is compile and unit-test
+Linux storage-service suite passes 144 tests. This is compile and unit-test
 evidence, not a live installed-service or physical-device result.
 
 The FAT32 provider package is now **PARTIALLY IMPLEMENTED** as
@@ -911,8 +911,13 @@ only after removal; replay is stale, and serial exhaustion preserves the live
 record. A narrow unsafe backend must read the complete boot sector from the exact
 volume handle before admission. The provider validates those bytes, erases the
 sector scratch on every path, and publishes no state or generation advance after
-backend or parse failure. Forty focused Linux-host tests pass. Concrete
-block-provider composition remains **PLANNED**. The
+backend or parse failure. Forty focused Linux-host tests pass. The storage service
+now has an interface-level boot-sector reader that binds an opaque filesystem
+volume to one owner-authenticated block session. It validates exact full-block
+scratch geometry, rechecks `READ` for every block-zero operation, copies only the
+512-byte FAT boot sector, and erases scratch after success, denial, mismatch, or
+backend failure. It grants no new right and makes no device call for a mismatched
+volume. Cross-service transport remains **PLANNED**. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows
@@ -921,7 +926,7 @@ validated backend now makes the block-provider health check mandatory during
 replacement:
 it cleans and erases the old generation, launches the candidate, publishes only
 after a valid catalog, and explicitly cleans a failed candidate before the slot
-becomes unavailable. Retry therefore launches fresh state. Storage passes 142
+becomes unavailable. Retry therefore launches fresh state. Storage passes 144
 tests on both hosts. This does not implement syscall-dispatched mount, lookup/open policy,
 check/repair, format, writes, installed-kernel launch, or physical interoperability
 evidence.

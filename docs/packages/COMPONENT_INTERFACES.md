@@ -414,7 +414,12 @@ The schema tool now accepts version 2 solely to express bounded, uniquely named
 multi-field response records while preserving version-1 output byte-for-byte.
 Filesystem generation 2 uses that record to return mount lifecycle and root-object
 identities separately. Neither response field is a capability; runtime-delivered
-capabilities authorize, and provider mount/open state remains unimplemented.
+capabilities authorize, and cross-service mount/open dispatch remains unimplemented.
+The storage service now consumes the generation-2 handle type in a concrete
+boot-sector bridge. One explicit volume identity is bound to one authenticated
+block session; ordinary `READ` authority is rechecked per operation, only the
+512-byte prefix is exposed, and full-block scratch is erased. This is local
+service composition, not cross-service FAT32 mount dispatch.
 The storage-side fixed registry exercises cleanup before candidate launch,
 health-check before publication, quarantine on cleanup uncertainty, and an
 unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
