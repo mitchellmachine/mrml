@@ -7438,6 +7438,16 @@ Patent review: `NOT_TRIGGERED` — exact-generation flush framing, typed statuse
 and nonzero durability-serial validation are conventional IPC and filesystem
 lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
+Canonical filesystem check framing binds the exact volume and nonzero mount
+generation through the retained provider endpoint and one writable report of at
+most 64 KiB. Zero-byte success is valid; successful byte counts cannot exceed
+the report, and typed failures carry zero. The focused Linux-host interface suite
+passes twelve tests.
+
+Patent review: `NOT_TRIGGERED` — bounded writable reports, exact-generation
+framing, completion-count validation, and typed errors are conventional IPC and
+filesystem-check boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
 completion-count validation, and typed read errors are conventional IPC and file
 I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.

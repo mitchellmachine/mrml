@@ -1188,3 +1188,8 @@ Filesystem flush requests bind the exact volume and nonzero mount generation to
 the retained provider endpoint. A successful response carries a nonzero
 durability serial as evidence rather than authority; stale-object, permission,
 and I/O failures carry zero, and status/serial mixtures fail closed.
+
+Filesystem check requests bind that exact mounted volume and retained endpoint
+to one writable report of at most 64 KiB. Successful byte counts cannot exceed
+the caller's report range; zero-byte success is valid, while every typed failure
+carries zero and cannot smuggle report progress.

@@ -22,6 +22,8 @@ pub const CREATE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 48;
 pub const CREATE_RESPONSE_BYTES: usize = 16;
 pub const FLUSH_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
 pub const FLUSH_RESPONSE_BYTES: usize = 16;
+pub const CHECK_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 32;
+pub const CHECK_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
@@ -167,6 +169,23 @@ pub trait FilesystemFlushEndpoint {
     ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait FilesystemCheckTransport {
+    fn check(
+        &mut self,
+        request: &[u8; CHECK_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; CHECK_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemCheckEndpoint {
+    fn invoke_check(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; CHECK_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; CHECK_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub struct IsolatedFilesystemTransport<E> {
     endpoint: OpaqueHandle,
     maximum_memory_bytes: usize,
@@ -301,6 +320,20 @@ impl<E: FilesystemFlushEndpoint> FilesystemFlushTransport for IsolatedFilesystem
     ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError> {
         decode_flush_request(request)?;
         self.service.invoke_flush(self.endpoint, request)
+    }
+}
+
+impl<E: FilesystemCheckEndpoint> FilesystemCheckTransport for IsolatedFilesystemTransport<E> {
+    fn check(
+        &mut self,
+        request: &[u8; CHECK_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; CHECK_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_check_request(request, memory.len() as u64)?;
+        self.service.invoke_check(self.endpoint, request, memory)
     }
 }
 
@@ -1092,6 +1125,103 @@ pub fn decode_flush_response(
     }
 }
 
+pub fn encode_check_request(
+    volume: OpaqueHandle,
+    generation: u64,
+    report: BorrowedWriteView,
+) -> Result<[u8; CHECK_REQUEST_BYTES], ProtocolError> {
+    let request = CheckRequest {
+        volume,
+        generation,
+        report,
+    };
+    if generation == 0 || !request.validate() {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; CHECK_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_CHECK.to_le_bytes());
+    bytes[56..64].copy_from_slice(&32_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(CHECK_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&generation.to_le_bytes());
+    bytes[88..96].copy_from_slice(&report.offset().to_le_bytes());
+    bytes[96..104].copy_from_slice(&report.length().to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_check_request(
+    bytes: &[u8; CHECK_REQUEST_BYTES],
+    memory_length: u64,
+) -> Result<CheckRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_CHECK
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 32
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != CHECK_RESPONSE_BYTES as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let generation = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+    let report = BorrowedWriteView::within(
+        u64::from_le_bytes(bytes[88..96].try_into().unwrap()),
+        u64::from_le_bytes(bytes[96..104].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let request = CheckRequest {
+        volume,
+        generation,
+        report,
+    };
+    if generation == 0 || !request.validate() {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    Ok(request)
+}
+
+pub fn encode_check_response(result: Result<CheckResponse, CheckError>) -> [u8; 16] {
+    let mut bytes = [0; CHECK_RESPONSE_BYTES];
+    let (status, written) = match result {
+        Ok(written) => (0, written),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&written.to_le_bytes());
+    bytes
+}
+
+pub fn decode_check_response(
+    bytes: &[u8; CHECK_RESPONSE_BYTES],
+    report_length: u64,
+) -> Result<Result<CheckResponse, CheckError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] || report_length > MAX_FILESYSTEM_REPORT_BYTES {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let written = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if written <= report_length => Ok(Ok(written)),
+        1 if written == 0 => Ok(Err(CheckError::InvalidRequest)),
+        2 if written == 0 => Ok(Err(CheckError::StaleObject)),
+        3 if written == 0 => Ok(Err(CheckError::PermissionDenied)),
+        4 if written == 0 => Ok(Err(CheckError::IoFailure)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1601,6 +1731,78 @@ mod tests {
         invalid[8] = 1;
         assert_eq!(
             decode_flush_response(&invalid),
+            Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    struct CheckEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemCheckEndpoint for CheckEndpoint {
+        fn invoke_check(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; CHECK_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<[u8; CHECK_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            let request = decode_check_request(request, memory.len() as u64)?;
+            Ok(encode_check_response(Ok(request.report.length())))
+        }
+    }
+
+    #[test]
+    fn check_codec_bounds_report_and_preserves_typed_failures() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let report = BorrowedWriteView::within(8, 16, 32).unwrap();
+        let request = encode_check_request(volume, 12, report).unwrap();
+        assert_eq!(
+            decode_check_request(&request, 32),
+            Ok(CheckRequest {
+                volume,
+                generation: 12,
+                report,
+            })
+        );
+        let service = CheckEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_check_response(&transport.check(&request, &mut [0; 32]).unwrap(), 16),
+            Ok(Ok(16))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        assert_eq!(
+            transport.check(&request, &mut [0; 33]),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            encode_check_request(volume, 0, report),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let oversized = BorrowedWriteView::within(
+            0,
+            MAX_FILESYSTEM_REPORT_BYTES + 1,
+            MAX_FILESYSTEM_REPORT_BYTES + 1,
+        )
+        .unwrap();
+        assert_eq!(
+            encode_check_request(volume, 12, oversized),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_check_response(&encode_check_response(Ok(17)), 16),
+            Err(ProtocolError::InvalidResponse)
+        );
+        assert_eq!(
+            decode_check_response(&encode_check_response(Ok(0)), 0),
+            Ok(Ok(0))
+        );
+        let mut invalid = encode_check_response(Err(CheckError::IoFailure));
+        invalid[8] = 1;
+        assert_eq!(
+            decode_check_response(&invalid, 16),
             Err(ProtocolError::InvalidResponse)
         );
     }

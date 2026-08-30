@@ -442,8 +442,10 @@ preserves the provider-defined generation-1 kind value, rejects nonzero alignmen
 padding, and returns only a nonzero object identity or typed zero-identity error.
 Canonical flush framing binds the exact volume and mount generation through the
 retained provider endpoint. Success carries one nonzero durability serial, while
-typed stale-object, permission, and I/O errors carry zero. The complete suite
-passes eleven Linux-host tests. The FAT32 provider now consumes
+typed stale-object, permission, and I/O errors carry zero. Canonical check framing
+binds the same exact state and a writable report of at most 64 KiB. Zero-byte
+success is valid; over-counts and error/data mixtures fail closed. The complete
+suite passes twelve Linux-host tests. The FAT32 provider now consumes
 the probe boundary through
 an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
