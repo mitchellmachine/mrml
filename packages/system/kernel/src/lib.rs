@@ -300,7 +300,8 @@ pub use task_runtime::{
     DomainBalanceError, DomainBalanceOutcome, FaultRetirement, MAX_TASK_DELEGATIONS, PeerDeath,
     PeerDeathReason, PeriodicDomainBalancer, QueuedMessageShape, ReceivedMessage,
     TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES, TaskProtocolViolation, TaskRuntime, TaskRuntimeError,
-    TaskTermination, TaskViolationRetirement, TimerDomainBalanceOutcome,
+    TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError, TaskViolationRetirement,
+    TimerDomainBalanceOutcome,
 };
 pub use virtual_block::{
     AdmittedVirtualBlockRequest, CapabilitySelectedVirtualBlockBackend,

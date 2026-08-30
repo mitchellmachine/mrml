@@ -10652,3 +10652,16 @@ is not claimed.
 Patent review: `NOT_TRIGGERED` — propagating a typed fail-closed retirement
 result through a service receipt is conventional lifecycle state management.
 See `docs/patents/REVIEW_LOG.md`.
+
+Voluntary task termination now has a typed dispatch proof that exact-matches the
+returned scheduler outcome against current runtime state before exposing a
+successor `UserContext`. A switch must name the retired task as its source and
+the runtime's exact current task as its destination; `Continue`, source-less
+switches, stale destinations, and `Idle` while a task remains current fail
+closed. The Linux-host release kernel suite now passes 653 tests and the release
+build passes. This proves in-memory scheduler/context binding only and does not
+execute the privileged context-loading assembly.
+
+Patent review: `NOT_TRIGGERED` — exact matching of scheduler outcomes to saved
+contexts is conventional task-dispatch lifecycle validation. See
+`docs/patents/REVIEW_LOG.md`.
