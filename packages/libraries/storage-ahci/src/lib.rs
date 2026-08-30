@@ -27,6 +27,7 @@ mod dispatch_service;
 mod mapped_command_memory;
 mod mapped_data_buffer;
 mod service_bootstrap;
+mod service_cpu_mapping;
 mod service_launch;
 mod service_launch_record;
 mod service_loop;
@@ -121,6 +122,11 @@ pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
     bootstrap_installed_ahci_service,
+};
+pub use service_cpu_mapping::{
+    AhciInstalledCpuMappings, AhciServiceCpuMappingBackend, AhciServiceCpuMappingError,
+    AhciServiceCpuMappingRemovalError, AhciServiceCpuMappingRequest,
+    install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,

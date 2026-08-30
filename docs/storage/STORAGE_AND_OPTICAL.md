@@ -619,6 +619,32 @@ Patent review: **NOT_TRIGGERED**. Fixed register-to-field validation and token
 non-aliasing checks are conventional native service ABI binding. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+Pre-launch AHCI CPU mapping construction is now **PARTIALLY IMPLEMENTED IN
+SOURCE** as a backend-neutral transaction over four mappings. The launcher must
+hold four exact, separate `MAP|READ|WRITE` capabilities for command-list,
+received-FIS, command-table, and data memory; none becomes a projected runtime
+role. All authority/object pairs are checked before a backend call. The
+transaction installs page-rounded RW/NX mappings in canonical record order,
+withdraws them in reverse order, rolls back clean partial installation, and
+returns the exact retained set when withdrawal is uncertain for bounded retry.
+The focused Linux AHCI suite passes all 102 tests. A concrete kernel memory-
+resource/page-table adapter, target-address-space binding, ABAR lifecycle
+coupling, native entry binary, supervision, active execution, and physical-
+device evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Capability-preflighted fixed-order mapping,
+reverse rollback, and explicit retained cleanup state are conventional resource
+transaction handling. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

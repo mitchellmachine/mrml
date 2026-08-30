@@ -735,6 +735,32 @@ Patent review: `NOT_TRIGGERED` — fixed register-to-field validation and token
 non-aliasing checks are conventional native service ABI binding. See
 `docs/patents/REVIEW_LOG.md`.
 
+Pre-launch AHCI CPU mapping construction is now **PARTIALLY IMPLEMENTED IN
+SOURCE** as a backend-neutral four-mapping transaction. The launcher must hold
+four exact, separate `MAP|READ|WRITE` capabilities for command-list,
+received-FIS, command-table, and data memory; these mapping authorities are not
+projected as runtime roles. Every authority/object pair is preflighted before a
+backend call. The transaction installs page-rounded RW/NX mappings in canonical
+record order, removes them in reverse order, cleanly rolls back partial install,
+and returns the exact retained mapping set when withdrawal is uncertain so
+cleanup can resume without guessing. The focused Linux AHCI suite passes all
+102 tests. A concrete kernel memory-resource/page-table adapter, target address-
+space binding, ABAR lifecycle coupling, native entry binary, supervision, active
+execution, and physical-device evidence remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — capability-preflighted fixed-order mapping with
+reverse rollback and explicit retained cleanup state is conventional resource
+transaction handling. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
