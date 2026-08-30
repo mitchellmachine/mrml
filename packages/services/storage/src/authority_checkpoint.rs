@@ -1316,6 +1316,29 @@ pub enum AuthorityRecoveryValidationError<
     },
 }
 
+impl<
+    const N: usize,
+    Output,
+    StorageError: core::fmt::Debug,
+    StateError: core::fmt::Debug,
+    ValidationError: core::fmt::Debug,
+> core::fmt::Debug
+    for AuthorityRecoveryValidationError<N, Output, StorageError, StateError, ValidationError>
+{
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Checkpoint(error) => formatter.debug_tuple("Checkpoint").field(error).finish(),
+            Self::State(error) => formatter.debug_tuple("State").field(error).finish(),
+            Self::Storage(error) => formatter.debug_tuple("Storage").field(error).finish(),
+            Self::Validation(error) => formatter.debug_tuple("Validation").field(error).finish(),
+            Self::StateUncertain { error, .. } => formatter
+                .debug_struct("StateUncertain")
+                .field("error", error)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
 pub struct PendingValidatedStorageAuthorities<const N: usize, Output> {
     recovered: RecoveredStorageAuthorities<N>,
     validated: Output,
