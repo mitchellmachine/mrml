@@ -1021,7 +1021,9 @@ retries, and proves the one mapping, backing, and page charge are gone.
 Installed invocation and active page-table backends remain **PLANNED**. Storage
 passes 162 focused Linux-host release tests. The lifecycle test now invokes the
 kernel's concrete inactive x86-64 page-table backend for the sole read-only
-mapping and verifies the exact leaf is absent after teardown. The hierarchy is
+mapping, exact-matches that backend root against the target task context before
+construction, rejects a substituted root while revoking both consumed transfer
+trees, and verifies the exact leaf is absent after teardown. The hierarchy is
 never activated on a CPU, so this is controlled Linux-host page-table evidence,
 not active-address-space, TLB-shootdown, installed-system, or physical-device
 evidence. The block transport now has a

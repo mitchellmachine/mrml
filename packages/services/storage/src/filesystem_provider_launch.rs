@@ -134,10 +134,12 @@ impl NativeFilesystemProviderLaunchSpec {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeFilesystemProviderLaunchPreflightError {
     Source(TaskRuntimeError),
+    Target(TaskRuntimeError),
     Capability(CapabilityError),
     WrongEndpointAuthority,
     WrongTransferAuthority,
     TransferTooSmall,
+    WrongPageTableRoot,
     Spec(NativeFilesystemProviderLaunchSpecError),
 }
 
@@ -201,11 +203,31 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
     launch_attachment: ComponentServiceLaunchAttachment,
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferCopyTaskBinding,
+    local_page_table_root: mrml_kernel::PhysAddr,
     supervisor_task_object: ObjectId,
 ) -> Result<
     FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     NativeFilesystemProviderLaunchError,
 > {
+    let target_context = match runtime.context(target_task) {
+        Ok(context) => context,
+        Err(error) => {
+            return Err(reject_native_filesystem_provider_preflight(
+                runtime,
+                source_task,
+                transfer,
+                NativeFilesystemProviderLaunchPreflightError::Target(error),
+            ));
+        }
+    };
+    if target_context.page_table() != local_page_table_root {
+        return Err(reject_native_filesystem_provider_preflight(
+            runtime,
+            source_task,
+            transfer,
+            NativeFilesystemProviderLaunchPreflightError::WrongPageTableRoot,
+        ));
+    }
     let preflight = runtime
         .capabilities(source_task)
         .map_err(NativeFilesystemProviderLaunchPreflightError::Source)
@@ -846,6 +868,9 @@ mod tests {
     #[test]
     fn native_launch_and_teardown_retain_one_exact_copy_task_lifecycle() {
         let association = association();
+        let mut page_tables = PageTableArena([0; 512 * 5]);
+        let page_table_base =
+            mrml_kernel::PhysAddr::new(page_tables.0.as_mut_ptr() as u64).unwrap();
         let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
         let context = |physical, page_table, stack| {
             UserContext::new(
@@ -864,7 +889,7 @@ mod tests {
         let target = runtime
             .create(
                 mrml_kernel::Priority::NORMAL,
-                context(0x30_0000, 0x50_0000, 0x7100_0000),
+                context(page_table_base.get(), 0x50_0000, 0x7100_0000),
             )
             .unwrap();
         let provider = runtime
@@ -909,9 +934,6 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x7100), Rights::MAP.union(Rights::CONTROL))
             .unwrap();
-        let mut page_tables = PageTableArena([0; 512 * 5]);
-        let page_table_base =
-            mrml_kernel::PhysAddr::new(page_tables.0.as_mut_ptr() as u64).unwrap();
         // SAFETY: the aligned test arena remains exclusively owned and
         // unreachable by every CPU for the complete adapter lifetime.
         let store = unsafe { PreallocatedPageTableStore::new(page_table_base, 5) }.unwrap();
@@ -980,6 +1002,37 @@ mod tests {
             root.root(),
         )
         .unwrap();
+        let wrong_root =
+            mrml_kernel::PhysAddr::new(page_table_base.get() + mrml_kernel::PAGE_SIZE).unwrap();
+        assert_eq!(
+            launch_native_filesystem_provider(
+                &mut runtime,
+                source,
+                target,
+                endpoint,
+                transfer,
+                association,
+                service,
+                launch_attachment,
+                root,
+                binding,
+                wrong_root,
+                ObjectId(0x91),
+            ),
+            Err(NativeFilesystemProviderLaunchError::Preflight(
+                NativeFilesystemProviderLaunchPreflightError::WrongPageTableRoot
+            ))
+        );
+        let transfer = mrml_kernel::prepare_component_service_read_transfer_attachment(
+            &mut runtime,
+            source,
+            provider,
+            root.shared_object(),
+            root.generation(),
+            root.bytes(),
+            root.root(),
+        )
+        .unwrap();
         let receipt = launch_native_filesystem_provider(
             &mut runtime,
             source,
@@ -991,6 +1044,7 @@ mod tests {
             launch_attachment,
             root,
             binding,
+            local_mapping.root(),
             ObjectId(0x91),
         )
         .unwrap();
