@@ -4134,3 +4134,8 @@ Deployment activation validation is now one private typed transition shared by
 direct and both stable commits. All fallible capability, candidate, release, and
 arithmetic checks precede storage mutation; final in-memory publication is an
 infallible consumption of that validated state.
+
+Ordinary stable deployment commit now returns its complete prepared activation
+with every pre-publication failure. Storage revocation leaves the receipt and
+live deployment state unchanged while preserving the exact successor for an
+explicit caller decision.

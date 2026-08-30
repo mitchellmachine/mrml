@@ -1115,3 +1115,7 @@ Deployment does not repeat a fallible candidate lookup or capability check after
 durable publication. A private validated-activation owner captures the exact
 slot, activation/release identities, and checked successor sequence before the
 receipt boundary; final service mutation only consumes that owner.
+
+Ordinary stable activation denial retains the complete prepared deployment
+owner alongside its typed error. No failed control, stale-state, storage, or
+receipt check silently discards the staged successor or changes live activation.

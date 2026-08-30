@@ -7303,6 +7303,15 @@ Patent review: `NOT_TRIGGERED` — this is conventional validation/commit
 factoring within the existing bounded activation state machine. See
 `docs/patents/REVIEW_LOG.md`.
 
+Ordinary stable deployment activation now returns the complete prepared owner
+with every control, candidate, release, storage-authority, or receipt error.
+Because the validated activation makes post-receipt publication infallible,
+denial can retain the exact staged file and activation identity without an
+ambiguous partial state. Deployment remains 7 focused Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this preserves linear ownership across the
+existing pre-publication error boundary. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

@@ -779,25 +779,44 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         control: Capability,
         storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
-    ) -> Result<StableActivation<EXTENTS>, StableActivationCommitError> {
-        let validated = service
-            .validate_activation(capabilities, control, self.activation)
-            .map_err(StableActivationCommitError::Deployment)?;
+    ) -> Result<StableActivation<EXTENTS>, (Self, StableActivationCommitError)> {
+        let validated = match service.validate_activation(capabilities, control, self.activation) {
+            Ok(validated) => validated,
+            Err(error) => {
+                return Err((self, StableActivationCommitError::Deployment(error)));
+            }
+        };
         if validated.active != self.active {
-            return Err(StableActivationCommitError::StaleActivation);
+            return Err((self, StableActivationCommitError::StaleActivation));
         }
         if validated.active_release != self.active_release {
-            return Err(StableActivationCommitError::StaleActivation);
+            return Err((self, StableActivationCommitError::StaleActivation));
         }
-        let file = self
-            .file
-            .commit_transaction_authorized(storage_authority, receipt)
-            .map_err(|(_, error)| StableActivationCommitError::Storage(error))?;
+        let Self {
+            file,
+            activation,
+            active,
+            active_release,
+        } = self;
+        let file = match file.commit_transaction_authorized(storage_authority, receipt) {
+            Ok(file) => file,
+            Err((file, error)) => {
+                return Err((
+                    Self {
+                        file,
+                        activation,
+                        active,
+                        active_release,
+                    },
+                    StableActivationCommitError::Storage(error),
+                ));
+            }
+        };
         let active = service.publish_validated_activation(validated);
         Ok(StableActivation {
             file,
             active,
-            active_release: self.active_release,
+            active_release,
         })
     }
 
@@ -2706,19 +2725,22 @@ mod tests {
             .unwrap();
         let mut recovery_state = RecoveryStateStore::empty();
         authority.revoke(file, principal()).unwrap();
-        assert!(matches!(
-            stable.commit_authenticated(
-                &mut service,
-                &capabilities,
-                control,
-                &authority,
-                &mut receipt,
-                &mut recovery_state,
-            ),
-            Err(AuthenticatedActivationCommitError::Storage(
-                FileWriteCommitError::Authority(StorageAuthorityError::InvalidHandle)
-            ))
-        ));
+        let retained = match stable.commit(
+            &mut service,
+            &capabilities,
+            control,
+            &authority,
+            &mut receipt,
+        ) {
+            Err((
+                prepared,
+                StableActivationCommitError::Storage(FileWriteCommitError::Authority(
+                    StorageAuthorityError::InvalidHandle,
+                )),
+            )) => prepared,
+            _ => panic!("revoked storage authority did not retain stable activation"),
+        };
+        assert_eq!(retained.active(), preview);
         assert_eq!(receipt.remaining(), 1);
         assert_eq!(service.active(&capabilities, inspect), Ok(None));
 
