@@ -10135,11 +10135,13 @@ direction-scoped dependency read-transfer attachment. The source must hold two
 distinct delegable capabilities for one exact generational shared object: local
 `MAP|READ` authority and provider-bound `MAP|WRITE` authority. Construction
 atomically attenuates the former while preserving only the latter's delegation
-right, installs both fresh target-space handles with the exact shared generation
-and byte bound, and revokes every projected descendant on entry failure. The
-Linux-host kernel suite passes 643 tests. This proves source, unit, and simulated
-capability-lifecycle behavior only; it does not prove an installed FAT32 data
-plane, KVM, WHP, IOMMU, or physical-device execution.
+right, requires the exact generational provider task to remain live and distinct
+from both construction domains, installs that receiver identity with both fresh
+target-space handles and the exact shared generation/byte bound, and revokes
+every projected descendant on entry failure. The Linux-host kernel suite passes
+643 tests. This proves source, unit, and simulated capability-lifecycle behavior
+only; it does not prove an installed FAT32 data plane, KVM, WHP, IOMMU, or
+physical-device execution.
 
 Patent review: `NOT_TRIGGERED` — separate read and delegated-write capability
 handles are conventional least-authority shared-memory mediation and introduce

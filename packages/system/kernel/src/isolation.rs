@@ -436,10 +436,12 @@ impl ComponentServiceLaunchAttachment {
 ///
 /// The local capability can only read the completed transfer. The distinct
 /// transfer capability can only be delegated with write authority to the
-/// provider. Both capabilities must name the same object, but their separate
-/// generations prevent either token from silently acquiring the other's role.
+/// exact generational provider task. Both capabilities must name the same
+/// object, but their separate generations prevent either token from silently
+/// acquiring the other's role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComponentServiceReadTransferAttachment {
+    provider_task: TaskId,
     shared_object: ObjectId,
     shared_generation: u64,
     shared_bytes: u32,
@@ -461,6 +463,7 @@ pub enum ComponentServiceReadTransferAttachmentError {
 
 impl ComponentServiceReadTransferAttachment {
     pub fn new<const C: usize>(
+        provider_task: TaskId,
         shared_object: ObjectId,
         shared_generation: u64,
         shared_bytes: u32,
@@ -499,12 +502,17 @@ impl ComponentServiceReadTransferAttachment {
             return Err(ComponentServiceReadTransferAttachmentError::WrongProviderWriteObject);
         }
         Ok(Self {
+            provider_task,
             shared_object,
             shared_generation,
             shared_bytes,
             local_read,
             provider_write,
         })
+    }
+
+    pub const fn provider_task(self) -> TaskId {
+        self.provider_task
     }
 
     pub const fn shared_object(self) -> ObjectId {
@@ -727,10 +735,23 @@ pub fn prepare_native_component_service_task_with_read_transfer<
     if spec.placement() != IsolationPlacement::NativeService {
         return Err(NativeComponentServiceTaskError::WrongPlacement);
     }
+    if transfer.provider_task() == source_task || transfer.provider_task() == target_task {
+        return Err(NativeComponentServiceTaskError::Entry(
+            NativeComponentServiceEntryError::InvalidIdentity,
+        ));
+    }
+    runtime
+        .context(transfer.provider_task())
+        .map_err(NativeComponentServiceTaskError::Runtime)?;
     let context = *runtime
         .context(target_task)
         .map_err(NativeComponentServiceTaskError::Runtime)?;
-    if context.rbp != 0 || context.rsi != 0 || context.r9 != 0 || context.r8 != 0 {
+    if context.rbp != 0
+        || context.rsi != 0
+        || context.r9 != 0
+        || context.r8 != 0
+        || context.rdx != 0
+    {
         return Err(NativeComponentServiceTaskError::Entry(
             NativeComponentServiceEntryError::LaunchRegistersOccupied,
         ));
@@ -804,6 +825,7 @@ pub fn prepare_native_component_service_task_with_read_transfer<
     installed.rsi = provider_write.token();
     installed.r9 = transfer.shared_generation();
     installed.r8 = u64::from(transfer.shared_bytes());
+    installed.rdx = transfer.provider_task().token();
     *runtime
         .context_mut(target_task)
         .expect("successful projection preserves the target context") = installed;
@@ -3319,6 +3341,7 @@ mod tests {
             )
             .unwrap();
         let attachment = ComponentServiceReadTransferAttachment::new(
+            TaskId::from_token((3_u64 << 32) | 2),
             ObjectId(0xa0),
             9,
             4096,
@@ -3327,6 +3350,7 @@ mod tests {
             &capabilities,
         )
         .unwrap();
+        assert_eq!(attachment.provider_task().token(), (3_u64 << 32) | 2);
         assert_eq!(attachment.shared_object(), ObjectId(0xa0));
         assert_eq!(attachment.shared_generation(), 9);
         assert_eq!(attachment.shared_bytes(), 4096);
@@ -3334,6 +3358,7 @@ mod tests {
         assert_eq!(attachment.provider_write(), provider_write);
         assert_eq!(
             ComponentServiceReadTransferAttachment::new(
+                TaskId::from_token((3_u64 << 32) | 2),
                 ObjectId(0xa0),
                 9,
                 4096,
@@ -3345,6 +3370,7 @@ mod tests {
         );
         assert_eq!(
             ComponentServiceReadTransferAttachment::new(
+                TaskId::from_token((3_u64 << 32) | 2),
                 ObjectId(0xa0),
                 9,
                 4096,
@@ -3359,7 +3385,7 @@ mod tests {
     #[test]
     fn native_read_transfer_construction_projects_exact_split_authority() {
         let spec = service_spec(IsolationPlacement::NativeService);
-        let mut runtime = TaskRuntime::<2, 4>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -3378,6 +3404,17 @@ mod tests {
                     crate::PhysAddr::new(0x30_0000).unwrap(),
                     0x50_0000,
                     0x7100_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let provider = runtime
+            .create(
+                crate::Priority::NORMAL,
+                UserContext::new(
+                    crate::PhysAddr::new(0x40_0000).unwrap(),
+                    0x60_0000,
+                    0x7200_0000,
                 )
                 .unwrap(),
             )
@@ -3415,6 +3452,7 @@ mod tests {
         )
         .unwrap();
         let transfer = ComponentServiceReadTransferAttachment::new(
+            provider,
             ObjectId(0xa0),
             9,
             4096,
@@ -3423,6 +3461,32 @@ mod tests {
             runtime.capabilities(source).unwrap(),
         )
         .unwrap();
+        let stale_provider = ComponentServiceReadTransferAttachment::new(
+            TaskId::from_token(provider.token() + (1_u64 << 32)),
+            ObjectId(0xa0),
+            9,
+            4096,
+            local_read,
+            provider_write,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_native_component_service_task_with_read_transfer(
+                &mut runtime,
+                source,
+                target,
+                spec,
+                attachment,
+                stale_provider,
+                ObjectId(0x90),
+                ObjectId(0x91),
+                ObjectId(0x92),
+            ),
+            Err(NativeComponentServiceTaskError::Runtime(
+                TaskRuntimeError::MissingTask
+            ))
+        );
         let prepared = prepare_native_component_service_task_with_read_transfer(
             &mut runtime,
             source,
@@ -3440,6 +3504,7 @@ mod tests {
         assert_eq!(context.rsi, prepared.provider_write().token());
         assert_eq!(context.r9, transfer.shared_generation());
         assert_eq!(context.r8, u64::from(transfer.shared_bytes()));
+        assert_eq!(context.rdx, provider.token());
         let target_capabilities = runtime.capabilities(target).unwrap();
         assert_eq!(
             target_capabilities
