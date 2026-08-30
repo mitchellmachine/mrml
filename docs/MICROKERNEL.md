@@ -11822,3 +11822,28 @@ mechanical rewrite was included. This is profile and cross-build evidence only;
 Patent review: `NOT_TRIGGERED` — a dedicated capability-authorized cancellation
 integration probe with a distinct exact proof marker is conventional syscall
 regression testing. See `docs/patents/REVIEW_LOG.md`.
+
+The hosted KVM and WHP runners now route the dedicated
+`deadline-receive-cancel-probe` through the same timer-capable, local-APIC,
+three-service guest preparation used by the timeout and message-completion
+profiles. Their proof selection remains mode-bound: timeout requires exactly
+`0x2a`, message completion exactly `0x2b`, and supervised cancellation exactly
+`0x2c`. The KVM validator rejects noncanonical expected values and proof-marker
+substitution, including attempts to satisfy one deadline mode with another
+mode's marker.
+
+`./target/debug/mrml test org.mrml.tool.vmm-kvm-run --target linux` passes all
+16 tests, and the Linux KVM runner release build passes with its existing 25
+CUDA/PTX warnings. An initial native-target test request was correctly rejected
+with `NoMatchingComponents { target: MRML_NATIVE }` and is not counted as test
+evidence. The WHP runner contains the symmetric mode and proof routing, but its
+Windows release build remains unavailable in this environment because the
+`cross_host_rust_target` component is absent. Whole-file rustfmt checks continue
+to report unrelated pre-existing formatting drift in both large runner sources,
+so this increment does not apply a broad mechanical rewrite. `/dev/kvm` is not
+available here, so no KVM guest execution, WHP execution, proof-port observation,
+or physical-hardware verification is claimed.
+
+Patent review: `NOT_TRIGGERED` — selecting an existing bounded guest profile and
+exactly matching a mode-specific regression marker is conventional hosted test
+runner routing. See `docs/patents/REVIEW_LOG.md`.
