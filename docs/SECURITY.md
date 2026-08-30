@@ -1100,3 +1100,8 @@ subsequent disposition remains explicit.
 Durable authority-checkpoint commit also returns its complete prepared owner on
 denial. The checkpoint epoch and root-generation binding remain available to
 explicit recovery policy, and the failed commit consumes no receipt authority.
+
+Activation-sequence exhaustion is rejected before deployment candidate
+preparation and stable-publication receipt consumption. A terminal counter
+cannot leave a newly prepared candidate or convert a receipt into an orphaned
+activation attempt.

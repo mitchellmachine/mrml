@@ -7271,6 +7271,16 @@ Patent review: `NOT_TRIGGERED` — this is the same conventional linear error
 ownership rule at the existing authority-checkpoint boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+Deployment activation now rejects terminal activation-sequence exhaustion in
+both preparation and preview. The check occurs before a candidate changes from
+staged to prepared and before stable activation can consume a file receipt;
+`u64::MAX` is never published and the staged candidate remains available for
+explicit recovery policy. Deployment passes 7 focused Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this moves conventional checked integer
+arithmetic earlier in the existing activation state machine. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

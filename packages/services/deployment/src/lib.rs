@@ -278,6 +278,9 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         if actual_active != expected_active {
             return Err(DeploymentError::StaleActiveGeneration);
         }
+        self.next_activation_sequence
+            .checked_add(1)
+            .ok_or(DeploymentError::GenerationExhausted)?;
         let slot = self.slot_mut(candidate)?;
         if slot.state != CandidateState::Staged {
             return Err(DeploymentError::InvalidCandidate);
@@ -333,6 +336,9 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         if prepared.expected_activation_sequence != self.next_activation_sequence {
             return Err(DeploymentError::StaleActivation);
         }
+        self.next_activation_sequence
+            .checked_add(1)
+            .ok_or(DeploymentError::GenerationExhausted)?;
         let slot = self.slot(prepared.candidate)?;
         if slot.state != CandidateState::Prepared {
             return Err(DeploymentError::InvalidCandidate);
@@ -2551,6 +2557,34 @@ mod tests {
         assert_eq!(
             service.commit_activation(&capabilities, control, prepared),
             Err(DeploymentError::StaleActivation)
+        );
+    }
+
+    #[test]
+    fn activation_sequence_exhaustion_precedes_preparation_and_publication() {
+        let (capabilities, control, _) = authority();
+        let mut service = DeploymentService::<1>::new(ObjectId(0x4445_504c_4f59)).unwrap();
+        let candidate = service
+            .stage(&capabilities, control, candidate(8, 0x51))
+            .unwrap();
+        service.next_activation_sequence = u64::MAX;
+        assert_eq!(
+            service.prepare_activation(&capabilities, control, candidate, None),
+            Err(DeploymentError::GenerationExhausted)
+        );
+
+        service.next_activation_sequence = 1;
+        service
+            .prepare_activation(&capabilities, control, candidate, None)
+            .unwrap();
+        service.next_activation_sequence = u64::MAX;
+        let exhausted = PreparedActivation {
+            candidate,
+            expected_activation_sequence: u64::MAX,
+        };
+        assert_eq!(
+            service.preview_activation(exhausted),
+            Err(DeploymentError::GenerationExhausted)
         );
     }
 

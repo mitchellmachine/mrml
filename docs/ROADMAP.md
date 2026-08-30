@@ -4121,3 +4121,7 @@ or abandonment remains an explicit caller decision.
 Durable storage-authority checkpoint commit now follows the same linear error
 contract. Its exact checkpoint owner is returned with authorization or receipt
 failure, leaving both staged state and receipt disposition explicit.
+
+Deployment activation sequence exhaustion is now a preparation/preview gate.
+Terminal arithmetic fails before candidate-state mutation and before either
+stable publication path can consume its storage receipt.
