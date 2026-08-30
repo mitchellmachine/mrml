@@ -1017,6 +1017,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             frame.complete_message(message.payload())
                         }
                         mrml_kernel::DeadlineReceiveStart::TimedOut => frame.complete_timeout(),
+                        mrml_kernel::DeadlineReceiveStart::IncompatibleMessage => {
+                            frame.complete_error()
+                        }
                         mrml_kernel::DeadlineReceiveStart::Blocked(
                             ScheduleOutcome::Switch { to, .. },
                         ) => enter_service_task(runtime, to),
@@ -1074,6 +1077,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
+                #[cfg(feature = "deadline-receive-probe")]
+                if !deadline_delivery_is_valid(receiver, usize::from(length), 0) {
+                    frame.complete_error();
+                    return;
+                }
                 let sequence = match runtime.deliver_ipc(
                     current,
                     receiver,
@@ -1158,6 +1166,13 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
+                #[cfg(feature = "deadline-receive-probe")]
+                if !deadline_delivery_is_valid(receiver, payload_length, capability_count) {
+                    payload_storage.fill(0);
+                    requested.fill((Capability::from_token(0), Rights::NONE));
+                    frame.complete_error();
+                    return;
+                }
                 let delivery = runtime.deliver_ipc(
                     current,
                     receiver,
@@ -5324,6 +5339,22 @@ unsafe fn complete_deadline_receive_if_ready(
         executor
             .complete_ready(runtime, receiver)
             .unwrap_or_else(|_| halt());
+    }
+}
+
+#[cfg(feature = "deadline-receive-probe")]
+unsafe fn deadline_delivery_is_valid(
+    receiver: mrml_kernel::TaskId,
+    payload_length: usize,
+    capability_count: usize,
+) -> bool {
+    let executor = unsafe { &*core::ptr::addr_of!(SERVICE_DEADLINE_RECEIVES) }
+        .as_ref()
+        .unwrap_or_else(|| halt());
+    match executor.validate_delivery(receiver, payload_length, capability_count) {
+        Ok(()) => true,
+        Err(mrml_kernel::DeadlineReceiveSyscallError::MessageShape) => false,
+        Err(_) => halt(),
     }
 }
 

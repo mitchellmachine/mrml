@@ -2,13 +2,14 @@ use core::array;
 
 use crate::{
     BlockedReceive, DeadlineReceive, Message, ReceiveDeadlineTick, ReceiveTimeout, ScheduleOutcome,
-    TaskId, TaskRuntime, TaskRuntimeError,
+    TaskId, TaskRuntime, TaskRuntimeError, MAX_SYSCALL_INLINE_PAYLOAD,
 };
 
 #[must_use = "deadline receive admission must be completed or retained"]
 pub enum DeadlineReceiveStart {
     Ready(Message),
     TimedOut,
+    IncompatibleMessage,
     Blocked(ScheduleOutcome),
 }
 
@@ -17,6 +18,7 @@ pub enum DeadlineReceiveSyscallError {
     Runtime(TaskRuntimeError),
     OwnerFull,
     OwnerMismatch,
+    MessageShape,
 }
 
 pub struct DeadlineReceiveSyscallExecutor<const TASKS: usize> {
@@ -48,6 +50,14 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
             .iter()
             .position(Option::is_none)
             .ok_or(DeadlineReceiveSyscallError::OwnerFull)?;
+        match runtime.receive_ipc_bounded(task, MAX_SYSCALL_INLINE_PAYLOAD, 0) {
+            Ok(message) => return Ok(DeadlineReceiveStart::Ready(message)),
+            Err(TaskRuntimeError::ReceiveCapacity) => {
+                return Ok(DeadlineReceiveStart::IncompatibleMessage);
+            }
+            Err(TaskRuntimeError::InboxEmpty) => {}
+            Err(error) => return Err(DeadlineReceiveSyscallError::Runtime(error)),
+        }
         match runtime
             .receive_or_block_current_for(timeout)
             .map_err(DeadlineReceiveSyscallError::Runtime)?
@@ -140,6 +150,20 @@ impl<const TASKS: usize> DeadlineReceiveSyscallExecutor<TASKS> {
 
     pub fn has_pending(&self, task: TaskId) -> Result<bool, DeadlineReceiveSyscallError> {
         self.owner_slot(task).map(|slot| slot.is_some())
+    }
+
+    pub fn validate_delivery(
+        &self,
+        task: TaskId,
+        payload_length: usize,
+        capability_count: usize,
+    ) -> Result<(), DeadlineReceiveSyscallError> {
+        if self.owner_slot(task)?.is_some()
+            && (payload_length > MAX_SYSCALL_INLINE_PAYLOAD || capability_count != 0)
+        {
+            return Err(DeadlineReceiveSyscallError::MessageShape);
+        }
+        Ok(())
     }
 
     fn owner_slot(&self, task: TaskId) -> Result<Option<usize>, DeadlineReceiveSyscallError> {
@@ -322,5 +346,66 @@ mod tests {
                 (0, 0, 0, 0)
             );
         }
+    }
+
+    #[test]
+    fn incompatible_queued_message_is_not_consumed_or_truncated() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x93);
+        let capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(object);
+        let payload = [0x5a; MAX_SYSCALL_INLINE_PAYLOAD + 1];
+        runtime
+            .deliver_ipc(sender, receiver, &mut endpoint, capability, &payload, &[])
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        assert!(matches!(
+            executor.start(&mut runtime, ReceiveTimeout::new(3).unwrap()),
+            Ok(DeadlineReceiveStart::IncompatibleMessage)
+        ));
+        assert!(!executor.has_pending(receiver).unwrap());
+        assert_eq!(runtime.receive_ipc(receiver).unwrap().payload(), payload);
+    }
+
+    #[test]
+    fn pending_inline_deadline_rejects_unrepresentable_delivery_shapes() {
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        runtime.start();
+        let mut executor = DeadlineReceiveSyscallExecutor::new();
+        assert!(matches!(
+            executor.start(&mut runtime, ReceiveTimeout::new(3).unwrap()),
+            Ok(DeadlineReceiveStart::Blocked(ScheduleOutcome::Switch { to, .. })) if to == sender
+        ));
+        assert_eq!(
+            executor.validate_delivery(receiver, MAX_SYSCALL_INLINE_PAYLOAD + 1, 0),
+            Err(DeadlineReceiveSyscallError::MessageShape)
+        );
+        assert_eq!(
+            executor.validate_delivery(receiver, 0, 1),
+            Err(DeadlineReceiveSyscallError::MessageShape)
+        );
+        assert_eq!(
+            executor.validate_delivery(receiver, MAX_SYSCALL_INLINE_PAYLOAD, 0),
+            Ok(())
+        );
+        assert_eq!(executor.validate_delivery(sender, usize::MAX, usize::MAX), Ok(()));
+        assert!(executor.has_pending(receiver).unwrap());
     }
 }

@@ -11558,3 +11558,30 @@ physical timer behavior.
 Patent review: `NOT_TRIGGERED` — independently matching fixed-capacity timeout
 owners across staggered timer ticks is conventional scheduler regression
 testing. See `docs/patents/REVIEW_LOG.md`.
+
+Deadline receive operation 13 now enforces the shape that its register-only
+completion ABI can represent: at most 24 inline payload bytes and no transferred
+capabilities. If an incompatible message is already queued when the operation
+starts, admission reports `IncompatibleMessage` without consuming or truncating
+the message and without retaining a deadline owner. The receiver can retrieve
+the complete message through the ordinary buffered receive protocol.
+
+While an operation-13 owner is pending, both inline and buffered send paths
+validate the prospective delivery before capability derivation, message
+publication, or receiver wakeup. An oversized payload or any capability transfer
+is rejected with the sender's generic syscall error; buffered payload and
+capability-request scratch storage are scrubbed on that path. Receivers without
+a pending operation-13 owner retain the existing buffered IPC shapes and are not
+restricted by this register-only ABI.
+
+`./target/debug/mrml test org.mrml.system.kernel --target native` passes 670
+tests. The native kernel release build and the UEFI bootloader release builds for
+`deadline_receive_probe`, `deadline_receive_message_probe`, and `service_probe`
+all pass through `mrml`; the boot profiles report only their existing
+unreachable-pattern warning. This is deterministic unit and cross-build
+evidence. No KVM, WHP, or physical-hardware execution was performed for this
+increment.
+
+Patent review: `NOT_TRIGGERED` — bounded message-shape admission before
+publication and non-consuming capacity rejection are conventional IPC boundary
+validation. See `docs/patents/REVIEW_LOG.md`.
