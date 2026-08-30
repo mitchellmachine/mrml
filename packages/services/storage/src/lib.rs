@@ -126,8 +126,9 @@ pub use filesystem_provider_launch::{
     FilesystemProviderTeardownError, NativeFilesystemProviderInstance,
     NativeFilesystemProviderLaunchError, NativeFilesystemProviderLaunchPreflightError,
     NativeFilesystemProviderLaunchSpec, NativeFilesystemProviderLaunchSpecError,
-    NativeFilesystemProviderTeardownBackend, launch_filesystem_provider,
-    launch_native_filesystem_provider, teardown_filesystem_provider,
+    NativeFilesystemProviderRetirementError, NativeFilesystemProviderTeardownBackend,
+    launch_filesystem_provider, launch_native_filesystem_provider,
+    retire_current_native_filesystem_provider, teardown_filesystem_provider,
 };
 pub use format::{
     DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, DirectoryEntry, DirectoryMetadata,

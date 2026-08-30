@@ -1284,6 +1284,7 @@ impl NativeComponentServiceCopyReadTransferTask {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeComponentServiceCopyReadTransferTeardown {
     active: NativeComponentServiceCopyReadTransferTask,
+    retired_context: Option<UserContext>,
     authority_revoked: bool,
     mapping_removed: bool,
     backing_released: bool,
@@ -1293,6 +1294,18 @@ impl NativeComponentServiceCopyReadTransferTeardown {
     pub const fn new(active: NativeComponentServiceCopyReadTransferTask) -> Self {
         Self {
             active,
+            retired_context: None,
+            authority_revoked: false,
+            mapping_removed: false,
+            backing_released: false,
+        }
+    }
+    pub const fn from_retirement(
+        retirement: NativeComponentServiceCopyReadTransferRetirement,
+    ) -> Self {
+        Self {
+            active: retirement.active,
+            retired_context: Some(retirement.context),
             authority_revoked: false,
             mapping_removed: false,
             backing_released: false,
@@ -1300,6 +1313,12 @@ impl NativeComponentServiceCopyReadTransferTeardown {
     }
     pub const fn active(self) -> NativeComponentServiceCopyReadTransferTask {
         self.active
+    }
+    pub const fn retired_context(self) -> Option<UserContext> {
+        self.retired_context
+    }
+    pub const fn is_pristine(self) -> bool {
+        !self.authority_revoked && !self.mapping_removed && !self.backing_released
     }
     pub const fn authority_revoked(self) -> bool {
         self.authority_revoked
@@ -1313,8 +1332,39 @@ impl NativeComponentServiceCopyReadTransferTeardown {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeComponentServiceCopyReadTransferRetirement {
+    active: NativeComponentServiceCopyReadTransferTask,
+    context: UserContext,
+}
+
+impl NativeComponentServiceCopyReadTransferRetirement {
+    pub const fn active(self) -> NativeComponentServiceCopyReadTransferTask {
+        self.active
+    }
+
+    pub const fn context(self) -> UserContext {
+        self.context
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceCopyReadTransferRetirementError {
+    NotCurrent,
+    RootMismatch,
+    Runtime(TaskRuntimeError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeComponentServiceCopyReadTransferTeardownError<M, B> {
     TaskStillLive {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        task: TaskId,
+    },
+    RetirementMissing {
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        task: TaskId,
+    },
+    RetirementRootMismatch {
         state: NativeComponentServiceCopyReadTransferTeardown,
         task: TaskId,
     },
@@ -1344,6 +1394,8 @@ impl<M, B> NativeComponentServiceCopyReadTransferTeardownError<M, B> {
     pub const fn state(&self) -> NativeComponentServiceCopyReadTransferTeardown {
         match self {
             Self::TaskStillLive { state, .. }
+            | Self::RetirementMissing { state, .. }
+            | Self::RetirementRootMismatch { state, .. }
             | Self::Authority { state, .. }
             | Self::Runtime { state, .. }
             | Self::LocalMapping { state, .. }
@@ -1622,6 +1674,43 @@ pub fn teardown_native_component_service_mapped_read_transfer<
         )
 }
 
+pub fn retire_current_native_component_service_copy_read_transfer<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    active: NativeComponentServiceCopyReadTransferTask,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<
+    (
+        crate::TaskTermination,
+        NativeComponentServiceCopyReadTransferRetirement,
+    ),
+    NativeComponentServiceCopyReadTransferRetirementError,
+> {
+    let task = active.construction().task();
+    if runtime.current() != Some(task) {
+        return Err(NativeComponentServiceCopyReadTransferRetirementError::NotCurrent);
+    }
+    let context = *runtime
+        .context(task)
+        .map_err(NativeComponentServiceCopyReadTransferRetirementError::Runtime)?;
+    if context.page_table() != active.page_table_root() {
+        return Err(NativeComponentServiceCopyReadTransferRetirementError::RootMismatch);
+    }
+    let (termination, retired_context) = runtime
+        .terminate_current_with_context()
+        .map_err(NativeComponentServiceCopyReadTransferRetirementError::Runtime)?;
+    debug_assert_eq!(termination.task, task);
+    debug_assert_eq!(retired_context, context);
+    Ok((
+        termination,
+        NativeComponentServiceCopyReadTransferRetirement {
+            active,
+            context: retired_context,
+        },
+    ))
+}
+
 pub fn teardown_native_component_service_copy_read_transfer<
     M: MemoryMappingBackend,
     B: MemoryObjectBackingBackend,
@@ -1638,21 +1727,39 @@ pub fn teardown_native_component_service_copy_read_transfer<
     backing_backend: &mut B,
 ) -> Result<u64, NativeComponentServiceCopyReadTransferTeardownError<M::Error, B::Error>> {
     let construction = state.active().construction();
-    match runtime.context(construction.task()) {
-        Ok(_) => {
-            return Err(
-                NativeComponentServiceCopyReadTransferTeardownError::TaskStillLive {
-                    state,
-                    task: construction.task(),
-                },
-            );
-        }
-        Err(TaskRuntimeError::MissingTask) => {}
-        Err(error) => {
-            return Err(
-                NativeComponentServiceCopyReadTransferTeardownError::Runtime { state, error },
-            );
-        }
+    let retired_context = match state.retired_context() {
+        Some(context) => context,
+        None => match runtime.context(construction.task()) {
+            Ok(_) => {
+                return Err(
+                    NativeComponentServiceCopyReadTransferTeardownError::TaskStillLive {
+                        state,
+                        task: construction.task(),
+                    },
+                );
+            }
+            Err(TaskRuntimeError::MissingTask) => {
+                return Err(
+                    NativeComponentServiceCopyReadTransferTeardownError::RetirementMissing {
+                        state,
+                        task: construction.task(),
+                    },
+                );
+            }
+            Err(error) => {
+                return Err(
+                    NativeComponentServiceCopyReadTransferTeardownError::Runtime { state, error },
+                );
+            }
+        },
+    };
+    if retired_context.page_table() != state.active().page_table_root() {
+        return Err(
+            NativeComponentServiceCopyReadTransferTeardownError::RetirementRootMismatch {
+                state,
+                task: construction.task(),
+            },
+        );
     }
     if !state.authority_revoked {
         if let Err(error) = runtime.revoke_capability_pair(
@@ -5341,6 +5448,10 @@ mod tests {
         assert_eq!(active.page_table_root().get(), 0x30_0000);
         assert_eq!(active.source_attachment(&runtime).unwrap(), transfer);
         assert!(mapping_backend.installed.is_some());
+        assert_eq!(
+            retire_current_native_component_service_copy_read_transfer(active, &mut runtime),
+            Err(NativeComponentServiceCopyReadTransferRetirementError::NotCurrent)
+        );
         let state = match teardown_native_component_service_copy_read_transfer(
             NativeComponentServiceCopyReadTransferTeardown::new(active),
             &mut runtime,
@@ -5360,7 +5471,16 @@ mod tests {
         runtime.start();
         runtime.yield_current().unwrap();
         assert_eq!(runtime.current(), Some(target));
-        assert_eq!(runtime.terminate_current().unwrap().task, target);
+        assert!(state.is_pristine());
+        let (termination, retirement) = retire_current_native_component_service_copy_read_transfer(
+            state.active(),
+            &mut runtime,
+        )
+        .unwrap();
+        assert_eq!(termination.task, target);
+        assert_eq!(retirement.active(), active);
+        assert_eq!(retirement.context().page_table(), active.page_table_root());
+        let state = NativeComponentServiceCopyReadTransferTeardown::from_retirement(retirement);
         mapping_backend.fail_remove = true;
         let state = match teardown_native_component_service_copy_read_transfer(
             state,
@@ -5416,6 +5536,21 @@ mod tests {
             ),
             (0, 0, 0)
         );
+        assert!(matches!(
+            teardown_native_component_service_copy_read_transfer(
+                NativeComponentServiceCopyReadTransferTeardown::new(active),
+                &mut runtime,
+                &mut memory,
+                &mut mapping_backend,
+                &mut backing,
+            ),
+            Err(
+                NativeComponentServiceCopyReadTransferTeardownError::RetirementMissing {
+                    task,
+                    ..
+                }
+            ) if task == target
+        ));
     }
 
     #[test]

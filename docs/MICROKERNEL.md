@@ -10536,3 +10536,18 @@ and rejects substitution. Active-root retirement remains **PLANNED**.
 Patent review: `NOT_TRIGGERED` — exact matching and retention of an existing
 page-table identity is conventional lifecycle boundary validation. See
 `docs/patents/REVIEW_LOG.md`.
+
+Copy-mediated native service teardown now requires a typed voluntary-retirement
+witness containing the exact removed task context. Retirement is accepted only
+while that task is current and its context still exact-matches the retained
+page-table root; ordinary task disappearance is no longer sufficient to begin
+authority, mapping, backing, or object cleanup. The storage launch receipt
+carries the witness through retryable teardown without discarding prior cleanup
+progress. The Linux-host release kernel suite passes 652 tests, the storage
+suite passes 162 tests, and both release builds pass. This is in-memory
+scheduler and inactive-page-table evidence only: active-root mapping retirement
+and TLB invalidation remain **PLANNED**.
+
+Patent review: `NOT_TRIGGERED` — retaining and exact-matching a task's existing
+context before conventional capability and memory cleanup is ordinary lifecycle
+enforcement. See `docs/patents/REVIEW_LOG.md`.
