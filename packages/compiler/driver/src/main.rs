@@ -64,6 +64,15 @@ enum EmitKind {
     ElfExecutable,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PeCapacityTier {
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Maximum,
+}
+
 struct LinkObjectRefs<'a> {
     bytes: Vector<&'a [u8]>,
     archive_group: Vector<u16>,
@@ -2385,54 +2394,62 @@ fn write_linked_pe(
         &mut contextual_arenas,
     )?;
     let payload = selected_payload_bound(&contextual_inputs, &runtime_functions, &writable_data)?;
+    match pe_capacity_tier(payload) {
+        PeCapacityTier::Tiny => write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(
+            &contextual_inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        ),
+        PeCapacityTier::Small => write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(
+            &contextual_inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        ),
+        PeCapacityTier::Medium => write_pe_image::<{ 1024 * 1024 }, { 512 * 1024 }>(
+            &contextual_inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        ),
+        PeCapacityTier::Large => write_pe_image::<{ 768 * 1024 }, { 768 * 1024 }>(
+            &contextual_inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        ),
+        PeCapacityTier::Maximum => write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_PE_LINKED_BYTES>(
+            &contextual_inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        ),
+    }
+}
+
+fn pe_capacity_tier(payload: usize) -> PeCapacityTier {
     if payload <= 16 * 1024 {
-        return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(
-            &contextual_inputs,
-            &runtime_functions,
-            &writable_data,
-            &readonly_absolute_relocations,
-            entry,
-            output,
-        );
+        PeCapacityTier::Tiny
+    } else if payload <= 256 * 1024 {
+        PeCapacityTier::Small
+    } else if payload <= 512 * 1024 {
+        PeCapacityTier::Medium
+    } else if payload <= 768 * 1024 {
+        PeCapacityTier::Large
+    } else {
+        PeCapacityTier::Maximum
     }
-    if payload <= 256 * 1024 {
-        return write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(
-            &contextual_inputs,
-            &runtime_functions,
-            &writable_data,
-            &readonly_absolute_relocations,
-            entry,
-            output,
-        );
-    }
-    if payload <= 512 * 1024 {
-        return write_pe_image::<{ 1024 * 1024 }, { 512 * 1024 }>(
-            &contextual_inputs,
-            &runtime_functions,
-            &writable_data,
-            &readonly_absolute_relocations,
-            entry,
-            output,
-        );
-    }
-    if payload <= 1024 * 1024 {
-        return write_pe_image::<{ 768 * 1024 }, { 768 * 1024 }>(
-            &contextual_inputs,
-            &runtime_functions,
-            &writable_data,
-            &readonly_absolute_relocations,
-            entry,
-            output,
-        );
-    }
-    write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_PE_LINKED_BYTES>(
-        &contextual_inputs,
-        &runtime_functions,
-        &writable_data,
-        &readonly_absolute_relocations,
-        entry,
-        output,
-    )
 }
 
 fn global_link_definitions<'input, 'data, 'relocations, 'definitions>(
@@ -3016,6 +3033,26 @@ mod tests {
             selected_payload_bound(&inputs, &[], &[]).unwrap(),
             4096 + 3 + 5 + 7 + 64
         );
+    }
+
+    #[test]
+    fn selects_bounded_pe_capacity_tiers_at_exact_boundaries() {
+        let cases = [
+            (0, PeCapacityTier::Tiny),
+            (16 * 1024, PeCapacityTier::Tiny),
+            (16 * 1024 + 1, PeCapacityTier::Small),
+            (256 * 1024, PeCapacityTier::Small),
+            (256 * 1024 + 1, PeCapacityTier::Medium),
+            (512 * 1024, PeCapacityTier::Medium),
+            (512 * 1024 + 1, PeCapacityTier::Large),
+            (768 * 1024, PeCapacityTier::Large),
+            (768 * 1024 + 1, PeCapacityTier::Maximum),
+            (1024 * 1024, PeCapacityTier::Maximum),
+        ];
+
+        for (payload, expected) in cases {
+            assert_eq!(pe_capacity_tier(payload), expected);
+        }
     }
 
     #[test]
