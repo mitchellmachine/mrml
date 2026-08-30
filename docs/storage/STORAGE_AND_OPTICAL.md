@@ -918,7 +918,10 @@ its 512-byte FAT prefix, and erases its scratch after every outcome. A matching
 numeric handle or label is explicitly insufficient. Its canonical generation-2
 mount transport accepts only empty options, publishes the exact lifecycle/root
 response after validation, and maps stale backing sessions without creating
-state. Forty-seven focused Linux-host tests pass. The storage service
+state. A dedicated mount receive/reply loop requires the exact canonical payload
+size and zero transferred capabilities while options remain undefined, then
+dispatches through the already bound provider and erases local buffers. Fifty
+focused Linux-host tests pass. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

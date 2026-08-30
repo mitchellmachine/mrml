@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loop pass forty-seven
+isolated syscall-backed receive/reply loops pass fifty
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -89,6 +89,10 @@ logical-block read at LBA zero, requires exact completion, copies only the
 now consumes canonical generation-2 mount request bytes, accepts only the
 currently defined empty options, and returns canonical lifecycle/root responses;
 stale block sessions remain typed stale failures and publish no mount state.
+The dedicated mount loop accepts exactly one canonical mount payload and zero
+transferred capabilities while options remain empty, dispatches through the
+already runtime-bound provider, and erases local request/response buffers after
+reply. A concrete register-level adapter for this mount loop remains next.
 The storage service now provides the first concrete half of that composition:
 `FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
 to one owner-authenticated block session, validates full-block scratch geometry,

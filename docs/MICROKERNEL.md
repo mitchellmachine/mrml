@@ -7425,7 +7425,11 @@ establish this binding. The mounted provider now implements canonical
 generation-2 mount transport: options must be empty, stale backing sessions
 remain typed stale failures, and lifecycle/root identity is encoded only after
 validated state publication. The focused Linux-host provider suite passes
-forty-seven tests.
+forty-seven tests. A separate mount receive/reply loop now requires the exact
+generation-2 payload size and zero transferred capabilities, dispatches only
+through the provider's preinstalled binding, and erases local buffers after
+success or failure. Together the focused provider suite passes fifty tests; a
+register-level mount syscall adapter is not yet implemented.
 
 Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and

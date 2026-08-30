@@ -5,6 +5,7 @@
 //! Native MRML storage does not inherit FAT authority or namespace semantics.
 
 mod service_loop;
+mod mount_service_loop;
 mod userspace_syscall_adapter;
 
 use mrml_interface_storage_block_provider_v1::{
@@ -22,6 +23,10 @@ use mrml_interface_storage_filesystem_v2::{
 
 pub use service_loop::{
     Fat32ServiceLoop, Fat32ServiceLoopError, Fat32ServiceSyscalls, ReceivedFat32Envelope,
+};
+pub use mount_service_loop::{
+    Fat32MountServiceLoop, Fat32MountServiceLoopError, Fat32MountServiceSyscalls,
+    ReceivedFat32MountEnvelope,
 };
 pub use userspace_syscall_adapter::{
     Fat32RawSyscall, Fat32SyscallFrame, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,

@@ -1198,6 +1198,12 @@ generation-2 request before block I/O, maps a stale backing session to the typed
 stale result, and emits lifecycle/root identity only after the boot sector has
 validated and the mount record exists.
 
+The isolated mount loop receives no capability while mount options are empty;
+any claimed transfer or wrong payload length fails before provider dispatch and
+produces no reply. Its block authority was installed separately through the
+runtime-proven binding, so request data cannot select or manufacture a block
+session. Local request and response buffers are erased after every outcome.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode
