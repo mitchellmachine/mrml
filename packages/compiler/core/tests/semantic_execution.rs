@@ -74,6 +74,12 @@ const RUSTC_WIDE_CHECKED_CAST_UNSIGNED_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.checked_cast_unsigned().unwrap_or_default() }",
 );
+const MRML_V1_WIDE_CHECKED_CAST_FALLBACK_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or(fallback) }";
+const RUSTC_WIDE_CHECKED_CAST_FALLBACK_SOURCE: &str = concat!(
+    "#![feature(integer_cast_extras)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or(fallback) }",
+);
+const MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.checked_cast_signed().unwrap() }";
 const RUSTC_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = concat!(
     "#![feature(integer_cast_extras)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }",
@@ -1571,6 +1577,77 @@ fn mrml_v1_wide_checked_sign_cast_defaults_match_both_oracle_words() {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_checked_sign_cast_fallback_matches_both_oracle_words() {
+    let inputs = [
+        (0u128, (-17i128) as u128),
+        (i128::MAX as u128, 42),
+        (i128::MIN as u128, (-17i128) as u128),
+        (u128::MAX, i128::MIN as u128),
+    ];
+    let code = compile(MRML_V1_WIDE_CHECKED_CAST_FALLBACK_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(input, fallback)| {
+            let returned = unsafe {
+                call_mrml_v1_two_wide_return(code.pointer, input, fallback)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, rustc_mrml_v1_observations(RUSTC_WIDE_CHECKED_CAST_FALLBACK_SOURCE, "for (input, fallback) in [(0u128, -17i128), (i128::MAX as u128, 42), (i128::MIN as u128, -17), (u128::MAX, i128::MIN)] { let returned = probe(input, fallback); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"));
+}
+
+#[test]
+fn mrml_v1_wide_checked_sign_cast_unwrap_overflow_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_CHECKED_SIGN_CAST_UNWRAP_CHILD";
+    let code = compile(MRML_V1_WIDE_CHECKED_CAST_UNWRAP_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    for input in [i128::MIN as u128, u128::MAX] {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(mode) = std::env::var_os(CHILD) {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let input = if mode == "maximum" { u128::MAX } else { i128::MIN as u128 };
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+        panic!("wide checked sign-cast unwrap unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for mode in ["minimum", "maximum"] {
+        let output = current_semantic_test_command()
+            .args([
+                "--exact",
+                "mrml_v1_wide_checked_sign_cast_unwrap_overflow_traps",
+                "--nocapture",
+            ])
+            .env(CHILD, mode)
+            .output()
+            .expect("launch isolated wide checked-sign-cast unwrap trap probe");
+        assert!(!output.status.success(), "generated checked-sign-cast unwrap trap returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status for {mode}; stdout: {stdout}; stderr: {stderr}"
+        );
     }
 }
 
