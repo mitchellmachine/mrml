@@ -12275,11 +12275,15 @@ mod tests {
     fn mrml_v1_codegen_consumes_checked_wide_sign_cast_options() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or(fallback) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128, fallback: u128) -> u128 { input.checked_cast_unsigned().unwrap_or(fallback) }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().unwrap_or_default() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().unwrap() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().expect(\"nonnegative\") }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { unsafe { input.checked_cast_signed().unwrap_unchecked() } }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { unsafe { input.checked_cast_unsigned().unwrap_unchecked() } }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or_else(|| fallback) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128, fallback: u128) -> u128 { input.checked_cast_unsigned().unwrap_or_else(|| fallback) }",
         ] {
             let module = Parser::new(source).parse_module::<3, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -12290,7 +12294,10 @@ mod tests {
             }
         }
 
-        for source in ["#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap_unchecked() }"] {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap_unchecked() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().unwrap_unchecked() }",
+        ] {
             let module = Parser::new(source).parse_module::<3, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
