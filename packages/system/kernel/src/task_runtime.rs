@@ -798,8 +798,21 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn timer_tick_and_expire_receives(
         &mut self,
     ) -> Result<ReceiveDeadlineTick<TASKS>, TaskRuntimeError> {
-        let mut scheduling = self.timer_tick()?;
-        let expired = self.expire_due_receives()?;
+        self.ensure_scheduler_mutable()?;
+        let next_tick =
+            self.scheduler
+                .ticks()
+                .checked_add(1)
+                .ok_or(TaskRuntimeError::Scheduler(
+                    KernelScheduleError::TickExhausted,
+                ))?;
+        let expired = self.receive_expirations_due_at(next_tick);
+        let wakes = self.prepare_receive_expiration_wakes(&expired)?;
+        let mut scheduling = self
+            .scheduler
+            .timer_tick()
+            .expect("prevalidated next scheduler tick cannot exhaust");
+        self.commit_receive_expirations(&expired, wakes);
         if matches!(scheduling, ScheduleOutcome::Idle) && expired.iter().any(Option::is_some) {
             scheduling = self.start();
             if matches!(scheduling, ScheduleOutcome::Idle) {
@@ -2515,8 +2528,17 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     ) -> Result<[Option<ExpiredReceive>; TASKS], TaskRuntimeError> {
         self.ensure_scheduler_mutable()?;
         let now = self.scheduler.ticks();
-        let mut wakes: [Option<WakePlan>; TASKS] = array::from_fn(|_| None);
         let expired = self.receive_expirations_due_at(now);
+        let wakes = self.prepare_receive_expiration_wakes(&expired)?;
+        self.commit_receive_expirations(&expired, wakes);
+        Ok(expired)
+    }
+
+    fn prepare_receive_expiration_wakes(
+        &self,
+        expired: &[Option<ExpiredReceive>; TASKS],
+    ) -> Result<[Option<WakePlan>; TASKS], TaskRuntimeError> {
+        let mut wakes = array::from_fn(|_| None);
         for (slot, expiration) in expired.iter().enumerate() {
             let Some(expiration) = expiration else {
                 continue;
@@ -2527,6 +2549,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                     .map_err(TaskRuntimeError::Scheduler)?,
             );
         }
+        Ok(wakes)
+    }
+
+    fn commit_receive_expirations(
+        &mut self,
+        expired: &[Option<ExpiredReceive>; TASKS],
+        mut wakes: [Option<WakePlan>; TASKS],
+    ) {
         for slot in 0..TASKS {
             let Some(wake) = wakes[slot].take() else {
                 continue;
@@ -2542,7 +2572,6 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             domain.blocked_receive = None;
             self.scheduler.commit_wake(wake);
         }
-        Ok(expired)
     }
 
     fn receive_expirations_due_at(&self, now: u64) -> [Option<ExpiredReceive>; TASKS] {
@@ -2943,6 +2972,16 @@ mod tests {
             runtime.timer_tick(),
             Err(TaskRuntimeError::RetirementDispatchPending)
         );
+        let ticks = runtime.ticks();
+        assert!(matches!(
+            runtime.preview_receive_expirations_on_next_tick(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
+        assert!(matches!(
+            runtime.timer_tick_and_expire_receives(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
+        assert_eq!(runtime.ticks(), ticks);
         assert_eq!(
             runtime.preempt_current(context(0x30_0000, 0x50_0000)),
             Err(TaskRuntimeError::RetirementDispatchPending)

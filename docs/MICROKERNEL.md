@@ -11678,3 +11678,26 @@ physical timer execution.
 Patent review: `NOT_TRIGGERED` — previewing a bounded due set before committing
 the same timer transition is conventional transactional state-machine
 validation. See `docs/patents/REVIEW_LOG.md`.
+
+The composed runtime timer operation now prepares every due receive wake before
+advancing the scheduler tick. It checks scheduler mutability, checked-adds the
+next tick, computes the exact due set, and validates every wake identity first;
+only then does a commit-only phase account the tick, clear the matching waits,
+and make those tasks runnable. The standalone already-accounted expiry path
+reuses the same due-set, wake-preparation, and commit helpers.
+
+Existing retirement serialization coverage now also invokes both next-tick
+preview and the composed tick/expiry operation while a retirement dispatch is
+pending. Both return `RetirementDispatchPending`, and the scheduler tick remains
+unchanged. Together with the unmatched-owner test, this closes ordinary
+error-return paths after timer mutation; internal post-prevalidation
+contradictions remain fail-stop invariants.
+
+The Linux-host kernel suite remains at 675 passing tests. The native kernel
+release build and the `deadline_receive_probe` UEFI bootloader release build
+pass through `mrml`, with only the boot profile's existing unreachable-pattern
+warning. This is deterministic unit and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — preparing a bounded set of scheduler wakes
+before a commit-only timer transition is conventional transactional scheduling.
+See `docs/patents/REVIEW_LOG.md`.
