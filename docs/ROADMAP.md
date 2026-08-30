@@ -4093,3 +4093,8 @@ Stable configuration is the first service-specific migration to that primitive.
 Checkpoint commit now requires both the retained exact configuration `READ`
 capability and the retained exact storage write/resize authority; revocation of
 the storage handle after staging leaves the publication receipt unconsumed.
+
+Deployment stable activation is also migrated. Ordinary and authenticated
+publication now require the retained exact storage authority in addition to
+live deployment control and unchanged activation state; storage revocation
+leaves the receipt, recovery state, and deployment service unchanged.

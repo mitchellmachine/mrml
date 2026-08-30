@@ -22,8 +22,9 @@ use mrml_package_format::{
 };
 use mrml_storage::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
-    FileWriteError, MAX_FILE_READ_BYTES, MetadataPointer, PreparedFileWrite, StorageAuthorityTable,
-    StorageHandle, StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    FileWriteCommitError, FileWriteError, MAX_FILE_READ_BYTES, MetadataPointer, PreparedFileWrite,
+    StorageAuthorityTable, StorageHandle, StoragePrincipal, StorageTransaction, TransactionError,
+    TransactionReceipt,
 };
 
 pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 424;
@@ -746,11 +747,17 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         transaction.admit_file(&self.file)
     }
 
-    pub fn commit<const CANDIDATES: usize, const PARTICIPANTS: usize, const CAPS: usize>(
+    pub fn commit<
+        const CANDIDATES: usize,
+        const PARTICIPANTS: usize,
+        const CAPS: usize,
+        const AUTHORITIES: usize,
+    >(
         self,
         service: &mut DeploymentService<CANDIDATES>,
         capabilities: &CapabilitySpace<CAPS>,
         control: Capability,
+        storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
     ) -> Result<StableActivation<EXTENTS>, StableActivationCommitError> {
         service
@@ -764,8 +771,8 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         }
         let file = self
             .file
-            .commit_transaction(receipt)
-            .map_err(StableActivationCommitError::Transaction)?;
+            .commit_transaction_authorized(storage_authority, receipt)
+            .map_err(|(_, error)| StableActivationCommitError::Storage(error))?;
         let active = service
             .commit_activation(capabilities, control, self.activation)
             .map_err(StableActivationCommitError::Deployment)?;
@@ -786,12 +793,14 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         const CANDIDATES: usize,
         const PARTICIPANTS: usize,
         const CAPS: usize,
+        const AUTHORITIES: usize,
         S: DeploymentRecoveryStateStore,
     >(
         self,
         service: &mut DeploymentService<CANDIDATES>,
         capabilities: &CapabilitySpace<CAPS>,
         control: Capability,
+        storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
         state_store: &mut S,
     ) -> Result<StableActivation<EXTENTS>, AuthenticatedActivationCommitError<S::Error>> {
@@ -815,8 +824,8 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         }
         let file = self
             .file
-            .commit_transaction(receipt)
-            .map_err(AuthenticatedActivationCommitError::Transaction)?;
+            .commit_transaction_authorized(storage_authority, receipt)
+            .map_err(|(_, error)| AuthenticatedActivationCommitError::Storage(error))?;
         let replacement = encode_deployment_recovery_state_with_release(
             current.epoch().checked_add(1).ok_or(
                 AuthenticatedActivationCommitError::Deployment(
@@ -873,7 +882,7 @@ impl<const EXTENTS: usize> StableActivation<EXTENTS> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StableActivationCommitError {
     StaleActivation,
-    Transaction(TransactionError),
+    Storage(FileWriteCommitError),
     Deployment(DeploymentError),
 }
 
@@ -881,7 +890,7 @@ pub enum StableActivationCommitError {
 pub enum AuthenticatedActivationCommitError<E> {
     StaleActivation,
     RecoveryStateMismatch,
-    Transaction(TransactionError),
+    Storage(FileWriteCommitError),
     Deployment(DeploymentError),
     StateStore(E),
 }
@@ -1553,8 +1562,8 @@ mod tests {
     };
     use mrml_storage::{
         CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
-        ExtentRecord, StorageObjectId, StorageObjectKind, StorageRights, StorageTransactionId,
-        Superblock, VolumeHeader, VolumeId,
+        ExtentRecord, StorageAuthorityError, StorageObjectId, StorageObjectKind, StorageRights,
+        StorageTransactionId, Superblock, VolumeHeader, VolumeId,
     };
 
     const BLOCK_BYTES: usize = 4096;
@@ -2624,11 +2633,60 @@ mod tests {
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
         let mut recovery_state = RecoveryStateStore::empty();
+        authority.revoke(file, principal()).unwrap();
+        assert!(matches!(
+            stable.commit_authenticated(
+                &mut service,
+                &capabilities,
+                control,
+                &authority,
+                &mut receipt,
+                &mut recovery_state,
+            ),
+            Err(AuthenticatedActivationCommitError::Storage(
+                FileWriteCommitError::Authority(StorageAuthorityError::InvalidHandle)
+            ))
+        ));
+        assert_eq!(receipt.remaining(), 1);
+        assert_eq!(service.active(&capabilities, inspect), Ok(None));
+
+        let file = authority
+            .insert(
+                object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                principal(),
+            )
+            .unwrap();
+        let (_, next, metadata, images) = stable_layout(&checkpoint);
+        let stable = prepare_stable_activation(
+            &service,
+            prepared,
+            &current,
+            &authority,
+            file,
+            principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut backend,
+        )
+        .unwrap();
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(71).unwrap(), 2).unwrap();
+        stable.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
         let stable = stable
             .commit_authenticated(
                 &mut service,
                 &capabilities,
                 control,
+                &authority,
                 &mut receipt,
                 &mut recovery_state,
             )

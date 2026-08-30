@@ -1070,3 +1070,9 @@ after its independent exact root/read check. Thus neither checkpoint bytes nor
 successful staging preserve storage authority: revoking the retained file
 handle before commit prevents publication and leaves the one-use receipt
 unconsumed.
+
+Stable deployment activation applies the same rule to both publication forms.
+After exact control and activation-state revalidation, the retained file handle,
+principal, kind, and write/resize rights must still authorize the successor.
+Denial occurs before receipt consumption, authenticated recovery-state update,
+or live activation.

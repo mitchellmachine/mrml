@@ -7210,6 +7210,17 @@ Patent review: `NOT_TRIGGERED` — this composes conventional exact capability
 and generational storage-handle reauthorization at an existing transaction
 commit boundary. See `docs/patents/REVIEW_LOG.md`.
 
+Deployment stable activation now uses the same authorized file-write commit in
+both ordinary and authenticated recovery-state publication. Exact live
+deployment `CONTROL` and unchanged candidate/release state are checked first;
+the retained storage binding is then reauthorized before receipt consumption.
+Revocation publishes neither a file generation, recovery state, nor activation.
+Deployment passes 6 focused tests and storage remains 142 focused tests.
+
+Patent review: `NOT_TRIGGERED` — this applies the existing conventional
+generational storage-handle check at the deployment transaction boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
