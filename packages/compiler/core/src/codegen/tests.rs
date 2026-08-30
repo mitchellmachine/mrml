@@ -20017,10 +20017,18 @@ mod tests {
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
-        assert!(
-            compile_x86_64_function::<_, 1024, 2, 80>(&function, &NoConstants, X86_64Abi::Windows,)
-                .is_err()
-        );
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    abi,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
     }
 
     #[test]
