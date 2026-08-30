@@ -1171,3 +1171,9 @@ offset, and writable memory range before invocation. Checked arithmetic prevents
 offset wrapping; successful byte counts cannot exceed caller authority, and
 typed failures carry no byte count. A zero-byte success represents EOF rather
 than an I/O grant.
+
+Filesystem writes are a distinct authority path from reads. Canonical requests
+bind exact volume, mount, file, provider endpoint, checked file offset, and one
+nonempty immutable range; successful byte counts cannot be zero or exceed that
+range. `ReadOnly`, permission, capacity, and I/O failures remain distinguishable
+and carry no progress count.

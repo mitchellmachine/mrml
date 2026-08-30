@@ -433,7 +433,11 @@ Canonical read framing now binds exact volume, mount, and file generations,
 checked file-offset arithmetic, and one bounded writable range. The isolated
 transport preserves the endpoint and memory bound; response decoding permits
 zero-byte EOF but rejects over-counts and error/data mixtures. The complete suite
-passes eight Linux-host tests. The FAT32 provider now consumes the probe boundary
+passes eight Linux-host tests. Canonical write framing independently binds the
+same exact object identities and
+checked file offset to a nonempty immutable range. Successful progress is nonzero
+and caller-bounded; `ReadOnly`, permission, capacity, and I/O failures remain
+distinct. The complete suite passes nine Linux-host tests. The FAT32 provider now consumes the probe boundary
 through
 an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The

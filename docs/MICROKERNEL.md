@@ -7407,6 +7407,16 @@ invocation; completion cannot exceed the borrowed range or 1 MiB interface bound
 Zero-byte EOF is a valid success, while every typed failure carries zero bytes.
 The focused Linux-host interface suite passes eight tests.
 
+Canonical filesystem write framing keeps mutation independent from read. It
+binds exact volume, mount, file, endpoint, checked file offset, and one nonempty
+immutable range. Success requires nonzero progress within the range and 1 MiB
+bound; `ReadOnly`, permission, capacity, and I/O failures remain distinct and
+carry zero bytes. The focused Linux-host interface suite passes nine tests.
+
+Patent review: `NOT_TRIGGERED` — bounded immutable inputs, checked offsets,
+partial-progress validation, and typed write errors are conventional IPC and
+file-I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
 completion-count validation, and typed read errors are conventional IPC and file
 I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.
