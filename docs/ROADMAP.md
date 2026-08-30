@@ -67,12 +67,17 @@ valid transferred leaf; absent or malformed token data cannot trigger revocation
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
-filesystem interface codec passes thirteen and storage passes 144, including a
+filesystem interface codec passes thirteen and storage passes 149, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
-does not change the modeled kernel epoch. Capability-authorized open policy,
-checking, formatting, writes, installed supervisor launch, and hardware evidence
+does not change the modeled kernel epoch. Checking, formatting, writes,
+installed supervisor launch, and hardware evidence
 remain next in dependency order; this lookup returns metadata and grants no open
-authority.
+authority. The storage policy service now has a fixed-capacity filesystem open
+broker. An unsafe runtime-authenticated lookup binding maps the exact provider/
+mount/parent result to a stable storage object but grants nothing by itself.
+Opening requires the exact parent handle with `OPEN_CHILD`, derives only requested
+kind-valid rights, rejects substitution before allocation, and records the child
+handle for mount-scoped transitive revocation. `LOOKUP` alone remains insufficient.
 The mount table accepts only already-validated geometry, issues fresh independent
 mount and root generations, exact-matches both, invalidates them together on
 unmount, and permanently fails after generation exhaustion. It grants no open

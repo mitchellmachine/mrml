@@ -1247,6 +1247,13 @@ protocol, provider, or reply failure releases the validated leaf. The register
 adapter bounds kernel-reported payload and capability counts to the supplied
 arrays before constructing the envelope.
 
+Provider lookup identity cannot be used as a file handle. The storage open broker
+accepts only an unsafe runtime-authenticated mapping from the exact provider,
+mount, parent, and provider object to a stable storage object; this evidence
+still grants no right. A child handle is derived only from the same principal's
+exact directory handle carrying `OPEN_CHILD`, with kind-valid requested rights.
+Mount cleanup revokes each opened handle transitively, including descendants.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

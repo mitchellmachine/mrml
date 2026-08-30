@@ -7467,6 +7467,19 @@ name range, releases that validated leaf after every later outcome, and erases
 transient buffers. Its register adapter rejects kernel over-counts before the
 envelope exists.
 
+The storage policy service now bridges non-authorizing filesystem lookup identity
+to a child handle without conflating the two. An unsafe runtime binding
+authenticates the exact provider/mount/parent/object mapping; `OPEN_CHILD` on the
+same principal's exact parent remains required. The broker derives only requested
+kind-valid rights, rejects substitution before allocation, and tracks handles
+for mount-scoped transitive revocation. Storage passes 149 focused Linux-host
+tests.
+
+Patent review: `NOT_TRIGGERED` — parent-authorized child-handle derivation,
+rights attenuation, exact identity binding, and transitive lifecycle revocation
+are conventional capability-system mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — checked filesystem offset derivation, exact
 single-block reads, failure-atomic range assembly, and scratch erasure are
 conventional storage-parser boundary mechanisms. See
@@ -7487,7 +7500,7 @@ to one owner-authenticated block session and exact full-block scratch. Every rea
 rechecks the independent `READ` right through `BlockService`, copies only the
 512-byte boot sector, and erases the full scratch on success or failure. Volume
 substitution, denial, and backend error publish zero output bytes. The focused
-Linux-host storage suite passes 144 tests.
+Linux-host storage suite passes 149 tests.
 
 Patent review: `NOT_TRIGGERED` — exact session authorization, block-zero reads,
 bounded prefix copy, and scratch erasure are conventional storage-service boundary

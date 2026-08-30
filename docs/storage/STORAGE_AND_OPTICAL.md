@@ -951,7 +951,13 @@ scratch geometry, rechecks `READ` for every block-zero operation, copies only th
 512-byte FAT boot sector, and erases scratch after success, denial, mismatch, or
 backend failure. It grants no new right and makes no device call for a mismatched
 volume. Installed runtime construction of the proven association and dispatch
-from the service entry remain **PLANNED**. The
+from the service entry remain **PLANNED**. The storage policy service now also
+has a bounded filesystem open broker. It consumes an unsafe runtime-authenticated
+provider/mount/parent/object mapping as identity evidence only, requires the
+exact parent's `OPEN_CHILD` authority, derives only requested kind-valid rights,
+and tracks opened handles for mount-scoped transitive revocation. Lookup-only
+authority, parent substitution, and cross-volume mapping fail before creation.
+Storage passes 149 focused Linux-host tests. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows

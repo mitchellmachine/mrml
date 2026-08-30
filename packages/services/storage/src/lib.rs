@@ -20,6 +20,7 @@ mod directory;
 mod extent;
 mod file;
 mod filesystem_mount;
+mod filesystem_open;
 mod format;
 mod identity;
 mod kernel_transport;
@@ -119,6 +120,10 @@ pub use format::{
     DirectoryEntry, DirectoryMetadata, FileMetadata, MetadataError, MetadataPointer, StorageName,
     Superblock, VolumeHeader, DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, FILE_METADATA_BYTES,
     MAX_METADATA_BLOCKS, MAX_STORAGE_NAME_BYTES, SUPERBLOCK_BYTES, VOLUME_HEADER_BYTES,
+};
+pub use filesystem_open::{
+    AuthenticatedFilesystemLookup, FilesystemOpenBroker, FilesystemOpenError,
+    FilesystemOpenKind,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use kernel_transport::{BlockKernelTransport, BlockKernelTransportError};
