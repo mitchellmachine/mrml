@@ -563,6 +563,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn timer_tick(&mut self) -> Result<ScheduleOutcome, TaskRuntimeError> {
+        self.ensure_no_pending_termination()?;
         self.scheduler
             .timer_tick()
             .map_err(TaskRuntimeError::Scheduler)
@@ -574,6 +575,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         interrupted: UserContext,
     ) -> Result<ScheduleOutcome, TaskRuntimeError> {
+        self.ensure_no_pending_termination()?;
         let current = self
             .scheduler
             .current()
@@ -603,6 +605,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn yield_current(&mut self) -> Result<ScheduleOutcome, TaskRuntimeError> {
+        self.ensure_no_pending_termination()?;
         self.scheduler
             .yield_current()
             .map_err(TaskRuntimeError::Scheduler)
@@ -966,6 +969,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         disposition: TrapDisposition,
     ) -> Result<FaultRetirement, TaskRuntimeError> {
+        self.ensure_no_pending_termination()?;
         let (vector, address) = match disposition {
             TrapDisposition::TerminateUser { vector, address } => (vector, address),
             TrapDisposition::HaltKernel { .. } => {
@@ -1020,6 +1024,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         violation: TaskProtocolViolation,
     ) -> Result<TaskViolationRetirement, TaskRuntimeError> {
+        self.ensure_no_pending_termination()?;
         let current = self
             .scheduler
             .current()
@@ -1116,6 +1121,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
         self.pending_termination = None;
         Ok(())
+    }
+
+    fn ensure_no_pending_termination(&self) -> Result<(), TaskRuntimeError> {
+        if self.pending_termination.is_some() {
+            Err(TaskRuntimeError::TerminationDispatchPending)
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn terminate_current_with_context(
@@ -2256,6 +2269,18 @@ mod tests {
         );
         assert_eq!(
             runtime.terminate_current(),
+            Err(TaskRuntimeError::TerminationDispatchPending)
+        );
+        assert_eq!(
+            runtime.yield_current(),
+            Err(TaskRuntimeError::TerminationDispatchPending)
+        );
+        assert_eq!(
+            runtime.timer_tick(),
+            Err(TaskRuntimeError::TerminationDispatchPending)
+        );
+        assert_eq!(
+            runtime.preempt_current(context(0x30_0000, 0x50_0000)),
             Err(TaskRuntimeError::TerminationDispatchPending)
         );
         assert_eq!(

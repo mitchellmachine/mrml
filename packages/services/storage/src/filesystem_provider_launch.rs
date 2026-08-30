@@ -1483,30 +1483,6 @@ mod tests {
         assert!(!retained.mapping_removed());
         let successor = runtime.current().unwrap();
         let successor_context = *runtime.context(successor).unwrap();
-        runtime.yield_current().unwrap();
-        assert_ne!(runtime.current(), Some(successor));
-        assert!(matches!(
-            retire_current_native_filesystem_provider(
-                &mut receipt,
-                &mut runtime,
-                &mut memory,
-                &mut local_mapping,
-            ),
-            Err(NativeFilesystemProviderRetirementError::Dispatch {
-                termination,
-                error: TaskTerminationDispatchError::CurrentMismatch,
-            }) if termination.task == target
-        ));
-        let awaiting_dispatch = receipt.instance().teardown().unwrap();
-        assert!(awaiting_dispatch.mapping_removed());
-        assert!(!awaiting_dispatch.dispatch_issued());
-        for _ in 0..3 {
-            if runtime.current() == Some(successor) {
-                break;
-            }
-            runtime.yield_current().unwrap();
-        }
-        assert_eq!(runtime.current(), Some(successor));
         let retirement = retire_current_native_filesystem_provider(
             &mut receipt,
             &mut runtime,

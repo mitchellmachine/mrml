@@ -10778,10 +10778,9 @@ retained termination unissued and retryable; successful validation atomically
 marks issuance before returning the non-copyable token. Both generic and active
 provider entry points reject later replay. The Linux-host release kernel suite
 passes 653 tests, storage passes 163 tests, and both release builds pass. The
-storage test forces mapping failure, then scheduler mismatch after successful
-withdrawal, restores the exact successor, proves one successful issuance, and
-rejects a second attempt. This remains in-memory scheduler and inactive-page-
-table evidence.
+storage test forces mapping failure, proves successful withdrawal and one
+dispatch issuance on retry, and rejects a second attempt. This remains in-
+memory scheduler and inactive-page-table evidence.
 
 Patent review: `NOT_TRIGGERED` — one-use issuance tracking for a validated
 dispatch token is conventional replay-resistant lifecycle state. See
@@ -10802,3 +10801,17 @@ context installation.
 Patent review: `NOT_TRIGGERED` — runtime-owned single-pending transition state
 and consume-on-success validation are conventional scheduler replay prevention.
 See `docs/patents/REVIEW_LOG.md`.
+
+While that exact voluntary termination remains pending, the runtime now rejects
+timer scheduling, preemption/context capture, yielding, and every additional
+current-task retirement. This freezes the selected successor until validation
+consumes the transition instead of allowing ordinary scheduler activity to
+manufacture a current-task mismatch. Capability cleanup and bounded mapping
+retry may still progress without changing scheduler selection. The Linux-host
+release kernel suite passes 653 tests, storage passes 163 tests, and both release
+builds pass. Tests cover the in-memory freeze and successful storage retry; they
+do not execute an interrupt return or active hardware context switch.
+
+Patent review: `NOT_TRIGGERED` — freezing scheduler selection around a pending
+context transition is conventional critical lifecycle sequencing. See
+`docs/patents/REVIEW_LOG.md`.
