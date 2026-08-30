@@ -1608,6 +1608,131 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
         )
         .map_err(Fat32RootDirectoryError::Filesystem)
     }
+
+    pub fn lookup_with_scratch(
+        &mut self,
+        request: &[u8; LOOKUP_REQUEST_BYTES],
+        memory: &mut [u8],
+        cluster_scratch: &mut [u8],
+    ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError> {
+        cluster_scratch.fill(0);
+        let result = (|| {
+            let request = decode_lookup_request(request, memory.len() as u64)?;
+            let start = usize::try_from(request.name.offset())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let length = usize::try_from(request.name.length())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let end = start
+                .checked_add(length)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let name = memory
+                .get(start..end)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let name = core::str::from_utf8(name).map_err(|_| ProtocolError::InvalidRequest)?;
+            let mut utf16 = [0_u16; 255];
+            let mut utf16_length = 0;
+            for unit in name.encode_utf16() {
+                let Some(destination) = utf16.get_mut(utf16_length) else {
+                    utf16.fill(0);
+                    return Err(ProtocolError::InvalidRequest);
+                };
+                *destination = unit;
+                utf16_length += 1;
+            }
+            if utf16_length == 0 {
+                return Ok(encode_lookup_response(Err(LookupError::InvalidRequest)));
+            }
+            let directory = match self.load_root_directory::<64, 64>(
+                request.volume,
+                request.generation,
+                request.directory,
+                cluster_scratch,
+            ) {
+                Ok(directory) => directory,
+                Err(Fat32RootDirectoryError::Lifecycle(_)) => {
+                    utf16.fill(0);
+                    return Ok(encode_lookup_response(Err(LookupError::StaleObject)));
+                }
+                Err(Fat32RootDirectoryError::Filesystem(_)) => {
+                    utf16.fill(0);
+                    return Ok(encode_lookup_response(Err(LookupError::InvalidRequest)));
+                }
+            };
+            let result = self
+                .lookup_root_entry(
+                    request.volume,
+                    request.generation,
+                    request.directory,
+                    &directory,
+                    &utf16[..utf16_length],
+                )
+                .map_err(|error| match error {
+                    Fat32RootLookupError::Lookup(Fat32Error::LookupNotFound) => {
+                        LookupError::NotFound
+                    }
+                    Fat32RootLookupError::Identity(Fat32ObjectIdentityError::Lifecycle(_))
+                    | Fat32RootLookupError::Identity(Fat32ObjectIdentityError::StaleObject) => {
+                        LookupError::StaleObject
+                    }
+                    Fat32RootLookupError::Lookup(_) | Fat32RootLookupError::Identity(_) => {
+                        LookupError::InvalidRequest
+                    }
+                });
+            utf16.fill(0);
+            Ok(encode_lookup_response(result))
+        })();
+        cluster_scratch.fill(0);
+        result
+    }
+
+    pub fn read_with_scratch<const C: usize>(
+        &mut self,
+        request: &[u8; READ_REQUEST_BYTES],
+        memory: &mut [u8],
+        staging: &mut [u8],
+        cluster_scratch: &mut [u8],
+    ) -> Result<[u8; READ_RESPONSE_BYTES], ProtocolError> {
+        staging.fill(0);
+        cluster_scratch.fill(0);
+        let result = (|| {
+            let request = decode_read_request(request, memory.len() as u64)?;
+            let start = usize::try_from(request.output.offset())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let length = usize::try_from(request.output.length())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let end = start
+                .checked_add(length)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let output = memory
+                .get_mut(start..end)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let staging = staging
+                .get_mut(..length)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            let result = self
+                .read_open_file::<C>(
+                    request.volume,
+                    request.generation,
+                    request.file,
+                    request.offset,
+                    output,
+                    staging,
+                    cluster_scratch,
+                )
+                .map(|()| length as u64)
+                .map_err(|error| match error {
+                    Fat32OpenReadError::Open(_) => ReadError::StaleObject,
+                    Fat32OpenReadError::Filesystem(Fat32Error::FatRead)
+                    | Fat32OpenReadError::Filesystem(Fat32Error::DirectoryRead)
+                    | Fat32OpenReadError::Filesystem(Fat32Error::FileRead) => ReadError::IoFailure,
+                    Fat32OpenReadError::Filesystem(_) => ReadError::InvalidRequest,
+                });
+            Ok(encode_read_response(result))
+        })();
+        staging.fill(0);
+        cluster_scratch.fill(0);
+        result
+    }
 }
 
 pub struct Fat32LookupProvider<'a, B, const N: usize, const O: usize = 64> {
@@ -1637,63 +1762,8 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize> FilesystemLo
         request: &[u8; LOOKUP_REQUEST_BYTES],
         memory: &mut [u8],
     ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError> {
-        let request = decode_lookup_request(request, memory.len() as u64)?;
-        let start = usize::try_from(request.name.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
-        let length = usize::try_from(request.name.length()).map_err(|_| ProtocolError::InvalidRequest)?;
-        let end = start
-            .checked_add(length)
-            .ok_or(ProtocolError::InvalidRequest)?;
-        let name = memory.get(start..end).ok_or(ProtocolError::InvalidRequest)?;
-        let name = core::str::from_utf8(name).map_err(|_| ProtocolError::InvalidRequest)?;
-        let mut utf16 = [0_u16; 255];
-        let mut utf16_length = 0;
-        for unit in name.encode_utf16() {
-            let Some(destination) = utf16.get_mut(utf16_length) else {
-                utf16.fill(0);
-                return Err(ProtocolError::InvalidRequest);
-            };
-            *destination = unit;
-            utf16_length += 1;
-        }
-        if utf16_length == 0 {
-            return Ok(encode_lookup_response(Err(LookupError::InvalidRequest)));
-        }
-        let directory = match self.provider.load_root_directory::<64, 64>(
-            request.volume,
-            request.generation,
-            request.directory,
-            self.cluster_scratch,
-        ) {
-            Ok(directory) => directory,
-            Err(Fat32RootDirectoryError::Lifecycle(_)) => {
-                utf16.fill(0);
-                return Ok(encode_lookup_response(Err(LookupError::StaleObject)));
-            }
-            Err(Fat32RootDirectoryError::Filesystem(_)) => {
-                utf16.fill(0);
-                return Ok(encode_lookup_response(Err(LookupError::InvalidRequest)));
-            }
-        };
-        let result = self
-            .provider
-            .lookup_root_entry(
-                request.volume,
-                request.generation,
-                request.directory,
-                &directory,
-                &utf16[..utf16_length],
-            )
-            .map_err(|error| match error {
-                Fat32RootLookupError::Lookup(Fat32Error::LookupNotFound) => LookupError::NotFound,
-                Fat32RootLookupError::Identity(Fat32ObjectIdentityError::Lifecycle(_))
-                | Fat32RootLookupError::Identity(Fat32ObjectIdentityError::StaleObject) => {
-                    LookupError::StaleObject
-                }
-                Fat32RootLookupError::Lookup(_)
-                | Fat32RootLookupError::Identity(_) => LookupError::InvalidRequest,
-            });
-        utf16.fill(0);
-        Ok(encode_lookup_response(result))
+        self.provider
+            .lookup_with_scratch(request, memory, self.cluster_scratch)
     }
 }
 
@@ -1741,50 +1811,12 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize, const C: usi
         request: &[u8; READ_REQUEST_BYTES],
         memory: &mut [u8],
     ) -> Result<[u8; READ_RESPONSE_BYTES], ProtocolError> {
-        self.staging.fill(0);
-        self.cluster_scratch.fill(0);
-        let result = (|| {
-            let request = decode_read_request(request, memory.len() as u64)?;
-            let start = usize::try_from(request.output.offset())
-                .map_err(|_| ProtocolError::InvalidRequest)?;
-            let length = usize::try_from(request.output.length())
-                .map_err(|_| ProtocolError::InvalidRequest)?;
-            let end = start
-                .checked_add(length)
-                .ok_or(ProtocolError::InvalidRequest)?;
-            let output = memory
-                .get_mut(start..end)
-                .ok_or(ProtocolError::InvalidRequest)?;
-            let staging = self
-                .staging
-                .get_mut(..length)
-                .ok_or(ProtocolError::InvalidRequest)?;
-            let result = self
-                .provider
-                .read_open_file::<C>(
-                    request.volume,
-                    request.generation,
-                    request.file,
-                    request.offset,
-                    output,
-                    staging,
-                    self.cluster_scratch,
-                )
-                .map(|()| length as u64)
-                .map_err(|error| match error {
-                    Fat32OpenReadError::Open(_) => ReadError::StaleObject,
-                    Fat32OpenReadError::Filesystem(Fat32Error::FatRead)
-                    | Fat32OpenReadError::Filesystem(Fat32Error::DirectoryRead)
-                    | Fat32OpenReadError::Filesystem(Fat32Error::FileRead) => {
-                        ReadError::IoFailure
-                    }
-                    Fat32OpenReadError::Filesystem(_) => ReadError::InvalidRequest,
-                });
-            Ok(encode_read_response(result))
-        })();
-        self.staging.fill(0);
-        self.cluster_scratch.fill(0);
-        result
+        self.provider.read_with_scratch::<C>(
+            request,
+            memory,
+            self.staging,
+            self.cluster_scratch,
+        )
     }
 }
 
