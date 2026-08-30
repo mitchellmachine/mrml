@@ -5,6 +5,7 @@
 //! Native MRML storage does not inherit FAT authority or namespace semantics.
 
 mod service_loop;
+mod dispatch_service;
 mod mount_service_loop;
 mod lookup_service_loop;
 mod open_service_loop;
@@ -34,6 +35,10 @@ use mrml_interface_storage_filesystem_v3::{
 pub use service_loop::{
     Fat32ServiceLoop, Fat32ServiceLoopError, Fat32ServiceSyscalls, ReceivedFat32Envelope,
 };
+pub use dispatch_service::{
+    Fat32DispatchSyscalls, ReceivedFat32DispatchEnvelope, FAT32_DISPATCH_REQUEST_BYTES,
+    FAT32_DISPATCH_RESPONSE_BYTES,
+};
 pub use mount_service_loop::{
     Fat32MountServiceLoop, Fat32MountServiceLoopError, Fat32MountServiceSyscalls,
     ReceivedFat32MountEnvelope,
@@ -55,9 +60,9 @@ pub use unmount_service_loop::{
     ReceivedFat32UnmountEnvelope,
 };
 pub use userspace_syscall_adapter::{
-    Fat32LookupUserspaceSyscalls, Fat32MountUserspaceSyscalls, Fat32RawSyscall, Fat32SyscallFrame,
-    Fat32OpenUserspaceSyscalls, Fat32ReadUserspaceSyscalls, Fat32UnmountUserspaceSyscalls,
-    Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
+    Fat32DispatchUserspaceSyscalls, Fat32LookupUserspaceSyscalls, Fat32MountUserspaceSyscalls,
+    Fat32OpenUserspaceSyscalls, Fat32RawSyscall, Fat32ReadUserspaceSyscalls, Fat32SyscallFrame,
+    Fat32UnmountUserspaceSyscalls, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;
