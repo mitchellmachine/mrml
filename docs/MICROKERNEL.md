@@ -7251,6 +7251,20 @@ Patent review: `NOT_TRIGGERED` — this is a conventional typestate restriction
 over the existing digest comparison and isolation reservation. See
 `docs/patents/REVIEW_LOG.md`.
 
+Component-service launch now has an additive attached construction path for one
+exact read-only launch-data object and one separately attenuated dependency
+endpoint. Attachment creation requires exact `READ` and `SIGNAL` capabilities,
+binds the admitted domain, SystemRelease, policy, association, object, and
+dependency generations, and rejects overbroad or substituted authority before
+either placement backend runs. The selected backend must construct both
+projections atomically before the route commits; backend failure records the
+domain unavailable and never tries another placement. Kernel passes 635 focused
+Linux-host tests.
+
+Patent review: `NOT_TRIGGERED` — this adds conventional capability attenuation
+and atomic launch sequencing to the existing isolation transaction. See
+`docs/patents/REVIEW_LOG.md`.
+
 Stable configuration commit now preserves the complete linear prepared owner on
 both configuration-capability and storage-authority denial. The caller receives
 the same checkpoint identity, revision, retained root binding, and prepared file

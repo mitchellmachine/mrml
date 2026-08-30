@@ -5,8 +5,8 @@ use mrml_package_format::{
 };
 
 use crate::{
-    ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetTable, CpuResourceError,
-    ObjectId, VcpuReservationId,
+    ArtifactKind, Capability, CapabilityError, CapabilitySpace, CpuBudgetId, CpuBudgetTable,
+    CpuResourceError, ObjectId, Rights, VcpuReservationId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -303,6 +303,155 @@ pub trait IsolationServiceBackend {
     fn launch_microvm_service(
         &mut self,
         spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>>;
+
+    fn revoke(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentServiceLaunchAttachment {
+    domain: ObjectId,
+    system_generation: u64,
+    policy_generation: u64,
+    association_generation: u64,
+    launch_data_object: ObjectId,
+    launch_data_generation: u64,
+    launch_data_bytes: u32,
+    launch_data: Capability,
+    dependency_endpoint_object: ObjectId,
+    dependency_endpoint_generation: u64,
+    dependency_endpoint: Capability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceLaunchAttachmentError {
+    InvalidIdentity,
+    InvalidGeneration,
+    InvalidLength,
+    Capability(CapabilityError),
+    WrongLaunchDataObject,
+    WrongDependencyEndpoint,
+}
+
+impl ComponentServiceLaunchAttachment {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<const C: usize>(
+        spec: IsolationServiceSpec,
+        association_generation: u64,
+        launch_data_object: ObjectId,
+        launch_data_generation: u64,
+        launch_data_bytes: u32,
+        launch_data: Capability,
+        dependency_endpoint_object: ObjectId,
+        dependency_endpoint_generation: u64,
+        dependency_endpoint: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<Self, ComponentServiceLaunchAttachmentError> {
+        if launch_data_object.0 == 0
+            || dependency_endpoint_object.0 == 0
+            || launch_data_object == dependency_endpoint_object
+        {
+            return Err(ComponentServiceLaunchAttachmentError::InvalidIdentity);
+        }
+        if association_generation == 0
+            || launch_data_generation == 0
+            || dependency_endpoint_generation == 0
+        {
+            return Err(ComponentServiceLaunchAttachmentError::InvalidGeneration);
+        }
+        if launch_data_bytes == 0 || launch_data_bytes > 4096 {
+            return Err(ComponentServiceLaunchAttachmentError::InvalidLength);
+        }
+        let actual_data = capabilities
+            .authorize_exact(launch_data, Rights::READ)
+            .map_err(ComponentServiceLaunchAttachmentError::Capability)?;
+        if actual_data != launch_data_object {
+            return Err(ComponentServiceLaunchAttachmentError::WrongLaunchDataObject);
+        }
+        let actual_endpoint = capabilities
+            .authorize_exact(dependency_endpoint, Rights::SIGNAL)
+            .map_err(ComponentServiceLaunchAttachmentError::Capability)?;
+        if actual_endpoint != dependency_endpoint_object {
+            return Err(ComponentServiceLaunchAttachmentError::WrongDependencyEndpoint);
+        }
+        Ok(Self {
+            domain: spec.domain(),
+            system_generation: spec.system_generation(),
+            policy_generation: spec.policy_generation(),
+            association_generation,
+            launch_data_object,
+            launch_data_generation,
+            launch_data_bytes,
+            launch_data,
+            dependency_endpoint_object,
+            dependency_endpoint_generation,
+            dependency_endpoint,
+        })
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.domain
+    }
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
+    }
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+    pub const fn association_generation(self) -> u64 {
+        self.association_generation
+    }
+    pub const fn launch_data_object(self) -> ObjectId {
+        self.launch_data_object
+    }
+    pub const fn launch_data_generation(self) -> u64 {
+        self.launch_data_generation
+    }
+    pub const fn launch_data_bytes(self) -> u32 {
+        self.launch_data_bytes
+    }
+    pub const fn launch_data(self) -> Capability {
+        self.launch_data
+    }
+    pub const fn dependency_endpoint_object(self) -> ObjectId {
+        self.dependency_endpoint_object
+    }
+    pub const fn dependency_endpoint_generation(self) -> u64 {
+        self.dependency_endpoint_generation
+    }
+    pub const fn dependency_endpoint(self) -> Capability {
+        self.dependency_endpoint
+    }
+
+    fn matches(self, spec: IsolationServiceSpec) -> bool {
+        self.domain == spec.domain()
+            && self.system_generation == spec.system_generation()
+            && self.policy_generation == spec.policy_generation()
+    }
+}
+
+/// Atomic placement boundary for a service whose construction requires one
+/// read-only launch-data object and one separately attenuated dependency
+/// endpoint.
+///
+/// Implementations must project both capabilities into the same fresh domain
+/// generation and publish no endpoint or ready signal until both projections
+/// and service construction succeed. Failure must revoke and erase all partial
+/// mappings, capabilities, device state, and domain memory.
+pub unsafe trait IsolationAttachedServiceBackend {
+    type Endpoint;
+    type Error;
+
+    fn launch_native_service_attached(
+        &mut self,
+        spec: IsolationServiceSpec,
+        attachment: ComponentServiceLaunchAttachment,
+    ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>>;
+
+    fn launch_microvm_service_attached(
+        &mut self,
+        spec: IsolationServiceSpec,
+        attachment: ComponentServiceLaunchAttachment,
     ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>>;
 
     fn revoke(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error>;
@@ -907,6 +1056,109 @@ pub fn launch_prepared_component_service<B: IsolationServiceBackend, const DOMAI
     };
     launch_prepared_isolation_service_route(admission, backend, launch.into_route())
         .map_err(PreparedComponentServiceRouteError::Route)
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum PreparedAttachedComponentServiceRouteError<E, Endpoint> {
+    Artifact {
+        launch: PreparedComponentServiceLaunch,
+        attachment: ComponentServiceLaunchAttachment,
+        error: ComponentServiceArtifactError,
+    },
+    AttachmentMismatch {
+        launch: VerifiedComponentServiceLaunch,
+        attachment: ComponentServiceLaunchAttachment,
+    },
+    Admission(IsolationLaunchError),
+    Backend {
+        reason: IsolationUnavailableReason,
+        error: E,
+    },
+    Rollback {
+        admission: IsolationLaunchError,
+        error: E,
+        endpoint: Endpoint,
+        prepared: PreparedIsolationServiceRoute,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn launch_prepared_component_service_with_attachment<
+    B: IsolationAttachedServiceBackend,
+    const DOMAINS: usize,
+>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    backend: &mut B,
+    launch: PreparedComponentServiceLaunch,
+    attachment: ComponentServiceLaunchAttachment,
+    consumer_kind: ArtifactKind,
+    consumer_digest: &[u8; 64],
+    provider_kind: ArtifactKind,
+    provider_digest: &[u8; 64],
+) -> Result<
+    RoutedIsolationService<B::Endpoint>,
+    PreparedAttachedComponentServiceRouteError<B::Error, B::Endpoint>,
+> {
+    let launch = match launch.verify(
+        consumer_kind,
+        consumer_digest,
+        provider_kind,
+        provider_digest,
+    ) {
+        Ok(launch) => launch,
+        Err((launch, error)) => {
+            return Err(PreparedAttachedComponentServiceRouteError::Artifact {
+                launch,
+                attachment,
+                error,
+            });
+        }
+    };
+    let spec = launch.spec();
+    if !attachment.matches(spec) {
+        return Err(
+            PreparedAttachedComponentServiceRouteError::AttachmentMismatch { launch, attachment },
+        );
+    }
+    let prepared = launch.into_route();
+    let launched = match spec.placement() {
+        IsolationPlacement::NativeService => {
+            backend.launch_native_service_attached(spec, attachment)
+        }
+        IsolationPlacement::Microvm => backend.launch_microvm_service_attached(spec, attachment),
+        _ => unreachable!("IsolationServiceSpec rejected non-service placement"),
+    };
+    let endpoint = match launched {
+        Ok(endpoint) => endpoint,
+        Err(failure) => {
+            prepared
+                .unavailable(admission, failure.reason)
+                .map_err(PreparedAttachedComponentServiceRouteError::Admission)?;
+            return Err(PreparedAttachedComponentServiceRouteError::Backend {
+                reason: failure.reason,
+                error: failure.error,
+            });
+        }
+    };
+    match prepared.commit(admission, endpoint) {
+        Ok(routed) => Ok(routed),
+        Err((prepared, admission_error, endpoint)) => match backend.revoke(&endpoint) {
+            Ok(()) => {
+                prepared
+                    .cancel(admission)
+                    .map_err(PreparedAttachedComponentServiceRouteError::Admission)?;
+                Err(PreparedAttachedComponentServiceRouteError::Admission(
+                    admission_error,
+                ))
+            }
+            Err(error) => Err(PreparedAttachedComponentServiceRouteError::Rollback {
+                admission: admission_error,
+                error,
+                endpoint,
+                prepared,
+            }),
+        },
+    }
 }
 
 pub trait IsolationApplicationBackend {
@@ -1576,6 +1828,34 @@ mod tests {
         microvm_launches: usize,
         failure: Option<IsolationUnavailableReason>,
         revoke_fails: bool,
+        attachment: Option<ComponentServiceLaunchAttachment>,
+    }
+
+    unsafe impl IsolationAttachedServiceBackend for DualBackend {
+        type Endpoint = u64;
+        type Error = BackendError;
+
+        fn launch_native_service_attached(
+            &mut self,
+            spec: IsolationServiceSpec,
+            attachment: ComponentServiceLaunchAttachment,
+        ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>> {
+            self.attachment = Some(attachment);
+            self.launch_native_service(spec)
+        }
+
+        fn launch_microvm_service_attached(
+            &mut self,
+            spec: IsolationServiceSpec,
+            attachment: ComponentServiceLaunchAttachment,
+        ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>> {
+            self.attachment = Some(attachment);
+            self.launch_microvm_service(spec)
+        }
+
+        fn revoke(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+            IsolationServiceBackend::revoke(self, endpoint)
+        }
     }
 
     impl IsolationServiceBackend for DualBackend {
@@ -1670,6 +1950,7 @@ mod tests {
             microvm_launches: 0,
             failure: None,
             revoke_fails: false,
+            attachment: None,
         }
     }
 
@@ -1683,6 +1964,26 @@ mod tests {
             7,
             TotalMicrovmClass::MicrovmEligible,
             placement,
+        )
+        .unwrap()
+    }
+
+    fn component_launch(
+        table: &mut IsolationAdmissionTable<1>,
+        spec: IsolationServiceSpec,
+    ) -> PreparedComponentServiceLaunch {
+        let route = prepare_isolation_service_route(table, spec).unwrap();
+        PreparedComponentServiceLaunch::bind(
+            route,
+            spec.interface(),
+            spec.interface_generation(),
+            spec.provider_generation(),
+            spec.system_generation(),
+            [0x51; 64],
+            [0x61; 64],
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
         )
         .unwrap()
     }
@@ -2222,6 +2523,128 @@ mod tests {
             .commit(&mut table, 0x55aa_u64)
             .unwrap();
         assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn attached_component_launch_projects_only_exact_read_and_signal_authority() {
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let launch = component_launch(&mut table, spec);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let data = capabilities.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let endpoint = capabilities.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            spec,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            &capabilities,
+        )
+        .unwrap();
+        let mut backend = backend();
+        let routed = launch_prepared_component_service_with_attachment(
+            &mut table,
+            &mut backend,
+            launch,
+            attachment,
+            ArtifactKind::ServiceImage,
+            &[0x18; 64],
+            ArtifactKind::ServiceImage,
+            &[0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(backend.attachment, Some(attachment));
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
+        assert_eq!(routed.domain(), spec.domain());
+        assert_eq!(attachment.association_generation(), 12);
+        assert_eq!(attachment.launch_data_bytes(), 144);
+        assert_eq!(attachment.launch_data(), data);
+        assert_eq!(attachment.dependency_endpoint(), endpoint);
+        assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn attachment_identity_or_rights_substitution_fails_before_backend_launch() {
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let launch = component_launch(&mut table, spec);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let data = capabilities
+            .insert(ObjectId(0x80), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let endpoint = capabilities.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        assert_eq!(
+            ComponentServiceLaunchAttachment::new(
+                spec,
+                12,
+                ObjectId(0x80),
+                4,
+                144,
+                data,
+                ObjectId(0x81),
+                7,
+                endpoint,
+                &capabilities,
+            ),
+            Err(ComponentServiceLaunchAttachmentError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        );
+
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let data = capabilities.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let endpoint = capabilities.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let other = IsolationServiceSpec::new(
+            ObjectId(0x44),
+            spec.interface(),
+            spec.interface_generation(),
+            spec.provider_generation(),
+            spec.system_generation(),
+            spec.policy_generation(),
+            spec.class(),
+            spec.placement(),
+        )
+        .unwrap();
+        let attachment = ComponentServiceLaunchAttachment::new(
+            other,
+            12,
+            ObjectId(0x80),
+            4,
+            144,
+            data,
+            ObjectId(0x81),
+            7,
+            endpoint,
+            &capabilities,
+        )
+        .unwrap();
+        let mut backend = backend();
+        let error = launch_prepared_component_service_with_attachment(
+            &mut table,
+            &mut backend,
+            launch,
+            attachment,
+            ArtifactKind::ServiceImage,
+            &[0x18; 64],
+            ArtifactKind::ServiceImage,
+            &[0x2f; 64],
+        )
+        .unwrap_err();
+        let PreparedAttachedComponentServiceRouteError::AttachmentMismatch { launch, .. } = error
+        else {
+            panic!("substituted attachment must return the retained launch");
+        };
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 0));
+        launch.into_route().cancel(&mut table).unwrap();
     }
 
     #[test]
