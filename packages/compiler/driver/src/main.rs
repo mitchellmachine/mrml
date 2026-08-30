@@ -2040,13 +2040,6 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                     identity.section()
                 ));
             }
-            if let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target {
-                return Err(anyhow!(
-                    "selected PE import table emission is unsupported: {}!{}",
-                    library,
-                    symbol
-                ));
-            }
             if let LinkRelocationTarget::PeTlsSection { identity, .. } = relocation.target
                 && !tls_section_defined(identity)
             {

@@ -8089,6 +8089,101 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
                 .ok_or(LinkerError::OffsetOverflow)?,
         )
         .ok_or(LinkerError::OffsetOverflow)?;
+    let mut imports = [None; MAX_LINK_INPUTS];
+    let mut import_count = 0usize;
+    for input in inputs {
+        for relocation in input.relocations {
+            let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target
+            else {
+                continue;
+            };
+            validate_pe_import_library(library)?;
+            validate_symbol(symbol)?;
+            if imports[..import_count]
+                .iter()
+                .any(|import| *import == Some((library, symbol)))
+            {
+                continue;
+            }
+            let slot = imports
+                .get_mut(import_count)
+                .ok_or(LinkerError::TooManyInputs)?;
+            *slot = Some((library, symbol));
+            import_count += 1;
+        }
+    }
+    let mut import_libraries = [None; MAX_LINK_INPUTS];
+    let mut import_library_count = 0usize;
+    for (library, _) in imports[..import_count].iter().flatten().copied() {
+        if import_libraries[..import_library_count]
+            .iter()
+            .any(|existing| *existing == Some(library))
+        {
+            continue;
+        }
+        import_libraries[import_library_count] = Some(library);
+        import_library_count += 1;
+    }
+    let import_directory_offset = align(readonly_size, 8)?;
+    let mut import_lookup_offsets = [0usize; MAX_LINK_INPUTS];
+    let mut import_hint_offsets = [0usize; MAX_LINK_INPUTS];
+    let mut import_library_name_offsets = [0usize; MAX_LINK_INPUTS];
+    if import_count != 0 {
+        readonly_size = import_directory_offset
+            .checked_add(
+                import_library_count
+                    .checked_add(1)
+                    .and_then(|count| count.checked_mul(20))
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?;
+        for (library_index, library) in import_libraries[..import_library_count]
+            .iter()
+            .flatten()
+            .copied()
+            .enumerate()
+        {
+            readonly_size = align(readonly_size, 8)?;
+            for (import_index, import) in imports[..import_count].iter().enumerate() {
+                if import.is_some_and(|(candidate, _)| candidate == library) {
+                    import_lookup_offsets[import_index] = readonly_size;
+                    readonly_size = readonly_size
+                        .checked_add(8)
+                        .ok_or(LinkerError::OffsetOverflow)?;
+                }
+            }
+            readonly_size = readonly_size
+                .checked_add(8)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            import_library_name_offsets[library_index] = 0;
+        }
+        for (index, (_, symbol)) in imports[..import_count]
+            .iter()
+            .flatten()
+            .copied()
+            .enumerate()
+        {
+            readonly_size = align(readonly_size, 2)?;
+            import_hint_offsets[index] = readonly_size;
+            readonly_size = readonly_size
+                .checked_add(2)
+                .and_then(|size| size.checked_add(symbol.len()))
+                .and_then(|size| size.checked_add(1))
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+        for (index, library) in import_libraries[..import_library_count]
+            .iter()
+            .flatten()
+            .copied()
+            .enumerate()
+        {
+            import_library_name_offsets[index] = readonly_size;
+            readonly_size = readonly_size
+                .checked_add(library.len())
+                .and_then(|size| size.checked_add(1))
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
     if writable_data.len() > MAX_LINK_INPUTS {
         return Err(LinkerError::TooManyInputs);
     }
@@ -8123,7 +8218,29 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             .ok_or(LinkerError::OffsetOverflow)?;
     }
     let mut writable_offsets = [0usize; MAX_LINK_INPUTS];
+    let mut import_address_offsets = [0usize; MAX_LINK_INPUTS];
     let mut writable_size = 0usize;
+    if import_count != 0 {
+        for library in import_libraries[..import_library_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            writable_size = align(writable_size, 8)?;
+            for (import_index, import) in imports[..import_count].iter().enumerate() {
+                if import.is_some_and(|(candidate, _)| candidate == library) {
+                    import_address_offsets[import_index] = writable_size;
+                    writable_size = writable_size
+                        .checked_add(8)
+                        .ok_or(LinkerError::OffsetOverflow)?;
+                }
+            }
+            writable_size = writable_size
+                .checked_add(8)
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    let import_address_size = writable_size;
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] {
             continue;
@@ -8300,6 +8417,20 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     patch_u64(bytes, optional + 88, 0x10_0000)?;
     patch_u64(bytes, optional + 96, 0x1000)?;
     patch_u32(bytes, optional + 108, 16)?;
+    if import_count != 0 {
+        patch_u32(
+            bytes,
+            optional + 120,
+            to_u32_link(readonly_rva + import_directory_offset)?,
+        )?;
+        patch_u32(
+            bytes,
+            optional + 124,
+            to_u32_link((import_library_count + 1) * 20)?,
+        )?;
+        patch_u32(bytes, optional + 208, to_u32_link(writable_rva)?)?;
+        patch_u32(bytes, optional + 212, to_u32_link(import_address_size)?)?;
+    }
     if !runtime_functions.is_empty() {
         patch_u32(
             bytes,
@@ -8341,6 +8472,70 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             readonly_raw_size,
             readonly_raw,
             0x4000_0040,
+        )?;
+    }
+    for (library_index, library) in import_libraries[..import_library_count]
+        .iter()
+        .flatten()
+        .copied()
+        .enumerate()
+    {
+        let first_import = imports[..import_count]
+            .iter()
+            .position(|import| import.is_some_and(|(candidate, _)| candidate == library))
+            .ok_or(LinkerError::InvalidCoff)?;
+        let descriptor = readonly_raw + import_directory_offset + library_index * 20;
+        patch_u32(
+            bytes,
+            descriptor,
+            to_u32_link(readonly_rva + import_lookup_offsets[first_import])?,
+        )?;
+        patch_u32(
+            bytes,
+            descriptor + 12,
+            to_u32_link(readonly_rva + import_library_name_offsets[library_index])?,
+        )?;
+        patch_u32(
+            bytes,
+            descriptor + 16,
+            to_u32_link(writable_rva + import_address_offsets[first_import])?,
+        )?;
+    }
+    for (index, (_, symbol)) in imports[..import_count]
+        .iter()
+        .flatten()
+        .copied()
+        .enumerate()
+    {
+        let hint_name_rva = readonly_rva
+            .checked_add(import_hint_offsets[index])
+            .ok_or(LinkerError::OffsetOverflow)?;
+        patch_u64(
+            bytes,
+            readonly_raw + import_lookup_offsets[index],
+            u64::try_from(hint_name_rva).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        patch_u64(
+            bytes,
+            writable_raw + import_address_offsets[index],
+            u64::try_from(hint_name_rva).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        copy_at(
+            bytes,
+            readonly_raw + import_hint_offsets[index] + 2,
+            symbol.as_bytes(),
+        )?;
+    }
+    for (index, library) in import_libraries[..import_library_count]
+        .iter()
+        .flatten()
+        .copied()
+        .enumerate()
+    {
+        copy_at(
+            bytes,
+            readonly_raw + import_library_name_offsets[index],
+            library.as_bytes(),
         )?;
     }
     if writable_size != 0 {
@@ -8662,6 +8857,36 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     }
     for (input, layout) in inputs.iter().zip(linked.layouts.iter()) {
         for relocation in input.relocations {
+            if let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target {
+                let import_index = imports[..import_count]
+                    .iter()
+                    .position(|import| *import == Some((library, symbol)))
+                    .ok_or(LinkerError::UndefinedSymbol)?;
+                let place = layout
+                    .text
+                    .checked_add(relocation.offset)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let target_rva = writable_rva
+                    .checked_add(import_address_offsets[import_index])
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let place_rva = TEXT_RVA
+                    .checked_add(place)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let displacement = i128::try_from(target_rva)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    .checked_add(i128::from(relocation.addend))
+                    .and_then(|value| value.checked_sub(i128::try_from(place_rva).ok()?))
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or(LinkerError::RelocationOverflow)?;
+                patch_i32(
+                    bytes,
+                    HEADERS
+                        .checked_add(place)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                    displacement,
+                )?;
+                continue;
+            }
             if let LinkRelocationTarget::PeTlsSection {
                 identity,
                 offset,
@@ -13002,6 +13227,42 @@ mod tests {
         assert_eq!(read_image_u64(0x420), 0);
         assert_eq!(read_i32(pe.bytes(), 0x200).unwrap(), 4);
         assert_eq!(&pe.bytes()[0x600..0x608], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn emits_bounded_pe_import_directory_and_writable_iat() {
+        let relocation = [LinkRelocation {
+            offset: 2,
+            target: LinkRelocationTarget::PeImportAddress {
+                library: "demo.dll",
+                symbol: "Ping",
+            },
+            addend: -4,
+        }];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xff, 0x25, 0, 0, 0, 0],
+            readonly_data: &[],
+            relocations: &relocation,
+        };
+        let pe = link_x86_64_pe::<2048, 8192>(&[input], "entry").unwrap();
+        let read_image_u64 =
+            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
+
+        assert_eq!(read_u32(pe.bytes(), 0x110).unwrap(), 0x2000);
+        assert_eq!(read_u32(pe.bytes(), 0x114).unwrap(), 40);
+        assert_eq!(read_u32(pe.bytes(), 0x168).unwrap(), 0x3000);
+        assert_eq!(read_u32(pe.bytes(), 0x16c).unwrap(), 16);
+        assert_eq!(read_u32(pe.bytes(), 0x400).unwrap(), 0x2028);
+        assert_eq!(read_u32(pe.bytes(), 0x40c).unwrap(), 0x203f);
+        assert_eq!(read_u32(pe.bytes(), 0x410).unwrap(), 0x3000);
+        assert_eq!(read_image_u64(0x428), 0x2038);
+        assert_eq!(read_image_u64(0x600), 0x2038);
+        assert_eq!(&pe.bytes()[0x43a..0x43e], b"Ping");
+        assert_eq!(&pe.bytes()[0x43f..0x447], b"demo.dll");
+        assert_eq!(read_i32(pe.bytes(), 0x202).unwrap(), 0x1ffa);
     }
 
     #[test]
