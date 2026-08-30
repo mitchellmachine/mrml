@@ -10968,3 +10968,18 @@ memory and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — explicit consuming acknowledgement of an idle
 scheduler result is conventional linear lifecycle handling. See
 `docs/patents/REVIEW_LOG.md`.
+
+The shared-runtime native Zstd backend now retains a provider-retirement
+dispatch instead of discarding the valid successor selected for its
+authenticated caller. The token is stored before address-space cleanup, remains
+available across uncertain erasure and retry, and must be explicitly taken by
+the owner. A replacement provider cannot launch while that dispatch handoff is
+pending. The Linux-host Zstd suite passes 27 tests and its release build passes;
+the configuration-service integration suite passes 53 tests and its release
+build passes. Tests prove caller identity/context retention, cleanup-failure
+retention, and relaunch denial in memory; they do not execute privileged context
+entry.
+
+Patent review: `NOT_TRIGGERED` — retaining a one-use scheduler result across
+retryable service cleanup and blocking replacement until handoff is conventional
+linear lifecycle state management. See `docs/patents/REVIEW_LOG.md`.

@@ -9,7 +9,7 @@ use mrml_kernel::{
     IsolationServiceSpec, IsolationUnavailableReason, ObjectId, Priority, ReceivedMessage, Rights,
     RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
     ServiceId, ServiceState, ServiceSupervisor, SharedMemoryBindings, TaskId, TaskRuntime,
-    TaskRuntimeError, TotalMicrovmClass, VmId,
+    TaskRuntimeError, TaskTerminationDispatch, TotalMicrovmClass, VmId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +104,7 @@ impl ZstdNativeServiceEndpoint {
 pub enum ZstdNativeServiceError<E> {
     Binding(ZstdServiceBindingError),
     AlreadyRunning,
+    RetirementDispatchPending,
     WrongEndpoint,
     Runtime(TaskRuntimeError),
     Capability(CapabilityError),
@@ -132,6 +133,7 @@ pub struct ZstdNativeServiceBackend<
     priority: Priority,
     context: UserContext,
     active: Option<ZstdNativeServiceEndpoint>,
+    retirement_dispatch: Option<TaskTerminationDispatch>,
 }
 
 impl<'a, E, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
@@ -171,11 +173,20 @@ impl<'a, E, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
             priority,
             context,
             active: None,
+            retirement_dispatch: None,
         })
     }
 
     pub const fn active(&self) -> Option<ZstdNativeServiceEndpoint> {
         self.active
+    }
+
+    pub fn pending_retirement_dispatch(&self) -> Option<&TaskTerminationDispatch> {
+        self.retirement_dispatch.as_ref()
+    }
+
+    pub fn take_retirement_dispatch(&mut self) -> Option<TaskTerminationDispatch> {
+        self.retirement_dispatch.take()
     }
 
     pub fn runtime_mut(&mut self) -> &mut TaskRuntime<TASKS, CAPS> {
@@ -240,6 +251,12 @@ impl<E: ServiceAddressSpaceEraser, const TASKS: usize, const CAPS: usize, const 
                 ZstdNativeServiceError::AlreadyRunning,
             ));
         }
+        if self.retirement_dispatch.is_some() {
+            return Err(IsolationBackendFailure::new(
+                IsolationUnavailableReason::NativeServiceResource,
+                ZstdNativeServiceError::RetirementDispatchPending,
+            ));
+        }
         if spec.interface() != self.expected.interface
             || spec.interface_generation() != INTERFACE_GENERATION
             || spec.provider_generation() != self.expected.provider_generation
@@ -295,10 +312,12 @@ impl<E: ServiceAddressSpaceEraser, const TASKS: usize, const CAPS: usize, const 
             .map_err(ZstdNativeServiceError::Service)?
         {
             ServiceState::Running => {
-                self.supervisor
+                let retirement = self
+                    .supervisor
                     .exit_current(self.runtime)
-                    .map_err(ZstdNativeServiceError::Service)?
-                    .cleanup
+                    .map_err(ZstdNativeServiceError::Service)?;
+                self.retirement_dispatch = Some(retirement.dispatch);
+                retirement.cleanup
             }
             ServiceState::Exited | ServiceState::Faulted => self
                 .supervisor
@@ -960,6 +979,21 @@ mod tests {
         assert_eq!(&buffer_backend.bytes[64..69], b"xxxxx");
         native.revoke(&native_endpoint).unwrap();
         assert_eq!(native.active(), None);
+        assert!(matches!(
+            native.launch_native_service(service_spec(
+                interface,
+                11,
+                7,
+                IsolationPlacement::NativeService,
+            )),
+            Err(failure)
+                if failure.error() == &ZstdNativeServiceError::RetirementDispatchPending
+        ));
+        let dispatch = native.take_retirement_dispatch().unwrap();
+        assert_eq!(
+            dispatch.user(),
+            Some((caller, context(0x20_0000, 0x40_0000, 0x0000_7000_0000_0000)))
+        );
         drop(native);
         assert_eq!(eraser.erased, Some((provider, provider_context)));
         assert_eq!(
@@ -1118,8 +1152,17 @@ mod tests {
             ))
         );
         assert_eq!(native.active(), Some(endpoint));
+        assert_eq!(
+            native
+                .pending_retirement_dispatch()
+                .and_then(|dispatch| dispatch.user())
+                .map(|(task, _)| task),
+            Some(caller)
+        );
         native.revoke(&endpoint).unwrap();
         assert_eq!(native.active(), None);
+        let dispatch = native.take_retirement_dispatch().unwrap();
+        assert_eq!(dispatch.user().map(|(task, _)| task), Some(caller));
         drop(native);
         assert_eq!(eraser.attempts, 2);
         assert_eq!(eraser.erased, Some((endpoint.task(), provider_context)));
