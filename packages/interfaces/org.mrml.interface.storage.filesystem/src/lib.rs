@@ -40,6 +40,23 @@ pub trait FilesystemServiceEndpoint {
     ) -> Result<[u8; PROBE_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait FilesystemLookupTransport {
+    fn lookup(
+        &mut self,
+        request: &[u8; LOOKUP_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemLookupEndpoint {
+    fn invoke_lookup(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; LOOKUP_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub struct IsolatedFilesystemTransport<E> {
     endpoint: OpaqueHandle,
     maximum_memory_bytes: usize,
@@ -84,6 +101,20 @@ impl<E: FilesystemServiceEndpoint> FilesystemTransport for IsolatedFilesystemTra
         }
         decode_probe_request(request, memory.len() as u64)?;
         self.service.invoke_probe(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemLookupEndpoint> FilesystemLookupTransport for IsolatedFilesystemTransport<E> {
+    fn lookup(
+        &mut self,
+        request: &[u8; LOOKUP_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_lookup_request(request, memory.len() as u64)?;
+        self.service.invoke_lookup(self.endpoint, request, memory)
     }
 }
 
@@ -390,6 +421,42 @@ mod tests {
         assert_eq!(
             decode_lookup_response(&encode_lookup_response(Ok(0))),
             Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    struct LookupEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemLookupEndpoint for LookupEndpoint {
+        fn invoke_lookup(
+            &mut self,
+            endpoint: OpaqueHandle,
+            _request: &[u8; LOOKUP_REQUEST_BYTES],
+            _memory: &mut [u8],
+        ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            Ok(encode_lookup_response(Ok(41)))
+        }
+    }
+
+    #[test]
+    fn lookup_transport_preserves_endpoint_generation_and_memory_bound() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let directory = OpaqueHandle::new(9, 3).unwrap();
+        let name = BorrowedReadView::within(8, 8, 32).unwrap();
+        let request = encode_lookup_request(volume, 12, directory, name).unwrap();
+        let service = LookupEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_lookup_response(&transport.lookup(&request, &mut [0; 32]).unwrap()),
+            Ok(Ok(41))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        assert_eq!(
+            transport.lookup(&request, &mut [0; 33]),
+            Err(ProtocolError::InvalidRequest)
         );
     }
 }

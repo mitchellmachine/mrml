@@ -7384,7 +7384,9 @@ granting open authority. Requests bind exact volume, mount, and directory
 generations plus one bounded borrowed name range; responses contain either one
 nonzero object identity or a typed zero-identity failure. Cross-operation
 headers, stale ranges, reserved bytes, zero success identities, and status/data
-mixtures fail closed. Four focused Linux-host interface tests pass.
+mixtures fail closed. The isolated lookup transport retains the exact endpoint
+generation and rejects memory beyond its admitted bound before invocation. Five
+focused Linux-host interface tests pass.
 
 Patent review: `NOT_TRIGGERED` — fixed canonical framing, bounded borrowed
 ranges, typed statuses, and reserved-byte validation are conventional IPC codec

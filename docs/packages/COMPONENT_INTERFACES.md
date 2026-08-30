@@ -421,7 +421,9 @@ tests pass on both hosts. Its lookup operation now also has canonical request an
 response codecs binding volume, mount, and directory generations plus one
 bounded borrowed name range. Success returns a nonzero object identity; typed
 failure carries no object, and reserved or cross-operation bytes fail closed.
-Four focused Linux-host tests pass. The FAT32 provider now consumes the probe boundary through
+The isolated lookup transport retains the exact endpoint generation and rejects
+memory beyond its admitted bound before invocation. Five focused Linux-host tests
+pass. The FAT32 provider now consumes the probe boundary through
 an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
 existing AHCI code was moved intact out of `mrml-storage`, the package advertises
