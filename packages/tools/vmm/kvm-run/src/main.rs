@@ -1035,6 +1035,7 @@ enum LaunchMode {
     PreemptionProbe,
     UserProbe,
     ServiceProbe,
+    DeadlineReceiveProbe,
     InvalidReturnProbe,
     BufferDriftProbe,
     ComponentServiceProbe,
@@ -1065,6 +1066,7 @@ impl LaunchMode {
             "preemption-probe" => Ok(Self::PreemptionProbe),
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
+            "deadline-receive-probe" => Ok(Self::DeadlineReceiveProbe),
             "invalid-return-probe" => Ok(Self::InvalidReturnProbe),
             "buffer-drift-probe" => Ok(Self::BufferDriftProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
@@ -1082,7 +1084,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, deadline-receive-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -1136,6 +1138,21 @@ fn require_buffer_drift_stage(exit: VmExit, expected: u32) -> Result<()> {
             expected,
             exit
         ));
+    }
+    Ok(())
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn require_deadline_receive_proof(exit: VmExit) -> Result<()> {
+    if exit
+        != (VmExit::Io {
+            port: SERVICE_PROBE_PORT,
+            size: 4,
+            write: true,
+            value: 0x2a,
+        })
+    {
+        return Err(anyhow!("deadline-receive proof mismatch: {:?}", exit));
     }
     Ok(())
 }
@@ -2282,6 +2299,7 @@ fn application_main() -> Result<()> {
     let total_service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
@@ -2299,6 +2317,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::GuiApplicationProbe
             | LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
+            | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::BlockServiceProbe
@@ -2336,6 +2355,7 @@ fn application_main() -> Result<()> {
     let service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
@@ -3216,6 +3236,7 @@ fn application_main() -> Result<()> {
         ),
         LaunchMode::TimerProbe
         | LaunchMode::PreemptionProbe
+        | LaunchMode::DeadlineReceiveProbe
         | LaunchMode::ServicePreemptionProbe => {
             system.prepare_timer_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout)
         }
@@ -3329,7 +3350,9 @@ fn application_main() -> Result<()> {
         let local_apic = component_smp_mode
             || matches!(
                 mode,
-                LaunchMode::ServicePreemptionProbe | LaunchMode::SmpServiceMigrationProbe
+                LaunchMode::DeadlineReceiveProbe
+                    | LaunchMode::ServicePreemptionProbe
+                    | LaunchMode::SmpServiceMigrationProbe
             );
         guest = if let Some(launch) = component_launch.as_ref() {
             let ram = component_ram
@@ -3426,7 +3449,9 @@ fn application_main() -> Result<()> {
         };
         if matches!(
             mode,
-            LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
+            LaunchMode::ServiceProbe
+                | LaunchMode::DeadlineReceiveProbe
+                | LaunchMode::ServiceRestartRequestProbe
         ) {
             guest = guest
                 .attach_isolated_service_at(
@@ -3528,7 +3553,9 @@ fn application_main() -> Result<()> {
             || (!component_service_mode && provider_entry != service_entry)
             || (matches!(
                 mode,
-                LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
+                LaunchMode::ServiceProbe
+                    | LaunchMode::DeadlineReceiveProbe
+                    | LaunchMode::ServiceRestartRequestProbe
             ) && (guest.service_entry_at(2) != Some(service_entry)
                 || guest.service_page_table_root_at(2)
                     != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
@@ -4233,6 +4260,16 @@ fn application_main() -> Result<()> {
                 .map_err(|error| anyhow!("KVM block-service execution failed: {:?}", error))?;
         }
         return Err(anyhow!("KVM block-service probe exceeded its stage bound"));
+    } else if mode == LaunchMode::DeadlineReceiveProbe {
+        require_deadline_receive_proof(exit)?;
+        println!(
+            "verified exact deadline receive timeout under KVM: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        exit = VmExit::Halted;
     } else if mode == LaunchMode::InvalidReturnProbe {
         require_invalid_return_stage(exit, 0x26)?;
         exit = VmBackend::run(&mut guest, 0)
@@ -4785,6 +4822,7 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("user probe unexpectedly modified the framebuffer"));
         }
         LaunchMode::ServiceProbe
+        | LaunchMode::DeadlineReceiveProbe
         | LaunchMode::InvalidReturnProbe
         | LaunchMode::BufferDriftProbe
             if marker != [0; 4] =>
@@ -5699,6 +5737,10 @@ mod tests {
             LaunchMode::ServiceProbe
         );
         assert_eq!(
+            LaunchMode::parse("deadline-receive-probe").unwrap(),
+            LaunchMode::DeadlineReceiveProbe
+        );
+        assert_eq!(
             LaunchMode::parse("invalid-return-probe").unwrap(),
             LaunchMode::InvalidReturnProbe
         );
@@ -5783,6 +5825,36 @@ mod tests {
         assert!(require_buffer_drift_stage(stage(0x28), 0x29).is_err());
         assert!(require_buffer_drift_stage(stage(0x28), 0x27).is_err());
         assert!(require_buffer_drift_stage(VmExit::Halted, 0x28).is_err());
+    }
+
+    #[test]
+    fn deadline_receive_proof_is_exact_and_detail_free() {
+        let proof = VmExit::Io {
+            port: SERVICE_PROBE_PORT,
+            size: 4,
+            write: true,
+            value: 0x2a,
+        };
+        assert!(require_deadline_receive_proof(proof).is_ok());
+        assert!(
+            require_deadline_receive_proof(VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x29,
+            })
+            .is_err()
+        );
+        assert!(
+            require_deadline_receive_proof(VmExit::Io {
+                port: SERVICE_CALL_PORT,
+                size: 4,
+                write: true,
+                value: 0x2a,
+            })
+            .is_err()
+        );
+        assert!(require_deadline_receive_proof(VmExit::Halted).is_err());
     }
 
     #[test]

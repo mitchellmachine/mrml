@@ -11448,3 +11448,24 @@ Patent review: `NOT_TRIGGERED` — composing a conventional periodic timer
 interrupt, retained pending-syscall owner, typed timeout completion, and
 scheduler resume does not introduce a new substantial mechanism. See
 `docs/patents/REVIEW_LOG.md`.
+
+The hosted KVM and WHP runners now recognize a distinct
+`deadline-receive-probe` mode. Both select an interrupt-capable kernel guest,
+attach the independently signed service image with local-APIC access, retain
+the existing Total-mode service admission path, and accept only the exact
+32-bit service proof value `0x2a` on the service proof port. A halt, service-call
+trace, wrong port, wrong width, read, or adjacent proof value is not timeout
+evidence. The KVM validator has direct negative coverage for those substitutions.
+
+The Linux-host KVM runner suite passes 16 tests and its release build passes
+through the canonical `mrml` frontend with the existing CUDA-PTX warnings. The
+WHP path was kept structurally symmetric and both edited sources parse under
+Rust 2024 rustfmt, but the Windows build was not available because this host
+lacks the repository's `cross_host_rust_target` component. `/dev/kvm` is also
+absent on this host, so no guest executed and neither KVM nor WHP timeout proof
+is claimed yet. The next evidence gate is to run these exact signed artifacts on
+a host with the corresponding backend.
+
+Patent review: `NOT_TRIGGERED` — selecting an existing hosted launch path and
+exact-matching its bounded proof output is conventional test-harness routing.
+See `docs/patents/REVIEW_LOG.md`.

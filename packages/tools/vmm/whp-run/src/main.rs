@@ -2114,7 +2114,12 @@ fn application_main() -> Result<()> {
         None
     };
     let application_mode = application_package_id.is_some();
-    let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
+    let deadline_receive_mode = arguments.len() == 9 && arguments[5] == "deadline-receive-probe";
+    let service_mode = arguments.len() == 9
+        && matches!(
+            arguments[5].as_str(),
+            "service-probe" | "deadline-receive-probe"
+        );
     let component_release_input_mode =
         arguments.len() == 15 && arguments[5] == "component-release-inputs";
     let component_smp_mode = arguments.len() == 14 && arguments[5] == "component-service-smp-probe";
@@ -3060,6 +3065,8 @@ fn application_main() -> Result<()> {
         )
     } else if component_smp_mode {
         system.prepare_isolated_service_smp_kernel(&executable, handoff.as_slice(), layout)
+    } else if deadline_receive_mode {
+        system.prepare_timer_kernel(&executable, handoff.as_slice(), layout)
     } else if service_mode
         || component_service_mode
         || block_service_mode
@@ -3156,8 +3163,10 @@ fn application_main() -> Result<()> {
         None
     };
     if service_artifact_mode {
-        let local_apic =
-            service_preemption_mode || smp_service_migration_mode || component_smp_mode;
+        let local_apic = deadline_receive_mode
+            || service_preemption_mode
+            || smp_service_migration_mode
+            || component_smp_mode;
         let isolated_stack_pages = if block_service_mode { 256 } else { 8 };
         guest = if let Some(launch) = component_launch.as_ref() {
             let ram = component_ram
@@ -4317,6 +4326,27 @@ fn application_main() -> Result<()> {
                 .map_err(|error| anyhow!("WHP block-service execution failed: {:?}", error))?;
         }
         return Err(anyhow!("WHP block-service probe exceeded its stage bound"));
+    }
+    if deadline_receive_mode {
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x2a,
+            })
+        {
+            return Err(anyhow!("WHP deadline-receive proof mismatch: {:?}", exit));
+        }
+        println!(
+            "verified exact deadline receive timeout under WHP: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        guest.finish()?;
+        return Ok(());
     }
     if service_mode || service_restart_request_mode {
         if exit
