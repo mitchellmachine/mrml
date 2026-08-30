@@ -1731,6 +1731,27 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
     };
     let writable_target_defined =
         |symbol: &str| writable_data.iter().any(|data| data.symbol == symbol);
+    let typed_section_target = |symbol: &str| {
+        inputs.iter().find_map(|input| {
+            core::iter::once(LinkDefinition {
+                symbol: input.symbol,
+                target: input.symbol_target,
+            })
+            .chain(input.additional_definitions.iter().copied())
+            .find_map(|definition| {
+                if definition.symbol != symbol {
+                    return None;
+                }
+                match definition.target {
+                    LinkDefinitionTarget::CoffTextSection { identity, offset }
+                    | LinkDefinitionTarget::CoffSection { identity, offset } => {
+                        Some((identity, offset))
+                    }
+                    _ => None,
+                }
+            })
+        })
+    };
     let import_target = |symbol: &str| {
         inputs.iter().find_map(|input| {
             let defines_import = input.additional_definitions.iter().any(|definition| {
@@ -1763,7 +1784,12 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
         for (index, relocation) in input.relocations.iter().copied().enumerate() {
             arena[index] = match relocation.target {
                 LinkRelocationTarget::Symbol(symbol) => {
-                    if let Some((library, import)) = import_target(symbol) {
+                    if let Some((identity, offset)) = typed_section_target(symbol) {
+                        LinkRelocation {
+                            target: LinkRelocationTarget::CoffSection { identity, offset },
+                            ..relocation
+                        }
+                    } else if let Some((library, import)) = import_target(symbol) {
                         LinkRelocation {
                             target: LinkRelocationTarget::PeImportAddress {
                                 library,
@@ -2447,7 +2473,7 @@ mod tests {
     }
 
     #[test]
-    fn contextualizes_only_unresolved_pe_writable_code_targets() {
+    fn contextualizes_unresolved_pe_code_targets_by_typed_layout() {
         let relocation = [LinkRelocation {
             offset: 0,
             target: LinkRelocationTarget::Symbol("marker"),
@@ -2533,6 +2559,42 @@ mod tests {
             LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 symbol: "WaitOnAddress",
+            }
+        );
+
+        let readonly_identity = CoffSectionIdentity::new(14, 3).unwrap();
+        let readonly_definition = LinkInput {
+            symbol: "__guard_dispatch_icall_fptr",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: readonly_identity,
+                offset: 8,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[0; 16],
+            relocations: &[],
+        };
+        let guard_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("__guard_dispatch_icall_fptr"),
+            addend: -4,
+        }];
+        let guard_user = LinkInput {
+            relocations: &guard_relocation,
+            ..input
+        };
+        let mut guard_arenas = relocation_arenas(2).unwrap();
+        let guard_contextual = contextualize_pe_writable_relocations(
+            &[guard_user, readonly_definition],
+            &[],
+            &mut guard_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            guard_contextual[0].relocations[0].target,
+            LinkRelocationTarget::CoffSection {
+                identity: readonly_identity,
+                offset: 8,
             }
         );
     }

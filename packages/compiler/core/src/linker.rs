@@ -3068,11 +3068,17 @@ pub fn select_ordered_static_link_members(
                         target: inputs[candidate].symbol_target,
                     })
                     .chain(inputs[candidate].additional_definitions.iter().copied())
-                    .filter(|definition| definition_is_global(definition.target))
                     .any(|definition| {
-                        !symbol_is_defined(inputs, &selected, definition.symbol)
-                            && (definition.symbol == entry_symbol
-                                || symbol_is_referenced(inputs, &selected, definition.symbol))
+                        let referenced = definition.symbol == entry_symbol
+                            || symbol_is_referenced(inputs, &selected, definition.symbol);
+                        if !referenced {
+                            return false;
+                        }
+                        if definition_is_global(definition.target) {
+                            return !symbol_is_defined(inputs, &selected, definition.symbol);
+                        }
+                        definition_coff_section_identity(definition.target).is_some()
+                            && typed_symbol_definition_is_unique(inputs, definition.symbol)
                     });
                     if needed {
                         let member = archive_member[candidate];
@@ -3105,6 +3111,29 @@ pub fn select_ordered_static_link_members(
         }
     }
     Ok(selection)
+}
+
+fn typed_symbol_definition_is_unique(inputs: &[LinkInput<'_, '_, '_>], symbol: &str) -> bool {
+    let mut exact_target = None;
+    for definition in inputs.iter().flat_map(|input| {
+        core::iter::once(LinkDefinition {
+            symbol: input.symbol,
+            target: input.symbol_target,
+        })
+        .chain(input.additional_definitions.iter().copied())
+    }) {
+        if definition.symbol != symbol
+            || definition_coff_section_identity(definition.target).is_none()
+        {
+            continue;
+        }
+        match exact_target {
+            None => exact_target = Some(definition.target),
+            Some(target) if target == definition.target => {}
+            Some(_) => return false,
+        }
+    }
+    exact_target.is_some()
 }
 
 fn definition_coff_section_identity(target: LinkDefinitionTarget) -> Option<CoffSectionIdentity> {
@@ -5525,9 +5554,11 @@ fn x86_64_coff_projected_readonly_fragment_count(
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
         if coff_is_readonly_data_section(name)
             && read_u32(object, header + 16)? != 0
-            && inventory.section(section_number).is_some_and(|metadata| {
-                include_associative || metadata.selection != CoffTextComdatSelection::Associative
-            })
+            && (name == ".00cfg"
+                || inventory.section(section_number).is_some_and(|metadata| {
+                    include_associative
+                        || metadata.selection != CoffTextComdatSelection::Associative
+                }))
         {
             count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
         }
@@ -5602,15 +5633,16 @@ fn decode_x86_64_coff_projected_readonly_fragment<'data, 'definitions>(
             string_size,
         )?;
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
-        let Some(metadata) = inventory.section(section_number) else {
-            continue;
-        };
+        let metadata = inventory.section(section_number);
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
         if size == 0
             || !coff_is_readonly_data_section(name)
+            || (metadata.is_none() && name != ".00cfg")
             || (object_identity.is_none()
-                && metadata.selection == CoffTextComdatSelection::Associative)
+                && metadata.is_some_and(|metadata| {
+                    metadata.selection == CoffTextComdatSelection::Associative
+                }))
         {
             continue;
         }
@@ -5624,8 +5656,10 @@ fn decode_x86_64_coff_projected_readonly_fragment<'data, 'definitions>(
                 section_number,
                 name,
                 contents,
-                metadata.selection,
-                metadata.associated_section,
+                metadata
+                    .map(|metadata| metadata.selection)
+                    .unwrap_or(CoffTextComdatSelection::None),
+                metadata.and_then(|metadata| metadata.associated_section),
             ));
             break;
         }
@@ -11139,6 +11173,63 @@ mod tests {
     }
 
     #[test]
+    fn ordered_archive_selection_resolves_unique_named_typed_sections() {
+        let guard_identity = CoffSectionIdentity::new(9, 4).unwrap();
+        let guard_reference = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("__guard_dispatch_icall_fptr"),
+            addend: -4,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &guard_reference,
+        };
+        let guard = LinkInput {
+            symbol: "__guard_dispatch_icall_fptr",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: guard_identity,
+                offset: 8,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[0; 16],
+            relocations: &[],
+        };
+        let duplicate_projection = LinkInput {
+            readonly_data: &[],
+            ..guard
+        };
+        let selection = select_ordered_static_link_members(
+            &[entry, guard, duplicate_projection],
+            &[0, 1, 1],
+            &[0, 3, 3],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selection.indices(), &[0, 1, 2]);
+
+        let ambiguous = LinkInput {
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: CoffSectionIdentity::new(10, 4).unwrap(),
+                offset: 8,
+            },
+            ..guard
+        };
+        let ambiguous_selection = select_ordered_static_link_members(
+            &[entry, guard, ambiguous],
+            &[0, 1, 1],
+            &[0, 3, 4],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(ambiguous_selection.indices(), &[0]);
+    }
+
+    #[test]
     fn ordered_archive_selection_separates_fragment_and_source_input_bounds() {
         let fragment = LinkInput {
             symbol: "entry",
@@ -12293,6 +12384,7 @@ mod tests {
             LinkDefinitionTarget::ReadonlyData(0)
         );
         assert_eq!(readonly.input.readonly_data, b"R");
+
         let linked = link_x86_64_static::<64>(&[text, readonly.input], "entry").unwrap();
         assert_eq!(linked.readonly_offset(), 16);
         assert_eq!(
