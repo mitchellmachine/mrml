@@ -974,6 +974,32 @@ Patent review: `NOT_TRIGGERED` — abstracting an existing exact capability chec
 behind a minimal interface is conventional dependency inversion. See
 `docs/patents/REVIEW_LOG.md`.
 
+The installed AHCI launch now constructs a concrete userspace data-capability
+authorizer **IMPLEMENTED IN SOURCE**. It binds the copied launch record's exact
+data object to only the two separately installed directional capabilities,
+rejects an unknown token or wrong complete rights before kernel entry, and
+encodes syscall 6 with the capability token, expected object, and exact
+`PIN|MAP|WRITE` or `PIN|MAP|READ` bits. Only zero kernel status returns the
+already bound object; denial cannot disclose or substitute another identity.
+The focused test records both frames, proves pre-syscall rejection, and injects
+kernel denial. The Linux AHCI suite passes all 111 tests and the release build
+passes. Native raw `int 0x80` invocation, mapped-memory construction, the
+service binary, installed dispatch, and physical-device evidence remain
+unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — binding a conventional exact-authorization
+syscall adapter to already validated launch roles is ordinary capability
+plumbing. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

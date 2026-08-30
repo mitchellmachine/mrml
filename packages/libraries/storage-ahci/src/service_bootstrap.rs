@@ -165,7 +165,7 @@ mod tests {
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
-    use mrml_kernel::ObjectId;
+    use mrml_kernel::{ObjectId, Rights};
 
     const LAUNCH_TOKEN: u64 = (10 << 32) | 1;
 
@@ -249,6 +249,94 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    struct AuthorizeRaw {
+        frames: [Option<AhciSyscallFrame>; 2],
+        statuses: [u64; 2],
+        calls: usize,
+    }
+
+    unsafe impl AhciRawSyscall for AuthorizeRaw {
+        unsafe fn invoke(&mut self, frame: &mut AhciSyscallFrame) {
+            self.frames[self.calls] = Some(*frame);
+            let status = self.statuses[self.calls];
+            self.calls += 1;
+            frame.rax = status;
+        }
+    }
+
+    #[test]
+    fn installed_data_authorizer_binds_exact_roles_object_and_syscall_frame() {
+        let authorities = core::array::from_fn(|index| {
+            Capability::from_token(((index as u64 + 20) << 32) | 1)
+        });
+        let installed = unsafe {
+            InstalledAhciServiceLaunch::from_installed_projection(
+                &record().encode(),
+                3,
+                authorities,
+            )
+        }
+        .unwrap();
+        let mut authorizer = crate::AhciInstalledDataAuthorizer::from_installed_launch(
+            AuthorizeRaw {
+                frames: [None; 2],
+                statuses: [0, 9],
+                calls: 0,
+            },
+            installed,
+        );
+        let write_rights = Rights::PIN.union(Rights::MAP).union(Rights::WRITE);
+        assert_eq!(
+            crate::AhciDataCapabilityAuthorizer::authorize_exact(
+                &mut authorizer,
+                installed.device_write_data(),
+                write_rights,
+            ),
+            Ok(ObjectId(23))
+        );
+        assert_eq!(
+            crate::AhciDataCapabilityAuthorizer::authorize_exact(
+                &mut authorizer,
+                installed.device_write_data(),
+                Rights::PIN.union(Rights::MAP).union(Rights::READ),
+            ),
+            Err(mrml_kernel::CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            crate::AhciDataCapabilityAuthorizer::authorize_exact(
+                &mut authorizer,
+                installed.device_read_data(),
+                Rights::PIN.union(Rights::MAP).union(Rights::READ),
+            ),
+            Err(mrml_kernel::CapabilityError::PermissionDenied)
+        );
+        let raw = authorizer.into_raw();
+        assert_eq!(raw.calls, 2);
+        let frame = raw.frames[0].unwrap();
+        assert_eq!(
+            (frame.rax, frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (
+                6,
+                installed.device_write_data().token(),
+                23,
+                u64::from(write_rights.bits()),
+                0,
+                0,
+                0,
+            )
+        );
+        let frame = raw.frames[1].unwrap();
+        assert_eq!(
+            (frame.rax, frame.rdi, frame.rsi, frame.rdx),
+            (
+                6,
+                installed.device_read_data().token(),
+                23,
+                u64::from(Rights::PIN.union(Rights::MAP).union(Rights::READ).bits()),
+            )
+        );
     }
 
     fn authorities() -> [Capability; AHCI_SERVICE_AUTHORITY_COUNT] {

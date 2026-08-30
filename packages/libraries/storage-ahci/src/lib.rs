@@ -172,7 +172,8 @@ pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };
 pub use userspace_syscall_adapter::{
-    AhciRawSyscall, AhciSyscallFrame, AhciUserspaceSyscallError, AhciUserspaceSyscalls,
+    AhciInstalledDataAuthorizer, AhciRawSyscall, AhciSyscallFrame,
+    AhciUserspaceSyscallError, AhciUserspaceSyscalls,
 };
 
 pub struct AhciBlockProvider<'a> {

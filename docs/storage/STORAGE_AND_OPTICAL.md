@@ -830,6 +830,32 @@ Patent review: **NOT_TRIGGERED**. Abstracting an existing exact capability check
 behind a minimal interface is conventional dependency inversion. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The installed AHCI launch now constructs a concrete userspace data-capability
+authorizer **IMPLEMENTED IN SOURCE**. It binds the copied launch record's exact
+data object to only the two separately installed directional capabilities,
+rejects unknown tokens or wrong complete rights before kernel entry, and
+encodes syscall 6 with the capability token, expected object, and exact
+`PIN|MAP|WRITE` or `PIN|MAP|READ` bits. Only zero kernel status returns the
+already bound object; denial cannot disclose or substitute another identity.
+The focused test records both frames, proves pre-syscall rejection, and injects
+kernel denial. The Linux AHCI suite passes all 111 tests and the release build
+passes. Native raw `int 0x80` invocation, mapped-memory construction, the
+service binary, installed dispatch, and physical-device evidence remain
+unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. Binding a conventional exact-authorization
+syscall adapter to already validated launch roles is ordinary capability
+plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

@@ -1,14 +1,16 @@
 use crate::{
-    AhciControlServiceSyscalls, AhciDataServiceSyscalls, AhciDispatchSyscalls,
-    AhciServiceSyscalls, ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope,
-    ReceivedAhciDispatchEnvelope, ReceivedAhciEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
+    AhciControlServiceSyscalls, AhciDataCapabilityAuthorizer, AhciDataServiceSyscalls,
+    AhciDispatchSyscalls, AhciServiceSyscalls, InstalledAhciServiceLaunch,
+    ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope, ReceivedAhciDispatchEnvelope,
+    ReceivedAhciEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
 use mrml_interface_storage_block_provider_v1::{
     ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES,
     READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
 };
-use mrml_kernel::Capability;
+use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
 
+const AUTHORIZE_EXACT: u64 = 6;
 const SEND_BUFFER: u64 = 4;
 const RECEIVE_BUFFER: u64 = 5;
 const READ_SHARED_BUFFER: u64 = 7;
@@ -45,6 +47,64 @@ pub struct AhciUserspaceSyscalls<R> {
     raw: R,
     reply_endpoint: u64,
     reply_task: u64,
+}
+
+/// Launch-bound adapter for the kernel's exact capability authorization
+/// syscall. It recognizes only the two installed data-DMA roles.
+pub struct AhciInstalledDataAuthorizer<R> {
+    raw: R,
+    data_object: ObjectId,
+    device_write_data: Capability,
+    device_read_data: Capability,
+}
+
+impl<R> AhciInstalledDataAuthorizer<R> {
+    pub fn from_installed_launch(raw: R, launch: InstalledAhciServiceLaunch) -> Self {
+        Self {
+            raw,
+            data_object: launch.record().data().memory_object,
+            device_write_data: launch.device_write_data(),
+            device_read_data: launch.device_read_data(),
+        }
+    }
+
+    pub fn into_raw(self) -> R {
+        self.raw
+    }
+}
+
+impl<R: AhciRawSyscall> AhciDataCapabilityAuthorizer for AhciInstalledDataAuthorizer<R> {
+    fn authorize_exact(
+        &mut self,
+        capability: Capability,
+        rights: Rights,
+    ) -> Result<ObjectId, CapabilityError> {
+        let expected = if capability == self.device_write_data {
+            Rights::PIN.union(Rights::MAP).union(Rights::WRITE)
+        } else if capability == self.device_read_data {
+            Rights::PIN.union(Rights::MAP).union(Rights::READ)
+        } else {
+            return Err(CapabilityError::Invalid);
+        };
+        if rights != expected {
+            return Err(CapabilityError::PermissionDenied);
+        }
+        let mut frame = AhciSyscallFrame {
+            rax: AUTHORIZE_EXACT,
+            rdi: capability.token(),
+            rsi: self.data_object.0,
+            rdx: u64::from(rights.bits()),
+            r10: 0,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut frame) };
+        if frame.rax == 0 {
+            Ok(self.data_object)
+        } else {
+            Err(CapabilityError::PermissionDenied)
+        }
+    }
 }
 
 impl<R> AhciUserspaceSyscalls<R> {
