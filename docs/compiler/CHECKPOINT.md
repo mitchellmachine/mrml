@@ -92,8 +92,8 @@ input. Isolated Linux children confirm checked `unwrap` and `expect` trap at
 both invalid unsigned boundaries, and reverse-direction checked `unwrap` and
 `expect` trap for negative signed inputs. Valid checked trapping consumers in
 both directions match both oracle words.
-Scoped-unsafe `unwrap_unchecked` matches both oracle
-words for valid inputs while safe use fails closed; invalid unchecked input is
+Scoped-unsafe `unwrap_unchecked` matches both oracle words for valid inputs in
+both directions while safe use fails closed; invalid unchecked input is
 Rust UB and was not executed. Windows gnullvm was not run. Patent review:
 **NOT_TRIGGERED**; this reuses the existing bounded option
 consumer and integer conversion mechanisms. See `docs/patents/REVIEW_LOG.md`.
