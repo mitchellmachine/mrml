@@ -941,8 +941,10 @@ unmount invalidates the associated objects. Sixty-seven focused Linux-host tests
 pass. Canonical lookup transport preserves the borrowed UTF-8 name, performs
 bounded local UTF-16 conversion, rejects malformed/oversized names before block
 I/O, exact-loads the mounted root, and emits only a stable nonzero object or
-typed zero-object error. Seventy focused Linux-host tests pass; isolated lookup
-dispatch remains next. The storage service
+typed zero-object error. The isolated lookup loop exact-validates one transferred
+name-buffer leaf, locally rebases the copied range, releases the validated leaf
+after later failure, and erases transient buffers. Its register adapter rejects
+kernel over-counts. Seventy-five focused Linux-host tests pass. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

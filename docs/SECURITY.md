@@ -1240,6 +1240,13 @@ checked before block access; conversion uses provider-local UTF-16 that is erase
 after dispatch. Stale roots and missing names return typed responses whose object
 field is canonically zero.
 
+The isolated lookup receive loop records cleanup ownership only after the
+envelope declares exactly one capability and the token is structurally valid.
+Malformed or absent transfers cannot trigger revocation; every later copy,
+protocol, provider, or reply failure releases the validated leaf. The register
+adapter bounds kernel-reported payload and capability counts to the supplied
+arrays before constructing the envelope.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

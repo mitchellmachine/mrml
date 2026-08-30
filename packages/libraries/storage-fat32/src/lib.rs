@@ -6,6 +6,7 @@
 
 mod service_loop;
 mod mount_service_loop;
+mod lookup_service_loop;
 mod unmount_service_loop;
 mod userspace_syscall_adapter;
 
@@ -32,12 +33,16 @@ pub use mount_service_loop::{
     Fat32MountServiceLoop, Fat32MountServiceLoopError, Fat32MountServiceSyscalls,
     ReceivedFat32MountEnvelope,
 };
+pub use lookup_service_loop::{
+    Fat32LookupServiceLoop, Fat32LookupServiceLoopError, Fat32LookupServiceSyscalls,
+    ReceivedFat32LookupEnvelope,
+};
 pub use unmount_service_loop::{
     Fat32UnmountServiceLoop, Fat32UnmountServiceLoopError, Fat32UnmountServiceSyscalls,
     ReceivedFat32UnmountEnvelope,
 };
 pub use userspace_syscall_adapter::{
-    Fat32MountUserspaceSyscalls, Fat32RawSyscall, Fat32SyscallFrame,
+    Fat32LookupUserspaceSyscalls, Fat32MountUserspaceSyscalls, Fat32RawSyscall, Fat32SyscallFrame,
     Fat32UnmountUserspaceSyscalls, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 

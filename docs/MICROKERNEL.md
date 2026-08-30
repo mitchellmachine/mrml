@@ -7461,7 +7461,11 @@ grant no capability. Canonical lookup transport preserves the borrowed UTF-8
 range, performs strict bounded provider-local UTF-16 conversion before I/O,
 loads only the exact mounted root, and returns either a stable nonzero identity
 or a typed zero-object failure. The focused Linux-host suite passes seventy
-tests; isolated lookup syscall dispatch remains pending.
+tests. Isolated lookup dispatch now validates the exact payload plus one
+structurally valid transferred leaf, copies and locally rebases only the bounded
+name range, releases that validated leaf after every later outcome, and erases
+transient buffers. Its register adapter rejects kernel over-counts before the
+envelope exists.
 
 Patent review: `NOT_TRIGGERED` — checked filesystem offset derivation, exact
 single-block reads, failure-atomic range assembly, and scratch erasure are
