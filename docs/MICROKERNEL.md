@@ -10983,3 +10983,26 @@ entry.
 Patent review: `NOT_TRIGGERED` — retaining a one-use scheduler result across
 retryable service cleanup and blocking replacement until handoff is conventional
 linear lifecycle state management. See `docs/patents/REVIEW_LOG.md`.
+
+`TaskRuntime` now retains the exact source-and-successor identity of every
+issued opaque termination dispatch until the owning runtime acknowledges an
+idle result or consumes the token at the final transition-stack entry boundary.
+Another runtime cannot consume the token, replay cannot mint a second dispatch,
+and a second retirement fails closed while the first dispatch remains issued.
+Trusted successor-context refresh also revalidates the issued identity. Native
+application, configuration-service, and UEFI consumers acknowledge idle results
+through their owning runtime rather than by inspecting the token alone. Ordinary
+scheduling and successor-context mutation are not yet frozen after issuance;
+closing that remaining preparation window is a later dependency gate.
+
+The Linux-host kernel suite passes 653 tests, storage passes 163, Zstd passes 27,
+and configuration passes 53; their affected Linux release builds pass. The
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build. The UEFI builds retain existing configuration-
+specific unused-variable and unreachable-pattern warnings. This is in-memory
+state-machine and cross-build evidence only, not QEMU, KVM, WHP, or physical-
+hardware context-entry evidence.
+
+Patent review: `NOT_TRIGGERED` — retaining and exact-matching a conventional
+one-use lifecycle lease until its final acknowledgement does not introduce a
+new technical mechanism. See `docs/patents/REVIEW_LOG.md`.

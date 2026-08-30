@@ -1405,7 +1405,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     match terminated.dispatch.user().map(|(task, _)| task) {
                         Some(to) => enter_service_dispatch(runtime, to, terminated.dispatch),
                         None => {
-                            let _ = terminated.dispatch.into_idle().unwrap_or_else(|_| halt());
+                            let _ = runtime
+                                .consume_idle_dispatch(terminated.dispatch)
+                                .unwrap_or_else(|_| halt());
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if ids[..2].iter().any(|service| {
                                 supervisor.task(*service) != Ok(None)
@@ -1462,7 +1464,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             enter_service_dispatch(runtime, to, terminated.dispatch)
                         }
                         None => {
-                            let _ = terminated.dispatch.into_idle().unwrap_or_else(|_| halt());
+                            let _ = runtime
+                                .consume_idle_dispatch(terminated.dispatch)
+                                .unwrap_or_else(|_| halt());
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if ids[..2].iter().any(|service| {
                                 supervisor.task(*service) != Ok(None)
@@ -1526,7 +1530,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             feature = "buffer-drift-probe"
                         ))]
                         None => {
-                            let _ = terminated.dispatch.into_idle().unwrap_or_else(|_| halt());
+                            let _ = runtime
+                                .consume_idle_dispatch(terminated.dispatch)
+                                .unwrap_or_else(|_| halt());
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if supervisor.task(ids[0]) != Ok(None)
                                 || supervisor.pending_cleanup(ids[0]) != Ok(None)
@@ -2020,7 +2026,9 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                 let transition_stack =
                     CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
                         .unwrap_or_else(|_| halt());
-                let _ = dispatch.enter_user_on_stack(transition_stack);
+                let _ = dispatch
+                    .enter_user_on_stack(runtime, transition_stack)
+                    .unwrap_or_else(|_| halt());
                 halt()
             }
             #[cfg(not(feature = "uefi-service-preemption-probe"))]
@@ -2060,11 +2068,14 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                     CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
                         .unwrap_or_else(|_| halt())
                 };
-                let _ = unsafe { dispatch.enter_user_on_stack(transition_stack) };
+                let _ = unsafe { dispatch.enter_user_on_stack(runtime, transition_stack) }
+                    .unwrap_or_else(|_| halt());
                 halt();
             }
             None if retired.vector == 3 => {
-                let _ = dispatch.into_idle().unwrap_or_else(|_| halt());
+                let _ = runtime
+                    .consume_idle_dispatch(dispatch)
+                    .unwrap_or_else(|_| halt());
             }
             _ => halt(),
         }
@@ -2164,7 +2175,9 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             let fault = supervisor
                 .fault_current_at(runtime, _disposition, 0)
                 .unwrap_or_else(|_| halt());
-            let _ = fault.dispatch.into_idle().unwrap_or_else(|_| halt());
+            let _ = runtime
+                .consume_idle_dispatch(fault.dispatch)
+                .unwrap_or_else(|_| halt());
             complete_service_cleanup(supervisor, fault.cleanup);
             let replacement = supervisor
                 .restart_at(
@@ -4409,7 +4422,9 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
             unsafe { enter_service_dispatch(runtime, to, retired.dispatch) }
         }
         None => {
-            let _ = retired.dispatch.into_idle().unwrap_or_else(|_| halt());
+            let _ = runtime
+                .consume_idle_dispatch(retired.dispatch)
+                .unwrap_or_else(|_| halt());
             halt()
         }
         _ => halt(),
@@ -5263,7 +5278,8 @@ unsafe fn enter_service_dispatch(
         CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
             .unwrap_or_else(|_| halt())
     };
-    let _ = unsafe { dispatch.enter_user_on_stack(transition_stack) };
+    let _ = unsafe { dispatch.enter_user_on_stack(runtime, transition_stack) }
+        .unwrap_or_else(|_| halt());
     halt()
 }
 

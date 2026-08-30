@@ -1497,6 +1497,9 @@ mod tests {
             .register_with_policy(object, task, policy)
             .unwrap();
         let retirement = supervisor.exit_current_at(&mut runtime, 100).unwrap();
+        runtime
+            .consume_idle_dispatch(retirement.dispatch)
+            .expect("single-service exit must select idle");
         complete(&mut supervisor, retirement.cleanup);
 
         let mut management = CapabilitySpace::<2>::new();
@@ -1550,6 +1553,9 @@ mod tests {
                 200,
             )
             .unwrap();
+        runtime
+            .consume_idle_dispatch(fault.dispatch)
+            .expect("single-service fault must select idle");
         complete(&mut supervisor, fault.cleanup);
         assert_eq!(
             supervisor.restart_at(
@@ -1776,6 +1782,9 @@ mod tests {
             .register_with_policy(object, task, RestartPolicy::new(2, 10, 10).unwrap())
             .unwrap();
         let retirement = supervisor.exit_current_at(&mut runtime, 100).unwrap();
+        runtime
+            .consume_idle_dispatch(retirement.dispatch)
+            .expect("single-service exit must select idle");
         complete(&mut supervisor, retirement.cleanup);
 
         let mut management = CapabilitySpace::<3>::new();
@@ -1847,6 +1856,9 @@ mod tests {
             .unwrap();
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { .. }));
         let retirement = supervisor.exit_current_at(&mut runtime, 200).unwrap();
+        runtime
+            .consume_idle_dispatch(retirement.dispatch)
+            .expect("single-service exit must select idle");
         complete(&mut supervisor, retirement.cleanup);
         supervisor
             .replace_restart_policy(

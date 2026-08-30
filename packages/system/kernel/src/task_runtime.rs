@@ -202,6 +202,12 @@ enum TaskTerminationDispatchTarget {
     User { task: TaskId, context: UserContext },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TaskTerminationDispatchIdentity {
+    source: TaskId,
+    target: Option<TaskId>,
+}
+
 /// An opaque successor dispatch minted only after exact runtime validation.
 ///
 /// Callers may inspect the selected target but cannot construct a replacement
@@ -209,6 +215,7 @@ enum TaskTerminationDispatchTarget {
 #[derive(Debug, Eq, PartialEq)]
 #[must_use = "a validated dispatch must be explicitly consumed"]
 pub struct TaskTerminationDispatch {
+    identity: TaskTerminationDispatchIdentity,
     target: TaskTerminationDispatchTarget,
 }
 
@@ -229,22 +236,13 @@ impl TaskTerminationDispatch {
         }
     }
 
-    /// Consumes a validated idle dispatch without entering userspace.
-    /// A user-target dispatch is returned unchanged to prevent accidental
-    /// authority loss or treatment as an idle transition.
-    pub fn into_idle(self) -> Result<TaskTerminationIdle, Self> {
-        match self.target {
-            TaskTerminationDispatchTarget::Idle => Ok(TaskTerminationIdle { _private: () }),
-            TaskTerminationDispatchTarget::User { .. } => Err(self),
-        }
-    }
-
     /// Refreshes the saved user context after trusted successor preparation,
     /// while exact-matching the scheduler-selected task again.
     pub fn refresh_from_runtime<const TASKS: usize, const CAPS: usize>(
         &mut self,
         runtime: &TaskRuntime<TASKS, CAPS>,
     ) -> Result<(), TaskTerminationDispatchError> {
+        runtime.validate_issued_dispatch(self.identity)?;
         match &mut self.target {
             TaskTerminationDispatchTarget::Idle => {
                 if runtime.current().is_some() {
@@ -271,12 +269,16 @@ impl TaskTerminationDispatch {
     ///
     /// The caller must satisfy every transition-stack, page-table, TSS, and
     /// interrupt exclusion requirement of [`enter_user_context_on_stack`].
-    pub unsafe fn enter_user_on_stack(
+    pub unsafe fn enter_user_on_stack<const TASKS: usize, const CAPS: usize>(
         self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
         transition_stack: InstalledEntryStack,
-    ) -> TaskTerminationIdle {
+    ) -> Result<TaskTerminationIdle, (Self, TaskTerminationDispatchError)> {
+        if let Err(error) = runtime.consume_issued_dispatch(self.identity) {
+            return Err((self, error));
+        }
         match self.target {
-            TaskTerminationDispatchTarget::Idle => TaskTerminationIdle { _private: () },
+            TaskTerminationDispatchTarget::Idle => Ok(TaskTerminationIdle { _private: () }),
             TaskTerminationDispatchTarget::User { context, .. } => unsafe {
                 enter_user_context_on_stack(&context, transition_stack)
             },
@@ -295,6 +297,8 @@ pub enum TaskTerminationDispatchError {
     FaultMismatch,
     NoPendingViolation,
     ViolationMismatch,
+    DispatchOutstanding,
+    DispatchIdentityMismatch,
     Runtime(TaskRuntimeError),
 }
 
@@ -476,6 +480,7 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
     pending_retirement: Option<PendingRetirement>,
+    issued_dispatch: Option<TaskTerminationDispatchIdentity>,
 }
 
 /// A task runtime whose complete fixed-capacity kernel footprint has one exact
@@ -575,6 +580,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             domains: array::from_fn(|_| None),
             delegations: [None; MAX_TASK_DELEGATIONS],
             pending_retirement: None,
+            issued_dispatch: None,
         })
     }
 
@@ -1027,6 +1033,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         disposition: TrapDisposition,
     ) -> Result<FaultRetirement, TaskRuntimeError> {
         self.ensure_no_pending_retirement()?;
+        self.ensure_no_issued_retirement()?;
         let (vector, address) = match disposition {
             TrapDisposition::TerminateUser { vector, address } => (vector, address),
             TrapDisposition::HaltKernel { .. } => {
@@ -1084,6 +1091,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         violation: TaskProtocolViolation,
     ) -> Result<TaskViolationRetirement, TaskRuntimeError> {
         self.ensure_no_pending_retirement()?;
+        self.ensure_no_issued_retirement()?;
         let current = self
             .scheduler
             .current()
@@ -1136,9 +1144,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         termination: TaskTermination,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
+        self.ensure_no_issued_dispatch()?;
         let target = self.validate_dispatch_target(termination.task, termination.next)?;
         self.consume_pending_termination(termination)?;
-        Ok(TaskTerminationDispatch { target })
+        Ok(self.issue_dispatch(termination.task, target))
     }
 
     /// Exact-matches a fault retirement to the runtime's one pending fault
@@ -1147,6 +1156,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         retirement: FaultRetirement,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
+        self.ensure_no_issued_dispatch()?;
         let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
         match self.pending_retirement {
             Some(PendingRetirement::Fault(pending)) if pending == retirement => {}
@@ -1156,7 +1166,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             _ => return Err(TaskTerminationDispatchError::NoPendingFault),
         }
         self.pending_retirement = None;
-        Ok(TaskTerminationDispatch { target })
+        Ok(self.issue_dispatch(retirement.task, target))
     }
 
     /// Exact-matches a protocol-violation retirement to the runtime's one
@@ -1165,6 +1175,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         retirement: TaskViolationRetirement,
     ) -> Result<TaskTerminationDispatch, TaskTerminationDispatchError> {
+        self.ensure_no_issued_dispatch()?;
         let target = self.validate_dispatch_target(retirement.task, retirement.next)?;
         match self.pending_retirement {
             Some(PendingRetirement::Violation(pending)) if pending == retirement => {}
@@ -1174,7 +1185,61 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             _ => return Err(TaskTerminationDispatchError::NoPendingViolation),
         }
         self.pending_retirement = None;
-        Ok(TaskTerminationDispatch { target })
+        Ok(self.issue_dispatch(retirement.task, target))
+    }
+
+    fn issue_dispatch(
+        &mut self,
+        source: TaskId,
+        target: TaskTerminationDispatchTarget,
+    ) -> TaskTerminationDispatch {
+        let identity = TaskTerminationDispatchIdentity {
+            source,
+            target: match target {
+                TaskTerminationDispatchTarget::Idle => None,
+                TaskTerminationDispatchTarget::User { task, .. } => Some(task),
+            },
+        };
+        self.issued_dispatch = Some(identity);
+        TaskTerminationDispatch { identity, target }
+    }
+
+    fn ensure_no_issued_dispatch(&self) -> Result<(), TaskTerminationDispatchError> {
+        if self.issued_dispatch.is_some() {
+            Err(TaskTerminationDispatchError::DispatchOutstanding)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_issued_dispatch(
+        &self,
+        identity: TaskTerminationDispatchIdentity,
+    ) -> Result<(), TaskTerminationDispatchError> {
+        if self.issued_dispatch == Some(identity) {
+            Ok(())
+        } else {
+            Err(TaskTerminationDispatchError::DispatchIdentityMismatch)
+        }
+    }
+
+    fn consume_issued_dispatch(
+        &mut self,
+        identity: TaskTerminationDispatchIdentity,
+    ) -> Result<(), TaskTerminationDispatchError> {
+        self.validate_issued_dispatch(identity)?;
+        self.issued_dispatch = None;
+        Ok(())
+    }
+
+    pub fn consume_idle_dispatch(
+        &mut self,
+        dispatch: TaskTerminationDispatch,
+    ) -> Result<TaskTerminationIdle, TaskTerminationDispatch> {
+        if !dispatch.is_idle() || self.consume_issued_dispatch(dispatch.identity).is_err() {
+            return Err(dispatch);
+        }
+        Ok(TaskTerminationIdle { _private: () })
     }
 
     fn validate_dispatch_target(
@@ -1233,10 +1298,18 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
     }
 
+    fn ensure_no_issued_retirement(&self) -> Result<(), TaskRuntimeError> {
+        if self.issued_dispatch.is_some() {
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn terminate_current_with_context(
         &mut self,
     ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
-        if self.pending_retirement.is_some() {
+        if self.pending_retirement.is_some() || self.issued_dispatch.is_some() {
             return Err(TaskRuntimeError::RetirementDispatchPending);
         }
         let current = self
@@ -2348,7 +2421,7 @@ mod tests {
         );
         assert_eq!(
             runtime.dispatch_after_fault(retired),
-            Err(TaskTerminationDispatchError::NoPendingFault)
+            Err(TaskTerminationDispatchError::DispatchOutstanding)
         );
     }
 
@@ -2450,11 +2523,8 @@ mod tests {
             }),
             Err(TaskTerminationDispatchError::TerminationMismatch)
         );
-        let mut dispatch = match runtime
-            .dispatch_after_termination(terminated)
-            .unwrap()
-            .into_idle()
-        {
+        let issued = runtime.dispatch_after_termination(terminated).unwrap();
+        let mut dispatch = match runtime.consume_idle_dispatch(issued) {
             Err(dispatch) => dispatch,
             Ok(_) => panic!("user dispatch must not consume as idle"),
         };
@@ -2465,7 +2535,11 @@ mod tests {
         );
         assert_eq!(
             runtime.dispatch_after_termination(terminated),
-            Err(TaskTerminationDispatchError::NoPendingTermination)
+            Err(TaskTerminationDispatchError::DispatchOutstanding)
+        );
+        assert_eq!(
+            runtime.terminate_current(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         let refreshed = context(0x30_0000, 0x51_0000);
         *runtime.context_mut(replacement).unwrap() = refreshed;
@@ -2498,8 +2572,12 @@ mod tests {
         let dispatch = runtime.dispatch_after_termination(termination).unwrap();
         assert!(dispatch.is_idle());
         assert_eq!(dispatch.user(), None);
+        let mut other_runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let dispatch = other_runtime
+            .consume_idle_dispatch(dispatch)
+            .expect_err("another runtime must not consume the issued dispatch");
         assert_eq!(
-            dispatch.into_idle(),
+            runtime.consume_idle_dispatch(dispatch),
             Ok(TaskTerminationIdle { _private: () })
         );
         assert_eq!(
@@ -4859,7 +4937,7 @@ mod tests {
         assert_eq!(dispatch.user(), Some((observer, observer_context)));
         assert_eq!(
             runtime.dispatch_after_violation(retirement),
-            Err(TaskTerminationDispatchError::NoPendingViolation)
+            Err(TaskTerminationDispatchError::DispatchOutstanding)
         );
     }
 

@@ -4828,6 +4828,9 @@ mod tests {
             mrml_kernel::ScheduleOutcome::Switch { .. }
         ));
         let retirement = supervisor.exit_current_at(&mut runtime, 0).unwrap();
+        runtime
+            .consume_idle_dispatch(retirement.dispatch)
+            .expect("single-service exit must select idle");
         struct Eraser;
         impl mrml_kernel::ServiceAddressSpaceEraser for Eraser {
             type Error = ();
@@ -4875,6 +4878,9 @@ mod tests {
             mrml_kernel::ScheduleOutcome::Switch { .. }
         ));
         let retirement = supervisor.exit_current_at(&mut runtime, 20).unwrap();
+        runtime
+            .consume_idle_dispatch(retirement.dispatch)
+            .expect("single-service exit must select idle");
         supervisor
             .complete_cleanup(retirement.cleanup, &mut Eraser)
             .unwrap();

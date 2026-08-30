@@ -564,9 +564,9 @@ impl<
                     .supervisor
                     .exit_current(&mut self.substrate.runtime)
                     .map_err(NativeConfigurationLaunchError::Service)?;
-                retirement
-                    .dispatch
-                    .into_idle()
+                self.substrate
+                    .runtime
+                    .consume_idle_dispatch(retirement.dispatch)
                     .map_err(|_| NativeConfigurationLaunchError::WrongEndpoint)?;
                 retirement.cleanup
             }

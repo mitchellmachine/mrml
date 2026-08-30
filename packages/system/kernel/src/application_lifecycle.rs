@@ -195,7 +195,7 @@ impl<E: ServiceAddressSpaceEraser, const TASKS: usize, const CAPS: usize>
                     .map_err(|_| {
                         NativeApplicationError::Runtime(TaskRuntimeError::IntegrityFailure)
                     })?;
-                dispatch.into_idle().map_err(|_| {
+                self.runtime.consume_idle_dispatch(dispatch).map_err(|_| {
                     NativeApplicationError::Runtime(TaskRuntimeError::IntegrityFailure)
                 })?;
                 self.state = Some(NativeApplicationState::Cleanup {
