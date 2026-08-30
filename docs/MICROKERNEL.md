@@ -11160,3 +11160,26 @@ in-memory and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — exact generational cancellation of a blocked
 wait is conventional replay-safe scheduler lifecycle handling. See
 `docs/patents/REVIEW_LOG.md`.
+
+The UEFI service dispatcher now retains every inline blocked receive token in a
+separate bounded owner table before handing execution to the selected task. A
+successful inline receive resume consumes the exact task-bound owner record
+before copying the queued message into the suspended syscall frame. Inline and
+buffered receive ownership are mutually exclusive for a task, duplicate owner
+records fail closed, and service protocol retirement or component accounting
+release cannot proceed while either kind of receive owner remains live.
+
+This establishes an explicit kernel-issued cancellation owner across the inline
+syscall suspension boundary. It does not yet expose a cancellation syscall or
+choose deadline and cancellation policy; those remain subsequent integration
+work, and no task-name cancellation fallback is introduced.
+
+The Linux-host kernel suite passes 657 tests. The default, service,
+component-service, invalid-return, and buffer-drift UEFI release profiles
+cross-build with the existing configuration-specific unused-variable and
+unreachable-pattern warnings. This is in-memory and cross-build evidence only;
+no QEMU or physical-hardware execution was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — retaining and consuming a one-use cancellation
+token across a suspended syscall is conventional lifecycle ownership. See
+`docs/patents/REVIEW_LOG.md`.

@@ -513,6 +513,9 @@ struct PendingBufferReceive {
 #[cfg(feature = "service-probe")]
 static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; SERVICE_TASK_CAPACITY] =
     [None; SERVICE_TASK_CAPACITY];
+#[cfg(feature = "service-probe")]
+static mut SERVICE_PENDING_INLINE_WAITS: [Option<mrml_kernel::BlockedReceive>;
+    SERVICE_TASK_CAPACITY] = [None; SERVICE_TASK_CAPACITY];
 #[cfg(feature = "buffer-drift-probe")]
 static mut BUFFER_DRIFT_ARMED: bool = false;
 #[cfg(feature = "service-probe")]
@@ -1002,6 +1005,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     let ScheduleOutcome::Switch { to, .. } = blocked.outcome() else {
                         halt()
                     };
+                    insert_pending_inline_wait(blocked);
                     asm!(
                         "out dx, eax",
                         in("dx") SERVICE_CALL_PORT,
@@ -1012,6 +1016,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         && root.get() == SERVICE_B_ROOT
                         && !has_pending_buffer(current)
                     {
+                        commit_pending_inline_wait(to);
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
                         runtime
                             .context_mut(to)
@@ -1389,6 +1394,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
                     if !has_pending_buffer(to) {
+                        commit_pending_inline_wait(to);
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
                         runtime
                             .context_mut(to)
@@ -4392,7 +4398,9 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
             .unwrap_or_else(|| halt())
     };
     let current = runtime.current().unwrap_or_else(|| halt());
-    if unsafe { has_pending_buffer(current) } {
+    if unsafe { has_pending_buffer(current) }
+        || unsafe { pending_inline_wait_slot(current) }.is_some()
+    {
         halt();
     }
     let supervisor = unsafe {
@@ -4537,6 +4545,15 @@ unsafe fn complete_service_cleanup(
 
 #[cfg(feature = "component-service-probe")]
 unsafe fn release_component_service_accounting() {
+    if unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_BUFFERS) }
+        .iter()
+        .any(Option::is_some)
+        || unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_INLINE_WAITS) }
+            .iter()
+            .any(Option::is_some)
+    {
+        halt();
+    }
     let runtime =
         unsafe { (*core::ptr::addr_of_mut!(SERVICE_RUNTIME)).take() }.unwrap_or_else(|| halt());
     let supervisor =
@@ -5187,6 +5204,44 @@ unsafe fn has_pending_buffer(task: mrml_kernel::TaskId) -> bool {
 }
 
 #[cfg(feature = "service-probe")]
+unsafe fn pending_inline_wait_slot(task: mrml_kernel::TaskId) -> Option<usize> {
+    let waits = unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_INLINE_WAITS) };
+    let mut found = None;
+    for (index, wait) in waits.iter().enumerate() {
+        if wait.is_some_and(|wait| wait.task() == task) && found.replace(index).is_some() {
+            halt();
+        }
+    }
+    found
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn insert_pending_inline_wait(wait: mrml_kernel::BlockedReceive) {
+    if wait.is_control()
+        || unsafe { pending_inline_wait_slot(wait.task()) }.is_some()
+        || unsafe { pending_buffer_slot(wait.task()) }.is_some()
+    {
+        halt();
+    }
+    let waits = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_INLINE_WAITS) };
+    let slot = waits
+        .iter()
+        .position(Option::is_none)
+        .unwrap_or_else(|| halt());
+    waits[slot] = Some(wait);
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn commit_pending_inline_wait(task: mrml_kernel::TaskId) {
+    let slot = unsafe { pending_inline_wait_slot(task) }.unwrap_or_else(|| halt());
+    let waits = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_INLINE_WAITS) };
+    let wait = waits[slot].take().unwrap_or_else(|| halt());
+    if wait.task() != task || wait.is_control() {
+        halt();
+    }
+}
+
+#[cfg(feature = "service-probe")]
 unsafe fn prepare_pending_buffer(
     task: mrml_kernel::TaskId,
 ) -> Option<(usize, PendingBufferReceive)> {
@@ -5206,7 +5261,9 @@ unsafe fn commit_pending_buffer_take(slot: usize, expected: PendingBufferReceive
 
 #[cfg(feature = "service-probe")]
 unsafe fn pending_buffer_insert_slot(task: mrml_kernel::TaskId) -> usize {
-    if unsafe { pending_buffer_slot(task) }.is_some() {
+    if unsafe { pending_buffer_slot(task) }.is_some()
+        || unsafe { pending_inline_wait_slot(task) }.is_some()
+    {
         halt();
     }
     let buffers = unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_BUFFERS) };
