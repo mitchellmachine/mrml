@@ -1410,6 +1410,35 @@ Patent review: `NOT_TRIGGERED` — fixed aligned service working buffers and
 explicit zeroization are conventional bounded runtime storage. See
 `docs/patents/REVIEW_LOG.md`.
 
+The aggregate service image now has a dedicated `ahci_service_entry` profile
+**PARTIALLY IMPLEMENTED IN SOURCE**. Its assembly entry preserves all six
+fixed-order authority registers before mapping the six service identity and
+launch fields plus six stack arguments into one explicit SysV receiver. The
+receiver validates that exact register projection, copies and erases the launch
+record, constructs the launch-bound directional authorizer, admits only a
+calibrated invariant-TSC delay, prepares native coherent ABAR/DMA state, and
+runs the persistent dispatcher over the single static buffer owner. The first
+dispatch error erases all working storage and requests normal task termination
+for supervisor cleanup. The canonical workspace lock and manifest checks pass;
+both the default and AHCI-profile `MRML_NATIVE` service-image release builds
+pass; focused AHCI Linux tests remain 130/130; and controlled PE disassembly
+confirms the entry register saves, argument moves, and receiver call. No service
+was installed or invoked, so blocking IPC, supervisor cleanup, MMIO/DMA, KVM,
+WHP, IOMMU, and physical AHCI behavior remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — a fixed register-to-language entry shim and
+composition of existing launch, authorization, timing, and dispatch mechanisms
+are conventional service integration. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

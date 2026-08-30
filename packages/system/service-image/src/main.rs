@@ -12,6 +12,9 @@
 ))]
 compile_error!("deadline receive cancellation denial and replay probes are mutually exclusive");
 
+#[cfg(all(feature = "ahci-service-entry", feature = "preemption-probe"))]
+compile_error!("AHCI service entry and preemption probe are mutually exclusive");
+
 use core::arch::{asm, global_asm};
 
 #[cfg(not(feature = "preemption-probe"))]
@@ -68,6 +71,12 @@ use mrml_storage::{
     StorageTransactionId, Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest,
     encode_authority_checkpoint, recover_validate_and_commit_stable_authorities,
 };
+#[cfg(all(not(feature = "preemption-probe"), feature = "ahci-service-entry"))]
+use mrml_storage_ahci::{
+    AhciInstalledDataAuthorizer, AhciNativeServiceBuffers, AhciServiceEntryRegisters,
+    AhciUserspaceSyscalls, NativeAhciRawSyscall, bootstrap_installed_ahci_entry,
+    prepare_bootstrapped_native_x86_coherent_ahci_service,
+};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
@@ -76,7 +85,10 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 
 // This entry is assembly rather than a Rust ABI function because r12-r14 are
 // intentional launch registers, not compiler-owned callee-saved temporaries.
-#[cfg(not(feature = "preemption-probe"))]
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    not(feature = "ahci-service-entry")
+))]
 global_asm!(
     r#"
             .section .text$a,"xr"
@@ -125,12 +137,43 @@ global_asm!(
     "#
 );
 
+// Device services receive twelve kernel-installed values. Save all authority
+// registers before assigning the first six SysV arguments, then place the six
+// fixed-order capability roles in the caller's stack argument area.
+#[cfg(all(not(feature = "preemption-probe"), feature = "ahci-service-entry"))]
+global_asm!(
+    r#"
+            .section .text$a,"xr"
+            .global efi_main
+        efi_main:
+            and rsp, -16
+            sub rsp, 64
+            mov [rsp], rbx
+            mov [rsp + 8], rdx
+            mov [rsp + 16], rbp
+            mov [rsp + 24], rsi
+            mov [rsp + 32], r9
+            mov [rsp + 40], r8
+            mov rdi, r13
+            mov rsi, r14
+            mov rdx, r12
+            mov rcx, r15
+            mov r8, r11
+            mov r9, r10
+            call mrml_ahci_receiver
+            ud2
+    "#
+);
+
 #[cfg(not(feature = "preemption-probe"))]
 const CONFIG_ROOT_OBJECT: ObjectId = ObjectId(0x92);
 #[cfg(not(feature = "preemption-probe"))]
 const CONFIG_SETTING_OBJECT: ObjectId = ObjectId(0x93);
 #[cfg(not(feature = "preemption-probe"))]
 static mut CONFIGURATION: Option<ConfigurationService<1, 2>> = None;
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "ahci-service-entry"))]
+static mut AHCI_SERVICE_BUFFERS: AhciNativeServiceBuffers = AhciNativeServiceBuffers::new();
 
 #[cfg(not(feature = "preemption-probe"))]
 struct KernelAuthorizer;
@@ -296,6 +339,7 @@ impl ServicePolicyAuthorizer for KernelAuthorizer {
 
 #[cfg(all(
     not(feature = "preemption-probe"),
+    not(feature = "ahci-service-entry"),
     not(feature = "block-service-loop"),
     not(feature = "invalid-return-probe"),
     not(feature = "buffer-drift-probe"),
@@ -361,6 +405,71 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         halt();
     }
     unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "ahci-service-entry"))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_ahci_receiver(
+    service_endpoint: u64,
+    supervisor_task: u64,
+    provider_generation: u64,
+    launch_data: u64,
+    launch_data_bytes: u64,
+    service_module_object: u64,
+    device: u64,
+    command_list: u64,
+    received_fis: u64,
+    command_tables: u64,
+    device_write_data: u64,
+    device_read_data: u64,
+) -> ! {
+    let entry = unsafe {
+        AhciServiceEntryRegisters::from_installed_registers(
+            service_endpoint,
+            supervisor_task,
+            provider_generation,
+            launch_data,
+            launch_data_bytes,
+            service_module_object,
+            device,
+            command_list,
+            received_fis,
+            command_tables,
+            device_write_data,
+            device_read_data,
+        )
+    }
+    .unwrap_or_else(|_| halt());
+    let buffers = unsafe { &mut *core::ptr::addr_of_mut!(AHCI_SERVICE_BUFFERS) };
+    let mut syscalls = AhciUserspaceSyscalls::new(
+        NativeAhciRawSyscall,
+        entry.service_endpoint(),
+        entry.supervisor_task(),
+    )
+    .unwrap_or_else(|_| halt());
+    let launch = bootstrap_installed_ahci_entry(&mut syscalls, entry, buffers.launch_scratch())
+        .unwrap_or_else(|_| halt());
+    let mut authorizer =
+        AhciInstalledDataAuthorizer::from_installed_launch(NativeAhciRawSyscall, launch);
+    let delay = mrml_kernel::arch::x86_64::ApStartupTiming::detect().unwrap_or_else(|_| halt());
+    let mut state = unsafe {
+        prepare_bootstrapped_native_x86_coherent_ahci_service(
+            &mut authorizer,
+            launch,
+            delay,
+        )
+    }
+    .unwrap_or_else(|_| halt());
+    let (request, capability_tokens, scratch) = buffers.dispatch_buffers();
+    let _error = state.serve_until_error(
+        &mut syscalls,
+        request,
+        capability_tokens,
+        scratch,
+    );
+    drop(state);
+    buffers.erase();
+    unsafe { terminate(3) }
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "deadline-receive-probe"))]

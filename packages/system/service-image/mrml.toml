@@ -22,6 +22,9 @@ environment = "mrml"
 name = "block-service-loop"
 
 [[feature]]
+name = "ahci-service-entry"
+
+[[feature]]
 name = "invalid-return-probe"
 
 [[feature]]
@@ -91,6 +94,12 @@ compile_name = "mrml-storage"
 package = "org.mrml.service.storage"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_storage_ahci"
+compile_name = "mrml-storage-ahci"
+package = "org.mrml.library.storage.ahci"
+scope = "compile"
+
 [[binary]]
 crate_name = "mrml_service_pe"
 output = "mrml-service-pe"
@@ -104,6 +113,11 @@ targets = ["MRML_NATIVE"]
 [[feature_profile]]
 features = ["block-service-loop"]
 name = "block_service_loop"
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = ["ahci-service-entry"]
+name = "ahci_service_entry"
 targets = ["MRML_NATIVE"]
 
 [[feature_profile]]
