@@ -578,6 +578,31 @@ Patent review: **NOT_TRIGGERED**. Bounded read-only launch-data copying and
 fixed-order installed capability-token validation are conventional service-entry
 plumbing. See [the patent review log](../patents/REVIEW_LOG.md).
 
+The AHCI native bootstrap boundary is now **PARTIALLY IMPLEMENTED IN SOURCE** as
+one fail-closed operation over the installed projection. It rejects an invalid
+launch token, zero provider generation, or alias between launch data and an
+authority before any syscall; otherwise it performs one exact copy, binds the
+decoded record and six ordered capabilities, and erases the 384-byte scratch
+buffer after success or any copy/decode/binding failure. The focused Linux AHCI
+suite passes all 97 tests. Assembly register capture, a native binary artifact,
+capability-backed CPU mapping construction, active-port reconstruction,
+concrete cache/IOMMU backends, supervised teardown, active execution, and
+physical-device evidence remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. One bounded capability copy followed by
+validation and unconditional scratch erasure is conventional fail-closed
+service bootstrap plumbing. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded
 service operations to the existing kernel syscall ABI; it introduces no new
 storage, AHCI, scheduling, or device mechanism. See

@@ -695,6 +695,30 @@ Patent review: `NOT_TRIGGERED` — copying a bounded read-only launch record and
 validating fixed-order installed capability tokens is conventional service-entry
 plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+The AHCI native bootstrap boundary is now **PARTIALLY IMPLEMENTED IN SOURCE** as
+a single fail-closed operation over the installed projection. It rejects an
+invalid launch token, zero provider generation, or alias between launch data and
+any authority before a syscall; otherwise it performs exactly one canonical
+copy, binds the decoded record and six ordered capabilities, and zeroes the
+384-byte scratch buffer on success and every copy/decode/binding failure. The
+focused Linux AHCI suite passes all 97 tests. Assembly register capture, a native
+binary artifact, capability-backed CPU mapping construction, active-port
+reconstruction, cache/IOMMU backends, supervised teardown, active execution,
+and physical-device evidence remain unverified.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — one bounded capability copy followed by
+validation and unconditional scratch erasure is conventional fail-closed
+service bootstrap plumbing. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
