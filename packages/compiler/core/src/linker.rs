@@ -7730,6 +7730,33 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     writable_data: &[PeWritableData<'_, '_>],
     readonly_absolute_relocations: &[PeReadonlyAbsoluteRelocation<'_>],
 ) -> Result<PeImage<MAX_IMAGE_BYTES>, LinkerError> {
+    let mut bytes = [0u8; MAX_IMAGE_BYTES];
+    let length = link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<
+        MAX_LINKED_BYTES,
+    >(
+        inputs,
+        entry_symbol,
+        runtime_functions,
+        writable_data,
+        readonly_absolute_relocations,
+        &mut bytes,
+    )?;
+    Ok(PeImage { bytes, length })
+}
+
+/// Serializes a bounded PE image into caller-owned storage. Hosted drivers use
+/// this entry point so multi-megabyte output tiers do not become process-stack
+/// arrays; fixed-array callers retain the convenience wrapper above.
+pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
+    const MAX_LINKED_BYTES: usize,
+>(
+    inputs: &[LinkInput<'_, '_, '_>],
+    entry_symbol: &str,
+    runtime_functions: &[PeRuntimeFunction<'_>],
+    writable_data: &[PeWritableData<'_, '_>],
+    readonly_absolute_relocations: &[PeReadonlyAbsoluteRelocation<'_>],
+    bytes: &mut [u8],
+) -> Result<usize, LinkerError> {
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: usize = 0x1000;
     const HEADERS: usize = 0x200;
@@ -7860,7 +7887,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     let length = writable_raw
         .checked_add(writable_raw_size)
         .ok_or(LinkerError::OffsetOverflow)?;
-    if length > MAX_IMAGE_BYTES {
+    if length > bytes.len() {
         return Err(LinkerError::OutputTooSmall);
     }
     let readonly_rva = TEXT_RVA
@@ -7899,25 +7926,25 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
         )?
     };
 
-    let mut bytes = [0u8; MAX_IMAGE_BYTES];
+    bytes.fill(0);
     bytes[0..2].copy_from_slice(b"MZ");
-    patch_u32(&mut bytes, 0x3c, 0x80)?;
+    patch_u32(bytes, 0x3c, 0x80)?;
     bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
-    patch_u16(&mut bytes, 0x84, 0x8664)?;
+    patch_u16(bytes, 0x84, 0x8664)?;
     let section_count = 1 + usize::from(readonly_size != 0) + usize::from(writable_size != 0);
     patch_u16(
-        &mut bytes,
+        bytes,
         0x86,
         u16::try_from(section_count).map_err(|_| LinkerError::OffsetOverflow)?,
     )?;
-    patch_u16(&mut bytes, 0x94, 240)?;
-    patch_u16(&mut bytes, 0x96, 0x022f)?;
+    patch_u16(bytes, 0x94, 240)?;
+    patch_u16(bytes, 0x96, 0x022f)?;
 
     let optional = 0x98;
-    patch_u16(&mut bytes, optional, 0x20b)?;
-    patch_u32(&mut bytes, optional + 4, to_u32_link(text_raw_size)?)?;
+    patch_u16(bytes, optional, 0x20b)?;
+    patch_u32(bytes, optional + 4, to_u32_link(text_raw_size)?)?;
     patch_u32(
-        &mut bytes,
+        bytes,
         optional + 8,
         to_u32_link(
             readonly_raw_size
@@ -7925,46 +7952,46 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                 .ok_or(LinkerError::OffsetOverflow)?,
         )?,
     )?;
-    patch_u32(&mut bytes, optional + 12, to_u32_link(zeroed_total)?)?;
+    patch_u32(bytes, optional + 12, to_u32_link(zeroed_total)?)?;
     patch_u32(
-        &mut bytes,
+        bytes,
         optional + 16,
         to_u32_link(TEXT_RVA + linked.entry_offset)?,
     )?;
-    patch_u32(&mut bytes, optional + 20, to_u32_link(TEXT_RVA)?)?;
+    patch_u32(bytes, optional + 20, to_u32_link(TEXT_RVA)?)?;
     patch_u64(
-        &mut bytes,
+        bytes,
         optional + 24,
         u64::try_from(IMAGE_BASE).map_err(|_| LinkerError::OffsetOverflow)?,
     )?;
-    patch_u32(&mut bytes, optional + 32, to_u32_link(SECTION_ALIGNMENT)?)?;
-    patch_u32(&mut bytes, optional + 36, to_u32_link(FILE_ALIGNMENT)?)?;
-    patch_u16(&mut bytes, optional + 40, 6)?;
-    patch_u16(&mut bytes, optional + 48, 6)?;
-    patch_u32(&mut bytes, optional + 56, to_u32_link(size_of_image)?)?;
-    patch_u32(&mut bytes, optional + 60, to_u32_link(HEADERS)?)?;
-    patch_u16(&mut bytes, optional + 68, 3)?;
-    patch_u16(&mut bytes, optional + 70, 0x8100)?;
-    patch_u64(&mut bytes, optional + 72, 0x10_0000)?;
-    patch_u64(&mut bytes, optional + 80, 0x1000)?;
-    patch_u64(&mut bytes, optional + 88, 0x10_0000)?;
-    patch_u64(&mut bytes, optional + 96, 0x1000)?;
-    patch_u32(&mut bytes, optional + 108, 16)?;
+    patch_u32(bytes, optional + 32, to_u32_link(SECTION_ALIGNMENT)?)?;
+    patch_u32(bytes, optional + 36, to_u32_link(FILE_ALIGNMENT)?)?;
+    patch_u16(bytes, optional + 40, 6)?;
+    patch_u16(bytes, optional + 48, 6)?;
+    patch_u32(bytes, optional + 56, to_u32_link(size_of_image)?)?;
+    patch_u32(bytes, optional + 60, to_u32_link(HEADERS)?)?;
+    patch_u16(bytes, optional + 68, 3)?;
+    patch_u16(bytes, optional + 70, 0x8100)?;
+    patch_u64(bytes, optional + 72, 0x10_0000)?;
+    patch_u64(bytes, optional + 80, 0x1000)?;
+    patch_u64(bytes, optional + 88, 0x10_0000)?;
+    patch_u64(bytes, optional + 96, 0x1000)?;
+    patch_u32(bytes, optional + 108, 16)?;
     if !runtime_functions.is_empty() {
         patch_u32(
-            &mut bytes,
+            bytes,
             optional + 136,
             to_u32_link(readonly_rva + pdata_offset)?,
         )?;
         patch_u32(
-            &mut bytes,
+            bytes,
             optional + 140,
             to_u32_link(runtime_functions.len() * 12)?,
         )?;
     }
 
     write_pe_section(
-        &mut bytes,
+        bytes,
         0x188,
         b".text\0\0\0",
         text_size,
@@ -7975,7 +8002,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     )?;
     if readonly_size != 0 {
         write_pe_section(
-            &mut bytes,
+            bytes,
             0x1b0,
             b".rdata\0\0",
             readonly_size,
@@ -7987,7 +8014,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     }
     if writable_size != 0 {
         write_pe_section(
-            &mut bytes,
+            bytes,
             if readonly_size == 0 { 0x1b0 } else { 0x1d8 },
             b".data\0\0\0",
             writable_size,
@@ -7997,10 +8024,10 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             0xc000_0040,
         )?;
     }
-    copy_at(&mut bytes, HEADERS, &linked.bytes[..linked.text_length])?;
+    copy_at(bytes, HEADERS, &linked.bytes[..linked.text_length])?;
     if readonly_size != 0 {
         copy_at(
-            &mut bytes,
+            bytes,
             readonly_raw,
             &linked.bytes[linked.readonly_offset..linked.length],
         )?;
@@ -8042,7 +8069,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
         end_rvas[index] = to_u32_link(end)?;
         order[index] = index;
         copy_at(
-            &mut bytes,
+            bytes,
             readonly_raw + unwind_offsets[index],
             function.unwind_info,
         )?;
@@ -8058,10 +8085,10 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     }
     for (record, function_index) in order[..runtime_functions.len()].iter().enumerate() {
         let output = readonly_raw + pdata_offset + record * 12;
-        patch_u32(&mut bytes, output, begin_rvas[*function_index])?;
-        patch_u32(&mut bytes, output + 4, end_rvas[*function_index])?;
+        patch_u32(bytes, output, begin_rvas[*function_index])?;
+        patch_u32(bytes, output + 4, end_rvas[*function_index])?;
         patch_u32(
-            &mut bytes,
+            bytes,
             output + 8,
             to_u32_link(readonly_rva + unwind_offsets[*function_index])?,
         )?;
@@ -8079,7 +8106,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             continue;
         }
         let output = writable_raw + writable_offsets[index];
-        copy_at(&mut bytes, output, data.initialized)?;
+        copy_at(bytes, output, data.initialized)?;
         for relocation in data.relocations {
             let target_rva = match relocation.target {
                 PeWritableRelocationTarget::Readonly { owner, offset } => resolve_readonly_symbol(
@@ -8115,7 +8142,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                 .checked_add(target_rva)
                 .ok_or(LinkerError::OffsetOverflow)?;
             patch_u64(
-                &mut bytes,
+                bytes,
                 output + relocation.offset,
                 u64::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?,
             )?;
@@ -8200,7 +8227,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                     .and_then(|address| address.checked_add(i128::from(relocation.addend)))
                     .and_then(|address| u64::try_from(address).ok())
                     .ok_or(LinkerError::OffsetOverflow)?;
-                patch_u64(&mut bytes, pointer_offset, target)?;
+                patch_u64(bytes, pointer_offset, target)?;
             }
             PeReadonlyRelocationKind::Address32NoBase => {
                 let target = i128::try_from(target_rva)
@@ -8208,7 +8235,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                     .checked_add(i128::from(relocation.addend))
                     .and_then(|address| u32::try_from(address).ok())
                     .ok_or(LinkerError::RelocationOverflow)?;
-                patch_u32(&mut bytes, pointer_offset, target)?;
+                patch_u32(bytes, pointer_offset, target)?;
             }
             PeReadonlyRelocationKind::Relative32 { trailing_bytes } => {
                 if trailing_bytes > 5 {
@@ -8224,7 +8251,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                     .and_then(|target| target.checked_sub(i128::try_from(place_end_rva).ok()?))
                     .and_then(|value| i32::try_from(value).ok())
                     .ok_or(LinkerError::RelocationOverflow)?;
-                patch_i32(&mut bytes, pointer_offset, displacement)?;
+                patch_i32(bytes, pointer_offset, displacement)?;
             }
         }
     }
@@ -8250,7 +8277,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
                 .and_then(|value| value.checked_sub(i64::try_from(place_rva).ok()?))
                 .ok_or(LinkerError::OffsetOverflow)?;
             patch_i32(
-                &mut bytes,
+                bytes,
                 HEADERS
                     .checked_add(place)
                     .ok_or(LinkerError::OffsetOverflow)?,
@@ -8258,7 +8285,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             )?;
         }
     }
-    Ok(PeImage { bytes, length })
+    Ok(length)
 }
 
 /// Links MRML fragments into a deterministic, fixed-address, import-free
@@ -9047,8 +9074,8 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
     })
 }
 
-fn write_pe_section<const MAX_BYTES: usize>(
-    output: &mut [u8; MAX_BYTES],
+fn write_pe_section(
+    output: &mut [u8],
     offset: usize,
     name: &[u8; 8],
     virtual_size: usize,
@@ -9068,8 +9095,8 @@ fn write_pe_section<const MAX_BYTES: usize>(
     patch_u32(output, offset + 36, characteristics)
 }
 
-fn patch_u16<const MAX_BYTES: usize>(
-    output: &mut [u8; MAX_BYTES],
+fn patch_u16(
+    output: &mut [u8],
     offset: usize,
     value: u16,
 ) -> Result<(), LinkerError> {
@@ -9080,8 +9107,8 @@ fn patch_u16<const MAX_BYTES: usize>(
     Ok(())
 }
 
-fn patch_u32<const MAX_BYTES: usize>(
-    output: &mut [u8; MAX_BYTES],
+fn patch_u32(
+    output: &mut [u8],
     offset: usize,
     value: u32,
 ) -> Result<(), LinkerError> {
@@ -9092,8 +9119,8 @@ fn patch_u32<const MAX_BYTES: usize>(
     Ok(())
 }
 
-fn patch_i32<const MAX_BYTES: usize>(
-    output: &mut [u8; MAX_BYTES],
+fn patch_i32(
+    output: &mut [u8],
     offset: usize,
     value: i32,
 ) -> Result<(), LinkerError> {
@@ -9104,8 +9131,8 @@ fn patch_i32<const MAX_BYTES: usize>(
     Ok(())
 }
 
-fn patch_u64<const MAX_BYTES: usize>(
-    output: &mut [u8; MAX_BYTES],
+fn patch_u64(
+    output: &mut [u8],
     offset: usize,
     value: u64,
 ) -> Result<(), LinkerError> {
@@ -9243,8 +9270,8 @@ fn align(value: usize, alignment: usize) -> Result<usize, LinkerError> {
         .ok_or(LinkerError::OffsetOverflow)
 }
 
-fn copy_at<const MAX_BYTES: usize>(
-    output: &mut [u8; MAX_BYTES],
+fn copy_at(
+    output: &mut [u8],
     offset: usize,
     input: &[u8],
 ) -> Result<(), LinkerError> {
@@ -12091,6 +12118,33 @@ mod tests {
         );
         assert_eq!(&pe.bytes()[0x400..0x405], b"hello");
         assert_eq!(pe, link_x86_64_pe::<2048, 8192>(&[input], "entry").unwrap());
+
+        let mut caller_owned = [0xa5; 2048];
+        let caller_length =
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<8192>(
+                &[input],
+                "entry",
+                &[],
+                &[],
+                &[],
+                &mut caller_owned,
+            )
+            .unwrap();
+        assert_eq!(&caller_owned[..caller_length], pe.bytes());
+        assert!(caller_owned[caller_length..].iter().all(|byte| *byte == 0));
+
+        let mut too_small = [0u8; 512];
+        assert_eq!(
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<8192>(
+                &[input],
+                "entry",
+                &[],
+                &[],
+                &[],
+                &mut too_small,
+            ),
+            Err(LinkerError::OutputTooSmall)
+        );
     }
 
     #[test]

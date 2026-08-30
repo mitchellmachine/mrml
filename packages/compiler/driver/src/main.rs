@@ -27,7 +27,8 @@ use mrml_rustc::{
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
     inventory_x86_64_coff_symbols, inventory_x86_64_elf_symbols,
-    link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
+    link_x86_64_elf_selected_executable,
+    link_x86_64_pe_with_data_unwind_and_readonly_relocations_into,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
     x86_64_coff_section_identity_readonly_fragment_count,
     x86_64_coff_short_import,
@@ -1718,13 +1719,19 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
             }
         }
     }
-    let executable =
-        link_x86_64_pe_with_data_unwind_and_readonly_relocations::<MAX_IMAGE, MAX_LINKED>(
+    let mut executable = Vector::with_capacity(MAX_IMAGE)
+        .map_err(|_| anyhow!("could not allocate bounded PE image output"))?;
+    executable
+        .try_resize(MAX_IMAGE, 0)
+        .map_err(|_| anyhow!("could not initialize bounded PE image output"))?;
+    let length =
+        link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<MAX_LINKED>(
             inputs,
             entry,
             runtime_functions,
             writable_data,
             readonly_absolute_relocations,
+            &mut executable,
         )
         .map_err(|error| {
             anyhow!(
@@ -1734,11 +1741,11 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                 readonly_absolute_relocations.len()
             )
         })?;
-    mrml_runtime::write_file(output, executable.bytes())?;
+    mrml_runtime::write_file(output, &executable[..length])?;
     println!(
         "linked {} to {} deterministic PE bytes",
         entry,
-        executable.bytes().len()
+        length
     );
     Ok(())
 }
