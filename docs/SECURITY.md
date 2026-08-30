@@ -1193,3 +1193,9 @@ Filesystem check requests bind that exact mounted volume and retained endpoint
 to one writable report of at most 64 KiB. Successful byte counts cannot exceed
 the caller's report range; zero-byte success is valid, while every typed failure
 carries zero and cannot smuggle report progress.
+
+Filesystem format framing keeps bounded immutable options disjoint from its
+bounded writable report and rejects completion beyond the report. A distinct
+`DestructiveAuthorityRequired` failure makes explicit that request data cannot
+authorize formatting; the runtime must separately deliver the exact
+preview-bound capability selected by the owner.

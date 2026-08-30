@@ -7448,6 +7448,18 @@ Patent review: `NOT_TRIGGERED` — bounded writable reports, exact-generation
 framing, completion-count validation, and typed errors are conventional IPC and
 filesystem-check boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
+Canonical filesystem format framing binds an exact volume and retained provider
+endpoint while keeping bounded immutable options disjoint from a writable report
+of at most 64 KiB. Successful byte counts remain report-bounded; typed failures
+carry zero. `DestructiveAuthorityRequired` stays distinct, and request data cannot
+replace the runtime-delivered, exact preview-bound capability. The focused
+Linux-host interface suite passes thirteen tests.
+
+Patent review: `NOT_TRIGGERED` — disjoint borrowed ranges, bounded completion
+counts, typed destructive-authority failure, and canonical framing are
+conventional IPC and filesystem-format boundary mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
 completion-count validation, and typed read errors are conventional IPC and file
 I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.

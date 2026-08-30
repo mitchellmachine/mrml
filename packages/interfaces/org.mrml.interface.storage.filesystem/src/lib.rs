@@ -24,6 +24,8 @@ pub const FLUSH_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
 pub const FLUSH_RESPONSE_BYTES: usize = 16;
 pub const CHECK_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 32;
 pub const CHECK_RESPONSE_BYTES: usize = 16;
+pub const FORMAT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
+pub const FORMAT_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
@@ -186,6 +188,23 @@ pub trait FilesystemCheckEndpoint {
     ) -> Result<[u8; CHECK_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait FilesystemFormatTransport {
+    fn format(
+        &mut self,
+        request: &[u8; FORMAT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; FORMAT_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemFormatEndpoint {
+    fn invoke_format(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; FORMAT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; FORMAT_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub struct IsolatedFilesystemTransport<E> {
     endpoint: OpaqueHandle,
     maximum_memory_bytes: usize,
@@ -334,6 +353,20 @@ impl<E: FilesystemCheckEndpoint> FilesystemCheckTransport for IsolatedFilesystem
         }
         decode_check_request(request, memory.len() as u64)?;
         self.service.invoke_check(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemFormatEndpoint> FilesystemFormatTransport for IsolatedFilesystemTransport<E> {
+    fn format(
+        &mut self,
+        request: &[u8; FORMAT_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; FORMAT_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_format_request(request, memory.len() as u64)?;
+        self.service.invoke_format(self.endpoint, request, memory)
     }
 }
 
@@ -1222,6 +1255,124 @@ pub fn decode_check_response(
     }
 }
 
+fn format_views_overlap(options: BorrowedReadView, report: BorrowedWriteView) -> bool {
+    let options_end = options.offset().checked_add(options.length());
+    let report_end = report.offset().checked_add(report.length());
+    match (options_end, report_end) {
+        (Some(options_end), Some(report_end)) => {
+            options.length() != 0
+                && report.length() != 0
+                && options.offset() < report_end
+                && report.offset() < options_end
+        }
+        _ => true,
+    }
+}
+
+pub fn encode_format_request(
+    volume: OpaqueHandle,
+    options: BorrowedReadView,
+    report: BorrowedWriteView,
+) -> Result<[u8; FORMAT_REQUEST_BYTES], ProtocolError> {
+    let request = FormatRequest {
+        volume,
+        options,
+        report,
+    };
+    if !request.validate() || format_views_overlap(options, report) {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; FORMAT_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_FORMAT.to_le_bytes());
+    bytes[56..64].copy_from_slice(&40_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(FORMAT_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&options.offset().to_le_bytes());
+    bytes[88..96].copy_from_slice(&options.length().to_le_bytes());
+    bytes[96..104].copy_from_slice(&report.offset().to_le_bytes());
+    bytes[104..112].copy_from_slice(&report.length().to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_format_request(
+    bytes: &[u8; FORMAT_REQUEST_BYTES],
+    memory_length: u64,
+) -> Result<FormatRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_FORMAT
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 40
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != FORMAT_RESPONSE_BYTES as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let options = BorrowedReadView::within(
+        u64::from_le_bytes(bytes[80..88].try_into().unwrap()),
+        u64::from_le_bytes(bytes[88..96].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let report = BorrowedWriteView::within(
+        u64::from_le_bytes(bytes[96..104].try_into().unwrap()),
+        u64::from_le_bytes(bytes[104..112].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let request = FormatRequest {
+        volume,
+        options,
+        report,
+    };
+    if !request.validate() || format_views_overlap(options, report) {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    Ok(request)
+}
+
+pub fn encode_format_response(result: Result<FormatResponse, FormatError>) -> [u8; 16] {
+    let mut bytes = [0; FORMAT_RESPONSE_BYTES];
+    let (status, written) = match result {
+        Ok(written) => (0, written),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&written.to_le_bytes());
+    bytes
+}
+
+pub fn decode_format_response(
+    bytes: &[u8; FORMAT_RESPONSE_BYTES],
+    report_length: u64,
+) -> Result<Result<FormatResponse, FormatError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] || report_length > MAX_FILESYSTEM_REPORT_BYTES {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let written = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if written <= report_length => Ok(Ok(written)),
+        1 if written == 0 => Ok(Err(FormatError::InvalidRequest)),
+        2 if written == 0 => Ok(Err(FormatError::StaleObject)),
+        3 if written == 0 => Ok(Err(FormatError::PermissionDenied)),
+        4 if written == 0 => Ok(Err(FormatError::DestructiveAuthorityRequired)),
+        5 if written == 0 => Ok(Err(FormatError::IoFailure)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1803,6 +1954,73 @@ mod tests {
         invalid[8] = 1;
         assert_eq!(
             decode_check_response(&invalid, 16),
+            Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    struct FormatEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemFormatEndpoint for FormatEndpoint {
+        fn invoke_format(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; FORMAT_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<[u8; FORMAT_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            let request = decode_format_request(request, memory.len() as u64)?;
+            Ok(encode_format_response(Ok(request.report.length())))
+        }
+    }
+
+    #[test]
+    fn format_codec_separates_options_report_and_destructive_authority_error() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let options = BorrowedReadView::within(0, 8, 32).unwrap();
+        let report = BorrowedWriteView::within(8, 16, 32).unwrap();
+        let request = encode_format_request(volume, options, report).unwrap();
+        assert_eq!(
+            decode_format_request(&request, 32),
+            Ok(FormatRequest {
+                volume,
+                options,
+                report,
+            })
+        );
+        let service = FormatEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_format_response(&transport.format(&request, &mut [0; 32]).unwrap(), 16),
+            Ok(Ok(16))
+        );
+        assert_eq!(transport.service.seen, Some(endpoint));
+        assert_eq!(
+            transport.format(&request, &mut [0; 33]),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let overlapping = BorrowedWriteView::within(7, 2, 32).unwrap();
+        assert_eq!(
+            encode_format_request(volume, options, overlapping),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_format_response(
+                &encode_format_response(Err(FormatError::DestructiveAuthorityRequired)),
+                16,
+            ),
+            Ok(Err(FormatError::DestructiveAuthorityRequired))
+        );
+        assert_eq!(
+            decode_format_response(&encode_format_response(Ok(17)), 16),
+            Err(ProtocolError::InvalidResponse)
+        );
+        let mut invalid = encode_format_response(Err(FormatError::IoFailure));
+        invalid[8] = 1;
+        assert_eq!(
+            decode_format_response(&invalid, 16),
             Err(ProtocolError::InvalidResponse)
         );
     }

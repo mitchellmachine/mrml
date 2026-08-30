@@ -816,8 +816,8 @@ PCI classes, and manifests do not authorize.
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
 interface passes eleven focused tests and the filesystem interface's canonical
-probe, mount/unmount, lookup, read/write, create, flush, and check codecs plus exact-generation
-isolated transports pass twelve focused Linux-host tests. Mount binds the volume generation
+probe, mount/unmount, lookup, read/write, create, flush, check, and format codecs plus
+exact-generation isolated transports pass thirteen focused Linux-host tests. Mount binds the volume generation
 and bounded options range and returns only a nonzero mount generation or typed failure.
 Unmount consumes the exact nonzero mount generation through the same endpoint
 and returns a nonzero completion serial or typed zero-serial failure.
@@ -831,14 +831,17 @@ range; zero-byte EOF success remains valid, while completion over-counts and
 error/data mixtures fail closed.
 Filesystem write separately binds immutable input, checked offset arithmetic,
 and nonzero bounded completion while retaining `ReadOnly`, permission, capacity,
-and I/O failure as distinct statuses. The fixed-capacity module registry is
-Create binds exact volume, mount, parent-directory, bounded nonempty name, and
+and I/O failure as distinct statuses. Create binds exact volume, mount,
+parent-directory, bounded nonempty name, and
 provider-defined kind data. Reserved alignment bytes and status/object mixtures
 fail closed; a returned object identity is non-authorizing. Flush binds the exact
 mounted volume and retained provider endpoint. Success carries a nonzero durability
 serial; typed stale-object, permission, and I/O failures carry zero. Check binds
 the same exact state to a writable report of at most 64 KiB; zero-byte success is
-valid, over-counts fail closed, and typed failures carry zero. The fixed-capacity module registry is
+valid, over-counts fail closed, and typed failures carry zero. Format separates
+bounded immutable options from its bounded writable report,
+rejects overlap, and preserves `DestructiveAuthorityRequired` as a distinct typed
+failure. Request data never substitutes for exact preview-bound authority. The fixed-capacity module registry is
 also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
 endpoint signal authorities separately; exact-matches all generations; permits
