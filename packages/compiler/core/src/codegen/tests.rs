@@ -19092,17 +19092,15 @@ mod tests {
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert_eq!(
-                compile_x86_64_function::<_, 4096, 4, 224>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 4096, 4, 224>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::Windows,
+                    abi,
                 )
-                .unwrap_err()
-                .kind,
-                CodegenErrorKind::RuntimeTypeMismatch,
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, CodegenErrorKind::RuntimeTypeMismatch, "{source}");
+            }
         }
     }
 
@@ -19132,17 +19130,15 @@ mod tests {
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert_eq!(
-                compile_x86_64_function::<_, 4096, 4, 224>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 4096, 4, 224>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::Windows,
+                    abi,
                 )
-                .unwrap_err()
-                .kind,
-                CodegenErrorKind::RuntimeTypeMismatch,
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, CodegenErrorKind::RuntimeTypeMismatch, "{source}");
+            }
         }
     }
 
