@@ -2986,10 +2986,12 @@ pub fn select_ordered_static_link_inputs(
     )
 }
 
-/// Applies conventional left-to-right archive selection while treating every
+/// Applies bounded archive selection to a fixed point while treating every
 /// fragment with the same nonzero `(archive_group, archive_member)` pair as one
 /// object member. Selecting any definition in that member selects all of its
-/// code and metadata fragments atomically.
+/// code and metadata fragments atomically. Repeating the ordered scan admits
+/// references discovered in later indexed Rust archives without expanding
+/// unrelated members.
 pub fn select_ordered_static_link_members(
     inputs: &[LinkInput<'_, '_, '_>],
     archive_group: &[u16],
@@ -3007,71 +3009,81 @@ pub fn select_ordered_static_link_members(
     }
     validate_symbol(entry_symbol)?;
     let mut selected = [false; MAX_LINK_FRAGMENTS];
-    let mut cursor = 0usize;
-    while cursor < inputs.len() {
-        let group = archive_group[cursor];
-        if group == 0 {
-            if archive_member[cursor] != 0 {
+    loop {
+        let mut global_changed = false;
+        let mut cursor = 0usize;
+        while cursor < inputs.len() {
+            let group = archive_group[cursor];
+            if group == 0 {
+                if archive_member[cursor] != 0 {
+                    return Err(LinkerError::InvalidArchive);
+                }
+                if !selected[cursor] {
+                    selected[cursor] = true;
+                    global_changed = true;
+                }
+                cursor += 1;
+                continue;
+            }
+            let start = cursor;
+            while cursor < inputs.len() && archive_group[cursor] == group {
+                cursor += 1;
+            }
+            if archive_group[..start].contains(&group) {
                 return Err(LinkerError::InvalidArchive);
             }
-            selected[cursor] = true;
-            cursor += 1;
-            continue;
-        }
-        let start = cursor;
-        while cursor < inputs.len() && archive_group[cursor] == group {
-            cursor += 1;
-        }
-        if archive_group[..start].contains(&group) {
-            return Err(LinkerError::InvalidArchive);
-        }
-        if archive_member[start..cursor].contains(&0) {
-            return Err(LinkerError::InvalidArchive);
-        }
-        loop {
-            let mut changed = false;
-            for candidate in start..cursor {
-                if selected[candidate] {
-                    continue;
-                }
-                let exact_section_needed = core::iter::once(inputs[candidate].symbol_target)
-                    .chain(
-                        inputs[candidate]
-                            .additional_definitions
-                            .iter()
-                            .map(|definition| definition.target),
-                    )
-                    .filter_map(definition_coff_section_identity)
-                    .any(|identity| coff_section_is_referenced(inputs, &selected, identity));
-                if exact_section_needed {
-                    selected[candidate] = true;
-                    changed = true;
-                    continue;
-                }
-                let needed = core::iter::once(LinkDefinition {
-                    symbol: inputs[candidate].symbol,
-                    target: inputs[candidate].symbol_target,
-                })
-                .chain(inputs[candidate].additional_definitions.iter().copied())
-                .filter(|definition| definition_is_global(definition.target))
-                .any(|definition| {
-                    !symbol_is_defined(inputs, &selected, definition.symbol)
-                        && (definition.symbol == entry_symbol
-                            || symbol_is_referenced(inputs, &selected, definition.symbol))
-                });
-                if needed {
-                    let member = archive_member[candidate];
-                    for sibling in start..cursor {
-                        if archive_member[sibling] == member {
-                            selected[sibling] = true;
-                        }
+            if archive_member[start..cursor].contains(&0) {
+                return Err(LinkerError::InvalidArchive);
+            }
+            loop {
+                let mut changed = false;
+                for candidate in start..cursor {
+                    if selected[candidate] {
+                        continue;
                     }
-                    changed = true;
+                    let exact_section_needed = core::iter::once(inputs[candidate].symbol_target)
+                        .chain(
+                            inputs[candidate]
+                                .additional_definitions
+                                .iter()
+                                .map(|definition| definition.target),
+                        )
+                        .filter_map(definition_coff_section_identity)
+                        .any(|identity| coff_section_is_referenced(inputs, &selected, identity));
+                    if exact_section_needed {
+                        selected[candidate] = true;
+                        changed = true;
+                        continue;
+                    }
+                    let needed = core::iter::once(LinkDefinition {
+                        symbol: inputs[candidate].symbol,
+                        target: inputs[candidate].symbol_target,
+                    })
+                    .chain(inputs[candidate].additional_definitions.iter().copied())
+                    .filter(|definition| definition_is_global(definition.target))
+                    .any(|definition| {
+                        !symbol_is_defined(inputs, &selected, definition.symbol)
+                            && (definition.symbol == entry_symbol
+                                || symbol_is_referenced(inputs, &selected, definition.symbol))
+                    });
+                    if needed {
+                        let member = archive_member[candidate];
+                        for sibling in start..cursor {
+                            if archive_member[sibling] == member {
+                                selected[sibling] = true;
+                            }
+                        }
+                        changed = true;
+                    }
                 }
+                if !changed {
+                    break;
+                }
+                global_changed = true;
             }
-            if !changed {
-                break;
-            }
+        }
+        if !global_changed {
+            break;
         }
     }
     let mut selection = LinkInputSelection {
@@ -10563,7 +10575,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_archive_selection_does_not_revisit_earlier_archives() {
+    fn ordered_archive_selection_revisits_earlier_archives_to_a_fixed_point() {
         let relocation = [LinkRelocation {
             offset: 0,
             target: LinkRelocationTarget::Symbol("helper"),
@@ -10588,7 +10600,7 @@ mod tests {
 
         let earlier =
             select_ordered_static_link_inputs(&[helper, entry], &[1, 0], "entry").unwrap();
-        assert_eq!(earlier.indices(), &[1]);
+        assert_eq!(earlier.indices(), &[0, 1]);
         let later = select_ordered_static_link_inputs(&[entry, helper], &[0, 1], "entry").unwrap();
         assert_eq!(later.indices(), &[0, 1]);
     }
@@ -10633,6 +10645,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selection.indices(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn ordered_archive_selection_revisits_earlier_groups_for_later_references() {
+        let call_helper = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("helper"),
+            addend: -4,
+        }];
+        let helper = LinkInput {
+            symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &call_helper,
+        };
+        let selection =
+            select_ordered_static_link_members(&[helper, entry], &[1, 2], &[1, 1], "entry")
+                .unwrap();
+        assert_eq!(selection.indices(), &[0, 1]);
     }
 
     #[test]

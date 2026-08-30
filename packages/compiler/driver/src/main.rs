@@ -479,9 +479,14 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
     referenced
         .try_push(entry)
         .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
+    for object in objects {
+        let object = object.as_ref();
+        if object.get(..8) != Some(b"!<arch>\n") {
+            scan_link_object_symbols(object, format, &mut referenced, &mut defined)?;
+        }
+    }
     let mut next_archive_group = 1u16;
     let mut indexed_selection_safe = true;
-    let mut indexed_selection_initialized = false;
     for object in objects {
         let object = object.as_ref();
         if object.get(..8) == Some(b"!<arch>\n") {
@@ -491,12 +496,6 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                 selected[..archive.members().len()].fill(true);
                 indexed_selection_safe = false;
             } else {
-                if !indexed_selection_initialized {
-                    for prior in &refs {
-                        scan_link_object_symbols(prior, format, &mut referenced, &mut defined)?;
-                    }
-                    indexed_selection_initialized = true;
-                }
                 let mut reference_cursor = 0usize;
                 while reference_cursor < referenced.len() {
                     let symbol = referenced[reference_cursor];
@@ -600,11 +599,181 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
             archive_indexed
                 .try_push(true)
                 .map_err(|_| anyhow!("could not allocate link index-presence list"))?;
-            if indexed_selection_safe && indexed_selection_initialized {
-                scan_link_object_symbols(object, format, &mut referenced, &mut defined)?;
-            }
         }
     }
+    loop {
+        let mut changed = false;
+        let mut group = 1u16;
+        for object in objects {
+            let object = object.as_ref();
+            if object.get(..8) != Some(b"!<arch>\n") {
+                continue;
+            }
+            let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
+            if archive.has_symbol_index() {
+                let mut reference_cursor = 0usize;
+                while reference_cursor < referenced.len() {
+                    let symbol = referenced[reference_cursor];
+                    reference_cursor += 1;
+                    if defined.iter().any(|defined| *defined == symbol) {
+                        continue;
+                    }
+                    let Some(candidate) = archive.symbols().iter().find(|candidate| {
+                        candidate.symbol == symbol
+                            && !archive_group
+                                .iter()
+                                .zip(archive_member.iter())
+                                .any(|(selected_group, selected_member)| {
+                                    *selected_group == group
+                                        && usize::from(*selected_member)
+                                            == candidate.member_index + 1
+                                })
+                    }) else {
+                        continue;
+                    };
+                    let member = &archive.members()[candidate.member_index];
+                    scan_link_object_symbols(member.bytes, format, &mut referenced, &mut defined)
+                        .map_err(|error| {
+                            anyhow!(
+                                "archive group {} member {} ({}) symbol inventory: {}",
+                                group,
+                                candidate.member_index + 1,
+                                member.name,
+                                error
+                            )
+                        })?;
+                    let alias = short_import_alias(
+                        format,
+                        member.bytes,
+                        archive.symbols(),
+                        candidate.member_index,
+                    )?;
+                    if let Some(alias) = alias
+                        && !defined.iter().any(|defined| *defined == alias)
+                    {
+                        defined
+                            .try_push(alias)
+                            .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+                    }
+                    if !defined.iter().any(|defined| *defined == candidate.symbol) {
+                        return Err(anyhow!(
+                            "archive group {} member {} ({}) symbol index for {} does not match its object member",
+                            group,
+                            candidate.member_index + 1,
+                            member.name,
+                            candidate.symbol,
+                        ));
+                    }
+                    if refs.len() == MAX_LINK_INPUTS {
+                        return Err(anyhow!("expanded link input count exceeds 256"));
+                    }
+                    refs.try_push(member.bytes)
+                        .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+                    archive_group
+                        .try_push(group)
+                        .map_err(|_| anyhow!("could not allocate link input origin list"))?;
+                    archive_member
+                        .try_push(
+                            u16::try_from(candidate.member_index + 1)
+                                .map_err(|_| anyhow!("archive member identity overflow"))?,
+                        )
+                        .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+                    import_alias
+                        .try_push(alias)
+                        .map_err(|_| anyhow!("could not allocate link import-alias list"))?;
+                    archive_indexed
+                        .try_push(true)
+                        .map_err(|_| anyhow!("could not allocate link index-presence list"))?;
+                    changed = true;
+                }
+            }
+            group = group
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("archive group identity overflow"))?;
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let selected_group = archive_group;
+    let selected_member = archive_member;
+    let mut ordered_refs = Vector::with_capacity(refs.len())
+        .map_err(|_| anyhow!("could not allocate ordered link input reference list"))?;
+    let mut ordered_group = Vector::with_capacity(refs.len())
+        .map_err(|_| anyhow!("could not allocate ordered link input origin list"))?;
+    let mut ordered_member = Vector::with_capacity(refs.len())
+        .map_err(|_| anyhow!("could not allocate ordered link member origin list"))?;
+    let mut ordered_alias = Vector::with_capacity(refs.len())
+        .map_err(|_| anyhow!("could not allocate ordered link import-alias list"))?;
+    let mut ordered_indexed = Vector::with_capacity(refs.len())
+        .map_err(|_| anyhow!("could not allocate ordered link index-presence list"))?;
+    let mut group = 1u16;
+    for object in objects {
+        let object = object.as_ref();
+        if object.get(..8) == Some(b"!<arch>\n") {
+            let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
+            for (member_index, member) in archive.members().iter().enumerate() {
+                let member_number = u16::try_from(member_index + 1)
+                    .map_err(|_| anyhow!("archive member identity overflow"))?;
+                if member.name == "lib.rmeta"
+                    || member.name == "lib.rmeta-link"
+                    || !selected_group
+                        .iter()
+                        .zip(selected_member.iter())
+                        .any(|(selected_group, selected_member)| {
+                            *selected_group == group && *selected_member == member_number
+                        })
+                {
+                    continue;
+                }
+                ordered_refs
+                    .try_push(member.bytes)
+                    .map_err(|_| anyhow!("could not allocate ordered link input list"))?;
+                ordered_group
+                    .try_push(group)
+                    .map_err(|_| anyhow!("could not allocate ordered link origin list"))?;
+                ordered_member
+                    .try_push(member_number)
+                    .map_err(|_| anyhow!("could not allocate ordered link member list"))?;
+                ordered_alias
+                    .try_push(short_import_alias(
+                        format,
+                        member.bytes,
+                        archive.symbols(),
+                        member_index,
+                    )?)
+                    .map_err(|_| anyhow!("could not allocate ordered import-alias list"))?;
+                ordered_indexed
+                    .try_push(archive.has_symbol_index())
+                    .map_err(|_| anyhow!("could not allocate ordered index-presence list"))?;
+            }
+            group = group
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("archive group identity overflow"))?;
+        } else {
+            ordered_refs
+                .try_push(object)
+                .map_err(|_| anyhow!("could not allocate ordered link input list"))?;
+            ordered_group
+                .try_push(0)
+                .map_err(|_| anyhow!("could not allocate ordered link origin list"))?;
+            ordered_member
+                .try_push(0)
+                .map_err(|_| anyhow!("could not allocate ordered link member list"))?;
+            ordered_alias
+                .try_push(None)
+                .map_err(|_| anyhow!("could not allocate ordered import-alias list"))?;
+            ordered_indexed
+                .try_push(true)
+                .map_err(|_| anyhow!("could not allocate ordered index-presence list"))?;
+        }
+    }
+    refs = ordered_refs;
+    archive_group = ordered_group;
+    archive_member = ordered_member;
+    import_alias = ordered_alias;
+    archive_indexed = ordered_indexed;
     if refs.is_empty() {
         return Err(anyhow!("link input list contains no object members"));
     }
