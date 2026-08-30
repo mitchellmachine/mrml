@@ -337,8 +337,8 @@ fn validate_coff_archive_second_index(
             .iter()
             .position(|byte| *byte == 0)
             .ok_or(LinkerError::InvalidArchive)?;
-        let name = core::str::from_utf8(&suffix[..length])
-            .map_err(|_| LinkerError::InvalidArchive)?;
+        let name =
+            core::str::from_utf8(&suffix[..length]).map_err(|_| LinkerError::InvalidArchive)?;
         validate_symbol(name).map_err(|_| LinkerError::InvalidArchive)?;
         name_cursor = name_cursor
             .checked_add(length + 1)
@@ -689,7 +689,10 @@ pub struct PeRuntimeFunction<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeWritableRelocationTarget<'a> {
-    Readonly { owner: &'a str, offset: usize },
+    Readonly {
+        owner: &'a str,
+        offset: usize,
+    },
     CoffSection {
         identity: CoffSectionIdentity,
         offset: usize,
@@ -990,22 +993,22 @@ fn decode_x86_64_coff_short_import_header(
     {
         return Err(LinkerError::UnsupportedCoff);
     }
-    let payload_size = usize::try_from(read_u32(object, 12)?)
-        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let payload_size =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
     let payload_end = 20usize
         .checked_add(payload_size)
         .ok_or(LinkerError::OffsetOverflow)?;
     if payload_end != object.len() {
         return Err(LinkerError::InvalidCoff);
     }
-    let payload = object.get(20..payload_end).ok_or(LinkerError::InvalidCoff)?;
+    let payload = object
+        .get(20..payload_end)
+        .ok_or(LinkerError::InvalidCoff)?;
     let name_end = payload
         .iter()
         .position(|byte| *byte == 0)
         .ok_or(LinkerError::InvalidCoff)?;
-    let library_start = name_end
-        .checked_add(1)
-        .ok_or(LinkerError::OffsetOverflow)?;
+    let library_start = name_end.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
     let library_end = payload[library_start..]
         .iter()
         .position(|byte| *byte == 0)
@@ -1014,8 +1017,8 @@ fn decode_x86_64_coff_short_import_header(
     if name_end == 0 || library_end == library_start || library_end + 1 != payload.len() {
         return Err(LinkerError::InvalidCoff);
     }
-    let symbol = core::str::from_utf8(&payload[..name_end])
-        .map_err(|_| LinkerError::InvalidCoff)?;
+    let symbol =
+        core::str::from_utf8(&payload[..name_end]).map_err(|_| LinkerError::InvalidCoff)?;
     validate_symbol(symbol)?;
     let library = core::str::from_utf8(&payload[library_start..library_end])
         .map_err(|_| LinkerError::InvalidCoff)?;
@@ -1035,9 +1038,7 @@ fn validate_pe_import_library(library: &str) -> Result<(), LinkerError> {
     Ok(())
 }
 
-pub fn x86_64_coff_short_import(
-    object: &[u8],
-) -> Result<Option<CoffShortImport<'_>>, LinkerError> {
+pub fn x86_64_coff_short_import(object: &[u8]) -> Result<Option<CoffShortImport<'_>>, LinkerError> {
     decode_x86_64_coff_short_import_header(object)
 }
 
@@ -3139,8 +3140,7 @@ fn input_definition_target(
 fn definition_is_global(target: LinkDefinitionTarget) -> bool {
     !matches!(
         target,
-        LinkDefinitionTarget::CoffTextSection { .. }
-            | LinkDefinitionTarget::CoffSection { .. }
+        LinkDefinitionTarget::CoffTextSection { .. } | LinkDefinitionTarget::CoffSection { .. }
     )
 }
 
@@ -3977,10 +3977,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
     )
 }
 
-pub fn decode_x86_64_coff_writable_data_fragment_with_section_identities<
-    'data,
-    'relocations,
->(
+pub fn decode_x86_64_coff_writable_data_fragment_with_section_identities<'data, 'relocations>(
     object: &'data [u8],
     fragment_index: usize,
     readonly_owner: &'data str,
@@ -4080,8 +4077,8 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
             object.get(raw..end).ok_or(LinkerError::InvalidCoff)?;
             readonly_sections.insert(section + 1)?;
-            let section_number = u16::try_from(section + 1)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let section_number =
+                u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
             let projected = comdat_sections
                 .as_ref()
                 .is_some_and(|inventory| inventory.section(section_number).is_some());
@@ -4206,8 +4203,8 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             let addend = read_u64_coff(bytes, field_offset)?;
             let addend = usize::try_from(addend).map_err(|_| LinkerError::OffsetOverflow)?;
-            let target_section = u16::try_from(target_section_index)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let target_section =
+                u16::try_from(target_section_index).map_err(|_| LinkerError::OffsetOverflow)?;
             let projected = comdat_sections
                 .as_ref()
                 .is_some_and(|inventory| inventory.section(target_section).is_some());
@@ -4217,10 +4214,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     .filter(|offset| *offset <= target_size)
                     .ok_or(LinkerError::InvalidRelocationOffset)?;
                 PeWritableRelocationTarget::CoffSection {
-                    identity: CoffSectionIdentity::new(
-                        object_identity,
-                        target_section,
-                    )?,
+                    identity: CoffSectionIdentity::new(object_identity, target_section)?,
                     offset,
                 }
             } else {
@@ -4266,8 +4260,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             PeWritableRelocationTarget::TlsSection {
                 identity: CoffSectionIdentity::new(
                     object_identity,
-                    u16::try_from(target_section_index)
-                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                    u16::try_from(target_section_index).map_err(|_| LinkerError::OffsetOverflow)?,
                 )?,
                 offset,
             }
@@ -4318,11 +4311,7 @@ pub fn decode_x86_64_coff_runtime_functions_with_section_identities<'data, 'reco
     record_storage: &'records mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
 ) -> Result<&'records [PeRuntimeFunction<'data>], LinkerError> {
     CoffSectionIdentity::new(object_identity, 1)?;
-    decode_x86_64_coff_runtime_functions_for_object(
-        object,
-        Some(object_identity),
-        record_storage,
-    )
+    decode_x86_64_coff_runtime_functions_for_object(object, Some(object_identity), record_storage)
 }
 
 fn decode_x86_64_coff_runtime_functions_for_object<'data, 'records>(
@@ -4589,8 +4578,7 @@ fn coff_code_symbol_in_section<'a>(
     if let Some(symbol) = found {
         return Ok(symbol);
     }
-    let section_index =
-        usize::try_from(section).map_err(|_| LinkerError::UnsupportedCoffSymbol)?;
+    let section_index = usize::try_from(section).map_err(|_| LinkerError::UnsupportedCoffSymbol)?;
     if section_index == 0 {
         return Err(LinkerError::UnsupportedCoffSymbol);
     }
@@ -4695,8 +4683,7 @@ fn validate_discardable_coff_exclude_directives(
             .ok_or(LinkerError::UnsupportedCoffSection)?;
         if symbol.is_empty()
             || !symbol.iter().all(|byte| {
-                byte.is_ascii_alphanumeric()
-                    || matches!(*byte, b'_' | b'$' | b'@' | b'?' | b'.')
+                byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'$' | b'@' | b'?' | b'.')
             })
         {
             return Err(LinkerError::UnsupportedCoffSection);
@@ -4707,6 +4694,80 @@ fn validate_discardable_coff_exclude_directives(
     }
     if directives == 0 {
         return Err(LinkerError::UnsupportedCoffSection);
+    }
+    Ok(())
+}
+
+fn validate_discardable_coff_symbol_index_metadata(
+    object: &[u8],
+    header: usize,
+    contents: &[u8],
+    symbol_count: usize,
+) -> Result<(), LinkerError> {
+    let characteristics = read_u32(object, header + 36)?;
+    if characteristics & 0x4000_0040 != 0x4000_0040
+        || characteristics & !0x40f0_0040 != 0
+        || read_u16(object, header + 32)? != 0
+        || contents.len() % 4 != 0
+    {
+        return Err(LinkerError::UnsupportedCoffSection);
+    }
+    for record in contents.chunks_exact(4) {
+        let symbol = usize::try_from(u32::from_le_bytes(
+            record.try_into().map_err(|_| LinkerError::InvalidCoff)?,
+        ))
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+        if symbol >= symbol_count {
+            return Err(LinkerError::InvalidCoff);
+        }
+    }
+    Ok(())
+}
+
+fn validate_discardable_llvm_addrsig(
+    object: &[u8],
+    header: usize,
+    contents: &[u8],
+    symbol_count: usize,
+) -> Result<(), LinkerError> {
+    let characteristics = read_u32(object, header + 36)?;
+    if characteristics & 0x0000_0800 == 0
+        || characteristics & !0x00f0_0a00 != 0
+        || read_u16(object, header + 32)? != 0
+    {
+        return Err(LinkerError::UnsupportedCoffSection);
+    }
+    let mut offset = 0usize;
+    while offset < contents.len() {
+        let mut value = 0usize;
+        let mut shift = 0u32;
+        let start = offset;
+        loop {
+            let byte = *contents.get(offset).ok_or(LinkerError::InvalidCoff)?;
+            offset = offset.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
+            let scale = 1usize
+                .checked_shl(shift)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let payload = usize::from(byte & 0x7f)
+                .checked_mul(scale)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            value = value
+                .checked_add(payload)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            if byte & 0x80 == 0 {
+                if offset - start > 1 && byte == 0 {
+                    return Err(LinkerError::InvalidCoff);
+                }
+                break;
+            }
+            shift = shift.checked_add(7).ok_or(LinkerError::OffsetOverflow)?;
+            if shift >= usize::BITS {
+                return Err(LinkerError::OffsetOverflow);
+            }
+        }
+        if value >= symbol_count {
+            return Err(LinkerError::InvalidCoff);
+        }
     }
     Ok(())
 }
@@ -4894,12 +4955,18 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             }
             metadata_sections.insert(section + 1)?;
         } else if name == ".drectve" {
-            validate_discardable_coff_exclude_directives(
+            validate_discardable_coff_exclude_directives(object, header, contents, symbol_count)?;
+            metadata_sections.insert(section + 1)?;
+        } else if matches!(name, ".gfids$y" | ".giats$y" | ".gljmp$y") {
+            validate_discardable_coff_symbol_index_metadata(
                 object,
                 header,
                 contents,
                 symbol_count,
             )?;
+            metadata_sections.insert(section + 1)?;
+        } else if name == ".llvm_addrsig" {
+            validate_discardable_llvm_addrsig(object, header, contents, symbol_count)?;
             metadata_sections.insert(section + 1)?;
         } else if name == ".debug" || name.starts_with(".debug$") || name.starts_with(".debug_") {
             validate_discardable_coff_debug_section(object, header, contents.len(), symbol_count)?;
@@ -5083,8 +5150,9 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             .ok_or(LinkerError::OffsetOverflow)?;
         let target_section = read_i16(object, target_offset + 12)?;
         let target_is_tls = target_section > 0
-            && tls_sections
-                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?);
+            && tls_sections.contains(
+                usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?,
+            );
         // IMAGE_REL_AMD64_REL32 is the ordinary code relocation. Rust's
         // Windows TLS access sequence additionally uses IMAGE_REL_AMD64_SECREL
         // for the offset within the selected TLS template; retain that target
@@ -5128,8 +5196,8 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     string_size,
                 )?)
             } else if storage_class == 3 {
-                let section = u16::try_from(target_section)
-                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let section =
+                    u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
                 let target_header = 20 + (usize::from(section) - 1) * 40;
                 if let Some(object_identity) = object_identity {
                     let section_size = usize::try_from(read_u32(object, target_header + 16)?)
@@ -5251,8 +5319,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 i64::from(field_addend) - 4,
             )
         } else if target_is_tls {
-            let section = u16::try_from(target_section)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let section = u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
             let target_header = 20 + (usize::from(section) - 1) * 40;
             let size = usize::try_from(read_u32(object, target_header + 16)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -7840,9 +7907,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
     readonly_absolute_relocations: &[PeReadonlyAbsoluteRelocation<'_>],
 ) -> Result<PeImage<MAX_IMAGE_BYTES>, LinkerError> {
     let mut bytes = [0u8; MAX_IMAGE_BYTES];
-    let length = link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<
-        MAX_LINKED_BYTES,
-    >(
+    let length = link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<MAX_LINKED_BYTES>(
         inputs,
         entry_symbol,
         runtime_functions,
@@ -8146,31 +8211,25 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
     let mut order = [0usize; MAX_PE_RUNTIME_FUNCTIONS];
     for (index, function) in runtime_functions.iter().enumerate() {
         let begin = match function.begin_identity {
-            Some(identity) => resolve_coff_section(
-                inputs,
-                &linked.layouts,
-                identity,
-                function.begin_offset,
-            )?,
+            Some(identity) => {
+                resolve_coff_section(inputs, &linked.layouts, identity, function.begin_offset)?
+            }
             None => resolve_symbol(inputs, &linked.layouts, function.begin_symbol)?
                 .checked_add(function.begin_offset)
                 .ok_or(LinkerError::OffsetOverflow)?,
         }
-            .checked_add(TEXT_RVA)
-            .ok_or(LinkerError::OffsetOverflow)?;
+        .checked_add(TEXT_RVA)
+        .ok_or(LinkerError::OffsetOverflow)?;
         let end = match function.end_identity {
-            Some(identity) => resolve_coff_section(
-                inputs,
-                &linked.layouts,
-                identity,
-                function.end_offset,
-            )?,
+            Some(identity) => {
+                resolve_coff_section(inputs, &linked.layouts, identity, function.end_offset)?
+            }
             None => resolve_symbol(inputs, &linked.layouts, function.end_symbol)?
                 .checked_add(function.end_offset)
                 .ok_or(LinkerError::OffsetOverflow)?,
         }
-            .checked_add(TEXT_RVA)
-            .ok_or(LinkerError::OffsetOverflow)?;
+        .checked_add(TEXT_RVA)
+        .ok_or(LinkerError::OffsetOverflow)?;
         if end <= begin {
             return Err(LinkerError::InvalidRelocationOffset);
         }
@@ -8297,12 +8356,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             )
             .ok_or(LinkerError::OffsetOverflow)?;
         let target_rva = if let Some(identity) = relocation.target_identity {
-            let target = resolve_coff_section(
-                inputs,
-                &linked.layouts,
-                identity,
-                relocation.target_offset,
-            )?;
+            let target =
+                resolve_coff_section(inputs, &linked.layouts, identity, relocation.target_offset)?;
             if target < linked.readonly_offset {
                 TEXT_RVA
                     .checked_add(target)
@@ -9037,8 +9092,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
             }
             if !matches!(
                 relocation.target,
-                LinkRelocationTarget::RequiredSymbol(_)
-                    | LinkRelocationTarget::PeWritableSymbol(_)
+                LinkRelocationTarget::RequiredSymbol(_) | LinkRelocationTarget::PeWritableSymbol(_)
             ) {
                 relocation
                     .offset
@@ -9204,11 +9258,7 @@ fn write_pe_section(
     patch_u32(output, offset + 36, characteristics)
 }
 
-fn patch_u16(
-    output: &mut [u8],
-    offset: usize,
-    value: u16,
-) -> Result<(), LinkerError> {
+fn patch_u16(output: &mut [u8], offset: usize, value: u16) -> Result<(), LinkerError> {
     output
         .get_mut(offset..offset + 2)
         .ok_or(LinkerError::OutputTooSmall)?
@@ -9216,11 +9266,7 @@ fn patch_u16(
     Ok(())
 }
 
-fn patch_u32(
-    output: &mut [u8],
-    offset: usize,
-    value: u32,
-) -> Result<(), LinkerError> {
+fn patch_u32(output: &mut [u8], offset: usize, value: u32) -> Result<(), LinkerError> {
     output
         .get_mut(offset..offset + 4)
         .ok_or(LinkerError::OutputTooSmall)?
@@ -9228,11 +9274,7 @@ fn patch_u32(
     Ok(())
 }
 
-fn patch_i32(
-    output: &mut [u8],
-    offset: usize,
-    value: i32,
-) -> Result<(), LinkerError> {
+fn patch_i32(output: &mut [u8], offset: usize, value: i32) -> Result<(), LinkerError> {
     output
         .get_mut(offset..offset + 4)
         .ok_or(LinkerError::OutputTooSmall)?
@@ -9240,11 +9282,7 @@ fn patch_i32(
     Ok(())
 }
 
-fn patch_u64(
-    output: &mut [u8],
-    offset: usize,
-    value: u64,
-) -> Result<(), LinkerError> {
+fn patch_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), LinkerError> {
     output
         .get_mut(offset..offset + 8)
         .ok_or(LinkerError::OutputTooSmall)?
@@ -9381,11 +9419,7 @@ fn align(value: usize, alignment: usize) -> Result<usize, LinkerError> {
         .ok_or(LinkerError::OffsetOverflow)
 }
 
-fn copy_at(
-    output: &mut [u8],
-    offset: usize,
-    input: &[u8],
-) -> Result<(), LinkerError> {
+fn copy_at(output: &mut [u8], offset: usize, input: &[u8]) -> Result<(), LinkerError> {
     let end = offset
         .checked_add(input.len())
         .ok_or(LinkerError::OffsetOverflow)?;
@@ -10098,9 +10132,16 @@ mod tests {
         append_archive_member(&mut empty_padded_archive, "/", &[0; 8]);
         append_archive_member(&mut empty_padded_archive, "empty.o/", b"object");
         assert!(
-            decode_unix_archive(&empty_padded_archive).unwrap().has_symbol_index()
+            decode_unix_archive(&empty_padded_archive)
+                .unwrap()
+                .has_symbol_index()
         );
-        assert!(decode_unix_archive(&empty_padded_archive).unwrap().symbols().is_empty());
+        assert!(
+            decode_unix_archive(&empty_padded_archive)
+                .unwrap()
+                .symbols()
+                .is_empty()
+        );
 
         let mut excessive_padding_archive = b"!<arch>\n".to_vec();
         append_archive_member(&mut excessive_padding_archive, "/", &[0; 12]);
@@ -10128,7 +10169,10 @@ mod tests {
 
         let decoded = decode_unix_archive(&archive).unwrap();
         assert_eq!(decoded.members().len(), 1);
-        assert_eq!(decoded.member_for_symbol("entry"), Some(&decoded.members()[0]));
+        assert_eq!(
+            decoded.member_for_symbol("entry"),
+            Some(&decoded.members()[0])
+        );
 
         let mut padded_archive = b"!<arch>\n".to_vec();
         let mut padded_first = std::vec![0, 0, 0, 1, 0, 0, 0, 164];
@@ -11792,6 +11836,72 @@ mod tests {
     }
 
     #[test]
+    fn validates_only_bounded_relocation_free_coff_symbol_index_metadata() {
+        let mut object = [0u8; 64];
+        let header = 20;
+        object[header + 36..header + 40].copy_from_slice(&0x4030_0040u32.to_le_bytes());
+        assert_eq!(
+            validate_discardable_coff_symbol_index_metadata(
+                &object,
+                header,
+                &[1, 0, 0, 0, 3, 0, 0, 0],
+                4,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_discardable_coff_symbol_index_metadata(&object, header, &[4, 0, 0, 0], 4,),
+            Err(LinkerError::InvalidCoff)
+        );
+        assert_eq!(
+            validate_discardable_coff_symbol_index_metadata(&object, header, &[1, 0, 0], 4),
+            Err(LinkerError::UnsupportedCoffSection)
+        );
+        object[header + 32..header + 34].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            validate_discardable_coff_symbol_index_metadata(&object, header, &[], 4),
+            Err(LinkerError::UnsupportedCoffSection)
+        );
+    }
+
+    #[test]
+    fn validates_only_bounded_relocation_free_llvm_addrsig_metadata() {
+        let mut object = [0u8; 64];
+        let header = 20;
+        object[header + 36..header + 40].copy_from_slice(&0x0010_0800u32.to_le_bytes());
+        assert_eq!(
+            validate_discardable_llvm_addrsig(&object, header, &[1, 0x81, 1], 130),
+            Ok(())
+        );
+        assert_eq!(
+            validate_discardable_llvm_addrsig(&object, header, &[0x82, 1], 130),
+            Err(LinkerError::InvalidCoff)
+        );
+        assert_eq!(
+            validate_discardable_llvm_addrsig(&object, header, &[0x80], 130),
+            Err(LinkerError::InvalidCoff)
+        );
+        assert_eq!(
+            validate_discardable_llvm_addrsig(&object, header, &[0x80, 0], 130),
+            Err(LinkerError::InvalidCoff)
+        );
+        assert_eq!(
+            validate_discardable_llvm_addrsig(
+                &object,
+                header,
+                &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 2],
+                usize::MAX,
+            ),
+            Err(LinkerError::OffsetOverflow)
+        );
+        object[header + 32..header + 34].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            validate_discardable_llvm_addrsig(&object, header, &[], 130),
+            Err(LinkerError::UnsupportedCoffSection)
+        );
+    }
+
+    #[test]
     fn decodes_multiple_readonly_relocation_kinds_from_named_comdats() {
         let object = coff_with_multiple_standalone_readonly_relocations();
         let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
@@ -11832,8 +11942,7 @@ mod tests {
             .unwrap();
         assert_eq!(identified.relocations().len(), 2);
         assert!(identified.relocations().iter().all(|relocation| {
-            relocation.readonly_identity
-                == Some(CoffSectionIdentity::new(9, 2).unwrap())
+            relocation.readonly_identity == Some(CoffSectionIdentity::new(9, 2).unwrap())
         }));
         assert_eq!(identified.relocations()[0].readonly_offset, 0);
         assert_eq!(identified.relocations()[1].readonly_offset, 8);
@@ -12055,8 +12164,7 @@ mod tests {
         aliased[329] = 2;
         let mut aliased_storage = storage;
         assert_eq!(
-            decode_x86_64_coff_runtime_functions(&aliased, &mut aliased_storage)
-                .unwrap()[0]
+            decode_x86_64_coff_runtime_functions(&aliased, &mut aliased_storage).unwrap()[0]
                 .begin_symbol,
             "entry"
         );
@@ -12322,16 +12430,15 @@ mod tests {
         assert_eq!(pe, link_x86_64_pe::<2048, 8192>(&[input], "entry").unwrap());
 
         let mut caller_owned = [0xa5; 2048];
-        let caller_length =
-            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<8192>(
-                &[input],
-                "entry",
-                &[],
-                &[],
-                &[],
-                &mut caller_owned,
-            )
-            .unwrap();
+        let caller_length = link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<8192>(
+            &[input],
+            "entry",
+            &[],
+            &[],
+            &[],
+            &mut caller_owned,
+        )
+        .unwrap();
         assert_eq!(&caller_owned[..caller_length], pe.bytes());
         assert!(caller_owned[caller_length..].iter().all(|byte| *byte == 0));
 
