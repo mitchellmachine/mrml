@@ -10582,3 +10582,19 @@ and interrupt-exclusion integration remain **PLANNED**.
 Patent review: `NOT_TRIGGERED` — narrowing teardown to a revoke-only backend and
 retaining conventional fail-closed ordering is ordinary authority attenuation.
 See `docs/patents/REVIEW_LOG.md`.
+
+Native copy-transfer retirement now has one coupled operation that removes the
+current task's complete runtime domain and immediately invokes exact mapping
+withdrawal before returning control to code that may install the scheduler's
+next hardware context. A withdrawal failure cannot revive the task: it returns
+the termination outcome, retained context, and still-live mapping policy record
+as retryable teardown state. Storage provider retirement uses this coupled path
+and publishes only the resulting teardown state, with successful withdrawal
+already marked complete. The Linux-host release kernel suite passes 652 tests,
+storage passes 162 tests, and both release builds pass. Tests use the in-memory
+scheduler and an inactive page-table hierarchy; active CR3 and interrupt-
+exclusion behavior remain unverified on physical hardware.
+
+Patent review: `NOT_TRIGGERED` — coupling task-domain retirement to immediate
+mapping withdrawal is conventional fail-closed lifecycle ordering. See
+`docs/patents/REVIEW_LOG.md`.

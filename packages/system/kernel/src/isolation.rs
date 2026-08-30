@@ -1311,6 +1311,17 @@ impl NativeComponentServiceCopyReadTransferTeardown {
             backing_released: false,
         }
     }
+    pub const fn from_retirement_with_mapping_revoked(
+        retirement: NativeComponentServiceCopyReadTransferRetirement,
+    ) -> Self {
+        Self {
+            active: retirement.active,
+            retired_context: Some(retirement.context),
+            authority_revoked: false,
+            mapping_removed: true,
+            backing_released: false,
+        }
+    }
     pub const fn active(self) -> NativeComponentServiceCopyReadTransferTask {
         self.active
     }
@@ -1352,6 +1363,30 @@ pub enum NativeComponentServiceCopyReadTransferRetirementError {
     NotCurrent,
     RootMismatch,
     Runtime(TaskRuntimeError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeComponentServiceCopyReadTransferRetirementMappingError<M> {
+    Retirement(NativeComponentServiceCopyReadTransferRetirementError),
+    Runtime {
+        termination: crate::TaskTermination,
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: TaskRuntimeError,
+    },
+    LocalMapping {
+        termination: crate::TaskTermination,
+        state: NativeComponentServiceCopyReadTransferTeardown,
+        error: MemoryMappingOperationError<M>,
+    },
+}
+
+impl<M> NativeComponentServiceCopyReadTransferRetirementMappingError<M> {
+    pub const fn state(&self) -> Option<NativeComponentServiceCopyReadTransferTeardown> {
+        match self {
+            Self::Retirement(_) => None,
+            Self::Runtime { state, .. } | Self::LocalMapping { state, .. } => Some(*state),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1708,6 +1743,66 @@ pub fn retire_current_native_component_service_copy_read_transfer<
             active,
             context: retired_context,
         },
+    ))
+}
+
+/// Retires the current copy-mediated service task and withdraws its exact local
+/// mapping before returning control to code that may install the next hardware
+/// context. A post-retirement failure retains the typed context and mapping
+/// policy record so cleanup can fail closed or retry without reviving the task.
+pub fn retire_current_native_component_service_copy_read_transfer_with_mapping_revocation<
+    M: MemoryMappingRevocationBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    active: NativeComponentServiceCopyReadTransferTask,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    mapping_backend: &mut M,
+) -> Result<
+    (
+        crate::TaskTermination,
+        NativeComponentServiceCopyReadTransferTeardown,
+    ),
+    NativeComponentServiceCopyReadTransferRetirementMappingError<M::Error>,
+> {
+    let (termination, retirement) =
+        retire_current_native_component_service_copy_read_transfer(active, runtime)
+            .map_err(NativeComponentServiceCopyReadTransferRetirementMappingError::Retirement)?;
+    let state = NativeComponentServiceCopyReadTransferTeardown::from_retirement(retirement);
+    let construction = active.construction();
+    let capabilities = runtime
+        .capabilities(construction.source_task())
+        .map_err(
+            |error| NativeComponentServiceCopyReadTransferRetirementMappingError::Runtime {
+                termination,
+                state,
+                error,
+            },
+        )?;
+    let mapping = active.binding().mapping();
+    memory
+        .revoke_mapping(
+            mapping.mapping(),
+            mapping.local_target_capability(),
+            capabilities,
+            mapping_backend,
+        )
+        .map_err(|error| {
+            NativeComponentServiceCopyReadTransferRetirementMappingError::LocalMapping {
+                termination,
+                state,
+                error,
+            }
+        })?;
+    Ok((
+        termination,
+        NativeComponentServiceCopyReadTransferTeardown::from_retirement_with_mapping_revoked(
+            retirement,
+        ),
     ))
 }
 
@@ -5472,32 +5567,22 @@ mod tests {
         runtime.yield_current().unwrap();
         assert_eq!(runtime.current(), Some(target));
         assert!(state.is_pristine());
-        let (termination, retirement) = retire_current_native_component_service_copy_read_transfer(
-            state.active(),
-            &mut runtime,
-        )
-        .unwrap();
+        let (termination, state) =
+            retire_current_native_component_service_copy_read_transfer_with_mapping_revocation(
+                state.active(),
+                &mut runtime,
+                &mut memory,
+                &mut mapping_backend,
+            )
+            .unwrap();
         assert_eq!(termination.task, target);
-        assert_eq!(retirement.active(), active);
-        assert_eq!(retirement.context().page_table(), active.page_table_root());
-        let state = NativeComponentServiceCopyReadTransferTeardown::from_retirement(retirement);
+        assert_eq!(
+            state.retired_context().unwrap().page_table(),
+            active.page_table_root()
+        );
+        assert!(!state.authority_revoked());
+        assert!(state.mapping_removed());
         mapping_backend.fail_remove = true;
-        let state = match teardown_native_component_service_copy_read_transfer(
-            state,
-            &mut runtime,
-            &mut memory,
-            &mut mapping_backend,
-            &mut backing,
-        ) {
-            Err(NativeComponentServiceCopyReadTransferTeardownError::LocalMapping {
-                state,
-                error: MemoryMappingOperationError::Backend("remove"),
-            }) => state,
-            other => panic!("unexpected copy mapping teardown result: {other:?}"),
-        };
-        assert!(state.authority_revoked());
-        assert!(!state.mapping_removed());
-        mapping_backend.fail_remove = false;
         backing.fail_release = true;
         let state = match teardown_native_component_service_copy_read_transfer(
             state,

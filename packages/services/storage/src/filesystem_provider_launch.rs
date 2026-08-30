@@ -7,13 +7,13 @@ use mrml_kernel::{
     ComponentServiceReadTransferAttachment, ComponentServiceReadTransferCopyTaskBinding,
     ComponentServiceReadTransferMemoryRoot, IsolationPlacement, IsolationServiceSpec,
     MemoryMappingRevocationBackend, MemoryObjectBackingBackend, MemoryPoolTable,
-    NativeComponentServiceCopyReadTransferError, NativeComponentServiceCopyReadTransferRetirement,
-    NativeComponentServiceCopyReadTransferRetirementError,
+    NativeComponentServiceCopyReadTransferError,
+    NativeComponentServiceCopyReadTransferRetirementMappingError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
     NativeComponentServiceCopyReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
     TaskRuntimeError, TaskTermination,
     prepare_native_component_service_task_from_copy_read_transfer_attachment,
-    retire_current_native_component_service_copy_read_transfer,
+    retire_current_native_component_service_copy_read_transfer_with_mapping_revocation,
     teardown_native_component_service_copy_read_transfer,
 };
 
@@ -159,7 +159,6 @@ pub enum NativeFilesystemProviderLaunchError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeFilesystemProviderInstance {
     Active(NativeComponentServiceCopyReadTransferTask),
-    Retired(NativeComponentServiceCopyReadTransferRetirement),
     Teardown(NativeComponentServiceCopyReadTransferTeardown),
 }
 
@@ -167,44 +166,67 @@ impl NativeFilesystemProviderInstance {
     pub const fn active(self) -> Option<NativeComponentServiceCopyReadTransferTask> {
         match self {
             Self::Active(active) => Some(active),
-            Self::Retired(_) | Self::Teardown(_) => None,
+            Self::Teardown(_) => None,
         }
     }
 
     pub const fn teardown(self) -> Option<NativeComponentServiceCopyReadTransferTeardown> {
         match self {
-            Self::Active(_) | Self::Retired(_) => None,
+            Self::Active(_) => None,
             Self::Teardown(state) => Some(state),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NativeFilesystemProviderRetirementError {
-    AlreadyRetired,
+pub enum NativeFilesystemProviderRetirementError<M> {
     TeardownProgressed,
-    Retirement(NativeComponentServiceCopyReadTransferRetirementError),
+    RetirementMapping(NativeComponentServiceCopyReadTransferRetirementMappingError<M>),
 }
 
-pub fn retire_current_native_filesystem_provider<const TASKS: usize, const CAPABILITIES: usize>(
+pub fn retire_current_native_filesystem_provider<
+    M: MemoryMappingRevocationBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
     receipt: &mut FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
-) -> Result<TaskTermination, NativeFilesystemProviderRetirementError> {
+    memory: &mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    mapping_backend: &mut M,
+) -> Result<TaskTermination, NativeFilesystemProviderRetirementError<M::Error>> {
     let active = match receipt.instance {
         NativeFilesystemProviderInstance::Active(active) => active,
-        NativeFilesystemProviderInstance::Retired(_) => {
-            return Err(NativeFilesystemProviderRetirementError::AlreadyRetired);
+        NativeFilesystemProviderInstance::Teardown(state)
+            if state.is_pristine() && state.retired_context().is_none() =>
+        {
+            state.active()
         }
-        NativeFilesystemProviderInstance::Teardown(state) if state.is_pristine() => state.active(),
         NativeFilesystemProviderInstance::Teardown(_) => {
             return Err(NativeFilesystemProviderRetirementError::TeardownProgressed);
         }
     };
-    let (termination, retirement) =
-        retire_current_native_component_service_copy_read_transfer(active, runtime)
-            .map_err(NativeFilesystemProviderRetirementError::Retirement)?;
-    receipt.instance = NativeFilesystemProviderInstance::Retired(retirement);
-    Ok(termination)
+    match retire_current_native_component_service_copy_read_transfer_with_mapping_revocation(
+        active,
+        runtime,
+        memory,
+        mapping_backend,
+    ) {
+        Ok((termination, state)) => {
+            receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
+            Ok(termination)
+        }
+        Err(error) => {
+            if let Some(state) = error.state() {
+                receipt.instance = NativeFilesystemProviderInstance::Teardown(state);
+            }
+            Err(NativeFilesystemProviderRetirementError::RetirementMapping(
+                error,
+            ))
+        }
+    }
 }
 
 fn reject_native_filesystem_provider_preflight<const TASKS: usize, const CAPABILITIES: usize>(
@@ -527,9 +549,6 @@ unsafe impl<
             NativeFilesystemProviderInstance::Active(active) => {
                 NativeComponentServiceCopyReadTransferTeardown::new(active)
             }
-            NativeFilesystemProviderInstance::Retired(retirement) => {
-                NativeComponentServiceCopyReadTransferTeardown::from_retirement(retirement)
-            }
             NativeFilesystemProviderInstance::Teardown(state) => state,
         };
         match teardown_native_component_service_copy_read_transfer(
@@ -599,6 +618,21 @@ mod tests {
 
     #[repr(C, align(4096))]
     struct PageTableArena([u64; 512 * 5]);
+
+    struct RejectingRevoker;
+
+    // SAFETY: this backend never mutates native mapping state and never reports
+    // successful withdrawal.
+    unsafe impl MemoryMappingRevocationBackend for RejectingRevoker {
+        type Error = &'static str;
+
+        fn revoke(
+            &mut self,
+            _request: mrml_kernel::MemoryMappingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            Err("revoke")
+        }
+    }
 
     struct Backend {
         fail: bool,
@@ -1113,12 +1147,28 @@ mod tests {
         runtime.start();
         runtime.yield_current().unwrap();
         assert_eq!(runtime.current(), Some(target));
+        let mut rejecting = RejectingRevoker;
+        assert!(matches!(
+            retire_current_native_filesystem_provider(
+                &mut receipt,
+                &mut runtime,
+                &mut memory,
+                &mut rejecting,
+            ),
+            Err(NativeFilesystemProviderRetirementError::RetirementMapping(
+                NativeComponentServiceCopyReadTransferRetirementMappingError::LocalMapping {
+                    termination,
+                    error: mrml_kernel::MemoryMappingOperationError::Backend("revoke"),
+                    ..
+                }
+            )) if termination.task == target
+        ));
+        let retained = receipt.instance().teardown().unwrap();
         assert_eq!(
-            retire_current_native_filesystem_provider(&mut receipt, &mut runtime)
-                .unwrap()
-                .task,
-            target
+            retained.retired_context().unwrap().page_table(),
+            local_mapping.root()
         );
+        assert!(!retained.mapping_removed());
         let mut teardown = NativeFilesystemProviderTeardownBackend::new(
             &mut runtime,
             &mut memory,
