@@ -348,9 +348,12 @@ selected for each `InterfaceBinding`; consumer/provider form mismatch fails
 closed. Bootloader and recovery manifests cannot require either ordinary dynamic
 form. The first canonical schema generator is
 implemented as `mrml interface generate-rust SCHEMA OUTPUT`. It bounds input at
-64 KiB, exclusively creates output, accepts only the explicit version-1 policy
-profile, computes a SHA3-256 fingerprint, and emits deterministic pointer-free
-Rust types. The Zstd ABI-3 schema and checked-in generated output are the first
+64 KiB, exclusively creates output, computes a SHA3-256 fingerprint, and emits
+deterministic pointer-free Rust types. Schema version 1 remains frozen to zero or
+one result field. Schema version 2 adds only bounded, uniquely named multi-field
+response records; version-2 borrowed views remain request-only, capability-transfer policy
+is unchanged, and existing version-1 generation and fingerprint output remains
+byte-identical. The Zstd ABI-3 schema and checked-in generated output are the first
 golden fixture. The generation-1 GUI surface schema is now a second checked-in
 fixture. Its fingerprinted fixed request/state/response codec is a separate
 interface package and the kernel policy-model crate consumes it statically for
@@ -361,6 +364,20 @@ call lowering, conformance execution, ABI diffs, and
 adapter exercises the generated request/response contract for Zstd and ZIM,
 but is not native loader dispatch; neither Rust's native ABI nor a package name
 is the stable interface.
+
+This is a prerequisite for a future filesystem interface generation that can
+return mount lifecycle identity and root-object identity separately. It does not
+define that interface, grant a root capability, or reinterpret generation-1
+mount responses.
+
+- Complexity impact: **LOW**
+- TCB impact: **NONE**
+- New parser boundary: **NO** (bounded extension of the existing schema parser)
+- New authority model: **NO**
+
+Patent review: `NOT_TRIGGERED` — parsing bounded named result fields and emitting
+a deterministic record type are conventional schema/code-generation mechanisms.
+See `docs/patents/REVIEW_LOG.md`.
 
 Profiles define compiler restrictions, ABI, unsafe/FFI policy, format, metadata,
 signing, and admission:

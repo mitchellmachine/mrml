@@ -71,6 +71,13 @@ checking, formatting, writes, installed supervisor launch, and hardware evidence
 remain next in dependency order; this lookup returns metadata and grants no open
 authority.
 
+The build frontend now **PARTIALLY IMPLEMENTS** schema version 2 multi-field
+responses as the bounded prerequisite for resolving the mount/root bootstrap.
+Version-1 generation remains byte-identical, and version 2 neither transfers
+capabilities nor defines a filesystem generation by itself. The next filesystem
+contract must return mount lifecycle identity and root-object identity explicitly
+before provider mount/open state is implemented.
+
 The FAT32 and Zstd isolated-service syscall adapters now apply the same receive-
 result bound as AHCI: kernel-reported payload and capability counts cannot
 exceed the exact buffers supplied to the trap. Focused Linux suites pass 34

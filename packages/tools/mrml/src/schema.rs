@@ -2,7 +2,7 @@ use crate::abi::InterfaceIdentity;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-pub const INTERFACE_SCHEMA_VERSION: u16 = 1;
+pub const INTERFACE_SCHEMA_VERSION: u16 = 2;
 pub const MAX_INTERFACE_SCHEMA_BYTES: usize = 64 * 1024;
 pub const MAX_INTERFACE_OPERATIONS: usize = 64;
 pub const MAX_OPERATION_ARGUMENTS: usize = 16;
@@ -73,7 +73,7 @@ pub struct AbiOperation {
     id: u32,
     name: String,
     arguments: Vec<AbiArgument>,
-    result: Option<AbiArgument>,
+    results: Vec<AbiArgument>,
 }
 
 impl AbiOperation {
@@ -90,7 +90,11 @@ impl AbiOperation {
     }
 
     pub fn result(&self) -> Option<&AbiArgument> {
-        self.result.as_ref()
+        (self.results.len() == 1).then(|| &self.results[0])
+    }
+
+    pub fn results(&self) -> &[AbiArgument] {
+        &self.results
     }
 }
 
@@ -117,6 +121,7 @@ impl AbiErrorCode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InterfaceSchema {
+    schema_version: u16,
     identity: InterfaceIdentity,
     operations: Vec<AbiOperation>,
     errors: Vec<AbiErrorCode>,
@@ -133,9 +138,11 @@ impl InterfaceSchema {
             return Err(SchemaError::NonCanonical);
         }
         let mut lines = text.lines();
-        if lines.next() != Some("mrml-interface-schema|1") {
-            return Err(SchemaError::InvalidHeader);
-        }
+        let schema_version = match lines.next() {
+            Some("mrml-interface-schema|1") => 1,
+            Some("mrml-interface-schema|2") => 2,
+            _ => return Err(SchemaError::InvalidHeader),
+        };
         let interface = lines.next().ok_or(SchemaError::MissingInterface)?;
         let fields: Vec<_> = interface.split('|').collect();
         if fields.len() != 9
@@ -181,16 +188,12 @@ impl InterfaceSchema {
                         return Err(SchemaError::DuplicateOrInvalidIdentity);
                     }
                     let arguments = parse_arguments(fields[3])?;
-                    let result = if fields[4] == "none" {
-                        None
-                    } else {
-                        Some(parse_argument(fields[4])?)
-                    };
+                    let results = parse_results(fields[4], schema_version)?;
                     operations.push(AbiOperation {
                         id,
                         name: fields[2].to_owned(),
                         arguments,
-                        result,
+                        results,
                     });
                 }
                 Some("error") if fields.len() == 4 => {
@@ -229,6 +232,7 @@ impl InterfaceSchema {
             return Err(SchemaError::NonCanonicalOrder);
         }
         Ok(Self {
+            schema_version,
             identity,
             operations,
             errors,
@@ -238,6 +242,10 @@ impl InterfaceSchema {
 
     pub fn identity(&self) -> &InterfaceIdentity {
         &self.identity
+    }
+
+    pub const fn schema_version(&self) -> u16 {
+        self.schema_version
     }
 
     pub fn operations(&self) -> &[AbiOperation] {
@@ -344,7 +352,8 @@ impl OpaqueHandle {\n\
             .unwrap();
             writeln!(output, "    }}").unwrap();
             writeln!(output, "}}").unwrap();
-            if let Some(result) = &operation.result {
+            if operation.results.len() == 1 {
+                let result = &operation.results[0];
                 writeln!(
                     output,
                     "pub type {}Response = {};",
@@ -352,8 +361,21 @@ impl OpaqueHandle {\n\
                     result.kind.rust_type()
                 )
                 .unwrap();
-            } else {
+            } else if operation.results.is_empty() {
                 writeln!(output, "pub type {}Response = ();", pascal(&operation.name)).unwrap();
+            } else {
+                writeln!(output, "#[derive(Clone, Copy, Debug, Eq, PartialEq)]").unwrap();
+                writeln!(output, "pub struct {}Response {{", pascal(&operation.name)).unwrap();
+                for result in &operation.results {
+                    writeln!(
+                        output,
+                        "    pub {}: {},",
+                        result.name,
+                        result.kind.rust_type()
+                    )
+                    .unwrap();
+                }
+                writeln!(output, "}}").unwrap();
             }
             let operation_errors: Vec<_> = self
                 .errors
@@ -412,6 +434,21 @@ fn parse_arguments(value: &str) -> Result<Vec<AbiArgument>, SchemaError> {
         return Err(SchemaError::DuplicateOrInvalidIdentity);
     }
     Ok(arguments)
+}
+
+fn parse_results(value: &str, schema_version: u16) -> Result<Vec<AbiArgument>, SchemaError> {
+    if value == "none" {
+        return Ok(Vec::new());
+    }
+    let results = if schema_version == 1 {
+        vec![parse_argument(value)?]
+    } else {
+        parse_arguments(value)?
+    };
+    if schema_version >= 2 && results.iter().any(|result| result.kind.is_view()) {
+        return Err(SchemaError::InvalidArgument);
+    }
+    Ok(results)
 }
 
 fn parse_argument(value: &str) -> Result<AbiArgument, SchemaError> {
@@ -562,6 +599,7 @@ mod tests {
     use super::*;
 
     const ZSTD_SCHEMA: &str = "mrml-interface-schema|1\ninterface|org.mrml.interface.compression.zstd|3|mrml-call-v1|parallel|fail-closed|none|none|no-capability-transfer\noperation|1|decompress|input:borrowed-read:16777216,output:borrowed-write:536870912|written:u64:0\nerror|1|1|invalid_frame\nerror|1|2|output_too_small\nend\n";
+    const MULTI_RESULT_SCHEMA: &str = "mrml-interface-schema|2\ninterface|org.mrml.interface.storage.filesystem|2|mrml-call-v1|parallel|fail-closed|none|none|no-capability-transfer\noperation|1|mount|volume:opaque-handle:0|generation:u64:0,root:opaque-handle:0\nerror|1|1|invalid_request\nend\n";
 
     #[test]
     fn sha3_256_matches_fips_empty_vector() {
@@ -594,6 +632,40 @@ mod tests {
     }
 
     #[test]
+    fn schema_v2_generates_named_multi_field_response_without_changing_v1() {
+        let schema = InterfaceSchema::parse(MULTI_RESULT_SCHEMA.as_bytes()).unwrap();
+        assert_eq!(schema.schema_version(), 2);
+        let operation = &schema.operations()[0];
+        assert_eq!(operation.results().len(), 2);
+        assert_eq!(operation.result(), None);
+        let rust = schema.generate_rust();
+        assert!(rust.contains("pub struct MountResponse"));
+        assert!(rust.contains("pub generation: u64"));
+        assert!(rust.contains("pub root: OpaqueHandle"));
+
+        let v1_multi =
+            MULTI_RESULT_SCHEMA.replace("mrml-interface-schema|2", "mrml-interface-schema|1");
+        assert_eq!(
+            InterfaceSchema::parse(v1_multi.as_bytes()),
+            Err(SchemaError::InvalidArgument)
+        );
+        let v1 = InterfaceSchema::parse(ZSTD_SCHEMA.as_bytes()).unwrap();
+        assert_eq!(v1.schema_version(), 1);
+        assert!(
+            v1.generate_rust()
+                .contains("pub type DecompressResponse = u64")
+        );
+        let v1_view_result = ZSTD_SCHEMA.replace("written:u64:0", "output:borrowed-write:64");
+        assert!(InterfaceSchema::parse(v1_view_result.as_bytes()).is_ok());
+        let v2_view_result =
+            v1_view_result.replace("mrml-interface-schema|1", "mrml-interface-schema|2");
+        assert_eq!(
+            InterfaceSchema::parse(v2_view_result.as_bytes()),
+            Err(SchemaError::InvalidArgument)
+        );
+    }
+
+    #[test]
     fn malformed_ambiguous_and_reordered_schemas_fail_closed() {
         let crlf = ZSTD_SCHEMA.replace('\n', "\r\n");
         assert_eq!(
@@ -618,6 +690,11 @@ mod tests {
         assert_eq!(
             InterfaceSchema::parse(unbounded.as_bytes()),
             Err(SchemaError::InvalidArgument)
+        );
+        let future = ZSTD_SCHEMA.replace("mrml-interface-schema|1", "mrml-interface-schema|3");
+        assert_eq!(
+            InterfaceSchema::parse(future.as_bytes()),
+            Err(SchemaError::InvalidHeader)
         );
     }
 

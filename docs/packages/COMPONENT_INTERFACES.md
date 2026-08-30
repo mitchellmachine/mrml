@@ -410,6 +410,12 @@ because transports own device/DMA state and filesystems parse hostile media.
 AHCI and FAT32 packages may be libraries, but runtime composition is a supervised
 exact-generation endpoint rather than DLL/SO path search. Compatible updates use
 cleanup-gated restart without reboot; names and manifests grant no authority.
+The schema tool now accepts version 2 solely to express bounded, uniquely named
+multi-field response records while preserving version-1 output byte-for-byte.
+This removes the representation blocker for a future filesystem generation to
+return mount and root identities separately, but no generation-2 filesystem
+contract or root capability exists yet. Response fields remain data; runtime-
+delivered capabilities authorize.
 The storage-side fixed registry exercises cleanup before candidate launch,
 health-check before publication, quarantine on cleanup uncertainty, and an
 unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
@@ -632,7 +638,8 @@ After package identity, generation construction, package resolution, loader
 foundations, stable ABI primitives, and quantitative memory accounting, proceed:
 
 1. versioned canonical interface schema and generated safe bindings
-   (**PARTIALLY IMPLEMENTED** for schema version 1 and the Zstd ABI-3 fixture);
+   (**PARTIALLY IMPLEMENTED** for frozen schema version 1, bounded multi-result
+   schema version 2, and the Zstd ABI-3 fixture);
 2. typed provides/requires metadata and exact candidate resolution
    (**PARTIALLY IMPLEMENTED** as bounded in-generation exact resolution);
 3. immutable in-process loader and generation-safe `InterfaceBinding`
