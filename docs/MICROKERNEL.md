@@ -10756,3 +10756,18 @@ active-CR3 execution remains unverified.
 Patent review: `NOT_TRIGGERED` — retaining exact scheduler evidence across a
 retryable resource-withdrawal failure is conventional fail-closed lifecycle
 recovery. See `docs/patents/REVIEW_LOG.md`.
+
+The active x86-64 retirement path now accepts that same progressed retry state.
+It validates the retained termination and context root, reauthorizes the exact
+mapping descriptor, opens the still-active IF-clear CR3 hierarchy, reconstructs
+the revoke-only backend, and retries withdrawal without consulting or mutating
+the already-advanced scheduler task state. The storage receipt exposes this
+retry through its existing active retirement operation. The Linux-host release
+kernel suite passes 653 tests, storage passes 163 tests, and both release builds
+pass. Host coverage proves malformed retry state is rejected before privileged
+access; successful active-CR3 retry remains **PARTIALLY IMPLEMENTED** and is not
+physical-hardware evidence.
+
+Patent review: `NOT_TRIGGERED` — reconstructing an exact authorized page-table
+revoker for retry is conventional privileged lifecycle recovery. See
+`docs/patents/REVIEW_LOG.md`.
