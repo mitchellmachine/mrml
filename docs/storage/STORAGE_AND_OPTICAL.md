@@ -911,13 +911,19 @@ only after removal; replay is stale, and serial exhaustion preserves the live
 record. A narrow unsafe backend must read the complete boot sector from the exact
 volume handle before admission. The provider validates those bytes, erases the
 sector scratch on every path, and publishes no state or generation advance after
-backend or parse failure. Forty focused Linux-host tests pass. The storage service
+backend or parse failure. The provider-side block client accepts only an unsafe
+runtime-proven exact volume/session association, sends one canonical LBA-zero
+read for the complete logical block, requires exact completion, publishes only
+its 512-byte FAT prefix, and erases its scratch after every outcome. A matching
+numeric handle or label is explicitly insufficient. Forty-four focused Linux-host
+tests pass. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the
 512-byte FAT boot sector, and erases scratch after success, denial, mismatch, or
 backend failure. It grants no new right and makes no device call for a mismatched
-volume. Cross-service transport remains **PLANNED**. The
+volume. Runtime installation of the proven association and syscall-dispatched
+mount remain **PLANNED**. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows

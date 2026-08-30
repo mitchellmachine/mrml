@@ -7416,11 +7416,22 @@ A narrow unsafe FAT32 mount backend now binds validation to an exact volume
 handle. It must fill the complete sector-zero scratch from that live volume;
 the provider parses before publication and erases scratch after success or
 failure. Backend errors and malformed filesystems publish no record and consume
-no lifecycle generation. The focused Linux-host provider suite passes forty tests.
+no lifecycle generation. A concrete provider-side client now consumes the
+generation-1 block-provider protocol only through an unsafe runtime-proven exact
+volume/session binding. It requests one complete logical block at LBA zero,
+requires exact completion, copies only the 512-byte boot-sector prefix, and
+erases full-block scratch on every path. Numeric identity equality alone does not
+establish this binding. The focused Linux-host provider suite passes forty-four
+tests.
 
 Patent review: `NOT_TRIGGERED` — exact-volume reads, validate-before-publish,
 scratch erasure, and failure-atomic admission are conventional storage-parser and
 resource-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
+Patent review: `NOT_TRIGGERED` — canonical block reads, runtime-established
+cross-service association, exact completion checks, bounded prefix copy, and
+scratch erasure are conventional storage-service composition mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
 
 The storage service now has a concrete interface-level sector-zero bridge for
 filesystem admission. Construction binds one opaque filesystem volume identity

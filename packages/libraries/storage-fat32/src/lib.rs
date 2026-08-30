@@ -7,6 +7,12 @@
 mod service_loop;
 mod userspace_syscall_adapter;
 
+use mrml_interface_storage_block_provider_v1::{
+    decode_read_response as decode_block_read_response,
+    encode_read_request as encode_block_read_request, BlockProviderReadTransport,
+    BorrowedWriteView as BlockBorrowedWriteView, OpaqueHandle as BlockOpaqueHandle,
+    ProtocolError as BlockProtocolError, ReadError as BlockReadError,
+};
 use mrml_interface_storage_filesystem_v2::{
     decode_probe_request, encode_probe_response, FilesystemTransport, MountResponse, OpaqueHandle,
     ProbeError, ProtocolError, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
@@ -224,6 +230,135 @@ pub unsafe trait Fat32MountBackend {
         volume: OpaqueHandle,
         output: &mut [u8; FAT32_BOOT_SECTOR_BYTES],
     ) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fat32BlockBinding {
+    volume: OpaqueHandle,
+    session: BlockOpaqueHandle,
+    logical_block_bytes: u32,
+}
+
+impl Fat32BlockBinding {
+    /// Creates a cross-service binding after the runtime has proven that the
+    /// block session is the exact storage backing for `volume`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the authoritative runtime association between these
+    /// two live generations. Matching numeric fields, names, or media labels is
+    /// insufficient.
+    pub unsafe fn new(
+        volume: OpaqueHandle,
+        session: BlockOpaqueHandle,
+        logical_block_bytes: u32,
+    ) -> Option<Self> {
+        if logical_block_bytes < FAT32_BOOT_SECTOR_BYTES as u32
+            || logical_block_bytes > 65_536
+            || !logical_block_bytes.is_power_of_two()
+        {
+            return None;
+        }
+        Some(Self {
+            volume,
+            session,
+            logical_block_bytes,
+        })
+    }
+
+    pub const fn volume(self) -> OpaqueHandle {
+        self.volume
+    }
+
+    pub const fn session(self) -> BlockOpaqueHandle {
+        self.session
+    }
+
+    pub const fn logical_block_bytes(self) -> u32 {
+        self.logical_block_bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32BlockMountError {
+    VolumeMismatch,
+    InvalidScratch,
+    Protocol(BlockProtocolError),
+    Read(BlockReadError),
+    ShortRead,
+}
+
+pub struct Fat32BlockMountBackend<'a, T> {
+    binding: Fat32BlockBinding,
+    transport: T,
+    scratch: &'a mut [u8],
+}
+
+impl<'a, T> Fat32BlockMountBackend<'a, T> {
+    pub fn new(
+        binding: Fat32BlockBinding,
+        transport: T,
+        scratch: &'a mut [u8],
+    ) -> Result<Self, Fat32BlockMountError> {
+        if scratch.len() != binding.logical_block_bytes as usize {
+            scratch.fill(0);
+            return Err(Fat32BlockMountError::InvalidScratch);
+        }
+        scratch.fill(0);
+        Ok(Self {
+            binding,
+            transport,
+            scratch,
+        })
+    }
+
+    pub fn into_transport(self) -> T {
+        self.transport
+    }
+}
+
+unsafe impl<T: BlockProviderReadTransport> Fat32MountBackend for Fat32BlockMountBackend<'_, T> {
+    type Error = Fat32BlockMountError;
+
+    fn read_boot_sector(
+        &mut self,
+        volume: OpaqueHandle,
+        output: &mut [u8; FAT32_BOOT_SECTOR_BYTES],
+    ) -> Result<(), Self::Error> {
+        output.fill(0);
+        if volume != self.binding.volume {
+            return Err(Fat32BlockMountError::VolumeMismatch);
+        }
+        self.scratch.fill(0);
+        let result = (|| {
+            let view = BlockBorrowedWriteView::within(
+                0,
+                u64::from(self.binding.logical_block_bytes),
+                u64::from(self.binding.logical_block_bytes),
+            )
+            .ok_or(Fat32BlockMountError::InvalidScratch)?;
+            let request = encode_block_read_request(self.binding.session, 0, 1, view)
+                .map_err(Fat32BlockMountError::Protocol)?;
+            let response = self
+                .transport
+                .read(&request, self.scratch)
+                .map_err(Fat32BlockMountError::Protocol)?;
+            let transferred =
+                decode_block_read_response(&response, u64::from(self.binding.logical_block_bytes))
+                    .map_err(Fat32BlockMountError::Protocol)?
+                    .map_err(Fat32BlockMountError::Read)?;
+            if transferred != u64::from(self.binding.logical_block_bytes) {
+                return Err(Fat32BlockMountError::ShortRead);
+            }
+            output.copy_from_slice(&self.scratch[..FAT32_BOOT_SECTOR_BYTES]);
+            Ok(())
+        })();
+        self.scratch.fill(0);
+        if result.is_err() {
+            output.fill(0);
+        }
+        result
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1311,6 +1446,151 @@ mod tests {
             *output = self.sector;
             Ok(())
         }
+    }
+
+    struct BlockReadTransport {
+        session: BlockOpaqueHandle,
+        response: Result<u64, BlockReadError>,
+        calls: u8,
+    }
+
+    impl BlockProviderReadTransport for BlockReadTransport {
+        fn read(
+            &mut self,
+            request: &[u8; mrml_interface_storage_block_provider_v1::READ_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<
+            [u8; mrml_interface_storage_block_provider_v1::READ_RESPONSE_BYTES],
+            BlockProtocolError,
+        > {
+            use mrml_interface_storage_block_provider_v1::{
+                decode_read_request, encode_read_response,
+            };
+
+            let decoded = decode_read_request(request, memory.len() as u64)?;
+            assert_eq!(decoded.session, self.session);
+            assert_eq!(decoded.lba, 0);
+            assert_eq!(decoded.sector_count, 1);
+            assert_eq!(decoded.output.offset(), 0);
+            assert_eq!(decoded.output.length(), memory.len() as u64);
+            self.calls = self.calls.checked_add(1).unwrap();
+            if self.response.is_ok() {
+                memory[..FAT32_BOOT_SECTOR_BYTES].copy_from_slice(&boot_sector());
+                memory[FAT32_BOOT_SECTOR_BYTES..].fill(0xcc);
+            }
+            Ok(encode_read_response(self.response))
+        }
+    }
+
+    fn block_binding(volume: OpaqueHandle, session: BlockOpaqueHandle) -> Fat32BlockBinding {
+        // SAFETY: This test fixture defines `session` as the exact backing session
+        // for `volume`; production callers must obtain the association from the runtime.
+        unsafe { Fat32BlockBinding::new(volume, session, 4096).unwrap() }
+    }
+
+    #[test]
+    fn block_mount_backend_reads_one_exact_logical_block_and_erases_scratch() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = BlockReadTransport {
+            session,
+            response: Ok(4096),
+            calls: 0,
+        };
+        let mut scratch = [0xaa; 4096];
+        let mut output = [0xbb; FAT32_BOOT_SECTOR_BYTES];
+        let returned = {
+            let mut backend = Fat32BlockMountBackend::new(
+                block_binding(volume, session),
+                transport,
+                &mut scratch,
+            )
+            .unwrap();
+            backend.read_boot_sector(volume, &mut output).unwrap();
+            backend.into_transport()
+        };
+        assert_eq!(returned.calls, 1);
+        assert_eq!(output, boot_sector());
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn block_mount_backend_rejects_volume_mismatch_without_io() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let other = OpaqueHandle::new(5, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = BlockReadTransport {
+            session,
+            response: Ok(4096),
+            calls: 0,
+        };
+        let mut scratch = [0xaa; 4096];
+        let mut output = [0xbb; FAT32_BOOT_SECTOR_BYTES];
+        let returned = {
+            let mut backend = Fat32BlockMountBackend::new(
+                block_binding(volume, session),
+                transport,
+                &mut scratch,
+            )
+            .unwrap();
+            assert_eq!(
+                backend.read_boot_sector(other, &mut output),
+                Err(Fat32BlockMountError::VolumeMismatch)
+            );
+            backend.into_transport()
+        };
+        assert_eq!(returned.calls, 0);
+        assert_eq!(output, [0; FAT32_BOOT_SECTOR_BYTES]);
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn block_mount_backend_preserves_typed_error_and_rejects_short_completion() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        for (response, expected) in [
+            (
+                Err(BlockReadError::StaleObject),
+                Fat32BlockMountError::Read(BlockReadError::StaleObject),
+            ),
+            (Ok(512), Fat32BlockMountError::ShortRead),
+        ] {
+            let transport = BlockReadTransport {
+                session,
+                response,
+                calls: 0,
+            };
+            let mut scratch = [0xaa; 4096];
+            let mut output = [0xbb; FAT32_BOOT_SECTOR_BYTES];
+            {
+                let mut backend = Fat32BlockMountBackend::new(
+                    block_binding(volume, session),
+                    transport,
+                    &mut scratch,
+                )
+                .unwrap();
+                assert_eq!(backend.read_boot_sector(volume, &mut output), Err(expected));
+            }
+            assert_eq!(output, [0; FAT32_BOOT_SECTOR_BYTES]);
+            assert_eq!(scratch, [0; 4096]);
+        }
+    }
+
+    #[test]
+    fn block_mount_backend_rejects_and_erases_wrong_scratch_size() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = BlockReadTransport {
+            session,
+            response: Ok(4096),
+            calls: 0,
+        };
+        let mut scratch = [0xaa; 512];
+        assert!(matches!(
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut scratch),
+            Err(Fat32BlockMountError::InvalidScratch)
+        ));
+        assert_eq!(scratch, [0; 512]);
     }
 
     #[test]

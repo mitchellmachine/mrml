@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loop pass forty
+isolated syscall-backed receive/reply loop pass forty-four
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -82,13 +82,16 @@ an ambiguous completion. The table is not yet wired to the provider syscall loop
 An unsafe exact-volume backend contract now reads the complete boot sector for the
 specified live volume handle, validates it, erases scratch, and only then admits
 the lifecycle record. Backend and parser failures publish nothing and consume no
-generations. Concrete block-service composition remains next.
+generations. The provider-side concrete block-service client now requires an
+unsafe runtime-proven exact volume/session binding, issues one canonical full-
+logical-block read at LBA zero, requires exact completion, copies only the
+512-byte FAT boot sector, and erases scratch on every path.
 The storage service now provides the first concrete half of that composition:
 `FilesystemBootSectorReader` binds one non-authorizing filesystem volume identity
 to one owner-authenticated block session, validates full-block scratch geometry,
 rechecks `READ` on every block-zero access, copies only the 512-byte boot sector,
-and erases scratch on every path. Cross-service transport into the FAT32 provider
-remains next.
+and erases scratch on every path. Installing the runtime-proven binding and
+dispatching mount through the isolated provider loop remain next.
 
 The build frontend and filesystem contract now **PARTIALLY IMPLEMENT** the
 mount/root bootstrap representation. Schema version 2 supports bounded named

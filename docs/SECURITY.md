@@ -1184,6 +1184,14 @@ full-block scratch geometry, exposes only the first 512 bytes, and erases the
 complete scratch after success or failure. Volume substitution, denial, and
 backend failure publish zero output bytes.
 
+The FAT32 provider's canonical block client preserves the same boundary on the
+other side of the interface. Its unsafe binding requires the runtime to prove
+the exact live volume/session association; matching identifiers, names, or media
+labels are not proof and grant nothing. It reads exactly one full logical block
+at LBA zero, rejects typed errors and short completion, exposes only the first
+512 bytes to the parser, and clears both parser output and full-block scratch on
+failure.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode
