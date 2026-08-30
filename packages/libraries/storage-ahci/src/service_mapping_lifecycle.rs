@@ -169,8 +169,9 @@ mod tests {
     use super::*;
     use crate::{
         AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPciFunctionSnapshot,
-        AhciPortDmaLayout, AhciServiceCpuMapping, AhciServiceCpuMappingRequest,
-        PciFunctionLocation, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
+        AhciPortDmaBackend, AhciPortDmaLayout, AhciRegisterIo, AhciServiceCpuMapping,
+        AhciServiceCpuMappingRequest, ActiveAhciPort, PciFunctionLocation,
+        AHCI_SERVICE_CPU_MAPPING_RIGHTS,
     };
     use mrml_interface_storage_block_provider_v1::{
         BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
@@ -208,6 +209,60 @@ mod tests {
         install_count: usize,
         fail_install: Option<usize>,
         fail_remove_object: Option<u64>,
+    }
+
+    struct Registers([u32; 16]);
+
+    impl Registers {
+        fn active() -> Self {
+            let mut words = [0; 16];
+            words[0] = 0x30_0000;
+            words[2] = 0x31_0000;
+            words[6] = 0x11;
+            Self(words)
+        }
+    }
+
+    impl AhciRegisterIo for Registers {
+        fn read_u32(&mut self, offset: u32) -> Result<u32, ()> {
+            let index = usize::try_from(offset.checked_sub(0x200).ok_or(())? / 4).map_err(|_| ())?;
+            self.0.get(index).copied().ok_or(())
+        }
+
+        fn write_u32(&mut self, offset: u32, value: u32) -> Result<(), ()> {
+            let index = usize::try_from(offset.checked_sub(0x200).ok_or(())? / 4).map_err(|_| ())?;
+            *self.0.get_mut(index).ok_or(())? = value;
+            Ok(())
+        }
+    }
+
+    struct Data {
+        fail_sanitize: bool,
+        sanitizations: usize,
+    }
+
+    impl crate::AhciDataBufferIo for Data {
+        fn prepare_read(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
+        fn prepare_write(&mut self, _: AhciDataDmaRegion, _: &[u8]) -> Result<(), ()> { Ok(()) }
+        fn complete_read(&mut self, _: AhciDataDmaRegion, _: &mut [u8]) -> Result<(), ()> { Ok(()) }
+        fn complete_write(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> { Ok(()) }
+        fn sanitize(&mut self, _: AhciDataDmaRegion) -> Result<(), ()> {
+            self.sanitizations += 1;
+            if self.fail_sanitize { Err(()) } else { Ok(()) }
+        }
+    }
+
+    #[derive(Default)]
+    struct DmaBackend {
+        removals: usize,
+    }
+
+    impl AhciPortDmaBackend for DmaBackend {
+        fn install_zeroed_layout(&mut self, _: AhciPortDmaLayout) -> Result<(), ()> { Ok(()) }
+        fn remove_layout(&mut self, _: AhciPortDmaLayout) -> Result<(), ()> {
+            self.removals += 1;
+            Ok(())
+        }
     }
 
     unsafe impl AhciServiceCpuMappingBackend for CpuBackend {
@@ -426,5 +481,66 @@ mod tests {
         )
         .unwrap()
         .complete());
+    }
+
+    #[test]
+    fn data_and_dma_cleanup_gate_mapping_withdrawal() {
+        let (capabilities, map, control, cpu) = authorities();
+        let mut abar_backend = AbarBackend::default();
+        let mut cpu_backend = CpuBackend::default();
+        let state = install_ahci_service_mappings(
+            record(), descriptor(), map, control, cpu, &capabilities,
+            &mut abar_backend, &mut cpu_backend,
+        )
+        .unwrap();
+        let launch = record();
+        let mut registers = Registers::active();
+        let mut command_list = [0xa5; 1024];
+        let mut received_fis = [0xa5; 256];
+        let mut command_tables = [0xa5; 1024];
+        let mut command_memory = crate::AhciMappedCommandMemory::new(
+            launch.layout(),
+            &mut command_list,
+            &mut received_fis,
+            &mut command_tables,
+        )
+        .unwrap();
+        let mut data = Data { fail_sanitize: true, sanitizations: 0 };
+        let mut dma_backend = DmaBackend::default();
+        let error = crate::quiesce_ahci_service_device(
+            launch.mapping(),
+            ActiveAhciPort::from_layout(launch.layout()),
+            state,
+            launch.data(),
+            &mut registers,
+            &mut command_memory,
+            &mut data,
+            &mut dma_backend,
+        )
+        .unwrap_err();
+        let crate::AhciServiceDeviceQuiesceError::Pending(pending) = error else {
+            panic!("expected retryable data cleanup");
+        };
+        assert!(pending.mappings().abar().is_some());
+        assert_eq!(dma_backend.removals, 0);
+        data.fail_sanitize = false;
+        let quiesced = crate::resume_ahci_service_device_teardown(
+            pending,
+            launch.data(),
+            &mut data,
+            &mut dma_backend,
+        )
+        .unwrap();
+        assert_eq!(data.sanitizations, 2);
+        assert_eq!(dma_backend.removals, 1);
+        let state = crate::remove_quiesced_ahci_service_mappings(
+            quiesced,
+            control,
+            &capabilities,
+            &mut abar_backend,
+            &mut cpu_backend,
+        )
+        .unwrap();
+        assert!(state.complete());
     }
 }

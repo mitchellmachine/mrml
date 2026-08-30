@@ -29,6 +29,7 @@ mod mapped_command_memory;
 mod mapped_data_buffer;
 mod service_bootstrap;
 mod service_cpu_mapping;
+mod service_device_teardown;
 mod service_launch;
 mod service_launch_record;
 mod service_mapping_lifecycle;
@@ -135,6 +136,11 @@ pub use service_cpu_mapping::{
     AhciInstalledCpuMappings, AhciServiceCpuMappingBackend, AhciServiceCpuMappingError,
     AhciServiceCpuMappingRemovalError, AhciServiceCpuMappingRequest,
     install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
+};
+pub use service_device_teardown::{
+    AhciServiceDeviceQuiesceError, PendingAhciServiceDeviceTeardown,
+    QuiescedAhciServiceMappings, quiesce_ahci_service_device,
+    remove_quiesced_ahci_service_mappings, resume_ahci_service_device_teardown,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
