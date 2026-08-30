@@ -7347,6 +7347,17 @@ Patent review: `NOT_TRIGGERED` — this applies conventional typed uncertainty a
 exact authenticated-state comparison to the existing recovery transaction. See
 `docs/patents/REVIEW_LOG.md`.
 
+Validated storage-authority recovery applies the same uncertainty boundary to
+both temporary results. A compare-and-store error retains the reconstructed
+authority and the validator's non-authorizing output in one pending owner; only
+an exact fresh authenticated-state match releases either result. The focused
+storage suite passes 142 tests on Linux. No KVM, WHP, or physical storage device
+was exercised.
+
+Patent review: `NOT_TRIGGERED` — retaining typestate-owned temporary results and
+resolving an uncertain compare-and-store by exact authenticated-state equality
+is conventional fail-closed recovery logic. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

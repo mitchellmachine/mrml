@@ -1135,3 +1135,9 @@ Authority recovery does not release reconstructed capabilities when monotonic
 state persistence reports uncertainty. The pending owner exposes no handles and
 can resolve only when a new authenticated load exactly equals its retained
 replacement record; stale or different state keeps all authority private.
+
+Storage-authority validation cannot escape the rollback-publication boundary.
+When authenticated compare-and-store reports uncertainty, one opaque owner
+retains both reconstructed capabilities and the validator's non-authorizing
+output. A fresh load must exactly equal the intended replacement before either
+result is released; mismatch preserves the owner and grants nothing.

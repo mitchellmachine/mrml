@@ -549,7 +549,7 @@ pub type AuthorityRecoveryValidationResult<
     ValidationError,
 > = Result<
     (CommittedRecoveredStorageAuthorities<N>, Output),
-    AuthorityRecoveryValidationError<StorageError, StateError, ValidationError>,
+    AuthorityRecoveryValidationError<N, Output, StorageError, StateError, ValidationError>,
 >;
 
 /// Durable-grant checkpoint staged into one fresh stable-file generation. The
@@ -1140,9 +1140,9 @@ pub fn recover_selected_stable_authorities_and_commit<
 
 /// Reconstructs authority into private temporary state, validates dependent
 /// recovery through that state, and atomically advances authenticated rollback
-/// state before releasing either result. Validation failure or uncertain state
-/// persistence drops both temporary results and leaves the prior accepted state
-/// unchanged.
+/// state before releasing either result. Validation failure drops both temporary
+/// results. State-persistence uncertainty retains them in a non-authorizing
+/// owner until the intended authenticated replacement is observed exactly.
 #[allow(clippy::too_many_arguments)]
 pub fn recover_validate_and_commit_stable_authorities<
     const GRANTS: usize,
@@ -1192,9 +1192,16 @@ pub fn recover_validate_and_commit_stable_authorities<
         accepted_root_generation: guard.accepted_root_generation,
     }
     .encode();
-    state_store
-        .compare_and_store(&encoded_state, &replacement)
-        .map_err(AuthorityRecoveryValidationError::State)?;
+    if let Err(error) = state_store.compare_and_store(&encoded_state, &replacement) {
+        return Err(AuthorityRecoveryValidationError::StateUncertain {
+            pending: PendingValidatedStorageAuthorities {
+                recovered,
+                validated,
+                replacement,
+            },
+            error,
+        });
+    }
     Ok((
         CommittedRecoveredStorageAuthorities { recovered },
         validated,
@@ -1292,12 +1299,51 @@ impl<const N: usize> PendingRecoveredStorageAuthorities<N> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthorityRecoveryValidationError<StorageError, StateError, ValidationError> {
+pub enum AuthorityRecoveryValidationError<
+    const N: usize,
+    Output,
+    StorageError,
+    StateError,
+    ValidationError,
+> {
     Checkpoint(AuthorityCheckpointError),
     State(StateError),
     Storage(AuthorityStorageError<StorageError>),
     Validation(ValidationError),
+    StateUncertain {
+        pending: PendingValidatedStorageAuthorities<N, Output>,
+        error: StateError,
+    },
+}
+
+pub struct PendingValidatedStorageAuthorities<const N: usize, Output> {
+    recovered: RecoveredStorageAuthorities<N>,
+    validated: Output,
+    replacement: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+}
+
+impl<const N: usize, Output> PendingValidatedStorageAuthorities<N, Output> {
+    pub fn resolve<S: AuthorityRecoveryStateStore>(
+        self,
+        state_store: &S,
+    ) -> Result<
+        (CommittedRecoveredStorageAuthorities<N>, Output),
+        (Self, PendingAuthorityResolutionError<S::Error>),
+    > {
+        let mut authenticated = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+        if let Err(error) = state_store.load_authenticated(&mut authenticated) {
+            return Err((self, PendingAuthorityResolutionError::State(error)));
+        }
+        if authenticated != self.replacement {
+            return Err((self, PendingAuthorityResolutionError::StateMismatch));
+        }
+        Ok((
+            CommittedRecoveredStorageAuthorities {
+                recovered: self.recovered,
+            },
+            self.validated,
+        ))
+    }
 }
 
 struct Decoded<const N: usize> {
@@ -2118,21 +2164,21 @@ mod tests {
         let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
         validator.fail = false;
         recovery_state.force_conflict = true;
-        assert!(matches!(
-            recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
-                stable.file(),
-                &authority,
-                file,
-                principal(7),
-                2,
-                &mut issuer,
-                &mut recovered_bytes,
-                &mut backend,
-                &mut recovery_state,
-                &mut validator,
-            ),
-            Err(AuthorityRecoveryValidationError::State(3))
-        ));
+        let pending = match recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
+            stable.file(),
+            &authority,
+            file,
+            principal(7),
+            2,
+            &mut issuer,
+            &mut recovered_bytes,
+            &mut backend,
+            &mut recovery_state,
+            &mut validator,
+        ) {
+            Err(AuthorityRecoveryValidationError::StateUncertain { pending, error: 3 }) => pending,
+            _ => panic!("state uncertainty did not retain validated recovery"),
+        };
         assert_eq!(validator.calls, 2);
         let unchanged =
             AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
@@ -2144,6 +2190,18 @@ mod tests {
             ),
             (8, 1)
         );
+        let pending = match pending.resolve(&recovery_state) {
+            Err((pending, PendingAuthorityResolutionError::StateMismatch)) => pending,
+            _ => panic!("stale state released validated recovery"),
+        };
+        recovery_state.state = pending.replacement;
+        let (resolved, validated) = match pending.resolve(&recovery_state) {
+            Ok(resolved) => resolved,
+            Err(_) => panic!("exact authenticated replacement did not release validated recovery"),
+        };
+        assert_eq!(resolved.epoch(), 9);
+        assert_eq!(validated, object(7));
+        recovery_state = RecoveryStateBackend::new(8, 1);
 
         let admission = unsafe {
             OwnerApprovedAuthorityCheckpoint::new(
@@ -2157,7 +2215,7 @@ mod tests {
         let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
         recovery_state.force_conflict = false;
         let (recovered, validated) =
-            recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
+            match recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
                 stable.file(),
                 &authority,
                 file,
@@ -2168,8 +2226,10 @@ mod tests {
                 &mut backend,
                 &mut recovery_state,
                 &mut validator,
-            )
-            .unwrap();
+            ) {
+                Ok(committed) => committed,
+                Err(_) => panic!("validated recovery did not commit"),
+            };
         assert_eq!(validated, object(7));
         assert_eq!(validator.calls, 3);
         let committed =

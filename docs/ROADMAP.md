@@ -4154,3 +4154,8 @@ Non-validating storage-authority recovery now retains a non-authorizing pending
 owner on rollback-store uncertainty. Reconstructed handles remain private until
 a fresh authenticated load exactly equals the intended replacement; mismatch
 keeps them unavailable rather than forcing a lossy reboot-only outcome.
+
+Validated authority recovery now also retains its temporary authority and
+non-authorizing validation output across rollback-store uncertainty. Exact
+authenticated replacement equality is required before either becomes available;
+the Linux-host storage suite passes all 142 focused tests.
