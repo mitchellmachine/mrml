@@ -82,10 +82,11 @@ Checked same-width `u128`/`i128` sign casts now reach the two-word emitter when
 consumed directly by `unwrap_or`, `unwrap_or_default`, `unwrap`, or `expect`.
 Valid values preserve both words, invalid values select the exact wide fallback
 or zero default, and trapping consumers use the shared illegal-instruction
-path. Lazy and compositional wide option consumers remain unsupported and fail
-closed. Both x86-64 ABIs compile the terminal forms. The canonical Linux gate
+path. Zero-parameter lazy fallbacks are evaluated only on `None`; compositional
+wide option consumers remain unsupported and fail closed. Both x86-64 ABIs
+compile the terminal forms. The canonical Linux gate
 passes 817 unit tests, 351 replacement tests, and 127 semantic-execution tests;
-defaulting in both directions and custom signed fallbacks match exact
+defaulting in both directions and eager or lazy custom signed fallbacks match exact
 ORACLE-0003 results across both words at zero, signed boundaries, and all-ones
 input. Isolated Linux children confirm checked `unwrap` traps at both invalid
 unsigned boundaries. Scoped-unsafe `unwrap_unchecked` also matches both oracle

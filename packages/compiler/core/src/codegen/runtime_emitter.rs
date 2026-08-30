@@ -7188,9 +7188,6 @@ impl<
             lazy,
         } = expression.kind
         {
-            if lazy {
-                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-            }
             let option = tree
                 .expression(option)
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
@@ -7235,6 +7232,21 @@ impl<
                 return Ok(());
             }
             let some = self.emit_forward_branch(0x89)?;
+            let fallback = if lazy {
+                let fallback = fallback
+                    .and_then(|fallback| tree.expression(fallback))
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let ExprKind::Closure {
+                    parameter: None,
+                    body,
+                } = fallback.kind
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                Some(body)
+            } else {
+                fallback
+            };
             if let Some(fallback) = fallback {
                 self.emit_wide_integer_return(tree, fallback, expected_type)?;
             } else {
