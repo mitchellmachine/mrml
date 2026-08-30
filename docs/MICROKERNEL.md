@@ -7379,6 +7379,17 @@ Patent review: `NOT_TRIGGERED` — bounded name validation, conservative equalit
 linear lookup, and duplicate rejection are conventional directory mechanisms.
 See `docs/patents/REVIEW_LOG.md`.
 
+The generation-1 filesystem interface now canonically frames lookup without
+granting open authority. Requests bind exact volume, mount, and directory
+generations plus one bounded borrowed name range; responses contain either one
+nonzero object identity or a typed zero-identity failure. Cross-operation
+headers, stale ranges, reserved bytes, zero success identities, and status/data
+mixtures fail closed. Four focused Linux-host interface tests pass.
+
+Patent review: `NOT_TRIGGERED` — fixed canonical framing, bounded borrowed
+ranges, typed statuses, and reserved-byte validation are conventional IPC codec
+mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

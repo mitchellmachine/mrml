@@ -417,7 +417,11 @@ model evidence; the FAT32-specific route now exercises compatible replacement,
 while installed supervisor/provider restart remains unproved.
 The filesystem interface now has a canonical generation-1 probe byte codec and
 an isolated transport that retains the exact endpoint generation; three focused
-tests pass on both hosts. The FAT32 provider now consumes this boundary through
+tests pass on both hosts. Its lookup operation now also has canonical request and
+response codecs binding volume, mount, and directory generations plus one
+bounded borrowed name range. Success returns a nonzero object identity; typed
+failure carries no object, and reserved or cross-operation bytes fail closed.
+Four focused Linux-host tests pass. The FAT32 provider now consumes the probe boundary through
 an authenticated receive/read/release/reply loop and concrete syscall adapter.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
 existing AHCI code was moved intact out of `mrml-storage`, the package advertises

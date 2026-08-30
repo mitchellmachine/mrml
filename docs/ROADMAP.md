@@ -22,8 +22,8 @@ Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
 schemas define bounded opaque-handle operations for isolated library providers.
 The block interface passes one focused test; the filesystem interface's canonical
-probe codec and exact-generation isolated transport pass three on Windows and
-Arch Linux. The storage service will
+probe codec, lookup codec, and exact-generation isolated transport pass four
+focused tests on Linux. The storage service will
 bind exact admitted generations and restart through complete cleanup rather than
 load path-selected code or reboot. The fixed-capacity registry is now
 **PARTIALLY IMPLEMENTED** with separate authorities, exact generation changes,

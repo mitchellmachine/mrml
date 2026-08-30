@@ -10,6 +10,8 @@ pub const MAX_FILESYSTEM_REPORT_BYTES: u64 = 64 * 1024;
 pub const ABI_CALL_HEADER_BYTES: usize = 72;
 pub const PROBE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 24;
 pub const PROBE_RESPONSE_BYTES: usize = 16;
+pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
+pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
 const ABI_SCHEMA_VERSION: u16 = 1;
 
@@ -170,6 +172,112 @@ pub fn decode_probe_response(
     }
 }
 
+pub fn encode_lookup_request(
+    volume: OpaqueHandle,
+    generation: u64,
+    directory: OpaqueHandle,
+    name: BorrowedReadView,
+) -> Result<[u8; LOOKUP_REQUEST_BYTES], ProtocolError> {
+    let request = LookupRequest {
+        volume,
+        generation,
+        directory,
+        name,
+    };
+    if !request.validate() {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; LOOKUP_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_LOOKUP.to_le_bytes());
+    bytes[56..64].copy_from_slice(&40_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(LOOKUP_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&generation.to_le_bytes());
+    bytes[88..92].copy_from_slice(&directory.index().to_le_bytes());
+    bytes[92..96].copy_from_slice(&directory.generation().to_le_bytes());
+    bytes[96..104].copy_from_slice(&name.offset().to_le_bytes());
+    bytes[104..112].copy_from_slice(&name.length().to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_lookup_request(
+    bytes: &[u8; LOOKUP_REQUEST_BYTES],
+    memory_length: u64,
+) -> Result<LookupRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_LOOKUP
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 40
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != LOOKUP_RESPONSE_BYTES as u64
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let generation = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+    let directory = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[88..92].try_into().unwrap()),
+        u32::from_le_bytes(bytes[92..96].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let name = BorrowedReadView::within(
+        u64::from_le_bytes(bytes[96..104].try_into().unwrap()),
+        u64::from_le_bytes(bytes[104..112].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let request = LookupRequest {
+        volume,
+        generation,
+        directory,
+        name,
+    };
+    request
+        .validate()
+        .then_some(request)
+        .ok_or(ProtocolError::InvalidRequest)
+}
+
+pub fn encode_lookup_response(result: Result<LookupResponse, LookupError>) -> [u8; 16] {
+    let mut bytes = [0; LOOKUP_RESPONSE_BYTES];
+    let (status, object) = match result {
+        Ok(object) => (0, object),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&object.to_le_bytes());
+    bytes
+}
+
+pub fn decode_lookup_response(
+    bytes: &[u8; LOOKUP_RESPONSE_BYTES],
+) -> Result<Result<LookupResponse, LookupError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let object = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if object != 0 => Ok(Ok(object)),
+        1 if object == 0 => Ok(Err(LookupError::InvalidRequest)),
+        2 if object == 0 => Ok(Err(LookupError::StaleObject)),
+        3 if object == 0 => Ok(Err(LookupError::NotFound)),
+        4 if object == 0 => Ok(Err(LookupError::PermissionDenied)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +343,52 @@ mod tests {
         response[8..12].copy_from_slice(&101_u32.to_le_bytes());
         assert_eq!(
             decode_probe_response(&response),
+            Err(ProtocolError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn lookup_codec_binds_generations_range_and_non_authorizing_identity() {
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let directory = OpaqueHandle::new(9, 3).unwrap();
+        let name = BorrowedReadView::within(16, 24, 64).unwrap();
+        let request = encode_lookup_request(volume, 11, directory, name).unwrap();
+        assert_eq!(
+            decode_lookup_request(&request, 64),
+            Ok(LookupRequest {
+                volume,
+                generation: 11,
+                directory,
+                name,
+            })
+        );
+        assert_eq!(
+            decode_lookup_response(&encode_lookup_response(Ok(41))),
+            Ok(Ok(41))
+        );
+        assert_eq!(
+            decode_lookup_response(&encode_lookup_response(Err(LookupError::PermissionDenied))),
+            Ok(Err(LookupError::PermissionDenied))
+        );
+
+        let mut stale = request;
+        stale[52..56].copy_from_slice(&OP_READ.to_le_bytes());
+        assert_eq!(
+            decode_lookup_request(&stale, 64),
+            Err(ProtocolError::InvalidHeader)
+        );
+        assert_eq!(
+            decode_lookup_request(&request, 39),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut invalid = encode_lookup_response(Ok(41));
+        invalid[4] = 1;
+        assert_eq!(
+            decode_lookup_response(&invalid),
+            Err(ProtocolError::InvalidResponse)
+        );
+        assert_eq!(
+            decode_lookup_response(&encode_lookup_response(Ok(0))),
             Err(ProtocolError::InvalidResponse)
         );
     }

@@ -1148,3 +1148,9 @@ ambiguous aliases, and never manufactures a file handle or I/O permission.
 Non-ASCII comparison is deliberately exact until a complete admitted upcase
 policy exists, avoiding an incomplete Unicode fold that could select the wrong
 entry.
+
+The filesystem lookup wire boundary preserves that separation. Its canonical
+request binds exact volume, mount, and directory generations and one bounded
+borrowed name range. A successful response carries only a nonzero object
+identity; it cannot encode a capability, and every typed failure requires the
+identity field to remain zero.
