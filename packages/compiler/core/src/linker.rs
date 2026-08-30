@@ -50,6 +50,8 @@ pub enum LinkerError {
     OffsetOverflow,
     RelocationOverflow,
     OutputTooSmall,
+    LinkedOutputTooSmall { required: usize, capacity: usize },
+    PeOutputTooSmall { required: usize, capacity: usize },
     InvalidCoff,
     InvalidCoffAssociation,
     UnsupportedCoffSection,
@@ -72,6 +74,21 @@ pub enum LinkerError {
 
 impl core::fmt::Display for LinkerError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::LinkedOutputTooSmall { required, capacity } => {
+                return write!(
+                    formatter,
+                    "linked output capacity is too small (required {required}, capacity {capacity})"
+                );
+            }
+            Self::PeOutputTooSmall { required, capacity } => {
+                return write!(
+                    formatter,
+                    "PE output capacity is too small (required {required}, capacity {capacity})"
+                );
+            }
+            _ => {}
+        }
         let message = match self {
             Self::EmptyInput => "link input set is empty",
             Self::EmptySymbol => "link symbol is empty",
@@ -85,6 +102,7 @@ impl core::fmt::Display for LinkerError {
             Self::OffsetOverflow => "link offset arithmetic overflow",
             Self::RelocationOverflow => "link relocation displacement overflow",
             Self::OutputTooSmall => "link output capacity is too small",
+            Self::LinkedOutputTooSmall { .. } | Self::PeOutputTooSmall { .. } => unreachable!(),
             Self::InvalidCoff => "invalid bounded COFF input",
             Self::InvalidCoffAssociation => "invalid COFF COMDAT association",
             Self::UnsupportedCoffSection => "unsupported COFF section",
@@ -8385,7 +8403,10 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
         .checked_add(writable_raw_size)
         .ok_or(LinkerError::OffsetOverflow)?;
     if length > bytes.len() {
-        return Err(LinkerError::OutputTooSmall);
+        return Err(LinkerError::PeOutputTooSmall {
+            required: length,
+            capacity: bytes.len(),
+        });
     }
     let readonly_rva = TEXT_RVA
         .checked_add(linked.readonly_offset)
@@ -9707,7 +9728,10 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
             .ok_or(LinkerError::OffsetOverflow)?;
     }
     if cursor > MAX_BYTES {
-        return Err(LinkerError::OutputTooSmall);
+        return Err(LinkerError::LinkedOutputTooSmall {
+            required: cursor,
+            capacity: MAX_BYTES,
+        });
     }
 
     let entry_offset = resolve_symbol(inputs, &layouts, entry_symbol)?;
@@ -11610,7 +11634,20 @@ mod tests {
         );
         assert_eq!(
             link_x86_64_static::<0>(&[plain], "same"),
-            Err(LinkerError::OutputTooSmall)
+            Err(LinkerError::LinkedOutputTooSmall {
+                required: 28,
+                capacity: 0,
+            })
+        );
+        assert_eq!(
+            std::format!(
+                "{}",
+                LinkerError::LinkedOutputTooSmall {
+                    required: 28,
+                    capacity: 0,
+                }
+            ),
+            "linked output capacity is too small (required 28, capacity 0)"
         );
     }
 
@@ -13209,7 +13246,36 @@ mod tests {
                 &[],
                 &mut too_small,
             ),
-            Err(LinkerError::OutputTooSmall)
+            Err(LinkerError::PeOutputTooSmall {
+                required: 1536,
+                capacity: 512,
+            })
+        );
+        assert_eq!(
+            std::format!(
+                "{}",
+                LinkerError::PeOutputTooSmall {
+                    required: 1536,
+                    capacity: 512,
+                }
+            ),
+            "PE output capacity is too small (required 1536, capacity 512)"
+        );
+
+        let mut linked_too_small = [0u8; 2048];
+        assert_eq!(
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations_into::<4096>(
+                &[input],
+                "entry",
+                &[],
+                &[],
+                &[],
+                &mut linked_too_small,
+            ),
+            Err(LinkerError::LinkedOutputTooSmall {
+                required: 4101,
+                capacity: 4096,
+            })
         );
     }
 
