@@ -114,7 +114,6 @@ impl RestartPolicy {
 pub struct ServiceRetirement {
     pub service: ServiceId,
     pub task: TaskId,
-    pub next: ScheduleOutcome,
     pub cleanup: ServiceCleanupTicket,
     pub dispatch: TaskTerminationDispatch,
 }
@@ -646,7 +645,6 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let (termination, context) = runtime
             .terminate_current_with_context()
             .map_err(ServiceError::Runtime)?;
-        let next = termination.next;
         let dispatch = runtime
             .dispatch_after_termination(termination)
             .map_err(ServiceError::Dispatch)?;
@@ -659,7 +657,6 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         Ok(ServiceRetirement {
             service: cleanup.service,
             task: cleanup.task,
-            next,
             cleanup,
             dispatch,
         })

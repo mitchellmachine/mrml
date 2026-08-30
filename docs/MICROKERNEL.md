@@ -10857,3 +10857,18 @@ conditional branches but do not constitute QEMU or physical `IRETQ` evidence.
 Patent review: `NOT_TRIGGERED` — refreshing a selected context from the same
 runtime identity immediately before conventional context entry is ordinary
 control-flow integrity composition. See `docs/patents/REVIEW_LOG.md`.
+
+Service retirement now exposes only the runtime-minted, non-copyable dispatch
+token as its successor representation; the duplicate caller-readable
+`ScheduleOutcome` has been removed. Every UEFI service-exit branch derives its
+switch target or idle result from that token before consuming it at the context-
+entry boundary. The Linux-host kernel suite passes 653 tests and the
+configuration-service suite passes 53 tests; both Linux release builds pass.
+Standard, component-service, block-service, invalid-return, and buffer-drift
+UEFI release profiles cross-build, with the same pre-existing unused-variable
+warning. These are in-memory and cross-build checks only, not QEMU or physical
+context-switch evidence.
+
+Patent review: `NOT_TRIGGERED` — removing a redundant copyable schedule record
+in favor of one linear lifecycle token is conventional control-flow integrity
+hardening. See `docs/patents/REVIEW_LOG.md`.

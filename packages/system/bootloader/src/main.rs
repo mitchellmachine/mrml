@@ -1402,17 +1402,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         halt();
                     }
                     complete_service_cleanup(supervisor, terminated.cleanup);
-                    match terminated.next {
-                        ScheduleOutcome::Switch { to, .. } => {
-                            if terminated.dispatch.user().map(|(task, _)| task) != Some(to) {
-                                halt();
-                            }
-                            enter_service_dispatch(runtime, to, terminated.dispatch)
-                        }
-                        ScheduleOutcome::Idle => {
-                            if !terminated.dispatch.is_idle() {
-                                halt();
-                            }
+                    match terminated.dispatch.user().map(|(task, _)| task) {
+                        Some(to) => enter_service_dispatch(runtime, to, terminated.dispatch),
+                        None if terminated.dispatch.is_idle() => {
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if ids[..2].iter().any(|service| {
                                 supervisor.task(*service) != Ok(None)
@@ -1447,11 +1439,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         halt();
                     }
                     complete_service_cleanup(supervisor, terminated.cleanup);
-                    match terminated.next {
-                        ScheduleOutcome::Switch { to, .. } => {
-                            if terminated.dispatch.user().map(|(task, _)| task) != Some(to) {
-                                halt();
-                            }
+                    match terminated.dispatch.user().map(|(task, _)| task) {
+                        Some(to) => {
                             let ControlEvent::PeerDied(death) =
                                 runtime.receive_control(to).unwrap_or_else(|_| halt())
                             else {
@@ -1471,10 +1460,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             );
                             enter_service_dispatch(runtime, to, terminated.dispatch)
                         }
-                        ScheduleOutcome::Idle => {
-                            if !terminated.dispatch.is_idle() {
-                                halt();
-                            }
+                        None if terminated.dispatch.is_idle() => {
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if ids[..2].iter().any(|service| {
                                 supervisor.task(*service) != Ok(None)
@@ -1508,11 +1494,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         halt();
                     }
                     complete_service_cleanup(supervisor, terminated.cleanup);
-                    match terminated.next {
-                        ScheduleOutcome::Switch { to, .. } => {
-                            if terminated.dispatch.user().map(|(task, _)| task) != Some(to) {
-                                halt();
-                            }
+                    match terminated.dispatch.user().map(|(task, _)| task) {
+                        Some(to) => {
                             let ControlEvent::PeerDied(death) =
                                 runtime.receive_control(to).unwrap_or_else(|_| halt())
                             else {
@@ -1540,10 +1523,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             feature = "invalid-return-probe",
                             feature = "buffer-drift-probe"
                         ))]
-                        ScheduleOutcome::Idle => {
-                            if !terminated.dispatch.is_idle() {
-                                halt();
-                            }
+                        None if terminated.dispatch.is_idle() => {
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
                             if supervisor.task(ids[0]) != Ok(None)
                                 || supervisor.pending_cleanup(ids[0]) != Ok(None)
