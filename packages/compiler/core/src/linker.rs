@@ -2915,6 +2915,20 @@ pub fn select_ordered_static_link_members(
                 if selected[candidate] {
                     continue;
                 }
+                let exact_section_needed = core::iter::once(inputs[candidate].symbol_target)
+                    .chain(
+                        inputs[candidate]
+                            .additional_definitions
+                            .iter()
+                            .map(|definition| definition.target),
+                    )
+                    .filter_map(definition_coff_section_identity)
+                    .any(|identity| coff_section_is_referenced(inputs, &selected, identity));
+                if exact_section_needed {
+                    selected[candidate] = true;
+                    changed = true;
+                    continue;
+                }
                 let needed = core::iter::once(LinkDefinition {
                     symbol: inputs[candidate].symbol,
                     target: inputs[candidate].symbol_target,
@@ -2952,6 +2966,36 @@ pub fn select_ordered_static_link_members(
         }
     }
     Ok(selection)
+}
+
+fn definition_coff_section_identity(target: LinkDefinitionTarget) -> Option<CoffSectionIdentity> {
+    match target {
+        LinkDefinitionTarget::CoffTextSection { identity, .. }
+        | LinkDefinitionTarget::CoffSection { identity, .. } => Some(identity),
+        LinkDefinitionTarget::Text(_) | LinkDefinitionTarget::ReadonlyData(_) => None,
+    }
+}
+
+fn coff_section_is_referenced(
+    inputs: &[LinkInput<'_, '_, '_>],
+    selected: &[bool; MAX_LINK_FRAGMENTS],
+    identity: CoffSectionIdentity,
+) -> bool {
+    inputs.iter().zip(selected).any(|(input, selected)| {
+        *selected
+            && input.relocations.iter().any(|relocation| {
+                matches!(
+                    relocation.target,
+                    LinkRelocationTarget::CoffSection {
+                        identity: target,
+                        ..
+                    } | LinkRelocationTarget::PeTlsSection {
+                        identity: target,
+                        ..
+                    } if target == identity
+                )
+            })
+    })
 }
 
 fn symbol_is_defined(
@@ -10222,6 +10266,59 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selection.indices(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn ordered_archive_selection_pulls_only_exact_typed_section_fragment() {
+        let wanted_identity = CoffSectionIdentity::new(2, 7).unwrap();
+        let unrelated_identity = CoffSectionIdentity::new(2, 9).unwrap();
+        let exact_reference = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::CoffSection {
+                identity: wanted_identity,
+                offset: 0,
+            },
+            addend: -4,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &exact_reference,
+        };
+        let wanted = LinkInput {
+            symbol: ".rdata$wanted",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: wanted_identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: b"wanted",
+            relocations: &[],
+        };
+        let unrelated = LinkInput {
+            symbol: ".rdata$unrelated",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: unrelated_identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: b"unrelated",
+            relocations: &[],
+        };
+
+        let selection = select_ordered_static_link_members(
+            &[entry, wanted, unrelated],
+            &[0, 1, 1],
+            &[0, 5, 5],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selection.indices(), &[0, 1]);
     }
 
     #[test]
