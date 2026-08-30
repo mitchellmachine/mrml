@@ -4112,3 +4112,8 @@ Prepared component-service launch ownership now advances through an explicit
 verified-artifact state. The unverified owner cannot release its raw isolation
 route; KVM/WHP integration and the common launch helper must consume exact
 service-image kinds and digests before route restoration or commit.
+
+Stable configuration commit now returns its complete prepared owner with any
+commit-time configuration or storage denial. Failed reauthorization neither
+consumes the receipt nor silently discards the staged successor; retry, cleanup,
+or abandonment remains an explicit caller decision.

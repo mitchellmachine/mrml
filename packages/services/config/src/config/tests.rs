@@ -3553,9 +3553,10 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared
-            .commit(&authorizer, &authority, &mut receipt)
-            .unwrap();
+        let stable = match prepared.commit(&authorizer, &authority, &mut receipt) {
+            Ok(stable) => stable,
+            Err(_) => panic!("authorized stable configuration commit failed"),
+        };
         assert_eq!(authorizer.calls.get(), 2);
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.file().generation(), 2);
@@ -3830,9 +3831,10 @@ mod tests {
                 StorageTransaction::<1, 2>::new(StorageTransactionId::new(72).unwrap(), 2).unwrap();
             prepared.admit(&mut transaction).unwrap();
             let mut receipt = transaction.publish(&plan, &mut volume).unwrap();
-            let stable = prepared
-                .commit(&capabilities, &storage_authority, &mut receipt)
-                .unwrap();
+            let stable = match prepared.commit(&capabilities, &storage_authority, &mut receipt) {
+                Ok(stable) => stable,
+                Err(_) => panic!("authorized block stable configuration commit failed"),
+            };
             assert_eq!(receipt.remaining(), 0);
 
             let grants = [StorageRecoveryGrant::root(
@@ -4547,12 +4549,17 @@ mod tests {
             .unwrap();
         authority.revoke(file, stable_principal()).unwrap();
         assert_eq!(receipt.remaining(), 1);
-        assert!(matches!(
-            prepared.commit(&capabilities, &authority, &mut receipt),
-            Err(StableConfigurationCommitError::Storage(
-                FileWriteCommitError::Authority(StorageAuthorityError::InvalidHandle)
-            ))
-        ));
+        let retained = match prepared.commit(&capabilities, &authority, &mut receipt) {
+            Err((
+                prepared,
+                StableConfigurationCommitError::Storage(FileWriteCommitError::Authority(
+                    StorageAuthorityError::InvalidHandle,
+                )),
+            )) => prepared,
+            _ => panic!("revoked storage authority did not retain prepared configuration"),
+        };
+        assert_eq!(retained.checkpoint(), checkpoint);
+        assert_eq!(retained.revision(), service.revision());
         assert_eq!(receipt.remaining(), 1);
 
         let file = authority
@@ -4589,9 +4596,10 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared
-            .commit(&capabilities, &authority, &mut receipt)
-            .unwrap();
+        let stable = match prepared.commit(&capabilities, &authority, &mut receipt) {
+            Ok(stable) => stable,
+            Err(_) => panic!("reauthorized stable configuration commit failed"),
+        };
 
         let mut recovered_bytes = [0xa5; 512];
         assert!(matches!(

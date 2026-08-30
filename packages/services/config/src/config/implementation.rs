@@ -1217,18 +1217,38 @@ impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
         capabilities: &A,
         storage_authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
-    ) -> Result<StableConfiguration<EXTENTS>, StableConfigurationCommitError> {
-        capabilities
-            .authorize_exact(self.root_capability, Rights::READ, self.root)
-            .map_err(StableConfigurationCommitError::Configuration)?;
-        let file = self
-            .file
-            .commit_transaction_authorized(storage_authority, receipt)
-            .map_err(|(_, error)| StableConfigurationCommitError::Storage(error))?;
+    ) -> Result<StableConfiguration<EXTENTS>, (Self, StableConfigurationCommitError)> {
+        if let Err(error) =
+            capabilities.authorize_exact(self.root_capability, Rights::READ, self.root)
+        {
+            return Err((self, StableConfigurationCommitError::Configuration(error)));
+        }
+        let Self {
+            file,
+            checkpoint,
+            revision,
+            root,
+            root_capability,
+        } = self;
+        let file = match file.commit_transaction_authorized(storage_authority, receipt) {
+            Ok(file) => file,
+            Err((file, error)) => {
+                return Err((
+                    Self {
+                        file,
+                        checkpoint,
+                        revision,
+                        root,
+                        root_capability,
+                    },
+                    StableConfigurationCommitError::Storage(error),
+                ));
+            }
+        };
         Ok(StableConfiguration {
             file,
-            checkpoint: self.checkpoint,
-            revision: self.revision,
+            checkpoint,
+            revision,
         })
     }
 }

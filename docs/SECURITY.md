@@ -1091,3 +1091,8 @@ An unverified component-service launch cannot be decomposed into a committable
 isolation route. Exact authenticated consumer/provider service-image identities
 must produce the typed verified owner first; mismatch retains the original
 reservation so it can be cancelled without backend launch or fallback.
+
+Stable configuration reauthorization failure returns the complete prepared
+checkpoint owner together with the error. Denial therefore cannot turn a linear
+staged successor into hidden ambient state or force receipt consumption; its
+subsequent disposition remains explicit.

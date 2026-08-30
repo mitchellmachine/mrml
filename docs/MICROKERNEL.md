@@ -7251,6 +7251,16 @@ Patent review: `NOT_TRIGGERED` — this is a conventional typestate restriction
 over the existing digest comparison and isolation reservation. See
 `docs/patents/REVIEW_LOG.md`.
 
+Stable configuration commit now preserves the complete linear prepared owner on
+both configuration-capability and storage-authority denial. The caller receives
+the same checkpoint identity, revision, retained root binding, and prepared file
+alongside the typed error, while the transaction receipt remains untouched.
+Configuration passes 53 focused Linux tests and the native service image builds.
+
+Patent review: `NOT_TRIGGERED` — this preserves ownership across an existing
+error boundary and introduces no new mechanism. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
