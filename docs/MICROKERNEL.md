@@ -10406,3 +10406,19 @@ tests and the release build passes. Installed storage placement remains
 Patent review: `NOT_TRIGGERED` — reconstructing a validated typed view from
 already retained capability and identity records is conventional boundary
 checking. See `docs/patents/REVIEW_LOG.md`.
+
+Native mapped-transfer construction now also accepts the exact source
+attachment already validated by a service coordinator. Before target mutation,
+the kernel exact-matches its provider task, shared object, generation, and byte
+count against the mapped memory and task binding; mismatch leaves the target
+and attachment unchanged. Construction failure revokes both consumed source
+attachment roots with the existing rollback error semantics. The convenience
+root path preflights mapping coherence before splitting authority and delegates
+to the same constructor. The Linux-host release kernel suite passes 649 tests
+and the release build passes. This enables a storage placement backend to use
+the coordinator-provided attachment, but does not yet constitute an installed
+backend.
+
+Patent review: `NOT_TRIGGERED` — exact typed-record matching and rollback of a
+consumed capability pair are conventional authority-boundary composition. See
+`docs/patents/REVIEW_LOG.md`.

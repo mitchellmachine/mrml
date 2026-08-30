@@ -182,6 +182,7 @@ pub use isolation::{
     prepare_component_service_read_transfer_attachment,
     prepare_native_component_service_task,
     prepare_native_component_service_task_from_mapped_read_transfer,
+    prepare_native_component_service_task_from_mapped_read_transfer_attachment,
     prepare_native_component_service_task_from_read_transfer_root,
     prepare_native_component_service_task_with_read_transfer,
     install_component_service_read_transfer_mappings, prepare_isolation_application_route,

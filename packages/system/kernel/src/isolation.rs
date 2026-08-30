@@ -1391,6 +1391,77 @@ pub enum NativeComponentServiceMappedReadTransferError {
     Construction(NativeComponentServiceReadTransferRootError),
 }
 
+/// Constructs the exact local task from an already prepared source attachment
+/// only when that attachment, the live mappings, and the task binding describe
+/// the same transfer.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_native_component_service_task_from_mapped_read_transfer_attachment<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    spec: IsolationServiceSpec,
+    launch_attachment: ComponentServiceLaunchAttachment,
+    transfer: ComponentServiceReadTransferAttachment,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferTaskBinding,
+    service_endpoint_object: ObjectId,
+    supervisor_task_object: ObjectId,
+    consumer_module_object: ObjectId,
+) -> Result<
+    NativeComponentServiceMappedReadTransferTask,
+    NativeComponentServiceMappedReadTransferError,
+> {
+    let mappings = binding.mappings();
+    if binding.local_task() != target_task
+        || binding.provider_task() != transfer.provider_task()
+        || mappings.memory_object() != memory.memory_object()
+        || mappings.shared_object() != memory.shared_object()
+        || transfer.shared_object() != memory.shared_object()
+        || transfer.shared_generation() != memory.generation()
+        || transfer.shared_bytes() != memory.bytes()
+    {
+        return Err(NativeComponentServiceMappedReadTransferError::BindingMismatch);
+    }
+    let construction = match prepare_native_component_service_task_with_read_transfer(
+        runtime,
+        source_task,
+        target_task,
+        spec,
+        launch_attachment,
+        transfer,
+        service_endpoint_object,
+        supervisor_task_object,
+        consumer_module_object,
+    ) {
+        Ok(construction) => construction,
+        Err(task) => {
+            let first = runtime
+                .revoke_capability(source_task, transfer.local_read())
+                .err();
+            let second = runtime
+                .revoke_capability(source_task, transfer.provider_write())
+                .err();
+            let error = match first.or(second) {
+                Some(cleanup) => {
+                    NativeComponentServiceReadTransferRootError::Rollback { task, cleanup }
+                }
+                None => NativeComponentServiceReadTransferRootError::Task(task),
+            };
+            return Err(NativeComponentServiceMappedReadTransferError::Construction(
+                error,
+            ));
+        }
+    };
+    Ok(NativeComponentServiceMappedReadTransferTask {
+        construction,
+        memory,
+        binding,
+    })
+}
+
 /// Constructs the exact local task only when the live directional mappings,
 /// task association, and charged memory root still describe one transfer.
 #[allow(clippy::too_many_arguments)]
@@ -1419,27 +1490,33 @@ pub fn prepare_native_component_service_task_from_mapped_read_transfer<
     {
         return Err(NativeComponentServiceMappedReadTransferError::BindingMismatch);
     }
-    let construction = prepare_native_component_service_task_from_read_transfer_root(
+    let transfer = prepare_component_service_read_transfer_attachment(
         runtime,
         source_task,
-        target_task,
-        spec,
-        launch_attachment,
         binding.provider_task(),
         memory.shared_object(),
         memory.generation(),
         memory.bytes(),
         memory.root(),
+    )
+    .map_err(|error| {
+        NativeComponentServiceMappedReadTransferError::Construction(
+            NativeComponentServiceReadTransferRootError::Preparation(error),
+        )
+    })?;
+    prepare_native_component_service_task_from_mapped_read_transfer_attachment(
+        runtime,
+        source_task,
+        target_task,
+        spec,
+        launch_attachment,
+        transfer,
+        memory,
+        binding,
         service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
     )
-    .map_err(NativeComponentServiceMappedReadTransferError::Construction)?;
-    Ok(NativeComponentServiceMappedReadTransferTask {
-        construction,
-        memory,
-        binding,
-    })
 }
 
 /// Prepares the direction-scoped source attachment and constructs the native
@@ -4478,6 +4555,32 @@ mod tests {
         assert_eq!(
             source_attachment.provider_write(),
             constructed.construction().source_provider_write()
+        );
+        let wrong_generation = ComponentServiceReadTransferAttachment::new(
+            provider_task,
+            reservation.shared_object(),
+            reservation.generation() + 1,
+            reservation.bytes(),
+            source_attachment.local_read(),
+            source_attachment.provider_write(),
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_native_component_service_task_from_mapped_read_transfer_attachment(
+                &mut runtime,
+                source,
+                local_task,
+                spec,
+                launch,
+                wrong_generation,
+                reservation,
+                binding,
+                ObjectId(0x90),
+                ObjectId(0x91),
+                ObjectId(0x92),
+            ),
+            Err(NativeComponentServiceMappedReadTransferError::BindingMismatch)
         );
         assert_eq!(
             local_mapping.installed.unwrap().mapping().access(),
