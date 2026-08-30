@@ -10834,3 +10834,11 @@ PE/COFF section identities through conventional runtime-function and writable
 relocation resolution. It introduces no object encoding, archive format,
 symbol-resolution algorithm, compression method, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Bounded COFF short-import inventory
+
+Patent review: **NOT_TRIGGERED**. This increment validates the conventional
+documented COFF short-import header and payload during bounded archive symbol
+inventory. It introduces no import encoding, symbol-resolution algorithm,
+loader behavior, compression, or cryptographic mechanism. This technical
+screen is not legal advice or patent clearance.

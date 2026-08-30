@@ -799,6 +799,7 @@ pub struct CoffObjectSymbolInventory<'a> {
     symbol_count: usize,
     symbols_end: usize,
     string_size: usize,
+    import_name: Option<&'a str>,
 }
 
 impl<'a> CoffObjectSymbolInventory<'a> {
@@ -809,6 +810,7 @@ impl<'a> CoffObjectSymbolInventory<'a> {
             symbol_count: self.symbol_count,
             symbols_end: self.symbols_end,
             string_size: self.string_size,
+            import_name: self.import_name,
             index: 0,
         }
     }
@@ -832,6 +834,7 @@ pub struct CoffObjectSymbols<'a> {
     symbol_count: usize,
     symbols_end: usize,
     string_size: usize,
+    import_name: Option<&'a str>,
     index: usize,
 }
 
@@ -839,6 +842,16 @@ impl<'a> Iterator for CoffObjectSymbols<'a> {
     type Item = Result<CoffObjectSymbol<'a>, LinkerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(name) = self.import_name {
+            if self.index == 0 {
+                self.index = 1;
+                return Some(Ok(CoffObjectSymbol {
+                    name,
+                    kind: CoffObjectSymbolKind::Definition,
+                }));
+            }
+            return None;
+        }
         while self.index < self.symbol_count {
             let offset = self.symbol_offset + self.index * 18;
             let auxiliary = match self.object.get(offset + 17) {
@@ -893,6 +906,62 @@ impl ElfLinkSectionSelections {
 pub fn inventory_x86_64_coff_symbols(
     object: &[u8],
 ) -> Result<CoffObjectSymbolInventory<'_>, LinkerError> {
+    if object.get(..4) == Some(b"\0\0\xff\xff") {
+        if read_u16(object, 4)? != 0
+            || read_u16(object, 6)? != 0x8664
+            || read_u16(object, 16)? != 0
+            || read_u16(object, 18)? != 4
+        {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        let payload_size = usize::try_from(read_u32(object, 12)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let payload_end = 20usize
+            .checked_add(payload_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        if payload_end != object.len() {
+            return Err(LinkerError::InvalidCoff);
+        }
+        let payload = object.get(20..payload_end).ok_or(LinkerError::InvalidCoff)?;
+        let name_end = payload
+            .iter()
+            .position(|byte| *byte == 0)
+            .ok_or(LinkerError::InvalidCoff)?;
+        let library_start = name_end
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let library_end = payload[library_start..]
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|offset| library_start + offset)
+            .ok_or(LinkerError::InvalidCoff)?;
+        if name_end == 0
+            || library_end == library_start
+            || library_end + 1 != payload.len()
+        {
+            return Err(LinkerError::InvalidCoff);
+        }
+        let name = core::str::from_utf8(&payload[..name_end])
+            .map_err(|_| LinkerError::InvalidCoff)?;
+        validate_symbol(name)?;
+        let library = core::str::from_utf8(&payload[library_start..library_end])
+            .map_err(|_| LinkerError::InvalidCoff)?;
+        if !library.ends_with(".dll")
+            || !library.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+            })
+        {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        return Ok(CoffObjectSymbolInventory {
+            object,
+            symbol_offset: 0,
+            symbol_count: 0,
+            symbols_end: 0,
+            string_size: 0,
+            import_name: Some(name),
+        });
+    }
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
@@ -971,6 +1040,7 @@ pub fn inventory_x86_64_coff_symbols(
         symbol_count,
         symbols_end,
         string_size,
+        import_name: None,
     })
 }
 
@@ -10334,6 +10404,39 @@ mod tests {
             11
         );
         assert_eq!(&linked.bytes()[16..24], callee_code.bytes());
+    }
+
+    #[test]
+    fn inventories_bounded_amd64_short_import_code_objects() {
+        let mut object = std::vec![0u8; 20];
+        object[2..4].copy_from_slice(&0xffffu16.to_le_bytes());
+        object[6..8].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[18..20].copy_from_slice(&4u16.to_le_bytes());
+        object.extend_from_slice(b"WaitOnAddress\0api-ms-win-core-synch-l1-2-0.dll\0");
+        let payload_size = u32::try_from(object.len() - 20).unwrap();
+        object[12..16].copy_from_slice(&payload_size.to_le_bytes());
+
+        let inventory = inventory_x86_64_coff_symbols(&object).unwrap();
+        assert_eq!(
+            inventory.symbols().collect::<Result<std::vec::Vec<_>, _>>(),
+            Ok(std::vec![CoffObjectSymbol {
+                name: "WaitOnAddress",
+                kind: CoffObjectSymbolKind::Definition,
+            }])
+        );
+
+        let mut data_import = object.clone();
+        data_import[18..20].copy_from_slice(&5u16.to_le_bytes());
+        assert!(matches!(
+            inventory_x86_64_coff_symbols(&data_import),
+            Err(LinkerError::UnsupportedCoff)
+        ));
+        let mut trailing = object.clone();
+        trailing.push(0);
+        assert!(matches!(
+            inventory_x86_64_coff_symbols(&trailing),
+            Err(LinkerError::InvalidCoff)
+        ));
     }
 
     #[test]

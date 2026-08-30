@@ -1449,3 +1449,19 @@ one bounded allocator-backed `Vec` path, not native Windows, allocator
 production readiness, broad `alloc` conformance, or physical-hardware evidence.
 An isolated canonical compiler-core package gate at this exact checkpoint passed
 815 unit tests and 123 semantic-execution tests with zero failures.
+
+The first pinned ORACLE-0003 `std` boundary recognizes the conventional AMD64
+COFF short-import header during archive symbol inventory. The bounded reader
+currently accepts only version-zero, code imports named directly in the payload,
+an exact NUL-terminated `.dll` library name, and no trailing bytes. It exposes
+only the callable definition used by the selected std path; data/constant
+imports, ordinal imports, decorated-name transformations, and synthesized
+`__imp_` aliases remain unsupported. Archive-selection diagnostics retain the
+exact group, member, and member name on inventory failure.
+
+An independently authored `std::thread::available_parallelism` consumer advances
+from the former anonymous inventory rejection through selection of
+`api-ms-win-core-synch-l1-2-0.dll` to the next explicit gate, `COFF object 3
+COMDAT inventory: unsupported COFF feature`. Import objects are not yet decoded
+as link inputs and no PE import table is emitted, so std execution is not
+claimed.

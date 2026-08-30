@@ -488,7 +488,16 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
                         format,
                         &mut referenced,
                         &mut defined,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        anyhow!(
+                            "archive group {} member {} ({}) symbol inventory: {}",
+                            next_archive_group,
+                            candidate.member_index + 1,
+                            archive.members()[candidate.member_index].name,
+                            error
+                        )
+                    })?;
                     if !defined.iter().any(|defined| *defined == candidate.symbol) {
                         return Err(anyhow!(
                             "archive symbol index does not match its object member"
