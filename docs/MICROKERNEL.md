@@ -7460,6 +7460,17 @@ counts, typed destructive-authority failure, and canonical framing are
 conventional IPC and filesystem-format boundary mechanisms. See
 `docs/patents/REVIEW_LOG.md`.
 
+The isolated FAT32 service loop now records cleanup ownership only after the
+receive envelope declares exactly one capability and its token has a nonzero
+generation. Absent or malformed transfer data cannot revoke an unrelated object;
+after validation, every later failure still releases the exact received leaf and
+erases transient buffers. The focused Linux-host provider suite remains thirty-five
+tests.
+
+Patent review: `NOT_TRIGGERED` — exact receive-count validation and conditional
+cleanup of a transferred capability are conventional IPC lifecycle checks. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — bounded borrowed writes, checked offsets,
 completion-count validation, and typed read errors are conventional IPC and file
 I/O boundary mechanisms. See `docs/patents/REVIEW_LOG.md`.

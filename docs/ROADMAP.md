@@ -59,7 +59,9 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, and the isolated syscall-backed receive/reply loop pass thirty-five
-focused tests on Linux. Lookup validates UTF-16 input, matches ASCII
+focused tests on Linux. The loop releases only an exactly declared, structurally
+valid transferred leaf; absent or malformed token data cannot trigger revocation.
+Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
 filesystem interface codec passes thirteen and storage passes 142, including a

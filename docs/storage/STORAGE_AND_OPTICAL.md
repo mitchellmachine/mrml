@@ -894,7 +894,10 @@ exact validated chain, stage all requested bytes before publication, preserve
 caller output on failure, and wipe temporary buffers. The FAT32 provider now
 consumes the canonical probe bytes and distinguishes malformed calls from
 unsupported media. Its authenticated receive/read/release/reply loop and concrete
-register-level syscall adapter erase transient buffers on every path; the
+register-level syscall adapter erase transient buffers on every path. Cleanup
+records a received leaf only after the envelope declares exactly one capability
+and its token is structurally valid, so absent or malformed token bytes cannot
+revoke an untransferred object; later failures still release the validated leaf. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Thirty-five focused
 tests pass on Linux; prior Windows evidence covered thirty-three tests. The

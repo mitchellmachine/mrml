@@ -1199,3 +1199,9 @@ bounded writable report and rejects completion beyond the report. A distinct
 `DestructiveAuthorityRequired` failure makes explicit that request data cannot
 authorize formatting; the runtime must separately deliver the exact
 preview-bound capability selected by the owner.
+
+The isolated FAT32 receive loop enters capability cleanup only after an envelope
+declares exactly one transferred capability and the token has a nonzero
+generation. Nonzero bytes paired with an absent or malformed transfer cannot
+trigger revocation; once validated, the received leaf is released even when a
+later shared read or provider operation fails.

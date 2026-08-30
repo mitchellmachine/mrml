@@ -71,15 +71,17 @@ impl Fat32ServiceLoop {
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
+        let mut received_capability = None;
         let result = self.serve_one_inner(
             syscalls,
             request_buffer,
             capability_tokens,
             scratch,
             response_buffer,
+            &mut received_capability,
         );
-        let release = (capability_tokens[0] != 0)
-            .then(|| syscalls.release_received(Capability::from_token(capability_tokens[0])))
+        let release = received_capability
+            .map(|capability| syscalls.release_received(capability))
             .transpose()
             .map(|_| ())
             .map_err(Fat32ServiceLoopError::Syscall);
@@ -103,6 +105,7 @@ impl Fat32ServiceLoop {
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response_buffer: &mut [u8; PROBE_RESPONSE_BYTES],
+        received_capability: &mut Option<Capability>,
     ) -> Result<(), Fat32ServiceLoopError<S::Error>> {
         let envelope = syscalls
             .receive(request_buffer, capability_tokens)
@@ -114,6 +117,8 @@ impl Fat32ServiceLoop {
         {
             return Err(Fat32ServiceLoopError::InvalidEnvelope);
         }
+        let capability = Capability::from_token(capability_tokens[0]);
+        *received_capability = Some(capability);
         let request = decode_probe_request(request_buffer, u64::MAX)
             .map_err(Fat32ServiceLoopError::Protocol)?;
         let length = usize::try_from(request.header.length())
@@ -121,7 +126,6 @@ impl Fat32ServiceLoop {
         if length == 0 || length > scratch.len() {
             return Err(Fat32ServiceLoopError::ScratchTooSmall);
         }
-        let capability = Capability::from_token(capability_tokens[0]);
         syscalls
             .read_shared(capability, request.header.offset(), &mut scratch[..length])
             .map_err(Fat32ServiceLoopError::Syscall)?;
@@ -157,6 +161,7 @@ mod tests {
         token: u64,
         shared: [u8; 1024],
         response: Option<[u8; PROBE_RESPONSE_BYTES]>,
+        capability_count: usize,
         reads: usize,
         releases: usize,
         fail_read: bool,
@@ -174,7 +179,7 @@ mod tests {
             capability_tokens[0] = self.token;
             Ok(ReceivedFat32Envelope {
                 payload_length: PROBE_REQUEST_BYTES,
-                capability_count: 1,
+                capability_count: self.capability_count,
             })
         }
 
@@ -219,6 +224,7 @@ mod tests {
             token: TOKEN,
             shared,
             response: None,
+            capability_count: 1,
             reads: 0,
             releases: 0,
             fail_read: false,
@@ -301,9 +307,10 @@ mod tests {
 
     #[test]
     fn rejects_untransferred_or_malformed_envelope_before_shared_read() {
-        for token in [0, 7] {
+        for (token, capability_count) in [(0, 1), (7, 1), (TOKEN, 0)] {
             let mut syscalls = syscalls();
             syscalls.token = token;
+            syscalls.capability_count = capability_count;
             let mut request = [0; PROBE_REQUEST_BYTES];
             let mut tokens = [0; 1];
             let mut scratch = [0; 4096];
@@ -319,6 +326,7 @@ mod tests {
                 Err(Fat32ServiceLoopError::InvalidEnvelope)
             );
             assert_eq!(syscalls.reads, 0);
+            assert_eq!(syscalls.releases, 0);
             assert_eq!(syscalls.response, None);
         }
     }
