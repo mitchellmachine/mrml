@@ -3268,9 +3268,9 @@ pub fn x86_64_coff_text_fragment_count(object: &[u8]) -> Result<usize, LinkerErr
     Ok(fragments)
 }
 
-/// Counts nonempty `.pdata$...` and `.xdata$...` sections without interpreting
-/// their contents. Legacy single-fragment decoding uses this to reject objects
-/// whose unwind metadata would otherwise be lost.
+/// Counts nonempty base or suffixed `.pdata` and `.xdata` sections without
+/// interpreting their contents. Legacy single-fragment decoding uses this to
+/// reject objects whose unwind metadata would otherwise be lost.
 pub fn x86_64_coff_unwind_section_count(object: &[u8]) -> Result<usize, LinkerError> {
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
@@ -3317,7 +3317,7 @@ pub fn x86_64_coff_unwind_section_count(object: &[u8]) -> Result<usize, LinkerEr
         let name = coff_section_name(raw_name, object, symbols_end, string_size)?;
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
-        if (name.starts_with(".pdata$") || name.starts_with(".xdata$")) && size != 0 {
+        if (coff_is_pdata_section(name) || coff_is_xdata_section(name)) && size != 0 {
             unwind_sections = unwind_sections
                 .checked_add(1)
                 .ok_or(LinkerError::OffsetOverflow)?;
@@ -3372,13 +3372,37 @@ pub fn x86_64_coff_writable_section_count(object: &[u8]) -> Result<usize, Linker
             symbols_end,
             string_size,
         )?;
-        if (name.starts_with(".data$") || name.starts_with(".bss$"))
+        if coff_is_writable_section(name)
             && read_u32(object, header + 16)? != 0
         {
             count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
         }
     }
     Ok(count)
+}
+
+fn coff_is_writable_section(name: &str) -> bool {
+    name == ".data"
+        || name == ".bss"
+        || name.starts_with(".data$")
+        || name.starts_with(".bss$")
+        || name.starts_with(".CRT$")
+}
+
+fn coff_is_zeroed_writable_section(name: &str) -> bool {
+    name == ".bss" || name.starts_with(".bss$")
+}
+
+fn coff_is_tls_section(name: &str) -> bool {
+    name == ".tls" || name.starts_with(".tls$")
+}
+
+fn coff_is_pdata_section(name: &str) -> bool {
+    name == ".pdata" || name.starts_with(".pdata$")
+}
+
+fn coff_is_xdata_section(name: &str) -> bool {
+    name == ".xdata" || name.starts_with(".xdata$")
 }
 
 pub fn x86_64_coff_readonly_absolute_relocation_count(object: &[u8]) -> Result<usize, LinkerError> {
@@ -4069,7 +4093,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
         }
         if name == ".text" || name.starts_with(".text$") {
             text_sections.insert(section + 1)?;
-        } else if name.starts_with(".tls$") {
+        } else if coff_is_tls_section(name) {
             tls_sections.insert(section + 1)?;
         } else if name == ".rdata" || name.starts_with(".rdata$") {
             let raw = usize::try_from(read_u32(object, header + 20)?)
@@ -4089,10 +4113,10 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     Some(_) => return Err(LinkerError::UnsupportedCoff),
                 });
             }
-        } else if name.starts_with(".data$") || name.starts_with(".bss$") {
+        } else if coff_is_writable_section(name) {
             writable_sections.insert(section + 1)?;
             let characteristics = read_u32(object, header + 36)?;
-            let zeroed = name.starts_with(".bss$");
+            let zeroed = coff_is_zeroed_writable_section(name);
             let expected = if zeroed { 0xc000_0080 } else { 0xc000_0040 };
             if characteristics & 0xe000_00e0 != expected {
                 return Err(LinkerError::UnsupportedCoff);
@@ -4295,9 +4319,10 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
     })
 }
 
-/// Decodes the bounded AMD64 `.pdata$...`/`.xdata$...` shape emitted by the
-/// pinned gnullvm oracle. Every 12-byte runtime-function record must carry
-/// three `IMAGE_REL_AMD64_ADDR32NB` relocations at its three fields.
+/// Decodes the bounded AMD64 base or suffixed `.pdata`/`.xdata` shape emitted
+/// by the pinned gnullvm oracle and its MinGW runtime. Every 12-byte
+/// runtime-function record must carry three `IMAGE_REL_AMD64_ADDR32NB`
+/// relocations at its three fields.
 pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
     object: &'data [u8],
     record_storage: &'records mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
@@ -4371,7 +4396,7 @@ fn decode_x86_64_coff_runtime_functions_for_object<'data, 'records>(
             symbols_end,
             string_size,
         )?;
-        if !name.starts_with(".pdata$") {
+        if !coff_is_pdata_section(name) {
             continue;
         }
         let pdata_section = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
@@ -4475,7 +4500,7 @@ fn decode_x86_64_coff_runtime_functions_for_object<'data, 'records>(
                         u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
                     text_section_names[field] = target_name;
                 } else {
-                    if !target_name.starts_with(".xdata$") || addend != 0 {
+                    if !coff_is_xdata_section(target_name) || addend != 0 {
                         return Err(LinkerError::UnsupportedCoffRelocationTarget);
                     }
                     let target_size = usize::try_from(read_u32(object, target_header + 16)?)
@@ -4941,11 +4966,11 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 continue;
             }
             readonly_sections.insert(section + 1)?;
-        } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
+        } else if coff_is_xdata_section(name) || coff_is_pdata_section(name) {
             unwind_sections.insert(section + 1)?;
-        } else if name.starts_with(".tls$") {
+        } else if coff_is_tls_section(name) {
             tls_sections.insert(section + 1)?;
-        } else if (name.starts_with(".data$") || name.starts_with(".bss$")) && size != 0 {
+        } else if coff_is_writable_section(name) && size != 0 {
             writable_sections.insert(section + 1)?;
         } else if name == ".llvmbc" || name == ".llvmcmd" {
             let characteristics = read_u32(object, header + 36)?;
@@ -12139,6 +12164,20 @@ mod tests {
         );
         assert_eq!(identified[0].end_identity, identified[0].begin_identity);
 
+        let mut base_sections = object.clone();
+        base_sections[60..68].copy_from_slice(b".xdata\0\0");
+        base_sections[100..108].copy_from_slice(b".pdata\0\0");
+        base_sections[241..249].copy_from_slice(b".xdata\0\0");
+        base_sections[277..285].copy_from_slice(b".pdata\0\0");
+        assert_eq!(x86_64_coff_unwind_section_count(&base_sections), Ok(2));
+        let mut base_storage = storage;
+        assert_eq!(
+            decode_x86_64_coff_runtime_functions(&base_sections, &mut base_storage)
+                .unwrap()
+                .len(),
+            1
+        );
+
         let mut invalid = object.clone();
         invalid[157 + 8..157 + 10].copy_from_slice(&4u16.to_le_bytes());
         let mut invalid_storage = [PeRuntimeFunction {
@@ -12191,6 +12230,11 @@ mod tests {
     fn decodes_typed_addr64_writable_coff_data() {
         let object = coff_with_readonly_and_writable_data();
         assert_eq!(x86_64_coff_writable_section_count(&object), Ok(1));
+        let mut base_data = object.clone();
+        base_data[100..108].copy_from_slice(b".data\0\0\0");
+        assert_eq!(x86_64_coff_writable_section_count(&base_data), Ok(1));
+        assert!(coff_is_writable_section(".CRT$XLC"));
+        assert!(coff_is_tls_section(".tls"));
         let mut data_only = object.clone();
         data_only[36..40].copy_from_slice(&0u32.to_le_bytes());
         data_only[76..80].copy_from_slice(&0u32.to_le_bytes());
