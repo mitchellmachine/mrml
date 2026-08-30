@@ -11043,3 +11043,16 @@ These checks do not execute privileged entry or physical hardware.
 Patent review: `NOT_TRIGGERED` — binding trusted successor-context preparation
 to an existing one-use transition token is conventional capability-scoped state
 mutation. See `docs/patents/REVIEW_LOG.md`.
+
+Task-domain migration now freezes while a termination dispatch is outstanding.
+Explicit detach, load-driven rebalance detach, and attachment of a detached
+domain all reject before inspecting or mutating migration state, so the selected
+successor cannot be displaced or supplemented through a concurrent migration.
+Task creation remains a separate follow-up because service restart provisioning
+currently creates a replacement before every caller has acknowledged the prior
+dispatch. The Linux-host kernel suite passes 653 tests and its release build
+passes; this is in-memory state-machine evidence only.
+
+Patent review: `NOT_TRIGGERED` — serializing task migration against an existing
+one-use scheduler transition is conventional lifecycle locking. See
+`docs/patents/REVIEW_LOG.md`.

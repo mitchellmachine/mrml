@@ -737,6 +737,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         task: TaskId,
     ) -> Result<DetachedTaskDomain<CAPS>, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
         let slot = self.domain_slot(task)?;
         if self.domains[slot].as_ref().is_some_and(|domain| {
             domain.peers.iter().any(Option::is_some)
@@ -768,6 +769,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         destination: SchedulerLoad,
     ) -> Result<Option<DetachedTaskDomain<CAPS>>, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
         let Some(candidate) = self
             .scheduler
             .rebalance_candidate(destination)
@@ -787,6 +789,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         ticket: &mut Option<DetachedTaskDomain<CAPS>>,
     ) -> Result<TaskMigration, TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
         let Some(slot) = self.domains.iter().position(Option::is_none) else {
             return Err(TaskRuntimeError::Full);
         };
@@ -2520,6 +2523,20 @@ mod tests {
             runtime.preempt_current(context(0x30_0000, 0x50_0000)),
             Err(TaskRuntimeError::RetirementDispatchPending)
         );
+        assert!(matches!(
+            runtime.detach_domain(replacement),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
+        let load = runtime.load();
+        assert!(matches!(
+            runtime.detach_domain_for_rebalance(load),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
+        let mut migration = None;
+        assert!(matches!(
+            runtime.attach_domain(&mut migration),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        ));
         assert_eq!(
             runtime.context_mut(replacement).map(|_| ()),
             Err(TaskRuntimeError::RetirementDispatchPending)
