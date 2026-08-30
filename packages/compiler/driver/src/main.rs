@@ -2185,6 +2185,43 @@ fn write_linked_pe(
     )
 }
 
+fn global_link_definitions<'input, 'data, 'relocations, 'definitions>(
+    input: &'input LinkInput<'data, 'relocations, 'definitions>,
+) -> impl Iterator<Item = LinkDefinition<'data>> + 'input
+where
+    'data: 'input,
+    'definitions: 'input,
+{
+    core::iter::once(LinkDefinition {
+        symbol: input.symbol,
+        target: input.symbol_target,
+    })
+    .chain(input.additional_definitions.iter().copied())
+    .filter(|definition| {
+        !matches!(
+            definition.target,
+            LinkDefinitionTarget::CoffTextSection { .. } | LinkDefinitionTarget::CoffSection { .. }
+        )
+    })
+}
+
+fn duplicate_global_link_symbol<'data>(inputs: &[LinkInput<'data, '_, '_>]) -> Option<&'data str> {
+    for (input_index, input) in inputs.iter().enumerate() {
+        for (definition_index, definition) in global_link_definitions(input).enumerate() {
+            let defined_earlier = inputs[..input_index].iter().any(|earlier| {
+                global_link_definitions(earlier)
+                    .any(|candidate| candidate.symbol == definition.symbol)
+            }) || global_link_definitions(input)
+                .take(definition_index)
+                .any(|candidate| candidate.symbol == definition.symbol);
+            if defined_earlier {
+                return Some(definition.symbol);
+            }
+        }
+    }
+    None
+}
+
 fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     inputs: &[LinkInput<'_, '_, '_>],
     runtime_functions: &[PeRuntimeFunction<'_>],
@@ -2394,6 +2431,12 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                 _ => {}
             }
         }
+    }
+    if let Some(symbol) = duplicate_global_link_symbol(inputs) {
+        return Err(anyhow!(
+            "selected link symbol is defined more than once: {}",
+            symbol
+        ));
     }
     let mut executable = Vector::with_capacity(MAX_IMAGE)
         .map_err(|_| anyhow!("could not allocate bounded PE image output"))?;
@@ -3232,6 +3275,63 @@ mod tests {
                 &relocation,
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn reports_exact_duplicate_globals_without_colliding_typed_sections() {
+        let first_identity = CoffSectionIdentity::new(4, 7).unwrap();
+        let second_identity = CoffSectionIdentity::new(5, 9).unwrap();
+        let typed_first = LinkInput {
+            symbol: ".text$shared",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: first_identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let typed_second = LinkInput {
+            symbol: ".text$shared",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: second_identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        assert_eq!(
+            duplicate_global_link_symbol(&[typed_first, typed_second]),
+            None
+        );
+
+        let first = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let duplicate = [LinkDefinition {
+            symbol: "entry",
+            target: LinkDefinitionTarget::Text(0),
+        }];
+        let second = LinkInput {
+            symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &duplicate,
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        assert_eq!(
+            duplicate_global_link_symbol(&[first, second]),
+            Some("entry")
         );
     }
 
