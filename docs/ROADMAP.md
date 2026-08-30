@@ -4064,3 +4064,8 @@ Recovered deployment runtime assignment now revalidates its retained exact
 inspection handle when sealing the authenticated assigned release. Revocation
 after release recovery cannot produce a detached sealed inventory for Total
 admission, and the intermediate owner no longer exposes the raw plan.
+
+All deployment runtime-assignment entry points now return the same linear
+prepared owner. Sealing requires the retained exact `READ` capability and the
+same still-active release identity, so revocation and intervening activation
+both fail before producing an admission-ready inventory.

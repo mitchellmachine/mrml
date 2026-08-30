@@ -7141,6 +7141,18 @@ Patent review: `NOT_TRIGGERED` — this extends conventional commit-time exact
 capability revalidation to an existing deployment publication boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+The lower deployment assignment entry points now return that same linear
+prepared owner instead of a raw kernel assignment plan. Seal exact-reauthorizes
+the retained inspection handle and exact-matches the currently active
+`ActivatedSystemRelease`; either revocation or intervening activation prevents
+inventory publication. This closes the bypass around recovered composition
+without making release identity or package metadata authoritative. Deployment
+remains 6 focused tests and configuration 53.
+
+Patent review: `NOT_TRIGGERED` — this is conventional capability and generation
+revalidation at the existing assignment seal transition. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

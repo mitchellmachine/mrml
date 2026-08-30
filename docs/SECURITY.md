@@ -1039,3 +1039,8 @@ Recovered deployment assignment retains the exact `READ` handle that selected
 the active release and reauthorizes it at seal. Its intermediate owner cannot be
 split into a raw assignment plan, so revocation covers the derived inventory
 until it becomes a sealed, identity-bound release input to admission.
+
+In-memory and storage-backed deployment assignment use the same prepared owner.
+Seal requires both live exact inspection authority and equality with the
+deployment service's current `ActivatedSystemRelease`; an old but correctly
+signed release cannot survive a later activation through a prepared plan.

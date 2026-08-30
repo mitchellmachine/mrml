@@ -35,6 +35,49 @@ const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA3\0";
 const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 3;
 const DEPLOYMENT_RECOVERY_STATE_MAGIC: [u8; 16] = *b"MRML-DEPLSTATE2\0";
 
+/// A capability-derived assignment transaction bound to the activated release
+/// observed at preparation. Sealing rechecks both the exact inspection handle
+/// and that same active release against the live deployment service.
+pub struct PreparedRuntimeAssignment<'a, const DOMAINS: usize> {
+    assignment: RuntimeDomainAssignmentPlan<'a, DOMAINS>,
+    inspect: Capability,
+    active: ActivatedSystemRelease,
+}
+
+impl<'a, const DOMAINS: usize> PreparedRuntimeAssignment<'a, DOMAINS> {
+    pub const fn assignment(&self) -> &RuntimeDomainAssignmentPlan<'a, DOMAINS> {
+        &self.assignment
+    }
+
+    pub fn assignment_mut(&mut self) -> &mut RuntimeDomainAssignmentPlan<'a, DOMAINS> {
+        &mut self.assignment
+    }
+
+    pub fn seal<const CANDIDATES: usize, const CAPS: usize>(
+        self,
+        service: &DeploymentService<CANDIDATES>,
+        capabilities: &CapabilitySpace<CAPS>,
+    ) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, RuntimeAssignmentSealError> {
+        service
+            .authorize(capabilities, self.inspect, Rights::READ)
+            .map_err(RuntimeAssignmentSealError::Deployment)?;
+        if service.active_release != Some(self.active) {
+            return Err(RuntimeAssignmentSealError::Deployment(
+                DeploymentError::StaleActiveGeneration,
+            ));
+        }
+        self.assignment
+            .seal()
+            .map_err(RuntimeAssignmentSealError::Release)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeAssignmentSealError {
+    Deployment(DeploymentError),
+    Release(ReleaseInventoryError),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenerationCandidate {
     generation: u64,
@@ -362,18 +405,23 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         inspect: Capability,
         release_bytes: &'a [u8],
         policy_generation: u64,
-    ) -> Result<RuntimeDomainAssignmentPlan<'a, DOMAINS>, DeploymentError> {
+    ) -> Result<PreparedRuntimeAssignment<'a, DOMAINS>, DeploymentError> {
         self.authorize(capabilities, inspect, Rights::READ)?;
         let active = self
             .active_release
             .ok_or(DeploymentError::MissingActiveRelease)?;
-        RuntimeDomainAssignmentPlan::new(
+        let assignment = RuntimeDomainAssignmentPlan::new(
             release_bytes,
             active.release().key_id(),
             active,
             policy_generation,
         )
-        .map_err(DeploymentError::ReleaseInventory)
+        .map_err(DeploymentError::ReleaseInventory)?;
+        Ok(PreparedRuntimeAssignment {
+            assignment,
+            inspect,
+            active,
+        })
     }
 
     /// Reads the exact activated release source through storage authority and
@@ -399,7 +447,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         output: &'a mut [u8],
         backend: &mut B,
         policy_generation: u64,
-    ) -> Result<RuntimeDomainAssignmentPlan<'a, DOMAINS>, DeploymentStorageError<B::Error>> {
+    ) -> Result<PreparedRuntimeAssignment<'a, DOMAINS>, DeploymentStorageError<B::Error>> {
         self.authorize(capabilities, inspect, Rights::READ)
             .map_err(DeploymentStorageError::Deployment)?;
         let active = self
@@ -435,7 +483,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
             }
             offset = end;
         }
-        RuntimeDomainAssignmentPlan::new(
+        let assignment = RuntimeDomainAssignmentPlan::new(
             &output[..length],
             active.release().key_id(),
             active,
@@ -443,6 +491,11 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         )
         .map_err(|error| {
             DeploymentStorageError::Deployment(DeploymentError::ReleaseInventory(error))
+        })?;
+        Ok(PreparedRuntimeAssignment {
+            assignment,
+            inspect,
+            active,
         })
     }
 
@@ -1140,8 +1193,7 @@ pub enum AuthenticatedActivationRecoveryError<StorageError, StateError> {
 pub struct RecoveredRuntimeAssignment<'a, const CANDIDATES: usize, const DOMAINS: usize> {
     service: DeploymentService<CANDIDATES>,
     recovery: DeploymentRecoveryState,
-    assignment: RuntimeDomainAssignmentPlan<'a, DOMAINS>,
-    inspect: Capability,
+    assignment: PreparedRuntimeAssignment<'a, DOMAINS>,
 }
 
 /// Authenticated deployment recovery retained beside the exact activated
@@ -1205,11 +1257,11 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
     }
 
     pub const fn assignment(&self) -> &RuntimeDomainAssignmentPlan<'a, DOMAINS> {
-        &self.assignment
+        self.assignment.assignment()
     }
 
     pub fn assignment_mut(&mut self) -> &mut RuntimeDomainAssignmentPlan<'a, DOMAINS> {
-        &mut self.assignment
+        self.assignment.assignment_mut()
     }
 
     /// Seals every assigned package while retaining the authenticated
@@ -1217,17 +1269,9 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
     pub fn seal<const CAPS: usize>(
         self,
         capabilities: &CapabilitySpace<CAPS>,
-    ) -> Result<
-        RecoveredDeploymentRuntimeInventory<CANDIDATES, DOMAINS>,
-        RecoveredRuntimeAssignmentSealError,
-    > {
-        self.service
-            .authorize(capabilities, self.inspect, Rights::READ)
-            .map_err(RecoveredRuntimeAssignmentSealError::Deployment)?;
-        let release = self
-            .assignment
-            .seal()
-            .map_err(RecoveredRuntimeAssignmentSealError::Release)?;
+    ) -> Result<RecoveredDeploymentRuntimeInventory<CANDIDATES, DOMAINS>, RuntimeAssignmentSealError>
+    {
+        let release = self.assignment.seal(&self.service, capabilities)?;
         Ok(RecoveredDeploymentRuntimeInventory {
             owner: RecoveredDeploymentOwner {
                 service: self.service,
@@ -1236,12 +1280,6 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
             release,
         })
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RecoveredRuntimeAssignmentSealError {
-    Deployment(DeploymentError),
-    Release(ReleaseInventoryError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1395,7 +1433,6 @@ pub fn recover_and_read_runtime_assignment<
         service,
         recovery,
         assignment,
-        inspect,
     })
 }
 
@@ -1462,7 +1499,6 @@ pub fn recover_and_read_runtime_assignment_shared_backend<
         service,
         recovery,
         assignment,
-        inspect,
     })
 }
 
@@ -1989,19 +2025,37 @@ mod tests {
         assert_eq!(activated_release.generation(), active);
         assert_eq!(activated_release.release(), identity);
 
-        let mut assignment = service
+        let mut revoked_assignment = service
             .begin_runtime_assignment::<1, 3>(&capabilities, inspect, &release[..release_length], 4)
             .unwrap();
-        let mut packages = assignment.packages();
+        let mut packages = revoked_assignment.assignment().packages();
         assert_eq!(packages.next(), Some("org.mrml.zstd"));
         assert_eq!(packages.next(), None);
         drop(packages);
-        assignment
+        revoked_assignment
+            .assignment_mut()
             .assign_from_policy(|record| {
                 mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
             })
             .unwrap();
-        let inventory = assignment.seal().unwrap();
+        capabilities.revoke(inspect).unwrap();
+        assert!(matches!(
+            revoked_assignment.seal(&service, &capabilities),
+            Err(RuntimeAssignmentSealError::Deployment(
+                DeploymentError::Unauthorized
+            ))
+        ));
+        let inspect = capabilities.insert(root, Rights::READ).unwrap();
+        let mut assignment = service
+            .begin_runtime_assignment::<1, 3>(&capabilities, inspect, &release[..release_length], 4)
+            .unwrap();
+        assignment
+            .assignment_mut()
+            .assign_from_policy(|record| {
+                mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
+            })
+            .unwrap();
+        let inventory = assignment.seal(&service, &capabilities).unwrap();
         assert_eq!(inventory.active_release(), activated_release);
         assert_eq!(inventory.policy_generation(), 4);
         assert_eq!(inventory.release().len(), 1);
@@ -2077,13 +2131,32 @@ mod tests {
             )
             .unwrap();
         read_assignment
+            .assignment_mut()
             .assign_from_policy(|record| {
                 mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
             })
             .unwrap();
-        let read_inventory = read_assignment.seal().unwrap();
+        let read_inventory = read_assignment.seal(&service, &capabilities).unwrap();
         assert_eq!(read_inventory.active_release(), activated_release);
         assert_eq!(release_backend.reads, 1);
+
+        let mut stale_assignment = service
+            .begin_runtime_assignment::<1, 3>(&capabilities, inspect, &release[..release_length], 4)
+            .unwrap();
+        stale_assignment
+            .assignment_mut()
+            .assign_from_policy(|record| {
+                mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
+            })
+            .unwrap();
+        service.active_release = None;
+        assert!(matches!(
+            stale_assignment.seal(&service, &capabilities),
+            Err(RuntimeAssignmentSealError::Deployment(
+                DeploymentError::StaleActiveGeneration
+            ))
+        ));
+        service.active_release = Some(activated_release);
 
         let mut failed_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
         release_backend.fail = true;
@@ -2217,7 +2290,7 @@ mod tests {
         capabilities.revoke(inspect).unwrap();
         assert!(matches!(
             shared_assignment.seal(&capabilities),
-            Err(RecoveredRuntimeAssignmentSealError::Deployment(
+            Err(RuntimeAssignmentSealError::Deployment(
                 DeploymentError::Unauthorized
             ))
         ));

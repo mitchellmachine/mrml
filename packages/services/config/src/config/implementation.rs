@@ -3836,10 +3836,10 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         let deployment = deployment
             .seal(deployment_capabilities)
             .map_err(|error| match error {
-                mrml_deployment::RecoveredRuntimeAssignmentSealError::Deployment(error) => {
+                mrml_deployment::RuntimeAssignmentSealError::Deployment(error) => {
                     RecoveredAssignedTotalAdmissionError::Deployment(error)
                 }
-                mrml_deployment::RecoveredRuntimeAssignmentSealError::Release(error) => {
+                mrml_deployment::RuntimeAssignmentSealError::Release(error) => {
                     RecoveredAssignedTotalAdmissionError::Release(error)
                 }
             })?;
