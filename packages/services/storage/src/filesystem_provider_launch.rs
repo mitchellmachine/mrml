@@ -6,9 +6,12 @@ use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, ComponentServiceLaunchAttachment,
     ComponentServiceReadTransferAttachment, ComponentServiceReadTransferMemoryRoot,
     ComponentServiceReadTransferTaskBinding, IsolationPlacement, IsolationServiceSpec,
+    MemoryMappingBackend, MemoryObjectBackingBackend, MemoryPoolTable,
     NativeComponentServiceMappedReadTransferError, NativeComponentServiceMappedReadTransferTask,
-    ObjectId, Rights, TaskId, TaskRuntime, TaskRuntimeError,
-    prepare_native_component_service_task_from_mapped_read_transfer_attachment,
+    NativeComponentServiceMappedReadTransferTeardown,
+    NativeComponentServiceMappedReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
+    TaskRuntimeError, prepare_native_component_service_task_from_mapped_read_transfer_attachment,
+    teardown_native_component_service_mapped_read_transfer,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,12 +133,16 @@ impl NativeFilesystemProviderLaunchSpec {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeFilesystemProviderLaunchPreflightError {
-    HandoffMismatch,
+    Source(TaskRuntimeError),
+    Capability(CapabilityError),
+    WrongEndpointAuthority,
+    WrongTransferAuthority,
+    TransferTooSmall,
     Spec(NativeFilesystemProviderLaunchSpecError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NativeFilesystemProviderBackendError {
+pub enum NativeFilesystemProviderLaunchError {
     Preflight(NativeFilesystemProviderLaunchPreflightError),
     Rollback {
         preflight: NativeFilesystemProviderLaunchPreflightError,
@@ -144,54 +151,25 @@ pub enum NativeFilesystemProviderBackendError {
     Construction(NativeComponentServiceMappedReadTransferError),
 }
 
-pub struct NativeFilesystemProviderBackend<'a, const TASKS: usize, const CAPABILITIES: usize> {
-    runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
-    source_task: TaskId,
-    target_task: TaskId,
-    service: IsolationServiceSpec,
-    launch_attachment: ComponentServiceLaunchAttachment,
-    memory: ComponentServiceReadTransferMemoryRoot,
-    binding: ComponentServiceReadTransferTaskBinding,
-    supervisor_task_object: ObjectId,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderInstance {
+    Active(NativeComponentServiceMappedReadTransferTask),
+    Teardown(NativeComponentServiceMappedReadTransferTeardown),
 }
 
-impl<'a, const TASKS: usize, const CAPABILITIES: usize>
-    NativeFilesystemProviderBackend<'a, TASKS, CAPABILITIES>
-{
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
-        source_task: TaskId,
-        target_task: TaskId,
-        service: IsolationServiceSpec,
-        launch_attachment: ComponentServiceLaunchAttachment,
-        memory: ComponentServiceReadTransferMemoryRoot,
-        binding: ComponentServiceReadTransferTaskBinding,
-        supervisor_task_object: ObjectId,
-    ) -> Self {
-        Self {
-            runtime,
-            source_task,
-            target_task,
-            service,
-            launch_attachment,
-            memory,
-            binding,
-            supervisor_task_object,
+impl NativeFilesystemProviderInstance {
+    pub const fn active(self) -> Option<NativeComponentServiceMappedReadTransferTask> {
+        match self {
+            Self::Active(active) => Some(active),
+            Self::Teardown(_) => None,
         }
     }
 
-    fn reject_preflight(
-        &mut self,
-        transfer: ComponentServiceReadTransferAttachment,
-        preflight: NativeFilesystemProviderLaunchPreflightError,
-    ) -> NativeFilesystemProviderBackendError {
-        reject_native_filesystem_provider_preflight(
-            self.runtime,
-            self.source_task,
-            transfer,
-            preflight,
-        )
+    pub const fn teardown(self) -> Option<NativeComponentServiceMappedReadTransferTeardown> {
+        match self {
+            Self::Active(_) => None,
+            Self::Teardown(state) => Some(state),
+        }
     }
 }
 
@@ -200,65 +178,154 @@ fn reject_native_filesystem_provider_preflight<const TASKS: usize, const CAPABIL
     source_task: TaskId,
     transfer: ComponentServiceReadTransferAttachment,
     preflight: NativeFilesystemProviderLaunchPreflightError,
-) -> NativeFilesystemProviderBackendError {
+) -> NativeFilesystemProviderLaunchError {
     match runtime.revoke_capability_pair(
         source_task,
         transfer.local_read(),
         transfer.provider_write(),
     ) {
-        Ok(()) => NativeFilesystemProviderBackendError::Preflight(preflight),
-        Err(cleanup) => NativeFilesystemProviderBackendError::Rollback { preflight, cleanup },
+        Ok(()) => NativeFilesystemProviderLaunchError::Preflight(preflight),
+        Err(cleanup) => NativeFilesystemProviderLaunchError::Rollback { preflight, cleanup },
     }
 }
 
-// SAFETY: every preflight rejection atomically revokes the consumed attachment
-// roots, while the kernel constructor either returns the complete mapped task
-// or performs its own rollback. Success retains that task as the launch
-// instance, so no task, mapping, or backing cleanup owner is discarded.
-unsafe impl<'a, const TASKS: usize, const CAPABILITIES: usize> FilesystemProviderLaunchBackend
-    for NativeFilesystemProviderBackend<'a, TASKS, CAPABILITIES>
-{
-    type Error = NativeFilesystemProviderBackendError;
-    type Instance = NativeComponentServiceMappedReadTransferTask;
-
-    fn launch(
-        &mut self,
-        association: FilesystemBlockAssociation,
-        handoff: &[u8; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
-        block_endpoint: Capability,
-        transfer: ComponentServiceReadTransferAttachment,
-    ) -> Result<Self::Instance, Self::Error> {
-        if handoff != &association.handoff().encode() {
-            return Err(self.reject_preflight(
-                transfer,
-                NativeFilesystemProviderLaunchPreflightError::HandoffMismatch,
-            ));
-        }
-        if let Err(error) = NativeFilesystemProviderLaunchSpec::new(
-            association,
-            self.service,
-            self.launch_attachment,
-            block_endpoint,
-        ) {
-            return Err(self.reject_preflight(
-                transfer,
-                NativeFilesystemProviderLaunchPreflightError::Spec(error),
-            ));
-        }
-        prepare_native_component_service_task_from_mapped_read_transfer_attachment(
-            self.runtime,
-            self.source_task,
-            self.target_task,
-            self.service,
-            self.launch_attachment,
+#[allow(clippy::too_many_arguments)]
+pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES: usize>(
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    source_task: TaskId,
+    target_task: TaskId,
+    block_endpoint: Capability,
+    transfer: ComponentServiceReadTransferAttachment,
+    association: FilesystemBlockAssociation,
+    service: IsolationServiceSpec,
+    launch_attachment: ComponentServiceLaunchAttachment,
+    memory: ComponentServiceReadTransferMemoryRoot,
+    binding: ComponentServiceReadTransferTaskBinding,
+    supervisor_task_object: ObjectId,
+) -> Result<
+    FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    NativeFilesystemProviderLaunchError,
+> {
+    let preflight = runtime
+        .capabilities(source_task)
+        .map_err(NativeFilesystemProviderLaunchPreflightError::Source)
+        .and_then(|capabilities| {
+            let endpoint_object = capabilities
+                .authorize_exact(block_endpoint, Rights::SIGNAL.union(Rights::DELEGATE))
+                .map_err(NativeFilesystemProviderLaunchPreflightError::Capability)?;
+            if endpoint_object != association.block_binding.endpoint_object {
+                return Err(NativeFilesystemProviderLaunchPreflightError::WrongEndpointAuthority);
+            }
+            let local_object = capabilities
+                .authorize_exact(
+                    transfer.local_read(),
+                    Rights::MAP.union(Rights::READ).union(Rights::DELEGATE),
+                )
+                .map_err(NativeFilesystemProviderLaunchPreflightError::Capability)?;
+            let write_object = capabilities
+                .authorize_exact(
+                    transfer.provider_write(),
+                    Rights::MAP.union(Rights::WRITE).union(Rights::DELEGATE),
+                )
+                .map_err(NativeFilesystemProviderLaunchPreflightError::Capability)?;
+            if local_object != transfer.shared_object() || write_object != transfer.shared_object()
+            {
+                return Err(NativeFilesystemProviderLaunchPreflightError::WrongTransferAuthority);
+            }
+            if transfer.shared_bytes() < association.logical_block_bytes {
+                return Err(NativeFilesystemProviderLaunchPreflightError::TransferTooSmall);
+            }
+            NativeFilesystemProviderLaunchSpec::new(
+                association,
+                service,
+                launch_attachment,
+                block_endpoint,
+            )
+            .map_err(NativeFilesystemProviderLaunchPreflightError::Spec)
+        });
+    if let Err(preflight) = preflight {
+        return Err(reject_native_filesystem_provider_preflight(
+            runtime,
+            source_task,
             transfer,
-            self.memory,
-            self.binding,
-            association.filesystem_binding.endpoint_object,
-            self.supervisor_task_object,
-            association.filesystem_binding.module_object,
-        )
-        .map_err(NativeFilesystemProviderBackendError::Construction)
+            preflight,
+        ));
+    }
+    let active = prepare_native_component_service_task_from_mapped_read_transfer_attachment(
+        runtime,
+        source_task,
+        target_task,
+        service,
+        launch_attachment,
+        transfer,
+        memory,
+        binding,
+        association.filesystem_binding.endpoint_object,
+        supervisor_task_object,
+        association.filesystem_binding.module_object,
+    )
+    .map_err(NativeFilesystemProviderLaunchError::Construction)?;
+    Ok(receipt(
+        association.handoff(),
+        NativeFilesystemProviderInstance::Active(active),
+    ))
+}
+
+pub struct NativeFilesystemProviderTeardownBackend<
+    'a,
+    F,
+    S,
+    B,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+> {
+    runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
+    memory: &'a mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+    local_backend: &'a mut F,
+    provider_backend: &'a mut S,
+    backing_backend: &'a mut B,
+}
+
+impl<
+    'a,
+    F,
+    S,
+    B,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>
+    NativeFilesystemProviderTeardownBackend<
+        'a,
+        F,
+        S,
+        B,
+        POOLS,
+        OBJECTS,
+        MAPPINGS,
+        TASKS,
+        CAPABILITIES,
+    >
+{
+    pub const fn new(
+        runtime: &'a mut TaskRuntime<TASKS, CAPABILITIES>,
+        memory: &'a mut MemoryPoolTable<POOLS, OBJECTS, MAPPINGS>,
+        local_backend: &'a mut F,
+        provider_backend: &'a mut S,
+        backing_backend: &'a mut B,
+    ) -> Self {
+        Self {
+            runtime,
+            memory,
+            local_backend,
+            provider_backend,
+            backing_backend,
+        }
     }
 }
 
@@ -316,7 +383,8 @@ pub unsafe trait FilesystemProviderLaunchBackend {
 /// confirmed. On failure it must retain the exact live resources and progress
 /// needed for a safe retry. Success means the complete provider domain and all
 /// projections owned by the instance are retired.
-pub unsafe trait FilesystemProviderTeardownBackend: FilesystemProviderLaunchBackend {
+pub unsafe trait FilesystemProviderTeardownBackend {
+    type Instance;
     type TeardownError;
 
     fn teardown(&mut self, instance: &mut Self::Instance) -> Result<(), Self::TeardownError>;
@@ -388,6 +456,63 @@ pub fn teardown_filesystem_provider<B: FilesystemProviderTeardownBackend>(
     }
 }
 
+// SAFETY: the exact kernel retry state replaces the active instance before any
+// backend error is returned. A caller therefore retries from confirmed progress
+// and cannot repeat a completed unmap, scrub, or object release.
+unsafe impl<
+    'a,
+    F: MemoryMappingBackend,
+    S: MemoryMappingBackend,
+    B: MemoryObjectBackingBackend,
+    const POOLS: usize,
+    const OBJECTS: usize,
+    const MAPPINGS: usize,
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+> FilesystemProviderTeardownBackend
+    for NativeFilesystemProviderTeardownBackend<
+        'a,
+        F,
+        S,
+        B,
+        POOLS,
+        OBJECTS,
+        MAPPINGS,
+        TASKS,
+        CAPABILITIES,
+    >
+{
+    type Instance = NativeFilesystemProviderInstance;
+    type TeardownError =
+        NativeComponentServiceMappedReadTransferTeardownError<F::Error, S::Error, B::Error>;
+
+    fn teardown(&mut self, instance: &mut Self::Instance) -> Result<(), Self::TeardownError> {
+        let state = match *instance {
+            NativeFilesystemProviderInstance::Active(active) => {
+                NativeComponentServiceMappedReadTransferTeardown::new(active)
+            }
+            NativeFilesystemProviderInstance::Teardown(state) => state,
+        };
+        match teardown_native_component_service_mapped_read_transfer(
+            state,
+            self.runtime,
+            self.memory,
+            self.local_backend,
+            self.provider_backend,
+            self.backing_backend,
+        ) {
+            Ok(released_pages) => {
+                debug_assert_eq!(released_pages, 1);
+                Ok(())
+            }
+            Err(error) => {
+                *instance = NativeFilesystemProviderInstance::Teardown(error.state());
+                Err(error)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,7 +521,64 @@ mod tests {
     use mrml_interface_storage_filesystem_v3::OpaqueHandle as FilesystemOpaqueHandle;
     use mrml_kernel::ObjectId;
     use mrml_kernel::arch::x86_64::UserContext;
-    use mrml_kernel::{IsolationServiceSpec, TotalMicrovmClass};
+    use mrml_kernel::{
+        IsolationServiceSpec, MemoryBackingBackendRequest, MemoryMappingBackendRequest,
+        MemoryPhysicalBacking, MemoryPoolTable, TotalMicrovmClass,
+    };
+
+    #[derive(Default)]
+    struct NativeBackingBackend {
+        claimed: Option<MemoryBackingBackendRequest>,
+    }
+
+    unsafe impl MemoryObjectBackingBackend for NativeBackingBackend {
+        type Error = &'static str;
+
+        fn claim_zeroed(
+            &mut self,
+            request: MemoryBackingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            if self.claimed.replace(request).is_some() {
+                return Err("occupied");
+            }
+            Ok(())
+        }
+
+        fn release_scrubbed(
+            &mut self,
+            request: MemoryBackingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            if self.claimed != Some(request) {
+                return Err("substitution");
+            }
+            self.claimed = None;
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct NativeMappingBackend {
+        installed: Option<MemoryMappingBackendRequest>,
+    }
+
+    unsafe impl MemoryMappingBackend for NativeMappingBackend {
+        type Error = &'static str;
+
+        fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            if self.installed.replace(request).is_some() {
+                return Err("occupied");
+            }
+            Ok(())
+        }
+
+        fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            if self.installed != Some(request) {
+                return Err("substitution");
+            }
+            self.installed = None;
+            Ok(())
+        }
+    }
 
     struct Backend {
         fail: bool,
@@ -407,6 +589,7 @@ mod tests {
     }
 
     unsafe impl FilesystemProviderTeardownBackend for Backend {
+        type Instance = u64;
         type TeardownError = ();
 
         fn teardown(&mut self, instance: &mut Self::Instance) -> Result<(), Self::TeardownError> {
@@ -676,10 +859,10 @@ mod tests {
                 &mut runtime,
                 source,
                 transfer,
-                NativeFilesystemProviderLaunchPreflightError::HandoffMismatch,
+                NativeFilesystemProviderLaunchPreflightError::WrongTransferAuthority,
             ),
-            NativeFilesystemProviderBackendError::Preflight(
-                NativeFilesystemProviderLaunchPreflightError::HandoffMismatch
+            NativeFilesystemProviderLaunchError::Preflight(
+                NativeFilesystemProviderLaunchPreflightError::WrongTransferAuthority
             )
         );
         assert_eq!(
@@ -695,6 +878,208 @@ mod tests {
                 .unwrap()
                 .authorize(provider_write, Rights::WRITE),
             Err(CapabilityError::Invalid)
+        );
+    }
+
+    #[test]
+    fn native_launch_and_teardown_retain_one_exact_mapped_task_lifecycle() {
+        let association = association();
+        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let context = |physical, page_table, stack| {
+            UserContext::new(
+                mrml_kernel::PhysAddr::new(physical).unwrap(),
+                page_table,
+                stack,
+            )
+            .unwrap()
+        };
+        let source = runtime
+            .create(
+                mrml_kernel::Priority::NORMAL,
+                context(0x20_0000, 0x40_0000, 0x7000_0000),
+            )
+            .unwrap();
+        let target = runtime
+            .create(
+                mrml_kernel::Priority::NORMAL,
+                context(0x30_0000, 0x50_0000, 0x7100_0000),
+            )
+            .unwrap();
+        let provider = runtime
+            .create(
+                mrml_kernel::Priority::NORMAL,
+                context(0x40_0000, 0x60_0000, 0x7200_0000),
+            )
+            .unwrap();
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x2a).unwrap();
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::CONTROL)
+            .union(Rights::INSPECT);
+        let (pool, pool_capability) = memory
+            .create_root(
+                1,
+                2,
+                0,
+                pool_rights,
+                runtime.capabilities_mut(source).unwrap(),
+            )
+            .unwrap();
+        let root = mrml_kernel::reserve_component_service_read_transfer_memory(
+            &mut memory,
+            pool,
+            pool_capability,
+            &mut runtime,
+            source,
+        )
+        .unwrap();
+        let mut backing = NativeBackingBackend::default();
+        mrml_kernel::bind_component_service_read_transfer_backing(
+            &mut memory,
+            root,
+            MemoryPhysicalBacking::new(mrml_kernel::PhysAddr::new(0x80_0000).unwrap(), 1).unwrap(),
+            &runtime,
+            source,
+            &mut backing,
+        )
+        .unwrap();
+        let local_target = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x7100), Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let provider_target = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x7200), Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let mut local_mapping = NativeMappingBackend::default();
+        let mut provider_mapping = NativeMappingBackend::default();
+        let mappings = mrml_kernel::install_component_service_read_transfer_mappings(
+            &mut memory,
+            root,
+            local_target,
+            0x300,
+            &mut local_mapping,
+            provider_target,
+            0x400,
+            &mut provider_mapping,
+            &runtime,
+            source,
+        )
+        .unwrap();
+        let binding = mrml_kernel::bind_component_service_read_transfer_tasks(
+            mappings, target, provider, &runtime,
+        )
+        .unwrap();
+        let service = IsolationServiceSpec::new(
+            association.filesystem_binding.provider_object,
+            association.filesystem_binding.interface_object,
+            association.filesystem_binding.interface_generation,
+            association.filesystem_binding.provider_generation,
+            association.filesystem_binding.system_generation,
+            2,
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::NativeService,
+        )
+        .unwrap();
+        let launch_data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x90), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                association.block_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let launch_attachment = ComponentServiceLaunchAttachment::new(
+            service,
+            association.association_generation,
+            ObjectId(0x90),
+            3,
+            FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES as u32,
+            launch_data,
+            association.block_binding.endpoint_object,
+            association.block_binding.binding_generation,
+            endpoint,
+            runtime.capabilities(source).unwrap(),
+        )
+        .unwrap();
+        let transfer = mrml_kernel::prepare_component_service_read_transfer_attachment(
+            &mut runtime,
+            source,
+            provider,
+            root.shared_object(),
+            root.generation(),
+            root.bytes(),
+            root.root(),
+        )
+        .unwrap();
+        let receipt = launch_native_filesystem_provider(
+            &mut runtime,
+            source,
+            target,
+            endpoint,
+            transfer,
+            association,
+            service,
+            launch_attachment,
+            root,
+            binding,
+            ObjectId(0x91),
+        )
+        .unwrap();
+        assert_eq!(
+            receipt.association_generation(),
+            association.association_generation
+        );
+        assert_eq!(
+            receipt.instance().active().unwrap().construction().task(),
+            target
+        );
+        let failure = {
+            let mut teardown = NativeFilesystemProviderTeardownBackend::new(
+                &mut runtime,
+                &mut memory,
+                &mut local_mapping,
+                &mut provider_mapping,
+                &mut backing,
+            );
+            teardown_filesystem_provider(receipt, &mut teardown).unwrap_err()
+        };
+        assert!(matches!(
+            failure.error(),
+            NativeComponentServiceMappedReadTransferTeardownError::TaskStillLive {
+                task,
+                ..
+            } if *task == target
+        ));
+        assert!(failure.receipt().instance().teardown().is_some());
+        let (receipt, _) = failure.into_parts();
+        runtime.start();
+        runtime.yield_current().unwrap();
+        assert_eq!(runtime.current(), Some(target));
+        runtime.terminate_current().unwrap();
+        let mut teardown = NativeFilesystemProviderTeardownBackend::new(
+            &mut runtime,
+            &mut memory,
+            &mut local_mapping,
+            &mut provider_mapping,
+            &mut backing,
+        );
+        teardown_filesystem_provider(receipt, &mut teardown).unwrap();
+        assert!(local_mapping.installed.is_none());
+        assert!(provider_mapping.installed.is_none());
+        assert!(backing.claimed.is_none());
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, runtime.capabilities(source).unwrap())
+                .unwrap()
+                .object_pages(),
+            0
         );
     }
 
