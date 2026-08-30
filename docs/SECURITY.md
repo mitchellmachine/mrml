@@ -1059,3 +1059,8 @@ Single-route artifact transformation cannot exploit a shared domain name to
 replace the reservation. Restore exact-compares the full original service spec,
 including interface/provider identities and every generation, class, and
 placement field, before returning it to the complete set.
+
+Prepared file data and metadata are not authority. The authorized file-write
+commit retains and rechecks the exact storage handle, principal, object kind,
+and write/resize rights before consuming its transaction receipt. Revocation
+returns the prepared state and does not advance the receipt.

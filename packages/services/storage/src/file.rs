@@ -420,6 +420,9 @@ impl<const N: usize> FileState<N> {
             },
             file_metadata,
             extent_metadata,
+            file,
+            principal,
+            requested,
         })
     }
 }
@@ -428,6 +431,16 @@ pub struct PreparedFileWrite<const N: usize> {
     state: FileState<N>,
     file_metadata: CowMetadataImage,
     extent_metadata: CowMetadataImage,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    requested: StorageRights,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileWriteCommitError {
+    Authority(StorageAuthorityError),
+    WrongFile,
+    Transaction(TransactionError),
 }
 
 impl<const N: usize> PreparedFileWrite<N> {
@@ -463,6 +476,36 @@ impl<const N: usize> PreparedFileWrite<N> {
         receipt: &mut TransactionReceipt<P>,
     ) -> Result<FileState<N>, TransactionError> {
         receipt.consume(self.transaction_participant()?)?;
+        Ok(self.state)
+    }
+
+    /// Revalidates the exact retained file authority immediately before the
+    /// one-use transaction receipt is consumed. Revocation or rebinding leaves
+    /// both the receipt and prepared successor untouched for explicit policy.
+    pub fn commit_transaction_authorized<const P: usize, const A: usize>(
+        self,
+        authority: &StorageAuthorityTable<A>,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<FileState<N>, (Self, FileWriteCommitError)> {
+        let object = match authority.authorize(
+            self.file,
+            self.principal,
+            StorageObjectKind::File,
+            self.requested,
+        ) {
+            Ok(object) => object,
+            Err(error) => return Err((self, FileWriteCommitError::Authority(error))),
+        };
+        if object != self.state.object {
+            return Err((self, FileWriteCommitError::WrongFile));
+        }
+        let participant = match self.transaction_participant() {
+            Ok(participant) => participant,
+            Err(error) => return Err((self, FileWriteCommitError::Transaction(error))),
+        };
+        if let Err(error) = receipt.consume(participant) {
+            return Err((self, FileWriteCommitError::Transaction(error)));
+        }
         Ok(self.state)
     }
 
@@ -1452,10 +1495,17 @@ mod tests {
         };
         let mut receipt = transaction.publish(&plan, &mut publication).unwrap();
         let participant = prepared.transaction_participant().unwrap();
-        let committed = prepared.commit_transaction(&mut receipt).unwrap();
-
-        assert_eq!(committed.generation(), 4);
-        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(authority.revoke(write, principal()), Ok(1));
+        let (_, error) = match prepared.commit_transaction_authorized(&authority, &mut receipt) {
+            Err(failure) => failure,
+            Ok(_) => panic!("revoked file write authority committed"),
+        };
+        assert_eq!(
+            error,
+            FileWriteCommitError::Authority(StorageAuthorityError::InvalidHandle)
+        );
+        assert_eq!(receipt.remaining(), 1);
+        assert_eq!(receipt.consume(participant), Ok(()));
         assert_eq!(
             receipt.consume(participant),
             Err(TransactionError::ParticipantMismatch)

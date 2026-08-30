@@ -4083,3 +4083,8 @@ expected membership before complete endpoint construction or commit succeeds.
 That restoration gate now binds the full prepared service specification rather
 than domain membership alone. Same-domain substitution of interface, provider,
 generation, class, policy, or placement is rejected before complete commit.
+
+The shared prepared-file-write primitive now retains its exact handle,
+principal, and requested write/resize rights and offers commit-time authority
+revalidation before receipt consumption. Revocation leaves both the prepared
+successor and receipt unconsumed; service-specific migrations follow this gate.

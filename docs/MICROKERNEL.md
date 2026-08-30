@@ -7187,6 +7187,18 @@ Patent review: `NOT_TRIGGERED` — this applies conventional exact structural
 identity comparison to an existing linear restoration gate. See
 `docs/patents/REVIEW_LOG.md`.
 
+Prepared native file writes now retain the exact generational storage handle,
+principal, and write/resize rights used before data staging. A new authorized
+transaction commit rechecks that binding immediately before receipt
+consumption, returns the still-prepared successor on denial, and leaves the
+receipt untouched after revocation. This is the shared dependency gate for
+migrating stable configuration, deployment, and authority checkpoints in
+separate service commits. Storage passes 142 focused tests.
+
+Patent review: `NOT_TRIGGERED` — this is conventional generational handle
+reauthorization at an existing storage transaction boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

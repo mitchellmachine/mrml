@@ -103,10 +103,10 @@ pub use extent::{
     EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, MAX_EXTENT_BLOCKS,
 };
 pub use file::{
-    prepare_initial_file, FileReadBackend, FileReadError, FileState, FileStateError,
-    FileWriteBackend, FileWriteError, FileWritePublishError, InitialFileError,
-    InitialFileWriteBackend, PreparedFileWrite, PreparedInitialFile, MAX_FILE_READ_BYTES,
-    MAX_FILE_WRITE_BYTES, MAX_PROTECTED_METADATA_RANGES,
+    FileReadBackend, FileReadError, FileState, FileStateError, FileWriteBackend,
+    FileWriteCommitError, FileWriteError, FileWritePublishError, InitialFileError,
+    InitialFileWriteBackend, MAX_FILE_READ_BYTES, MAX_FILE_WRITE_BYTES,
+    MAX_PROTECTED_METADATA_RANGES, PreparedFileWrite, PreparedInitialFile, prepare_initial_file,
 };
 pub use format::{
     DirectoryEntry, DirectoryMetadata, FileMetadata, MetadataError, MetadataPointer, StorageName,
