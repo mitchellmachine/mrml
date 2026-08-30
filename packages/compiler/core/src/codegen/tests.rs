@@ -12297,8 +12297,6 @@ mod tests {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap_unchecked() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().unwrap_unchecked() }",
-            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> bool { input.checked_cast_signed().is_some() }",
-            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> bool { input.checked_cast_unsigned().is_none() }",
         ] {
             let module = Parser::new(source).parse_module::<3, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -12313,6 +12311,25 @@ mod tests {
                 .is_err(),
                 "{source}"
             );
+        }
+
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> bool { input.checked_cast_signed().is_some() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> bool { input.checked_cast_unsigned().is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                let error = compile_x86_64_function::<_, 768, 2, 32>(
+                    &function,
+                    &NoConstants,
+                    abi,
+                )
+                .unwrap_err();
+                assert_eq!(error.kind, CodegenErrorKind::UnsupportedRuntimeType, "{source}");
+            }
         }
     }
 
