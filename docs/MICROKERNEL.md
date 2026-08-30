@@ -7493,7 +7493,11 @@ exact-matches the live volume, mount generation, directory root, and lookup
 object, then atomically reserves and activates a revocable provider handle.
 Capacity and stale lifecycle failures return typed zero-handle responses; close
 and unmount still invalidate generations. The focused FAT32 suite passes
-eighty-one Linux-host tests.
+eighty-five Linux-host tests. The isolated open loop accepts exactly one
+112-byte request and zero capabilities, performs canonical provider dispatch,
+and erases its request/response buffers. Its register adapter supplies no
+capability array, rejects kernel-reported payload/capability over-counts, and
+sends the exact 16-byte response only to the launch-bound caller.
 
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding

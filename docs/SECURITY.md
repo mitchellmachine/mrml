@@ -1275,6 +1275,10 @@ The FAT32 transport implements that open contract as one provider-local atomic
 transition. It validates the exact live tuple before reserving, activates the
 reservation before returning success, and maps stale or exhausted state to typed
 zero-handle failures.
+The isolated open receive path supplies no capability-token buffer. Both its
+semantic envelope check and register adapter require zero transferred
+capabilities; payload or kernel-count mismatch produces no reply. Request and
+response buffers are erased after every later outcome.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
