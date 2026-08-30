@@ -167,16 +167,11 @@ mod tests {
         let device = BlockDeviceId::new(3).unwrap();
         let mut service = BlockService::new();
         service
-            .register_device(
-                BlockDeviceDescriptor::new(device, BLOCK_SIZE as u32, 8).unwrap(),
-            )
+            .register_device(BlockDeviceDescriptor::new(device, BLOCK_SIZE as u32, 8).unwrap())
             .unwrap();
         let session = service.grant(device, owner(7), rights).unwrap();
         let mut block = [0; BLOCK_SIZE];
-        for (index, byte) in block[..FILESYSTEM_BOOT_SECTOR_BYTES]
-            .iter_mut()
-            .enumerate()
-        {
+        for (index, byte) in block[..FILESYSTEM_BOOT_SECTOR_BYTES].iter_mut().enumerate() {
             *byte = index as u8;
         }
         (

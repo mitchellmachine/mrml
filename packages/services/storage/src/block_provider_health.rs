@@ -1,9 +1,9 @@
 use crate::storage_module::STORAGE_BLOCK_PROVIDER_INTERFACE_GENERATION;
 use crate::{StorageModuleBackend, StorageModuleBinding, StorageModuleClass};
 use mrml_interface_storage_block_provider_v1::{
-    decode_enumerate_response, encode_enumerate_request, validate_block_device_catalog,
-    BlockProviderServiceEndpoint, BorrowedWriteView, OpaqueHandle, ProtocolError,
-    MAX_DEVICE_CATALOG_BYTES,
+    BlockProviderServiceEndpoint, BorrowedWriteView, MAX_DEVICE_CATALOG_BYTES, OpaqueHandle,
+    ProtocolError, decode_enumerate_response, encode_enumerate_request,
+    validate_block_device_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,9 +114,9 @@ fn healthcheck_inner<E: BlockProviderServiceEndpoint>(
 mod tests {
     use super::*;
     use mrml_interface_storage_block_provider_v1::{
-        decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
-        BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, ENUMERATE_REQUEST_BYTES,
-        ENUMERATE_RESPONSE_BYTES,
+        BLOCK_DEVICE_FLAG_FLUSH, BlockProviderDevice, ENUMERATE_REQUEST_BYTES,
+        ENUMERATE_RESPONSE_BYTES, OpaqueHandle, decode_enumerate_request,
+        encode_block_device_catalog, encode_enumerate_response,
     };
     use mrml_kernel::{Capability, CapabilitySpace, ObjectId, Rights};
 

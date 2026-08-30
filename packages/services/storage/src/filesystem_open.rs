@@ -235,8 +235,7 @@ impl<const N: usize> FilesystemOpenBroker<N> {
         lookup: AuthenticatedFilesystemLookup,
         requested: StorageRights,
     ) -> Result<StorageHandle, FilesystemOpenError> {
-        let reservation =
-            self.reserve_child(authorities, parent, owner, lookup, requested)?;
+        let reservation = self.reserve_child(authorities, parent, owner, lookup, requested)?;
         self.activate_child(authorities, reservation)
     }
 
@@ -258,9 +257,9 @@ impl<const N: usize> FilesystemOpenBroker<N> {
                 continue;
             }
             let result = match opened.state {
-                FilesystemOpenState::Reserved(handle) => authorities
-                    .cancel_reserved_handle(handle)
-                    .map(|()| 0),
+                FilesystemOpenState::Reserved(handle) => {
+                    authorities.cancel_reserved_handle(handle).map(|()| 0)
+                }
                 FilesystemOpenState::Active(handle) => authorities.revoke(handle, opened.owner),
             };
             match result {
@@ -340,7 +339,9 @@ mod tests {
                 lookup(volume, parent_object, child),
                 StorageRights::READ,
             ),
-            Err(FilesystemOpenError::Authority(StorageAuthorityError::Denied))
+            Err(FilesystemOpenError::Authority(
+                StorageAuthorityError::Denied
+            ))
         );
         assert!(authorities.has_capacity());
     }
@@ -459,9 +460,7 @@ mod tests {
             ),
             Err(FilesystemOpenError::Capacity)
         );
-        broker
-            .cancel_child(&mut authorities, reservation)
-            .unwrap();
+        broker.cancel_child(&mut authorities, reservation).unwrap();
         assert!(authorities.has_capacity());
         let replacement = broker
             .reserve_child(

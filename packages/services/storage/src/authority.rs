@@ -336,8 +336,8 @@ impl<const N: usize> StorageAuthorityTable<N> {
         &mut self,
         handle: StorageHandle,
     ) -> Result<(), StorageAuthorityError> {
-        let slot = usize::try_from(handle.slot)
-            .map_err(|_| StorageAuthorityError::InvalidReservation)?;
+        let slot =
+            usize::try_from(handle.slot).map_err(|_| StorageAuthorityError::InvalidReservation)?;
         let entry = self
             .entries
             .get_mut(slot)
