@@ -46,6 +46,8 @@ pub enum TaskRuntimeError {
     RuntimeIdentityExhausted,
     ReceiveWaitGenerationExhausted,
     ReceiveWaitMismatch,
+    ReceiveWaitHasNoDeadline,
+    ReceiveDeadlineNotReached,
 }
 
 impl TaskRuntimeError {
@@ -343,11 +345,25 @@ enum BlockedReceiveKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiveDeadline(u64);
+
+impl ReceiveDeadline {
+    pub const fn new(tick: u64) -> Option<Self> {
+        if tick == 0 { None } else { Some(Self(tick)) }
+    }
+
+    pub const fn tick(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BlockedReceiveIdentity {
     runtime: u64,
     task: TaskId,
     generation: u64,
     kind: BlockedReceiveKind,
+    deadline: Option<ReceiveDeadline>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -368,6 +384,10 @@ impl BlockedReceive {
 
     pub const fn is_control(&self) -> bool {
         matches!(self.identity.kind, BlockedReceiveKind::Control)
+    }
+
+    pub const fn deadline(&self) -> Option<ReceiveDeadline> {
+        self.identity.deadline
     }
 }
 
@@ -1985,7 +2005,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         match self.receive_control(current) {
             Ok(event) => Ok(Ok(event)),
             Err(TaskRuntimeError::InboxEmpty) => self
-                .block_current_for_receive(current, BlockedReceiveKind::Control)
+                .block_current_for_receive(current, BlockedReceiveKind::Control, None)
                 .map(Err),
             Err(error) => Err(error),
         }
@@ -2240,6 +2260,20 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     pub fn receive_or_block_current(
         &mut self,
     ) -> Result<Result<Message, BlockedReceive>, TaskRuntimeError> {
+        self.receive_or_block_current_with_deadline(None)
+    }
+
+    pub fn receive_or_block_current_until(
+        &mut self,
+        deadline: ReceiveDeadline,
+    ) -> Result<Result<Message, BlockedReceive>, TaskRuntimeError> {
+        self.receive_or_block_current_with_deadline(Some(deadline))
+    }
+
+    fn receive_or_block_current_with_deadline(
+        &mut self,
+        deadline: Option<ReceiveDeadline>,
+    ) -> Result<Result<Message, BlockedReceive>, TaskRuntimeError> {
         self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
@@ -2248,7 +2282,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         match self.receive_ipc(current) {
             Ok(message) => Ok(Ok(message)),
             Err(TaskRuntimeError::InboxEmpty) => self
-                .block_current_for_receive(current, BlockedReceiveKind::Ipc)
+                .block_current_for_receive(current, BlockedReceiveKind::Ipc, deadline)
                 .map(Err),
             Err(error) => Err(error),
         }
@@ -2287,10 +2321,28 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(())
     }
 
+    /// Expires one deadline-bound receive only after its exact absolute tick.
+    /// Early expiry and tokens without a deadline preserve all runtime state.
+    pub fn expire_blocked_receive(
+        &mut self,
+        blocked: BlockedReceive,
+        now: u64,
+    ) -> Result<(), TaskRuntimeError> {
+        let deadline = blocked
+            .identity
+            .deadline
+            .ok_or(TaskRuntimeError::ReceiveWaitHasNoDeadline)?;
+        if now < deadline.tick() {
+            return Err(TaskRuntimeError::ReceiveDeadlineNotReached);
+        }
+        self.cancel_blocked_receive(blocked)
+    }
+
     fn block_current_for_receive(
         &mut self,
         current: TaskId,
         kind: BlockedReceiveKind,
+        deadline: Option<ReceiveDeadline>,
     ) -> Result<BlockedReceive, TaskRuntimeError> {
         let slot = self.domain_slot(current)?;
         let domain = self.domains[slot]
@@ -2308,6 +2360,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             task: current,
             generation,
             kind,
+            deadline,
         };
         let outcome = self
             .scheduler
@@ -3974,6 +4027,49 @@ mod tests {
             runtime.yield_current(),
             Ok(ScheduleOutcome::Switch { to, .. }) if to == receiver
         ));
+    }
+
+    #[test]
+    fn deadline_bound_receive_expires_only_at_its_exact_absolute_tick() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == receiver));
+        let deadline = ReceiveDeadline::new(50).unwrap();
+        let blocked = match runtime.receive_or_block_current_until(deadline).unwrap() {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty receive must retain its deadline-bound token"),
+        };
+        assert_eq!(blocked.deadline(), Some(deadline));
+        assert_eq!(
+            runtime.expire_blocked_receive(blocked, 49),
+            Err(TaskRuntimeError::ReceiveDeadlineNotReached)
+        );
+        assert_eq!(runtime.expire_blocked_receive(blocked, 50), Ok(()));
+        assert_eq!(
+            runtime.expire_blocked_receive(blocked, 51),
+            Err(TaskRuntimeError::ReceiveWaitMismatch)
+        );
+        assert!(matches!(
+            runtime.yield_current(),
+            Ok(ScheduleOutcome::Switch { to, .. }) if to == receiver
+        ));
+
+        let undelimited = match runtime.receive_or_block_current().unwrap() {
+            Err(blocked) => blocked,
+            Ok(_) => panic!("empty receive must issue a cancellation token"),
+        };
+        assert_eq!(undelimited.deadline(), None);
+        assert_eq!(
+            runtime.expire_blocked_receive(undelimited, u64::MAX),
+            Err(TaskRuntimeError::ReceiveWaitHasNoDeadline)
+        );
+        assert_eq!(runtime.cancel_blocked_receive(undelimited), Ok(()));
+        assert_eq!(sender, runtime.current().unwrap());
     }
 
     #[test]

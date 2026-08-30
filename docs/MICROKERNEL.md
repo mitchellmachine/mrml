@@ -11183,3 +11183,29 @@ no QEMU or physical-hardware execution was performed for this increment.
 Patent review: `NOT_TRIGGERED` — retaining and consuming a one-use cancellation
 token across a suspended syscall is conventional lifecycle ownership. See
 `docs/patents/REVIEW_LOG.md`.
+
+IPC receive waits may now bind a nonzero absolute `ReceiveDeadline` inside the
+same opaque runtime/task/generation token. Trusted expiry must present that
+exact token and an observed monotonic tick at or after its bound deadline;
+pre-deadline attempts and undelimited waits return distinct typed errors without
+changing the wait or scheduler. Exact-deadline expiry uses the existing
+generational cancellation path, so successful delivery, cancellation, expiry,
+and replay still converge on one live wait record rather than parallel wake
+authorities. Ordinary undelimited receive behavior remains unchanged.
+
+This is the kernel mechanism gate only. The UEFI service dispatcher does not yet
+accept user-selected receive deadlines, connect these waits to its timer path,
+or define the suspended syscall's timeout result. No task-name cancellation or
+ambient cross-task authority is exposed.
+
+The Linux-host kernel suite passes 658 tests, including non-mutating early
+expiry, exact-boundary expiry, replay rejection, and rejection of expiry for an
+undelimited wait. The affected Linux kernel release build passes. The default,
+service, component-service, invalid-return, and buffer-drift UEFI release
+profiles cross-build with the existing configuration-specific warnings. This is
+in-memory and cross-build evidence only; no QEMU or physical-hardware execution
+was performed for this increment.
+
+Patent review: `NOT_TRIGGERED` — binding an absolute monotonic deadline to an
+exact generational wait token is conventional timeout state-machine handling.
+See `docs/patents/REVIEW_LOG.md`.
