@@ -762,7 +762,11 @@ leaf. Its 163 focused Linux tests and release build pass.
 The FAT32 adapter now also rejects kernel-reported receive lengths or capability
 counts beyond the exact supplied buffers before publishing a typed envelope;
 its focused Linux suite passes 34 tests. The sibling Zstd service adapter applies
-the same bound and passes 27 focused Linux tests.
+the same bound and passes 27 focused Linux tests. Zstd cleanup now retains a
+received leaf only after exact one-capability envelope admission and structural
+token validation. Missing, malformed, or undeclared token bytes perform no
+release, while later failures still release the admitted leaf; its Linux release
+build passes.
 
 Patent review: **NOT_TRIGGERED**. This increment reuses the existing kernel
 buffered-IPC ABI and adds only boundary-result validation; it introduces no new

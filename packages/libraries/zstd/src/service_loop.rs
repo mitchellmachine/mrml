@@ -93,15 +93,17 @@ impl ZstdServiceLoop {
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
+        let mut received_capability = None;
         let result = self.serve_one_inner(
             syscalls,
             request_buffer,
             capability_tokens,
             scratch,
             response_buffer,
+            &mut received_capability,
         );
-        let release = (capability_tokens[0] != 0)
-            .then(|| syscalls.release_received(Capability::from_token(capability_tokens[0])))
+        let release = received_capability
+            .map(|capability| syscalls.release_received(capability))
             .transpose()
             .map(|_| ())
             .map_err(ZstdServiceLoopError::Syscall);
@@ -125,6 +127,7 @@ impl ZstdServiceLoop {
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response_buffer: &mut [u8; DECOMPRESS_RESPONSE_BYTES],
+        received_capability: &mut Option<Capability>,
     ) -> Result<(), ZstdServiceLoopError<S::Error>> {
         let envelope = syscalls
             .receive(request_buffer, capability_tokens)
@@ -136,6 +139,8 @@ impl ZstdServiceLoop {
         {
             return Err(ZstdServiceLoopError::InvalidEnvelope);
         }
+        let capability = Capability::from_token(capability_tokens[0]);
+        *received_capability = Some(capability);
         let request = decode_decompress_request(request_buffer, u64::MAX)
             .map_err(ZstdServiceLoopError::Protocol)?;
         let input_end = request
@@ -161,7 +166,6 @@ impl ZstdServiceLoop {
             .map_err(|_| ZstdServiceLoopError::ScratchTooSmall)?;
         let input_end =
             usize::try_from(input_end).map_err(|_| ZstdServiceLoopError::ScratchTooSmall)?;
-        let capability = Capability::from_token(capability_tokens[0]);
         syscalls
             .read_shared(
                 capability,
@@ -223,6 +227,7 @@ mod tests {
         writes: usize,
         releases: usize,
         fail_release: bool,
+        capability_count: usize,
     }
 
     unsafe impl ZstdServiceSyscalls for Syscalls {
@@ -237,7 +242,7 @@ mod tests {
             capability_tokens[0] = self.token;
             Ok(ReceivedZstdEnvelope {
                 payload_length: DECOMPRESS_REQUEST_BYTES,
-                capability_count: 1,
+                capability_count: self.capability_count,
             })
         }
 
@@ -308,6 +313,7 @@ mod tests {
             writes: 0,
             releases: 0,
             fail_release: false,
+            capability_count: 1,
         }
     }
 
@@ -397,7 +403,27 @@ mod tests {
             ),
             Err(ZstdServiceLoopError::InvalidEnvelope)
         );
-        assert_eq!((malformed.reads, malformed.writes), (0, 0));
+        assert_eq!(
+            (malformed.reads, malformed.writes, malformed.releases),
+            (0, 0, 0)
+        );
+
+        let mut undeclared = syscalls();
+        undeclared.capability_count = 0;
+        assert_eq!(
+            ZstdServiceLoop::new().serve_one(
+                &mut undeclared,
+                &mut request,
+                &mut tokens,
+                &mut scratch,
+                &mut response,
+            ),
+            Err(ZstdServiceLoopError::InvalidEnvelope)
+        );
+        assert_eq!(
+            (undeclared.reads, undeclared.writes, undeclared.releases),
+            (0, 0, 0)
+        );
 
         let mut bounded = syscalls();
         let mut small = [0xcc; 68];

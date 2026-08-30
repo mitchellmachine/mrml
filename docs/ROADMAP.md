@@ -188,6 +188,16 @@ FAT32 and 27 Zstd tests, including hostile over-count rejection. This reuses the
 existing service ABI and authority model; it does not expand either provider's
 capabilities or maturity claim.
 
+Zstd cleanup now records the transferred shared-buffer leaf only after exact
+one-capability envelope admission and structural token validation. Missing,
+malformed, or undeclared token bytes cannot invoke release; protocol, scratch,
+and backend failures after admission still release the leaf. Its 27 focused
+Linux tests and release build pass.
+
+Patent review: `NOT_TRIGGERED` — binding cleanup to an already validated
+capability envelope is conventional fail-closed resource handling. See
+`docs/patents/REVIEW_LOG.md`.
+
 The NVMe and optional IDE block-provider adapters now enforce that same bound.
 Their focused Linux suites pass 68 and 28 tests respectively, including hostile
 payload and capability over-counts. All five currently concrete isolated
