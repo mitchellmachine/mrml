@@ -11006,3 +11006,22 @@ hardware context-entry evidence.
 Patent review: `NOT_TRIGGERED` — retaining and exact-matching a conventional
 one-use lifecycle lease until its final acknowledgement does not introduce a
 new technical mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+An issued termination dispatch now freezes timer scheduling, explicit yield,
+and interrupted-context preemption until the owning runtime consumes that exact
+token. Those scheduler paths return `RetirementDispatchPending` without
+advancing ticks, changing the selected task, or installing an interrupted
+context. Trusted successor-context preparation remains available while the
+token is issued because buffered IPC completion currently updates the selected
+service context before final entry; binding that preparation directly to the
+dispatch is the next separate gate.
+
+The Linux-host kernel suite passes 653 tests, storage passes 163, Zstd passes 27,
+and configuration passes 53; their affected Linux release builds pass. The
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+This is in-memory state-machine and cross-build evidence only.
+
+Patent review: `NOT_TRIGGERED` — pausing scheduler mutation while an existing
+one-use transition lease is outstanding is conventional fail-closed lifecycle
+serialization. See `docs/patents/REVIEW_LOG.md`.

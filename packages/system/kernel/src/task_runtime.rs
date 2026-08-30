@@ -625,7 +625,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn timer_tick(&mut self) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        self.ensure_no_pending_retirement()?;
+        self.ensure_scheduler_mutable()?;
         self.scheduler
             .timer_tick()
             .map_err(TaskRuntimeError::Scheduler)
@@ -637,7 +637,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         interrupted: UserContext,
     ) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        self.ensure_no_pending_retirement()?;
+        self.ensure_scheduler_mutable()?;
         let current = self
             .scheduler
             .current()
@@ -667,7 +667,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn yield_current(&mut self) -> Result<ScheduleOutcome, TaskRuntimeError> {
-        self.ensure_no_pending_retirement()?;
+        self.ensure_scheduler_mutable()?;
         self.scheduler
             .yield_current()
             .map_err(TaskRuntimeError::Scheduler)
@@ -1292,6 +1292,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
 
     fn ensure_no_pending_retirement(&self) -> Result<(), TaskRuntimeError> {
         if self.pending_retirement.is_some() {
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_scheduler_mutable(&self) -> Result<(), TaskRuntimeError> {
+        if self.pending_retirement.is_some() || self.issued_dispatch.is_some() {
             Err(TaskRuntimeError::RetirementDispatchPending)
         } else {
             Ok(())
@@ -2536,6 +2544,18 @@ mod tests {
         assert_eq!(
             runtime.dispatch_after_termination(terminated),
             Err(TaskTerminationDispatchError::DispatchOutstanding)
+        );
+        assert_eq!(
+            runtime.timer_tick(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.yield_current(),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        );
+        assert_eq!(
+            runtime.preempt_current(context(0x30_0000, 0x50_0000)),
+            Err(TaskRuntimeError::RetirementDispatchPending)
         );
         assert_eq!(
             runtime.terminate_current(),
