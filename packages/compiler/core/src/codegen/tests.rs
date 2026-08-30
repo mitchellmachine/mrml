@@ -18777,24 +18777,33 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.unwrap() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).unwrap() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b) }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.unwrap() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).unwrap() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b) }",
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::SystemV,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, expected, "{source}");
+            }
         }
     }
 
@@ -18817,24 +18826,33 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).expect() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, message: u8) -> u8 { a.checked_add(b).expect(message) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, message: &str) -> u8 { a.expect(message) }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).expect() }",
+                CodegenErrorKind::Expression(ExpressionErrorKind::ExpectedExpression),
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, message: u8) -> u8 { a.checked_add(b).expect(message) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, message: &str) -> u8 { a.expect(message) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::SystemV,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, expected, "{source}");
+            }
         }
     }
 
