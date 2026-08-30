@@ -1,9 +1,34 @@
 //! Exact-generation runtime bindings for isolated storage module providers.
 
 use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
+use mrml_interface_storage_block_provider_v1::OpaqueHandle as BlockOpaqueHandle;
+use mrml_interface_storage_filesystem_v3::OpaqueHandle as FilesystemOpaqueHandle;
 
 pub const STORAGE_BLOCK_PROVIDER_INTERFACE_GENERATION: u32 = 1;
-pub const STORAGE_FILESYSTEM_INTERFACE_GENERATION: u32 = 1;
+pub const STORAGE_FILESYSTEM_INTERFACE_GENERATION: u32 = 3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemBlockAssociation {
+    pub filesystem_binding: StorageModuleBinding,
+    pub block_binding: StorageModuleBinding,
+    pub volume: FilesystemOpaqueHandle,
+    pub block_session: BlockOpaqueHandle,
+    pub logical_block_bytes: u32,
+    pub association_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemBlockAssociationError {
+    Capability(CapabilityError),
+    WrongAuthorityObject,
+    Missing,
+    NotActive,
+    StaleBinding,
+    WrongClass,
+    IncoherentSystemGeneration,
+    InvalidGeometry,
+    InvalidGeneration,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageModuleClass {
@@ -95,6 +120,82 @@ impl<const N: usize> StorageModuleRegistry<N> {
             .flatten()
             .copied()
             .filter(move |state| state.class() == class)
+    }
+
+    /// Binds one filesystem volume identity to the exact live block-provider
+    /// session proven by the storage runtime.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have authenticated that `block_session` is the exact
+    /// backing storage for `volume`. Numeric equality, catalog position, names,
+    /// paths, labels, and media metadata are insufficient evidence.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn bind_filesystem_block_association<const C: usize>(
+        &self,
+        capabilities: &CapabilitySpace<C>,
+        filesystem_module_capability: Capability,
+        block_module_capability: Capability,
+        filesystem_module: ObjectId,
+        filesystem_binding_generation: u64,
+        block_module: ObjectId,
+        block_binding_generation: u64,
+        volume: FilesystemOpaqueHandle,
+        block_session: BlockOpaqueHandle,
+        logical_block_bytes: u32,
+        association_generation: u64,
+    ) -> Result<FilesystemBlockAssociation, FilesystemBlockAssociationError> {
+        for (capability, expected) in [
+            (filesystem_module_capability, filesystem_module),
+            (block_module_capability, block_module),
+        ] {
+            let actual = capabilities
+                .authorize_exact(capability, Rights::CONTROL)
+                .map_err(FilesystemBlockAssociationError::Capability)?;
+            if actual != expected {
+                return Err(FilesystemBlockAssociationError::WrongAuthorityObject);
+            }
+        }
+        let filesystem_binding = match self.state(filesystem_module) {
+            Some(StorageModuleState::Active(binding)) => binding,
+            Some(_) => return Err(FilesystemBlockAssociationError::NotActive),
+            None => return Err(FilesystemBlockAssociationError::Missing),
+        };
+        let block_binding = match self.state(block_module) {
+            Some(StorageModuleState::Active(binding)) => binding,
+            Some(_) => return Err(FilesystemBlockAssociationError::NotActive),
+            None => return Err(FilesystemBlockAssociationError::Missing),
+        };
+        if filesystem_binding.binding_generation != filesystem_binding_generation
+            || block_binding.binding_generation != block_binding_generation
+        {
+            return Err(FilesystemBlockAssociationError::StaleBinding);
+        }
+        if filesystem_binding.class != StorageModuleClass::Filesystem
+            || block_binding.class != StorageModuleClass::BlockProvider
+        {
+            return Err(FilesystemBlockAssociationError::WrongClass);
+        }
+        if filesystem_binding.system_generation != block_binding.system_generation {
+            return Err(FilesystemBlockAssociationError::IncoherentSystemGeneration);
+        }
+        if logical_block_bytes < 512
+            || logical_block_bytes > 65_536
+            || !logical_block_bytes.is_power_of_two()
+        {
+            return Err(FilesystemBlockAssociationError::InvalidGeometry);
+        }
+        if association_generation == 0 {
+            return Err(FilesystemBlockAssociationError::InvalidGeneration);
+        }
+        Ok(FilesystemBlockAssociation {
+            filesystem_binding,
+            block_binding,
+            volume,
+            block_session,
+            logical_block_bytes,
+            association_generation,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -821,5 +922,141 @@ mod tests {
             Err(StorageModuleError::Capability(_))
         ));
         assert_eq!(backend.calls, [0, 0]);
+    }
+
+    fn association_filesystem_binding(system_generation: u64) -> StorageModuleBinding {
+        StorageModuleBinding {
+            class: StorageModuleClass::Filesystem,
+            module_object: ObjectId(41),
+            interface_object: ObjectId(42),
+            provider_object: ObjectId(43),
+            endpoint_object: ObjectId(44),
+            interface_generation: STORAGE_FILESYSTEM_INTERFACE_GENERATION,
+            provider_generation: 5,
+            system_generation,
+            binding_generation: 3,
+        }
+    }
+
+    fn association_fixture(
+        block_system_generation: u64,
+    ) -> (StorageModuleRegistry<2>, CapabilitySpace<8>, [Capability; 8]) {
+        let filesystem = association_filesystem_binding(9);
+        let block = binding_in(11, 20, 7, block_system_generation, 4);
+        let mut capabilities = CapabilitySpace::new();
+        let handles = [
+            capabilities.insert(filesystem.module_object, Rights::CONTROL).unwrap(),
+            capabilities.insert(filesystem.interface_object, Rights::INSPECT).unwrap(),
+            capabilities.insert(filesystem.provider_object, Rights::CONTROL).unwrap(),
+            capabilities.insert(filesystem.endpoint_object, Rights::SIGNAL).unwrap(),
+            capabilities.insert(block.module_object, Rights::CONTROL).unwrap(),
+            capabilities.insert(block.interface_object, Rights::INSPECT).unwrap(),
+            capabilities.insert(block.provider_object, Rights::CONTROL).unwrap(),
+            capabilities.insert(block.endpoint_object, Rights::SIGNAL).unwrap(),
+        ];
+        let mut registry = StorageModuleRegistry::new();
+        registry
+            .bind_initial(
+                &capabilities,
+                handles[0],
+                handles[1],
+                handles[2],
+                handles[3],
+                filesystem,
+            )
+            .unwrap();
+        registry
+            .bind_initial(
+                &capabilities,
+                handles[4],
+                handles[5],
+                handles[6],
+                handles[7],
+                block,
+            )
+            .unwrap();
+        (registry, capabilities, handles)
+    }
+
+    #[test]
+    fn exact_active_modules_create_one_generation_bound_filesystem_block_association() {
+        let (registry, capabilities, handles) = association_fixture(9);
+        let volume = FilesystemOpaqueHandle::new(2, 6).unwrap();
+        let session = BlockOpaqueHandle::new(8, 10).unwrap();
+        let association = unsafe {
+            registry.bind_filesystem_block_association(
+                &capabilities,
+                handles[0],
+                handles[4],
+                ObjectId(41),
+                3,
+                ObjectId(11),
+                4,
+                volume,
+                session,
+                4096,
+                12,
+            )
+        }
+        .unwrap();
+        assert_eq!(association.volume, volume);
+        assert_eq!(association.block_session, session);
+        assert_eq!(association.logical_block_bytes, 4096);
+        assert_eq!(association.association_generation, 12);
+        assert_eq!(association.filesystem_binding.interface_generation, 3);
+    }
+
+    #[test]
+    fn stale_substituted_incoherent_or_invalid_associations_fail_closed() {
+        let (registry, capabilities, handles) = association_fixture(8);
+        let volume = FilesystemOpaqueHandle::new(2, 6).unwrap();
+        let session = BlockOpaqueHandle::new(8, 10).unwrap();
+        let bind = |filesystem_capability, filesystem_generation, logical_block_bytes| unsafe {
+            registry.bind_filesystem_block_association(
+                &capabilities,
+                filesystem_capability,
+                handles[4],
+                ObjectId(41),
+                filesystem_generation,
+                ObjectId(11),
+                4,
+                volume,
+                session,
+                logical_block_bytes,
+                12,
+            )
+        };
+        assert_eq!(
+            bind(handles[0], 2, 4096),
+            Err(FilesystemBlockAssociationError::StaleBinding)
+        );
+        assert_eq!(
+            bind(handles[4], 3, 4096),
+            Err(FilesystemBlockAssociationError::WrongAuthorityObject)
+        );
+        assert_eq!(
+            bind(handles[0], 3, 4096),
+            Err(FilesystemBlockAssociationError::IncoherentSystemGeneration)
+        );
+
+        let (registry, capabilities, handles) = association_fixture(9);
+        assert_eq!(
+            unsafe {
+                registry.bind_filesystem_block_association(
+                    &capabilities,
+                    handles[0],
+                    handles[4],
+                    ObjectId(41),
+                    3,
+                    ObjectId(11),
+                    4,
+                    volume,
+                    session,
+                    1000,
+                    12,
+                )
+            },
+            Err(FilesystemBlockAssociationError::InvalidGeometry)
+        );
     }
 }

@@ -982,7 +982,11 @@ authority slots are reserved together without publishing authority, then exact
 activation makes the child handle usable. Cancellation and unmount invalidate
 pending state and release both bounded resources. Lookup-only
 authority, parent substitution, and cross-volume mapping fail before creation.
-Storage passes 152 focused Linux-host tests. The
+The storage module registry now exact-matches active generation-3 filesystem and
+block-provider bindings under separate `CONTROL` capabilities before producing
+an unsafe runtime-proven volume/session association. It rejects stale bindings,
+authority substitution, cross-SystemRelease pairing, invalid block geometry,
+and zero association generations. Storage passes 154 focused Linux-host tests. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows
