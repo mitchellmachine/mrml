@@ -337,10 +337,13 @@ fn validate_coff_archive_second_index(
             .checked_add(length + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    let aligned_padding = name_cursor & 1 == 1
-        && index.len() == name_cursor + 1
-        && index.get(name_cursor) == Some(&0);
-    if name_cursor != index.len() && !aligned_padding {
+    // LLVM archive indexes may zero-pad the symbol names through the next
+    // eight-byte boundary, including a four-byte pad after an empty index.
+    // Keep that compatibility bounded and reject every nonzero trailing byte.
+    let padding = index
+        .get(name_cursor..)
+        .ok_or(LinkerError::InvalidArchive)?;
+    if padding.len() > 7 || padding.iter().any(|byte| *byte != 0) {
         return Err(LinkerError::InvalidArchive);
     }
     Ok(())
@@ -437,10 +440,12 @@ fn decode_gnu_archive_index<'a>(
             .checked_add(length + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    let aligned_padding = name_cursor & 1 == 1
-        && index.len() == name_cursor + 1
-        && index.get(name_cursor) == Some(&0);
-    if name_cursor != index.len() && !aligned_padding {
+    // LLVM uses the same bounded zero padding for ordinary big-endian symbol
+    // indexes, notably four bytes after a zero-symbol index in tiny rlibs.
+    let padding = index
+        .get(name_cursor..)
+        .ok_or(LinkerError::InvalidArchive)?;
+    if padding.len() > 7 || padding.iter().any(|byte| *byte != 0) {
         return Err(LinkerError::InvalidArchive);
     }
     Ok(count)
@@ -10074,6 +10079,24 @@ mod tests {
                 symbol: "even",
                 member_index: 0
             }]
+        );
+
+        let mut empty_padded_archive = b"!<arch>\n".to_vec();
+        append_archive_member(&mut empty_padded_archive, "/", &[0; 8]);
+        append_archive_member(&mut empty_padded_archive, "empty.o/", b"object");
+        assert!(
+            decode_unix_archive(&empty_padded_archive)
+                .unwrap()
+                .symbols()
+                .is_empty()
+        );
+
+        let mut excessive_padding_archive = b"!<arch>\n".to_vec();
+        append_archive_member(&mut excessive_padding_archive, "/", &[0; 12]);
+        append_archive_member(&mut excessive_padding_archive, "empty.o/", b"object");
+        assert_eq!(
+            decode_unix_archive(&excessive_padding_archive),
+            Err(LinkerError::InvalidArchive)
         );
     }
 
