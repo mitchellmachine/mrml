@@ -370,6 +370,11 @@ mount lifecycle identity and root-object identity separately. It does not grant
 a root capability or reinterpret generation-1 mount responses; generation 1
 remains checked in as immutable history.
 
+Filesystem interface generation 3 adds one fixed provider-open operation without
+changing generation 1 or 2. `mrml interface generate-rust` deterministically
+emits its pointer-free bindings and SHA3-256 fingerprint
+`cdf4ff47c6f987d7cf392eb641973f81de2b90ee8aa053b955265887823ae2dc`.
+
 - Complexity impact: **LOW**
 - TCB impact: **NONE**
 - New parser boundary: **NO** (bounded extension of the existing schema parser)

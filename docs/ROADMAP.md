@@ -67,7 +67,7 @@ valid transferred leaf; absent or malformed token data cannot trigger revocation
 Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
-filesystem interface codec passes thirteen and storage passes 152, including a
+filesystem interface generation 3 codec passes fourteen and storage passes 152, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
 does not change the modeled kernel epoch. Checking, formatting, writes,
 installed supervisor launch, and hardware evidence
@@ -90,7 +90,9 @@ non-authorizing object number for an active provider handle.
 Bounded file-range reads now resolve that active handle back to its exact
 mount/root entry, validate the complete FAT chain, preserve caller output when
 the handle is stale, and erase staging plus cluster scratch after dispatch. A
-provider read syscall remains pending a new, preserved interface generation.
+Provider open now has a canonical generation-3 request/response contract while
+read dispatch remains the next provider wiring step. Generations 1 and 2 remain
+checked in unchanged.
 The mount table accepts only already-validated geometry, issues fresh independent
 mount and root generations, exact-matches both, invalidates them together on
 unmount, and permanently fails after generation exhaustion. It grants no open

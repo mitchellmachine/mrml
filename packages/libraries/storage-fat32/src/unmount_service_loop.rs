@@ -1,5 +1,5 @@
 use crate::Fat32MountedProvider;
-use mrml_interface_storage_filesystem_v2::{
+use mrml_interface_storage_filesystem_v3::{
     FilesystemUnmountTransport, ProtocolError, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
 };
 
@@ -82,7 +82,7 @@ impl<B, const N: usize> Fat32UnmountServiceLoop<B, N> {
 mod tests {
     use super::*;
     use crate::{Fat32MountBackend, FAT32_BOOT_SECTOR_BYTES};
-    use mrml_interface_storage_filesystem_v2::{
+    use mrml_interface_storage_filesystem_v3::{
         decode_unmount_response, encode_unmount_request, OpaqueHandle, UnmountError,
     };
 

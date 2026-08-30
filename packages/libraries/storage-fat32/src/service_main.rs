@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::arch::{asm, naked_asm};
-use mrml_interface_storage_filesystem_v2::{PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES};
+use mrml_interface_storage_filesystem_v3::{PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES};
 use mrml_storage_fat32::{
     Fat32RawSyscall, Fat32ServiceLoop, Fat32SyscallFrame, Fat32UserspaceSyscalls,
 };

@@ -1266,6 +1266,11 @@ Provider file reads resolve only an active opaque handle, revalidate its exact
 mount lifecycle, and validate the complete FAT chain before publishing bytes.
 Stale handles leave output unchanged, while transient staging and cluster data
 are erased after every attempted read.
+The generation-3 open wire contract carries identity data only: exact volume,
+mount generation, directory handle, and nonzero lookup object. Its successful
+response is a structurally distinct generational provider handle; typed failures
+must carry an all-zero handle payload. Interface generations 1 and 2 are not
+redefined.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;

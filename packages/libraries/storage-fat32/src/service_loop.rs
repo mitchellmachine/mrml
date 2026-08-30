@@ -1,5 +1,5 @@
 use crate::Fat32Provider;
-use mrml_interface_storage_filesystem_v2::{
+use mrml_interface_storage_filesystem_v3::{
     decode_probe_request, encode_probe_request, BorrowedReadView, FilesystemTransport,
     ProtocolError, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
 };
@@ -150,7 +150,7 @@ impl Default for Fat32ServiceLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_interface_storage_filesystem_v2::{
+    use mrml_interface_storage_filesystem_v3::{
         decode_probe_response, encode_probe_request, OpaqueHandle, ProbeError,
     };
 

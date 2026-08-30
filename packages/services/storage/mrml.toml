@@ -24,9 +24,9 @@ multiplicity = "many"
 
 [[requires]]
 binding = "dynamic"
-fingerprint = "662a94c220ac3225dce9482f699ab09b06f35e412c01c003eb24b4340f2de6aa"
+fingerprint = "cdf4ff47c6f987d7cf392eb641973f81de2b90ee8aa053b955265887823ae2dc"
 form = "isolated-service"
-generation = 2
+generation = 3
 interface = "org.mrml.interface.storage.filesystem"
 
 [[target]]
@@ -70,8 +70,8 @@ package = "org.mrml.interface.storage.block-provider"
 scope = "compile"
 
 [[dependency]]
-alias = "mrml_interface_storage_filesystem_v2"
-compile_name = "mrml-interface-storage-filesystem-v2"
+alias = "mrml_interface_storage_filesystem_v3"
+compile_name = "mrml-interface-storage-filesystem-v3"
 package = "org.mrml.interface.storage.filesystem"
 scope = "compile"
 

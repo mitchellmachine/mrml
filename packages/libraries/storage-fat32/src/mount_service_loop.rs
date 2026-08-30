@@ -1,6 +1,6 @@
 use crate::{Fat32BlockMountBackend, Fat32MountedProvider};
 use mrml_interface_storage_block_provider_v1::BlockProviderReadTransport;
-use mrml_interface_storage_filesystem_v2::{
+use mrml_interface_storage_filesystem_v3::{
     FilesystemMountTransport, ProtocolError, MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES,
 };
 
@@ -97,7 +97,7 @@ mod tests {
         decode_read_request, encode_read_response, OpaqueHandle as BlockOpaqueHandle,
         ProtocolError as BlockProtocolError, READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
     };
-    use mrml_interface_storage_filesystem_v2::{
+    use mrml_interface_storage_filesystem_v3::{
         decode_mount_response, encode_mount_request, BorrowedReadView, MountError, OpaqueHandle,
     };
 

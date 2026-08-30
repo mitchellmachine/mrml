@@ -7479,6 +7479,15 @@ staging and cluster scratch. A stale handle causes no block I/O and leaves calle
 output untouched; syscall exposure remains pending a preserved next interface
 generation rather than modifying generation 2 in place.
 
+Filesystem interface generation 3 now preserves every generation-2 operation
+and numeric identity while adding canonical provider open as operation 11. The
+request exact-binds volume, mount generation, directory, and non-authorizing
+lookup object; success returns a distinct opaque handle, and errors require a
+zero handle payload. The generated fingerprint is
+`cdf4ff47c6f987d7cf392eb641973f81de2b90ee8aa053b955265887823ae2dc`.
+Fourteen focused Linux-host codec tests pass; generations 1 and 2 remain checked
+in unchanged.
+
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
 authenticates the exact provider/mount/parent/object mapping; `OPEN_CHILD` on the

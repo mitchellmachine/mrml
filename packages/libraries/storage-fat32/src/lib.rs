@@ -16,7 +16,7 @@ use mrml_interface_storage_block_provider_v1::{
     BorrowedWriteView as BlockBorrowedWriteView, OpaqueHandle as BlockOpaqueHandle,
     ProtocolError as BlockProtocolError, ReadError as BlockReadError,
 };
-use mrml_interface_storage_filesystem_v2::{
+use mrml_interface_storage_filesystem_v3::{
     decode_lookup_request, decode_mount_request, decode_probe_request, decode_unmount_request,
     encode_lookup_response, encode_mount_response, encode_probe_response, encode_unmount_response,
     FilesystemLookupTransport, FilesystemMountTransport, FilesystemTransport,
@@ -2476,7 +2476,7 @@ mod tests {
 
     #[test]
     fn canonical_mount_transport_publishes_exact_lifecycle_response() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_mount_response, encode_mount_request, BorrowedReadView,
         };
 
@@ -2509,7 +2509,7 @@ mod tests {
 
     #[test]
     fn canonical_mount_transport_rejects_options_before_block_io() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_mount_response, encode_mount_request, BorrowedReadView,
         };
 
@@ -2540,7 +2540,7 @@ mod tests {
 
     #[test]
     fn canonical_mount_transport_maps_stale_block_session_without_state() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_mount_response, encode_mount_request, BorrowedReadView,
         };
 
@@ -2571,7 +2571,7 @@ mod tests {
 
     #[test]
     fn canonical_unmount_transport_invalidates_exact_mount_once() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_mount_response, decode_unmount_response, encode_mount_request,
             encode_unmount_request, BorrowedReadView,
         };
@@ -2980,7 +2980,7 @@ mod tests {
 
     #[test]
     fn canonical_lookup_transport_loads_root_and_returns_stable_object_identity() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_lookup_response, encode_lookup_request, BorrowedReadView,
         };
 
@@ -3023,7 +3023,7 @@ mod tests {
 
     #[test]
     fn canonical_lookup_transport_maps_not_found_and_stale_without_object_data() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_lookup_response, encode_lookup_request, BorrowedReadView,
         };
 
@@ -3080,7 +3080,7 @@ mod tests {
 
     #[test]
     fn canonical_lookup_transport_rejects_invalid_utf8_before_block_io() {
-        use mrml_interface_storage_filesystem_v2::{encode_lookup_request, BorrowedReadView};
+        use mrml_interface_storage_filesystem_v3::{encode_lookup_request, BorrowedReadView};
 
         let volume = OpaqueHandle::new(4, 7).unwrap();
         let session = BlockOpaqueHandle::new(9, 11).unwrap();
@@ -3163,7 +3163,7 @@ mod tests {
 
     #[test]
     fn provider_probe_uses_canonical_interface_bytes() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
         };
 
@@ -3182,7 +3182,7 @@ mod tests {
 
     #[test]
     fn provider_probe_distinguishes_invalid_call_from_unsupported_media() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
         };
 

@@ -1,6 +1,6 @@
 use crate::{Fat32BlockMountBackend, Fat32LookupProvider};
 use mrml_interface_storage_block_provider_v1::BlockProviderReadTransport;
-use mrml_interface_storage_filesystem_v2::{
+use mrml_interface_storage_filesystem_v3::{
     decode_lookup_request, encode_lookup_request, BorrowedReadView, FilesystemLookupTransport,
     ProtocolError, LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES,
 };
@@ -170,7 +170,7 @@ mod tests {
         encode_read_response, OpaqueHandle as BlockOpaqueHandle,
         ProtocolError as BlockProtocolError, ReadError, READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
     };
-    use mrml_interface_storage_filesystem_v2::{encode_lookup_request, OpaqueHandle};
+    use mrml_interface_storage_filesystem_v3::{encode_lookup_request, OpaqueHandle};
 
     const TOKEN: u64 = (9_u64 << 32) | 4;
 

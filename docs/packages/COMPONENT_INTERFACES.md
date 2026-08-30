@@ -480,6 +480,22 @@ Names remain non-authorizing labels. This is executable service-boundary and
 hosted restart evidence, not installed-kernel execution, a mount, or physical
 hardware evidence.
 
+Filesystem interface generation 3 preserves all generation-2 operation numbers
+and layouts and adds operation 11 for provider open. It exact-binds volume,
+mount generation, directory handle, and a nonzero non-authorizing lookup object,
+then returns a distinct opaque generational handle or a typed zero-payload error.
+Generations 1 and 2 remain checked-in immutable history. The focused generation-3
+codec suite passes fourteen Linux-host tests.
+
+- Complexity impact: **LOW**
+- TCB impact: **NONE**
+- New parser boundary: **NO**
+- New authority model: **NO** (lookup identity remains data; capabilities still authorize)
+
+Patent review: `NOT_TRIGGERED` — fixed request framing, opaque generational
+handles, typed zero-payload errors, and major interface versioning are
+conventional service-ABI mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 ```text
 download -> authenticate -> validate ABI/evidence/policy
   -> resolve typed requirements -> construct candidate generation

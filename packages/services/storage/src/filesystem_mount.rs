@@ -1,7 +1,7 @@
 use crate::{
     BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, StoragePrincipal,
 };
-use mrml_interface_storage_filesystem_v2::OpaqueHandle;
+use mrml_interface_storage_filesystem_v3::OpaqueHandle;
 
 pub const FILESYSTEM_BOOT_SECTOR_BYTES: usize = 512;
 

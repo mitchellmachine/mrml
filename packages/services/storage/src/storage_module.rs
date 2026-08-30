@@ -292,7 +292,7 @@ fn authorize_binding<const C: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_interface_storage_filesystem_v2::{
+    use mrml_interface_storage_filesystem_v3::{
         decode_probe_response, encode_probe_request, BorrowedReadView, FilesystemServiceEndpoint,
         FilesystemTransport, IsolatedFilesystemTransport, OpaqueHandle, ProtocolError,
         PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,

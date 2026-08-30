@@ -1,6 +1,6 @@
 #![no_std]
 
-#[path = "../2.rs"]
+#[path = "../3.rs"]
 mod generated;
 
 pub use generated::*;
@@ -28,6 +28,8 @@ pub const FORMAT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const FORMAT_RESPONSE_BYTES: usize = 16;
 pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
+pub const OPEN_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
+pub const OPEN_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
 const ABI_SCHEMA_VERSION: u16 = 1;
 
@@ -71,6 +73,21 @@ pub trait FilesystemLookupEndpoint {
         request: &[u8; LOOKUP_REQUEST_BYTES],
         memory: &mut [u8],
     ) -> Result<[u8; LOOKUP_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemOpenTransport {
+    fn open(
+        &mut self,
+        request: &[u8; OPEN_REQUEST_BYTES],
+    ) -> Result<[u8; OPEN_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait FilesystemOpenEndpoint {
+    fn invoke_open(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; OPEN_REQUEST_BYTES],
+    ) -> Result<[u8; OPEN_RESPONSE_BYTES], ProtocolError>;
 }
 
 pub trait FilesystemMountTransport {
@@ -263,6 +280,16 @@ impl<E: FilesystemLookupEndpoint> FilesystemLookupTransport for IsolatedFilesyst
         }
         decode_lookup_request(request, memory.len() as u64)?;
         self.service.invoke_lookup(self.endpoint, request, memory)
+    }
+}
+
+impl<E: FilesystemOpenEndpoint> FilesystemOpenTransport for IsolatedFilesystemTransport<E> {
+    fn open(
+        &mut self,
+        request: &[u8; OPEN_REQUEST_BYTES],
+    ) -> Result<[u8; OPEN_RESPONSE_BYTES], ProtocolError> {
+        decode_open_request(request)?;
+        self.service.invoke_open(self.endpoint, request)
     }
 }
 
@@ -739,6 +766,110 @@ pub fn decode_lookup_response(
         2 if object == 0 => Ok(Err(LookupError::StaleObject)),
         3 if object == 0 => Ok(Err(LookupError::NotFound)),
         4 if object == 0 => Ok(Err(LookupError::PermissionDenied)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
+pub fn encode_open_request(
+    volume: OpaqueHandle,
+    generation: u64,
+    directory: OpaqueHandle,
+    object: u64,
+) -> Result<[u8; OPEN_REQUEST_BYTES], ProtocolError> {
+    let request = OpenRequest {
+        volume,
+        generation,
+        directory,
+        object,
+    };
+    if !request.validate() || generation == 0 || object == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; OPEN_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_OPEN.to_le_bytes());
+    bytes[56..64].copy_from_slice(&40_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(OPEN_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&volume.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&volume.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&generation.to_le_bytes());
+    bytes[88..92].copy_from_slice(&directory.index().to_le_bytes());
+    bytes[92..96].copy_from_slice(&directory.generation().to_le_bytes());
+    bytes[96..104].copy_from_slice(&object.to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_open_request(
+    bytes: &[u8; OPEN_REQUEST_BYTES],
+) -> Result<OpenRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_OPEN
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 40
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != OPEN_RESPONSE_BYTES as u64
+        || bytes[104..112] != [0; 8]
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let volume = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let generation = u64::from_le_bytes(bytes[80..88].try_into().unwrap());
+    let directory = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[88..92].try_into().unwrap()),
+        u32::from_le_bytes(bytes[92..96].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let object = u64::from_le_bytes(bytes[96..104].try_into().unwrap());
+    let request = OpenRequest {
+        volume,
+        generation,
+        directory,
+        object,
+    };
+    if generation == 0 || object == 0 || !request.validate() {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    Ok(request)
+}
+
+pub fn encode_open_response(result: Result<OpenResponse, OpenError>) -> [u8; OPEN_RESPONSE_BYTES] {
+    let mut bytes = [0; OPEN_RESPONSE_BYTES];
+    match result {
+        Ok(handle) => {
+            bytes[8..12].copy_from_slice(&handle.index().to_le_bytes());
+            bytes[12..16].copy_from_slice(&handle.generation().to_le_bytes());
+        }
+        Err(error) => bytes[0..4].copy_from_slice(&(error as u32).to_le_bytes()),
+    }
+    bytes
+}
+
+pub fn decode_open_response(
+    bytes: &[u8; OPEN_RESPONSE_BYTES],
+) -> Result<Result<OpenResponse, OpenError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let index = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    let generation = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+    match status {
+        0 => OpaqueHandle::new(index, generation)
+            .map(Ok)
+            .ok_or(ProtocolError::InvalidResponse),
+        1 if index == 0 && generation == 0 => Ok(Err(OpenError::InvalidRequest)),
+        2 if index == 0 && generation == 0 => Ok(Err(OpenError::StaleObject)),
+        3 if index == 0 && generation == 0 => Ok(Err(OpenError::PermissionDenied)),
+        4 if index == 0 && generation == 0 => Ok(Err(OpenError::Capacity)),
         _ => Err(ProtocolError::InvalidResponse),
     }
 }
@@ -1542,6 +1673,65 @@ mod tests {
         assert_eq!(
             transport.lookup(&request, &mut [0; 33]),
             Err(ProtocolError::InvalidRequest)
+        );
+    }
+
+    struct OpenEndpoint {
+        seen: Option<OpaqueHandle>,
+    }
+
+    impl FilesystemOpenEndpoint for OpenEndpoint {
+        fn invoke_open(
+            &mut self,
+            endpoint: OpaqueHandle,
+            _request: &[u8; OPEN_REQUEST_BYTES],
+        ) -> Result<[u8; OPEN_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            Ok(encode_open_response(Ok(OpaqueHandle::new(6, 13).unwrap())))
+        }
+    }
+
+    #[test]
+    fn open_codec_separates_lookup_identity_from_provider_handle() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let volume = OpaqueHandle::new(2, 5).unwrap();
+        let directory = OpaqueHandle::new(9, 3).unwrap();
+        let request = encode_open_request(volume, 12, directory, 41).unwrap();
+        assert_eq!(
+            decode_open_request(&request),
+            Ok(OpenRequest {
+                volume,
+                generation: 12,
+                directory,
+                object: 41,
+            })
+        );
+        let service = OpenEndpoint { seen: None };
+        let mut transport = IsolatedFilesystemTransport::new(endpoint, 32, service).unwrap();
+        assert_eq!(
+            decode_open_response(&transport.open(&request).unwrap()),
+            Ok(Ok(OpaqueHandle::new(6, 13).unwrap()))
+        );
+        assert_eq!(transport.into_service().seen, Some(endpoint));
+        assert_eq!(
+            encode_open_request(volume, 12, directory, 0),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut substituted = request;
+        substituted[52..56].copy_from_slice(&OP_LOOKUP.to_le_bytes());
+        assert_eq!(
+            decode_open_request(&substituted),
+            Err(ProtocolError::InvalidHeader)
+        );
+        let mut hidden = encode_open_response(Err(OpenError::Capacity));
+        hidden[8] = 1;
+        assert_eq!(
+            decode_open_response(&hidden),
+            Err(ProtocolError::InvalidResponse)
+        );
+        assert_eq!(
+            decode_open_response(&encode_open_response(Err(OpenError::StaleObject))),
+            Ok(Err(OpenError::StaleObject))
         );
     }
 

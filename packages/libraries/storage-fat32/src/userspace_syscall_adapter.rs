@@ -3,7 +3,7 @@ use crate::{
     Fat32UnmountServiceSyscalls, ReceivedFat32Envelope, ReceivedFat32LookupEnvelope,
     ReceivedFat32MountEnvelope, ReceivedFat32UnmountEnvelope,
 };
-use mrml_interface_storage_filesystem_v2::{
+use mrml_interface_storage_filesystem_v3::{
     LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES, MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES,
     PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
 };
@@ -444,7 +444,7 @@ unsafe impl<R: Fat32RawSyscall> Fat32LookupServiceSyscalls for Fat32LookupUsersp
 mod tests {
     use super::*;
     use crate::Fat32ServiceLoop;
-    use mrml_interface_storage_filesystem_v2::{
+    use mrml_interface_storage_filesystem_v3::{
         decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
     };
 
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn mount_adapter_uses_zero_capability_receive_and_exact_reply() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             encode_mount_request, encode_mount_response, BorrowedReadView, MountResponse,
             OpaqueHandle,
         };
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn unmount_adapter_uses_zero_capability_receive_and_exact_reply() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             encode_unmount_request, encode_unmount_response, OpaqueHandle,
         };
 
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn lookup_adapter_preserves_receive_read_release_reply_register_order() {
-        use mrml_interface_storage_filesystem_v2::{
+        use mrml_interface_storage_filesystem_v3::{
             encode_lookup_request, encode_lookup_response, BorrowedReadView, OpaqueHandle,
         };
 
