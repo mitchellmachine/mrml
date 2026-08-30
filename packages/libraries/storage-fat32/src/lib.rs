@@ -526,11 +526,63 @@ pub enum Fat32RootLookupError {
     Identity(Fat32ObjectIdentityError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Fat32OpenRecord {
+    volume: OpaqueHandle,
+    mount_generation: u64,
+    root: OpaqueHandle,
+    object: u64,
+    entry: Fat32ShortDirectoryEntry,
+}
+
+#[derive(Clone, Copy)]
+struct Fat32OpenSlot {
+    generation: u32,
+    record: Option<Fat32OpenRecord>,
+    reserved: bool,
+    retired: bool,
+}
+
+impl Fat32OpenSlot {
+    const EMPTY: Self = Self {
+        generation: 1,
+        record: None,
+        reserved: false,
+        retired: false,
+    };
+
+    fn retire(&mut self) {
+        self.record = None;
+        self.reserved = false;
+        if let Some(next) = self.generation.checked_add(1) {
+            self.generation = next;
+        } else {
+            self.retired = true;
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct Fat32OpenReservation {
+    slot: u32,
+    generation: u32,
+    record: Fat32OpenRecord,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32OpenError {
+    Identity(Fat32ObjectIdentityError),
+    Capacity,
+    InvalidReservation,
+    StaleHandle,
+}
+
 pub struct Fat32MountedProvider<B, const N: usize, const O: usize = 64> {
     backend: B,
     mounts: Fat32MountTable<N>,
     objects: [Option<Fat32ObjectRecord>; O],
     next_object: Option<u64>,
+    open: [Fat32OpenSlot; O],
 }
 
 impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
@@ -540,6 +592,7 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
             mounts: Fat32MountTable::new(),
             objects: [None; O],
             next_object: Some(1),
+            open: [Fat32OpenSlot::EMPTY; O],
         }
     }
 
@@ -571,6 +624,13 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
                 object.volume == volume && object.mount_generation == generation
             }) {
                 *object = None;
+            }
+        }
+        for slot in &mut self.open {
+            if slot.record.is_some_and(|record| {
+                record.volume == volume && record.mount_generation == generation
+            }) {
+                slot.retire();
             }
         }
         Ok(completion)
@@ -656,9 +716,127 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
             .map_err(Fat32RootLookupError::Identity)
     }
 
+    pub fn reserve_open(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+        object: u64,
+    ) -> Result<Fat32OpenReservation, Fat32OpenError> {
+        let entry = self
+            .root_entry(volume, generation, root, object)
+            .map_err(Fat32OpenError::Identity)?;
+        let (slot, state) = self
+            .open
+            .iter_mut()
+            .enumerate()
+            .find(|(_, state)| state.record.is_none() && !state.reserved && !state.retired)
+            .ok_or(Fat32OpenError::Capacity)?;
+        let slot = u32::try_from(slot).map_err(|_| Fat32OpenError::Capacity)?;
+        let record = Fat32OpenRecord {
+            volume,
+            mount_generation: generation,
+            root,
+            object,
+            entry,
+        };
+        state.record = Some(record);
+        state.reserved = true;
+        Ok(Fat32OpenReservation {
+            slot,
+            generation: state.generation,
+            record,
+        })
+    }
+
+    pub fn activate_open(
+        &mut self,
+        reservation: Fat32OpenReservation,
+    ) -> Result<OpaqueHandle, Fat32OpenError> {
+        let slot =
+            usize::try_from(reservation.slot).map_err(|_| Fat32OpenError::InvalidReservation)?;
+        let state = self
+            .open
+            .get_mut(slot)
+            .ok_or(Fat32OpenError::InvalidReservation)?;
+        if state.generation != reservation.generation
+            || state.record != Some(reservation.record)
+            || !state.reserved
+            || state.retired
+        {
+            return Err(Fat32OpenError::InvalidReservation);
+        }
+        state.reserved = false;
+        OpaqueHandle::new(reservation.slot, reservation.generation)
+            .ok_or(Fat32OpenError::InvalidReservation)
+    }
+
+    pub fn cancel_open(&mut self, reservation: Fat32OpenReservation) -> Result<(), Fat32OpenError> {
+        let slot =
+            usize::try_from(reservation.slot).map_err(|_| Fat32OpenError::InvalidReservation)?;
+        let state = self
+            .open
+            .get_mut(slot)
+            .ok_or(Fat32OpenError::InvalidReservation)?;
+        if state.generation != reservation.generation
+            || state.record != Some(reservation.record)
+            || !state.reserved
+            || state.retired
+        {
+            return Err(Fat32OpenError::InvalidReservation);
+        }
+        state.retire();
+        Ok(())
+    }
+
+    pub fn close_open(&mut self, handle: OpaqueHandle) -> Result<(), Fat32OpenError> {
+        let slot = usize::try_from(handle.index()).map_err(|_| Fat32OpenError::StaleHandle)?;
+        let state = self.open.get_mut(slot).ok_or(Fat32OpenError::StaleHandle)?;
+        if state.generation != handle.generation()
+            || state.record.is_none()
+            || state.reserved
+            || state.retired
+        {
+            return Err(Fat32OpenError::StaleHandle);
+        }
+        state.retire();
+        Ok(())
+    }
+
+    pub fn open_entry(
+        &self,
+        volume: OpaqueHandle,
+        generation: u64,
+        handle: OpaqueHandle,
+    ) -> Result<Fat32ShortDirectoryEntry, Fat32OpenError> {
+        let slot = usize::try_from(handle.index()).map_err(|_| Fat32OpenError::StaleHandle)?;
+        let state = self.open.get(slot).ok_or(Fat32OpenError::StaleHandle)?;
+        let record = state
+            .record
+            .filter(|record| {
+                state.generation == handle.generation()
+                    && !state.reserved
+                    && !state.retired
+                    && record.volume == volume
+                    && record.mount_generation == generation
+            })
+            .ok_or(Fat32OpenError::StaleHandle)?;
+        self.mounts
+            .geometry(record.volume, record.mount_generation, record.root)
+            .map_err(|error| {
+                Fat32OpenError::Identity(Fat32ObjectIdentityError::Lifecycle(error))
+            })?;
+        Ok(record.entry)
+    }
+
     #[cfg(test)]
     fn set_next_object_for_test(&mut self, next: u64) {
         self.next_object = Some(next);
+    }
+
+    #[cfg(test)]
+    fn set_open_generation_for_test(&mut self, slot: usize, generation: u32) {
+        self.open[slot].generation = generation;
     }
 }
 
@@ -2493,6 +2671,154 @@ mod tests {
         assert_eq!(
             provider.identify_root_entry(volume, remounted.generation, remounted.root, entry),
             Err(Fat32ObjectIdentityError::GenerationExhausted)
+        );
+    }
+
+    #[test]
+    fn open_handles_require_activation_and_close_without_reuse() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let entry = file_entry(5, 4096);
+        let object = provider
+            .identify_root_entry(volume, mounted.generation, mounted.root, entry)
+            .unwrap();
+        let reservation = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .unwrap();
+        let handle = provider.activate_open(reservation).unwrap();
+        assert_eq!(
+            provider.open_entry(volume, mounted.generation, handle),
+            Ok(entry)
+        );
+        assert_eq!(
+            provider.open_entry(OpaqueHandle::new(5, 7).unwrap(), mounted.generation, handle),
+            Err(Fat32OpenError::StaleHandle)
+        );
+        provider.close_open(handle).unwrap();
+        assert_eq!(
+            provider.open_entry(volume, mounted.generation, handle),
+            Err(Fat32OpenError::StaleHandle)
+        );
+        assert_eq!(
+            provider.close_open(handle),
+            Err(Fat32OpenError::StaleHandle)
+        );
+
+        let next = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .unwrap();
+        let next_handle = provider.activate_open(next).unwrap();
+        assert_ne!(next_handle, handle);
+        assert_eq!(next_handle.generation(), handle.generation() + 1);
+    }
+
+    #[test]
+    fn cancelled_open_reservations_advance_generation_and_release_capacity() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let object = provider
+            .identify_root_entry(
+                volume,
+                mounted.generation,
+                mounted.root,
+                file_entry(5, 4096),
+            )
+            .unwrap();
+        let reservation = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .unwrap();
+        assert_eq!(
+            provider.reserve_open(volume, mounted.generation, mounted.root, object),
+            Err(Fat32OpenError::Capacity)
+        );
+        let generation = reservation.generation;
+        provider.cancel_open(reservation).unwrap();
+        let replacement = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .unwrap();
+        assert_eq!(replacement.generation, generation + 1);
+    }
+
+    #[test]
+    fn unmount_invalidates_active_and_reserved_open_state() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 2>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let object = provider
+            .identify_root_entry(
+                volume,
+                mounted.generation,
+                mounted.root,
+                file_entry(5, 4096),
+            )
+            .unwrap();
+        let active = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .and_then(|reservation| provider.activate_open(reservation))
+            .unwrap();
+        let reserved = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .unwrap();
+        provider.unmount(volume, mounted.generation).unwrap();
+        assert_eq!(
+            provider.open_entry(volume, mounted.generation, active),
+            Err(Fat32OpenError::StaleHandle)
+        );
+        assert_eq!(
+            provider.activate_open(reserved),
+            Err(Fat32OpenError::InvalidReservation)
+        );
+    }
+
+    #[test]
+    fn exhausted_open_generation_retires_slot_permanently() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let mut provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        provider.set_open_generation_for_test(0, u32::MAX);
+        let mounted = provider.mount(volume).unwrap();
+        let object = provider
+            .identify_root_entry(
+                volume,
+                mounted.generation,
+                mounted.root,
+                file_entry(5, 4096),
+            )
+            .unwrap();
+        let handle = provider
+            .reserve_open(volume, mounted.generation, mounted.root, object)
+            .and_then(|reservation| provider.activate_open(reservation))
+            .unwrap();
+        assert_eq!(handle.generation(), u32::MAX);
+        provider.close_open(handle).unwrap();
+        assert_eq!(
+            provider.reserve_open(volume, mounted.generation, mounted.root, object),
+            Err(Fat32OpenError::Capacity)
         );
     }
 

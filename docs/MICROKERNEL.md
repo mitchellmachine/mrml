@@ -7467,6 +7467,14 @@ name range, releases that validated leaf after every later outcome, and erases
 transient buffers. Its register adapter rejects kernel over-counts before the
 envelope exists.
 
+Provider-side open state is now a bounded two-phase lifecycle. Reservation binds
+the exact live volume, mount generation, root, and provider object but yields no
+usable handle. Activation alone publishes a fresh opaque handle; cancellation,
+close, and unmount advance the slot generation, stale replays fail, and maximum
+generation permanently retires the slot. The lookup's non-authorizing object
+number is never interchangeable with this handle. The focused Linux-host FAT32
+suite passes seventy-nine tests.
+
 The storage policy service now bridges non-authorizing filesystem lookup identity
 to a child handle without conflating the two. An unsafe runtime binding
 authenticates the exact provider/mount/parent/object mapping; `OPEN_CHILD` on the

@@ -944,7 +944,11 @@ I/O, exact-loads the mounted root, and emits only a stable nonzero object or
 typed zero-object error. The isolated lookup loop exact-validates one transferred
 name-buffer leaf, locally rebases the copied range, releases the validated leaf
 after later failure, and erases transient buffers. Its register adapter rejects
-kernel over-counts. Seventy-five focused Linux-host tests pass. The storage service
+kernel over-counts. The provider also separates open reservation from activation
+in a fixed-capacity table. Reservations authorize no reads; activation alone
+publishes an opaque handle, while cancellation, close, and unmount advance
+generations and invalidate stale state. Generation exhaustion retires the slot
+permanently. Seventy-nine focused Linux-host tests pass. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the
@@ -970,6 +974,10 @@ becomes unavailable. Retry therefore launches fresh state. Storage passes 144
 tests on both hosts. This does not implement syscall-dispatched mount, lookup/open policy,
 check/repair, format, writes, installed-kernel launch, or physical interoperability
 evidence.
+
+Patent review: `NOT_TRIGGERED` — two-phase open publication, bounded handle
+tables, generation invalidation, and lifecycle cleanup are conventional
+capability and resource-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never

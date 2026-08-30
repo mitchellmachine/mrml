@@ -61,7 +61,7 @@ and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversa
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
 file-range reads, conservative bounded directory lookup, canonical provider
 probing, a fixed-capacity exact-generation mount/root lifecycle table, and the
-isolated syscall-backed receive/reply loops pass seventy-five
+isolated syscall-backed receive/reply loops pass seventy-nine
 focused tests on Linux. The loop releases only an exactly declared, structurally
 valid transferred leaf; absent or malformed token data cannot trigger revocation.
 Lookup validates UTF-16 input, matches ASCII
@@ -78,6 +78,11 @@ mount/parent result to a stable storage object but grants nothing by itself.
 Opening requires the exact parent handle with `OPEN_CHILD`, derives only requested
 kind-valid rights, rejects substitution before allocation, and records the child
 handle for mount-scoped transitive revocation. `LOOKUP` alone remains insufficient.
+The provider now reserves opens in a fixed-capacity table without issuing a
+usable handle. Exact activation publishes a fresh opaque handle; cancellation,
+close, and unmount advance its generation, reject replay, and permanently retire
+a slot at generation exhaustion. Reads therefore cannot substitute the lookup's
+non-authorizing object number for an active provider handle.
 The mount table accepts only already-validated geometry, issues fresh independent
 mount and root generations, exact-matches both, invalidates them together on
 unmount, and permanently fails after generation exhaustion. It grants no open

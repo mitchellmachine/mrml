@@ -1253,6 +1253,11 @@ mount, parent, and provider object to a stable storage object; this evidence
 still grants no right. A child handle is derived only from the same principal's
 exact directory handle carrying `OPEN_CHILD`, with kind-valid requested rights.
 Mount cleanup revokes each opened handle transitively, including descendants.
+The provider independently reserves an exact mount/root/object tuple before
+publishing any read-usable state. Only activation returns an opaque handle;
+cancellation, close, and unmount advance its generation, and exhaustion retires
+the slot. A lookup object number or unactivated reservation is never accepted as
+provider read authority.
 
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
