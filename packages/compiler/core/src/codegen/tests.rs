@@ -20065,23 +20065,29 @@ mod tests {
             CodegenErrorKind::RuntimeTypeMismatch,
         );
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::min_value(1) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::max_value }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::min_value(1) }",
+                CodegenErrorKind::Expression(ExpressionErrorKind::ExpectedCloseParen),
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::max_value }",
+                CodegenErrorKind::Expression(ExpressionErrorKind::ExpectedExpression),
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 768, 2, 80>(
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let error = compile_x86_64_function::<_, 768, 2, 80>(
                     &function,
                     &NoConstants,
-                    X86_64Abi::Windows,
+                    abi,
                 )
-                .is_err(),
-                "{source}"
-            );
+                .unwrap_err();
+                assert_eq!(error.kind, expected, "{source}");
+            }
         }
     }
 
