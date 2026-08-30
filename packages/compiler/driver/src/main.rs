@@ -1048,15 +1048,15 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
             .map_err(|_| anyhow!("could not select static link members"))?;
     let mut selected: Vector<LinkInput<'data, 'relocations, 'definitions>> =
-        Vector::with_capacity(selection.indices().len())
+        Vector::with_capacity(inputs.len())
             .map_err(|_| anyhow!("could not allocate selected link input list"))?;
-    let mut selected_group = Vector::with_capacity(selection.indices().len())
+    let mut selected_group = Vector::with_capacity(inputs.len())
         .map_err(|_| anyhow!("could not allocate selected link origin list"))?;
-    let mut selected_member = Vector::with_capacity(selection.indices().len())
+    let mut selected_member = Vector::with_capacity(inputs.len())
         .map_err(|_| anyhow!("could not allocate selected link member list"))?;
     let mut selected_comdat = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected COMDAT list"))?;
-    let mut selected_source_object = Vector::with_capacity(selection.indices().len())
+    let mut selected_source_object = Vector::with_capacity(inputs.len())
         .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     for index in selection.indices() {
         let current_is_internal = matches!(
@@ -1154,6 +1154,63 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         archive_member: selected_member,
         source_object: selected_source_object,
     })
+}
+
+fn retain_exact_readonly_relocation_targets<'data, 'relocations, 'definitions>(
+    inputs: &[LinkInput<'data, 'relocations, 'definitions>],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    source_object: &[usize],
+    selected: &mut SelectedLinkInputs<'data, 'relocations, 'definitions>,
+    relocations: &[PeReadonlyAbsoluteRelocation<'_>],
+) -> Result<bool> {
+    if inputs.len() != archive_group.len()
+        || inputs.len() != archive_member.len()
+        || inputs.len() != source_object.len()
+    {
+        return Err(anyhow!("decoded exact-section origin count mismatch"));
+    }
+    let mut changed = false;
+    for relocation in relocations {
+        let Some(identity) = relocation.target_identity else {
+            continue;
+        };
+        let already_selected = selected.inputs.iter().any(|input| {
+            matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                || input.additional_definitions.iter().any(|definition| {
+                    matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                })
+        });
+        if already_selected {
+            continue;
+        }
+        let Some(index) = inputs.iter().position(|input| {
+            matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                || input.additional_definitions.iter().any(|definition| {
+                    matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                })
+        }) else {
+            continue;
+        };
+        selected
+            .inputs
+            .try_push(inputs[index])
+            .map_err(|_| anyhow!("selected exact-section dependency capacity exceeded"))?;
+        selected
+            .archive_group
+            .try_push(archive_group[index])
+            .map_err(|_| anyhow!("selected exact-section origin capacity exceeded"))?;
+        selected
+            .archive_member
+            .try_push(archive_member[index])
+            .map_err(|_| anyhow!("selected exact-section member capacity exceeded"))?;
+        selected
+            .source_object
+            .try_push(source_object[index])
+            .map_err(|_| anyhow!("selected exact-section source capacity exceeded"))?;
+        changed = true;
+    }
+    Ok(changed)
 }
 
 fn selected_runtime_functions<'data>(
@@ -1587,7 +1644,7 @@ fn write_linked_pe(
         &mut arenas,
         &mut definitions,
     )?;
-    let selected = selected_link_inputs(
+    let mut selected = selected_link_inputs(
         &decoded.inputs,
         &decoded.archive_group,
         &decoded.archive_member,
@@ -1595,6 +1652,24 @@ fn write_linked_pe(
         &decoded.comdat_selection,
         entry,
     )?;
+    let readonly_absolute_relocations = loop {
+        let relocations = selected_readonly_absolute_relocations(
+            objects,
+            archive_group,
+            archive_member,
+            &selected,
+        )?;
+        if !retain_exact_readonly_relocation_targets(
+            &decoded.inputs,
+            &decoded.archive_group,
+            &decoded.archive_member,
+            &decoded.source_object,
+            &mut selected,
+            &relocations,
+        )? {
+            break relocations;
+        }
+    };
     let mut runtime_arena = [PeRuntimeFunction {
         begin_symbol: "unused",
         begin_identity: None,
@@ -1620,8 +1695,6 @@ fn write_linked_pe(
         &selected,
         &mut writable_arenas,
     )?;
-    let readonly_absolute_relocations =
-        selected_readonly_absolute_relocations(objects, archive_group, archive_member, &selected)?;
     let mut contextual_arenas = relocation_arenas(selected.inputs.len())?;
     let contextual_inputs = contextualize_pe_writable_relocations(
         &selected.inputs,
@@ -1752,9 +1825,11 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
         }
         if let Some(identity) = relocation.target_identity
             && !section_identity_defined(identity)
+            && !writable_section_defined(identity)
         {
             return Err(anyhow!(
-                "selected read-only relocation target section is undefined: object {}, section {}",
+                "selected read-only relocation target section is undefined: {} (object {}, section {})",
+                relocation.target_symbol,
                 identity.object(),
                 identity.section()
             ));
@@ -2522,6 +2597,77 @@ mod tests {
             12
         );
         assert_eq!(linked.bytes()[16], b'A');
+    }
+
+    #[test]
+    fn retains_exact_text_sections_referenced_by_readonly_relocations() {
+        let identity = CoffSectionIdentity::new(9, 25).unwrap();
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let target = LinkInput {
+            symbol: ".text$local",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity,
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let inputs = [entry, target];
+        let mut selected = selected_link_inputs(
+            &inputs,
+            &[0, 4],
+            &[0, 7],
+            &[0, 8],
+            &[CoffTextComdatSelection::None; 2],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs.len(), 1);
+        let relocation = [PeReadonlyAbsoluteRelocation {
+            readonly_owner: "entry",
+            readonly_identity: None,
+            readonly_offset: 0,
+            target_symbol: ".text$local",
+            target_identity: Some(identity),
+            target_offset: 0,
+            addend: 0,
+            kind: mrml_rustc::linker::PeReadonlyRelocationKind::Address64,
+        }];
+        assert!(
+            retain_exact_readonly_relocation_targets(
+                &inputs,
+                &[0, 4],
+                &[0, 7],
+                &[0, 8],
+                &mut selected,
+                &relocation,
+            )
+            .unwrap()
+        );
+        assert_eq!(selected.inputs.len(), 2);
+        assert_eq!(selected.archive_group[1], 4);
+        assert_eq!(selected.archive_member[1], 7);
+        assert_eq!(selected.source_object[1], 8);
+        assert!(
+            !retain_exact_readonly_relocation_targets(
+                &inputs,
+                &[0, 4],
+                &[0, 7],
+                &[0, 8],
+                &mut selected,
+                &relocation,
+            )
+            .unwrap()
+        );
     }
 
     #[test]

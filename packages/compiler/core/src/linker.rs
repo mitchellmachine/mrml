@@ -8434,16 +8434,27 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into<
             )
             .ok_or(LinkerError::OffsetOverflow)?;
         let target_rva = if let Some(identity) = relocation.target_identity {
-            let target =
-                resolve_coff_section(inputs, &linked.layouts, identity, relocation.target_offset)?;
-            if target < linked.readonly_offset {
-                TEXT_RVA
+            match resolve_coff_section(
+                inputs,
+                &linked.layouts,
+                identity,
+                relocation.target_offset,
+            ) {
+                Ok(target) if target < linked.readonly_offset => TEXT_RVA
                     .checked_add(target)
-                    .ok_or(LinkerError::OffsetOverflow)?
-            } else {
-                readonly_rva
+                    .ok_or(LinkerError::OffsetOverflow)?,
+                Ok(target) => readonly_rva
                     .checked_add(target - linked.readonly_offset)
-                    .ok_or(LinkerError::OffsetOverflow)?
+                    .ok_or(LinkerError::OffsetOverflow)?,
+                Err(LinkerError::UndefinedSymbol) => {
+                    let (target_index, target_offset) =
+                        writable_section(identity, relocation.target_offset)?;
+                    writable_rva
+                        .checked_add(writable_offsets[target_index])
+                        .and_then(|target| target.checked_add(target_offset))
+                        .ok_or(LinkerError::OffsetOverflow)?
+                }
+                Err(error) => return Err(error),
             }
         } else {
             match resolve_symbol(inputs, &linked.layouts, relocation.target_symbol) {
@@ -12748,6 +12759,7 @@ mod tests {
 
     #[test]
     fn resolves_readonly_absolute_targets_and_checked_addends_after_layout() {
+        let writable_identity = CoffSectionIdentity::new(12, 4).unwrap();
         let definitions = [LinkDefinition {
             symbol: "readonly_target",
             target: LinkDefinitionTarget::ReadonlyData(16),
@@ -12762,7 +12774,7 @@ mod tests {
         };
         let writable = PeWritableData {
             symbol: "writable",
-            identity: None,
+            identity: Some(writable_identity),
             selection: PeWritableComdatSelection::None,
             initialized: &[0; 8],
             zeroed_size: 0,
@@ -12794,8 +12806,8 @@ mod tests {
                 readonly_identity: None,
                 readonly_offset: 16,
                 target_symbol: "writable",
-                target_identity: None,
-                target_offset: 0,
+                target_identity: Some(writable_identity),
+                target_offset: 4,
                 addend: 7,
                 kind: PeReadonlyRelocationKind::Address64,
             },
@@ -12838,7 +12850,7 @@ mod tests {
         );
         assert_eq!(
             u64::from_le_bytes(pe.bytes()[0x410..0x418].try_into().unwrap()),
-            0x0000_0001_4000_3007
+            0x0000_0001_4000_300b
         );
         assert_eq!(
             u32::from_le_bytes(pe.bytes()[0x418..0x41c].try_into().unwrap()),
