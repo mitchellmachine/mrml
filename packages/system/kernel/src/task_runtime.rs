@@ -211,6 +211,30 @@ impl TaskTerminationDispatch {
         }
     }
 
+    /// Refreshes the saved user context after trusted successor preparation,
+    /// while exact-matching the scheduler-selected task again.
+    pub fn refresh_from_runtime<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        runtime: &TaskRuntime<TASKS, CAPS>,
+    ) -> Result<(), TaskTerminationDispatchError> {
+        match &mut self.target {
+            TaskTerminationDispatchTarget::Idle => {
+                if runtime.current().is_some() {
+                    return Err(TaskTerminationDispatchError::CurrentMismatch);
+                }
+            }
+            TaskTerminationDispatchTarget::User { task, context } => {
+                if runtime.current() != Some(*task) {
+                    return Err(TaskTerminationDispatchError::CurrentMismatch);
+                }
+                *context = *runtime
+                    .context(*task)
+                    .map_err(TaskTerminationDispatchError::Runtime)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Consumes this validated dispatch at the x86-64 context-transition
     /// boundary. An idle dispatch returns an opaque marker; a user dispatch
     /// does not return.
@@ -2325,7 +2349,7 @@ mod tests {
             }),
             Err(TaskTerminationDispatchError::TerminationMismatch)
         );
-        let dispatch = runtime.dispatch_after_termination(terminated).unwrap();
+        let mut dispatch = runtime.dispatch_after_termination(terminated).unwrap();
         assert!(!dispatch.is_idle());
         assert_eq!(
             dispatch.user(),
@@ -2335,7 +2359,10 @@ mod tests {
             runtime.dispatch_after_termination(terminated),
             Err(TaskTerminationDispatchError::NoPendingTermination)
         );
-        assert!(runtime.context_mut(replacement).is_ok());
+        let refreshed = context(0x30_0000, 0x51_0000);
+        *runtime.context_mut(replacement).unwrap() = refreshed;
+        dispatch.refresh_from_runtime(&runtime).unwrap();
+        assert_eq!(dispatch.user(), Some((replacement, refreshed)));
         assert_eq!(runtime.context(exiting), Err(TaskRuntimeError::MissingTask));
         assert_eq!(
             runtime.capabilities_mut(exiting).map(|_| ()),

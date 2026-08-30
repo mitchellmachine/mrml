@@ -10842,3 +10842,18 @@ the final `IRETQ` boundary.
 Patent review: `NOT_TRIGGERED` — exact matching of a scheduler outcome to an
 opaque dispatch record is conventional control-flow integrity validation. See
 `docs/patents/REVIEW_LOG.md`.
+
+An issued dispatch can now refresh its saved context only from the same task
+that remains current in the runtime. The UEFI service-exit switch path performs
+pending-buffer successor preparation, refreshes and rechecks that opaque token,
+obtains the typed installed entry stack, and consumes the token directly through
+the non-returning context-entry boundary instead of re-fetching and entering a
+detached raw context. The Linux-host kernel suite passes 653 tests and its
+release build passes. Standard, component-service, block-service, invalid-
+return, and buffer-drift UEFI release profiles cross-build; the standard profile
+retains one pre-existing unused-variable warning. These builds cover all changed
+conditional branches but do not constitute QEMU or physical `IRETQ` evidence.
+
+Patent review: `NOT_TRIGGERED` — refreshing a selected context from the same
+runtime identity immediately before conventional context entry is ordinary
+control-flow integrity composition. See `docs/patents/REVIEW_LOG.md`.

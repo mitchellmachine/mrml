@@ -1407,7 +1407,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             if terminated.dispatch.user().map(|(task, _)| task) != Some(to) {
                                 halt();
                             }
-                            enter_service_task(runtime, to)
+                            enter_service_dispatch(runtime, to, terminated.dispatch)
                         }
                         ScheduleOutcome::Idle => {
                             if !terminated.dispatch.is_idle() {
@@ -1469,7 +1469,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                                 in("eax") 0x31u32,
                                 options(nomem, nostack)
                             );
-                            enter_service_task(runtime, to)
+                            enter_service_dispatch(runtime, to, terminated.dispatch)
                         }
                         ScheduleOutcome::Idle => {
                             if !terminated.dispatch.is_idle() {
@@ -1534,7 +1534,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                                 in("eax") 3u32,
                                 options(nomem, nostack)
                             );
-                            enter_service_task(runtime, to)
+                            enter_service_dispatch(runtime, to, terminated.dispatch)
                         }
                         #[cfg(any(
                             feature = "invalid-return-probe",
@@ -5243,6 +5243,31 @@ unsafe fn enter_service_task(
         .map(|context| context as *const UserContext)
         .unwrap_or_else(|_| halt());
     unsafe { enter_service_probe_context(&*context) }
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn enter_service_dispatch(
+    runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+    task: mrml_kernel::TaskId,
+    mut dispatch: mrml_kernel::TaskTerminationDispatch,
+) -> ! {
+    #[cfg(feature = "buffer-drift-probe")]
+    unsafe {
+        arm_buffer_drift_probe()
+    };
+    unsafe { complete_pending_buffer(runtime, task) };
+    dispatch
+        .refresh_from_runtime(runtime)
+        .unwrap_or_else(|_| halt());
+    if dispatch.user().map(|(selected, _)| selected) != Some(task) {
+        halt();
+    }
+    let transition_stack = unsafe {
+        CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
+            .unwrap_or_else(|_| halt())
+    };
+    let _ = unsafe { dispatch.enter_user_on_stack(transition_stack) };
+    halt()
 }
 
 #[cfg(all(not(feature = "fault-probe"), feature = "gpu-benchmark"))]
