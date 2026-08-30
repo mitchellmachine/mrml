@@ -149,6 +149,7 @@ pub use platform_io::{AhciMonotonicDelay, AhciPlatformIo};
 pub use native_service_state::{
     bootstrap_and_prepare_native_x86_coherent_ahci_service,
     bootstrap_and_prepare_x86_coherent_ahci_service,
+    prepare_bootstrapped_native_x86_coherent_ahci_service,
 };
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,

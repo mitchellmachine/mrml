@@ -92,15 +92,55 @@ where
     B: AhciRawSyscall,
     D: crate::AhciMonotonicDelay,
 {
+    let launch = bootstrap_installed_ahci_entry(syscalls, entry, launch_scratch)
+        .map_err(AhciNativeServicePreparationError::Bootstrap)?;
     unsafe {
-        bootstrap_and_prepare_x86_coherent_ahci_service(
-            syscalls,
-            entry,
-            launch_scratch,
+        prepare_bootstrapped_native_x86_coherent_ahci_service(
             capabilities,
-            move |mapping| crate::AhciPlatformIo::from_installed_mapping(mapping, delay),
+            launch,
+            delay,
         )
     }
+}
+
+/// Prepares one already-authenticated launch after its authorizer is bound.
+///
+/// This separation lets native entry code bootstrap the launch, construct an
+/// [`crate::AhciInstalledDataAuthorizer`] from its exact roles and data object,
+/// and then borrow that authorizer for the complete service-state lifetime.
+///
+/// # Safety
+///
+/// The launch must be the result of the current entry's authenticated bootstrap.
+/// Its ABAR and CPU mappings must remain live and exclusive, its data extent
+/// must be platform-proven coherent, and `delay` must satisfy
+/// [`crate::AhciMonotonicDelay`].
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn prepare_bootstrapped_native_x86_coherent_ahci_service<'a, 'm, A, D>(
+    capabilities: &'a mut A,
+    launch: InstalledAhciServiceLaunch,
+    delay: D,
+) -> Result<
+    AhciNativeServiceState<
+        'a,
+        'm,
+        A,
+        crate::AhciPlatformIo<crate::NativeAhciRegisterIo, D>,
+        crate::AhciX86CoherentDataSync,
+    >,
+    AhciNativeServicePreparationError,
+>
+where
+    A: AhciDataCapabilityAuthorizer,
+    D: crate::AhciMonotonicDelay,
+{
+    let registers = unsafe {
+        crate::AhciPlatformIo::from_installed_mapping(launch.record().mapping(), delay)
+    }
+    .ok_or(AhciNativeServicePreparationError::RegisterMapping)?;
+    let sync = unsafe { crate::AhciX86CoherentDataSync::new(launch.record().data()) }
+        .ok_or(AhciNativeServicePreparationError::CoherenceAdmission)?;
+    unsafe { prepare_installed_ahci_service_state(capabilities, launch, registers, sync) }
 }
 
 /// Authenticates the native entry projection, wipes its copied bytes, and then
@@ -298,6 +338,19 @@ mod tests {
     struct BootRaw {
         bytes: [u8; AHCI_SERVICE_LAUNCH_BYTES],
         calls: usize,
+    }
+
+    struct AuthorizeRaw {
+        frames: [Option<crate::AhciSyscallFrame>; 2],
+        statuses: [u64; 2],
+        calls: usize,
+    }
+    unsafe impl AhciRawSyscall for AuthorizeRaw {
+        unsafe fn invoke(&mut self, frame: &mut crate::AhciSyscallFrame) {
+            self.frames[self.calls] = Some(*frame);
+            frame.rax = self.statuses[self.calls];
+            self.calls += 1;
+        }
     }
     unsafe impl AhciRawSyscall for BootRaw {
         unsafe fn invoke(&mut self, frame: &mut crate::AhciSyscallFrame) {
@@ -805,5 +858,51 @@ mod tests {
         drop(state);
         assert_eq!(authorizer.calls, 2);
         assert_eq!(syscalls.into_raw().calls, 1);
+    }
+
+    #[test]
+    fn bootstrapped_launch_can_bind_authorizer_before_native_state_borrow() {
+        let mut pages = [Page([0; 4096]), Page([0; 4096]), Page([0; 4096]), Page([0; 4096])];
+        let bases = pages.each_mut().map(|page| page.0.as_mut_ptr() as u64);
+        let mut abar = [Page([0; 4096]), Page([0; 4096])];
+        abar[0].0[0x118..0x11c].copy_from_slice(&0x11_u32.to_ne_bytes());
+        let expected = launch_with_ranges(bases, abar[0].0.as_mut_ptr() as u64);
+        let mut bootstrap_syscalls = AhciUserspaceSyscalls::new(
+            BootRaw {
+                bytes: expected.record().encode(),
+                calls: 0,
+            },
+            1,
+            2,
+        )
+        .unwrap();
+        let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
+        let launch = bootstrap_installed_ahci_entry(
+            &mut bootstrap_syscalls,
+            entry(expected),
+            &mut launch_scratch,
+        )
+        .unwrap();
+        let mut authorizer = crate::AhciInstalledDataAuthorizer::from_installed_launch(
+            AuthorizeRaw {
+                frames: [None; 2],
+                statuses: [0; 2],
+                calls: 0,
+            },
+            launch,
+        );
+        let state = unsafe {
+            prepare_bootstrapped_native_x86_coherent_ahci_service(
+                &mut authorizer,
+                launch,
+                Delay,
+            )
+        }
+        .unwrap();
+        assert_eq!(launch_scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
+        assert_eq!(state.device(), expected.record().device());
+        drop(state);
+        assert_eq!(authorizer.into_raw().calls, 2);
+        assert_eq!(bootstrap_syscalls.into_raw().calls, 1);
     }
 }

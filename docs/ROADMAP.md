@@ -1333,6 +1333,32 @@ Patent review: `NOT_TRIGGERED` — adapting an existing checked invariant-TSC
 delay primitive to an existing driver timing trait is conventional clock
 plumbing. See `docs/patents/REVIEW_LOG.md`.
 
+Native coherent preparation now supports the actual launch-bound authorizer
+sequence **PARTIALLY IMPLEMENTED IN SOURCE**. Entry code can first authenticate
+and erase launch bytes, construct `AhciInstalledDataAuthorizer` from that exact
+launch's two directional capabilities and data object, then borrow it while a
+separate preparation transition creates native ABAR, coherent-data, active-port,
+and backend state. This removes the circular requirement to construct the data
+authorizer before the launch reveals its expected object, without caching or
+weakening authorization. The integrated test records one launch copy and two
+exact authorization syscalls. The focused Linux suite passes all 128 tests and
+both Linux release and `MRML_NATIVE` release builds pass. Syscalls, MMIO, clock,
+and DMA remain controlled host models rather than installed or physical
+evidence.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — ordering authenticated launch decode before
+construction of its exact capability authorizer is conventional least-authority
+initialization. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
