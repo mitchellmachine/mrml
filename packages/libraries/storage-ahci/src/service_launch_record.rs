@@ -562,8 +562,9 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 mod tests {
     use super::*;
     use crate::{
-        AhciControlServiceSyscalls, AhciRawSyscall, AhciServiceEntryRegisters, AhciSyscallFrame,
-        AhciUserspaceSyscallError, AhciUserspaceSyscalls,
+        AhciControlServiceSyscalls, AhciRawSyscall, AhciReplyBinding,
+        AhciServiceEntryRegisters, AhciSyscallFrame, AhciUserspaceSyscallError,
+        AhciUserspaceSyscalls,
     };
     use mrml_interface_storage_block_provider_v1::{
         BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, FLUSH_RESPONSE_BYTES,
@@ -851,8 +852,7 @@ mod tests {
         runtime: &mut TaskRuntime<2, 8>,
         endpoint: &mut Endpoint,
         sender: TaskId,
-        endpoint_token: u64,
-        receiver_token: u64,
+        reply: AhciReplyBinding,
         response: &[u8; FLUSH_RESPONSE_BYTES],
     ) -> Result<(), AhciUserspaceSyscallError> {
         let raw = RuntimeRawSyscall {
@@ -860,7 +860,7 @@ mod tests {
             endpoint,
             sender,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, endpoint_token, receiver_token).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, reply);
         AhciControlServiceSyscalls::send_response(&mut syscalls, response)
     }
 
@@ -923,8 +923,8 @@ mod tests {
             )
         }
         .unwrap();
-        assert_eq!(installed_entry.service_endpoint(), entry.service_endpoint().token());
-        assert_eq!(installed_entry.supervisor_task(), entry.supervisor_task().token());
+        assert_eq!(installed_entry.service_endpoint(), entry.service_endpoint());
+        assert_eq!(installed_entry.supervisor_task(), entry.supervisor_task());
         runtime.activate_constructed_task(target).unwrap();
         let mut endpoint = Endpoint::new(ObjectId(40));
         let response = [0x5a; FLUSH_RESPONSE_BYTES];
@@ -935,7 +935,7 @@ mod tests {
                 &mut endpoint,
                 target,
                 entry.authorities()[0].token(),
-                installed_entry.supervisor_task(),
+                installed_entry.supervisor_task().token(),
                 &response,
             ),
             1
@@ -945,7 +945,7 @@ mod tests {
                 &mut runtime,
                 &mut endpoint,
                 target,
-                installed_entry.service_endpoint(),
+                installed_entry.service_endpoint().token(),
                 target.token(),
                 &response,
             ),
@@ -956,8 +956,7 @@ mod tests {
                 &mut runtime,
                 &mut endpoint,
                 target,
-                installed_entry.service_endpoint(),
-                installed_entry.supervisor_task(),
+                installed_entry.reply_binding(),
                 &response,
             ),
             Ok(())
@@ -977,8 +976,7 @@ mod tests {
                 &mut runtime,
                 &mut endpoint,
                 target,
-                installed_entry.service_endpoint(),
-                installed_entry.supervisor_task(),
+                installed_entry.reply_binding(),
                 &response,
             ),
             Err(AhciUserspaceSyscallError::Kernel(1))

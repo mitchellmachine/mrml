@@ -1,6 +1,7 @@
 use crate::{
-    AhciControlServiceSyscalls, AhciDataCapabilityAuthorizer, AhciDataServiceSyscalls,
-    AhciDispatchSyscalls, AhciServiceSyscalls, InstalledAhciServiceLaunch,
+    service_bootstrap::AhciReplyBinding, AhciControlServiceSyscalls,
+    AhciDataCapabilityAuthorizer, AhciDataServiceSyscalls, AhciDispatchSyscalls,
+    AhciServiceSyscalls, InstalledAhciServiceLaunch,
     ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope, ReceivedAhciDispatchEnvelope,
     ReceivedAhciEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
 };
@@ -80,15 +81,13 @@ unsafe impl AhciRawSyscall for NativeAhciRawSyscall {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciUserspaceSyscallError {
-    InvalidLaunchBinding,
     Kernel(u64),
     Range,
 }
 
 pub struct AhciUserspaceSyscalls<R> {
     raw: R,
-    reply_endpoint: u64,
-    reply_task: u64,
+    reply: AhciReplyBinding,
 }
 
 /// Launch-bound adapter for the kernel's exact capability authorization
@@ -150,19 +149,10 @@ impl<R: AhciRawSyscall> AhciDataCapabilityAuthorizer for AhciInstalledDataAuthor
 }
 
 impl<R> AhciUserspaceSyscalls<R> {
-    pub fn new(
-        raw: R,
-        reply_endpoint: u64,
-        reply_task: u64,
-    ) -> Result<Self, AhciUserspaceSyscallError> {
-        if reply_endpoint == 0 || reply_task == 0 {
-            return Err(AhciUserspaceSyscallError::InvalidLaunchBinding);
-        }
-        Ok(Self {
-            raw,
-            reply_endpoint,
-            reply_task,
-        })
+    /// Binds raw syscall transport to the reply destination authenticated by
+    /// the installed service entry.
+    pub const fn new(raw: R, reply: AhciReplyBinding) -> Self {
+        Self { raw, reply }
     }
 
     pub fn into_raw(self) -> R {
@@ -269,8 +259,8 @@ unsafe impl<R: AhciRawSyscall> AhciServiceSyscalls for AhciUserspaceSyscalls<R> 
     ) -> Result<(), Self::Error> {
         let mut frame = AhciSyscallFrame {
             rax: SEND_BUFFER,
-            rdi: self.reply_endpoint,
-            rsi: self.reply_task,
+            rdi: self.reply.endpoint().token(),
+            rsi: self.reply.supervisor().token(),
             rdx: response.as_ptr() as u64,
             r10: response.len() as u64,
             r8: 0,
@@ -353,8 +343,8 @@ unsafe impl<R: AhciRawSyscall> AhciDataServiceSyscalls for AhciUserspaceSyscalls
     fn send_response(&mut self, response: &[u8; READ_RESPONSE_BYTES]) -> Result<(), Self::Error> {
         let mut frame = AhciSyscallFrame {
             rax: SEND_BUFFER,
-            rdi: self.reply_endpoint,
-            rsi: self.reply_task,
+            rdi: self.reply.endpoint().token(),
+            rsi: self.reply.supervisor().token(),
             rdx: response.as_ptr() as u64,
             r10: response.len() as u64,
             r8: 0,
@@ -393,8 +383,8 @@ unsafe impl<R: AhciRawSyscall> AhciControlServiceSyscalls for AhciUserspaceSysca
     fn send_response(&mut self, response: &[u8; FLUSH_RESPONSE_BYTES]) -> Result<(), Self::Error> {
         let mut frame = AhciSyscallFrame {
             rax: SEND_BUFFER,
-            rdi: self.reply_endpoint,
-            rsi: self.reply_task,
+            rdi: self.reply.endpoint().token(),
+            rsi: self.reply.supervisor().token(),
             rdx: response.as_ptr() as u64,
             r10: response.len() as u64,
             r8: 0,
@@ -465,8 +455,18 @@ mod tests {
         decode_enumerate_response, encode_enumerate_request, BlockProviderDevice,
         BorrowedWriteView, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH,
     };
+    use mrml_kernel::TaskId;
 
     const TOKEN: u64 = (9_u64 << 32) | 4;
+    const REPLY_ENDPOINT_TOKEN: u64 = (10_u64 << 32) | 0x51;
+    const REPLY_TASK_TOKEN: u64 = (11_u64 << 32) | 0x61;
+
+    fn reply_binding() -> AhciReplyBinding {
+        AhciReplyBinding::for_test(
+            Capability::from_token(REPLY_ENDPOINT_TOKEN),
+            TaskId::from_token(REPLY_TASK_TOKEN),
+        )
+    }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
@@ -508,7 +508,10 @@ mod tests {
                 },
                 RELEASE_CAPABILITY => assert_eq!(frame.rdi, TOKEN),
                 SEND_BUFFER => unsafe {
-                    assert_eq!((frame.rdi, frame.rsi), (0x51, 0x61));
+                    assert_eq!(
+                        (frame.rdi, frame.rsi),
+                        (REPLY_ENDPOINT_TOKEN, REPLY_TASK_TOKEN)
+                    );
                     core::ptr::copy_nonoverlapping(
                         frame.rdx as *const u8,
                         self.response.as_mut_ptr(),
@@ -525,25 +528,14 @@ mod tests {
     fn register_adapter_preserves_copy_release_reply_order() {
         let request =
             encode_enumerate_request(BorrowedWriteView::within(32, 48, 128).unwrap()).unwrap();
-        let raw = Raw {
+        let raw = || Raw {
             request,
             memory: [0xa5; 128],
             response: [0; ENUMERATE_RESPONSE_BYTES],
             operations: [0; 4],
             count: 0,
         };
-        assert!(matches!(
-            AhciUserspaceSyscalls::new(raw, 0, 1),
-            Err(AhciUserspaceSyscallError::InvalidLaunchBinding)
-        ));
-        let raw = Raw {
-            request,
-            memory: [0xa5; 128],
-            response: [0; ENUMERATE_RESPONSE_BYTES],
-            operations: [0; 4],
-            count: 0,
-        };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw(), reply_binding());
         let devices = [BlockProviderDevice {
             session: OpaqueHandle::new(4, 8).unwrap(),
             logical_block_bytes: 512,
@@ -607,7 +599,7 @@ mod tests {
             count: 0,
             received_capabilities: 1,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
         let mut request = [0; READ_REQUEST_BYTES];
         let mut tokens = [0; 1];
         let envelope =
@@ -663,7 +655,7 @@ mod tests {
             count: 0,
             received_capabilities: 0,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
         let mut output = [0; crate::AHCI_SERVICE_LAUNCH_BYTES];
         syscalls
             .read_launch_data(Capability::from_token(TOKEN), &mut output)
@@ -728,7 +720,7 @@ mod tests {
             count: 0,
             received_capabilities: 1,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 0x51, 0x61).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
         let mut request = [0; AHCI_DISPATCH_REQUEST_BYTES];
         let mut tokens = [0; 1];
         let envelope = AhciDispatchSyscalls::receive(&mut syscalls, &mut request, &mut tokens)

@@ -153,8 +153,8 @@ pub use native_service_state::{
     prepare_bootstrapped_native_x86_coherent_ahci_service,
 };
 pub use service_bootstrap::{
-    AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
-    bootstrap_installed_ahci_service,
+    AhciReplyBinding, AhciServiceBootstrapError, AhciServiceEntryRegisters,
+    bootstrap_installed_ahci_entry, bootstrap_installed_ahci_service,
 };
 pub use service_cpu_mapping::{
     AHCI_SERVICE_CPU_MAPPING_RIGHTS,

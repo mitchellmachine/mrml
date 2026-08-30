@@ -748,17 +748,18 @@ The complete twelve-register native AHCI entry ABI is now **PARTIALLY
 IMPLEMENTED IN SOURCE** as one typed installed-register capture. It exact-checks
 the service endpoint, supervisor task, provider generation, 384-byte launch
 length, service module, launch token, and six fixed-order authority tokens;
-invalid tokens, launch/authority aliasing, authority duplication, and endpoint
-identity aliasing fail before launch-data copying. Only that validated binding
-can enter the bootstrap operation. The focused Linux AHCI suite passes all 99
-tests. The assembly entry stub and binary artifact remain unimplemented, as do
-capability-backed CPU mapping construction, active-port reconstruction,
-cache/IOMMU backends, supervised teardown, active execution, and physical-device
-evidence.
+invalid tokens (including zero-generation endpoint or task tokens),
+launch/authority aliasing, and authority duplication fail before launch-data
+copying. Equal numeric bits across those distinct namespaces remain valid. Only
+that validated binding can enter the bootstrap operation. The focused Linux
+AHCI suite passes all 99 tests. The assembly entry stub and binary artifact
+remain unimplemented, as do capability-backed CPU mapping construction,
+active-port reconstruction, cache/IOMMU backends, supervised teardown, active
+execution, and physical-device evidence.
 
-Patent review: `NOT_TRIGGERED` — fixed register-to-field validation and token
-non-aliasing checks are conventional native service ABI binding. See
-`docs/patents/REVIEW_LOG.md`.
+Patent review: `NOT_TRIGGERED` — fixed register-to-field validation and
+same-namespace non-aliasing checks are conventional native service ABI binding.
+See `docs/patents/REVIEW_LOG.md`.
 
 Pre-launch AHCI CPU mapping construction is now **PARTIALLY IMPLEMENTED IN
 SOURCE** as a backend-neutral four-mapping transaction. The launcher must hold
@@ -1614,6 +1615,36 @@ Existing-object reuse: HIGH
 Patent review: `NOT_TRIGGERED` — composing the existing launch-bound adapter,
 canonical syscall decoder, and capability-gated runtime delivery in a controlled
 test introduces no new mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+The AHCI reply binding now preserves its two namespaces as types
+**IMPLEMENTED IN SOURCE**. Raw entry registers are shape-checked once, then
+retained as `Capability` and `TaskId`. In production code, the validated entry
+alone can produce an opaque `AhciReplyBinding`; `AhciUserspaceSyscalls` accepts
+that binding and emits raw tokens only at the operation-4 frame boundary, so
+safe callers cannot substitute even another value from the correct namespace.
+The kernel now publicly reconstructs `TaskId` from a wire token with an explicit
+non-authorizing contract: the name proves neither liveness nor control, and all
+runtime operations still exact-match the generation and any separately required
+capability. A focused scheduler test proves a guessed generation cannot control
+the live slot. The Linux kernel suite passes all 689 tests and AHCI passes all
+136 tests; Linux and `MRML_NATIVE` release builds pass for both, and the AHCI
+service-image profile passes its `MRML_NATIVE` release build. This is typed API,
+unit, and compilation evidence, not live trap, installed supervisor, hosted VMM,
+or physical AHCI evidence.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — preserving existing endpoint and task token
+namespaces in Rust types, carrying their validated provenance in an opaque
+binding, and documenting non-authorizing identity reconstruction are
+conventional type-safety hardening. See `docs/patents/REVIEW_LOG.md`.
 
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See

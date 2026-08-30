@@ -441,12 +441,7 @@ unsafe extern "sysv64" fn mrml_ahci_receiver(
     }
     .unwrap_or_else(|_| halt());
     let buffers = unsafe { &mut *core::ptr::addr_of_mut!(AHCI_SERVICE_BUFFERS) };
-    let mut syscalls = AhciUserspaceSyscalls::new(
-        NativeAhciRawSyscall,
-        entry.service_endpoint(),
-        entry.supervisor_task(),
-    )
-    .unwrap_or_else(|_| halt());
+    let mut syscalls = AhciUserspaceSyscalls::new(NativeAhciRawSyscall, entry.reply_binding());
     let launch = bootstrap_installed_ahci_entry(&mut syscalls, entry, buffers.launch_scratch())
         .unwrap_or_else(|_| halt());
     let mut authorizer =

@@ -5,7 +5,7 @@ use crate::{
     AhciUserspaceSyscalls, InstalledAhciServiceLaunch, AHCI_SERVICE_AUTHORITY_COUNT,
     AHCI_SERVICE_LAUNCH_BYTES,
 };
-use mrml_kernel::Capability;
+use mrml_kernel::{Capability, TaskId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciServiceBootstrapError {
@@ -14,10 +14,41 @@ pub enum AhciServiceBootstrapError {
     Launch(AhciServiceLaunchRecordError),
 }
 
+/// Opaque, launch-authenticated destination for AHCI service replies.
+///
+/// The binding can only be obtained from a validated native entry capture, so
+/// safe reply adapters cannot substitute another endpoint or task even when a
+/// caller can construct values in either underlying token namespace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciReplyBinding {
+    endpoint: Capability,
+    supervisor: TaskId,
+}
+
+impl AhciReplyBinding {
+    pub(crate) const fn endpoint(self) -> Capability {
+        self.endpoint
+    }
+
+    pub(crate) const fn supervisor(self) -> TaskId {
+        self.supervisor
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(endpoint: Capability, supervisor: TaskId) -> Self {
+        assert!(valid_token(endpoint.token()));
+        assert!(valid_token(supervisor.token()));
+        Self {
+            endpoint,
+            supervisor,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AhciServiceEntryRegisters {
-    service_endpoint: u64,
-    supervisor_task: u64,
+    service_endpoint: Capability,
+    supervisor_task: TaskId,
     provider_generation: u64,
     launch_data: Capability,
     service_module_object: u64,
@@ -72,8 +103,8 @@ impl AhciServiceEntryRegisters {
             }
         }
         Ok(Self {
-            service_endpoint,
-            supervisor_task,
+            service_endpoint: Capability::from_token(service_endpoint),
+            supervisor_task: TaskId::from_token(supervisor_task),
             provider_generation,
             launch_data: Capability::from_token(launch_data),
             service_module_object,
@@ -81,12 +112,20 @@ impl AhciServiceEntryRegisters {
         })
     }
 
-    pub const fn service_endpoint(self) -> u64 {
+    pub const fn service_endpoint(self) -> Capability {
         self.service_endpoint
     }
 
-    pub const fn supervisor_task(self) -> u64 {
+    pub const fn supervisor_task(self) -> TaskId {
         self.supervisor_task
+    }
+
+    /// Returns the reply destination authenticated by this installed entry.
+    pub const fn reply_binding(self) -> AhciReplyBinding {
+        AhciReplyBinding {
+            endpoint: self.service_endpoint,
+            supervisor: self.supervisor_task,
+        }
     }
 
     pub const fn provider_generation(self) -> u64 {
@@ -169,6 +208,13 @@ mod tests {
     const LAUNCH_TOKEN: u64 = (10 << 32) | 1;
     const ENDPOINT_TOKEN: u64 = (11 << 32) | 2;
     const SUPERVISOR_TOKEN: u64 = (12 << 32) | 3;
+
+    fn reply_binding() -> AhciReplyBinding {
+        AhciReplyBinding::for_test(
+            Capability::from_token(ENDPOINT_TOKEN),
+            TaskId::from_token(SUPERVISOR_TOKEN),
+        )
+    }
 
     struct Raw {
         bytes: [u8; AHCI_SERVICE_LAUNCH_BYTES],
@@ -390,8 +436,8 @@ mod tests {
             )
         }
         .unwrap();
-        assert_eq!(entry.service_endpoint(), ENDPOINT_TOKEN);
-        assert_eq!(entry.supervisor_task(), SUPERVISOR_TOKEN);
+        assert_eq!(entry.service_endpoint(), Capability::from_token(ENDPOINT_TOKEN));
+        assert_eq!(entry.supervisor_task(), TaskId::from_token(SUPERVISOR_TOKEN));
         assert_eq!(entry.provider_generation(), 3);
         assert_eq!(entry.service_module_object(), 9);
         let equal_bit_pattern = unsafe {
@@ -402,15 +448,20 @@ mod tests {
             )
         }
         .unwrap();
-        assert_eq!(equal_bit_pattern.service_endpoint(), SUPERVISOR_TOKEN);
-        assert_eq!(equal_bit_pattern.supervisor_task(), SUPERVISOR_TOKEN);
+        assert_eq!(
+            equal_bit_pattern.service_endpoint(),
+            Capability::from_token(SUPERVISOR_TOKEN)
+        );
+        assert_eq!(
+            equal_bit_pattern.supervisor_task(),
+            TaskId::from_token(SUPERVISOR_TOKEN)
+        );
         let raw = Raw {
             bytes: record().encode(),
             status: 0,
             calls: 0,
         };
-        let mut syscalls =
-            AhciUserspaceSyscalls::new(raw, ENDPOINT_TOKEN, SUPERVISOR_TOKEN).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, entry.reply_binding());
         let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         assert_eq!(
             bootstrap_installed_ahci_entry(&mut syscalls, entry, &mut scratch)
@@ -488,7 +539,7 @@ mod tests {
             status: 0,
             calls: 0,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 1, 2).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
         let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         let launch = unsafe {
             bootstrap_installed_ahci_service(
@@ -517,7 +568,7 @@ mod tests {
                 status,
                 calls: 0,
             };
-            let mut syscalls = AhciUserspaceSyscalls::new(raw, 1, 2).unwrap();
+            let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
             let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
             assert!(unsafe {
                 bootstrap_installed_ahci_service(
@@ -539,7 +590,7 @@ mod tests {
             status: 0,
             calls: 0,
         };
-        let mut syscalls = AhciUserspaceSyscalls::new(raw, 1, 2).unwrap();
+        let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
         let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         assert_eq!(
             unsafe {

@@ -16,7 +16,12 @@ impl TaskId {
         ((self.generation as u64) << 32) | self.slot as u64
     }
 
-    pub(crate) const fn from_token(token: u64) -> Self {
+    /// Reconstructs a non-authorizing task identity from its wire token.
+    ///
+    /// This does not prove that the generation is live or grant control over
+    /// the task. Every kernel operation must still exact-match runtime state
+    /// and require any separately documented capability authority.
+    pub const fn from_token(token: u64) -> Self {
         Self {
             slot: token as u32,
             generation: (token >> 32) as u32,
@@ -847,6 +852,19 @@ mod tests {
             scheduler.set_state(old, TaskState::Blocked),
             Err(SchedulerError::InvalidTask)
         );
+    }
+
+    #[test]
+    fn reconstructed_task_tokens_identify_but_do_not_authorize() {
+        let mut scheduler = Scheduler::<1>::new();
+        let live = scheduler.create(Priority::NORMAL).unwrap();
+        assert_eq!(TaskId::from_token(live.token()), live);
+        let guessed_generation = TaskId::from_token(live.token() + (1_u64 << 32));
+        assert_eq!(
+            scheduler.set_state(guessed_generation, TaskState::Blocked),
+            Err(SchedulerError::InvalidTask)
+        );
+        assert_eq!(scheduler.set_state(live, TaskState::Blocked), Ok(()));
     }
 
     #[test]

@@ -373,13 +373,23 @@ mod tests {
     use super::*;
     use crate::{
         reconstruct_installed_ahci_port, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion,
-        AhciMappedDataBuffer, AhciPortDmaLayout, AhciServiceCpuMapping, AhciServiceLaunchRecord,
-        ReceivedAhciDispatchEnvelope,
+        AhciMappedDataBuffer, AhciPortDmaLayout, AhciReplyBinding, AhciServiceCpuMapping,
+        AhciServiceLaunchRecord, ReceivedAhciDispatchEnvelope,
     };
     use mrml_interface_storage_block_provider_v1::{
         OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
     };
-    use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
+    use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights, TaskId};
+
+    const REPLY_ENDPOINT_TOKEN: u64 = (8 << 32) | 2;
+    const REPLY_TASK_TOKEN: u64 = (9 << 32) | 3;
+
+    fn reply_binding() -> AhciReplyBinding {
+        AhciReplyBinding::for_test(
+            Capability::from_token(REPLY_ENDPOINT_TOKEN),
+            TaskId::from_token(REPLY_TASK_TOKEN),
+        )
+    }
 
     #[repr(align(4096))]
     struct Page([u8; 4096]);
@@ -635,8 +645,8 @@ mod tests {
     fn entry(installed: InstalledAhciServiceLaunch) -> AhciServiceEntryRegisters {
         unsafe {
             AhciServiceEntryRegisters::from_installed_registers(
-                (8 << 32) | 2,
-                (9 << 32) | 3,
+                REPLY_ENDPOINT_TOKEN,
+                REPLY_TASK_TOKEN,
                 3,
                 (10 << 32) | 1,
                 AHCI_SERVICE_LAUNCH_BYTES as u64,
@@ -889,10 +899,8 @@ mod tests {
                 bytes: installed.record().encode(),
                 calls: 0,
             },
-            1,
-            2,
-        )
-        .unwrap();
+            entry.reply_binding(),
+        );
         let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         let mut authorizer = Authorizer {
             object: ObjectId(23),
@@ -927,10 +935,8 @@ mod tests {
                 bytes: installed.record().encode(),
                 calls: 0,
             },
-            1,
-            2,
-        )
-        .unwrap();
+            reply_binding(),
+        );
         let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         let mut authorizer = Authorizer {
             object: ObjectId(23),
@@ -958,10 +964,8 @@ mod tests {
                 bytes: installed.record().encode(),
                 calls: 0,
             },
-            1,
-            2,
-        )
-        .unwrap();
+            reply_binding(),
+        );
         let mut rejected_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         let mut rejected_authorizer = Authorizer {
             object: ObjectId(23),
@@ -998,10 +1002,8 @@ mod tests {
                 bytes: installed.record().encode(),
                 calls: 0,
             },
-            1,
-            2,
-        )
-        .unwrap();
+            reply_binding(),
+        );
         let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         let mut authorizer = Authorizer {
             object: ObjectId(23),
@@ -1037,10 +1039,8 @@ mod tests {
                 bytes: expected.record().encode(),
                 calls: 0,
             },
-            1,
-            2,
-        )
-        .unwrap();
+            reply_binding(),
+        );
         let mut launch_scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
         let launch = bootstrap_installed_ahci_entry(
             &mut bootstrap_syscalls,
