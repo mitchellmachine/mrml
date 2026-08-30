@@ -2114,11 +2114,17 @@ fn application_main() -> Result<()> {
         None
     };
     let application_mode = application_package_id.is_some();
-    let deadline_receive_mode = arguments.len() == 9 && arguments[5] == "deadline-receive-probe";
+    let deadline_receive_message_mode =
+        arguments.len() == 9 && arguments[5] == "deadline-receive-message-probe";
+    let deadline_receive_mode = arguments.len() == 9
+        && matches!(
+            arguments[5].as_str(),
+            "deadline-receive-probe" | "deadline-receive-message-probe"
+        );
     let service_mode = arguments.len() == 9
         && matches!(
             arguments[5].as_str(),
-            "service-probe" | "deadline-receive-probe"
+            "service-probe" | "deadline-receive-probe" | "deadline-receive-message-probe"
         );
     let component_release_input_mode =
         arguments.len() == 15 && arguments[5] == "component-release-inputs";
@@ -4328,18 +4334,23 @@ fn application_main() -> Result<()> {
         return Err(anyhow!("WHP block-service probe exceeded its stage bound"));
     }
     if deadline_receive_mode {
+        let expected = if deadline_receive_message_mode {
+            0x2b
+        } else {
+            0x2a
+        };
         if exit
             != (VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,
                 write: true,
-                value: 0x2a,
+                value: expected,
             })
         {
             return Err(anyhow!("WHP deadline-receive proof mismatch: {:?}", exit));
         }
         println!(
-            "verified exact deadline receive timeout under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified exact deadline receive completion under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

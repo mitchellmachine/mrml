@@ -11495,3 +11495,31 @@ hosted or physical interrupt/message race was exercised.
 Patent review: `NOT_TRIGGERED` — completing a retained pending syscall before a
 woken task becomes preemptible is conventional interrupt-safe event delivery.
 See `docs/patents/REVIEW_LOG.md`.
+
+A separate `deadline_receive_message_probe` profile now exercises the other
+side of that arbitration contract. Its receiver enters operation 13 with a
+bounded one-million-tick duration; its sender publishes the five-byte `ready`
+message through the ordinary buffered-send ABI and cooperatively yields. The
+receiver accepts only successful completion with length five, exact little-
+endian payload bytes, and zero unused payload registers before emitting proof
+`0x2b`. It cannot confuse the existing detail-free timeout proof `0x2a` with a
+message completion.
+
+KVM and WHP expose a matching `deadline-receive-message-probe` runner mode on
+the same interrupt-capable, independently signed service path. Their expected
+proof is selected by mode. The host-tested KVM validator accepts only `0x2a` or
+`0x2b`, rejects noncanonical proof selection, and rejects either valid proof
+when substituted for the other mode.
+
+Both deadline service-image and UEFI bootloader release profiles cross-build
+through `mrml`; the timeout and message service images report 14 and 13 expected
+dead-code warnings respectively, and both boot profiles report the existing
+unreachable-pattern warning. The Linux KVM runner suite passes 16 tests and its
+release build passes with the existing CUDA-PTX warnings. The Windows target and
+`/dev/kvm` remain unavailable on this host, so this is compile and host-unit
+evidence only, not a claim that either hosted backend executed the arbitration
+probe.
+
+Patent review: `NOT_TRIGGERED` — a bounded message-before-timeout integration
+probe and exact mode-specific proof matching are conventional race-regression
+testing. See `docs/patents/REVIEW_LOG.md`.

@@ -342,7 +342,10 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         asm!(
             "int 0x80",
             inlateout("rax") status,
+            #[cfg(not(feature = "deadline-receive-message-probe"))]
             in("rdi") 1u64,
+            #[cfg(feature = "deadline-receive-message-probe")]
+            in("rdi") 1_000_000u64,
             in("rsi") 0u64,
             inlateout("rdx") length,
             inlateout("r10") word0,
@@ -351,8 +354,17 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
             options(nostack)
         )
     };
+    #[cfg(not(feature = "deadline-receive-message-probe"))]
     if status != mrml_kernel::SyscallCompletionStatus::TimedOut.code()
         || length | word0 | word1 | word2 != 0
+    {
+        halt();
+    }
+    #[cfg(feature = "deadline-receive-message-probe")]
+    if status != mrml_kernel::SyscallCompletionStatus::Success.code()
+        || length != 5
+        || &word0.to_le_bytes()[..5] != b"ready"
+        || word1 | word2 != 0
     {
         halt();
     }
@@ -360,7 +372,10 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         asm!(
             "out dx, eax",
             in("dx") 0x4d58u16,
+            #[cfg(not(feature = "deadline-receive-message-probe"))]
             in("eax") 0x2au32,
+            #[cfg(feature = "deadline-receive-message-probe")]
+            in("eax") 0x2bu32,
             options(nomem, nostack)
         )
     };
@@ -1212,7 +1227,11 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     unsafe { terminate(3) }
 }
 
-#[cfg(all(not(feature = "preemption-probe"), feature = "deadline-receive-probe"))]
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    feature = "deadline-receive-probe",
+    not(feature = "deadline-receive-message-probe")
+))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
     _endpoint: u64,
@@ -1226,6 +1245,25 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     loop {
         core::hint::spin_loop();
     }
+}
+
+#[cfg(all(
+    not(feature = "preemption-probe"),
+    feature = "deadline-receive-message-probe"
+))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_sender(
+    endpoint: u64,
+    receiver: u64,
+    _root_capability: u64,
+    _setting_capability: u64,
+    _generation: u64,
+    _supervision_read: u64,
+    _supervised_service: u64,
+) -> ! {
+    unsafe { send_buffer(endpoint, receiver, b"ready", &[]) };
+    unsafe { yield_now() };
+    halt()
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]

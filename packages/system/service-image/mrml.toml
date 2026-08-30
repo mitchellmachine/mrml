@@ -31,6 +31,9 @@ name = "buffer-drift-probe"
 name = "deadline-receive-probe"
 
 [[feature]]
+name = "deadline-receive-message-probe"
+
+[[feature]]
 name = "preemption-probe"
 
 [[artifact]]
@@ -107,6 +110,11 @@ targets = ["MRML_NATIVE"]
 [[feature_profile]]
 features = ["deadline-receive-probe"]
 name = "deadline_receive_probe"
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = ["deadline-receive-probe", "deadline-receive-message-probe"]
+name = "deadline_receive_message_probe"
 targets = ["MRML_NATIVE"]
 
 [[target_triple]]

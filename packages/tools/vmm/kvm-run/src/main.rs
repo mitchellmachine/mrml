@@ -1036,6 +1036,7 @@ enum LaunchMode {
     UserProbe,
     ServiceProbe,
     DeadlineReceiveProbe,
+    DeadlineReceiveMessageProbe,
     InvalidReturnProbe,
     BufferDriftProbe,
     ComponentServiceProbe,
@@ -1067,6 +1068,7 @@ impl LaunchMode {
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
             "deadline-receive-probe" => Ok(Self::DeadlineReceiveProbe),
+            "deadline-receive-message-probe" => Ok(Self::DeadlineReceiveMessageProbe),
             "invalid-return-probe" => Ok(Self::InvalidReturnProbe),
             "buffer-drift-probe" => Ok(Self::BufferDriftProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
@@ -1084,7 +1086,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, deadline-receive-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, deadline-receive-probe, deadline-receive-message-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -1143,13 +1145,16 @@ fn require_buffer_drift_stage(exit: VmExit, expected: u32) -> Result<()> {
 }
 
 #[cfg(any(test, target_os = "linux"))]
-fn require_deadline_receive_proof(exit: VmExit) -> Result<()> {
+fn require_deadline_receive_proof(exit: VmExit, expected: u32) -> Result<()> {
+    if !matches!(expected, 0x2a | 0x2b) {
+        return Err(anyhow!("deadline-receive proof is not canonical"));
+    }
     if exit
         != (VmExit::Io {
             port: SERVICE_PROBE_PORT,
             size: 4,
             write: true,
-            value: 0x2a,
+            value: expected,
         })
     {
         return Err(anyhow!("deadline-receive proof mismatch: {:?}", exit));
@@ -2300,6 +2305,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe
             | LaunchMode::DeadlineReceiveProbe
+            | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
@@ -2318,6 +2324,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
             | LaunchMode::DeadlineReceiveProbe
+            | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::BlockServiceProbe
@@ -2356,6 +2363,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe
             | LaunchMode::DeadlineReceiveProbe
+            | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::InvalidReturnProbe
             | LaunchMode::BufferDriftProbe
             | LaunchMode::ComponentServiceProbe
@@ -3237,6 +3245,7 @@ fn application_main() -> Result<()> {
         LaunchMode::TimerProbe
         | LaunchMode::PreemptionProbe
         | LaunchMode::DeadlineReceiveProbe
+        | LaunchMode::DeadlineReceiveMessageProbe
         | LaunchMode::ServicePreemptionProbe => {
             system.prepare_timer_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout)
         }
@@ -3351,6 +3360,7 @@ fn application_main() -> Result<()> {
             || matches!(
                 mode,
                 LaunchMode::DeadlineReceiveProbe
+                    | LaunchMode::DeadlineReceiveMessageProbe
                     | LaunchMode::ServicePreemptionProbe
                     | LaunchMode::SmpServiceMigrationProbe
             );
@@ -3451,6 +3461,7 @@ fn application_main() -> Result<()> {
             mode,
             LaunchMode::ServiceProbe
                 | LaunchMode::DeadlineReceiveProbe
+                | LaunchMode::DeadlineReceiveMessageProbe
                 | LaunchMode::ServiceRestartRequestProbe
         ) {
             guest = guest
@@ -3555,6 +3566,7 @@ fn application_main() -> Result<()> {
                 mode,
                 LaunchMode::ServiceProbe
                     | LaunchMode::DeadlineReceiveProbe
+                    | LaunchMode::DeadlineReceiveMessageProbe
                     | LaunchMode::ServiceRestartRequestProbe
             ) && (guest.service_entry_at(2) != Some(service_entry)
                 || guest.service_page_table_root_at(2)
@@ -4260,10 +4272,18 @@ fn application_main() -> Result<()> {
                 .map_err(|error| anyhow!("KVM block-service execution failed: {:?}", error))?;
         }
         return Err(anyhow!("KVM block-service probe exceeded its stage bound"));
-    } else if mode == LaunchMode::DeadlineReceiveProbe {
-        require_deadline_receive_proof(exit)?;
+    } else if matches!(
+        mode,
+        LaunchMode::DeadlineReceiveProbe | LaunchMode::DeadlineReceiveMessageProbe
+    ) {
+        let expected = if mode == LaunchMode::DeadlineReceiveProbe {
+            0x2a
+        } else {
+            0x2b
+        };
+        require_deadline_receive_proof(exit, expected)?;
         println!(
-            "verified exact deadline receive timeout under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified exact deadline receive completion under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),
@@ -4823,6 +4843,7 @@ fn application_main() -> Result<()> {
         }
         LaunchMode::ServiceProbe
         | LaunchMode::DeadlineReceiveProbe
+        | LaunchMode::DeadlineReceiveMessageProbe
         | LaunchMode::InvalidReturnProbe
         | LaunchMode::BufferDriftProbe
             if marker != [0; 4] =>
@@ -5741,6 +5762,10 @@ mod tests {
             LaunchMode::DeadlineReceiveProbe
         );
         assert_eq!(
+            LaunchMode::parse("deadline-receive-message-probe").unwrap(),
+            LaunchMode::DeadlineReceiveMessageProbe
+        );
+        assert_eq!(
             LaunchMode::parse("invalid-return-probe").unwrap(),
             LaunchMode::InvalidReturnProbe
         );
@@ -5828,33 +5853,65 @@ mod tests {
     }
 
     #[test]
-    fn deadline_receive_proof_is_exact_and_detail_free() {
+    fn deadline_receive_proof_is_exact_and_mode_bound() {
         let proof = VmExit::Io {
             port: SERVICE_PROBE_PORT,
             size: 4,
             write: true,
             value: 0x2a,
         };
-        assert!(require_deadline_receive_proof(proof).is_ok());
+        assert!(require_deadline_receive_proof(proof, 0x2a).is_ok());
         assert!(
-            require_deadline_receive_proof(VmExit::Io {
-                port: SERVICE_PROBE_PORT,
-                size: 4,
-                write: true,
-                value: 0x29,
-            })
+            require_deadline_receive_proof(
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x2b,
+                },
+                0x2b,
+            )
+            .is_ok()
+        );
+        assert!(require_deadline_receive_proof(proof, 0x2b).is_err());
+        assert!(
+            require_deadline_receive_proof(
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x2b,
+                },
+                0x2a,
+            )
             .is_err()
         );
         assert!(
-            require_deadline_receive_proof(VmExit::Io {
-                port: SERVICE_CALL_PORT,
-                size: 4,
-                write: true,
-                value: 0x2a,
-            })
+            require_deadline_receive_proof(
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x29,
+                },
+                0x2a,
+            )
             .is_err()
         );
-        assert!(require_deadline_receive_proof(VmExit::Halted).is_err());
+        assert!(
+            require_deadline_receive_proof(
+                VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x2a,
+                },
+                0x2a,
+            )
+            .is_err()
+        );
+        assert!(require_deadline_receive_proof(VmExit::Halted, 0x2a).is_err());
+        assert!(require_deadline_receive_proof(proof, 0x2c).is_err());
     }
 
     #[test]
