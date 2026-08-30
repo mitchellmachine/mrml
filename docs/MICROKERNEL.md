@@ -10828,3 +10828,17 @@ in-memory state-machine evidence only.
 Patent review: `NOT_TRIGGERED` — preventing saved-context mutation during a
 pending dispatch is conventional scheduler integrity enforcement. See
 `docs/patents/REVIEW_LOG.md`.
+
+The UEFI service-exit loop now exact-matches every supervisor retirement outcome
+against its runtime-minted opaque dispatch before processing peer death,
+successor preparation, or idle completion. A switch must name the same task in
+both records, and every idle branch requires an idle dispatch; mismatch halts.
+The standard, component-service, block-service, and invalid-return UEFI release
+profiles cross-build on Linux. The standard profile retains one pre-existing
+unused-variable warning. These are build checks only: the loop still prepares
+the successor context after validation and does not yet consume the token at
+the final `IRETQ` boundary.
+
+Patent review: `NOT_TRIGGERED` — exact matching of a scheduler outcome to an
+opaque dispatch record is conventional control-flow integrity validation. See
+`docs/patents/REVIEW_LOG.md`.
