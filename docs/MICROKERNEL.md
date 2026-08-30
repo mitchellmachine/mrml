@@ -7528,7 +7528,7 @@ kind-valid rights, rejects substitution before allocation, and tracks handles
 for mount-scoped transitive revocation. The broker now reserves its bounded slot
 and an inactive derived authority together; only exact activation publishes the
 child handle. Cancellation and mount cleanup invalidate pending authority and
-release both capacities. Storage passes 155 focused Linux-host tests.
+release both capacities. Storage passes 157 focused Linux-host tests.
 
 Patent review: `NOT_TRIGGERED` — parent-authorized child-handle derivation,
 rights attenuation, exact identity binding, and transitive lifecycle revocation
@@ -7555,7 +7555,7 @@ to one owner-authenticated block session and exact full-block scratch. Every rea
 rechecks the independent `READ` right through `BlockService`, copies only the
 512-byte boot sector, and erases the full scratch on success or failure. Volume
 substitution, denial, and backend error publish zero output bytes. The focused
-Linux-host storage suite passes 155 tests.
+Linux-host storage suite passes 157 tests.
 
 Patent review: `NOT_TRIGGERED` — exact session authorization, block-zero reads,
 bounded prefix copy, and scratch erasure are conventional storage-service boundary

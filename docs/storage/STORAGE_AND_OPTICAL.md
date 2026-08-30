@@ -989,8 +989,11 @@ authority substitution, cross-SystemRelease pairing, invalid block geometry,
 and zero association generations. The resulting non-authorizing launch handoff
 has one canonical zero-reserved encoding that binds both module, provider,
 interface, endpoint, volume, session, SystemRelease, and association generations;
-malformed or substituted records fail closed. Storage passes 155 focused
-Linux-host tests. The
+malformed or substituted records fail closed. A filesystem-provider launch
+coordinator separately authorizes the exact block endpoint, requires the
+placement backend to project the handoff read-only and attenuate that endpoint,
+erases its temporary encoding, and returns a generation-bound receipt only on
+successful construction. Storage passes 157 focused Linux-host tests. The
 `mrml-fat32-service.efi` entry sends a generation-bound ready message and then
 serves calls until fail-stop or supervised replacement. Prior Windows evidence
 covered thirty-three tests. The MRML-native release binary builds on Windows

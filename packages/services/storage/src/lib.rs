@@ -20,6 +20,7 @@ mod directory;
 mod extent;
 mod file;
 mod filesystem_mount;
+mod filesystem_provider_launch;
 mod filesystem_open;
 mod format;
 mod identity;
@@ -124,6 +125,10 @@ pub use format::{
 pub use filesystem_open::{
     AuthenticatedFilesystemLookup, FilesystemOpenBroker, FilesystemOpenError,
     FilesystemOpenKind, FilesystemOpenReservation,
+};
+pub use filesystem_provider_launch::{
+    FilesystemProviderLaunchBackend, FilesystemProviderLaunchError,
+    FilesystemProviderLaunchReceipt, launch_filesystem_provider,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use kernel_transport::{BlockKernelTransport, BlockKernelTransportError};

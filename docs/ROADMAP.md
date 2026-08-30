@@ -68,7 +68,7 @@ Lookup validates UTF-16 input, matches ASCII
 case-insensitively and non-ASCII exactly, accepts both a checked long name and
 canonical 8.3 alias, excludes volume labels, and fails closed on ambiguity. The
 filesystem interface generation 3 codec passes fifteen, including canonical
-all-operation dispatch-header validation, and storage passes 155, including a
+all-operation dispatch-header validation, and storage passes 157, including a
 hosted cleanup-gated generation replacement that rejects the stale endpoint and
 does not change the modeled kernel epoch. Checking, formatting, writes,
 installed supervisor launch, and hardware evidence
