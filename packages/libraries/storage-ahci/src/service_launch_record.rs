@@ -146,7 +146,8 @@ pub fn prepare_bound_ahci_native_service_task<
     target_task: TaskId,
     launch: BoundAhciServiceLaunch,
     service_endpoint_object: ObjectId,
-    supervisor_task_object: ObjectId,
+    service_endpoint: Capability,
+    supervisor_task: TaskId,
     service_module_object: ObjectId,
 ) -> Result<PreparedAhciNativeServiceTask, AhciNativeServiceTaskPreparationFailure> {
     let spec = launch.spec();
@@ -157,7 +158,8 @@ pub fn prepare_bound_ahci_native_service_task<
         spec.service(),
         spec.attachment(),
         service_endpoint_object,
-        supervisor_task_object,
+        service_endpoint,
+        supervisor_task,
         service_module_object,
     ) {
         Ok(task) => Ok(PreparedAhciNativeServiceTask { task, launch }),
@@ -692,6 +694,7 @@ mod tests {
         TaskId,
         TaskId,
         BoundAhciServiceLaunch,
+        Capability,
     ) {
         let mut runtime = TaskRuntime::<2, 8>::new(1_000, 1).unwrap();
         let source = runtime
@@ -711,6 +714,11 @@ mod tests {
         if occupied_entry {
             runtime.context_mut(target).unwrap().r13 = 1;
         }
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(40), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let launch_data = runtime
             .capabilities_mut(source)
             .unwrap()
@@ -764,19 +772,20 @@ mod tests {
         )
         .unwrap();
         let bound = record.bind(service(), attachment).unwrap();
-        (runtime, source, target, bound)
+        (runtime, source, target, bound, endpoint)
     }
 
     #[test]
     fn bound_launch_prepares_exact_native_task_and_preserves_pairing() {
-        let (mut runtime, source, target, launch) = runtime_launch(false);
+        let (mut runtime, source, target, launch, endpoint) = runtime_launch(false);
         let prepared = prepare_bound_ahci_native_service_task(
             &mut runtime,
             source,
             target,
             launch,
             ObjectId(40),
-            ObjectId(41),
+            endpoint,
+            source,
             ObjectId(42),
         )
         .unwrap();
@@ -789,7 +798,7 @@ mod tests {
 
     #[test]
     fn task_preparation_failure_rolls_back_and_returns_unchanged_launch() {
-        let (mut runtime, source, target, launch) = runtime_launch(true);
+        let (mut runtime, source, target, launch, endpoint) = runtime_launch(true);
         let original_context = *runtime.context(target).unwrap();
         let failure = prepare_bound_ahci_native_service_task(
             &mut runtime,
@@ -797,7 +806,8 @@ mod tests {
             target,
             launch,
             ObjectId(40),
-            ObjectId(41),
+            endpoint,
+            source,
             ObjectId(42),
         )
         .unwrap_err();

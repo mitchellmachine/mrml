@@ -1523,6 +1523,34 @@ Patent review: `NOT_TRIGGERED` — blocked construction followed by explicit
 scheduler activation is conventional task lifecycle synchronization. See
 `docs/patents/REVIEW_LOG.md`.
 
+Native device-service IPC entry identities now obey “names identify;
+capabilities authorize” **IMPLEMENTED IN SOURCE**. Construction exact-authorizes
+and atomically projects a source `SIGNAL|DELEGATE` endpoint into the target as
+non-delegable `SIGNAL`; `r13` receives that fresh capability token rather than
+an object ID. `r14` receives the exact live generational supervisor `TaskId`
+rather than a task-object name. The endpoint object remains validation metadata,
+and the syscall decoder can now consume both entry values using their actual
+types. Projection failure or later entry failure revokes endpoint, launch-data,
+and all six role capabilities together. Tests verify exact endpoint authority,
+supervisor identity, fixed register installation, and complete rollback. Kernel
+Linux tests remain 687/687 and AHCI remains 135/135; Linux and `MRML_NATIVE`
+release builds pass for kernel and AHCI, and the AHCI service-image profile also
+passes its `MRML_NATIVE` release build. This is source, unit, and ABI compilation
+evidence; installed IPC delivery and supervisor operation remain unverified.
+
+Complexity impact: MEDIUM
+TCB impact: MEDIUM
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — projecting an existing endpoint capability and
+installing an existing generational task identity are conventional
+least-authority IPC plumbing. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

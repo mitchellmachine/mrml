@@ -180,8 +180,8 @@ pub enum NativeDeviceServiceEntryError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeDeviceServiceEntry<const N: usize> {
-    service_endpoint_object: ObjectId,
-    supervisor_task_object: ObjectId,
+    service_endpoint: Capability,
+    supervisor_task: TaskId,
     provider_generation: u64,
     service_module_object: ObjectId,
     attachment: DeviceServiceLaunchAttachment<N>,
@@ -195,7 +195,8 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
         spec: IsolationServiceSpec,
         attachment: DeviceServiceLaunchAttachment<N>,
         service_endpoint_object: ObjectId,
-        supervisor_task_object: ObjectId,
+        service_endpoint: Capability,
+        supervisor_task: TaskId,
         service_module_object: ObjectId,
         launch_data: Capability,
         authorities: [Capability; N],
@@ -204,14 +205,18 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
         if N == 0
             || N > MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES
             || service_endpoint_object.0 == 0
-            || supervisor_task_object.0 == 0
             || service_module_object.0 == 0
-            || service_endpoint_object == supervisor_task_object
         {
             return Err(NativeDeviceServiceEntryError::InvalidIdentity);
         }
         if !attachment.matches_spec(spec) {
             return Err(NativeDeviceServiceEntryError::AttachmentMismatch);
+        }
+        let actual_endpoint = target_capabilities
+            .authorize_exact(service_endpoint, Rights::SIGNAL)
+            .map_err(NativeDeviceServiceEntryError::AuthorityCapability)?;
+        if actual_endpoint != service_endpoint_object {
+            return Err(NativeDeviceServiceEntryError::WrongAuthorityObject);
         }
         let actual_data = target_capabilities
             .authorize_exact(launch_data, Rights::READ)
@@ -228,8 +233,8 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
             }
         }
         Ok(Self {
-            service_endpoint_object,
-            supervisor_task_object,
+            service_endpoint,
+            supervisor_task,
             provider_generation: spec.provider_generation(),
             service_module_object,
             attachment,
@@ -240,6 +245,14 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
 
     pub const fn launch_data(self) -> Capability {
         self.launch_data
+    }
+
+    pub const fn service_endpoint(self) -> Capability {
+        self.service_endpoint
+    }
+
+    pub const fn supervisor_task(self) -> TaskId {
+        self.supervisor_task
     }
 
     pub const fn authorities(self) -> [Capability; N] {
@@ -277,8 +290,8 @@ impl<const N: usize> NativeDeviceServiceEntry<N> {
                 context,
             ));
         }
-        context.r13 = self.service_endpoint_object.0;
-        context.r14 = self.supervisor_task_object.0;
+        context.r13 = self.service_endpoint.token();
+        context.r14 = self.supervisor_task.token();
         context.r12 = self.provider_generation;
         context.r15 = self.launch_data.token();
         context.r11 = u64::from(self.attachment.launch_data_bytes());
@@ -404,7 +417,8 @@ pub fn prepare_native_device_service_task<
     spec: IsolationServiceSpec,
     attachment: DeviceServiceLaunchAttachment<N>,
     service_endpoint_object: ObjectId,
-    supervisor_task_object: ObjectId,
+    service_endpoint: Capability,
+    supervisor_task: TaskId,
     service_module_object: ObjectId,
 ) -> Result<NativeDeviceServiceTask<N>, NativeDeviceServiceTaskError> {
     if spec.placement() != IsolationPlacement::NativeService {
@@ -418,12 +432,21 @@ pub fn prepare_native_device_service_task<
             TaskRuntimeError::NotConstructionTarget,
         ));
     }
+    if supervisor_task == target_task
+        || runtime.context(supervisor_task).is_err()
+    {
+        return Err(NativeDeviceServiceTaskError::Entry(
+            NativeDeviceServiceEntryError::InvalidIdentity,
+        ));
+    }
     let context = *runtime
         .context(target_task)
         .map_err(NativeDeviceServiceTaskError::Runtime)?;
     let mut requested = [(attachment.launch_data(), Rights::READ);
-        MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES + 1];
-    for (slot, authority) in requested[1..=N]
+        MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES + 2];
+    requested[0] = (service_endpoint, Rights::SIGNAL);
+    requested[1] = (attachment.launch_data(), Rights::READ);
+    for (slot, authority) in requested[2..=N + 1]
         .iter_mut()
         .zip(attachment.authorities())
     {
@@ -433,10 +456,13 @@ pub fn prepare_native_device_service_task<
         .project_capabilities_for_construction(
             source_task,
             target_task,
-            &requested[..=N],
+            &requested[..=N + 1],
         )
         .map_err(NativeDeviceServiceTaskError::Runtime)?;
     let mut projected = projection.capabilities();
+    let projected_endpoint = projected
+        .next()
+        .expect("device construction always projects its endpoint");
     let launch_data = projected
         .next()
         .expect("device construction always projects launch data");
@@ -451,7 +477,8 @@ pub fn prepare_native_device_service_task<
         spec,
         attachment,
         service_endpoint_object,
-        supervisor_task_object,
+        projected_endpoint,
+        supervisor_task,
         service_module_object,
         launch_data,
         authorities,
@@ -461,13 +488,27 @@ pub fn prepare_native_device_service_task<
     ) {
         Ok(entry) => entry,
         Err(error) => {
-            return rollback_projection(runtime, target_task, launch_data, authorities, error);
+            return rollback_projection(
+                runtime,
+                target_task,
+                projected_endpoint,
+                launch_data,
+                authorities,
+                error,
+            );
         }
     };
     let installed = match entry.install(context) {
         Ok(installed) => installed,
         Err((_, error, _)) => {
-            return rollback_projection(runtime, target_task, launch_data, authorities, error);
+            return rollback_projection(
+                runtime,
+                target_task,
+                projected_endpoint,
+                launch_data,
+                authorities,
+                error,
+            );
         }
     };
     *runtime
@@ -484,11 +525,17 @@ pub fn prepare_native_device_service_task<
 fn rollback_projection<const N: usize, const TASKS: usize, const CAPABILITIES: usize>(
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
     target_task: TaskId,
+    service_endpoint: Capability,
     launch_data: Capability,
     authorities: [Capability; N],
     entry: NativeDeviceServiceEntryError,
 ) -> Result<NativeDeviceServiceTask<N>, NativeDeviceServiceTaskError> {
-    let mut cleanup = runtime.revoke_capability(target_task, launch_data).err();
+    let mut cleanup = runtime
+        .revoke_capability(target_task, service_endpoint)
+        .err();
+    if let Err(error) = runtime.revoke_capability(target_task, launch_data) {
+        cleanup = cleanup.or(Some(error));
+    }
     for authority in authorities {
         if let Err(error) = runtime.revoke_capability(target_task, authority) {
             cleanup = cleanup.or(Some(error));
@@ -567,9 +614,18 @@ mod tests {
         (attachment, launch_data, handles)
     }
 
+    fn endpoint(runtime: &mut TaskRuntime<2, 8>, source: TaskId) -> Capability {
+        runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0xa0), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap()
+    }
+
     #[test]
     fn six_exact_authorities_project_atomically_into_the_fixed_entry_abi() {
         let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
         let rights = [
             Rights::CONTROL,
             Rights::MAP.union(Rights::READ),
@@ -586,19 +642,28 @@ mod tests {
             spec(IsolationPlacement::NativeService),
             attachment,
             ObjectId(0xa0),
-            ObjectId(0xa1),
+            endpoint,
+            source,
             ObjectId(0xa2),
         )
         .unwrap();
         let entry = task.entry();
         let projected = entry.authorities();
         let installed = runtime.context(target).unwrap();
-        assert_eq!(installed.r13, 0xa0);
-        assert_eq!(installed.r14, 0xa1);
+        assert_eq!(installed.r13, entry.service_endpoint().token());
+        assert_eq!(installed.r14, source.token());
         assert_eq!(installed.r12, 9);
         assert_eq!(installed.r15, entry.launch_data().token());
         assert_eq!(installed.r11, 256);
         assert_eq!(installed.r10, 0xa2);
+        assert_eq!(entry.supervisor_task(), source);
+        assert_eq!(
+            runtime
+                .capabilities(target)
+                .unwrap()
+                .authorize_exact(entry.service_endpoint(), Rights::SIGNAL),
+            Ok(ObjectId(0xa0))
+        );
         assert_eq!(
             [
                 installed.rbx,
@@ -719,6 +784,7 @@ mod tests {
     #[test]
     fn occupied_entry_register_rolls_back_every_projected_leaf() {
         let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
         runtime.context_mut(target).unwrap().r9 = 1;
         let original = *runtime.context(target).unwrap();
         let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
@@ -730,7 +796,8 @@ mod tests {
                 spec(IsolationPlacement::NativeService),
                 attachment,
                 ObjectId(0xa0),
-                ObjectId(0xa1),
+                endpoint,
+                source,
                 ObjectId(0xa2),
             ),
             Err(NativeDeviceServiceTaskError::Entry(
@@ -746,6 +813,7 @@ mod tests {
         let mut runtime = TaskRuntime::<2, 8>::new(1_000, 1).unwrap();
         let source = runtime.create(Priority::NORMAL, context(0x20_0000)).unwrap();
         let target = runtime.create(Priority::NORMAL, context(0x30_0000)).unwrap();
+        let endpoint = endpoint(&mut runtime, source);
         let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
         assert_eq!(
             prepare_native_device_service_task(
@@ -755,7 +823,8 @@ mod tests {
                 spec(IsolationPlacement::NativeService),
                 attachment,
                 ObjectId(0xa0),
-                ObjectId(0xa1),
+                endpoint,
+                source,
                 ObjectId(0xa2),
             ),
             Err(NativeDeviceServiceTaskError::Runtime(
@@ -769,6 +838,7 @@ mod tests {
     #[test]
     fn source_revocation_reaches_each_derived_target_authority() {
         let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
         let (attachment, launch_data, source_authorities) = attachment(
             &mut runtime,
             source,
@@ -781,7 +851,8 @@ mod tests {
             spec(IsolationPlacement::NativeService),
             attachment,
             ObjectId(0xa0),
-            ObjectId(0xa1),
+            endpoint,
+            source,
             ObjectId(0xa2),
         )
         .unwrap();
@@ -818,6 +889,7 @@ mod tests {
     #[test]
     fn native_device_retirement_exact_matches_current_task_and_root() {
         let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
         let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
         let task = prepare_native_device_service_task(
             &mut runtime,
@@ -826,7 +898,8 @@ mod tests {
             spec(IsolationPlacement::NativeService),
             attachment,
             ObjectId(0xa0),
-            ObjectId(0xa1),
+            endpoint,
+            source,
             ObjectId(0xa2),
         )
         .unwrap();

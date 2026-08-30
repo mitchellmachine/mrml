@@ -571,6 +571,11 @@ mod tests {
         let wrong_target = runtime
             .create_for_construction(Priority::NORMAL, context(0x70_0000))
             .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(40), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let launch_data = runtime
             .capabilities_mut(source)
             .unwrap()
@@ -617,7 +622,8 @@ mod tests {
             target,
             bound,
             ObjectId(40),
-            ObjectId(41),
+            endpoint,
+            source,
             ObjectId(42),
         )
         .unwrap();
@@ -627,8 +633,9 @@ mod tests {
             wrong_target,
             service(),
             wrong_attachment,
-            ObjectId(43),
-            ObjectId(41),
+            ObjectId(40),
+            endpoint,
+            source,
             ObjectId(42),
         )
         .unwrap();
