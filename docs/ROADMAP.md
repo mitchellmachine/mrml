@@ -4117,3 +4117,7 @@ Stable configuration commit now returns its complete prepared owner with any
 commit-time configuration or storage denial. Failed reauthorization neither
 consumes the receipt nor silently discards the staged successor; retry, cleanup,
 or abandonment remains an explicit caller decision.
+
+Durable storage-authority checkpoint commit now follows the same linear error
+contract. Its exact checkpoint owner is returned with authorization or receipt
+failure, leaving both staged state and receipt disposition explicit.

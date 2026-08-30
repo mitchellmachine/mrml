@@ -575,15 +575,13 @@ impl<const EXTENTS: usize> PreparedStableAuthorities<EXTENTS> {
         self,
         authority: &StorageAuthorityTable<AUTHORITIES>,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
-    ) -> Result<StableAuthorities<EXTENTS>, FileWriteCommitError> {
-        let file = self
-            .file
-            .commit_transaction_authorized(authority, receipt)
-            .map_err(|(_, error)| error)?;
-        Ok(StableAuthorities {
-            file,
-            checkpoint: self.checkpoint,
-        })
+    ) -> Result<StableAuthorities<EXTENTS>, (Self, FileWriteCommitError)> {
+        let Self { file, checkpoint } = self;
+        let file = match file.commit_transaction_authorized(authority, receipt) {
+            Ok(file) => file,
+            Err((file, error)) => return Err((Self { file, checkpoint }, error)),
+        };
+        Ok(StableAuthorities { file, checkpoint })
     }
 }
 
@@ -1859,12 +1857,15 @@ mod tests {
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
         authority.revoke(file, principal(7)).unwrap();
-        assert!(matches!(
-            prepared.commit(&authority, &mut receipt),
-            Err(FileWriteCommitError::Authority(
-                StorageAuthorityError::InvalidHandle
-            ))
-        ));
+        let retained = match prepared.commit(&authority, &mut receipt) {
+            Err((
+                prepared,
+                FileWriteCommitError::Authority(StorageAuthorityError::InvalidHandle),
+            )) => prepared,
+            _ => panic!("revoked file authority did not retain prepared checkpoint"),
+        };
+        assert_eq!(retained.checkpoint().epoch(), 9);
+        assert_eq!(retained.checkpoint().root_generation(), 14);
         assert_eq!(receipt.remaining(), 1);
 
         let mut authority = StorageAuthorityTable::<2>::new();
@@ -1901,7 +1902,10 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared.commit(&authority, &mut receipt).unwrap();
+        let stable = match prepared.commit(&authority, &mut receipt) {
+            Ok(stable) => stable,
+            Err(_) => panic!("authorized stable authority commit failed"),
+        };
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.file().generation(), 2);
         assert_eq!(stable.checkpoint().epoch(), 9);

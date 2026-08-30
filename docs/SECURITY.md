@@ -1096,3 +1096,7 @@ Stable configuration reauthorization failure returns the complete prepared
 checkpoint owner together with the error. Denial therefore cannot turn a linear
 staged successor into hidden ambient state or force receipt consumption; its
 subsequent disposition remains explicit.
+
+Durable authority-checkpoint commit also returns its complete prepared owner on
+denial. The checkpoint epoch and root-generation binding remain available to
+explicit recovery policy, and the failed commit consumes no receipt authority.

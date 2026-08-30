@@ -7261,6 +7261,16 @@ Patent review: `NOT_TRIGGERED` — this preserves ownership across an existing
 error boundary and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
 
+Durable storage-authority checkpoint commit now preserves its complete prepared
+owner on storage-authority or receipt denial as well. The retained checkpoint
+continues to expose its exact epoch and root generation for explicit recovery
+policy, while no receipt participant is consumed. Storage passes 142 focused
+Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this is the same conventional linear error
+ownership rule at the existing authority-checkpoint boundary. See
+`docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
