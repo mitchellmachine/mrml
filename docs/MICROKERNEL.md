@@ -11025,3 +11025,21 @@ This is in-memory state-machine and cross-build evidence only.
 Patent review: `NOT_TRIGGERED` — pausing scheduler mutation while an existing
 one-use transition lease is outstanding is conventional fail-closed lifecycle
 serialization. See `docs/patents/REVIEW_LOG.md`.
+
+Generic mutable access to a task context now freezes alongside scheduling while
+a termination dispatch is issued. The opaque dispatch instead exposes a
+successor-only preparation borrow that exact-matches the owning runtime, issued
+source-and-target identity, and current selected task. The UEFI buffered-receive
+completion path uses that borrow before refreshing the token's saved context and
+entering through the transition stack; an unrelated task, runtime, or token
+cannot authorize the mutation.
+
+The Linux-host kernel suite passes 653 tests and its release build passes;
+storage passes 163 tests, Zstd passes 27, and configuration passes 53. The
+default, service, component-service, invalid-return, and buffer-drift UEFI
+release profiles cross-build with the existing configuration-specific warnings.
+These checks do not execute privileged entry or physical hardware.
+
+Patent review: `NOT_TRIGGERED` — binding trusted successor-context preparation
+to an existing one-use transition token is conventional capability-scoped state
+mutation. See `docs/patents/REVIEW_LOG.md`.

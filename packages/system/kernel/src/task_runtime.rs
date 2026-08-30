@@ -236,6 +236,19 @@ impl TaskTerminationDispatch {
         }
     }
 
+    /// Borrows the selected successor context for trusted preparation while
+    /// exact-matching this issued dispatch to its owning runtime and task.
+    pub fn user_context_mut<'a, const TASKS: usize, const CAPS: usize>(
+        &self,
+        runtime: &'a mut TaskRuntime<TASKS, CAPS>,
+        task: TaskId,
+    ) -> Result<&'a mut UserContext, TaskTerminationDispatchError> {
+        if self.identity.target != Some(task) {
+            return Err(TaskTerminationDispatchError::CurrentMismatch);
+        }
+        runtime.context_mut_for_issued_dispatch(self.identity, task)
+    }
+
     /// Refreshes the saved user context after trusted successor preparation,
     /// while exact-matching the scheduler-selected task again.
     pub fn refresh_from_runtime<const TASKS: usize, const CAPS: usize>(
@@ -685,7 +698,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn context_mut(&mut self, task: TaskId) -> Result<&mut UserContext, TaskRuntimeError> {
-        self.ensure_no_pending_retirement()?;
+        self.ensure_scheduler_mutable()?;
+        self.context_mut_unfrozen(task)
+    }
+
+    fn context_mut_unfrozen(&mut self, task: TaskId) -> Result<&mut UserContext, TaskRuntimeError> {
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -694,6 +711,19 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .as_mut()
             .map(|domain| &mut domain.context)
             .ok_or(TaskRuntimeError::IntegrityFailure)
+    }
+
+    fn context_mut_for_issued_dispatch(
+        &mut self,
+        identity: TaskTerminationDispatchIdentity,
+        task: TaskId,
+    ) -> Result<&mut UserContext, TaskTerminationDispatchError> {
+        self.validate_issued_dispatch(identity)?;
+        if self.current() != Some(task) || identity.target != Some(task) {
+            return Err(TaskTerminationDispatchError::CurrentMismatch);
+        }
+        self.context_mut_unfrozen(task)
+            .map_err(TaskTerminationDispatchError::Runtime)
     }
 
     pub const fn current(&self) -> Option<TaskId> {
@@ -2561,8 +2591,25 @@ mod tests {
             runtime.terminate_current(),
             Err(TaskRuntimeError::RetirementDispatchPending)
         );
+        assert_eq!(
+            runtime.context_mut(replacement).map(|_| ()),
+            Err(TaskRuntimeError::RetirementDispatchPending)
+        );
+        let mut other_runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        assert_eq!(
+            dispatch
+                .user_context_mut(&mut other_runtime, replacement)
+                .map(|_| ()),
+            Err(TaskTerminationDispatchError::DispatchIdentityMismatch)
+        );
+        assert_eq!(
+            dispatch.user_context_mut(&mut runtime, exiting).map(|_| ()),
+            Err(TaskTerminationDispatchError::CurrentMismatch)
+        );
         let refreshed = context(0x30_0000, 0x51_0000);
-        *runtime.context_mut(replacement).unwrap() = refreshed;
+        *dispatch
+            .user_context_mut(&mut runtime, replacement)
+            .unwrap() = refreshed;
         dispatch.refresh_from_runtime(&runtime).unwrap();
         assert_eq!(dispatch.user(), Some((replacement, refreshed)));
         assert_eq!(runtime.context(exiting), Err(TaskRuntimeError::MissingTask));

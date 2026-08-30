@@ -5075,6 +5075,7 @@ unsafe fn complete_buffer_current(
 unsafe fn complete_pending_buffer(
     runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
     task: mrml_kernel::TaskId,
+    dispatch: Option<&mrml_kernel::TaskTerminationDispatch>,
 ) {
     let Some((pending_slot, pending)) = (unsafe { prepare_pending_buffer(task) }) else {
         return;
@@ -5116,10 +5117,14 @@ unsafe fn complete_pending_buffer(
                     options(nostack, preserves_flags)
                 )
             }
-            runtime
-                .context_mut(task)
-                .unwrap_or_else(|_| halt())
-                .complete_error();
+            match dispatch {
+                Some(dispatch) => dispatch.user_context_mut(runtime, task),
+                None => runtime
+                    .context_mut(task)
+                    .map_err(mrml_kernel::TaskTerminationDispatchError::Runtime),
+            }
+            .unwrap_or_else(|_| halt())
+            .complete_error();
             return;
         }
         Err(_) => halt(),
@@ -5132,10 +5137,14 @@ unsafe fn complete_pending_buffer(
             options(nostack, preserves_flags)
         )
     };
-    runtime
-        .context_mut(task)
-        .unwrap_or_else(|_| halt())
-        .complete_buffer(completion);
+    match dispatch {
+        Some(dispatch) => dispatch.user_context_mut(runtime, task),
+        None => runtime
+            .context_mut(task)
+            .map_err(mrml_kernel::TaskTerminationDispatchError::Runtime),
+    }
+    .unwrap_or_else(|_| halt())
+    .complete_buffer(completion);
 }
 
 #[cfg(feature = "service-probe")]
@@ -5249,7 +5258,7 @@ unsafe fn enter_service_task(
     unsafe {
         arm_buffer_drift_probe()
     };
-    unsafe { complete_pending_buffer(runtime, task) };
+    unsafe { complete_pending_buffer(runtime, task, None) };
     let context = runtime
         .context(task)
         .map(|context| context as *const UserContext)
@@ -5267,7 +5276,7 @@ unsafe fn enter_service_dispatch(
     unsafe {
         arm_buffer_drift_probe()
     };
-    unsafe { complete_pending_buffer(runtime, task) };
+    unsafe { complete_pending_buffer(runtime, task, Some(&dispatch)) };
     dispatch
         .refresh_from_runtime(runtime)
         .unwrap_or_else(|_| halt());
