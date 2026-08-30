@@ -10335,3 +10335,15 @@ recording-backend simulation, not active native page-table or hardware evidence.
 Patent review: `NOT_TRIGGERED` — explicit progress state for retryable ordered
 resource teardown is conventional lifecycle management. See
 `docs/patents/REVIEW_LOG.md`.
+
+The service transfer mapping record now **PARTIALLY IMPLEMENTS IN SOURCE**
+retention of the exact local and provider target capability generations, not
+only their descriptive object identities. This lets later teardown reauthorize
+and remove each mapping through the same coordinator capability space without
+reconstructing authority from a name, task ID, or virtual address. The
+Linux-host release kernel suite passes 649 tests. Composed end-to-end teardown
+remains the next gate.
+
+Patent review: `NOT_TRIGGERED` — retaining opaque capability generations with
+their resource record is conventional authority-preserving bookkeeping. See
+`docs/patents/REVIEW_LOG.md`.

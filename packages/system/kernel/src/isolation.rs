@@ -534,6 +534,8 @@ pub struct ComponentServiceReadTransferMappings {
     mappings: MemoryMappingPair,
     local_target: ObjectId,
     provider_target: ObjectId,
+    local_target_capability: Capability,
+    provider_target_capability: Capability,
     local_virtual_page: u64,
     provider_virtual_page: u64,
 }
@@ -549,6 +551,14 @@ impl ComponentServiceReadTransferMappings {
 
     pub const fn provider_target(self) -> ObjectId {
         self.provider_target
+    }
+
+    pub const fn local_target_capability(self) -> Capability {
+        self.local_target_capability
+    }
+
+    pub const fn provider_target_capability(self) -> Capability {
+        self.provider_target_capability
     }
 
     pub const fn local_virtual_page(self) -> u64 {
@@ -729,6 +739,8 @@ pub fn install_component_service_read_transfer_mappings<
         mappings,
         local_target,
         provider_target,
+        local_target_capability,
+        provider_target_capability,
         local_virtual_page,
         provider_virtual_page,
     })
@@ -4066,6 +4078,8 @@ mod tests {
         .unwrap();
         assert_eq!(mappings.local_target(), ObjectId(0x7100));
         assert_eq!(mappings.provider_target(), ObjectId(0x7200));
+        assert_eq!(mappings.local_target_capability(), local_target);
+        assert_eq!(mappings.provider_target_capability(), provider_target);
         assert_eq!(mappings.local_virtual_page(), 0x300);
         assert_eq!(mappings.provider_virtual_page(), 0x400);
         assert_eq!(
