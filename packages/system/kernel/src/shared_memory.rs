@@ -351,12 +351,21 @@ impl<const N: usize> SharedWriteCopyBindings<N> {
         })
     }
 
-    pub fn revoke(&mut self, id: SharedWriteCopyBindingId) -> Result<(), SharedBindingError> {
-        self.entries
+    pub fn revoke<const CAPS: usize>(
+        &mut self,
+        id: SharedWriteCopyBindingId,
+        controller: &CapabilitySpace<CAPS>,
+        control: Capability,
+    ) -> Result<(), SharedBindingError> {
+        let entry = self
+            .entries
             .get(id.index())
             .and_then(Option::as_ref)
             .filter(|entry| entry.generation == id.generation())
             .ok_or(SharedBindingError::StaleBinding)?;
+        if controller.authorize_exact(control, Rights::CONTROL)? != entry.object {
+            return Err(SharedBindingError::WrongObject);
+        }
         self.entries[id.index()] = None;
         Ok(())
     }
@@ -1292,8 +1301,17 @@ mod tests {
             copies.resolve(copy, &mapped_bindings, &provider, write, &memory, vm, task,),
             Err(SharedBindingError::StaleMapping)
         ));
-        copies.revoke(copy).unwrap();
-        assert_eq!(copies.revoke(copy), Err(SharedBindingError::StaleBinding));
+        assert_eq!(
+            copies.revoke(copy, &controller, source_authority),
+            Err(SharedBindingError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        copies.revoke(copy, &controller, control).unwrap();
+        assert_eq!(
+            copies.revoke(copy, &controller, control),
+            Err(SharedBindingError::StaleBinding)
+        );
     }
 
     #[test]

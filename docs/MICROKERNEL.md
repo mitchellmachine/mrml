@@ -10483,3 +10483,13 @@ remains the next gate.
 Patent review: `NOT_TRIGGERED` — composing existing exact IPC authorization,
 projection resolution, range validation, and opaque backend I/O is conventional
 mechanism reuse. See `docs/patents/REVIEW_LOG.md`.
+
+Write-copy projection revocation now requires an exact `CONTROL` capability for
+the projected shared object. A generational projection ID identifies the entry
+but cannot remove it, and an overbroad otherwise-related capability is rejected
+before table mutation. The Linux-host release kernel suite remains at 651
+passing tests and the release build passes.
+
+Patent review: `NOT_TRIGGERED` — capability-authorized generational table
+revocation is conventional access-control lifecycle enforcement. See
+`docs/patents/REVIEW_LOG.md`.
