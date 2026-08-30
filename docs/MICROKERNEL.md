@@ -10154,9 +10154,14 @@ exact block endpoint to the launch-bound generational provider task, transfers
 only an attenuated `MAP|WRITE` handle, accepts an exact capability-free response,
 and copies only the completed borrowed range through its separate local
 `MAP|READ` handle. Provider errors and malformed completions publish no shared
-bytes. The Linux-host FAT32 suite passes 101 tests. This is syscall-frame and
-hostile-model evidence only; the installed entry still runs the probe-only loop,
-and no KVM, WHP, IOMMU, or physical storage device was exercised.
+bytes. The installed MRML-native entry now consumes all of those launch fields
+and runs the existing unified probe/mount/unmount/lookup/open/read dispatcher
+over fixed 4 KiB block, cluster, staging, and client-transfer scratch bounds;
+larger logical blocks or incompatible filesystem working sets fail closed. The
+Linux-host FAT32 suite passes 101 tests, and both the FAT32 service and aggregate
+service image pass release `MRML_NATIVE` builds. This is syscall-frame,
+hostile-model, and ABI compilation evidence only; no installed invocation, KVM,
+WHP, IOMMU, or physical storage device was exercised.
 
 Patent review: `NOT_TRIGGERED` — this is conventional bounded IPC plus
 direction-scoped shared-buffer transfer over the existing block protocol. See
