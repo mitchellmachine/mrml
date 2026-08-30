@@ -1050,6 +1050,33 @@ Patent review: `NOT_TRIGGERED` — converting already validated, disjoint native
 mappings into exact bounded slices is conventional memory-adapter plumbing. See
 `docs/patents/REVIEW_LOG.md`.
 
+Installed AHCI active-port reconstruction is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. The service exact-matches the launch-bound ABAR and DMA generations,
+proves the selected port registers fit the mapping, and obtains two complete
+read-only observations of interrupt enable, command state, task-file state,
+active commands, and issued commands. It publishes the typed active-port owner
+only when both observations are identical, interrupts remain disabled, both
+engines remain enabled, and no task-file busy/DRQ state or command is pending.
+Register failure, torn state, and every non-idle state publish no owner. The
+focused Linux suite passes all 115 tests and both Linux release and
+`MRML_NATIVE` release builds pass. These are hostile register-model tests, not
+installed execution or physical-device evidence; exclusive device control,
+concrete cache synchronization, native binary dispatch, and physical validation
+remain outstanding.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: `NOT_TRIGGERED` — stable double-sampling of conventional AHCI
+status registers before reconstructing existing typestate is ordinary defensive
+driver plumbing. See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — admitting cleanup only from the same validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.

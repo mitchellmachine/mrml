@@ -28,6 +28,7 @@ mod kernel_service_cpu_mapping;
 mod mapped_command_memory;
 mod mapped_data_buffer;
 mod native_mapped_memory;
+mod native_port_reconstruction;
 mod service_bootstrap;
 mod service_cpu_mapping;
 mod service_device_teardown;
@@ -132,6 +133,9 @@ pub use kernel_service_cpu_mapping::{
 pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryError};
+pub use native_port_reconstruction::{
+    AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
+};
 pub use service_bootstrap::{
     AhciServiceBootstrapError, AhciServiceEntryRegisters, bootstrap_installed_ahci_entry,
     bootstrap_installed_ahci_service,
