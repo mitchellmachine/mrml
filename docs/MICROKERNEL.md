@@ -7358,6 +7358,14 @@ Patent review: `NOT_TRIGGERED` — retaining typestate-owned temporary results a
 resolving an uncertain compare-and-store by exact authenticated-state equality
 is conventional fail-closed recovery logic. See `docs/patents/REVIEW_LOG.md`.
 
+The configuration recovery integration now exercises a store that commits the
+replacement but reports uncertainty. The one-use boot-bound adapter is consumed
+and dropped before the retained owner resolves against the underlying
+authenticated store; exact replacement equality releases the recovered
+authority and prepared service together. Configuration passes 53 Linux-host
+tests, and the release `MRML_NATIVE` service-image build passes. This is hosted
+and cross-build evidence, not KVM, WHP, or physical recovery evidence.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

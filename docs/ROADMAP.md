@@ -4159,3 +4159,9 @@ Validated authority recovery now also retains its temporary authority and
 non-authorizing validation output across rollback-store uncertainty. Exact
 authenticated replacement equality is required before either becomes available;
 the Linux-host storage suite passes all 142 focused tests.
+
+Configuration recovery now covers the committed-but-uncertain integration path:
+after consuming the one-use boot-bound adapter, the retained authority and
+prepared service resolve only through exact equality in the underlying
+authenticated store. All 53 Linux-host configuration tests and the release
+`MRML_NATIVE` service-image build pass.
