@@ -7324,6 +7324,18 @@ Patent review: `NOT_TRIGGERED` — this is conventional typed uncertainty and
 linear ownership at an existing authenticated commit boundary. See
 `docs/patents/REVIEW_LOG.md`.
 
+`PublishedAuthenticatedActivation` now resolves that uncertainty only by
+reloading authenticated recovery state and exact-matching the intended epoch,
+file volume/object/generation, activation identity, and root/release-bound
+checkpoint digest. A mismatch returns the same published owner; a match first
+revalidates live control and candidate state, then completes the already
+validated activation. The adversarial test covers both retained mismatch and
+confirmed completion. Deployment remains 8 focused Linux tests.
+
+Patent review: `NOT_TRIGGERED` — this composes existing authenticated-state,
+digest, capability, and generation checks into a bounded recovery transition.
+See `docs/patents/REVIEW_LOG.md`.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

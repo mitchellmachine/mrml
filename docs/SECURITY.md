@@ -1125,3 +1125,8 @@ retryable prepared file. Before receipt consumption, failures return the full
 prepared owner. After file publication, compare-and-store failure returns a
 `CheckpointPublished` owner containing the exact file generation and pending
 activation identity; live activation remains unchanged for explicit recovery.
+
+Resolving a published authenticated activation requires a fresh authenticated
+state load and exact equality with its retained epoch, stable-file identity,
+activation, and root/release-derived checkpoint digest. Stale or ambiguous
+state returns the same owner and cannot activate the candidate.

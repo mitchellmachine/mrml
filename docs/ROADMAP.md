@@ -4144,3 +4144,8 @@ Authenticated stable deployment failure now distinguishes `Prepared` from
 `CheckpointPublished`. Pre-receipt errors retain the complete prepared owner;
 post-receipt recovery-store uncertainty retains the exact durable file and
 pending activation identities while leaving the live service inactive.
+
+Published authenticated activation uncertainty now has an exact resolution
+path. Only authenticated state matching the retained successor epoch, file,
+activation, and checkpoint digest can complete live activation; mismatch keeps
+the published owner intact for later recovery.

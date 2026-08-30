@@ -760,6 +760,14 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         self.active
     }
 
+    pub const fn activation(&self) -> PreparedActivation {
+        self.activation
+    }
+
+    pub const fn active_release(&self) -> Option<ActivatedSystemRelease> {
+        self.active_release
+    }
+
     pub fn admit<const PARTICIPANTS: usize, const WRITES: usize>(
         &self,
         transaction: &mut StorageTransaction<PARTICIPANTS, WRITES>,
@@ -928,10 +936,13 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         };
         if let Err(error) = state_store.compare_and_store(&expected, &replacement) {
             return Err(AuthenticatedActivationCommitFailure::CheckpointPublished {
-                file,
-                activation,
-                active,
-                active_release,
+                published: PublishedAuthenticatedActivation {
+                    file,
+                    activation,
+                    active,
+                    active_release,
+                    recovery_epoch: next_epoch,
+                },
                 error,
             });
         }
@@ -986,12 +997,109 @@ pub enum AuthenticatedActivationCommitFailure<const EXTENTS: usize, E> {
         error: AuthenticatedActivationCommitError<E>,
     },
     CheckpointPublished {
-        file: FileState<EXTENTS>,
-        activation: PreparedActivation,
-        active: ActivatedSystemGeneration,
-        active_release: Option<ActivatedSystemRelease>,
+        published: PublishedAuthenticatedActivation<EXTENTS>,
         error: E,
     },
+}
+
+pub struct PublishedAuthenticatedActivation<const EXTENTS: usize> {
+    file: FileState<EXTENTS>,
+    activation: PreparedActivation,
+    active: ActivatedSystemGeneration,
+    active_release: Option<ActivatedSystemRelease>,
+    recovery_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublishedActivationResolutionError<E> {
+    StateStore(E),
+    Deployment(DeploymentError),
+    RecoveryStateMismatch,
+    StaleActivation,
+}
+
+impl<const EXTENTS: usize> PublishedAuthenticatedActivation<EXTENTS> {
+    pub const fn file(&self) -> &FileState<EXTENTS> {
+        &self.file
+    }
+
+    pub const fn active(&self) -> ActivatedSystemGeneration {
+        self.active
+    }
+
+    pub const fn activation(&self) -> PreparedActivation {
+        self.activation
+    }
+
+    pub const fn active_release(&self) -> Option<ActivatedSystemRelease> {
+        self.active_release
+    }
+
+    pub const fn recovery_epoch(&self) -> u64 {
+        self.recovery_epoch
+    }
+
+    pub fn resolve<const CANDIDATES: usize, const CAPS: usize, S: DeploymentRecoveryStateStore>(
+        self,
+        service: &mut DeploymentService<CANDIDATES>,
+        capabilities: &CapabilitySpace<CAPS>,
+        control: Capability,
+        state_store: &S,
+    ) -> Result<StableActivation<EXTENTS>, (Self, PublishedActivationResolutionError<S::Error>)>
+    {
+        let validated = match service.validate_activation(capabilities, control, self.activation) {
+            Ok(validated) => validated,
+            Err(error) => {
+                return Err((self, PublishedActivationResolutionError::Deployment(error)));
+            }
+        };
+        if validated.active != self.active || validated.active_release != self.active_release {
+            return Err((self, PublishedActivationResolutionError::StaleActivation));
+        }
+        let mut encoded = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
+        if let Err(error) = state_store.load_authenticated(&mut encoded) {
+            return Err((self, PublishedActivationResolutionError::StateStore(error)));
+        }
+        let recovered = match decode_deployment_recovery_state(&encoded) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                return Err((self, PublishedActivationResolutionError::Deployment(error)));
+            }
+        };
+        let checkpoint = match self.active_release {
+            Some(release) => encode_deployment_release_checkpoint(service.root, release),
+            None => encode_deployment_checkpoint(service.root, self.active),
+        };
+        let checkpoint = match checkpoint {
+            Ok(checkpoint) => checkpoint,
+            Err(error) => {
+                return Err((self, PublishedActivationResolutionError::Deployment(error)));
+            }
+        };
+        if recovered.epoch() != self.recovery_epoch
+            || recovered.active() != Some(self.active)
+            || !recovered.matches_file(&self.file)
+            || recovered.checkpoint_digest() != Sha3_256::digest(&checkpoint)
+        {
+            return Err((
+                self,
+                PublishedActivationResolutionError::RecoveryStateMismatch,
+            ));
+        }
+        let Self {
+            file,
+            activation: _,
+            active: _,
+            active_release,
+            recovery_epoch: _,
+        } = self;
+        let active = service.publish_validated_activation(validated);
+        Ok(StableActivation {
+            file,
+            active,
+            active_release,
+        })
+    }
 }
 
 pub trait DeploymentRecoveryStateStore {
@@ -2986,22 +3094,40 @@ mod tests {
             &mut receipt,
             &mut recovery_state,
         );
-        let Err(AuthenticatedActivationCommitFailure::CheckpointPublished {
-            file,
-            activation: retained_activation,
-            active: retained_active,
-            active_release,
-            error,
-        }) = failure
+        let Err(AuthenticatedActivationCommitFailure::CheckpointPublished { published, error }) =
+            failure
         else {
             panic!("store uncertainty did not return the published checkpoint owner");
         };
-        assert_eq!(file.generation(), 2);
-        assert_eq!(retained_activation, activation);
-        assert_eq!(retained_active, active);
-        assert_eq!(active_release, None);
+        assert_eq!(published.file().generation(), 2);
+        assert_eq!(published.activation(), activation);
+        assert_eq!(published.active(), active);
+        assert_eq!(published.active_release(), None);
         assert_eq!(error, 2);
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(service.active(&capabilities, inspect), Ok(None));
+
+        let published =
+            match published.resolve(&mut service, &capabilities, control, &recovery_state) {
+                Err((published, PublishedActivationResolutionError::RecoveryStateMismatch)) => {
+                    published
+                }
+                _ => panic!("unchanged recovery state did not retain published uncertainty"),
+            };
+        recovery_state.bytes = encode_deployment_recovery_state(
+            published.recovery_epoch(),
+            root,
+            active,
+            published.file().object(),
+            published.file().generation(),
+        )
+        .unwrap();
+        let stable = match published.resolve(&mut service, &capabilities, control, &recovery_state)
+        {
+            Ok(stable) => stable,
+            Err(_) => panic!("authenticated published checkpoint did not resolve"),
+        };
+        assert_eq!(stable.active(), active);
+        assert_eq!(service.active(&capabilities, inspect), Ok(Some(active)));
     }
 }
