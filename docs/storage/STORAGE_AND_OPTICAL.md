@@ -751,6 +751,9 @@ The NVMe loop now records cleanup eligibility only after exact one-capability
 envelope admission and structural token validation. It never attempts to revoke
 missing, malformed, or undeclared token bytes, while later failures still
 release the admitted leaf. Its 68 focused Linux tests and release build pass.
+The optional IDE loop applies that same admission-gated cleanup rule. Its 28
+focused Linux tests and release build pass; missing, malformed, and undeclared
+token bytes perform no release. Neither result is physical-device evidence.
 The FAT32 adapter now also rejects kernel-reported receive lengths or capability
 counts beyond the exact supplied buffers before publishing a typed envelope;
 its focused Linux suite passes 34 tests. The sibling Zstd service adapter applies

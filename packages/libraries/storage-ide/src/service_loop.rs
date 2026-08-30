@@ -67,9 +67,17 @@ impl<'a> IdeEnumerationServiceLoop<'a> {
         tokens.fill(0);
         scratch.fill(0);
         response.fill(0);
-        let result = self.serve_inner(syscalls, request, tokens, scratch, response);
-        let release = (tokens[0] != 0)
-            .then(|| syscalls.release_received(Capability::from_token(tokens[0])))
+        let mut received_capability = None;
+        let result = self.serve_inner(
+            syscalls,
+            request,
+            tokens,
+            scratch,
+            response,
+            &mut received_capability,
+        );
+        let release = received_capability
+            .map(|capability| syscalls.release_received(capability))
             .transpose()
             .map(|_| ())
             .map_err(IdeServiceLoopError::Syscall);
@@ -93,6 +101,7 @@ impl<'a> IdeEnumerationServiceLoop<'a> {
         tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response: &mut [u8; ENUMERATE_RESPONSE_BYTES],
+        received_capability: &mut Option<Capability>,
     ) -> Result<(), IdeServiceLoopError<S::Error>> {
         let envelope = syscalls
             .receive(request_buffer, tokens)
@@ -104,6 +113,7 @@ impl<'a> IdeEnumerationServiceLoop<'a> {
         {
             return Err(IdeServiceLoopError::InvalidEnvelope);
         }
+        *received_capability = Some(Capability::from_token(tokens[0]));
         let request = decode_enumerate_request(request_buffer, u64::MAX)
             .map_err(IdeServiceLoopError::Protocol)?;
         let length = usize::try_from(request.output.length())
@@ -152,6 +162,7 @@ mod tests {
         writes: usize,
         releases: usize,
         fail_write: bool,
+        capability_count: usize,
     }
 
     unsafe impl IdeServiceSyscalls for Syscalls {
@@ -165,7 +176,7 @@ mod tests {
             tokens[0] = self.token;
             Ok(ReceivedIdeEnvelope {
                 payload_length: ENUMERATE_REQUEST_BYTES,
-                capability_count: 1,
+                capability_count: self.capability_count,
             })
         }
         fn write_shared(
@@ -213,6 +224,7 @@ mod tests {
             writes: 0,
             releases: 0,
             fail_write: false,
+            capability_count: 1,
         }
     }
 
@@ -258,18 +270,24 @@ mod tests {
             Err(IdeServiceLoopError::Syscall(()))
         );
         assert_eq!((failed.releases, failed.response), (1, None));
-        let mut invalid = syscalls();
-        invalid.token = 7;
-        assert_eq!(
-            IdeEnumerationServiceLoop::new(&devices).serve_one(
-                &mut invalid,
-                &mut [0; ENUMERATE_REQUEST_BYTES],
-                &mut [0; 1],
-                &mut [0; 64],
-                &mut [0; ENUMERATE_RESPONSE_BYTES],
-            ),
-            Err(IdeServiceLoopError::InvalidEnvelope)
-        );
-        assert_eq!((invalid.writes, invalid.response), (0, None));
+        for (token, capability_count) in [(0, 1), (7, 1), (TOKEN, 0)] {
+            let mut invalid = syscalls();
+            invalid.token = token;
+            invalid.capability_count = capability_count;
+            assert_eq!(
+                IdeEnumerationServiceLoop::new(&devices).serve_one(
+                    &mut invalid,
+                    &mut [0; ENUMERATE_REQUEST_BYTES],
+                    &mut [0; 1],
+                    &mut [0; 64],
+                    &mut [0; ENUMERATE_RESPONSE_BYTES],
+                ),
+                Err(IdeServiceLoopError::InvalidEnvelope)
+            );
+            assert_eq!(
+                (invalid.writes, invalid.releases, invalid.response),
+                (0, 0, None)
+            );
+        }
     }
 }

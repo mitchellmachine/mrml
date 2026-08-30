@@ -200,6 +200,12 @@ malformed, or undeclared token bytes cannot invoke release, while failures after
 admission still release before returning. Its 68 focused Linux tests and release
 build pass; this adds no hardware evidence.
 
+The optional IDE enumeration loop applies the same admission-gated cleanup:
+only an exact declared, structurally valid transferred leaf can reach release.
+Its 28 focused Linux tests and release build pass, including zero-release
+rejection of missing, malformed, and undeclared token bytes. This is modeled
+source evidence, not legacy-controller or physical-device verification.
+
 Patent review: `NOT_TRIGGERED` — binding cleanup to an already validated
 capability envelope is conventional fail-closed resource handling. See
 `docs/patents/REVIEW_LOG.md`.
