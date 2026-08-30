@@ -1222,6 +1222,12 @@ binding, issues canonical one-block requests, and requires exact completion for
 each. Unaligned cross-block assembly is failure-atomic: if any later read fails,
 all previously copied caller output and the full scratch block are erased.
 
+Root-directory loading is gated by exact volume, mount generation, and root
+identity before the block backend is reachable. It validates the bounded FAT
+chain and parses each cluster into provider-local metadata, stopping only at a
+valid directory end marker or chain end. Read, parse, and capacity failures
+publish no directory batch and erase cluster scratch.
+
 Filesystem unmount is bound to the exact nonzero mount generation and provider
 endpoint. Its completion serial is lifecycle evidence rather than authority;
 typed errors cannot smuggle a serial, and a successful response cannot encode

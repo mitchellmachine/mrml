@@ -642,6 +642,7 @@ pub enum Fat32Error {
     InvalidLongNameEncoding,
     InvalidDirectoryEntry,
     DirectoryAlreadyEnded,
+    DirectoryRead,
     InvalidLookupName,
     LookupNotFound,
     AmbiguousLookup,
@@ -1112,6 +1113,77 @@ pub fn append_fat32_short_directory<const N: usize>(
     append_fat32_short_directory_inner(geometry, &mut candidate, bytes)?;
     *directory = candidate;
     Ok(())
+}
+
+pub fn load_fat32_directory<const C: usize, const E: usize, R>(
+    geometry: Fat32Geometry,
+    first_cluster: u32,
+    reader: &mut R,
+    cluster_scratch: &mut [u8],
+) -> Result<Fat32DirectoryBatch<E>, Fat32Error>
+where
+    R: Fat32EntryReader + Fat32ClusterReader,
+{
+    cluster_scratch.fill(0);
+    let cluster_bytes = usize::from(geometry.bytes_per_sector)
+        .checked_mul(usize::from(geometry.sectors_per_cluster))
+        .ok_or(Fat32Error::InvalidDirectoryExtent)?;
+    if cluster_scratch.len() != cluster_bytes {
+        return Err(Fat32Error::InvalidDirectoryExtent);
+    }
+    let chain = read_fat32_cluster_chain::<C, _>(geometry, first_cluster, reader)?;
+    let mut directory = Fat32DirectoryBatch::new();
+    for &cluster in chain.clusters() {
+        cluster_scratch.fill(0);
+        if reader.read_cluster(cluster, cluster_scratch).is_err() {
+            cluster_scratch.fill(0);
+            return Err(Fat32Error::DirectoryRead);
+        }
+        if let Err(error) = append_fat32_short_directory(
+            geometry,
+            &mut directory,
+            cluster_scratch,
+        ) {
+            cluster_scratch.fill(0);
+            return Err(error);
+        }
+        cluster_scratch.fill(0);
+        if directory.end_of_directory {
+            break;
+        }
+    }
+    Ok(directory)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fat32RootDirectoryError {
+    Lifecycle(Fat32MountError),
+    Filesystem(Fat32Error),
+}
+
+impl<T: BlockProviderReadTransport, const N: usize>
+    Fat32MountedProvider<Fat32BlockMountBackend<'_, T>, N>
+{
+    pub fn load_root_directory<const C: usize, const E: usize>(
+        &mut self,
+        volume: OpaqueHandle,
+        generation: u64,
+        root: OpaqueHandle,
+        cluster_scratch: &mut [u8],
+    ) -> Result<Fat32DirectoryBatch<E>, Fat32RootDirectoryError> {
+        let geometry = self
+            .mounts
+            .geometry(volume, generation, root)
+            .map_err(Fat32RootDirectoryError::Lifecycle)?;
+        let mut reader = Fat32BlockFilesystemReader::new(volume, geometry, &mut self.backend);
+        load_fat32_directory::<C, E, _>(
+            geometry,
+            geometry.root_cluster,
+            &mut reader,
+            cluster_scratch,
+        )
+        .map_err(Fat32RootDirectoryError::Filesystem)
+    }
 }
 
 fn append_fat32_short_directory_inner<const N: usize>(
@@ -1640,6 +1712,44 @@ mod tests {
         short_at: Option<usize>,
     }
 
+    struct FilesystemImageTransport {
+        session: BlockOpaqueHandle,
+        calls: [u64; 8],
+        count: usize,
+    }
+
+    impl BlockProviderReadTransport for FilesystemImageTransport {
+        fn read(
+            &mut self,
+            request: &[u8; mrml_interface_storage_block_provider_v1::READ_REQUEST_BYTES],
+            memory: &mut [u8],
+        ) -> Result<
+            [u8; mrml_interface_storage_block_provider_v1::READ_RESPONSE_BYTES],
+            BlockProtocolError,
+        > {
+            use mrml_interface_storage_block_provider_v1::{
+                decode_read_request, encode_read_response,
+            };
+
+            let request = decode_read_request(request, memory.len() as u64)?;
+            assert_eq!(request.session, self.session);
+            self.calls[self.count] = request.lba;
+            self.count += 1;
+            memory.fill(0);
+            match request.lba {
+                0 => memory[..FAT32_BOOT_SECTOR_BYTES].copy_from_slice(&boot_sector()),
+                4 | 132 => memory[8..12].copy_from_slice(&0x0fff_ffff_u32.to_le_bytes()),
+                260 => {
+                    memory[..32].copy_from_slice(&short_entry(b"KERNEL  MRP", 0x20, 5, 4096));
+                }
+                _ => {
+                    return Ok(encode_read_response(Err(BlockReadError::IoFailure)));
+                }
+            }
+            Ok(encode_read_response(Ok(memory.len() as u64)))
+        }
+    }
+
     impl BlockProviderReadTransport for PatternBlockTransport {
         fn read(
             &mut self,
@@ -2031,6 +2141,50 @@ mod tests {
     }
 
     #[test]
+    fn mounted_root_loader_reads_exact_fat_chain_and_directory_cluster() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let session = BlockOpaqueHandle::new(9, 11).unwrap();
+        let transport = FilesystemImageTransport {
+            session,
+            calls: [0; 8],
+            count: 0,
+        };
+        let mut block_scratch = [0xaa; 4096];
+        let backend =
+            Fat32BlockMountBackend::new(block_binding(volume, session), transport, &mut block_scratch)
+                .unwrap();
+        let mut provider = Fat32MountedProvider::<_, 1>::new(backend);
+        let mounted = provider.mount(volume).unwrap();
+        let mut cluster_scratch = [0xbb; 4096];
+        let directory = provider
+            .load_root_directory::<4, 4>(
+                volume,
+                mounted.generation,
+                mounted.root,
+                &mut cluster_scratch,
+            )
+            .unwrap();
+        assert_eq!(directory.entries().len(), 1);
+        assert_eq!(directory.entries()[0].short_name, *b"KERNEL  MRP");
+        assert!(directory.end_of_directory);
+        assert_eq!(cluster_scratch, [0; 4096]);
+
+        let wrong_root = OpaqueHandle::new(mounted.root.index(), 2).unwrap();
+        assert_eq!(
+            provider.load_root_directory::<4, 4>(
+                volume,
+                mounted.generation,
+                wrong_root,
+                &mut cluster_scratch,
+            ),
+            Err(Fat32RootDirectoryError::Lifecycle(Fat32MountError::StaleMount))
+        );
+        let transport = provider.into_backend().into_transport();
+        assert_eq!(&transport.calls[..transport.count], &[0, 4, 132, 260]);
+        assert_eq!(block_scratch, [0; 4096]);
+    }
+
+    #[test]
     fn mounted_provider_validates_exact_volume_before_publishing_state() {
         let volume = OpaqueHandle::new(4, 7).unwrap();
         let backend = MountBackend {
@@ -2262,6 +2416,32 @@ mod tests {
         }
     }
 
+    struct DirectoryReader {
+        fat: Reader,
+        fail_cluster: Option<u32>,
+        cluster_reads: [u8; 8],
+    }
+
+    impl Fat32EntryReader for DirectoryReader {
+        fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()> {
+            self.fat.read_entry(fat_index, cluster)
+        }
+    }
+
+    impl Fat32ClusterReader for DirectoryReader {
+        fn read_cluster(&mut self, cluster: u32, destination: &mut [u8]) -> Result<(), ()> {
+            let index = usize::try_from(cluster).map_err(|_| ())?;
+            *self.cluster_reads.get_mut(index).ok_or(())? += 1;
+            if self.fail_cluster == Some(cluster) {
+                destination.fill(0xcc);
+                return Err(());
+            }
+            destination.fill(0);
+            destination[..32].copy_from_slice(&short_entry(b"RECOVERYMRP", 0x20, 5, 1));
+            Ok(())
+        }
+    }
+
     struct ClusterReader {
         fail_cluster: Option<u32>,
         reads: [u8; 8],
@@ -2306,6 +2486,63 @@ mod tests {
             read_fat32_cluster_chain::<4, _>(geometry, 2, &mut reader),
             Err(Fat32Error::MirroredFatMismatch)
         );
+    }
+
+    #[test]
+    fn directory_loader_stops_at_end_marker_and_erases_cluster_scratch() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut reader = DirectoryReader {
+            fat: chain_reader(),
+            fail_cluster: None,
+            cluster_reads: [0; 8],
+        };
+        let mut scratch = [0xaa; 4096];
+        let directory =
+            load_fat32_directory::<4, 2, _>(geometry, 2, &mut reader, &mut scratch).unwrap();
+        assert_eq!(directory.entries().len(), 1);
+        assert_eq!(directory.entries()[0].short_name, *b"RECOVERYMRP");
+        assert!(directory.end_of_directory);
+        assert_eq!(reader.cluster_reads, [0, 0, 1, 0, 0, 0, 0, 0]);
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn directory_loader_erases_scratch_and_publishes_nothing_after_read_failure() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut reader = DirectoryReader {
+            fat: chain_reader(),
+            fail_cluster: Some(2),
+            cluster_reads: [0; 8],
+        };
+        let mut scratch = [0xaa; 4096];
+        assert_eq!(
+            load_fat32_directory::<4, 2, _>(geometry, 2, &mut reader, &mut scratch),
+            Err(Fat32Error::DirectoryRead)
+        );
+        assert_eq!(scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn directory_loader_rejects_chain_and_scratch_capacity_before_cluster_io() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut reader = DirectoryReader {
+            fat: chain_reader(),
+            fail_cluster: None,
+            cluster_reads: [0; 8],
+        };
+        let mut short = [0xaa; 512];
+        assert_eq!(
+            load_fat32_directory::<4, 2, _>(geometry, 2, &mut reader, &mut short),
+            Err(Fat32Error::InvalidDirectoryExtent)
+        );
+        assert_eq!(short, [0; 512]);
+        let mut scratch = [0xaa; 4096];
+        assert_eq!(
+            load_fat32_directory::<2, 2, _>(geometry, 2, &mut reader, &mut scratch),
+            Err(Fat32Error::ChainCapacity)
+        );
+        assert_eq!(reader.cluster_reads, [0; 8]);
+        assert_eq!(scratch, [0; 4096]);
     }
 
     #[test]

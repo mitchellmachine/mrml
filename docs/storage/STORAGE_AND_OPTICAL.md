@@ -931,8 +931,11 @@ volume/session client now assembles bounded unaligned byte ranges
 from canonical single-block reads. Every block must complete exactly; a later
 failure erases already assembled output and full-block scratch. Concrete adapters
 derive FAT-entry and data-cluster offsets with checked arithmetic and validated
-geometry. Sixty focused Linux-host tests pass; root-directory loading through
-these adapters remains next. The storage service
+geometry. Mounted root loading now exact-matches volume/mount/root identity,
+validates the bounded mirrored FAT chain, parses directory clusters until the
+end marker, and erases cluster scratch after success or failure. Stale roots fail
+before block I/O. Sixty-four focused Linux-host tests pass; stable non-authorizing
+lookup-object identity remains next. The storage service
 now has an interface-level boot-sector reader that binds an opaque filesystem
 volume to one owner-authenticated block session. It validates exact full-block
 scratch geometry, rechecks `READ` for every block-zero operation, copies only the

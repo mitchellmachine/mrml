@@ -7446,8 +7446,15 @@ exact session binding. It composes unaligned ranges from canonical one-block
 reads, requires exact completion per block, and clears partially assembled
 output plus scratch after any failure. Checked adapters derive FAT-entry and
 data-cluster offsets only from validated geometry. The focused Linux-host suite
-passes sixty tests; this is hosted protocol/unit evidence, not physical-media
+passes sixty-four tests; this is hosted protocol/unit evidence, not physical-media
 evidence.
+
+Mounted FAT32 root loading now exact-matches volume, lifecycle generation, and
+root identity before block access. It validates a bounded mirrored FAT chain,
+loads and parses directory clusters atomically until an end marker or chain end,
+and erases cluster scratch on every result. Stale root substitution performs no
+additional block call. Stable lookup-object identity and lookup syscall dispatch
+remain pending.
 
 Patent review: `NOT_TRIGGERED` — checked filesystem offset derivation, exact
 single-block reads, failure-atomic range assembly, and scratch erasure are
