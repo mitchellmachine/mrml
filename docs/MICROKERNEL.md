@@ -10147,3 +10147,17 @@ Patent review: `NOT_TRIGGERED` — separate read and delegated-write capability
 handles are conventional least-authority shared-memory mediation and introduce
 no new algorithm, protocol, or compatibility mechanism. See
 `docs/patents/REVIEW_LOG.md`.
+
+The FAT32 service library now **PARTIALLY IMPLEMENTS IN SOURCE** the matching
+block-read syscall client. It sends one canonical bounded request through the
+exact block endpoint to the launch-bound generational provider task, transfers
+only an attenuated `MAP|WRITE` handle, accepts an exact capability-free response,
+and copies only the completed borrowed range through its separate local
+`MAP|READ` handle. Provider errors and malformed completions publish no shared
+bytes. The Linux-host FAT32 suite passes 101 tests. This is syscall-frame and
+hostile-model evidence only; the installed entry still runs the probe-only loop,
+and no KVM, WHP, IOMMU, or physical storage device was exercised.
+
+Patent review: `NOT_TRIGGERED` — this is conventional bounded IPC plus
+direction-scoped shared-buffer transfer over the existing block protocol. See
+`docs/patents/REVIEW_LOG.md`.

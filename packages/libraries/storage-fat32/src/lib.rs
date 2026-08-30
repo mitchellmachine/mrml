@@ -62,9 +62,10 @@ pub use unmount_service_loop::{
     ReceivedFat32UnmountEnvelope,
 };
 pub use userspace_syscall_adapter::{
-    Fat32DispatchUserspaceSyscalls, Fat32LookupUserspaceSyscalls, Fat32MountUserspaceSyscalls,
-    Fat32OpenUserspaceSyscalls, Fat32RawSyscall, Fat32ReadUserspaceSyscalls, Fat32SyscallFrame,
-    Fat32UnmountUserspaceSyscalls, Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
+    Fat32BlockReadUserspaceTransport, Fat32DispatchUserspaceSyscalls, Fat32LookupUserspaceSyscalls,
+    Fat32MountUserspaceSyscalls, Fat32OpenUserspaceSyscalls, Fat32RawSyscall,
+    Fat32ReadUserspaceSyscalls, Fat32SyscallFrame, Fat32UnmountUserspaceSyscalls,
+    Fat32UserspaceSyscallError, Fat32UserspaceSyscalls,
 };
 
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;

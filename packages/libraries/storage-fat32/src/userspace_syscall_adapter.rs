@@ -5,12 +5,19 @@ use crate::{
     ReceivedFat32LookupEnvelope, ReceivedFat32MountEnvelope, ReceivedFat32OpenEnvelope,
     ReceivedFat32ReadEnvelope, ReceivedFat32UnmountEnvelope,
 };
+use mrml_interface_storage_block_provider_v1::{
+    BlockProviderReadTransport, ProtocolError as BlockProtocolError,
+    READ_REQUEST_BYTES as BLOCK_READ_REQUEST_BYTES,
+    READ_RESPONSE_BYTES as BLOCK_READ_RESPONSE_BYTES,
+    decode_read_request as decode_block_read_request,
+    decode_read_response as decode_block_read_response,
+};
 use mrml_interface_storage_filesystem_v3::{
     LOOKUP_REQUEST_BYTES, LOOKUP_RESPONSE_BYTES, MOUNT_REQUEST_BYTES, MOUNT_RESPONSE_BYTES,
     OPEN_REQUEST_BYTES, OPEN_RESPONSE_BYTES, PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
     READ_REQUEST_BYTES, READ_RESPONSE_BYTES, UNMOUNT_REQUEST_BYTES, UNMOUNT_RESPONSE_BYTES,
 };
-use mrml_kernel::Capability;
+use mrml_kernel::{CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, Capability, Rights};
 
 const SEND_BUFFER: u64 = 4;
 const RECEIVE_BUFFER: u64 = 5;
@@ -126,6 +133,139 @@ pub struct Fat32ReadUserspaceSyscalls<R> {
     raw: R,
     reply_endpoint: u64,
     reply_task: u64,
+}
+
+pub struct Fat32BlockReadUserspaceTransport<R> {
+    raw: R,
+    endpoint: Capability,
+    provider_task: u64,
+    local_read: Capability,
+    provider_write: Capability,
+    shared_bytes: usize,
+}
+
+impl<R> Fat32BlockReadUserspaceTransport<R> {
+    /// Builds the block client from the exact handles installed by the native
+    /// component read-transfer entry ABI.
+    ///
+    /// # Safety
+    ///
+    /// `endpoint` must be the exact-SIGNAL block endpoint, `provider_task` its
+    /// exact live generational receiver, and the two shared handles must be the
+    /// local `MAP|READ` and delegable `MAP|WRITE` projections for one object.
+    pub unsafe fn from_installed_projection(
+        raw: R,
+        endpoint: Capability,
+        provider_task: u64,
+        local_read: Capability,
+        provider_write: Capability,
+        shared_bytes: usize,
+    ) -> Result<Self, Fat32UserspaceSyscallError> {
+        if endpoint.token() == 0
+            || endpoint.token() >> 32 == 0
+            || provider_task == 0
+            || provider_task >> 32 == 0
+            || local_read.token() == 0
+            || local_read.token() >> 32 == 0
+            || provider_write.token() == 0
+            || provider_write.token() >> 32 == 0
+            || local_read == provider_write
+            || shared_bytes == 0
+            || shared_bytes > mrml_kernel::PAGE_SIZE as usize
+        {
+            return Err(Fat32UserspaceSyscallError::InvalidLaunchBinding);
+        }
+        Ok(Self {
+            raw,
+            endpoint,
+            provider_task,
+            local_read,
+            provider_write,
+            shared_bytes,
+        })
+    }
+
+    pub fn into_raw(self) -> R {
+        self.raw
+    }
+
+    fn invoke(&mut self, frame: &mut Fat32SyscallFrame) -> Result<(), BlockProtocolError>
+    where
+        R: Fat32RawSyscall,
+    {
+        unsafe { self.raw.invoke(frame) };
+        (frame.rax == 0)
+            .then_some(())
+            .ok_or(BlockProtocolError::Transport)
+    }
+}
+
+impl<R: Fat32RawSyscall> BlockProviderReadTransport for Fat32BlockReadUserspaceTransport<R> {
+    fn read(
+        &mut self,
+        request: &[u8; BLOCK_READ_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; BLOCK_READ_RESPONSE_BYTES], BlockProtocolError> {
+        memory.fill(0);
+        if memory.is_empty() || memory.len() > self.shared_bytes {
+            return Err(BlockProtocolError::InvalidRequest);
+        }
+        let decoded = decode_block_read_request(request, memory.len() as u64)?;
+        let mut descriptor = [0; CAPABILITY_TRANSFER_DESCRIPTOR_BYTES];
+        descriptor[..8].copy_from_slice(&self.provider_write.token().to_le_bytes());
+        descriptor[8..10].copy_from_slice(&Rights::MAP.union(Rights::WRITE).bits().to_le_bytes());
+        let mut send = Fat32SyscallFrame {
+            rax: SEND_BUFFER,
+            rdi: self.endpoint.token(),
+            rsi: self.provider_task,
+            rdx: request.as_ptr() as u64,
+            r10: request.len() as u64,
+            r8: descriptor.as_ptr() as u64,
+            r9: 1,
+        };
+        self.invoke(&mut send)?;
+
+        let mut response = [0; BLOCK_READ_RESPONSE_BYTES];
+        let mut receive = Fat32SyscallFrame {
+            rax: RECEIVE_BUFFER,
+            rdi: response.as_mut_ptr() as u64,
+            rsi: response.len() as u64,
+            rdx: 0,
+            r10: 0,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut receive)?;
+        if receive.rdx != response.len() as u64 || receive.r10 != 0 {
+            return Err(BlockProtocolError::Transport);
+        }
+        if let Ok(transferred) = decode_block_read_response(&response, decoded.output.length())? {
+            let start = usize::try_from(decoded.output.offset())
+                .map_err(|_| BlockProtocolError::InvalidRequest)?;
+            let length =
+                usize::try_from(transferred).map_err(|_| BlockProtocolError::InvalidRequest)?;
+            let end = start
+                .checked_add(length)
+                .ok_or(BlockProtocolError::InvalidRequest)?;
+            let output = memory
+                .get_mut(start..end)
+                .ok_or(BlockProtocolError::InvalidRequest)?;
+            let mut read = Fat32SyscallFrame {
+                rax: READ_SHARED_BUFFER,
+                rdi: self.local_read.token(),
+                rsi: decoded.output.offset(),
+                rdx: output.as_mut_ptr() as u64,
+                r10: output.len() as u64,
+                r8: 0,
+                r9: 0,
+            };
+            if let Err(error) = self.invoke(&mut read) {
+                memory.fill(0);
+                return Err(error);
+            }
+        }
+        Ok(response)
+    }
 }
 
 impl<R> Fat32ReadUserspaceSyscalls<R> {
@@ -821,7 +961,7 @@ mod tests {
     use super::*;
     use crate::Fat32ServiceLoop;
     use mrml_interface_storage_filesystem_v3::{
-        decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
+        BorrowedReadView, OpaqueHandle, decode_probe_response, encode_probe_request,
     };
 
     const TOKEN: u64 = (9_u64 << 32) | 4;
@@ -999,8 +1139,8 @@ mod tests {
     #[test]
     fn mount_adapter_uses_zero_capability_receive_and_exact_reply() {
         use mrml_interface_storage_filesystem_v3::{
-            encode_mount_request, encode_mount_response, BorrowedReadView, MountResponse,
-            OpaqueHandle,
+            BorrowedReadView, MountResponse, OpaqueHandle, encode_mount_request,
+            encode_mount_response,
         };
 
         let request = encode_mount_request(
@@ -1091,7 +1231,7 @@ mod tests {
     #[test]
     fn open_adapter_uses_zero_capability_receive_and_exact_reply() {
         use mrml_interface_storage_filesystem_v3::{
-            encode_open_request, encode_open_response, OpaqueHandle,
+            OpaqueHandle, encode_open_request, encode_open_response,
         };
 
         let request = encode_open_request(
@@ -1192,7 +1332,7 @@ mod tests {
     #[test]
     fn read_adapter_preserves_receive_write_release_reply_register_order() {
         use mrml_interface_storage_filesystem_v3::{
-            encode_read_request, encode_read_response, BorrowedWriteView, OpaqueHandle,
+            BorrowedWriteView, OpaqueHandle, encode_read_request, encode_read_response,
         };
 
         let request = encode_read_request(
@@ -1299,7 +1439,7 @@ mod tests {
     #[test]
     fn unmount_adapter_uses_zero_capability_receive_and_exact_reply() {
         use mrml_interface_storage_filesystem_v3::{
-            encode_unmount_request, encode_unmount_response, OpaqueHandle,
+            OpaqueHandle, encode_unmount_request, encode_unmount_response,
         };
 
         let request = encode_unmount_request(OpaqueHandle::new(3, 8).unwrap(), 12).unwrap();
@@ -1393,7 +1533,7 @@ mod tests {
     #[test]
     fn lookup_adapter_preserves_receive_read_release_reply_register_order() {
         use mrml_interface_storage_filesystem_v3::{
-            encode_lookup_request, encode_lookup_response, BorrowedReadView, OpaqueHandle,
+            BorrowedReadView, OpaqueHandle, encode_lookup_request, encode_lookup_response,
         };
 
         let request = encode_lookup_request(
@@ -1547,5 +1687,140 @@ mod tests {
             &raw.response[..OPEN_RESPONSE_BYTES],
             &[7; OPEN_RESPONSE_BYTES]
         );
+    }
+
+    struct BlockReadRaw {
+        response: [u8; BLOCK_READ_RESPONSE_BYTES],
+        operations: [u64; 3],
+        count: usize,
+        endpoint: u64,
+        provider_task: u64,
+        transferred: u64,
+        transferred_rights: u16,
+    }
+
+    unsafe impl Fat32RawSyscall for BlockReadRaw {
+        unsafe fn invoke(&mut self, frame: &mut Fat32SyscallFrame) {
+            self.operations[self.count] = frame.rax;
+            self.count += 1;
+            match frame.rax {
+                SEND_BUFFER => unsafe {
+                    self.endpoint = frame.rdi;
+                    self.provider_task = frame.rsi;
+                    assert_eq!(frame.r10, BLOCK_READ_REQUEST_BYTES as u64);
+                    assert_eq!(frame.r9, 1);
+                    let descriptor = core::slice::from_raw_parts(
+                        frame.r8 as *const u8,
+                        CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
+                    );
+                    self.transferred = u64::from_le_bytes(descriptor[..8].try_into().unwrap());
+                    self.transferred_rights =
+                        u16::from_le_bytes(descriptor[8..10].try_into().unwrap());
+                    assert_eq!(descriptor[10..], [0; 6]);
+                },
+                RECEIVE_BUFFER => unsafe {
+                    assert_eq!(frame.rsi, BLOCK_READ_RESPONSE_BYTES as u64);
+                    assert_eq!((frame.rdx, frame.r10), (0, 0));
+                    core::ptr::copy_nonoverlapping(
+                        self.response.as_ptr(),
+                        frame.rdi as *mut u8,
+                        self.response.len(),
+                    );
+                    frame.rdx = self.response.len() as u64;
+                    frame.r10 = 0;
+                },
+                READ_SHARED_BUFFER => unsafe {
+                    assert_eq!(frame.rsi, 16);
+                    core::ptr::write_bytes(frame.rdx as *mut u8, 0x5a, frame.r10 as usize);
+                },
+                _ => panic!("unexpected block client syscall"),
+            }
+            frame.rax = 0;
+        }
+    }
+
+    fn block_read_transport(
+        response: [u8; BLOCK_READ_RESPONSE_BYTES],
+    ) -> Fat32BlockReadUserspaceTransport<BlockReadRaw> {
+        unsafe {
+            Fat32BlockReadUserspaceTransport::from_installed_projection(
+                BlockReadRaw {
+                    response,
+                    operations: [0; 3],
+                    count: 0,
+                    endpoint: 0,
+                    provider_task: 0,
+                    transferred: 0,
+                    transferred_rights: 0,
+                },
+                Capability::from_token((7_u64 << 32) | 1),
+                (8_u64 << 32) | 2,
+                Capability::from_token((9_u64 << 32) | 3),
+                Capability::from_token((10_u64 << 32) | 4),
+                4096,
+            )
+        }
+        .unwrap()
+    }
+
+    #[test]
+    fn block_read_client_transfers_only_write_then_reads_exact_completed_view() {
+        use mrml_interface_storage_block_provider_v1::{
+            BorrowedWriteView, OpaqueHandle as BlockHandle, encode_read_request,
+            encode_read_response,
+        };
+
+        let request = encode_read_request(
+            BlockHandle::new(3, 4).unwrap(),
+            7,
+            1,
+            BorrowedWriteView::within(16, 512, 544).unwrap(),
+        )
+        .unwrap();
+        let mut transport = block_read_transport(encode_read_response(Ok(256)));
+        let mut memory = [0xff; 544];
+        let response = transport.read(&request, &mut memory).unwrap();
+        assert_eq!(decode_block_read_response(&response, 512), Ok(Ok(256)));
+        assert_eq!(&memory[..16], &[0; 16]);
+        assert_eq!(&memory[16..272], &[0x5a; 256]);
+        assert_eq!(&memory[272..], &[0; 272]);
+        let raw = transport.into_raw();
+        assert_eq!(
+            &raw.operations[..raw.count],
+            &[SEND_BUFFER, RECEIVE_BUFFER, READ_SHARED_BUFFER]
+        );
+        assert_eq!(raw.endpoint, (7_u64 << 32) | 1);
+        assert_eq!(raw.provider_task, (8_u64 << 32) | 2);
+        assert_eq!(raw.transferred, (10_u64 << 32) | 4);
+        assert_eq!(
+            raw.transferred_rights,
+            Rights::MAP.union(Rights::WRITE).bits()
+        );
+    }
+
+    #[test]
+    fn block_read_client_does_not_copy_shared_memory_after_provider_error() {
+        use mrml_interface_storage_block_provider_v1::{
+            BorrowedWriteView, OpaqueHandle as BlockHandle, ReadError, encode_read_request,
+            encode_read_response,
+        };
+
+        let request = encode_read_request(
+            BlockHandle::new(3, 4).unwrap(),
+            7,
+            1,
+            BorrowedWriteView::within(0, 512, 512).unwrap(),
+        )
+        .unwrap();
+        let mut transport = block_read_transport(encode_read_response(Err(ReadError::StaleObject)));
+        let mut memory = [0xff; 512];
+        let response = transport.read(&request, &mut memory).unwrap();
+        assert_eq!(
+            decode_block_read_response(&response, 512),
+            Ok(Err(ReadError::StaleObject))
+        );
+        assert_eq!(memory, [0; 512]);
+        let raw = transport.into_raw();
+        assert_eq!(&raw.operations[..raw.count], &[SEND_BUFFER, RECEIVE_BUFFER]);
     }
 }
