@@ -1,5 +1,9 @@
-use crate::{valid_header, valid_value, Header, HttpError, RequestHead, ResponseHead};
+use crate::{
+    valid_header, valid_value, Header, HttpError, QuicClientConnection, QuicConnection, QuicFrame,
+    QuicServerListener, QuicStreamAssembler, RequestHead, ResponseHead,
+};
 use mrml_runtime::Vector;
+use mrml_tls::TlsServerConfig;
 const MAX_FRAME: usize = 1024 * 1024;
 const QPACK_STATIC: [(&str, &str); 99] = [
     (":authority", ""),
@@ -623,6 +627,219 @@ impl Http3Server {
 impl Default for Http3Server {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn quic_error(_: crate::QuicError) -> HttpError {
+    HttpError::Io
+}
+fn stream_frame(id: u64, offset: u64, fin: bool, data: &[u8]) -> Result<QuicFrame, HttpError> {
+    let mut owned = Vector::new();
+    owned
+        .try_extend_from_slice(data)
+        .map_err(|_| HttpError::Allocation)?;
+    Ok(QuicFrame::Stream {
+        id,
+        offset,
+        fin,
+        data: owned,
+    })
+}
+fn send_critical_streams(connection: &mut QuicConnection) -> Result<(), HttpError> {
+    let mut frames = Vector::new();
+    for bytes in Http3Client::new().critical_streams()? {
+        let id = connection.open_uni_stream().map_err(quic_error)?;
+        frames
+            .try_push(stream_frame(id, 0, false, &bytes)?)
+            .map_err(|_| HttpError::Allocation)?;
+    }
+    connection.send_frames(&frames).map_err(quic_error)
+}
+fn receive_control_data(
+    state: &mut Http3ConnectionState,
+    id: u64,
+    data: &[u8],
+) -> Result<(), HttpError> {
+    let mut at = 0;
+    let stream_type = read_varint(data, &mut at)?;
+    state.open_peer_unidirectional_stream(id, stream_type)?;
+    if stream_type == 0 {
+        while at < data.len() {
+            let (frame, used) = Http3Frame::decode(&data[at..])?;
+            state.receive_control_frame(&frame)?;
+            at += used;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Http3Response {
+    pub status: u16,
+    pub headers: Vector<Header>,
+    pub body: Vector<u8>,
+}
+
+pub struct Http3ClientConnection {
+    connection: QuicConnection,
+    protocol: Http3Client,
+    state: Http3ConnectionState,
+}
+impl Http3ClientConnection {
+    pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
+        let mut connection = QuicClientConnection::connect(host, port).map_err(quic_error)?;
+        send_critical_streams(&mut connection)?;
+        Ok(Self {
+            connection,
+            protocol: Http3Client::new(),
+            state: Http3ConnectionState::new(),
+        })
+    }
+    pub fn request(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Http3Response, HttpError> {
+        let id = self.connection.open_bidi_stream().map_err(quic_error)?;
+        let request = self
+            .protocol
+            .request(method, "https", authority, target, headers)?;
+        self.connection
+            .send_frames(&[stream_frame(id, 0, true, &request)?])
+            .map_err(quic_error)?;
+        let mut stream = QuicStreamAssembler::new(16 * 1024 * 1024);
+        let mut parsed = 0;
+        let mut head = None;
+        let mut body = Vector::new();
+        loop {
+            for frame in self.connection.receive_frames().map_err(quic_error)? {
+                if let QuicFrame::Stream {
+                    id: received,
+                    offset,
+                    fin,
+                    data,
+                } = frame
+                {
+                    if received & 3 == 3 {
+                        if offset != 0 || fin {
+                            return Err(HttpError::InvalidResponse);
+                        }
+                        receive_control_data(&mut self.state, received, &data)?;
+                    } else if received == id {
+                        stream.insert(offset, &data, fin).map_err(quic_error)?;
+                    }
+                }
+            }
+            while parsed < stream.contiguous().len() {
+                let (frame, used) = Http3Frame::decode(&stream.contiguous()[parsed..])?;
+                parsed += used;
+                match frame.kind {
+                    Http3FrameKind::Headers if head.is_none() => {
+                        head = Some(self.protocol.response(&frame)?)
+                    }
+                    Http3FrameKind::Data if head.is_some() => {
+                        if body.len() + frame.payload.len() > 16 * 1024 * 1024 {
+                            return Err(HttpError::BodyTooLarge);
+                        }
+                        body.try_extend_from_slice(&frame.payload)
+                            .map_err(|_| HttpError::Allocation)?;
+                    }
+                    Http3FrameKind::Unknown(_) => {}
+                    _ => return Err(HttpError::InvalidResponse),
+                }
+            }
+            if stream.is_finished() {
+                let head = head.ok_or(HttpError::InvalidResponse)?;
+                return Ok(Http3Response {
+                    status: head.status,
+                    headers: head.headers,
+                    body,
+                });
+            }
+        }
+    }
+}
+
+pub struct Http3ServerConnection {
+    connection: QuicConnection,
+    protocol: Http3Server,
+    state: Http3ConnectionState,
+}
+impl Http3ServerConnection {
+    pub fn accept(
+        listener: QuicServerListener,
+        config: &TlsServerConfig,
+    ) -> Result<Self, HttpError> {
+        let mut connection = listener.accept(config).map_err(quic_error)?;
+        send_critical_streams(&mut connection)?;
+        Ok(Self {
+            connection,
+            protocol: Http3Server::new(),
+            state: Http3ConnectionState::new(),
+        })
+    }
+    pub fn next_request(&mut self) -> Result<(u64, RequestHead), HttpError> {
+        loop {
+            for frame in self.connection.receive_frames().map_err(quic_error)? {
+                if let QuicFrame::Stream {
+                    id,
+                    offset,
+                    fin,
+                    data,
+                } = frame
+                {
+                    if id & 3 == 2 {
+                        if offset != 0 || fin {
+                            return Err(HttpError::InvalidResponse);
+                        }
+                        receive_control_data(&mut self.state, id, &data)?;
+                    } else if id & 3 == 0 {
+                        if offset != 0 || !fin {
+                            return Err(HttpError::InvalidResponse);
+                        }
+                        let (request, used) = Http3Frame::decode(&data)?;
+                        if used != data.len() {
+                            return Err(HttpError::InvalidResponse);
+                        }
+                        return Ok((id, self.protocol.request(&request)?));
+                    }
+                }
+            }
+        }
+    }
+    pub fn respond(
+        &mut self,
+        id: u64,
+        status: u16,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<(), HttpError> {
+        let headers = self.protocol.response(status, headers)?;
+        let mut offset = headers.len() as u64;
+        self.connection
+            .send_frames(&[stream_frame(id, 0, body.is_empty(), &headers)?])
+            .map_err(quic_error)?;
+        for (index, chunk) in body.chunks(800).enumerate() {
+            let mut payload = Vector::new();
+            payload
+                .try_extend_from_slice(chunk)
+                .map_err(|_| HttpError::Allocation)?;
+            let bytes = Http3Frame {
+                kind: Http3FrameKind::Data,
+                payload,
+            }
+            .encode()?;
+            let fin = (index + 1) * 800 >= body.len();
+            self.connection
+                .send_frames(&[stream_frame(id, offset, fin, &bytes)?])
+                .map_err(quic_error)?;
+            offset = offset
+                .checked_add(bytes.len() as u64)
+                .ok_or(HttpError::BodyTooLarge)?;
+        }
+        Ok(())
     }
 }
 #[cfg(test)]

@@ -73,9 +73,12 @@ pub struct QuicConnectionState {
     peer_max_data: u64,
     peer_max_stream_data: u64,
     peer_max_streams_bidi: u64,
+    peer_max_streams_uni: u64,
     sent_stream_data: u64,
     opened_bidi: u64,
     next_bidi_stream: u64,
+    opened_uni: u64,
+    next_uni_stream: u64,
     pending_path_challenge: Option<[u8; 8]>,
 }
 
@@ -90,9 +93,12 @@ impl QuicConnectionState {
             peer_max_data: peer.initial_max_data,
             peer_max_stream_data: peer.initial_max_stream_data_bidi_remote,
             peer_max_streams_bidi: peer.initial_max_streams_bidi,
+            peer_max_streams_uni: peer.initial_max_streams_uni,
             sent_stream_data: 0,
             opened_bidi: 0,
             next_bidi_stream: if role == QuicRole::Client { 0 } else { 1 },
+            opened_uni: 0,
+            next_uni_stream: if role == QuicRole::Client { 2 } else { 3 },
             pending_path_challenge: None,
         }
     }
@@ -156,6 +162,19 @@ impl QuicConnectionState {
         self.sent_stream_data = total;
         Ok(())
     }
+    pub fn open_uni_stream(&mut self) -> Result<u64, QuicError> {
+        if self.phase != QuicConnectionPhase::Active || self.opened_uni >= self.peer_max_streams_uni
+        {
+            return Err(QuicError::FlowControl);
+        }
+        let id = self.next_uni_stream;
+        self.next_uni_stream = self
+            .next_uni_stream
+            .checked_add(4)
+            .ok_or(QuicError::Limit)?;
+        self.opened_uni += 1;
+        Ok(id)
+    }
     pub fn start_path_validation(&mut self, challenge: [u8; 8]) -> QuicFrame {
         self.pending_path_challenge = Some(challenge);
         QuicFrame::PathChallenge(challenge)
@@ -180,7 +199,9 @@ pub struct QuicTransportParameters {
     pub initial_max_data: u64,
     pub initial_max_stream_data_bidi_local: u64,
     pub initial_max_stream_data_bidi_remote: u64,
+    pub initial_max_stream_data_uni: u64,
     pub initial_max_streams_bidi: u64,
+    pub initial_max_streams_uni: u64,
     pub active_connection_id_limit: u64,
     pub disable_active_migration: bool,
 }
@@ -193,7 +214,9 @@ impl Default for QuicTransportParameters {
             initial_max_data: 1 << 20,
             initial_max_stream_data_bidi_local: 256 << 10,
             initial_max_stream_data_bidi_remote: 256 << 10,
+            initial_max_stream_data_uni: 256 << 10,
             initial_max_streams_bidi: 32,
+            initial_max_streams_uni: 8,
             active_connection_id_limit: 2,
             disable_active_migration: false,
         }
@@ -213,7 +236,9 @@ impl QuicTransportParameters {
             (4, self.initial_max_data),
             (5, self.initial_max_stream_data_bidi_local),
             (6, self.initial_max_stream_data_bidi_remote),
+            (7, self.initial_max_stream_data_uni),
             (8, self.initial_max_streams_bidi),
+            (9, self.initial_max_streams_uni),
             (14, self.active_connection_id_limit),
         ] {
             let mut encoded = Vector::new();
@@ -247,8 +272,10 @@ impl QuicTransportParameters {
                 5 => Some(3),
                 6 => Some(4),
                 8 => Some(5),
-                12 => Some(6),
-                14 => Some(7),
+                7 => Some(6),
+                9 => Some(7),
+                12 => Some(8),
+                14 => Some(9),
                 _ => None,
             };
             if let Some(bit) = bit {
@@ -276,7 +303,9 @@ impl QuicTransportParameters {
                 4 => result.initial_max_data = value,
                 5 => result.initial_max_stream_data_bidi_local = value,
                 6 => result.initial_max_stream_data_bidi_remote = value,
+                7 => result.initial_max_stream_data_uni = value,
                 8 => result.initial_max_streams_bidi = value,
+                9 => result.initial_max_streams_uni = value,
                 12 => result.disable_active_migration = true,
                 14 => result.active_connection_id_limit = value,
                 _ => {}

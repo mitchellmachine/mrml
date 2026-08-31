@@ -15,8 +15,8 @@ pub use http2::{
     Http2Response, Http2Server, Http2ServerConnection, HTTP2_CLIENT_PREFACE,
 };
 pub use http3::{
-    Http3Client, Http3ConnectionState, Http3Frame, Http3FrameKind, Http3RequestStreamState,
-    Http3Server, Http3StreamPhase,
+    Http3Client, Http3ClientConnection, Http3ConnectionState, Http3Frame, Http3FrameKind,
+    Http3RequestStreamState, Http3Response, Http3Server, Http3ServerConnection, Http3StreamPhase,
 };
 pub use quic::{
     HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,

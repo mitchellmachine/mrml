@@ -81,6 +81,10 @@ impl QuicConnection {
         self.state.open_bidi_stream()
     }
 
+    pub fn open_uni_stream(&mut self) -> Result<u64, QuicError> {
+        self.state.open_uni_stream()
+    }
+
     pub fn send_frames(&mut self, frames: &[QuicFrame]) -> Result<(), QuicError> {
         let mut payload = Vector::new();
         for frame in frames {
