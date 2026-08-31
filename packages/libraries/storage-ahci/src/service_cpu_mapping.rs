@@ -1,6 +1,6 @@
 //! Transactional pre-launch CPU mappings for one AHCI service generation.
 
-use crate::AhciServiceLaunchRecord;
+use crate::{AhciServiceLaunchRecord, BoundAhciServiceLaunch};
 use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 
 const CPU_MAPPING_COUNT: usize = 4;
@@ -197,8 +197,21 @@ pub fn remove_ahci_service_cpu_mappings<B: AhciServiceCpuMappingBackend>(
 pub(crate) fn mapping_requests(
     record: AhciServiceLaunchRecord,
 ) -> [AhciServiceCpuMappingRequest; CPU_MAPPING_COUNT] {
-    let layout = record.layout();
-    let data = record.data();
+    mapping_requests_from_parts(record.layout(), record.data(), record.cpu_mappings())
+}
+
+pub(crate) fn bound_mapping_requests(
+    launch: BoundAhciServiceLaunch,
+) -> [AhciServiceCpuMappingRequest; CPU_MAPPING_COUNT] {
+    let spec = launch.spec();
+    mapping_requests_from_parts(spec.layout(), spec.data(), launch.cpu_mappings())
+}
+
+fn mapping_requests_from_parts(
+    layout: crate::AhciPortDmaLayout,
+    data: crate::AhciDataDmaRegion,
+    mappings: [crate::AhciServiceCpuMapping; CPU_MAPPING_COUNT],
+) -> [AhciServiceCpuMappingRequest; CPU_MAPPING_COUNT] {
     let regions = [
         layout.command_list,
         layout.received_fis,
@@ -210,7 +223,6 @@ pub(crate) fn mapping_requests(
             bytes: data.bytes,
         },
     ];
-    let mappings = record.cpu_mappings();
     core::array::from_fn(|index| AhciServiceCpuMappingRequest {
         memory_object: regions[index].memory_object,
         allocation_generation: regions[index].allocation_generation,

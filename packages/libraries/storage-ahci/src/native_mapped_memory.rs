@@ -1,8 +1,9 @@
 //! Native service views over the four preinstalled AHCI CPU mappings.
 
 use crate::{
-    AhciMappedCommandMemory, AhciMappedDataBuffer, InstalledAhciServiceLaunch,
-    service_cpu_mapping::mapping_requests,
+    AhciMappedCommandMemory, AhciMappedDataBuffer, BoundAhciServiceLaunch,
+    InstalledAhciServiceLaunch,
+    service_cpu_mapping::{bound_mapping_requests, mapping_requests},
 };
 
 const PAGE_BYTES: u64 = 4096;
@@ -32,7 +33,48 @@ impl<'a, S> AhciNativeMappedMemory<'a, S> {
         sync: S,
     ) -> Result<Self, AhciNativeMappedMemoryError> {
         let record = launch.record();
-        let requests = mapping_requests(record);
+        unsafe {
+            Self::from_requests(
+                record.layout(),
+                record.data(),
+                mapping_requests(record),
+                sync,
+            )
+        }
+    }
+
+    /// Reconstructs the same four views from the manager-held bound launch
+    /// after the exact service task is frozen and its active leaves are
+    /// independently revalidated.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the matching frozen service owner. Every bound
+    /// virtual range must still map its exact physical object generation as
+    /// writable, non-executable, exclusive storage in the active root, and no
+    /// service or competing manager access may occur until this owner is
+    /// consumed.
+    pub unsafe fn from_bound_launch(
+        launch: BoundAhciServiceLaunch,
+        sync: S,
+    ) -> Result<Self, AhciNativeMappedMemoryError> {
+        let spec = launch.spec();
+        unsafe {
+            Self::from_requests(
+                spec.layout(),
+                spec.data(),
+                bound_mapping_requests(launch),
+                sync,
+            )
+        }
+    }
+
+    unsafe fn from_requests(
+        layout: crate::AhciPortDmaLayout,
+        data_region: crate::AhciDataDmaRegion,
+        requests: [crate::AhciServiceCpuMappingRequest; 4],
+        sync: S,
+    ) -> Result<Self, AhciNativeMappedMemoryError> {
         for request in requests {
             if request.virtual_base() == 0
                 || request.virtual_base() % PAGE_BYTES != 0
@@ -72,14 +114,10 @@ impl<'a, S> AhciNativeMappedMemory<'a, S> {
         let received_fis = view(1)?;
         let command_tables = view(2)?;
         let data_bytes = view(3)?;
-        let command_memory = AhciMappedCommandMemory::new(
-            record.layout(),
-            command_list,
-            received_fis,
-            command_tables,
-        )
-        .ok_or(AhciNativeMappedMemoryError::AdapterMismatch)?;
-        let data = AhciMappedDataBuffer::new(record.data(), data_bytes, sync)
+        let command_memory =
+            AhciMappedCommandMemory::new(layout, command_list, received_fis, command_tables)
+                .ok_or(AhciNativeMappedMemoryError::AdapterMismatch)?;
+        let data = AhciMappedDataBuffer::new(data_region, data_bytes, sync)
             .ok_or(AhciNativeMappedMemoryError::AdapterMismatch)?;
         Ok(Self {
             command_memory,

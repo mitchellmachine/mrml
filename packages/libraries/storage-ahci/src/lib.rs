@@ -152,7 +152,7 @@ pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryError};
 pub use native_port_reconstruction::{
-    AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
+    AhciNativePortReconstructionError, reconstruct_bound_ahci_port, reconstruct_installed_ahci_port,
 };
 pub use native_service_state::{
     AHCI_DISPATCH_SCRATCH_BYTES, AhciNativeServiceBuffers, AhciNativeServicePreparationError,

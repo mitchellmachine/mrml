@@ -1,6 +1,9 @@
 //! Fail-closed reconstruction of the installed native service's active port.
 
-use crate::{ActiveAhciPort, AhciRegisterIo, InstalledAhciServiceLaunch};
+use crate::{
+    ActiveAhciPort, AhciAbarMapping, AhciPortDmaLayout, AhciRegisterIo, BoundAhciServiceLaunch,
+    InstalledAhciServiceLaunch,
+};
 
 const PORT_BASE: u32 = 0x100;
 const PORT_STRIDE: u32 = 0x80;
@@ -31,8 +34,24 @@ pub fn reconstruct_installed_ahci_port<R: AhciRegisterIo>(
     registers: &mut R,
 ) -> Result<ActiveAhciPort, AhciNativePortReconstructionError> {
     let record = launch.record();
-    let mapping = record.mapping();
-    let layout = record.layout();
+    reconstruct_ahci_port(record.mapping(), record.layout(), registers)
+}
+
+/// Reconstructs the active port from the manager-held bound launch after the
+/// exact service has been frozen.
+pub fn reconstruct_bound_ahci_port<R: AhciRegisterIo>(
+    launch: BoundAhciServiceLaunch,
+    registers: &mut R,
+) -> Result<ActiveAhciPort, AhciNativePortReconstructionError> {
+    let spec = launch.spec();
+    reconstruct_ahci_port(spec.mapping(), spec.layout(), registers)
+}
+
+fn reconstruct_ahci_port<R: AhciRegisterIo>(
+    mapping: AhciAbarMapping,
+    layout: AhciPortDmaLayout,
+    registers: &mut R,
+) -> Result<ActiveAhciPort, AhciNativePortReconstructionError> {
     let base = PORT_BASE
         .checked_add(
             u32::from(layout.port)

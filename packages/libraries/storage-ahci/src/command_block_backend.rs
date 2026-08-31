@@ -9,7 +9,7 @@ use crate::{
     ActiveAhciPort, AhciAbarMapping, AhciAtaCommand, AhciBlockControlBackend,
     AhciBlockControlError, AhciBlockIoBackend, AhciBlockIoError, AhciCommandBuildFailure,
     AhciCommandMemoryIo, AhciDataDmaRegion, AhciFlushFailure, AhciRegisterIo, AhciResetIo,
-    execute_ahci_dma_command, flush_ahci_cache, prepare_ahci_dma_command,
+    BoundAhciServiceLaunch, execute_ahci_dma_command, flush_ahci_cache, prepare_ahci_dma_command,
     recycle_ahci_command_slot, reset_ahci_sata_port,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
@@ -73,6 +73,31 @@ pub struct AhciCommandBackendTeardown<R, M, D> {
 }
 
 impl<R, M, D> AhciCommandBackendTeardown<R, M, D> {
+    /// Assembles manager-reacquired views only when all retained identities
+    /// match the exact active port and data generation.
+    pub fn from_reacquired_parts(
+        launch: BoundAhciServiceLaunch,
+        port: ActiveAhciPort,
+        registers: R,
+        command_memory: M,
+        data_io: D,
+    ) -> Option<Self> {
+        let spec = launch.spec();
+        let mapping = spec.mapping();
+        let data_region = spec.data();
+        if port.layout() != spec.layout() {
+            return None;
+        }
+        Some(Self {
+            mapping,
+            port,
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        })
+    }
+
     pub const fn mapping(&self) -> AhciAbarMapping {
         self.mapping
     }

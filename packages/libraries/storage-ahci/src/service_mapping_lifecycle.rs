@@ -1395,6 +1395,29 @@ mod tests {
     fn kernel_mapping_set_activation_revalidates_and_retains_exact_root() {
         let mut fixture = resource_fixture();
         let prepared = fixture.prepared;
+        let spec = prepared.launch().spec();
+        let teardown = crate::AhciCommandBackendTeardown::from_reacquired_parts(
+            prepared.launch(),
+            crate::ActiveAhciPort::from_layout(spec.layout()),
+            (),
+            (),
+            (),
+        )
+        .unwrap_or_else(|| panic!("exact bound reacquisition parts must assemble"));
+        assert_eq!(teardown.mapping(), spec.mapping());
+        assert_eq!(teardown.data_region(), spec.data());
+        let mut substituted_layout = spec.layout();
+        substituted_layout.port = (substituted_layout.port + 1) % 32;
+        assert!(
+            crate::AhciCommandBackendTeardown::from_reacquired_parts(
+                prepared.launch(),
+                crate::ActiveAhciPort::from_layout(substituted_layout),
+                (),
+                (),
+                (),
+            )
+            .is_none()
+        );
         let target_task = prepared.task().task();
         let target = prepared.launch().spec().service().domain();
         let fault = WriteFault::default();

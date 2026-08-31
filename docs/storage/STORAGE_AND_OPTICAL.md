@@ -1687,6 +1687,23 @@ concrete lease. A physical-platform backend and installed manager instance are
 still unimplemented, so this is not physical AHCI or installed dispatcher
 evidence.
 
+Manager reacquisition no longer depends on userspace-installed capability
+tokens. The exact bound launch can now derive the same four CPU-mapping
+requests, reconstruct bounded command/data views after freeze, and reconstruct
+the stable idle active-port owner from the launch-bound ABAR. A public teardown
+owner constructor accepts only that bound launch plus the reconstructed linear
+port and views, and rejects any port-layout substitution. The installed-service
+path delegates to the same internal mapping-view constructor, so its existing
+geometry, overlap, length, and adapter tests cover the shared unsafe boundary.
+These are prerequisites for an active-root platform backend; they do not by
+themselves verify that the current CR3 leaves match the bound physical ranges.
+
+Patent review: **NOT_TRIGGERED**. Reusing an already authenticated launch to
+derive the same bounded mapping descriptors and assembling existing typed
+owners is conventional lifecycle refactoring. It adds no controller command,
+DMA behavior, parser format, or authority mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Separating immutable identity binding from a
 consuming platform backend and reconstructing an unchanged linear lease after
 failure are conventional ownership patterns; no parser, controller command,
