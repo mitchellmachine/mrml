@@ -4320,7 +4320,7 @@ fn decode_x86_64_coff_readonly_absolute_relocations_for_object<'a>(
             if target_storage != 2 && !(target_storage == 3 && target_is_projected) {
                 return Err(LinkerError::UnsupportedCoffRelocationTarget);
             }
-            let target_identity = if target_storage == 3 {
+            let target_identity = if target_is_projected {
                 Some(CoffSectionIdentity::new(
                     object_identity.ok_or(LinkerError::UnsupportedCoffRelocationTarget)?,
                     target_section_u16.ok_or(LinkerError::UnsupportedCoffRelocationTarget)?,
@@ -14367,6 +14367,26 @@ mod tests {
         }));
         assert_eq!(identified.relocations()[0].readonly_offset, 0);
         assert_eq!(identified.relocations()[1].readonly_offset, 8);
+        assert_eq!(
+            identified.relocations()[0].target_identity,
+            Some(CoffSectionIdentity::new(9, 1).unwrap())
+        );
+        assert_eq!(
+            identified.relocations()[1].target_identity,
+            Some(CoffSectionIdentity::new(9, 2).unwrap())
+        );
+        let mut external = object.clone();
+        external[198..200].copy_from_slice(&0i16.to_le_bytes());
+        let external_inventory = inventory_x86_64_coff_comdat_sections(&external).unwrap();
+        let external_decoded =
+            decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory(
+                &external,
+                &external_inventory,
+                9,
+            )
+            .unwrap();
+        assert_eq!(external_decoded.relocations()[0].target_symbol, "entry");
+        assert_eq!(external_decoded.relocations()[0].target_identity, None);
 
         for (coff_kind, trailing_bytes) in (4u16..=9).zip(0u8..=5) {
             let mut relative = object.clone();
