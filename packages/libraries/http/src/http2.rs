@@ -872,6 +872,8 @@ fn decode_response(frame: &Http2Frame) -> Result<ResponseHead, HttpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_runtime::TcpListener;
+    use mrml_tls::TlsServerConfig;
     #[test]
     fn client_server_round_trip() {
         let mut c = Http2Client::new();
@@ -1016,5 +1018,84 @@ mod tests {
             .request("GET", &host, "/", &[("user-agent", "mrml-http/1")])
             .unwrap();
         assert!((100..=599).contains(&response.status));
+    }
+
+    #[test]
+    fn authenticated_loopback_when_configured() {
+        let Some(certificate_path) = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_CERT")
+        else {
+            return;
+        };
+        let Some(issuer_path) = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_ISSUER")
+        else {
+            return;
+        };
+        let Some(key_path) = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_KEY") else {
+            return;
+        };
+        let Some(ocsp_path) = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_OCSP") else {
+            return;
+        };
+        let mut chain = mrml_runtime::read_file(&certificate_path).unwrap();
+        chain
+            .try_extend_from_slice(&mrml_runtime::read_file(&issuer_path).unwrap())
+            .unwrap();
+        let key = mrml_runtime::read_file(&key_path).unwrap();
+        let ocsp = mrml_runtime::read_file(&ocsp_path).unwrap();
+        let config = TlsServerConfig::from_pem(&chain, &key)
+            .unwrap()
+            .with_protocols(&["h2"])
+            .unwrap()
+            .with_ocsp_response(&ocsp)
+            .unwrap();
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let Ok(worker) = mrml_runtime::spawn_joinable(move || {
+            let socket = listener.accept().unwrap();
+            let tls = TlsServerStream::accept(socket, &config).unwrap();
+            let mut server = Http2ServerConnection::accept(tls).unwrap();
+            let (id, request) = server.next_request().unwrap();
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.target, "/loopback");
+            server.respond(id, 200, &[], b"http2 loopback").unwrap();
+            let _ = server.next_request();
+        }) else {
+            panic!("failed to start HTTP/2 loopback server");
+        };
+        if let Some(curl) = mrml_runtime::environment_variable("MRML_HTTP2_CURL") {
+            let endpoint = mrml_runtime::mrml_format!("localhost:{port}:127.0.0.1");
+            let url = mrml_runtime::mrml_format!("https://localhost:{port}/loopback");
+            let output = mrml_runtime::Command::new(&curl)
+                .args([
+                    "--http2",
+                    "--silent",
+                    "--show-error",
+                    "--noproxy",
+                    "*",
+                    "--cacert",
+                ])
+                .arg(&issuer_path)
+                .args(["--resolve"])
+                .arg(&endpoint)
+                .arg(&url)
+                .output()
+                .unwrap();
+            assert!(worker.join(), "MRML HTTP/2 server failed");
+            assert!(
+                output.status.success(),
+                "curl failed: {}",
+                core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
+            );
+            assert_eq!(&output.stdout[..], b"http2 loopback");
+            return;
+        } else {
+            let mut client = Http2ClientConnection::connect("localhost", port).unwrap();
+            let response = client
+                .request("GET", "localhost", "/loopback", &[])
+                .unwrap();
+            assert_eq!(response.status, 200);
+            assert_eq!(&response.body[..], b"http2 loopback");
+        }
+        assert!(worker.join());
     }
 }

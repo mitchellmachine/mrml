@@ -31,7 +31,7 @@ pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), Certif
                 if root.require_certificate_signing().is_ok()
                     && root.enforce_ca_path_length(subordinate_ca_count).is_ok()
                     && root.verify_time_now().is_ok()
-                    && last.verify_signed_by(&root).is_ok()
+                    && (last.same_trust_identity(&root) || last.verify_signed_by(&root).is_ok())
                 {
                     trusted = true;
                     return false;
@@ -50,7 +50,7 @@ pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), Certif
                 if root.require_certificate_signing().is_ok()
                     && root.enforce_ca_path_length(subordinate_ca_count).is_ok()
                     && root.verify_time_now().is_ok()
-                    && last.verify_signed_by(&root).is_ok()
+                    && (last.same_trust_identity(&root) || last.verify_signed_by(&root).is_ok())
                 {
                     trusted = true;
                     return false;
@@ -85,7 +85,7 @@ pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), Certif
                     if root.require_certificate_signing().is_ok()
                         && root.enforce_ca_path_length(subordinate_ca_count).is_ok()
                         && root.verify_time_now().is_ok()
-                        && last.verify_signed_by(&root).is_ok()
+                        && (last.same_trust_identity(&root) || last.verify_signed_by(&root).is_ok())
                     {
                         trusted = true;
                         return false;

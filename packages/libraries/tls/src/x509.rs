@@ -100,7 +100,12 @@ impl<'a> Reader<'a> {
 }
 
 const SHA256_WITH_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+const SHA256_WITH_ECDSA: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+const SHA384_WITH_ECDSA: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
 const RSA_ENCRYPTION: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+const EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+const PRIME256V1: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+const SECP384R1: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
 const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
 const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
 const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
@@ -128,13 +133,32 @@ fn algorithm(element: Element<'_>, expected: &[u8]) -> Result<(), CertificateErr
 
 pub struct Certificate<'a> {
     tbs: &'a [u8],
-    modulus: &'a [u8],
-    exponent: &'a [u8],
+    subject: &'a [u8],
+    spki: &'a [u8],
+    public_key: PublicKey<'a>,
+    signature_algorithm: SignatureAlgorithm,
     signature: &'a [u8],
     extensions: &'a [u8],
     not_before: u64,
     not_after: u64,
     serial: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+enum PublicKey<'a> {
+    Rsa {
+        modulus: &'a [u8],
+        exponent: &'a [u8],
+    },
+    P256(&'a [u8]),
+    P384(&'a [u8]),
+}
+
+#[derive(Clone, Copy)]
+enum SignatureAlgorithm {
+    RsaSha256,
+    EcdsaP256Sha256,
+    EcdsaP384Sha384,
 }
 
 impl<'a> Certificate<'a> {
@@ -143,7 +167,32 @@ impl<'a> Certificate<'a> {
         message: &[u8],
         signature: &[u8],
     ) -> Result<(), CertificateError> {
-        mrml_crypto::rsa_pss_sha256_verify(self.modulus, self.exponent, message, signature)
+        let PublicKey::Rsa { modulus, exponent } = self.public_key else {
+            return Err(CertificateError::UnsupportedAlgorithm);
+        };
+        mrml_crypto::rsa_pss_sha256_verify(modulus, exponent, message, signature)
+            .map_err(|_| CertificateError::InvalidSignature)
+    }
+    pub(crate) fn verify_tls_ecdsa(
+        &self,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<(), CertificateError> {
+        let PublicKey::P256(point) = self.public_key else {
+            return Err(CertificateError::UnsupportedAlgorithm);
+        };
+        mrml_crypto::ecdsa_p256_sha256_verify(point, message, signature)
+            .map_err(|_| CertificateError::InvalidSignature)
+    }
+    pub(crate) fn verify_tls_ecdsa_p384(
+        &self,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<(), CertificateError> {
+        let PublicKey::P384(point) = self.public_key else {
+            return Err(CertificateError::UnsupportedAlgorithm);
+        };
+        mrml_crypto::ecdsa_p384_sha384_verify(point, message, signature)
             .map_err(|_| CertificateError::InvalidSignature)
     }
     pub fn parse(der: &'a [u8]) -> Result<Self, CertificateError> {
@@ -161,7 +210,15 @@ impl<'a> Certificate<'a> {
         if tbs.tag != 0x30 || signature.tag != 0x03 || signature.value.first() != Some(&0) {
             return Err(CertificateError::Malformed);
         }
-        algorithm(signature_algorithm, SHA256_WITH_RSA)?;
+        let signature_algorithm = if algorithm(signature_algorithm, SHA256_WITH_RSA).is_ok() {
+            SignatureAlgorithm::RsaSha256
+        } else if algorithm(signature_algorithm, SHA256_WITH_ECDSA).is_ok() {
+            SignatureAlgorithm::EcdsaP256Sha256
+        } else if algorithm(signature_algorithm, SHA384_WITH_ECDSA).is_ok() {
+            SignatureAlgorithm::EcdsaP384Sha384
+        } else {
+            return Err(CertificateError::UnsupportedAlgorithm);
+        };
         let mut body = Reader::new(tbs.value);
         let first = body.next()?;
         if first.tag != 0xa0 {
@@ -171,7 +228,12 @@ impl<'a> Certificate<'a> {
         if serial.tag != 0x02 || serial.value.is_empty() {
             return Err(CertificateError::Malformed);
         }
-        algorithm(body.next()?, SHA256_WITH_RSA)?;
+        let tbs_signature = body.next()?;
+        match signature_algorithm {
+            SignatureAlgorithm::RsaSha256 => algorithm(tbs_signature, SHA256_WITH_RSA)?,
+            SignatureAlgorithm::EcdsaP256Sha256 => algorithm(tbs_signature, SHA256_WITH_ECDSA)?,
+            SignatureAlgorithm::EcdsaP384Sha384 => algorithm(tbs_signature, SHA384_WITH_ECDSA)?,
+        }
         let issuer = body.next()?;
         if issuer.tag != 0x30 {
             return Err(CertificateError::Malformed);
@@ -196,46 +258,52 @@ impl<'a> Certificate<'a> {
             return Err(CertificateError::Malformed);
         }
         let mut public = Reader::new(spki.value);
-        algorithm(public.next()?, RSA_ENCRYPTION)?;
+        let public_algorithm = public.next()?;
         let bits = public.next()?;
         public.finish()?;
         if bits.tag != 0x03 || bits.value.first() != Some(&0) {
             return Err(CertificateError::Malformed);
         }
-        let mut key_outer = Reader::new(&bits.value[1..]);
-        let key = key_outer.next()?;
-        key_outer.finish()?;
-        if key.tag != 0x30 {
-            return Err(CertificateError::Malformed);
-        }
-        let mut key_fields = Reader::new(key.value);
-        let modulus = key_fields.next()?;
-        let exponent = key_fields.next()?;
-        key_fields.finish()?;
-        if modulus.tag != 0x02
-            || exponent.tag != 0x02
-            || modulus.value.is_empty()
-            || exponent.value.is_empty()
-        {
-            return Err(CertificateError::Malformed);
-        }
-        let modulus = if modulus.value[0] == 0 {
-            &modulus.value[1..]
+        let public_key = if algorithm(public_algorithm, RSA_ENCRYPTION).is_ok() {
+            let mut key_outer = Reader::new(&bits.value[1..]);
+            let key = key_outer.next()?;
+            key_outer.finish()?;
+            if key.tag != 0x30 {
+                return Err(CertificateError::Malformed);
+            }
+            let mut key_fields = Reader::new(key.value);
+            let modulus = key_fields.next()?;
+            let exponent = key_fields.next()?;
+            key_fields.finish()?;
+            if modulus.tag != 0x02 || exponent.tag != 0x02 {
+                return Err(CertificateError::Malformed);
+            }
+            let modulus = modulus.value.strip_prefix(&[0]).unwrap_or(modulus.value);
+            let exponent = exponent.value.strip_prefix(&[0]).unwrap_or(exponent.value);
+            if !(256..=512).contains(&modulus.len())
+                || exponent.is_empty()
+                || exponent.len() > 8
+                || exponent.last().is_none_or(|value| value & 1 == 0)
+            {
+                return Err(CertificateError::UnsupportedAlgorithm);
+            }
+            PublicKey::Rsa { modulus, exponent }
         } else {
-            modulus.value
+            let mut parameters = Reader::new(public_algorithm.value);
+            let oid = parameters.next()?;
+            let curve = parameters.next()?;
+            parameters.finish()?;
+            if oid.tag != 0x06 || oid.value != EC_PUBLIC_KEY || curve.tag != 0x06 {
+                return Err(CertificateError::UnsupportedAlgorithm);
+            }
+            if curve.value == PRIME256V1 && bits.value.len() == 66 && bits.value[1] == 4 {
+                PublicKey::P256(&bits.value[1..])
+            } else if curve.value == SECP384R1 && bits.value.len() == 98 && bits.value[1] == 4 {
+                PublicKey::P384(&bits.value[1..])
+            } else {
+                return Err(CertificateError::UnsupportedAlgorithm);
+            }
         };
-        let exponent = if exponent.value[0] == 0 {
-            &exponent.value[1..]
-        } else {
-            exponent.value
-        };
-        if !(256..=512).contains(&modulus.len())
-            || exponent.is_empty()
-            || exponent.len() > 8
-            || exponent.last().is_none_or(|value| value & 1 == 0)
-        {
-            return Err(CertificateError::UnsupportedAlgorithm);
-        }
         let mut extensions = &[][..];
         while body.position < body.bytes.len() {
             let element = body.next()?;
@@ -248,8 +316,10 @@ impl<'a> Certificate<'a> {
         validate_extensions(extensions)?;
         Ok(Self {
             tbs: tbs.encoded,
-            modulus,
-            exponent,
+            subject: subject.encoded,
+            spki: spki.encoded,
+            public_key,
+            signature_algorithm,
             signature: &signature.value[1..],
             extensions,
             not_before,
@@ -259,8 +329,25 @@ impl<'a> Certificate<'a> {
     }
 
     pub fn verify_signed_by(&self, issuer: &Certificate<'_>) -> Result<(), CertificateError> {
-        rsa_pkcs1_sha256_verify(issuer.modulus, issuer.exponent, self.tbs, self.signature)
-            .map_err(|_| CertificateError::InvalidSignature)
+        match (self.signature_algorithm, issuer.public_key) {
+            (SignatureAlgorithm::RsaSha256, PublicKey::Rsa { modulus, exponent }) => {
+                rsa_pkcs1_sha256_verify(modulus, exponent, self.tbs, self.signature)
+                    .map_err(|_| CertificateError::InvalidSignature)
+            }
+            (SignatureAlgorithm::EcdsaP256Sha256, PublicKey::P256(point)) => {
+                mrml_crypto::ecdsa_p256_sha256_verify(point, self.tbs, self.signature)
+                    .map_err(|_| CertificateError::InvalidSignature)
+            }
+            (SignatureAlgorithm::EcdsaP384Sha384, PublicKey::P384(point)) => {
+                mrml_crypto::ecdsa_p384_sha384_verify(point, self.tbs, self.signature)
+                    .map_err(|_| CertificateError::InvalidSignature)
+            }
+            _ => Err(CertificateError::UnsupportedAlgorithm),
+        }
+    }
+
+    pub(crate) fn same_trust_identity(&self, other: &Certificate<'_>) -> bool {
+        self.subject == other.subject && self.spki == other.spki
     }
 
     pub(crate) fn serial(&self) -> &'a [u8] {
@@ -272,7 +359,10 @@ impl<'a> Certificate<'a> {
         data: &[u8],
         signature: &[u8],
     ) -> Result<(), CertificateError> {
-        rsa_pkcs1_sha256_verify(self.modulus, self.exponent, data, signature)
+        let PublicKey::Rsa { modulus, exponent } = self.public_key else {
+            return Err(CertificateError::UnsupportedAlgorithm);
+        };
+        rsa_pkcs1_sha256_verify(modulus, exponent, data, signature)
             .map_err(|_| CertificateError::InvalidSignature)
     }
 
@@ -633,14 +723,56 @@ mod tests {
     fn certificate_with_extensions(extensions: &[u8]) -> Certificate<'_> {
         Certificate {
             tbs: &[],
-            modulus: &[],
-            exponent: &[],
+            subject: &[],
+            spki: &[],
+            public_key: PublicKey::Rsa {
+                modulus: &[],
+                exponent: &[],
+            },
+            signature_algorithm: SignatureAlgorithm::RsaSha256,
             signature: &[],
             extensions,
             not_before: 0,
             not_after: 0,
             serial: &[1],
         }
+    }
+    #[test]
+    fn external_certificate_parses_when_configured() {
+        let Some(path) = mrml_runtime::environment_variable("MRML_X509_TEST_CERT") else {
+            return;
+        };
+        let bytes = mrml_runtime::read_file(&path).unwrap();
+        Certificate::parse(&bytes).unwrap();
+    }
+    #[test]
+    fn external_certificate_signature_verifies_when_configured() {
+        let Some(child_path) = mrml_runtime::environment_variable("MRML_X509_TEST_CHILD") else {
+            return;
+        };
+        let Some(issuer_path) = mrml_runtime::environment_variable("MRML_X509_TEST_ISSUER") else {
+            return;
+        };
+        let child_bytes = mrml_runtime::read_file(&child_path).unwrap();
+        let issuer_bytes = mrml_runtime::read_file(&issuer_path).unwrap();
+        let child = Certificate::parse(&child_bytes).unwrap();
+        let issuer = Certificate::parse(&issuer_bytes).unwrap();
+        child.verify_signed_by(&issuer).unwrap();
+    }
+    #[test]
+    fn trust_identity_binds_subject_and_public_key() {
+        let mut presented = certificate_with_extensions(&[]);
+        presented.subject = b"subject";
+        presented.spki = b"key";
+        let mut anchor = certificate_with_extensions(&[]);
+        anchor.subject = b"subject";
+        anchor.spki = b"key";
+        assert!(presented.same_trust_identity(&anchor));
+        anchor.subject = b"other";
+        assert!(!presented.same_trust_identity(&anchor));
+        anchor.subject = b"subject";
+        anchor.spki = b"other";
+        assert!(!presented.same_trust_identity(&anchor));
     }
     #[test]
     fn wildcard_matches_exactly_one_label() {

@@ -47,7 +47,10 @@ fn client_hello(
     let mut random = [0u8; 32];
     let mut session = [0u8; 32];
     mrml_runtime::fill_random(&mut random).map_err(|_| TlsError::AuthenticationFailed)?;
-    mrml_runtime::fill_random(&mut session).map_err(|_| TlsError::AuthenticationFailed)?;
+    let quic = quic_transport_parameters.is_some();
+    if !quic {
+        mrml_runtime::fill_random(&mut session).map_err(|_| TlsError::AuthenticationFailed)?;
+    }
     let mut extensions = Vector::new();
     let mut sni = Vector::new();
     push_u16(&mut sni, host.len() + 3)?;
@@ -84,7 +87,8 @@ fn client_hello(
         extension(&mut extensions, 57, parameters)?;
     }
     extension(&mut extensions, 43, &[2, 3, 4])?;
-    extension(&mut extensions, 13, &[0, 4, 8, 4, 4, 1])?;
+    extension(&mut extensions, 13, &[0, 8, 4, 3, 5, 3, 8, 4, 4, 1])?;
+    extension(&mut extensions, 50, &[0, 8, 4, 3, 5, 3, 8, 4, 4, 1])?;
     if hybrid_enabled {
         extension(&mut extensions, 10, &[0, 4, 0x11, 0xec, 0, 0x1d])?;
     } else {
@@ -118,8 +122,10 @@ fn client_hello(
         .map_err(|_| TlsError::AllocationFailed)?;
     body.try_extend_from_slice(&random)
         .map_err(|_| TlsError::AllocationFailed)?;
-    body.try_push(32).map_err(|_| TlsError::AllocationFailed)?;
-    body.try_extend_from_slice(&session)
+    let session_length = if quic { 0 } else { session.len() };
+    body.try_push(session_length as u8)
+        .map_err(|_| TlsError::AllocationFailed)?;
+    body.try_extend_from_slice(&session[..session_length])
         .map_err(|_| TlsError::AllocationFailed)?;
     push_u16(&mut body, 2)?;
     push_u16(&mut body, TLS_AES_128_GCM_SHA256 as usize)?;
@@ -392,9 +398,10 @@ fn verify_certificate_message(
         return Err(TlsError::Handshake);
     }
     let len = c.u24()?;
-    if len != message.len() - 4 || c.u16()? != 0x0804 {
+    if len != message.len() - 4 {
         return Err(TlsError::Handshake);
     }
+    let scheme = c.u16()?;
     let signature_len = c.u16()? as usize;
     let signature = c.take(signature_len)?;
     if !c.done() {
@@ -410,8 +417,13 @@ fn verify_certificate_message(
     signed
         .try_extend_from_slice(transcript_hash)
         .map_err(|_| TlsError::AllocationFailed)?;
-    leaf.verify_tls_pss(&signed, signature)
-        .map_err(|_| TlsError::AuthenticationFailed)
+    match scheme {
+        0x0403 => leaf.verify_tls_ecdsa(&signed, signature),
+        0x0503 => leaf.verify_tls_ecdsa_p384(&signed, signature),
+        0x0804 => leaf.verify_tls_pss(&signed, signature),
+        _ => return Err(TlsError::Handshake),
+    }
+    .map_err(|_| TlsError::AuthenticationFailed)
 }
 
 pub struct QuicHandshakeSecrets {
@@ -526,7 +538,12 @@ impl QuicTlsClientHandshake {
                 }
                 certificate_chain(message, &mut self.certificates, &mut self.stapled_ocsp)?;
                 let refs: Vector<&[u8]> = self.certificates.iter().map(|v| &v[..]).collect();
-                verify_server_chain(&self.host, &refs).map_err(|_| TlsError::Certificate)?;
+                verify_server_chain(&self.host, &refs).map_err(|error| match error {
+                    crate::CertificateError::UnsupportedAlgorithm => TlsError::Handshake,
+                    crate::CertificateError::InvalidSignature => TlsError::AuthenticationFailed,
+                    crate::CertificateError::Malformed => TlsError::InvalidRecord,
+                    _ => TlsError::Certificate,
+                })?;
                 let leaf = crate::Certificate::parse(&self.certificates[0])
                     .map_err(|_| TlsError::Certificate)?;
                 let issuer = crate::Certificate::parse(
@@ -539,7 +556,7 @@ impl QuicTlsClientHandshake {
                     &issuer,
                     mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?,
                 )
-                .map_err(|_| TlsError::Certificate)?;
+                .map_err(|_| TlsError::AuthenticationFailed)?;
                 self.got_certificate = true;
                 self.transcript.update(message);
                 Ok(None)
@@ -986,9 +1003,12 @@ mod tests {
         ];
         assert_eq!(&quic_extensions(&message).unwrap()[..], &[0xaa, 0xbb]);
         let (_, hello) = QuicTlsClientHandshake::new("example.com", &[1, 2, 3]).unwrap();
+        assert_eq!(hello[38], 0, "QUIC must disable TLS compatibility mode");
         assert!(hello
             .windows(7)
             .any(|window| window == [0, 57, 0, 3, 1, 2, 3]));
+        let (tcp_hello, _, _) = client_hello("example.com", &["h2"], None).unwrap();
+        assert_eq!(tcp_hello[38], 32);
     }
 
     #[test]

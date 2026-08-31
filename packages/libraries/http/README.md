@@ -43,11 +43,22 @@ The focused Linux test is:
 ./target/debug/mrml test org.mrml.library.http --target linux
 ```
 
+Authenticated independent-client probes use the generated certificate, issuer,
+private-key, and OCSP fixtures with `MRML_HTTP2_LOOPBACK_*` or
+`MRML_HTTP3_LOOPBACK_*`, plus `MRML_HTTP2_CURL` or `MRML_HTTP3_CURL`. The curl
+HTTP/2 probe also covers TLS 1.3 compatibility ChangeCipherSpec handling and
+the default OpenSSL X25519MLKEM768-first negotiation.
+
 Live HTTP/1.1 URL and range tests remain opt-in through their existing
 environment variables. The focused tests exercise codecs, RFC vectors,
 adversarial bounds, state machines, packet protection, and loopback UDP. They do
-not establish external HTTP/2/HTTP/3 interoperability, Windows-native, physical
-network, Internet-loss, or production evidence.
+establish hosted Linux interoperability from independent curl 8.21.0/nghttp2
+and curl 8.21.0/ngtcp2/nghttp3 clients to the MRML HTTP/2 and HTTP/3 servers.
+A public Cloudflare HTTP/3 probe validated its ECDSA chain through the trusted
+cross-signed root identity and then failed closed because the peer supplied no
+stapled OCSP response; that is revocation-policy evidence, not a successful
+public HTTP/3 request. The tests do not establish Windows-native, physical
+network, Internet-loss, public-client success, or production evidence.
 
 Patent review: **TRIGGERED**, disposition **CONDITIONAL_PROCEED** for the exact
 Canada-only bounded profile recorded in

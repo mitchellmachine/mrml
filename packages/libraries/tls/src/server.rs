@@ -287,6 +287,16 @@ fn send_plain(stream: &mut TcpStream, msg: &[u8]) -> Result<(), TlsError> {
     stream.write_all(&h).map_err(|_| TlsError::Io)?;
     stream.write_all(msg).map_err(|_| TlsError::Io)
 }
+
+fn compatibility_change_cipher_spec(record: &[u8]) -> Result<bool, TlsError> {
+    if record.first() != Some(&20) {
+        return Ok(false);
+    }
+    if record.len() != 6 || record[1..] != [3, 3, 0, 1, 1] {
+        return Err(TlsError::InvalidRecord);
+    }
+    Ok(true)
+}
 fn client_offer(
     msg: &[u8],
 ) -> Result<
@@ -416,7 +426,7 @@ impl QuicTlsServerHandshake {
         }
         let (session, group, share, protocols, peer_transport_parameters, status_requested) =
             client_offer(client_hello)?;
-        if !protocols.iter().any(|protocol| protocol == "h3") {
+        if !session.is_empty() || !protocols.iter().any(|protocol| protocol == "h3") {
             return Err(TlsError::Handshake);
         }
         let peer_transport_parameters = peer_transport_parameters.ok_or(TlsError::Handshake)?;
@@ -830,9 +840,19 @@ impl TlsServerStream {
         }
         let hash = transcript.hash();
         schedule.finish_handshake();
-        let incoming = record(&mut stream)?;
+        let incoming = loop {
+            let incoming = record(&mut stream)?;
+            if compatibility_change_cipher_spec(&incoming)? {
+                continue;
+            }
+            if incoming[0] != 23 {
+                return Err(TlsError::Handshake);
+            }
+            break incoming;
+        };
         let mut plain = Vector::new();
-        if read_hs.open(&incoming, &mut plain)? != 22 || plain.len() != 36 || plain[0] != 20 {
+        let content_type = read_hs.open(&incoming, &mut plain)?;
+        if content_type != 22 || plain.len() != 36 || plain[0] != 20 {
             return Err(TlsError::Handshake);
         }
         let expected = finished_verify_data(&client_hs, &hash);
@@ -895,6 +915,15 @@ impl TlsServerStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compatibility_ccs_is_exact_and_bounded() {
+        assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 1, 1]).unwrap());
+        assert!(!compatibility_change_cipher_spec(&[23, 3, 3, 0, 1, 1]).unwrap());
+        assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 2, 1, 1]).is_err());
+        assert!(compatibility_change_cipher_spec(&[20, 3, 1, 0, 1, 1]).is_err());
+        assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 1, 2]).is_err());
+    }
     use crate::TlsClientStream;
     use mrml_runtime::{environment_variable, read_file, TcpListener};
 

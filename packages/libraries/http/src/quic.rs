@@ -23,11 +23,19 @@ pub enum QuicError {
     ProtocolViolation,
     Io,
     Tls,
+    TlsCertificate,
+    TlsAuthentication,
+    TlsHandshake,
     UnexpectedPeer,
     ConnectionId,
     TransportParameter,
     HandshakeConfirmation,
-    PeerClosed { code: u64, frame_type: u64 },
+    PeerClosed {
+        code: u64,
+        frame_type: u64,
+        reason: [u8; 64],
+        reason_len: u8,
+    },
 }
 
 pub fn initial_destination_id(input: &[u8]) -> Result<Vector<u8>, QuicError> {
@@ -1520,7 +1528,10 @@ mod tests {
         assert!(QuicTransportParameters::decode(&duplicate).is_err());
         let mut greased = wire.clone();
         greased.try_extend_from_slice(&[0x40, 0x1f, 0]).unwrap();
-        assert_eq!(QuicTransportParameters::decode(&greased).unwrap(), parameters);
+        assert_eq!(
+            QuicTransportParameters::decode(&greased).unwrap(),
+            parameters
+        );
         assert!(QuicRecovery::new(1199).is_err())
     }
     #[test]

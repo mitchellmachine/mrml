@@ -1,5 +1,5 @@
 use mrml_runtime::{Instant, SocketAddress, TcpStream, UdpSocket, Vector};
-use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsServerConfig};
+use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
 use crate::quic::initial_destination_id;
 use crate::{
@@ -9,6 +9,15 @@ use crate::{
 
 const CRYPTO_CHUNK: usize = 900;
 const CONNECTION_ID_LENGTH: usize = 8;
+
+fn quic_tls_error(error: TlsError) -> QuicError {
+    match error {
+        TlsError::Certificate => QuicError::TlsCertificate,
+        TlsError::AuthenticationFailed | TlsError::InvalidRecord => QuicError::TlsAuthentication,
+        TlsError::Handshake => QuicError::TlsHandshake,
+        _ => QuicError::Tls,
+    }
+}
 
 fn random_connection_id() -> Result<Vector<u8>, QuicError> {
     let mut bytes = [0; CONNECTION_ID_LENGTH];
@@ -39,9 +48,19 @@ fn insert_crypto_frames(
             QuicFrame::Crypto { offset, data } => assembler.insert(offset, &data, false)?,
             QuicFrame::Padding | QuicFrame::Ping | QuicFrame::Ack { .. } => {}
             QuicFrame::ConnectionClose {
-                code, frame_type, ..
+                code,
+                frame_type,
+                reason,
             } => {
-                return Err(QuicError::PeerClosed { code, frame_type });
+                let mut bounded = [0; 64];
+                let reason_len = reason.len().min(bounded.len());
+                bounded[..reason_len].copy_from_slice(&reason[..reason_len]);
+                return Err(QuicError::PeerClosed {
+                    code,
+                    frame_type,
+                    reason: bounded,
+                    reason_len: reason_len as u8,
+                });
             }
             _ => return Err(QuicError::ProtocolViolation),
         }
@@ -379,9 +398,7 @@ impl QuicClientConnection {
             }
             insert_crypto_frames(&packet.payload, &mut server_initial_crypto)?;
             if let Some(message) = handshake_message(server_initial_crypto.contiguous(), 0)? {
-                break tls
-                    .receive_server_hello(message)
-                    .map_err(|_| QuicError::Tls)?;
+                break tls.receive_server_hello(message).map_err(quic_tls_error)?;
             }
         };
         let read_handshake = QuicInitialKeys::from_traffic_secret(&handshake_secrets.server)?;
@@ -405,9 +422,8 @@ impl QuicClientConnection {
                 handshake_message(handshake_crypto.contiguous(), handshake_at)?
             {
                 handshake_at += message.len();
-                if let Some(application) =
-                    tls.receive_handshake(message).map_err(|_| QuicError::Tls)?
-                {
+                let received = tls.receive_handshake(message).map_err(quic_tls_error)?;
+                if let Some(application) = received {
                     break 'application application;
                 }
             }
@@ -439,7 +455,7 @@ impl QuicClientConnection {
         let mut datagram = [0; 65_527];
         let (amount, from) = socket
             .receive_from(&mut datagram)
-            .map_err(|_| QuicError::Io)?;
+            .map_err(|_| QuicError::HandshakeConfirmation)?;
         if from != peer {
             return Err(QuicError::UnexpectedPeer);
         }
@@ -454,9 +470,7 @@ impl QuicClientConnection {
                     largest,
                     first_range,
                     ..
-                } if largest == 0 && first_range == 0 => {
-                    finished_acknowledged = true
-                }
+                } if largest == 0 && first_range == 0 => finished_acknowledged = true,
                 _ => return Err(QuicError::ProtocolViolation),
             }
         }
@@ -653,8 +667,7 @@ impl QuicServerListener {
                 &datagram[..amount],
                 initial_keys.as_ref().ok_or(QuicError::Crypto)?,
                 expected_initial,
-            )
-            {
+            ) {
                 cursor = used;
             }
             while cursor < amount {
