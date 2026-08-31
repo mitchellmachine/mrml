@@ -1709,3 +1709,16 @@ emits a deterministic 2,393,088-byte PE with SHA-256
 Wine 11.16 returned 42 after the call completed. This verifies one bounded
 link/load/execute path through the exact pinned sleep implementation. It is not
 sleep-precision, scheduler, native Windows, WHP, or physical-timer evidence.
+
+Identified writable COFF fragments now retain same-object writable `ADDR64`
+targets as an exact `(object, section, offset)` instead of collapsing them to a
+symbol name. The decoder checks the symbol value plus in-place addend against
+the target section's initialized or zero-filled extent, and final PE emission
+resolves the typed target only after writable layout is frozen. The legacy
+identity-free decoder retains its narrower zero-offset named behavior. Focused
+coverage checks the decoded identity, final virtual address, and one-past
+rejection. The Linux release gate passes 843 unit tests, 2 object-evidence
+tests, 10 conformance tests, 351 replacement tests, and 128 semantic-execution
+tests; the release driver and all eight pinned std/TLS Wine modes pass with
+their exact recorded hashes and exit 42. Patent review: NOT_TRIGGERED; this is
+bounded validation and conventional PE/COFF relocation handling.

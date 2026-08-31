@@ -4618,3 +4618,14 @@ exact pinned Windows delay path. It produces 2,393,088 bytes with SHA-256
 `f044c1c51e5a85a169d1bb39bd88307943fe8be28bec2269f430c93e809644cf`
 and returns 42 under Wine 11.16. This is bounded hosted linkage and execution
 evidence, not timing-precision, native Windows, WHP, or physical-timer evidence.
+
+Same-object writable `ADDR64` targets in identified COFF fragments now retain
+their exact object, section, and checked offset through final writable PE
+layout. A target value plus field addend beyond the initialized/zero-filled
+section extent fails closed, while the identity-free compatibility decoder
+keeps its previous zero-offset named form. Focused coverage verifies typed
+decoding, the final image-base virtual address, and out-of-range rejection.
+The Linux release gate passes 843/843 units, 2/2 object-evidence tests, 10/10
+conformance tests, 351/351 replacements, and 128/128 semantic tests. The
+release driver and all eight pinned std/TLS Wine modes pass with exact recorded
+hashes and exit 42. Patent review: NOT_TRIGGERED.

@@ -2713,6 +2713,15 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                         identity.section()
                     ));
                 }
+                PeWritableRelocationTarget::WritableSection { identity, .. }
+                    if !writable_section_defined(identity) =>
+                {
+                    return Err(anyhow!(
+                        "selected writable relocation writable section is undefined: object {}, section {}",
+                        identity.object(),
+                        identity.section()
+                    ));
+                }
                 PeWritableRelocationTarget::WritableSymbol(symbol)
                     if !named_target_defined(symbol) =>
                 {
