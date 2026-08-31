@@ -463,11 +463,11 @@ unsafe extern "sysv64" fn mrml_ahci_receiver(
         scratch,
     );
     buffers.erase();
-    // Operation 3 never returns. Suppress destructor execution explicitly so
-    // the exact backend owner remains live in the frozen service image for the
-    // controller manager's subsequent authenticated handoff.
-    let stop = core::mem::ManuallyDrop::new(stop);
-    core::hint::black_box(&stop);
+    // End every service-side Rust borrow before operation 3. The receipt is
+    // authority-free; the controller manager freezes this task and reconstructs
+    // exact teardown views from its separately retained owners.
+    let exit = stop.release_views_for_exit();
+    core::hint::black_box(&exit);
     unsafe { terminate(3) }
 }
 

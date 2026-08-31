@@ -239,6 +239,30 @@ pub struct AhciNativeServiceStopOwner<'a, 'm, A, R, S, E> {
     state: AhciNativeServiceState<'a, 'm, A, R, S>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciNativeServiceExitDisposition {
+    ActiveViewsReleased,
+    QuarantinedViewsReleased,
+}
+
+/// Authority-free receipt retained by userspace immediately before operation
+/// 3. It contains no register, memory, data, port, capability, or DMA owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciNativeServiceExitReady {
+    device: BlockProviderDevice,
+    disposition: AhciNativeServiceExitDisposition,
+}
+
+impl AhciNativeServiceExitReady {
+    pub const fn device(self) -> BlockProviderDevice {
+        self.device
+    }
+
+    pub const fn disposition(self) -> AhciNativeServiceExitDisposition {
+        self.disposition
+    }
+}
+
 impl<'a, 'm, A, R, S, E> AhciNativeServiceStopOwner<'a, 'm, A, R, S, E> {
     pub const fn error(&self) -> &AhciDispatchServiceError<E> {
         &self.error
@@ -255,6 +279,44 @@ impl<'a, 'm, A, R, S, E> AhciNativeServiceStopOwner<'a, 'm, A, R, S, E> {
         AhciNativeServiceState<'a, 'm, A, R, S>,
     ) {
         (self.error, self.state)
+    }
+
+    /// Ends every Rust borrow and derived device view before the non-returning
+    /// exit syscall, leaving only an authority-free diagnostic receipt.
+    ///
+    /// This performs no quiescence, MMIO, unmapping, DMA revocation, task
+    /// transition, or assignment release. The controller manager must freeze
+    /// the task and independently reconstruct exact teardown owners before any
+    /// such operation. Concrete installed view destructors are required to be
+    /// inert; they only release Rust borrows.
+    pub fn release_views_for_exit(self) -> AhciNativeServiceExitReady
+    where
+        A: AhciDataCapabilityAuthorizer,
+    {
+        let Self { error, state } = self;
+        drop(error);
+        let (device, backend) = state.into_parts();
+        let disposition = match backend.into_teardown() {
+            Ok(teardown) => {
+                let (_mapping, _port, _data, registers, command_memory, data_io) =
+                    teardown.into_parts();
+                drop(registers);
+                drop(command_memory);
+                drop(data_io);
+                AhciNativeServiceExitDisposition::ActiveViewsReleased
+            }
+            Err(quarantine) => {
+                let (_mapping, _data, registers, command_memory, data_io) = quarantine.into_parts();
+                drop(registers);
+                drop(command_memory);
+                drop(data_io);
+                AhciNativeServiceExitDisposition::QuarantinedViewsReleased
+            }
+        };
+        AhciNativeServiceExitReady {
+            device,
+            disposition,
+        }
     }
 }
 
@@ -872,8 +934,12 @@ mod tests {
         assert_eq!(request, [0; AHCI_DISPATCH_REQUEST_BYTES]);
         assert_eq!(tokens, [0]);
         assert_eq!(scratch, [0; 512]);
-        let (_, state) = stop.into_parts();
-        assert!(state.into_parts().1.is_available());
+        let exit = stop.release_views_for_exit();
+        assert_eq!(exit.device(), installed.record().device());
+        assert_eq!(
+            exit.disposition(),
+            AhciNativeServiceExitDisposition::ActiveViewsReleased
+        );
     }
 
     #[test]

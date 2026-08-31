@@ -1643,12 +1643,21 @@ production controller-manager lease remain unimplemented.
 The installed AHCI service entry now consumes its complete dispatcher state
 into a non-copy stop owner at the first fail-closed dispatch result. It erases
 the separate launch, request, capability-token, and transfer buffers, then
-retains that owner with destructor execution suppressed across the non-returning
-operation-3 syscall. Consequently the register, active-port, command-memory,
-data-buffer, and authorizer owners are no longer destroyed before the kernel
-freeze. This is source, unit-test, and `MRML_NATIVE` build evidence only; that
-service-side retention alone does not provide manager storage, installed trap
-routing, or the production controller-manager lease.
+consumes the stop owner before the non-returning operation-3 syscall. That
+transition destroys the service-side register, active-port, command-memory,
+data-buffer, and authorizer views without MMIO, unmapping, DMA revocation, task
+mutation, or assignment release. Only an authority-free device/disposition
+receipt remains across the syscall, so the frozen manager no longer
+reconstructs mutable Rust views while the service image retains competing
+borrows. The focused test covers the active-owner release path, and the
+`ahci_service_entry` `MRML_NATIVE` release build proves the installed receiver
+uses the transition. This is source, unit-test, and build evidence only; it does
+not provide manager storage, installed trap routing, or hardware execution.
+
+Patent review: **NOT_TRIGGERED**. Consuming local borrowed views before a
+non-returning exit and retaining only an authority-free receipt is conventional
+ownership cleanup. It adds no controller command, DMA behavior, parser format,
+or authority model. See [the patent review log](../patents/REVIEW_LOG.md).
 
 The kernel-side controller-manager handoff now has a bounded one-service slot
 that is installed before dispatch with the concrete active mapping-set owner
