@@ -4555,5 +4555,44 @@ is asserted in both the decoded typed relocation and final PE bytes. The Linux
 release compiler-core gate passes 839 unit tests, 2 object-evidence tests, 10
 conformance tests, 351 replacement tests, and 128 semantic-execution tests; the
 Linux release driver build also passes. Ordinal imports and name
-transformations remain unsupported, and no new runtime or hardware evidence is
-claimed.
+transformations are covered by the immediately subsequent signed checkpoints;
+no new runtime or hardware evidence is claimed by the hint checkpoint.
+
+Signed checkpoints `1bbe1248`, `0a82e699`, and `5347c138` retain typed ordinal
+imports, bounded `NOPREFIX`/`UNDECORATE` loader names with distinct decorated
+archive aliases, and the complete `REL32` through `REL32_5` trailing-byte bias.
+Their Linux release canonical gates pass respectively 840, 840, and 841 unit
+tests plus all existing object, conformance, replacement, and semantic groups;
+the release compiler-driver build passes at each checkpoint.
+
+## Selected-text PE address relocation checkpoint
+
+The selected COFF text decoder and PE serializer now retain typed
+`IMAGE_REL_AMD64_ADDR32NB` and `IMAGE_REL_AMD64_ADDR64` targets through final
+layout. Image-relative fields receive checked `u32` RVAs; absolute fields
+receive checked image-base VAs and enter the bounded `DIR64` base-relocation
+inventory. Both forms preserve exact object/section, read-only, writable, TLS,
+and import target classes rather than collapsing them to layout ranks or
+guessed names. Eight-byte field bounds, signed addends, final PE bytes, base
+relocation bytes, driver contextualization, unsupported-kind rejection, and
+overflow failure have focused coverage.
+
+At signed checkpoints `2beccac3` and `64e822c4`, the Linux release canonical
+gates passed first 842 and then 843 unit tests, plus 2 object-evidence tests, 10
+conformance tests, 351 replacement tests, and 128 semantic-execution tests with
+zero failures. The release compiler-driver build passed at both checkpoints.
+A read-only census of the exact ORACLE-0003 gnullvm `core`, `alloc`, and `std`
+archives found only `ADDR32NB` (4,597), `ADDR64` (78,281), `REL32` (13,145), and
+`SECREL` (43,306). Counts cover all archive members and debug metadata, not only
+the selected runtime closure. Patent review: NOT_TRIGGERED; this implements
+conventional PE/COFF relocation encodings and bounded validation without a new
+mechanism.
+
+All five durable pinned std/TLS Wine probes then reproduced their exact recorded
+PE sizes and SHA-256 hashes and returned 42: std, const TLS, lazy TLS,
+child-thread TLS, and child-thread destructor TLS. The exact commands were
+`RUSTUP_HOME=/home/m/.wine/drive_c/users/m/.rustup
+docs/compiler/probes/check_pinned_std_execution.sh` and the four
+`check_pinned_std_tls_execution.sh` modes (`const`, `lazy`, `thread`, and
+`destructor`). This is hosted Wine regression evidence, not native Windows,
+WHP, or physical-hardware verification.

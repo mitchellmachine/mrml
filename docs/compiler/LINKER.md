@@ -1616,6 +1616,68 @@ must agree on the hint or fail closed. Unit coverage uses a nonzero header hint
 and verifies the exact emitted PE hint field. The complete 839-unit
 compiler-core gate, its 2 object-evidence and 10 conformance tests, 351
 replacement tests, and 128 semantic tests pass, and the release driver build
-passes. Ordinal imports and name transformations remain unsupported. This is
-format/serialization evidence only; no new runtime or physical-hardware claim
-is made.
+passes. Subsequent checkpoints below add ordinal imports and bounded name
+transformations. This is format/serialization evidence only; no new runtime or
+physical-hardware claim is made.
+
+Ordinal short imports now retain their exact 16-bit ordinal as a typed import
+target and serialize the required high-bit ordinal thunk in both lookup and IAT
+tables. Named `NOPREFIX` and `UNDECORATE` imports retain the decorated archive
+alias separately from the transformed loader lookup name, with bounded
+transformation and exact data-import coverage. The Linux canonical gate passes
+840 unit tests and all existing object, conformance, replacement, and semantic
+groups at both checkpoints; the release driver build passes.
+
+Selected COFF text also admits the complete `IMAGE_REL_AMD64_REL32` through
+`REL32_5` family. A checked zero-through-five trailing-byte bias remains part of
+the typed PC-relative addend, and the adjacent unsupported kind still fails
+closed. The Linux canonical gate passes 841 unit tests and all existing groups;
+the release driver build passes.
+
+## Typed selected-text PE addresses
+
+Selected AMD64 COFF text now retains `IMAGE_REL_AMD64_ADDR32NB` as a typed
+four-byte PE image-relative address. Its nested target preserves global,
+object-local section, input-text, read-only, writable, TLS, or import identity
+until the final PE RVAs are frozen. The serializer applies the signed in-place
+addend only after that layout and rejects values outside `u32`; the generic
+static linker validates but never guesses how to patch the PE-specific field.
+`REL32` through `REL32_5` remain distinct PC-relative forms, and unsupported
+relocation types continue to fail closed. The Linux release compiler-core gate
+passes 842 unit tests, 2 object-evidence tests, 10 conformance tests, 351
+replacement tests, and 128 semantic-execution tests; the release driver build
+also passes.
+
+Selected-text `IMAGE_REL_AMD64_ADDR64` now uses the same retained target
+identity with an independently validated eight-byte field. Final PE emission
+adds the image base and signed addend with checked arithmetic, writes the exact
+64-bit virtual address, and records every such text field in the bounded
+`IMAGE_REL_BASED_DIR64` inventory. This prevents an apparently relocatable PE
+from omitting absolute addresses embedded in RX text. Focused coverage checks
+the decoded negative addend, final VA, relocation-directory page/offset entry,
+driver writable-target contextualization, and overflow rejection. The Linux
+release compiler-core gate passes 843 unit tests, 2 object-evidence tests, 10
+conformance tests, 351 replacement tests, and 128 semantic-execution tests; the
+release driver build also passes.
+
+A read-only `objdump -r` census of the exact ORACLE-0003 Windows gnullvm
+`libcore`, `liballoc`, and `libstd` archives found 4,597 `ADDR32NB`, 78,281
+`ADDR64`, 13,145 `REL32`, and 43,306 `SECREL` records, with no other AMD64
+relocation family present. This is archive-wide format evidence, not proof that
+every member is selected or that every debug relocation is runtime-relevant.
+The large `ADDR64` and `SECREL` populations are predominantly discarded debug
+metadata; runtime read-only `ADDR64`/`REL32` and TLS `SECREL` were already typed
+by the preceding gates. No native Windows, WHP, or physical-hardware claim is
+made.
+
+After both selected-text address checkpoints, the five durable ORACLE-0003
+Wine probes retained their exact deterministic outputs and exit 42: the std
+probe produced 2,393,088 bytes with SHA-256
+`66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6`;
+const, lazy, and child-thread TLS each produced 3,584 bytes with their existing
+recorded hashes; and the TLS-destructor probe produced 2,393,600 bytes with
+SHA-256
+`84a86a69953250b284a3f514a2d08db4c2eef7f446d7bdebd66eb099e358bcd5`.
+This confirms the new relocation admission does not alter those selected
+closures. It remains hosted Wine evidence under the limitations already stated
+for each probe.
