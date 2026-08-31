@@ -1122,6 +1122,7 @@ pub enum CoffObjectSymbolKind {
 pub struct CoffObjectSymbol<'a> {
     pub name: &'a str,
     pub kind: CoffObjectSymbolKind,
+    pub fallback: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1369,6 +1370,7 @@ impl<'a> Iterator for CoffObjectSymbols<'a> {
                 return Some(Ok(CoffObjectSymbol {
                     name,
                     kind: CoffObjectSymbolKind::Definition,
+                    fallback: None,
                 }));
             }
             return None;
@@ -1380,7 +1382,40 @@ impl<'a> Iterator for CoffObjectSymbols<'a> {
                 None => return Some(Err(LinkerError::InvalidCoff)),
             };
             self.index += auxiliary + 1;
-            if self.object.get(offset + 16) != Some(&2) {
+            let storage_class = self.object.get(offset + 16).copied();
+            if storage_class == Some(105) {
+                let fallback = match coff_weak_external_fallback_offset(
+                    self.object,
+                    self.symbol_offset,
+                    self.symbol_count,
+                    (offset - self.symbol_offset) / 18,
+                ) {
+                    Ok(Some(fallback)) => fallback,
+                    Ok(None) => return Some(Err(LinkerError::InvalidCoffAssociation)),
+                    Err(error) => return Some(Err(error)),
+                };
+                let name =
+                    match coff_symbol_name(self.object, offset, self.symbols_end, self.string_size)
+                    {
+                        Ok(name) => name,
+                        Err(error) => return Some(Err(error)),
+                    };
+                let fallback = match coff_symbol_name(
+                    self.object,
+                    fallback,
+                    self.symbols_end,
+                    self.string_size,
+                ) {
+                    Ok(name) => name,
+                    Err(error) => return Some(Err(error)),
+                };
+                return Some(Ok(CoffObjectSymbol {
+                    name,
+                    kind: CoffObjectSymbolKind::Definition,
+                    fallback: Some(fallback),
+                }));
+            }
+            if storage_class != Some(2) {
                 continue;
             }
             let section = match read_i16(self.object, offset + 12) {
@@ -1399,7 +1434,11 @@ impl<'a> Iterator for CoffObjectSymbols<'a> {
                     Ok(name) => name,
                     Err(error) => return Some(Err(error)),
                 };
-            return Some(Ok(CoffObjectSymbol { name, kind }));
+            return Some(Ok(CoffObjectSymbol {
+                name,
+                kind,
+                fallback: None,
+            }));
         }
         None
     }
@@ -11490,12 +11529,12 @@ fn coff_symbol_name<'a>(
     Ok(name)
 }
 
-fn coff_relocation_symbol_offset(
+fn coff_weak_external_fallback_offset(
     object: &[u8],
     symbol_offset: usize,
     symbol_count: usize,
     target_index: usize,
-) -> Result<usize, LinkerError> {
+) -> Result<Option<usize>, LinkerError> {
     let target = symbol_offset
         .checked_add(
             target_index
@@ -11505,7 +11544,7 @@ fn coff_relocation_symbol_offset(
         .ok_or(LinkerError::OffsetOverflow)?;
     let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
     if storage_class != 105 {
-        return Ok(target);
+        return Ok(None);
     }
     if read_u32(object, target + 8)? != 0
         || read_i16(object, target + 12)? != 0
@@ -11538,13 +11577,38 @@ fn coff_relocation_symbol_offset(
                 .ok_or(LinkerError::OffsetOverflow)?,
         )
         .ok_or(LinkerError::OffsetOverflow)?;
+    let fallback_section = read_i16(object, fallback + 12)?;
     if object.get(fallback + 16).copied() != Some(2)
         || object.get(fallback + 17).copied() != Some(0)
-        || read_i16(object, fallback + 12)? <= 0
+        || fallback_section < 0
+        || (fallback_section == 0 && read_u32(object, fallback + 8)? != 0)
     {
         return Err(LinkerError::InvalidCoffAssociation);
     }
-    Ok(fallback)
+    Ok(Some(fallback))
+}
+
+fn coff_relocation_symbol_offset(
+    object: &[u8],
+    symbol_offset: usize,
+    symbol_count: usize,
+    target_index: usize,
+) -> Result<usize, LinkerError> {
+    if let Some(fallback) =
+        coff_weak_external_fallback_offset(object, symbol_offset, symbol_count, target_index)?
+    {
+        if read_i16(object, fallback + 12)? == 0 {
+            return Err(LinkerError::InvalidCoffAssociation);
+        }
+        return Ok(fallback);
+    }
+    symbol_offset
+        .checked_add(
+            target_index
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)
 }
 
 fn coff_section_name<'a>(
@@ -13231,10 +13295,12 @@ mod tests {
                 CoffObjectSymbol {
                     name: "entry",
                     kind: CoffObjectSymbolKind::Definition,
+                    fallback: None,
                 },
                 CoffObjectSymbol {
                     name: "answer_helper",
                     kind: CoffObjectSymbolKind::Reference,
+                    fallback: None,
                 },
             ]
         );
@@ -13244,6 +13310,7 @@ mod tests {
             Some(Ok(CoffObjectSymbol {
                 name: "answer_helper",
                 kind: CoffObjectSymbolKind::Definition,
+                fallback: None,
             }))
         );
         let mut caller_relocations = [LinkRelocation {
@@ -13290,6 +13357,7 @@ mod tests {
             Ok(std::vec![CoffObjectSymbol {
                 name: "WaitOnAddress",
                 kind: CoffObjectSymbolKind::Definition,
+                fallback: None,
             }])
         );
         let mut relocations = [LinkRelocation {
@@ -13339,6 +13407,7 @@ mod tests {
             Ok(std::vec![CoffObjectSymbol {
                 name: "WaitOnAddress",
                 kind: CoffObjectSymbolKind::Definition,
+                fallback: None,
             }])
         );
         let mut data_relocations = relocations;
@@ -14030,6 +14099,29 @@ mod tests {
         }
 
         let object = two_fragment_coff_with_weak_alias();
+        assert_eq!(
+            inventory_x86_64_coff_symbols(&object)
+                .unwrap()
+                .symbols()
+                .collect::<Result<std::vec::Vec<_>, _>>(),
+            Ok(std::vec![
+                CoffObjectSymbol {
+                    name: "entry",
+                    kind: CoffObjectSymbolKind::Definition,
+                    fallback: None,
+                },
+                CoffObjectSymbol {
+                    name: "alias",
+                    kind: CoffObjectSymbolKind::Definition,
+                    fallback: Some("helper"),
+                },
+                CoffObjectSymbol {
+                    name: "helper",
+                    kind: CoffObjectSymbolKind::Definition,
+                    fallback: None,
+                },
+            ])
+        );
         assert_eq!(
             decode_first(&object),
             Ok(LinkRelocationTarget::Symbol("helper"))

@@ -127,6 +127,12 @@ struct CoffSectionRebinding {
     selected: CoffSectionIdentity,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CoffWeakAlias<'a> {
+    alias: &'a str,
+    fallback: &'a str,
+}
+
 fn resolve_duplicate_coff_definition(
     earlier: LinkInput<'_, '_, '_>,
     earlier_selection: CoffTextComdatSelection,
@@ -975,6 +981,13 @@ fn scan_link_object_symbols<'a>(
                         .try_push(symbol.name)
                         .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
                 }
+                if let Some(fallback) = symbol.fallback
+                    && !referenced.iter().any(|existing| *existing == fallback)
+                {
+                    referenced
+                        .try_push(fallback)
+                        .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
+                }
             }
             CoffObjectSymbolKind::Reference => {
                 if !referenced.iter().any(|existing| *existing == symbol.name) {
@@ -1016,6 +1029,9 @@ fn scan_link_object_symbols_owned(
         match symbol.kind {
             CoffObjectSymbolKind::Definition => {
                 push_owned_symbol(defined, symbol.name, "defined-symbol capacity exceeded")?;
+                if let Some(fallback) = symbol.fallback {
+                    push_owned_symbol(referenced, fallback, "referenced-symbol capacity exceeded")?;
+                }
             }
             CoffObjectSymbolKind::Reference => push_owned_symbol(
                 referenced,
@@ -2191,6 +2207,133 @@ fn selected_readonly_absolute_relocations<'data>(
     Ok(output)
 }
 
+fn collect_coff_weak_aliases<'data>(
+    objects: &[&'data [u8]],
+) -> Result<Vector<CoffWeakAlias<'data>>> {
+    let mut aliases: Vector<CoffWeakAlias<'data>> = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate COFF weak-alias inventory"))?;
+    for (object_index, object) in objects.iter().copied().enumerate() {
+        let inventory = inventory_x86_64_coff_symbols(object).map_err(|error| {
+            anyhow!(
+                "COFF object {} weak-alias inventory: {}",
+                object_index,
+                error
+            )
+        })?;
+        for symbol in inventory.symbols() {
+            let symbol = symbol.map_err(|error| {
+                anyhow!("COFF object {} weak-alias symbol: {}", object_index, error)
+            })?;
+            let Some(fallback) = symbol.fallback else {
+                continue;
+            };
+            if let Some(existing) = aliases
+                .iter()
+                .find(|existing| existing.alias == symbol.name)
+            {
+                if existing.fallback != fallback {
+                    return Err(anyhow!("conflicting COFF weak alias {}", symbol.name));
+                }
+                continue;
+            }
+            aliases
+                .try_push(CoffWeakAlias {
+                    alias: symbol.name,
+                    fallback,
+                })
+                .map_err(|_| anyhow!("COFF weak-alias capacity exceeded"))?;
+        }
+    }
+    if aliases.iter().any(|alias| {
+        aliases
+            .iter()
+            .any(|candidate| alias.fallback == candidate.alias)
+    }) {
+        return Err(anyhow!("chained COFF weak aliases are unsupported"));
+    }
+    Ok(aliases)
+}
+
+fn contextualize_coff_weak_aliases<'data, 'definitions, 'relocations>(
+    inputs: &[LinkInput<'data, '_, 'definitions>],
+    aliases: &[CoffWeakAlias<'data>],
+    arenas: &'relocations mut [[LinkRelocation<'data>; MAX_LINK_RELOCATIONS]],
+) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
+    if inputs.len() != arenas.len() {
+        return Err(anyhow!("weak-alias relocation arena count mismatch"));
+    }
+    let mut contextual = Vector::with_capacity(inputs.len())
+        .map_err(|_| anyhow!("could not allocate weak-alias link inputs"))?;
+    let mut remaining = arenas;
+    for input in inputs {
+        let (arena, rest) = remaining
+            .split_first_mut()
+            .ok_or_else(|| anyhow!("missing weak-alias relocation arena"))?;
+        if input.relocations.len() > arena.len() {
+            return Err(anyhow!("weak-alias relocation capacity exceeded"));
+        }
+        for (index, relocation) in input.relocations.iter().copied().enumerate() {
+            let rewrite = |symbol: &'data str| {
+                aliases
+                    .iter()
+                    .find(|alias| alias.alias == symbol)
+                    .filter(|alias| {
+                        !inputs.iter().any(|input| {
+                            global_link_definitions(input)
+                                .any(|definition| definition.symbol == alias.alias)
+                        })
+                    })
+                    .map(|alias| alias.fallback)
+            };
+            arena[index] = LinkRelocation {
+                target: match relocation.target {
+                    LinkRelocationTarget::Symbol(symbol) => rewrite(symbol)
+                        .map(LinkRelocationTarget::Symbol)
+                        .unwrap_or(relocation.target),
+                    LinkRelocationTarget::GotPcRelativeSymbol(symbol) => rewrite(symbol)
+                        .map(LinkRelocationTarget::GotPcRelativeSymbol)
+                        .unwrap_or(relocation.target),
+                    LinkRelocationTarget::RequiredSymbol(symbol) => rewrite(symbol)
+                        .map(LinkRelocationTarget::RequiredSymbol)
+                        .unwrap_or(relocation.target),
+                    LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(
+                        symbol,
+                    )) => rewrite(symbol)
+                        .map(|fallback| {
+                            LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(
+                                fallback,
+                            ))
+                        })
+                        .unwrap_or(relocation.target),
+                    LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(
+                        symbol,
+                    )) => rewrite(symbol)
+                        .map(|fallback| {
+                            LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(
+                                fallback,
+                            ))
+                        })
+                        .unwrap_or(relocation.target),
+                    _ => relocation.target,
+                },
+                ..relocation
+            };
+        }
+        contextual
+            .try_push(LinkInput {
+                symbol: input.symbol,
+                symbol_target: input.symbol_target,
+                additional_definitions: input.additional_definitions,
+                text: input.text,
+                readonly_data: input.readonly_data,
+                relocations: &arena[..input.relocations.len()],
+            })
+            .map_err(|_| anyhow!("could not allocate weak-alias link inputs"))?;
+        remaining = rest;
+    }
+    Ok(contextual)
+}
+
 fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
     inputs: &[LinkInput<'data, '_, 'definitions>],
     writable_data: &[PeWritableData<'data, '_>],
@@ -2370,8 +2513,12 @@ fn write_linked_pe(
         &mut arenas,
         &mut definitions,
     )?;
+    let weak_aliases = collect_coff_weak_aliases(objects)?;
+    let mut weak_alias_arenas = relocation_arenas(decoded.inputs.len())?;
+    let weak_alias_inputs =
+        contextualize_coff_weak_aliases(&decoded.inputs, &weak_aliases, &mut weak_alias_arenas)?;
     let mut selected = selected_link_inputs(
-        &decoded.inputs,
+        &weak_alias_inputs,
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
@@ -2386,7 +2533,7 @@ fn write_linked_pe(
             &selected,
         )?;
         if !retain_exact_readonly_relocation_targets(
-            &decoded.inputs,
+            &weak_alias_inputs,
             &decoded.archive_group,
             &decoded.archive_member,
             &decoded.source_object,
@@ -2410,7 +2557,7 @@ fn write_linked_pe(
             &mut probe_writable_arenas,
         )?;
         let changed = retain_writable_relocation_targets(
-            &decoded.inputs,
+            &weak_alias_inputs,
             &decoded.archive_group,
             &decoded.archive_member,
             &decoded.source_object,
@@ -2425,7 +2572,7 @@ fn write_linked_pe(
     }
     let named_frontier_start = selected.inputs.len();
     retain_named_code_targets(
-        &decoded.inputs,
+        &weak_alias_inputs,
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
@@ -2434,7 +2581,7 @@ fn write_linked_pe(
         writable_frontier_start,
     )?;
     retain_named_code_targets(
-        &decoded.inputs,
+        &weak_alias_inputs,
         &decoded.archive_group,
         &decoded.archive_member,
         &decoded.source_object,
@@ -2450,7 +2597,7 @@ fn write_linked_pe(
             &selected,
         )?;
         if !retain_exact_readonly_relocation_targets(
-            &decoded.inputs,
+            &weak_alias_inputs,
             &decoded.archive_group,
             &decoded.archive_member,
             &decoded.source_object,
@@ -3086,6 +3233,69 @@ mod tests {
             CodegenOptions::WRAPPING
         );
         assert!(parse_codegen_options("overflow-checks=maybe").is_err());
+    }
+
+    #[test]
+    fn contextualizes_bounded_coff_weak_alias_relocations() {
+        let relocations = [
+            LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("getpid"),
+                addend: -4,
+            },
+            LinkRelocation {
+                offset: 4,
+                target: LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(
+                    "getpid",
+                )),
+                addend: 0,
+            },
+        ];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &relocations,
+        };
+        let aliases = [CoffWeakAlias {
+            alias: "getpid",
+            fallback: "_getpid",
+        }];
+        let mut arenas = relocation_arenas(1).unwrap();
+        let contextual = contextualize_coff_weak_aliases(&[input], &aliases, &mut arenas).unwrap();
+        assert_eq!(
+            contextual[0].relocations,
+            &[
+                LinkRelocation {
+                    offset: 0,
+                    target: LinkRelocationTarget::Symbol("_getpid"),
+                    addend: -4,
+                },
+                LinkRelocation {
+                    offset: 4,
+                    target: LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(
+                        "_getpid"
+                    ),),
+                    addend: 0,
+                },
+            ]
+        );
+
+        let strong = LinkInput {
+            symbol: "getpid",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let mut strong_arenas = relocation_arenas(2).unwrap();
+        let strong_contextual =
+            contextualize_coff_weak_aliases(&[input, strong], &aliases, &mut strong_arenas)
+                .unwrap();
+        assert_eq!(strong_contextual[0].relocations, &relocations);
     }
 
     #[test]
