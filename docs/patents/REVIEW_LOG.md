@@ -10952,3 +10952,92 @@ completed. This record therefore makes no patent-clearance, license-coverage,
 non-infringement, essentiality, validity, or legal conclusion. Search and
 legal-status confidence remain **LOW**; technical overlap beyond the named
 standard wire mechanisms remains unassessed.
+
+## 2026-08-31 — Patent policy scope amendment: Canada only
+
+The owner changed MRML's mandatory patent-review territory to Canada. Canadian
+claim comparison and authoritative CIPO status verification are now the sole
+patent gates for development and Canadian release. Foreign and worldwide family
+research is optional discovery context and no longer blocks Canadian work.
+Historical worldwide entries remain unchanged as provenance.
+
+Intentional hosting, distribution, commercial release, manufacture, import,
+sale, or operation outside Canada requires an explicit policy amendment and
+jurisdiction-specific review before that expansion. This policy choice is not a
+legal opinion, freedom-to-operate conclusion, or statement that foreign rights
+do not exist.
+
+## 2026-08-31 — HTTP/3 and QUIC baseline — Canada
+
+- Trigger: **TRIGGERED**
+- Disposition: **CONDITIONAL_PROCEED**
+- Confidence: **MEDIUM**
+- Jurisdiction: **CA**
+- Review type: technical patent-family and standards-IPR screening
+- Clearance conclusion: none
+- Provenance: professional-review summary supplied and adopted by the owner;
+  underlying privileged work product is not reproduced here
+
+### Reviewed protocol scope
+
+- RFC 9000 — QUIC version 1
+- RFC 9001 — QUIC-TLS
+- RFC 9002 — loss detection and congestion control
+- RFC 9114 — HTTP/3
+- RFC 9204 — QPACK
+
+### Findings
+
+1. The filed base-QUIC recovery disclosure identifies US 9,288,128. The
+   reviewed family contains no Canadian member, and the disclosure includes an
+   RF/RAND implementation commitment.
+2. TLS 1.3 disclosure 2900 identifies WO 2007/115982. Its Canadian family
+   member, CA 2,648,377, is mapped as abandoned. The disclosed mechanism
+   concerns encryption of a client authentication certificate or client
+   identity and is excluded from the MRML baseline.
+3. CA 3,099,038, *Multi-Path User Datagram Protocol*, directly concerns
+   multipath UDP aggregation, adaptive path selection, duplication, and
+   receiver reordering. CIPO reports the application as deemed abandoned, but
+   not as beyond the period of reinstatement. These mechanisms remain excluded
+   and the application remains monitored.
+4. Sampled families involving asserted QUIC timeout handling, CDN migration,
+   multipath QUIC, QUIC anycast/CID policy, and selective DATAGRAM
+   retransmission showed no Canadian national family member.
+5. The IETF disclosure database is not exhaustive. No conclusion is made for
+   unknown, unpublished, unrelated, or incorrectly classified Canadian
+   applications.
+
+### Approved bounded profile
+
+- one active QUIC data path
+- standard RFC 9000 path validation and rebinding
+- standard RFC 9001 TLS 1.3 and ALPN
+- RFC 9002 NewReno-like congestion control
+- RFC 9114 core HTTP/3
+- QPACK static/literal operation with dynamic capacity zero
+- 0-RTT disabled
+
+### Excluded mechanisms
+
+- simultaneous multipath or packet striping
+- adaptive best-path grouping or redundant duplication
+- MASQUE or QUIC-aware proxying
+- CDN/cross-server connection migration
+- policy-encoded connection identifiers
+- in-network retransmission or FEC
+- alternative congestion controllers
+- bespoke TLS identity-protection extensions
+- QUIC/TLS hardware offload
+
+### Re-review triggers
+
+- implementation of any excluded mechanism
+- movement of CA 3,099,038 or CA 2,648,377 to an active status
+- a new IETF IPR disclosure affecting the reviewed RFCs
+- public or commercial release
+- intentional distribution or operation outside Canada
+- material changes to the selected protocol algorithms
+
+Patent review: **TRIGGERED**, disposition **CONDITIONAL_PROCEED** for the exact
+bounded Canadian profile above. This is technical risk screening, not legal
+advice or patent clearance.

@@ -223,5 +223,5 @@ devices, and recovery.
 
 Patent review: `TRIGGERED` — typed firmware transactions, A/B/deployment binding,
 trust-set composition, rollback handling, and Secure Boot management require
-mechanism-specific worldwide review before implementation. See
+mechanism-specific Canadian review before implementation. See
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

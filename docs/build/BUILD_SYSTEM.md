@@ -701,5 +701,5 @@ service uses this bounded form to compose AHCI, NVMe, and classic IDE providers.
 
 Patent review: `TRIGGERED` — package/release/image construction, content identity,
 provenance, parser reuse/differential validation, and publication compositions
-require mechanism-specific worldwide review before implementation. See
+require mechanism-specific Canadian review before implementation. See
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

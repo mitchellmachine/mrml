@@ -829,7 +829,7 @@ retention root, and cleanup result as adversarial.
 
 Patent review: `TRIGGERED` — package/interface resolution, executable loading,
 generated ABI bindings, update/retention composition, and shared-page accounting
-require mechanism-specific worldwide review before implementation. Record that
+require mechanism-specific Canadian review before implementation. Record that
 review in [patents/REVIEW_LOG.md](../patents/REVIEW_LOG.md); this design does not
 establish patent clearance and agent review does not replace human dual review.
 

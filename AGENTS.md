@@ -288,8 +288,13 @@ non-overlapping implementation cannot be established, pause that mechanism for
 targeted review or use a documented design-around rather than guessing.
 
 Search claim limitations and actual MRML mechanisms, not titles or branding.
-Discover families worldwide, but verify claims and status independently in the
-authoritative national or regional register for every material right; a PCT
-publication is not a worldwide patent. Persist public findings under
-`docs/patents/`. Never copy patent implementation prose into code or state that
-MRML is patent-free or infringes a patent solely from automated analysis.
+Canada is MRML's sole mandatory patent-review jurisdiction. Verify every
+material Canadian right independently in CIPO's authoritative register; a PCT
+or foreign publication is discovery context, not a Canadian patent. Foreign
+family discovery is optional and does not block Canadian development or
+release. Intentional hosting, distribution, commercial release, manufacture,
+import, sale, or operation outside Canada requires an explicit policy amendment
+and jurisdiction-specific re-review before that expansion. Persist public
+findings under `docs/patents/`. Never copy patent implementation prose into code
+or state that MRML is patent-free or infringes a patent solely from automated
+analysis.

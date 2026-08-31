@@ -131,5 +131,5 @@ HCI/L2CAP/ATT/GATT/profile codecs. Physical claims require exact devices/firmwar
 
 Patent review: `TRIGGERED` — connection configuration transactions, rollback,
 privacy identities, pairing/profile mediation, and lifecycle compositions require
-mechanism-specific worldwide review before implementation. See
+mechanism-specific Canadian review before implementation. See
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

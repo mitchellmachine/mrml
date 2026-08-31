@@ -262,6 +262,6 @@ monitor-off parity; blind-user testing; then ABI stabilization.
 
 Patent review: `TRIGGERED` — planned browser semantic protocols, JavaScript and
 WebAssembly execution/admission, media-description flow, and related interfaces
-require targeted mechanism and worldwide-family review before implementation.
+require targeted mechanism and Canadian-right review before implementation.
 This document makes no clearance or infringement claim; record review in
 [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).

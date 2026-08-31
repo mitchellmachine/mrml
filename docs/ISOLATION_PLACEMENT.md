@@ -1499,7 +1499,7 @@ Existing-object reuse: HIGH
 
 Patent review: **TRIGGERED**. Adaptive placement selection, interface transport,
 whole-system isolation policy, and boot-time policy composition require targeted
-worldwide claim review before implementation. See
+Canadian claim review before implementation. See
 [the patent review log](patents/REVIEW_LOG.md); this is technical screening, not
 legal advice or a clearance conclusion.
 

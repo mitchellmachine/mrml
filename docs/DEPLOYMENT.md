@@ -888,5 +888,5 @@ commit, and last-known-good destruction.
 Patent review: `TRIGGERED` — package/image containers, content-addressed
 deployment, snapshot/export, offline servicing, Store update, A/B boot,
 transactional install, and object-shell compositions require mechanism-specific
-worldwide review before implementation. See
+Canadian review before implementation. See
 [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
