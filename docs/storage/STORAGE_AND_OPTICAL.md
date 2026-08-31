@@ -1824,6 +1824,24 @@ continues the existing mapping-withdrawal path. Mapping removal, address-space
 cleanup, and successor dispatch are not yet manager-retained, and this remains
 Linux unit-test rather than installed or hardware evidence.
 
+Reverse-order mapping withdrawal is now manager-owned. It consumes only the
+retained retired owner, keeps the supervisor retirement token paired with the
+concrete hierarchy throughout four CPU/DMA leaf removals and final ABAR
+removal, and stores the empty root on success. Any removal error reconstructs
+the exact incomplete retired owner and preserves its diagnostic; success
+returns only a task/service/root receipt and rejects replay. The controlled
+lifecycle test advances through this manager transition, verifies the empty
+mapping owner and continued cleanup withholding, then transfers the paired
+state to the existing cleanup path. Failure-owner behavior remains covered by
+the underlying mapping-set rollback tests; installed SMP invalidation, IOMMU,
+booted dispatch, and hardware were not exercised.
+
+Patent review: **NOT_TRIGGERED**. Retaining the existing reverse-order mapping
+withdrawal success/error owners with their supervisor token is conventional
+fail-closed lifecycle composition. It adds no parser, controller command, DMA
+algorithm, persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining existing supervisor-retirement
 success and retry owners inside the bounded manager state is conventional
 fail-closed lifecycle composition. It adds no parser, controller command, DMA

@@ -691,6 +691,18 @@ pub struct KernelAhciServiceTeardownManager<
     retired: Option<
         RetiredKernelAhciServiceTask<'resources, S, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
     >,
+    mappings_removed: Option<
+        RetiredKernelAhciServiceMappingsRemoved<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -742,6 +754,34 @@ pub struct KernelAhciServiceRetired {
     task: TaskId,
     service: ServiceId,
     root: mrml_kernel::PhysAddr,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceManagerMappingRemovalError {
+    NotRetired,
+    AlreadyRemoved,
+    Removal(crate::KernelAhciPreactivationMappingSetError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceMappingsRemoved {
+    task: TaskId,
+    service: ServiceId,
+    root: mrml_kernel::PhysAddr,
+}
+
+impl KernelAhciServiceMappingsRemoved {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn root(self) -> mrml_kernel::PhysAddr {
+        self.root
+    }
 }
 
 impl KernelAhciServiceRetired {
@@ -1511,6 +1551,7 @@ impl<
             quiesce_error: None,
             quiesced: None,
             retired: None,
+            mappings_removed: None,
         })
     }
 
@@ -1532,6 +1573,10 @@ impl<
 
     pub const fn retired(&self) -> bool {
         self.retired.is_some()
+    }
+
+    pub const fn mappings_removed(&self) -> bool {
+        self.mappings_removed.is_some()
     }
 
     pub fn quiesce_failure(&self) -> Option<&KernelAhciServiceDeviceQuiesceFailure> {
@@ -1794,6 +1839,78 @@ impl<
     > {
         match self.retired.take() {
             Some(retired) => Ok((self.slot, retired)),
+            None => Err(self),
+        }
+    }
+
+    /// Withdraws the four CPU/DMA leaves and ABAR while the manager retains
+    /// the supervisor retirement token. Failure restores the exact incomplete
+    /// retired owner for inspection or retry.
+    ///
+    /// # Safety
+    ///
+    /// The retained page-table backend must truthfully perform required SMP
+    /// invalidation and keep successor dispatch withheld.
+    pub unsafe fn remove_mappings(
+        &mut self,
+    ) -> Result<KernelAhciServiceMappingsRemoved, KernelAhciServiceManagerMappingRemovalError> {
+        if self.mappings_removed.is_some() {
+            return Err(KernelAhciServiceManagerMappingRemovalError::AlreadyRemoved);
+        }
+        let retired = self
+            .retired
+            .take()
+            .ok_or(KernelAhciServiceManagerMappingRemovalError::NotRetired)?;
+        match unsafe { remove_retired_kernel_ahci_service_mappings(retired) } {
+            Ok(removed) => {
+                let receipt = KernelAhciServiceMappingsRemoved {
+                    task: removed.task(),
+                    service: removed.service(),
+                    root: removed.root(),
+                };
+                self.mappings_removed = Some(removed);
+                Ok(receipt)
+            }
+            Err(error) => {
+                let diagnostic = error.error();
+                self.retired = Some(error.into_owner());
+                Err(KernelAhciServiceManagerMappingRemovalError::Removal(
+                    diagnostic,
+                ))
+            }
+        }
+    }
+
+    pub fn into_mappings_removed_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            RetiredKernelAhciServiceMappingsRemoved<
+                'resources,
+                S,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self.mappings_removed.take() {
+            Some(removed) => Ok((self.slot, removed)),
             None => Err(self),
         }
     }

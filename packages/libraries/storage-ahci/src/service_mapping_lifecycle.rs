@@ -1828,12 +1828,6 @@ mod tests {
             unsafe { teardown_manager.retire(&mut supervisor, &mut fixture.runtime) },
             Err(crate::KernelAhciServiceManagerRetirementError::AlreadyRetired)
         );
-        let (_exit_slot, retired) = teardown_manager
-            .into_retired_parts()
-            .unwrap_or_else(|_| panic!("manager must retain the exact retired owner"));
-        assert_eq!(retired.service(), service_id);
-        assert_eq!(retired.task(), target_task);
-        assert_eq!(retired.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(supervisor.task(service_id), Ok(None));
         assert_eq!(
             supervisor.state(service_id),
@@ -1843,8 +1837,19 @@ mod tests {
         assert_eq!(fixture.runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
         // SAFETY: the inactive-page-table model exact-matches all five leaves;
         // each successful write is its modeled translation-withdrawal proof.
-        let removed = unsafe { crate::remove_retired_kernel_ahci_service_mappings(retired) }
+        let removed_receipt = unsafe { teardown_manager.remove_mappings() }
             .unwrap_or_else(|_| panic!("retired concrete mappings must withdraw"));
+        assert_eq!(removed_receipt.service(), service_id);
+        assert_eq!(removed_receipt.task(), target_task);
+        assert_eq!(removed_receipt.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert!(teardown_manager.mappings_removed());
+        assert_eq!(
+            unsafe { teardown_manager.remove_mappings() },
+            Err(crate::KernelAhciServiceManagerMappingRemovalError::AlreadyRemoved)
+        );
+        let (_exit_slot, removed) = teardown_manager
+            .into_mappings_removed_parts()
+            .unwrap_or_else(|_| panic!("manager must retain the empty retired root"));
         assert_eq!(removed.service(), service_id);
         assert_eq!(removed.task(), target_task);
         assert_eq!(removed.root(), PhysAddr::new(TABLE_BASE).unwrap());
