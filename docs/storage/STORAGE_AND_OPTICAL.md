@@ -1896,6 +1896,23 @@ exit path is conventional fail-closed dispatch composition. It adds no parser,
 controller command, DMA behavior, persistent storage format, or authority
 model. See [the patent review log](../patents/REVIEW_LOG.md).
 
+AHCI discovery now has a bounded, authority-free BAR5 size-probe observation
+decoder. It accepts only the original BAR value, the all-ones probe mask, and a
+re-read restored value; exact restoration, conventional non-prefetchable 32-bit
+memory encoding, a contiguous power-of-two mask, the minimum AHCI register
+extent, a nonzero base, and base/extent alignment must all hold before an exact
+byte length is published. The focused tests reject restoration drift,
+noncontiguous masks, undersized extents, misalignment, I/O BARs, 64-bit BARs,
+prefetchable BARs, and a missing base. This supplies the arithmetic/verification
+boundary needed by a future exclusive native PCI enumerator, but performs no
+configuration-space writes and grants no assignment, mapping, MMIO, DMA, or
+launch authority. No PCI device or physical AHCI hardware was exercised.
+
+Patent review: **NOT_TRIGGERED**. Decoding the conventional PCI BAR sizing mask
+and requiring exact restoration before publishing geometry is standard bounded
+validation. It adds no controller command, DMA behavior, persistent format, or
+authority model. See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
 success and error owners in a bounded manager state is conventional fail-closed
 lifecycle composition. It adds no parser, controller command, DMA behavior,

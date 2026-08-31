@@ -16,6 +16,75 @@ const PCI_MEMORY_BAR_32_BIT: u32 = 0;
 const PCI_MEMORY_BAR_PREFETCHABLE: u32 = 0b1000;
 const PCI_MEMORY_BAR_ADDRESS_MASK: u32 = 0xffff_fff0;
 
+/// Values captured by an exclusive PCI enumerator around one conventional
+/// BAR sizing transaction. Observation data never grants mapping or MMIO
+/// authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AhciAbarSizeProbe {
+    original: u32,
+    size_mask: u32,
+    restored: u32,
+}
+
+impl AhciAbarSizeProbe {
+    pub const fn new(original: u32, size_mask: u32, restored: u32) -> Self {
+        Self {
+            original,
+            size_mask,
+            restored,
+        }
+    }
+
+    /// Derives an exact 32-bit memory BAR extent only after exact restoration
+    /// and a conventional contiguous size mask were observed.
+    pub fn bytes(self) -> Result<u64, AhciAbarSizeProbeError> {
+        if self.restored != self.original {
+            return Err(AhciAbarSizeProbeError::RestorationMismatch);
+        }
+        if self.original & PCI_BAR_IO_SPACE != 0 {
+            return Err(AhciAbarSizeProbeError::IoBar);
+        }
+        if self.original & PCI_MEMORY_BAR_TYPE_MASK != PCI_MEMORY_BAR_32_BIT {
+            return Err(AhciAbarSizeProbeError::UnsupportedMemoryBar);
+        }
+        if self.original & PCI_MEMORY_BAR_PREFETCHABLE != 0 {
+            return Err(AhciAbarSizeProbeError::PrefetchableBar);
+        }
+        let masked = self.size_mask & PCI_MEMORY_BAR_ADDRESS_MASK;
+        let bytes = (!masked).wrapping_add(1) & PCI_MEMORY_BAR_ADDRESS_MASK;
+        if bytes == 0
+            || !bytes.is_power_of_two()
+            || masked != (!(bytes - 1) & PCI_MEMORY_BAR_ADDRESS_MASK)
+        {
+            return Err(AhciAbarSizeProbeError::MalformedSizeMask);
+        }
+        let bytes = u64::from(bytes);
+        if bytes < AHCI_ABAR_MINIMUM_BYTES {
+            return Err(AhciAbarSizeProbeError::TooSmall);
+        }
+        let base = u64::from(self.original & PCI_MEMORY_BAR_ADDRESS_MASK);
+        if base == 0 {
+            return Err(AhciAbarSizeProbeError::MissingAbar);
+        }
+        if base & (bytes - 1) != 0 {
+            return Err(AhciAbarSizeProbeError::MisalignedAbar);
+        }
+        Ok(bytes)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciAbarSizeProbeError {
+    RestorationMismatch,
+    IoBar,
+    UnsupportedMemoryBar,
+    PrefetchableBar,
+    MalformedSizeMask,
+    TooSmall,
+    MissingAbar,
+    MisalignedAbar,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PciFunctionLocation {
     pub segment: u16,
@@ -234,5 +303,50 @@ mod tests {
         assert!(PciFunctionLocation::new(0, 0, 31, 7).is_some());
         assert!(PciFunctionLocation::new(0, 0, 32, 0).is_none());
         assert!(PciFunctionLocation::new(0, 0, 0, 8).is_none());
+    }
+
+    #[test]
+    fn abar_size_probe_requires_restoration_and_contiguous_geometry() {
+        let original = 0xf7f0_0000;
+        assert_eq!(
+            AhciAbarSizeProbe::new(original, 0xffff_e000, original).bytes(),
+            Ok(0x2000)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(original, 0xffff_e000, original + 0x1000).bytes(),
+            Err(AhciAbarSizeProbeError::RestorationMismatch)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(original, 0xffff_d000, original).bytes(),
+            Err(AhciAbarSizeProbeError::MalformedSizeMask)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(original, 0xffff_f000, original).bytes(),
+            Err(AhciAbarSizeProbeError::TooSmall)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(original + 0x1000, 0xffff_e000, original + 0x1000).bytes(),
+            Err(AhciAbarSizeProbeError::MisalignedAbar)
+        );
+    }
+
+    #[test]
+    fn abar_size_probe_rejects_nonconventional_encodings() {
+        assert_eq!(
+            AhciAbarSizeProbe::new(0xf7f0_0001, 0xffff_e001, 0xf7f0_0001).bytes(),
+            Err(AhciAbarSizeProbeError::IoBar)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(0xf7f0_0004, 0xffff_e004, 0xf7f0_0004).bytes(),
+            Err(AhciAbarSizeProbeError::UnsupportedMemoryBar)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(0xf7f0_0008, 0xffff_e008, 0xf7f0_0008).bytes(),
+            Err(AhciAbarSizeProbeError::PrefetchableBar)
+        );
+        assert_eq!(
+            AhciAbarSizeProbe::new(0, 0xffff_e000, 0).bytes(),
+            Err(AhciAbarSizeProbeError::MissingAbar)
+        );
     }
 }

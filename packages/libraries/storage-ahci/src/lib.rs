@@ -83,7 +83,8 @@ pub use ahci_controller::{
 };
 pub use ahci_discovery::{
     AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE, AHCI_PCI_SUBCLASS,
-    AhciAbarDescriptor, AhciDiscoveryError, AhciPciFunctionSnapshot, PciFunctionLocation,
+    AhciAbarDescriptor, AhciAbarSizeProbe, AhciAbarSizeProbeError, AhciDiscoveryError,
+    AhciPciFunctionSnapshot, PciFunctionLocation,
 };
 pub use ahci_dma::{
     AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_ALIGNMENT,
