@@ -762,10 +762,52 @@ impl PeTlsCallbackOrder {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PeCrtInitializerFamily {
+    C,
+    D,
+    I,
+}
+
+impl PeCrtInitializerFamily {
+    const fn index(self) -> usize {
+        match self {
+            Self::C => 0,
+            Self::D => 1,
+            Self::I => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PeCrtInitializerOrder {
+    family: PeCrtInitializerFamily,
+    suffix: u8,
+}
+
+impl PeCrtInitializerOrder {
+    pub const fn new(family: PeCrtInitializerFamily, suffix: u8) -> Option<Self> {
+        if suffix >= b'A' && suffix <= b'Z' {
+            Some(Self { family, suffix })
+        } else {
+            None
+        }
+    }
+
+    pub const fn family(self) -> PeCrtInitializerFamily {
+        self.family
+    }
+
+    pub const fn suffix(self) -> u8 {
+        self.suffix
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeDataKind {
     Writable,
     Tls,
+    CrtInitializer(PeCrtInitializerOrder),
     TlsCallback(PeTlsCallbackOrder),
 }
 
@@ -3496,6 +3538,25 @@ fn coff_tls_callback_order(name: &str) -> Result<Option<PeTlsCallbackOrder>, Lin
         .ok_or(LinkerError::UnsupportedCoffTls)
 }
 
+fn coff_crt_initializer_order(name: &str) -> Result<Option<PeCrtInitializerOrder>, LinkerError> {
+    let Some(suffix) = name.strip_prefix(".CRT$X") else {
+        return Ok(None);
+    };
+    let suffix = suffix.as_bytes();
+    let family = match suffix.first().copied() {
+        Some(b'C') => PeCrtInitializerFamily::C,
+        Some(b'D') => PeCrtInitializerFamily::D,
+        Some(b'I') => PeCrtInitializerFamily::I,
+        _ => return Ok(None),
+    };
+    if suffix.len() != 2 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    PeCrtInitializerOrder::new(family, suffix[1])
+        .map(Some)
+        .ok_or(LinkerError::UnsupportedCoff)
+}
+
 fn coff_is_zeroed_writable_section(name: &str) -> bool {
     name == ".bss" || name.starts_with(".bss$")
 }
@@ -4259,7 +4320,10 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             }
             let data_kind = match coff_tls_callback_order(name)? {
                 Some(order) => PeDataKind::TlsCallback(order),
-                None => PeDataKind::Writable,
+                None => match coff_crt_initializer_order(name)? {
+                    Some(order) => PeDataKind::CrtInitializer(order),
+                    None => PeDataKind::Writable,
+                },
             };
             if writable_ordinal == fragment_index {
                 let bytes = if zeroed {
@@ -8357,6 +8421,108 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             writable_kept[index] = true;
         }
     }
+    let mut crt_initializer_indices = [0usize; MAX_LINK_INPUTS];
+    let mut crt_initializer_count = 0usize;
+    let mut crt_initializer_start_counts = [0usize; 3];
+    let mut crt_initializer_end_counts = [0usize; 3];
+    for (index, data) in writable_data.iter().enumerate() {
+        let PeDataKind::CrtInitializer(order) = data.kind else {
+            continue;
+        };
+        if !writable_kept[index] {
+            continue;
+        }
+        let family = order.family().index();
+        match order.suffix() {
+            b'A' => {
+                crt_initializer_start_counts[family] = crt_initializer_start_counts[family]
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            b'Z' => {
+                crt_initializer_end_counts[family] = crt_initializer_end_counts[family]
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            _ => {}
+        }
+        let slot = crt_initializer_indices
+            .get_mut(crt_initializer_count)
+            .ok_or(LinkerError::TooManyInputs)?;
+        *slot = index;
+        crt_initializer_count = crt_initializer_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    for family in 0..3 {
+        let present = crt_initializer_indices[..crt_initializer_count]
+            .iter()
+            .copied()
+            .any(|index| {
+                matches!(
+                    writable_data[index].kind,
+                    PeDataKind::CrtInitializer(order) if order.family().index() == family
+                )
+            });
+        if present
+            && (crt_initializer_start_counts[family] != 1
+                || crt_initializer_end_counts[family] != 1)
+        {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+    }
+    for index in 1..crt_initializer_count {
+        let selected = crt_initializer_indices[index];
+        let PeDataKind::CrtInitializer(selected_order) = writable_data[selected].kind else {
+            unreachable!();
+        };
+        let mut position = index;
+        while position > 0 {
+            let previous = crt_initializer_indices[position - 1];
+            let PeDataKind::CrtInitializer(previous_order) = writable_data[previous].kind else {
+                unreachable!();
+            };
+            if previous_order <= selected_order {
+                break;
+            }
+            crt_initializer_indices[position] = previous;
+            position -= 1;
+        }
+        crt_initializer_indices[position] = selected;
+    }
+    for index in crt_initializer_indices[..crt_initializer_count]
+        .iter()
+        .copied()
+    {
+        let data = &writable_data[index];
+        let PeDataKind::CrtInitializer(order) = data.kind else {
+            unreachable!();
+        };
+        if data.initialized.len() != 8
+            || data.initialized.iter().any(|byte| *byte != 0)
+            || data.zeroed_size != 0
+        {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        if matches!(order.suffix(), b'A' | b'Z') {
+            if !data.relocations.is_empty() {
+                return Err(LinkerError::UnsupportedCoff);
+            }
+            continue;
+        }
+        let [relocation] = data.relocations else {
+            return Err(LinkerError::UnsupportedCoff);
+        };
+        if relocation.offset != 0 {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        resolve_pe_code_pointer_target(
+            inputs,
+            &linked_layouts,
+            relocation.target,
+            LinkerError::UnsupportedCoff,
+        )?;
+    }
     let mut tls_callback_indices = [0usize; MAX_LINK_INPUTS];
     let mut tls_callback_count = 0usize;
     let mut tls_callback_start_count = 0usize;
@@ -8434,7 +8600,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if relocation.offset != 0 {
             return Err(LinkerError::UnsupportedCoffTls);
         }
-        resolve_pe_tls_callback_target(inputs, &linked_layouts, relocation.target)?;
+        resolve_pe_code_pointer_target(
+            inputs,
+            &linked_layouts,
+            relocation.target,
+            LinkerError::UnsupportedCoffTls,
+        )?;
     }
     let has_tls = writable_data
         .iter()
@@ -8477,7 +8648,10 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if !writable_kept[index] {
             continue;
         }
-        if matches!(data.kind, PeDataKind::Tls | PeDataKind::TlsCallback(_)) {
+        if matches!(
+            data.kind,
+            PeDataKind::Tls | PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+        ) {
             continue;
         }
         if data.initialized.is_empty() || data.zeroed_size != 0 {
@@ -8502,6 +8676,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 .filter(|end| *end <= data.initialized.len())
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
         }
+    }
+    for index in crt_initializer_indices[..crt_initializer_count]
+        .iter()
+        .copied()
+    {
+        writable_size = align(writable_size, 8)?;
+        writable_offsets[index] = writable_size;
+        writable_size = writable_size
+            .checked_add(writable_data[index].initialized.len())
+            .ok_or(LinkerError::OffsetOverflow)?;
     }
     let tls_callback_start_offset = if tls_callback_count == 0 {
         None
@@ -8542,7 +8726,10 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if !writable_kept[index] {
             continue;
         }
-        if matches!(data.kind, PeDataKind::Tls | PeDataKind::TlsCallback(_)) {
+        if matches!(
+            data.kind,
+            PeDataKind::Tls | PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+        ) {
             continue;
         }
         if !data.initialized.is_empty() {
@@ -10154,10 +10341,11 @@ fn resolve_symbol(
     Err(LinkerError::UndefinedSymbol)
 }
 
-fn resolve_pe_tls_callback_target(
+fn resolve_pe_code_pointer_target(
     inputs: &[LinkInput<'_, '_, '_>],
     layouts: &[InputLayout; MAX_LINK_FRAGMENTS],
     target: PeWritableRelocationTarget<'_>,
+    invalid_error: LinkerError,
 ) -> Result<usize, LinkerError> {
     match target {
         PeWritableRelocationTarget::TextSymbol(symbol) => {
@@ -10166,10 +10354,10 @@ fn resolve_pe_tls_callback_target(
                     continue;
                 };
                 let LinkDefinitionTarget::Text(offset) = definition else {
-                    return Err(LinkerError::UnsupportedCoffTls);
+                    return Err(invalid_error);
                 };
                 if offset >= input.text.len() {
-                    return Err(LinkerError::UnsupportedCoffTls);
+                    return Err(invalid_error);
                 }
                 return layout
                     .text
@@ -10212,7 +10400,7 @@ fn resolve_pe_tls_callback_target(
                         .checked_add(offset)
                         .ok_or(LinkerError::InvalidRelocationOffset)?;
                     if final_offset >= input.text.len() {
-                        return Err(LinkerError::UnsupportedCoffTls);
+                        return Err(invalid_error);
                     }
                     resolved = Some(
                         layout
@@ -10225,9 +10413,9 @@ fn resolve_pe_tls_callback_target(
             if !found {
                 return Err(LinkerError::UndefinedSymbol);
             }
-            resolved.ok_or(LinkerError::UnsupportedCoffTls)
+            resolved.ok_or(invalid_error)
         }
-        _ => Err(LinkerError::UnsupportedCoffTls),
+        _ => Err(invalid_error),
     }
 }
 
@@ -13439,6 +13627,56 @@ mod tests {
     }
 
     #[test]
+    fn retains_typed_coff_crt_initializer_order_independently_of_symbols() {
+        let order = PeCrtInitializerOrder::new(PeCrtInitializerFamily::I, b'C').unwrap();
+        assert_eq!(coff_crt_initializer_order(".CRT$XIC"), Ok(Some(order)));
+        assert_eq!(
+            coff_crt_initializer_order(".CRT$XCA"),
+            Ok(Some(
+                PeCrtInitializerOrder::new(PeCrtInitializerFamily::C, b'A').unwrap()
+            ))
+        );
+        assert_eq!(coff_crt_initializer_order(".CRT$XLC"), Ok(None));
+        assert_eq!(
+            coff_crt_initializer_order(".CRT$XI"),
+            Err(LinkerError::UnsupportedCoff)
+        );
+        assert_eq!(
+            coff_crt_initializer_order(".CRT$XIAA"),
+            Err(LinkerError::UnsupportedCoff)
+        );
+        assert_eq!(
+            coff_crt_initializer_order(".CRT$XIc"),
+            Err(LinkerError::UnsupportedCoff)
+        );
+
+        let mut object = coff_with_tls_callback_data();
+        object[100..108].copy_from_slice(b".CRT$XIC");
+        let mut storage = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::Readonly {
+                owner: "unused",
+                offset: 0,
+            },
+        }; MAX_LINK_RELOCATIONS];
+        let initializer = decode_x86_64_coff_writable_data_fragment_with_section_identities(
+            &object,
+            0,
+            "entry",
+            32,
+            &mut storage,
+        )
+        .unwrap();
+        assert_eq!(initializer.kind, PeDataKind::CrtInitializer(order));
+        assert_eq!(
+            initializer.identity,
+            Some(CoffSectionIdentity::new(32, 3).unwrap())
+        );
+        assert_eq!(initializer.initialized, &[0; 8]);
+        assert_eq!(initializer.relocations.len(), 1);
+    }
+
+    #[test]
     fn decodes_any_writable_comdat_and_rejects_unsupported_selection() {
         let object = coff_with_any_writable_comdat();
         let mut unsupported = object.clone();
@@ -13813,6 +14051,236 @@ mod tests {
         assert_eq!(read_image_u64(0x428), 0);
         assert_eq!(read_i32(pe.bytes(), 0x200).unwrap(), 4);
         assert_eq!(&pe.bytes()[0x600..0x608], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn orders_typed_pe_crt_initializer_families_stably() {
+        let first_initializer = CoffSectionIdentity::new(61, 1).unwrap();
+        let second_initializer = CoffSectionIdentity::new(61, 2).unwrap();
+        let definitions = [
+            LinkDefinition {
+                symbol: "first_initializer",
+                target: LinkDefinitionTarget::CoffTextSection {
+                    identity: first_initializer,
+                    offset: 1,
+                },
+            },
+            LinkDefinition {
+                symbol: "second_initializer",
+                target: LinkDefinitionTarget::CoffTextSection {
+                    identity: second_initializer,
+                    offset: 2,
+                },
+            },
+        ];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &definitions,
+            text: &[0xc3; 4],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let first_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity: first_initializer,
+                offset: 0,
+            },
+        }];
+        let second_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity: second_initializer,
+                offset: 0,
+            },
+        }];
+        fn initializer<'a, 'relocations>(
+            symbol: &'a str,
+            family: PeCrtInitializerFamily,
+            suffix: u8,
+            identity: CoffSectionIdentity,
+            relocations: &'relocations [PeWritableRelocation<'a>],
+        ) -> PeWritableData<'a, 'relocations> {
+            PeWritableData {
+                symbol,
+                identity: Some(identity),
+                kind: PeDataKind::CrtInitializer(
+                    PeCrtInitializerOrder::new(family, suffix).unwrap(),
+                ),
+                selection: PeWritableComdatSelection::None,
+                initialized: &[0; 8],
+                zeroed_size: 0,
+                relocations,
+            }
+        }
+        let writable = [
+            initializer(
+                "xi_z",
+                PeCrtInitializerFamily::I,
+                b'Z',
+                CoffSectionIdentity::new(62, 1).unwrap(),
+                &[],
+            ),
+            PeWritableData {
+                symbol: "prefix",
+                identity: None,
+                kind: PeDataKind::Writable,
+                selection: PeWritableComdatSelection::None,
+                initialized: &[9],
+                zeroed_size: 0,
+                relocations: &[],
+            },
+            initializer(
+                "xd_z",
+                PeCrtInitializerFamily::D,
+                b'Z',
+                CoffSectionIdentity::new(62, 2).unwrap(),
+                &[],
+            ),
+            initializer(
+                "zeta_rank",
+                PeCrtInitializerFamily::I,
+                b'C',
+                CoffSectionIdentity::new(62, 3).unwrap(),
+                &first_relocation,
+            ),
+            initializer(
+                "xc_z",
+                PeCrtInitializerFamily::C,
+                b'Z',
+                CoffSectionIdentity::new(62, 4).unwrap(),
+                &[],
+            ),
+            initializer(
+                "xd_a",
+                PeCrtInitializerFamily::D,
+                b'A',
+                CoffSectionIdentity::new(62, 5).unwrap(),
+                &[],
+            ),
+            initializer(
+                "xi_a",
+                PeCrtInitializerFamily::I,
+                b'A',
+                CoffSectionIdentity::new(62, 6).unwrap(),
+                &[],
+            ),
+            initializer(
+                "alpha_rank",
+                PeCrtInitializerFamily::I,
+                b'C',
+                CoffSectionIdentity::new(62, 7).unwrap(),
+                &second_relocation,
+            ),
+            initializer(
+                "xc_a",
+                PeCrtInitializerFamily::C,
+                b'A',
+                CoffSectionIdentity::new(62, 8).unwrap(),
+                &[],
+            ),
+        ];
+        let pe =
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], &writable)
+                .unwrap();
+
+        let read_image_u64 =
+            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
+        assert_eq!(pe.bytes()[0x400], 9);
+        assert_eq!(read_image_u64(0x408), 0);
+        assert_eq!(read_image_u64(0x410), 0);
+        assert_eq!(read_image_u64(0x418), 0);
+        assert_eq!(read_image_u64(0x420), 0);
+        assert_eq!(read_image_u64(0x428), 0);
+        assert_eq!(read_image_u64(0x430), 0x0000_0001_4000_1001);
+        assert_eq!(read_image_u64(0x438), 0x0000_0001_4000_1002);
+        assert_eq!(read_image_u64(0x440), 0);
+    }
+
+    #[test]
+    fn rejects_malformed_typed_pe_crt_initializer_tables() {
+        let definitions = [LinkDefinition {
+            symbol: "not_text",
+            target: LinkDefinitionTarget::ReadonlyData(0),
+        }];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &definitions,
+            text: &[0xc3],
+            readonly_data: &[42],
+            relocations: &[],
+        };
+        let start = PeWritableData {
+            symbol: "xi_a",
+            identity: Some(CoffSectionIdentity::new(71, 1).unwrap()),
+            kind: PeDataKind::CrtInitializer(
+                PeCrtInitializerOrder::new(PeCrtInitializerFamily::I, b'A').unwrap(),
+            ),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let end = PeWritableData {
+            symbol: "xi_z",
+            identity: Some(CoffSectionIdentity::new(71, 2).unwrap()),
+            kind: PeDataKind::CrtInitializer(
+                PeCrtInitializerOrder::new(PeCrtInitializerFamily::I, b'Z').unwrap(),
+            ),
+            ..start
+        };
+        let valid_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("entry"),
+        }];
+        let interior = PeWritableData {
+            symbol: "xi_c",
+            identity: Some(CoffSectionIdentity::new(71, 3).unwrap()),
+            kind: PeDataKind::CrtInitializer(
+                PeCrtInitializerOrder::new(PeCrtInitializerFamily::I, b'C').unwrap(),
+            ),
+            relocations: &valid_relocation,
+            ..start
+        };
+        let duplicate_start = PeWritableData {
+            symbol: "second_xi_a",
+            identity: Some(CoffSectionIdentity::new(72, 1).unwrap()),
+            ..start
+        };
+        let nonzero_start = PeWritableData {
+            symbol: "nonzero_xi_a",
+            initialized: &[1, 0, 0, 0, 0, 0, 0, 0],
+            ..start
+        };
+        let nontext_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("not_text"),
+        }];
+        let nontext_interior = PeWritableData {
+            symbol: "nontext_xi_c",
+            relocations: &nontext_relocation,
+            ..interior
+        };
+        let no_relocation_interior = PeWritableData {
+            symbol: "empty_xi_c",
+            relocations: &[],
+            ..interior
+        };
+
+        for writable in [
+            &[end][..],
+            &[start, duplicate_start, end],
+            &[nonzero_start, end],
+            &[start, no_relocation_interior, end],
+            &[start, nontext_interior, end],
+        ] {
+            assert_eq!(
+                link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], writable,),
+                Err(LinkerError::UnsupportedCoff)
+            );
+        }
     }
 
     #[test]

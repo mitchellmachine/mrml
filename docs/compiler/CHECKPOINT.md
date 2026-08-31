@@ -1529,6 +1529,23 @@ returned 42. This is one hosted Wine path, not native Windows, general `std`,
 complete PE startup/TLS
 lifecycle, WHP, or physical-hardware evidence.
 
+The adjacent typed CRT initializer checkpoint retains `.CRT$XC*`, `.CRT$XD*`,
+and `.CRT$XI*` as distinct family/suffix identities. It lays each present family
+out contiguously in lexical family/suffix order while preserving input order for
+equal suffixes. Every family requires one null `A` and `Z` sentinel, and every
+interior eight-byte slot requires one exact zero-offset `ADDR64` relocation to
+code in the referenced text input; missing or duplicate sentinels, malformed
+slots, non-code targets, and one-past targets fail closed. The combined Linux
+canonical gate passed 836/836 core units, 2/2 object-evidence tests, 10/10
+conformance tests, 351/351 replacements, and 128/128 semantic tests. The release
+driver build passed. The exact pinned `std` execution probe emitted 2,389,504
+bytes with SHA-256
+`f614d514b0781c4d144c9d0b9e0b4b86187fe2c89c7fb0ca5807b1802c3b1efa`;
+Wine 11.16 loaded the image and returned 42. Because the probe directly enters
+its authored `entry`, this is deterministic hosted loading evidence, not proof
+of CRT initializer invocation, native Windows, general `std`, complete PE
+startup/TLS lifecycle, WHP, or physical hardware.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.
