@@ -1569,17 +1569,21 @@ mod tests {
         let mut supervisor = ServiceSupervisor::<1>::new();
         // SAFETY: this consumes the retained exact owner under the same modeled
         // PAT, alias-exclusion, and inactive-root assumptions.
-        let mut manager_slot = crate::X86AhciServiceExitSlot::empty();
-        assert!(!manager_slot.occupied());
+        let mut teardown_manager = crate::KernelAhciServiceTeardownManager::empty();
+        assert!(!teardown_manager.active());
         let empty_exit =
             crate::KernelAhciServiceExitRequest::admit(mrml_kernel::SyscallRequest::Exit).unwrap();
         assert!(matches!(
-            manager_slot.route(empty_exit, &supervisor, &mut fixture.runtime),
+            teardown_manager.activation_slot().unwrap().route(
+                empty_exit,
+                &supervisor,
+                &mut fixture.runtime
+            ),
             Err(crate::KernelAhciServiceExitSlotRouteError::Empty)
         ));
         match unsafe {
             crate::activate_and_populate_x86_ahci_service_exit_slot(
-                &mut manager_slot,
+                teardown_manager.activation_slot().unwrap(),
                 failure.into_owner(),
                 RestartPolicy::ONCE_IMMEDIATE,
                 &mut supervisor,
@@ -1591,17 +1595,19 @@ mod tests {
             Ok(()) => {}
             Err(_) => panic!("exact activation and manager installation must succeed"),
         }
-        assert_eq!(manager_slot.task(), Some(target_task));
-        let installed_service = manager_slot
+        assert_eq!(teardown_manager.task(), Some(target_task));
+        let installed_service = teardown_manager
             .service()
             .unwrap_or_else(|| panic!("occupied manager slot must retain the service binding"));
         assert_eq!(supervisor.task(installed_service), Ok(Some(target_task)));
         assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
         assert_eq!(fixture.runtime.load().runnable(), 2);
-        assert!(manager_slot.occupied());
-        let (active, lease) = manager_slot
-            .into_parts()
-            .unwrap_or_else(|| panic!("unrouted manager slot must return both exact owners"));
+        assert!(teardown_manager.active());
+        let manager_slot = teardown_manager.activation_slot().unwrap();
+        let (active, lease) =
+            core::mem::replace(manager_slot, crate::X86AhciServiceExitSlot::empty())
+                .into_parts()
+                .unwrap_or_else(|| panic!("unrouted manager slot must return both exact owners"));
         let service_id = active.service();
         assert_eq!(active.task(), target_task);
         assert_eq!(active.root(), PhysAddr::new(TABLE_BASE).unwrap());
@@ -1710,18 +1716,18 @@ mod tests {
         ));
         let mut hostile_frame = user_call_frame(3);
         hostile_frame.cs = 0;
-        let mut exit_manager = crate::KernelAhciServiceExitManager::from_slot(exit_slot)
-            .unwrap_or_else(|_| panic!("occupied slot must become retained manager state"));
+        let mut teardown_manager = crate::KernelAhciServiceTeardownManager::empty();
+        *teardown_manager.activation_slot().unwrap() = exit_slot;
         assert!(matches!(
-            exit_manager.route_frame(&hostile_frame, &supervisor, &mut fixture.runtime),
+            teardown_manager.route_frame(&hostile_frame, &supervisor, &mut fixture.runtime),
             Err(crate::KernelAhciServiceExitManagerDispatchError::Dispatch(
                 crate::KernelAhciServiceExitDispatchError::Decode(UserCallDecodeError::Return(
                     UserReturnError::InvalidPrivilege
                 ))
             ))
         ));
-        assert!(!exit_manager.teardown_pending());
-        let routed = exit_manager
+        assert!(!teardown_manager.frozen_retry_pending());
+        let routed = teardown_manager
             .route_frame(&user_call_frame(3), &supervisor, &mut fixture.runtime)
             .unwrap_or_else(|failure| {
                 let _ = failure;
@@ -1729,28 +1735,16 @@ mod tests {
             });
         assert_eq!(routed.task(), target_task);
         assert_eq!(routed.service(), service_id);
-        assert!(exit_manager.teardown_pending());
-        assert_eq!(exit_manager.task(), Some(target_task));
-        assert_eq!(exit_manager.service(), Some(service_id));
+        assert!(teardown_manager.frozen_retry_pending());
+        assert_eq!(teardown_manager.task(), Some(target_task));
+        assert_eq!(teardown_manager.service(), Some(service_id));
+        assert!(teardown_manager.activation_slot().is_none());
         assert!(matches!(
-            exit_manager.route_frame(&user_call_frame(3), &supervisor, &mut fixture.runtime),
+            teardown_manager.route_frame(&user_call_frame(3), &supervisor, &mut fixture.runtime),
             Err(crate::KernelAhciServiceExitManagerDispatchError::TeardownPending)
         ));
-        let (mut exit_slot, frozen) = exit_manager
-            .into_frozen_parts()
-            .unwrap_or_else(|_| panic!("routed manager must retain the frozen owner"));
-        assert!(!exit_slot.occupied());
-        assert!(matches!(
-            exit_slot.route(exit_request, &supervisor, &mut fixture.runtime),
-            Err(crate::KernelAhciServiceExitSlotRouteError::Empty)
-        ));
-        assert_eq!(frozen.task(), target_task);
-        assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(fixture.runtime.load().runnable(), 1);
         assert_eq!(calls.get(), 0);
-        let mut teardown_manager =
-            crate::KernelAhciServiceTeardownManager::from_frozen_parts(exit_slot, frozen)
-                .unwrap_or_else(|_| panic!("empty slot and frozen owner must bind manager state"));
         assert!(teardown_manager.frozen_retry_pending());
         fault.reject_reads(true);
         assert_eq!(
@@ -1887,6 +1881,7 @@ mod tests {
             teardown_manager.dispatch(&mut fixture.runtime),
             Err(crate::KernelAhciServiceManagerDispatchCompletionError::AlreadyDispatched)
         );
+        assert!(teardown_manager.activation_slot().is_none());
         let (_exit_slot, dispatched) = teardown_manager
             .into_dispatched_parts()
             .unwrap_or_else(|_| panic!("manager must retain the issued dispatch owner"));

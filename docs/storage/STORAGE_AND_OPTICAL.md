@@ -1858,6 +1858,25 @@ selected successor. This completes source-level manager retention across the
 operation-3 lifecycle. Bootloader static retention and installed trap routing
 remain incomplete, and no hardware execution was exercised.
 
+The teardown manager is now preallocatable before discovery and retains one
+unchanged Rust type across activation, operation-3 frame routing, every retry,
+cleanup, and delayed dispatch. Its embedded activation slot is borrowable only
+before any teardown state exists. A successful exact-task frame route stores
+the frozen owner directly in that same manager; once teardown starts, attempts
+to reacquire the activation slot or route another exit fail closed. The
+controlled lifecycle test activates through the preallocated manager, rejects
+a hostile frame without owner movement, routes the exact frame, completes the
+full teardown, and confirms that even final dispatch does not reopen activation
+storage. This removes the type transition that prevented static controller-
+manager retention, but the bootloader has not yet instantiated or routed this
+state and no installed trap or hardware execution was exercised.
+
+Patent review: **NOT_TRIGGERED**. Retaining existing active and teardown owners
+inside one preallocated bounded state value is conventional fail-closed state-
+machine composition. It adds no parser, controller command, DMA behavior,
+persistent storage, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
 success and error owners in a bounded manager state is conventional fail-closed
 lifecycle composition. It adds no parser, controller command, DMA behavior,

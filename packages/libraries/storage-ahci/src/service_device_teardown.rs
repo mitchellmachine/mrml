@@ -1532,6 +1532,120 @@ impl<
         AUTHORITIES,
     >
 {
+    /// Creates one persistent manager owner before discovery or activation.
+    /// The same value can retain the active slot, frozen exit, every teardown
+    /// retry, cleanup completion, and the final delayed dispatch.
+    pub const fn empty() -> Self {
+        Self {
+            slot: KernelAhciServiceExitSlot::empty(),
+            frozen: None,
+            reacquired: None,
+            quarantine: None,
+            quarantine_error: None,
+            quiesce_error: None,
+            quiesced: None,
+            retired: None,
+            mappings_removed: None,
+            cleanup_complete: None,
+            dispatched: None,
+        }
+    }
+
+    /// Borrows the embedded activation slot only while this manager is in its
+    /// pristine preactivation state. Later lifecycle owners cannot be bypassed
+    /// by installing a replacement service into the now-empty slot.
+    pub fn activation_slot(
+        &mut self,
+    ) -> Option<
+        &mut KernelAhciServiceExitSlot<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        if self.frozen.is_some()
+            || self.reacquired.is_some()
+            || self.quarantine.is_some()
+            || self.quiesce_error.is_some()
+            || self.quiesced.is_some()
+            || self.retired.is_some()
+            || self.mappings_removed.is_some()
+            || self.cleanup_complete.is_some()
+            || self.dispatched.is_some()
+        {
+            return None;
+        }
+        Some(&mut self.slot)
+    }
+
+    pub fn active(&self) -> bool {
+        self.slot.occupied()
+    }
+
+    pub fn task(&self) -> Option<TaskId> {
+        self.frozen
+            .as_ref()
+            .map(FrozenKernelAhciServiceExit::task)
+            .or_else(|| self.slot.task())
+    }
+
+    pub fn service(&self) -> Option<ServiceId> {
+        self.frozen
+            .as_ref()
+            .map(FrozenKernelAhciServiceExit::service)
+            .or_else(|| self.slot.service())
+    }
+
+    /// Routes one canonical user frame directly into this persistent manager.
+    /// Success retains the frozen owner internally, so trap code never needs
+    /// to replace the manager value or expose a transitional owner.
+    pub fn route_frame<const SERVICES: usize>(
+        &mut self,
+        frame: &UserCallFrame,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<KernelAhciServiceExitRouted, KernelAhciServiceExitManagerDispatchError> {
+        if self.frozen.is_some()
+            || self.reacquired.is_some()
+            || self.quarantine.is_some()
+            || self.quiesce_error.is_some()
+            || self.quiesced.is_some()
+            || self.retired.is_some()
+            || self.mappings_removed.is_some()
+            || self.cleanup_complete.is_some()
+            || self.dispatched.is_some()
+        {
+            return Err(KernelAhciServiceExitManagerDispatchError::TeardownPending);
+        }
+        let task = self.slot.task().ok_or_else(|| {
+            KernelAhciServiceExitManagerDispatchError::Dispatch(
+                KernelAhciServiceExitDispatchError::Route(
+                    KernelAhciServiceExitSlotRouteError::Empty,
+                ),
+            )
+        })?;
+        let service = self.slot.service().ok_or_else(|| {
+            KernelAhciServiceExitManagerDispatchError::Dispatch(
+                KernelAhciServiceExitDispatchError::Route(
+                    KernelAhciServiceExitSlotRouteError::Empty,
+                ),
+            )
+        })?;
+        let frozen = self
+            .slot
+            .route_frame(frame, supervisor, runtime)
+            .map_err(KernelAhciServiceExitManagerDispatchError::Dispatch)?;
+        debug_assert_eq!(frozen.task(), task);
+        self.frozen = Some(frozen);
+        Ok(KernelAhciServiceExitRouted { task, service })
+    }
+
     pub fn from_frozen_parts(
         slot: KernelAhciServiceExitSlot<
             'resources,
