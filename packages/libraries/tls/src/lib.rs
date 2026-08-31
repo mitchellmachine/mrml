@@ -5,7 +5,9 @@ mod ocsp;
 mod server;
 mod trust;
 mod x509;
-pub use client::TlsClientStream;
+pub use client::{
+    QuicApplicationSecrets, QuicHandshakeSecrets, QuicTlsClientHandshake, TlsClientStream,
+};
 pub use ocsp::verify_stapled_ocsp;
 pub use server::{TlsServerConfig, TlsServerStream};
 pub use trust::verify_server_chain;

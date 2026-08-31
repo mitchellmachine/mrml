@@ -29,6 +29,7 @@ fn extension(out: &mut Vector<u8>, kind: u16, value: &[u8]) -> Result<(), TlsErr
 fn client_hello(
     host: &str,
     protocols: &[&str],
+    quic_transport_parameters: Option<&[u8]>,
 ) -> Result<(Vector<u8>, Option<HybridClientSecret>, [u8; 32]), TlsError> {
     if host.is_empty() || host.len() > 253 || !host.is_ascii() {
         return Err(TlsError::Handshake);
@@ -76,6 +77,12 @@ fn client_hello(
     }
     // Request a TLS 1.3 stapled OCSP response for the leaf certificate.
     extension(&mut extensions, 5, &[1, 0, 0, 0, 0])?;
+    if let Some(parameters) = quic_transport_parameters {
+        if parameters.len() > 4096 {
+            return Err(TlsError::Handshake);
+        }
+        extension(&mut extensions, 57, parameters)?;
+    }
     extension(&mut extensions, 43, &[2, 3, 4])?;
     extension(&mut extensions, 13, &[0, 4, 8, 4, 4, 1])?;
     if hybrid_enabled {
@@ -407,6 +414,241 @@ fn verify_certificate_message(
         .map_err(|_| TlsError::AuthenticationFailed)
 }
 
+pub struct QuicHandshakeSecrets {
+    pub client: [u8; 32],
+    pub server: [u8; 32],
+}
+pub struct QuicApplicationSecrets {
+    pub client: [u8; 32],
+    pub server: [u8; 32],
+    pub peer_transport_parameters: Vector<u8>,
+    pub client_finished: Vector<u8>,
+}
+pub struct QuicTlsClientHandshake {
+    host: Text,
+    transcript: Transcript,
+    schedule: Option<KeySchedule>,
+    hybrid: Option<HybridClientSecret>,
+    fallback: [u8; 32],
+    client_hs: [u8; 32],
+    server_hs: [u8; 32],
+    certificates: Vector<Vector<u8>>,
+    stapled_ocsp: Option<Vector<u8>>,
+    peer_transport_parameters: Option<Vector<u8>>,
+    got_extensions: bool,
+    got_certificate: bool,
+    got_verify: bool,
+}
+impl QuicTlsClientHandshake {
+    pub fn new(host: &str, transport_parameters: &[u8]) -> Result<(Self, Vector<u8>), TlsError> {
+        let (hello, hybrid, fallback) = client_hello(host, &["h3"], Some(transport_parameters))?;
+        let mut transcript = Transcript::new();
+        transcript.update(&hello);
+        Ok((
+            Self {
+                host: Text::try_from_str(host).map_err(|_| TlsError::AllocationFailed)?,
+                transcript,
+                schedule: None,
+                hybrid,
+                fallback,
+                client_hs: [0; 32],
+                server_hs: [0; 32],
+                certificates: Vector::new(),
+                stapled_ocsp: None,
+                peer_transport_parameters: None,
+                got_extensions: false,
+                got_certificate: false,
+                got_verify: false,
+            },
+            hello,
+        ))
+    }
+    pub fn receive_server_hello(
+        &mut self,
+        message: &[u8],
+    ) -> Result<QuicHandshakeSecrets, TlsError> {
+        if self.schedule.is_some() {
+            return Err(TlsError::Handshake);
+        }
+        let (group, server_key) = server_share(message)?;
+        let mut shared = Vector::new();
+        if group == X25519_MLKEM768 {
+            shared
+                .try_extend_from_slice(
+                    &self
+                        .hybrid
+                        .take()
+                        .ok_or(TlsError::Handshake)?
+                        .complete(server_key)?,
+                )
+                .map_err(|_| TlsError::AllocationFailed)?
+        } else {
+            let peer: [u8; 32] = server_key.try_into().map_err(|_| TlsError::Handshake)?;
+            shared
+                .try_extend_from_slice(
+                    &x25519_shared(self.fallback, peer).ok_or(TlsError::AuthenticationFailed)?,
+                )
+                .map_err(|_| TlsError::AllocationFailed)?
+        }
+        self.fallback.fill(0);
+        self.transcript.update(message);
+        let mut schedule = KeySchedule::new();
+        schedule.mix_shared_secret(&shared);
+        shared.fill(0);
+        self.client_hs = schedule.traffic_secret(false, &self.transcript.hash());
+        self.server_hs = schedule.traffic_secret(true, &self.transcript.hash());
+        self.schedule = Some(schedule);
+        Ok(QuicHandshakeSecrets {
+            client: self.client_hs,
+            server: self.server_hs,
+        })
+    }
+    pub fn receive_handshake(
+        &mut self,
+        message: &[u8],
+    ) -> Result<Option<QuicApplicationSecrets>, TlsError> {
+        if self.schedule.is_none() {
+            return Err(TlsError::Handshake);
+        }
+        match message.first().copied() {
+            Some(8) => {
+                if self.got_extensions {
+                    return Err(TlsError::Handshake);
+                }
+                self.peer_transport_parameters = Some(quic_extensions(message)?);
+                self.got_extensions = true;
+                self.transcript.update(message);
+                Ok(None)
+            }
+            Some(11) => {
+                if !self.got_extensions || self.got_certificate {
+                    return Err(TlsError::Handshake);
+                }
+                certificate_chain(message, &mut self.certificates, &mut self.stapled_ocsp)?;
+                let refs: Vector<&[u8]> = self.certificates.iter().map(|v| &v[..]).collect();
+                verify_server_chain(&self.host, &refs).map_err(|_| TlsError::Certificate)?;
+                let leaf = crate::Certificate::parse(&self.certificates[0])
+                    .map_err(|_| TlsError::Certificate)?;
+                let issuer = crate::Certificate::parse(
+                    self.certificates.get(1).ok_or(TlsError::Certificate)?,
+                )
+                .map_err(|_| TlsError::Certificate)?;
+                crate::verify_stapled_ocsp(
+                    self.stapled_ocsp.as_deref().ok_or(TlsError::Certificate)?,
+                    &leaf,
+                    &issuer,
+                    mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?,
+                )
+                .map_err(|_| TlsError::Certificate)?;
+                self.got_certificate = true;
+                self.transcript.update(message);
+                Ok(None)
+            }
+            Some(15) => {
+                if !self.got_certificate || self.got_verify {
+                    return Err(TlsError::Handshake);
+                }
+                let leaf = crate::Certificate::parse(&self.certificates[0])
+                    .map_err(|_| TlsError::Certificate)?;
+                verify_certificate_message(message, &self.transcript.hash(), &leaf)?;
+                self.got_verify = true;
+                self.transcript.update(message);
+                Ok(None)
+            }
+            Some(20) => {
+                if !self.got_verify {
+                    return Err(TlsError::Handshake);
+                }
+                let mut cursor = Cursor::new(message);
+                cursor.u8()?;
+                if cursor.u24()? != 32 {
+                    return Err(TlsError::Handshake);
+                }
+                let received = cursor.take(32)?;
+                if !cursor.done() {
+                    return Err(TlsError::Handshake);
+                }
+                let expected = finished_verify_data(&self.server_hs, &self.transcript.hash());
+                if expected
+                    .iter()
+                    .zip(received)
+                    .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+                    != 0
+                {
+                    return Err(TlsError::AuthenticationFailed);
+                }
+                self.transcript.update(message);
+                let schedule = self.schedule.as_mut().ok_or(TlsError::Handshake)?;
+                schedule.finish_handshake();
+                let hash = self.transcript.hash();
+                let client = schedule.application_traffic_secret(false, &hash);
+                let server = schedule.application_traffic_secret(true, &hash);
+                let verify = finished_verify_data(&self.client_hs, &self.transcript.hash());
+                let mut client_finished = Vector::new();
+                client_finished
+                    .try_push(20)
+                    .map_err(|_| TlsError::AllocationFailed)?;
+                push_u24(&mut client_finished, 32)?;
+                client_finished
+                    .try_extend_from_slice(&verify)
+                    .map_err(|_| TlsError::AllocationFailed)?;
+                Ok(Some(QuicApplicationSecrets {
+                    client,
+                    server,
+                    peer_transport_parameters: self
+                        .peer_transport_parameters
+                        .take()
+                        .ok_or(TlsError::Handshake)?,
+                    client_finished,
+                }))
+            }
+            _ => Err(TlsError::Handshake),
+        }
+    }
+}
+fn quic_extensions(message: &[u8]) -> Result<Vector<u8>, TlsError> {
+    let mut cursor = Cursor::new(message);
+    if cursor.u8()? != 8 || cursor.u24()? != message.len() - 4 {
+        return Err(TlsError::Handshake);
+    }
+    let total = cursor.u16()? as usize;
+    let mut extensions = Cursor::new(cursor.take(total)?);
+    if !cursor.done() {
+        return Err(TlsError::Handshake);
+    }
+    let mut alpn = false;
+    let mut parameters = None;
+    while !extensions.done() {
+        let kind = extensions.u16()?;
+        let length = extensions.u16()? as usize;
+        let value = extensions.take(length)?;
+        match kind {
+            16 => {
+                let mut a = Cursor::new(value);
+                if a.u16()? != 3 || a.u8()? != 2 || a.take(2)? != b"h3" || !a.done() {
+                    return Err(TlsError::Handshake);
+                }
+                alpn = true
+            }
+            57 => {
+                if parameters.is_some() || value.len() > 4096 {
+                    return Err(TlsError::Handshake);
+                }
+                let mut owned = Vector::new();
+                owned
+                    .try_extend_from_slice(value)
+                    .map_err(|_| TlsError::AllocationFailed)?;
+                parameters = Some(owned)
+            }
+            _ => {}
+        }
+    }
+    if !alpn {
+        return Err(TlsError::Handshake);
+    }
+    parameters.ok_or(TlsError::Handshake)
+}
+
 pub struct TlsClientStream {
     stream: TcpStream,
     read_keys: RecordKeys,
@@ -443,7 +685,7 @@ impl TlsClientStream {
         stream
             .set_write_timeout_millis(30_000)
             .map_err(|_| TlsError::Io)?;
-        let (client_hello, hybrid, mut fallback) = client_hello(host, protocols)?;
+        let (client_hello, hybrid, mut fallback) = client_hello(host, protocols, None)?;
         send_plain_handshake(&mut stream, &client_hello)?;
         let (mut kind, mut server_hello) = record(&mut stream)?;
         while kind == 20 {
@@ -682,7 +924,7 @@ mod tests {
         if crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
             return;
         }
-        let (hello, hybrid, _) = client_hello("example.com", &["h2", "http/1.1"]).unwrap();
+        let (hello, hybrid, _) = client_hello("example.com", &["h2", "http/1.1"], None).unwrap();
         assert!(hybrid.is_none());
         assert!(hello.len() > 32);
     }
@@ -697,6 +939,19 @@ mod tests {
         assert_eq!(
             encrypted_extensions(&message, &["h2"]).unwrap().as_deref(),
             Some("h2")
+        );
+    }
+    #[test]
+    fn quic_extensions_require_h3_and_transport_parameters() {
+        let message = [
+            8, 0, 0, 17, 0, 15, 0, 16, 0, 5, 0, 3, 2, b'h', b'3', 0, 57, 0, 2, 0xaa, 0xbb,
+        ];
+        assert_eq!(&quic_extensions(&message).unwrap()[..], &[0xaa, 0xbb]);
+        let (_, hello) = QuicTlsClientHandshake::new("example.com", &[1, 2, 3]).unwrap();
+        assert!(
+            hello
+                .windows(7)
+                .any(|window| window == [0, 57, 0, 3, 1, 2, 3])
         );
     }
 
