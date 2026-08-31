@@ -601,6 +601,99 @@ pub struct KernelAhciServiceExitRouted {
     service: ServiceId,
 }
 
+/// Persistent manager state for the first post-freeze teardown transition.
+/// Exactly one of `frozen`, `reacquired`, or `quarantine` is populated.
+#[must_use = "the AHCI teardown manager must retain every linear transition owner"]
+pub struct KernelAhciServiceTeardownManager<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    slot:
+        KernelAhciServiceExitSlot<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    frozen: Option<
+        FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
+    reacquired: Option<
+        ReacquiredKernelAhciServiceTeardown<
+            'resources,
+            S,
+            L::Registers,
+            L::CommandMemory,
+            L::DataIo,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
+    quarantine: Option<
+        QuarantinedKernelAhciServiceTeardown<
+            'resources,
+            S,
+            L::Registers,
+            L::CommandMemory,
+            L::DataIo,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
+    quarantine_error: Option<AhciServiceTaskBindingError>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceManagerReacquisitionError<E> {
+    InvalidState,
+    NotFrozen,
+    AlreadyReacquired,
+    Quarantined(AhciServiceTaskBindingError),
+    Verification(crate::KernelAhciPreactivationMappingSetError),
+    Lease(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceReacquired {
+    task: TaskId,
+    service: ServiceId,
+    root: mrml_kernel::PhysAddr,
+}
+
+impl KernelAhciServiceReacquired {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn root(self) -> mrml_kernel::PhysAddr {
+        self.root
+    }
+}
+
 impl KernelAhciServiceExitRouted {
     pub const fn task(self) -> TaskId {
         self.task
@@ -1236,6 +1329,192 @@ impl<
     > {
         match self.frozen.take() {
             Some(frozen) => Ok((self.slot, frozen)),
+            None => Err(self),
+        }
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciServiceTeardownManager<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub fn from_frozen_parts(
+        slot: KernelAhciServiceExitSlot<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        frozen: FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    ) -> Result<
+        Self,
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            FrozenKernelAhciServiceExit<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+    > {
+        if slot.occupied() {
+            return Err((slot, frozen));
+        }
+        Ok(Self {
+            slot,
+            frozen: Some(frozen),
+            reacquired: None,
+            quarantine: None,
+            quarantine_error: None,
+        })
+    }
+
+    pub const fn frozen_retry_pending(&self) -> bool {
+        self.frozen.is_some()
+    }
+
+    pub const fn reacquired(&self) -> bool {
+        self.reacquired.is_some()
+    }
+
+    pub const fn quarantined(&self) -> bool {
+        self.quarantine.is_some()
+    }
+
+    /// Attempts the one-use platform reacquisition while retaining every
+    /// success and failure owner inside the manager state.
+    pub fn reacquire(
+        &mut self,
+    ) -> Result<KernelAhciServiceReacquired, KernelAhciServiceManagerReacquisitionError<L::Error>>
+    {
+        if self.reacquired.is_some() {
+            return Err(KernelAhciServiceManagerReacquisitionError::AlreadyReacquired);
+        }
+        if self.quarantine.is_some() {
+            let Some(error) = self.quarantine_error else {
+                return Err(KernelAhciServiceManagerReacquisitionError::InvalidState);
+            };
+            return Err(KernelAhciServiceManagerReacquisitionError::Quarantined(
+                error,
+            ));
+        }
+        let frozen = self
+            .frozen
+            .take()
+            .ok_or(KernelAhciServiceManagerReacquisitionError::NotFrozen)?;
+        match reacquire_frozen_kernel_ahci_service_teardown(frozen) {
+            Ok(reacquired) => {
+                let receipt = KernelAhciServiceReacquired {
+                    task: reacquired.task(),
+                    service: reacquired.service(),
+                    root: reacquired.root(),
+                };
+                self.reacquired = Some(reacquired);
+                Ok(receipt)
+            }
+            Err(KernelAhciServiceTeardownReacquisitionError::Verification { error, frozen }) => {
+                self.frozen = Some(frozen);
+                Err(KernelAhciServiceManagerReacquisitionError::Verification(
+                    error,
+                ))
+            }
+            Err(KernelAhciServiceTeardownReacquisitionError::Lease { error, frozen }) => {
+                self.frozen = Some(frozen);
+                Err(KernelAhciServiceManagerReacquisitionError::Lease(error))
+            }
+            Err(KernelAhciServiceTeardownReacquisitionError::Binding { error, quarantine }) => {
+                self.quarantine = Some(quarantine);
+                self.quarantine_error = Some(error);
+                Err(KernelAhciServiceManagerReacquisitionError::Quarantined(
+                    error,
+                ))
+            }
+        }
+    }
+
+    pub fn into_reacquired_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            ReacquiredKernelAhciServiceTeardown<
+                'resources,
+                S,
+                L::Registers,
+                L::CommandMemory,
+                L::DataIo,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self.reacquired.take() {
+            Some(reacquired) => Ok((self.slot, reacquired)),
             None => Err(self),
         }
     }

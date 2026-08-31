@@ -1788,6 +1788,24 @@ receipt identity, pending-state replay denial, and retained-owner transfer.
 This does not yet retain reacquisition/quiescence retries or connect the booted
 dispatcher, so installed trap execution remains incomplete.
 
+The next manager state now retains every mapping-verification and platform
+reacquisition outcome. Verification denial and backend acquisition denial put
+the exact frozen owner and one-use lease back into retry state; success stores
+the acquired register, command-memory, data-buffer, mapping-root, and frozen
+task owners internally and returns only a descriptive receipt. Identity
+substitution stores the complete quarantine and its exact diagnostic. Repeated
+acquisition after success or quarantine is rejected without owner movement.
+The controlled lifecycle test injects verification and backend failures,
+observes retained retry state and exact call counts, then advances once into
+the retained reacquired state and rejects replay. Quiescence and later teardown
+states are not yet retained by this manager, and no booted dispatcher was run.
+
+Patent review: **NOT_TRIGGERED**. Retaining existing success, retry, and
+quarantine owners in a bounded state machine is conventional fail-closed
+lifecycle handling. It adds no parser, controller command, DMA behavior,
+persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Moving existing linear owners between bounded
 active and frozen manager states and returning a non-authorizing receipt is
 conventional lifecycle state management. It adds no parser, controller command,

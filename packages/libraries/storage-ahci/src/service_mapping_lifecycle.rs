@@ -1748,30 +1748,45 @@ mod tests {
         assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(fixture.runtime.load().runnable(), 1);
         assert_eq!(calls.get(), 0);
+        let mut teardown_manager =
+            crate::KernelAhciServiceTeardownManager::from_frozen_parts(exit_slot, frozen)
+                .unwrap_or_else(|_| panic!("empty slot and frozen owner must bind manager state"));
+        assert!(teardown_manager.frozen_retry_pending());
         fault.reject_reads(true);
-        let error = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
-            .err()
-            .unwrap_or_else(|| panic!("unverifiable frozen mappings must block reacquisition"));
         assert_eq!(
-            error.verification_error(),
-            Some(crate::KernelAhciPreactivationMappingSetError::Verification)
+            teardown_manager.reacquire(),
+            Err(
+                crate::KernelAhciServiceManagerReacquisitionError::Verification(
+                    crate::KernelAhciPreactivationMappingSetError::Verification
+                )
+            )
         );
+        assert!(teardown_manager.frozen_retry_pending());
         assert_eq!(calls.get(), 0);
-        let (_, frozen) = error
-            .into_verification_retry()
-            .unwrap_or_else(|_| panic!("verification failure must retain the complete handoff"));
         fault.reject_reads(false);
-        let error = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
-            .err()
-            .unwrap_or_else(|| panic!("injected manager reacquisition failure must retain root"));
-        assert_eq!(error.lease_error(), Some(&1));
-        let (_, frozen) = error
-            .into_retry()
-            .unwrap_or_else(|_| panic!("lease failure must retain the concrete frozen owner"));
-        assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(
+            teardown_manager.reacquire(),
+            Err(crate::KernelAhciServiceManagerReacquisitionError::Lease(1))
+        );
+        assert!(teardown_manager.frozen_retry_pending());
         assert_eq!(calls.get(), 1);
-        let reacquired = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
+        let reacquired_receipt = teardown_manager
+            .reacquire()
             .unwrap_or_else(|_| panic!("exact manager state must reacquire after retry"));
+        assert_eq!(reacquired_receipt.task(), target_task);
+        assert_eq!(reacquired_receipt.service(), service_id);
+        assert_eq!(
+            reacquired_receipt.root(),
+            PhysAddr::new(TABLE_BASE).unwrap()
+        );
+        assert!(teardown_manager.reacquired());
+        assert_eq!(
+            teardown_manager.reacquire(),
+            Err(crate::KernelAhciServiceManagerReacquisitionError::AlreadyReacquired)
+        );
+        let (_exit_slot, reacquired) = teardown_manager
+            .into_reacquired_parts()
+            .unwrap_or_else(|_| panic!("manager must retain the exact reacquired owner"));
         assert_eq!(reacquired.task(), target_task);
         assert_eq!(reacquired.root(), PhysAddr::new(TABLE_BASE).unwrap());
         let mut dma_backend = DmaBackend::default();
