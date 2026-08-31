@@ -346,8 +346,12 @@ access. The security/acceptance gate is canonical in
   lifetime. A retained owner can now permanently quarantine its exact blocked
   construction generation in the owning runtime; runtime substitution preserves
   the unchanged owner, and quarantine never converts mapping state into an
-  activation token. Activation-time effective-leaf revalidation, active-root
-  ownership, SMP TLB withdrawal, and IOMMU teardown remain required.
+  activation token. Native-service validation and scheduler activation
+  preparation reject a second live runtime domain with the same saved CR3, and
+  mapping-set verification inherits that bounded scan. It is only a
+  runtime-local snapshot: full-lifetime active-root ownership, activation-time
+  effective-leaf revalidation, SMP TLB withdrawal, and IOMMU teardown remain
+  required.
   Generic syscall/user-buffer copies reject device-selector leaves so
   non-volatile byte-copy machinery cannot access registers.
 - Restart commit publishes and returns the exact service/task generations as

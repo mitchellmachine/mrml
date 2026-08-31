@@ -44,6 +44,7 @@ pub enum TaskRuntimeError {
     ConstructionTargetNotPristine,
     ConstructionPending,
     ConstructionQuarantined,
+    DuplicatePageTableRoot,
     NotConstructionTarget,
     RetirementDispatchPending,
     RuntimeIdentityExhausted,
@@ -883,6 +884,26 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
+    /// Proves that one exact live task generation is the runtime's sole owner
+    /// of its saved page-table root at this instant.
+    pub fn validate_unique_page_table_root(&self, task: TaskId) -> Result<(), TaskRuntimeError> {
+        let slot = self.domain_slot(task)?;
+        let root = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .context
+            .page_table();
+        if self.domains.iter().enumerate().any(|(candidate, domain)| {
+            candidate != slot
+                && domain
+                    .as_ref()
+                    .is_some_and(|domain| domain.context.page_table() == root)
+        }) {
+            return Err(TaskRuntimeError::DuplicatePageTableRoot);
+        }
+        Ok(())
+    }
+
     pub(crate) fn prepare_constructed_task_activation(
         &mut self,
         task: TaskId,
@@ -898,6 +919,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if domain.construction_quarantined {
             return Err(TaskRuntimeError::ConstructionQuarantined);
         }
+        self.validate_unique_page_table_root(task)?;
         if domain.blocked_receive.is_some() {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
@@ -3684,6 +3706,35 @@ mod tests {
         );
         assert_eq!(runtime.construction_quarantined(other), Ok(false));
         assert!(runtime.prepare_constructed_task_activation(other).is_ok());
+    }
+
+    #[test]
+    fn construction_activation_requires_a_runtime_unique_page_table_root() {
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let target = runtime
+            .create_for_construction(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let colliding = runtime
+            .create_for_construction(Priority::NORMAL, context(0x20_0000, 0x50_0000))
+            .unwrap();
+        let before = runtime.load();
+
+        assert_eq!(
+            runtime.validate_unique_page_table_root(target),
+            Err(TaskRuntimeError::DuplicatePageTableRoot)
+        );
+        assert_eq!(
+            runtime
+                .prepare_constructed_task_activation(target)
+                .map(|_| ()),
+            Err(TaskRuntimeError::DuplicatePageTableRoot)
+        );
+        assert_eq!(runtime.load(), before);
+        assert_eq!(runtime.construction_pending(target), Ok(true));
+
+        *runtime.context_mut(colliding).unwrap() = context(0x30_0000, 0x50_0000);
+        assert_eq!(runtime.validate_unique_page_table_root(target), Ok(()));
+        assert!(runtime.prepare_constructed_task_activation(target).is_ok());
     }
 
     #[test]

@@ -1382,9 +1382,12 @@ runtime-bound task identity without borrowing the runtime; a retained poisoned
 owner can therefore consume mutable access to that exact runtime and
 permanently exclude its blocked construction generation while retaining the
 mapping resources. Neither owner can create the existing mapped-task token.
-The Linux AHCI suite passes 146 tests and the Linux kernel suite passes 711.
-This is not an activation seal or active mapping owner. Root uniqueness,
-descriptor-identity/device-object correlation, full-lifetime PAT3=UC and alias
+The Linux AHCI suite passes 146 tests and the Linux kernel suite passes 713.
+Native-service validation and scheduler activation preparation now reject a
+second live runtime domain with the same saved page-table root, and mapping-set
+verification inherits that check. This is a bounded runtime-local uniqueness
+snapshot, not an activation seal or active mapping owner. Full-lifetime root
+ownership, descriptor-identity/device-object correlation, PAT3=UC and alias
 exclusion, activation-time effective-leaf revalidation, SMP TLB withdrawal,
 IOMMU binding, installed CPL3, KVM/WHP, and physical evidence remain absent.
 
@@ -1400,7 +1403,8 @@ Existing-object reuse: HIGH
 Patent review: **NOT_TRIGGERED**. Retaining task ownership while invoking the
 existing exact mapping and rollback lifecycle, including conventional exact
 x86-64 task/root/target page-table installation and one-way fail-closed
-construction quarantine, is standard resource composition. See
+construction quarantine, plus bounded duplicate-root rejection, is standard
+resource composition. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
 Native device-service construction now has an explicit scheduler publication

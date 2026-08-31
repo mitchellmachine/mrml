@@ -395,6 +395,9 @@ impl<const N: usize> NativeDeviceServiceTask<N> {
         {
             return Err(NativeDeviceServiceActivationError::ConstructionQuarantined);
         }
+        runtime
+            .validate_unique_page_table_root(self.task)
+            .map_err(NativeDeviceServiceActivationError::Runtime)?;
         if *runtime
             .context(self.task)
             .map_err(NativeDeviceServiceActivationError::Runtime)?
@@ -929,6 +932,35 @@ mod tests {
             task.validate_activation_state(&runtime),
             Err(NativeDeviceServiceActivationError::ConstructionQuarantined)
         );
+    }
+
+    #[test]
+    fn activation_snapshot_rejects_a_duplicate_page_table_root() {
+        let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
+        let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+
+        *runtime.context_mut(source).unwrap() = context(0x30_0000);
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::Runtime(
+                TaskRuntimeError::DuplicatePageTableRoot
+            ))
+        );
+        assert_eq!(runtime.construction_pending(target), Ok(true));
     }
 
     #[test]

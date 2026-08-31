@@ -1322,6 +1322,19 @@ mod tests {
         assert_eq!(owner.target(), target);
         assert!(owner.abar_mapping().is_some());
         assert!(owner.cpu_mappings().fully_installed());
+        let source = prepared.task().source_task();
+        let source_context = *fixture.runtime.context(source).unwrap();
+        *fixture.runtime.context_mut(source).unwrap() =
+            UserContext::new(prepared.task().page_table_root(), 0x40_0000, 0x7000_0000).unwrap();
+        assert_eq!(
+            owner.verify_exact(&fixture.runtime),
+            Err(crate::KernelAhciPreactivationMappingSetError::Activation(
+                mrml_kernel::NativeDeviceServiceActivationError::Runtime(
+                    mrml_kernel::TaskRuntimeError::DuplicatePageTableRoot
+                )
+            ))
+        );
+        *fixture.runtime.context_mut(source).unwrap() = source_context;
         assert_eq!(owner.verify_exact(&fixture.runtime), Ok(()));
         let returned = match owner.rollback(&fixture.runtime) {
             Ok(returned) => returned,

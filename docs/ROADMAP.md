@@ -1523,10 +1523,14 @@ runtime-bound task identity without borrowing the runtime, so a poisoned owner
 can consume mutable access to that same runtime and permanently exclude its
 exact blocked construction generation from activation while retaining every
 mapping resource. It cannot produce the existing mapped-task token. The Linux
-AHCI suite passes 146 tests and the Linux kernel suite passes 711. Root
-uniqueness, descriptor-identity/device-object
-correlation, PAT/alias lifetime, activation-time effective-leaf revalidation,
-SMP TLB, IOMMU, installed CPL3, KVM/WHP, and physical evidence remain absent.
+AHCI suite passes 146 tests and the Linux kernel suite passes 713. Native task
+validation and the scheduler activation preparation now also reject a second
+live task domain with the same saved page-table root; the mapping-set verifier
+therefore fails before activation when another same-runtime generation collides
+with its CR3. This is an activation-time runtime-local uniqueness snapshot, not
+a retained active-root lease. Descriptor-identity/device-object correlation,
+full-lifetime root/PAT/alias ownership, effective-leaf revalidation, SMP TLB,
+IOMMU, installed CPL3, KVM/WHP, and physical evidence remain absent.
 
 Complexity impact: LOW
 TCB impact: LOW
