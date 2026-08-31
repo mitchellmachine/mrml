@@ -8,7 +8,10 @@ mod http2;
 mod http3;
 mod quic;
 
-pub use http2::{Http2Client, Http2Frame, Http2FrameKind, Http2Server, HTTP2_CLIENT_PREFACE};
+pub use http2::{
+    Http2Client, Http2ClientConnection, Http2Frame, Http2FrameKind, Http2Response, Http2Server,
+    Http2ServerConnection, HTTP2_CLIENT_PREFACE,
+};
 pub use http3::{Http3Client, Http3Frame, Http3FrameKind, Http3Server};
 pub use quic::{
     HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,

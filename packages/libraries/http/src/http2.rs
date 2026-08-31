@@ -1,6 +1,7 @@
 use mrml_runtime::{Text, Vector};
+use mrml_tls::{TlsClientStream, TlsServerStream};
 
-use crate::{Header, HttpError, RequestHead, ResponseHead, valid_header, valid_value};
+use crate::{valid_header, valid_value, Header, HttpError, RequestHead, ResponseHead};
 
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
@@ -354,6 +355,233 @@ impl Default for Http2Server {
         Self::new()
     }
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Http2Response {
+    pub status: u16,
+    pub headers: Vector<Header>,
+    pub body: Vector<u8>,
+}
+
+fn tls_read_exact_client(stream: &mut TlsClientStream, out: &mut [u8]) -> Result<(), HttpError> {
+    let mut at = 0;
+    while at < out.len() {
+        let count = stream.read(&mut out[at..]).map_err(|_| HttpError::Tls)?;
+        if count == 0 {
+            return Err(HttpError::Io);
+        }
+        at += count;
+    }
+    Ok(())
+}
+fn tls_read_exact_server(stream: &mut TlsServerStream, out: &mut [u8]) -> Result<(), HttpError> {
+    let mut at = 0;
+    while at < out.len() {
+        let count = stream.read(&mut out[at..]).map_err(|_| HttpError::Tls)?;
+        if count == 0 {
+            return Err(HttpError::Io);
+        }
+        at += count;
+    }
+    Ok(())
+}
+fn read_client_frame(stream: &mut TlsClientStream) -> Result<Http2Frame, HttpError> {
+    let mut header = [0; 9];
+    tls_read_exact_client(stream, &mut header)?;
+    let length = ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+    if length > MAX_FRAME {
+        return Err(HttpError::BodyTooLarge);
+    }
+    let mut wire = Vector::new();
+    wire.try_extend_from_slice(&header)
+        .map_err(|_| HttpError::Allocation)?;
+    wire.try_resize(9 + length, 0)
+        .map_err(|_| HttpError::Allocation)?;
+    tls_read_exact_client(stream, &mut wire[9..])?;
+    Http2Frame::decode(&wire).map(|value| value.0)
+}
+fn read_server_frame(stream: &mut TlsServerStream) -> Result<Http2Frame, HttpError> {
+    let mut header = [0; 9];
+    tls_read_exact_server(stream, &mut header)?;
+    let length = ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+    if length > MAX_FRAME {
+        return Err(HttpError::BodyTooLarge);
+    }
+    let mut wire = Vector::new();
+    wire.try_extend_from_slice(&header)
+        .map_err(|_| HttpError::Allocation)?;
+    wire.try_resize(9 + length, 0)
+        .map_err(|_| HttpError::Allocation)?;
+    tls_read_exact_server(stream, &mut wire[9..])?;
+    Http2Frame::decode(&wire).map(|value| value.0)
+}
+
+pub struct Http2ClientConnection {
+    stream: TlsClientStream,
+    protocol: Http2Client,
+}
+impl Http2ClientConnection {
+    pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
+        let mut stream =
+            TlsClientStream::connect_with_alpn(host, port, &["h2"]).map_err(|_| HttpError::Tls)?;
+        if stream.negotiated_protocol() != Some("h2") {
+            return Err(HttpError::Tls);
+        }
+        let protocol = Http2Client::new();
+        stream
+            .write_all(&protocol.connection_bytes()?)
+            .map_err(|_| HttpError::Tls)?;
+        Ok(Self { stream, protocol })
+    }
+    pub fn request(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Http2Response, HttpError> {
+        let (stream_id, request) = self
+            .protocol
+            .request(method, "https", authority, target, headers, true)?;
+        self.stream
+            .write_all(&request)
+            .map_err(|_| HttpError::Tls)?;
+        let mut head = None;
+        let mut body = Vector::new();
+        loop {
+            let frame = read_client_frame(&mut self.stream)?;
+            match frame.kind {
+                Http2FrameKind::Settings => {
+                    if frame.flags & 1 == 0 {
+                        self.stream
+                            .write_all(
+                                &Http2Frame {
+                                    kind: Http2FrameKind::Settings,
+                                    flags: 1,
+                                    stream_id: 0,
+                                    payload: Vector::new(),
+                                }
+                                .encode()?,
+                            )
+                            .map_err(|_| HttpError::Tls)?;
+                    }
+                }
+                Http2FrameKind::Ping if frame.flags & 1 == 0 && frame.payload.len() == 8 => {
+                    self.stream
+                        .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
+                        .map_err(|_| HttpError::Tls)?;
+                }
+                Http2FrameKind::Headers if frame.stream_id == stream_id => {
+                    if head.is_some() {
+                        return Err(HttpError::InvalidResponse);
+                    }
+                    head = Some(self.protocol.response(&frame)?);
+                    if frame.flags & 1 != 0 {
+                        break;
+                    }
+                }
+                Http2FrameKind::Data if frame.stream_id == stream_id => {
+                    if head.is_none() || body.len() + frame.payload.len() > 16 * 1024 * 1024 {
+                        return Err(HttpError::BodyTooLarge);
+                    }
+                    body.try_extend_from_slice(&frame.payload)
+                        .map_err(|_| HttpError::Allocation)?;
+                    if frame.flags & 1 != 0 {
+                        break;
+                    }
+                }
+                Http2FrameKind::GoAway => return Err(HttpError::Io),
+                _ => {}
+            }
+        }
+        let head = head.ok_or(HttpError::InvalidResponse)?;
+        Ok(Http2Response {
+            status: head.status,
+            headers: head.headers,
+            body,
+        })
+    }
+}
+
+pub struct Http2ServerConnection {
+    stream: TlsServerStream,
+    protocol: Http2Server,
+}
+impl Http2ServerConnection {
+    pub fn accept(mut stream: TlsServerStream) -> Result<Self, HttpError> {
+        if stream.negotiated_protocol() != Some("h2") {
+            return Err(HttpError::Tls);
+        }
+        let mut preface = [0; 24];
+        tls_read_exact_server(&mut stream, &mut preface)?;
+        if &preface != HTTP2_CLIENT_PREFACE {
+            return Err(HttpError::InvalidResponse);
+        }
+        let first = read_server_frame(&mut stream)?;
+        if first.kind != Http2FrameKind::Settings || first.flags != 0 || !first.payload.is_empty() {
+            return Err(HttpError::InvalidResponse);
+        }
+        let protocol = Http2Server::new();
+        stream
+            .write_all(&protocol.settings()?)
+            .map_err(|_| HttpError::Tls)?;
+        stream
+            .write_all(
+                &Http2Frame {
+                    kind: Http2FrameKind::Settings,
+                    flags: 1,
+                    stream_id: 0,
+                    payload: Vector::new(),
+                }
+                .encode()?,
+            )
+            .map_err(|_| HttpError::Tls)?;
+        Ok(Self { stream, protocol })
+    }
+    pub fn next_request(&mut self) -> Result<(u32, RequestHead), HttpError> {
+        loop {
+            let frame = read_server_frame(&mut self.stream)?;
+            if frame.kind == Http2FrameKind::Headers {
+                let id = frame.stream_id;
+                return Ok((id, self.protocol.request(&frame)?));
+            }
+        }
+    }
+    pub fn respond(
+        &mut self,
+        stream_id: u32,
+        status: u16,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<(), HttpError> {
+        self.stream
+            .write_all(
+                &self
+                    .protocol
+                    .response(stream_id, status, headers, body.is_empty())?,
+            )
+            .map_err(|_| HttpError::Tls)?;
+        for (index, chunk) in body.chunks(MAX_FRAME).enumerate() {
+            let final_chunk = (index + 1) * MAX_FRAME >= body.len();
+            let mut payload = Vector::new();
+            payload
+                .try_extend_from_slice(chunk)
+                .map_err(|_| HttpError::Allocation)?;
+            self.stream
+                .write_all(
+                    &Http2Frame {
+                        kind: Http2FrameKind::Data,
+                        flags: if final_chunk { 1 } else { 0 },
+                        stream_id,
+                        payload,
+                    }
+                    .encode()?,
+                )
+                .map_err(|_| HttpError::Tls)?;
+        }
+        Ok(())
+    }
+}
 fn take(headers: &mut Vector<Header>, name: &str) -> Result<Text, HttpError> {
     let pos = headers
         .iter()
@@ -414,10 +642,8 @@ mod tests {
             payload: payload.into(),
         };
         assert_eq!(f.encode(), Err(HttpError::BodyTooLarge));
-        assert!(
-            Http2Client::new()
-                .request("GET", "https", "x", "/", &[("Bad", "x")], true)
-                .is_err()
-        )
+        assert!(Http2Client::new()
+            .request("GET", "https", "x", "/", &[("Bad", "x")], true)
+            .is_err())
     }
 }
