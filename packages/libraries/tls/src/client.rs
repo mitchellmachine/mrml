@@ -304,7 +304,11 @@ fn handshake_message(buffer: &mut Vector<u8>) -> Result<Option<Vector<u8>>, TlsE
     Ok(Some(result))
 }
 
-fn certificate_chain(message: &[u8], storage: &mut Vector<Vector<u8>>) -> Result<(), TlsError> {
+fn certificate_chain(
+    message: &[u8],
+    storage: &mut Vector<Vector<u8>>,
+    stapled_ocsp: &mut Option<Vector<u8>>,
+) -> Result<(), TlsError> {
     let mut c = Cursor::new(message);
     if c.u8()? != 11 {
         return Err(TlsError::Handshake);
@@ -338,7 +342,31 @@ fn certificate_chain(message: &[u8], storage: &mut Vector<Vector<u8>>) -> Result
             .try_push(owned)
             .map_err(|_| TlsError::AllocationFailed)?;
         let ext = entries.u16()? as usize;
-        entries.take(ext)?;
+        let mut extensions = Cursor::new(entries.take(ext)?);
+        while !extensions.done() {
+            let kind = extensions.u16()?;
+            let length = extensions.u16()? as usize;
+            let value = extensions.take(length)?;
+            if kind == 5 {
+                if storage.len() != 1 || stapled_ocsp.is_some() {
+                    return Err(TlsError::Certificate);
+                }
+                let mut status = Cursor::new(value);
+                if status.u8()? != 1 {
+                    return Err(TlsError::Certificate);
+                }
+                let response_length = status.u24()?;
+                let response = status.take(response_length)?;
+                if !status.done() || response.is_empty() || response.len() > 64 * 1024 {
+                    return Err(TlsError::Certificate);
+                }
+                let mut owned = Vector::new();
+                owned
+                    .try_extend_from_slice(response)
+                    .map_err(|_| TlsError::AllocationFailed)?;
+                *stapled_ocsp = Some(owned);
+            }
+        }
     }
     if storage.is_empty() {
         Err(TlsError::Certificate)
@@ -457,6 +485,7 @@ impl TlsClientStream {
         let mut got_certificate = false;
         let mut got_verify = false;
         let mut negotiated_protocol = None;
+        let mut stapled_ocsp = None;
         loop {
             let (kind, encrypted) = record(&mut stream)?;
             if kind == 20 {
@@ -506,9 +535,23 @@ impl TlsClientStream {
                         if !got_extensions || got_certificate {
                             return Err(TlsError::Handshake);
                         }
-                        certificate_chain(&message, &mut certificates)?;
+                        certificate_chain(&message, &mut certificates, &mut stapled_ocsp)?;
                         let refs: Vector<&[u8]> = certificates.iter().map(|v| &v[..]).collect();
                         verify_server_chain(host, &refs).map_err(|_| TlsError::Certificate)?;
+                        let leaf = crate::Certificate::parse(&certificates[0])
+                            .map_err(|_| TlsError::Certificate)?;
+                        let issuer = crate::Certificate::parse(
+                            certificates.get(1).ok_or(TlsError::Certificate)?,
+                        )
+                        .map_err(|_| TlsError::Certificate)?;
+                        let now = mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?;
+                        crate::verify_stapled_ocsp(
+                            stapled_ocsp.as_deref().ok_or(TlsError::Certificate)?,
+                            &leaf,
+                            &issuer,
+                            now,
+                        )
+                        .map_err(|_| TlsError::Certificate)?;
                         got_certificate = true;
                         transcript.update(&message)
                     }

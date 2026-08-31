@@ -15,6 +15,11 @@ pub enum CertificateError {
     UntrustedIssuer,
     UnsupportedCriticalExtension,
     PathLengthExceeded,
+    OcspMissing,
+    OcspMalformed,
+    OcspUnknown,
+    Revoked,
+    OcspStale,
 }
 
 #[derive(Clone, Copy)]
@@ -129,6 +134,7 @@ pub struct Certificate<'a> {
     extensions: &'a [u8],
     not_before: u64,
     not_after: u64,
+    serial: &'a [u8],
 }
 
 impl<'a> Certificate<'a> {
@@ -248,11 +254,25 @@ impl<'a> Certificate<'a> {
             extensions,
             not_before,
             not_after,
+            serial: serial.value,
         })
     }
 
     pub fn verify_signed_by(&self, issuer: &Certificate<'_>) -> Result<(), CertificateError> {
         rsa_pkcs1_sha256_verify(issuer.modulus, issuer.exponent, self.tbs, self.signature)
+            .map_err(|_| CertificateError::InvalidSignature)
+    }
+
+    pub(crate) fn serial(&self) -> &'a [u8] {
+        self.serial
+    }
+
+    pub(crate) fn verify_pkcs1_sha256(
+        &self,
+        data: &[u8],
+        signature: &[u8],
+    ) -> Result<(), CertificateError> {
+        rsa_pkcs1_sha256_verify(self.modulus, self.exponent, data, signature)
             .map_err(|_| CertificateError::InvalidSignature)
     }
 
@@ -619,6 +639,7 @@ mod tests {
             extensions,
             not_before: 0,
             not_after: 0,
+            serial: &[1],
         }
     }
     #[test]
