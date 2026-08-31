@@ -265,6 +265,138 @@ pub unsafe trait AhciServiceTeardownLease: Sized {
     >;
 }
 
+/// Platform-owned mechanism which reconstructs the exact teardown views only
+/// after the bound service task has been frozen.
+///
+/// # Safety
+///
+/// An implementation must be minted from the controller manager's exclusive
+/// assignment and mapping authority. It must not retain live register,
+/// command-memory, or data-buffer aliases while the service runs. On success,
+/// `reacquire` must transfer the sole teardown views for `native_task` and
+/// `launch`. On failure it must perform no acquisition mutation and return the
+/// same backend. Its error is diagnostic-only, and dropping either an unused
+/// or returned backend must not touch hardware, mappings, DMA, scheduling, or
+/// dispatch.
+pub unsafe trait KernelAhciTeardownReacquisitionBackend: Sized {
+    type Registers;
+    type CommandMemory;
+    type DataIo;
+    type Error;
+
+    /// Reconstructs the exact views named by the manager-owned binding.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the matching frozen service owner and prevent
+    /// service resume or competing controller access for this operation.
+    unsafe fn reacquire(
+        self,
+        native_task: NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        launch: BoundAhciServiceLaunch,
+    ) -> Result<
+        AhciCommandBackendTeardown<Self::Registers, Self::CommandMemory, Self::DataIo>,
+        (Self::Error, Self),
+    >;
+}
+
+/// Concrete one-shot controller-manager lease. Identity is stored separately
+/// from the platform backend so backend state cannot substitute the task or
+/// launch observed by the freeze-first routing layer.
+#[must_use = "the manager lease must be retained until exact teardown acquisition"]
+pub struct KernelAhciManagerTeardownLease<B> {
+    native_task: NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+    backend: B,
+}
+
+impl<B> KernelAhciManagerTeardownLease<B> {
+    /// Mints a lease from the controller manager's exclusive platform owner.
+    ///
+    /// # Safety
+    ///
+    /// `backend` must satisfy [`KernelAhciTeardownReacquisitionBackend`] for
+    /// exactly `native_task` and `launch`, with no live service-view aliases.
+    pub const unsafe fn mint(
+        native_task: NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        launch: BoundAhciServiceLaunch,
+        backend: B,
+    ) -> Self
+    where
+        B: KernelAhciTeardownReacquisitionBackend,
+    {
+        Self {
+            native_task,
+            launch,
+            backend,
+        }
+    }
+
+    pub const fn native_task(
+        &self,
+    ) -> NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
+        self.native_task
+    }
+
+    pub const fn launch(&self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+        BoundAhciServiceLaunch,
+        B,
+    ) {
+        (self.native_task, self.launch, self.backend)
+    }
+}
+
+// SAFETY: minting binds the backend to the stored exact identities. The
+// consuming backend contract supplies the existing lease contract's one-shot,
+// no-alias, and failure-returns-owner guarantees.
+unsafe impl<B: KernelAhciTeardownReacquisitionBackend> AhciServiceTeardownLease
+    for KernelAhciManagerTeardownLease<B>
+{
+    type Registers = B::Registers;
+    type CommandMemory = B::CommandMemory;
+    type DataIo = B::DataIo;
+    type Error = B::Error;
+
+    fn native_task(&self) -> NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
+        self.native_task
+    }
+
+    fn launch(&self) -> BoundAhciServiceLaunch {
+        self.launch
+    }
+
+    unsafe fn reacquire(
+        self,
+    ) -> Result<
+        AhciCommandBackendTeardown<Self::Registers, Self::CommandMemory, Self::DataIo>,
+        (Self::Error, Self),
+    > {
+        let Self {
+            native_task,
+            launch,
+            backend,
+        } = self;
+        match unsafe { backend.reacquire(native_task, launch) } {
+            Ok(teardown) => Ok(teardown),
+            Err((error, backend)) => Err((
+                error,
+                Self {
+                    native_task,
+                    launch,
+                    backend,
+                },
+            )),
+        }
+    }
+}
+
 /// Manager-owned stop handoff created before any AHCI teardown state is
 /// reacquired. The exact service task is frozen and cannot run, while the
 /// one-shot controller-manager lease and all mapping owners remain retained.

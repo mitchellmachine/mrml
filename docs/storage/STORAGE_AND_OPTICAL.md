@@ -1673,6 +1673,26 @@ replay denial. The bootloader's installed dispatcher is not yet connected to
 this adapter, so this remains source-tested integration API evidence rather
 than installed trap execution.
 
+The controller-manager lease now has a concrete non-copy implementation which
+stores the opaque runtime-bound native task and exact bound launch separately
+from a consuming platform reacquisition backend. Its only constructor is an
+unsafe manager minting boundary; the backend contract forbids live service-view
+aliases, hardware or mapping effects on drop, and partial mutation on failure.
+Successful acquisition consumes the lease exactly once. Failure reconstructs
+the same lease from the unchanged returned backend, preserving exact retry and
+preventing backend state from substituting the task or launch seen by the
+freeze layer. The kernel mapping lifecycle test now exercises binding denial,
+freeze retry, backend acquisition retry, and successful quiescence through this
+concrete lease. A physical-platform backend and installed manager instance are
+still unimplemented, so this is not physical AHCI or installed dispatcher
+evidence.
+
+Patent review: **NOT_TRIGGERED**. Separating immutable identity binding from a
+consuming platform backend and reconstructing an unchanged linear lease after
+failure are conventional ownership patterns; no parser, controller command,
+DMA, mapping, or authority mechanism is added. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Exact-current-task classification over an
 existing decoded enum and retained linear owner is conventional dispatcher
 composition and adds no parser, device, DMA, or authority mechanism. See

@@ -716,6 +716,28 @@ mod tests {
         }
     }
 
+    unsafe impl<'a> crate::KernelAhciTeardownReacquisitionBackend for TeardownLease<'a> {
+        type Registers = Registers;
+        type CommandMemory = crate::AhciMappedCommandMemory<'a>;
+        type DataIo = Data;
+        type Error = u8;
+
+        unsafe fn reacquire(
+            self,
+            native_task: mrml_kernel::NativeDeviceServiceTask<
+                { crate::AHCI_SERVICE_AUTHORITY_COUNT },
+            >,
+            launch: crate::BoundAhciServiceLaunch,
+        ) -> Result<
+            crate::AhciCommandBackendTeardown<Self::Registers, Self::CommandMemory, Self::DataIo>,
+            (Self::Error, Self),
+        > {
+            assert_eq!(self.native, native_task);
+            assert_eq!(self.launch, launch);
+            unsafe { <Self as crate::AhciServiceTeardownLease>::reacquire(self) }
+        }
+    }
+
     #[derive(Default)]
     struct AddressSpaceEraser {
         erased: Option<(mrml_kernel::TaskId, UserContext)>,
@@ -1463,6 +1485,9 @@ mod tests {
         .unwrap();
         let (_, _, _, wrong_native, _) = native_tasks();
         lease.native = wrong_native;
+        let lease = unsafe {
+            crate::KernelAhciManagerTeardownLease::mint(wrong_native, prepared.launch(), lease)
+        };
         let install_error = crate::KernelAhciServiceExitSlot::install(active, lease)
             .err()
             .unwrap_or_else(|| panic!("colliding runtime identity must not bind"));
@@ -1471,8 +1496,12 @@ mod tests {
             crate::AhciServiceTeardownLeaseBindingError::NativeTaskMismatch
         );
         assert_eq!(calls.get(), 0);
-        let (active, mut lease) = install_error.into_parts();
-        lease.native = prepared.task();
+        let (active, lease) = install_error.into_parts();
+        let (_, _, mut backend) = lease.into_parts();
+        backend.native = prepared.task();
+        let lease = unsafe {
+            crate::KernelAhciManagerTeardownLease::mint(prepared.task(), prepared.launch(), backend)
+        };
         let mut exit_slot = crate::KernelAhciServiceExitSlot::install(active, lease)
             .unwrap_or_else(|_| panic!("exact active owner and manager lease must bind"));
         assert!(exit_slot.occupied());
