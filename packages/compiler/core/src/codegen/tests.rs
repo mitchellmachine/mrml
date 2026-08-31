@@ -18926,25 +18926,41 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> i8 { input.checked_truncate::<i8>().unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u16 { input.checked_truncate::<u16>().unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, fallback: i32) -> i16 { input.checked_truncate::<i16>().unwrap_or(fallback) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.checked_truncate::<u32>() }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> i8 { input.checked_truncate::<i8>().unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u16 { input.checked_truncate::<u16>().unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, fallback: i32) -> i16 { input.checked_truncate::<i16>().unwrap_or(fallback) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.checked_truncate::<u32>() }",
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
-                    &function,
-                    &NoConstants,
-                    X86_64Abi::SystemV
-                )
-                .is_err(),
-                "{source}"
-            );
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert_eq!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi
+                    )
+                    .unwrap_err()
+                    .kind,
+                    expected,
+                    "{source}"
+                );
+            }
         }
     }
 
