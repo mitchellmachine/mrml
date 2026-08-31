@@ -1598,6 +1598,19 @@ secondary-thread template/isolation path, not concurrent stress, destructors,
 thread-detach callbacks, dynamic TLS, native Windows, general `std`, WHP, or
 physical hardware.
 
+The TLS probe's `destructor` mode adds a `Drop` implementation that increments
+an ordinary atomic counter with release ordering. Its exact pinned object selects
+the `std` destructor-list registration path and retains typed TLS access, an
+unwind-described destroy shim, exact writable/read-only identities, and bounded
+kernel32 child-thread imports. MRML emitted a deterministic 2,390,528-byte PE
+with SHA-256
+`054cc69b907ee04db39979692611d4ce2df93d1fd98c7d2550611b6cecb7e7d3`;
+Wine 11.16 returned 42 after the child mutated its TLS value, thread detach ran
+the registered destructor, and the main thread acquired an exact drop count of
+one. This does not prove multiple or re-entrant destructors, teardown panics,
+process-detach ordering, dynamic TLS, native Windows, broad `std` conformance,
+WHP, or physical hardware.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.

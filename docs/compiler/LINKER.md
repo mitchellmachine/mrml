@@ -1557,3 +1557,16 @@ exit code was 42, and the main thread still observed 41. This is bounded hosted
 secondary-thread TLS template/isolation evidence, not concurrent stress,
 destructor execution, thread-detach callback behavior, dynamic TLS, native
 Windows, general `std`, WHP, or physical hardware.
+
+The probe's `destructor` mode gives its const TLS cell a `Drop` implementation
+that release-increments an ordinary atomic counter. The exact pinned object
+selects `std`'s destructor-list registration path, retains the typed TLS access,
+an unwind-described destroy shim, exact writable/read-only identities, and the
+same bounded kernel32 child-thread imports. MRML emits a deterministic
+2,390,528-byte PE with SHA-256
+`054cc69b907ee04db39979692611d4ce2df93d1fd98c7d2550611b6cecb7e7d3`.
+Wine 11.16 returned 42 only after the child accessed and mutated its TLS value,
+thread detach ran the registered destructor, and the main thread acquired an
+exact drop count of one. This is one hosted child-thread destructor path, not
+multiple/re-entrant destructors, panic during teardown, process-detach ordering,
+dynamic TLS, native Windows, broad `std` conformance, WHP, or physical hardware.

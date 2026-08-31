@@ -9,7 +9,7 @@ self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
 test "$#" -le 1 || {
-    echo "usage: $0 [const|lazy|thread]" >&2
+    echo "usage: $0 [const|lazy|thread|destructor]" >&2
     exit 1
 }
 case ${1:-const} in
@@ -31,8 +31,14 @@ case ${1:-const} in
         expected_size=3584
         expected_hash=6e9bdb946cb9778b00316f499672d7157ba40d639aa6798a33f211c21379c36a
         ;;
+    destructor)
+        probe_name=pinned_std_tls_destructor_execution
+        probe_source=docs/compiler/probes/pinned_std_tls_destructor_execution.rs
+        expected_size=2390528
+        expected_hash=054cc69b907ee04db39979692611d4ce2df93d1fd98c7d2550611b6cecb7e7d3
+        ;;
     *)
-        echo "usage: $0 [const|lazy|thread]" >&2
+        echo "usage: $0 [const|lazy|thread|destructor]" >&2
         exit 1
         ;;
 esac
