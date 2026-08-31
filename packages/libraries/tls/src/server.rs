@@ -2,7 +2,7 @@ use crate::{
     KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript, X25519_MLKEM768,
     finished_verify_data, hybrid_server_share,
 };
-use mrml_crypto::rsa_pss_sha256_sign;
+use mrml_crypto::{rsa_pss_sha256_sign, x25519_public, x25519_shared};
 use mrml_runtime::{TcpStream, Text, Vector};
 
 fn u16_push(out: &mut Vector<u8>, n: usize) -> Result<(), TlsError> {
@@ -181,6 +181,7 @@ pub struct TlsServerConfig {
     modulus: Vector<u8>,
     private_exponent: Vector<u8>,
     protocols: Vector<Text>,
+    ocsp_response: Option<Vector<u8>>,
 }
 impl Drop for TlsServerConfig {
     fn drop(&mut self) {
@@ -236,6 +237,7 @@ impl TlsServerConfig {
             modulus: n,
             private_exponent: d,
             protocols: Vector::new(),
+            ocsp_response: None,
         })
     }
     pub fn with_protocols(mut self, protocols: &[&str]) -> Result<Self, TlsError> {
@@ -247,6 +249,17 @@ impl TlsServerConfig {
                 .try_push(Text::try_from_str(protocol).map_err(|_| TlsError::AllocationFailed)?)
                 .map_err(|_| TlsError::AllocationFailed)?;
         }
+        Ok(self)
+    }
+    pub fn with_ocsp_response(mut self, response: &[u8]) -> Result<Self, TlsError> {
+        if response.is_empty() || response.len() > 64 * 1024 {
+            return Err(TlsError::Certificate);
+        }
+        let mut owned = Vector::new();
+        owned
+            .try_extend_from_slice(response)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        self.ocsp_response = Some(owned);
         Ok(self)
     }
 }
@@ -274,7 +287,7 @@ fn send_plain(stream: &mut TcpStream, msg: &[u8]) -> Result<(), TlsError> {
     stream.write_all(&h).map_err(|_| TlsError::Io)?;
     stream.write_all(msg).map_err(|_| TlsError::Io)
 }
-fn client_offer(msg: &[u8]) -> Result<(&[u8], &[u8], Vector<Text>), TlsError> {
+fn client_offer(msg: &[u8]) -> Result<(&[u8], u16, &[u8], Vector<Text>), TlsError> {
     let mut c = Cursor::new(msg);
     if c.byte()? != 1 || c.u24()? != msg.len() - 4 || c.take(2)? != [3, 3] {
         return Err(TlsError::Handshake);
@@ -297,7 +310,8 @@ fn client_offer(msg: &[u8]) -> Result<(&[u8], &[u8], Vector<Text>), TlsError> {
     if !c.done() {
         return Err(TlsError::Handshake);
     }
-    let mut selected_share = None;
+    let mut hybrid_share = None;
+    let mut x25519_share = None;
     let mut protocols = Vector::new();
     while !e.done() {
         let kind = e.u16()?;
@@ -312,7 +326,9 @@ fn client_offer(msg: &[u8]) -> Result<(&[u8], &[u8], Vector<Text>), TlsError> {
                 let len = shares.u16()? as usize;
                 let share = shares.take(len)?;
                 if group == X25519_MLKEM768 && len == 1216 {
-                    selected_share = Some(share);
+                    hybrid_share = Some(share);
+                } else if group == 0x1d && len == 32 {
+                    x25519_share = Some(share);
                 }
             }
         } else if kind == 16 {
@@ -332,11 +348,15 @@ fn client_offer(msg: &[u8]) -> Result<(&[u8], &[u8], Vector<Text>), TlsError> {
             }
         }
     }
-    Ok((
-        session,
-        selected_share.ok_or(TlsError::Handshake)?,
-        protocols,
-    ))
+    let (group, share) = if crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
+        hybrid_share
+            .map(|share| (X25519_MLKEM768, share))
+            .or_else(|| x25519_share.map(|share| (0x1d, share)))
+    } else {
+        x25519_share.map(|share| (0x1d, share))
+    }
+    .ok_or(TlsError::Handshake)?;
+    Ok((session, group, share, protocols))
 }
 
 pub struct TlsServerStream {
@@ -349,11 +369,6 @@ pub struct TlsServerStream {
 }
 impl TlsServerStream {
     pub fn accept(mut stream: TcpStream, config: &TlsServerConfig) -> Result<Self, TlsError> {
-        if !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_SERVER")
-            || !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID")
-        {
-            return Err(TlsError::Handshake);
-        }
         stream
             .set_read_timeout_millis(30_000)
             .map_err(|_| TlsError::Io)?;
@@ -365,7 +380,7 @@ impl TlsServerStream {
             return Err(TlsError::Handshake);
         }
         let client_hello = &first[5..];
-        let (session, share, offered_protocols) = client_offer(client_hello)?;
+        let (session, group, share, offered_protocols) = client_offer(client_hello)?;
         let negotiated_protocol = if config.protocols.is_empty() {
             None
         } else {
@@ -377,7 +392,30 @@ impl TlsServerStream {
                 .ok_or(TlsError::Handshake)?
                 .into()
         };
-        let (server_share, mut shared) = hybrid_server_share(share)?;
+        let (server_share, mut shared) = if group == X25519_MLKEM768 {
+            let (public, secret) = hybrid_server_share(share)?;
+            let mut shared = Vector::new();
+            shared
+                .try_extend_from_slice(&secret)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            (public, shared)
+        } else {
+            let peer: [u8; 32] = share.try_into().map_err(|_| TlsError::Handshake)?;
+            let mut scalar = [0; 32];
+            mrml_runtime::fill_random(&mut scalar).map_err(|_| TlsError::AuthenticationFailed)?;
+            let public = x25519_public(scalar);
+            let secret = x25519_shared(scalar, peer).ok_or(TlsError::AuthenticationFailed)?;
+            scalar.fill(0);
+            let mut public_bytes = Vector::new();
+            public_bytes
+                .try_extend_from_slice(&public)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            let mut shared = Vector::new();
+            shared
+                .try_extend_from_slice(&secret)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            (public_bytes, shared)
+        };
         let mut random = [0; 32];
         mrml_runtime::fill_random(&mut random).map_err(|_| TlsError::AuthenticationFailed)?;
         let mut body = Vector::new();
@@ -398,7 +436,7 @@ impl TlsServerStream {
             .map_err(|_| TlsError::AllocationFailed)?;
         u16_push(&mut ext, 51)?;
         u16_push(&mut ext, 4 + server_share.len())?;
-        u16_push(&mut ext, X25519_MLKEM768 as usize)?;
+        u16_push(&mut ext, group as usize)?;
         u16_push(&mut ext, server_share.len())?;
         ext.try_extend_from_slice(&server_share)
             .map_err(|_| TlsError::AllocationFailed)?;
@@ -445,11 +483,29 @@ impl TlsServerStream {
             .try_push(0)
             .map_err(|_| TlsError::AllocationFailed)?;
         let mut list = Vector::new();
-        for cert in &config.certificates {
+        for (certificate_index, cert) in config.certificates.iter().enumerate() {
             u24_push(&mut list, cert.len())?;
             list.try_extend_from_slice(cert)
                 .map_err(|_| TlsError::AllocationFailed)?;
-            u16_push(&mut list, 0)?;
+            if certificate_index == 0 {
+                if let Some(response) = &config.ocsp_response {
+                    let mut status = Vector::new();
+                    status.try_push(1).map_err(|_| TlsError::AllocationFailed)?;
+                    u24_push(&mut status, response.len())?;
+                    status
+                        .try_extend_from_slice(response)
+                        .map_err(|_| TlsError::AllocationFailed)?;
+                    u16_push(&mut list, 4 + status.len())?;
+                    u16_push(&mut list, 5)?;
+                    u16_push(&mut list, status.len())?;
+                    list.try_extend_from_slice(&status)
+                        .map_err(|_| TlsError::AllocationFailed)?;
+                } else {
+                    u16_push(&mut list, 0)?;
+                }
+            } else {
+                u16_push(&mut list, 0)?;
+            }
         }
         u24_push(&mut cert_body, list.len())?;
         cert_body
