@@ -254,9 +254,7 @@ fn validate_settings(payload: &[u8]) -> Result<(), HttpError> {
         }
         seen.try_push(identifier)
             .map_err(|_| HttpError::Allocation)?;
-        if matches!(identifier, 1 | 7) && value != 0 {
-            return Err(HttpError::InvalidResponse);
-        }
+        let _ = value;
     }
     Ok(())
 }
@@ -826,6 +824,7 @@ impl Http3ServerConnection {
     pub fn next_request(&mut self) -> Result<(u64, RequestHead), HttpError> {
         let mut unidirectional: Vector<IncomingHttp3Stream> = Vector::new();
         let mut requests: Vector<IncomingHttp3Stream> = Vector::new();
+        let mut ready_request: Option<(u64, RequestHead)> = None;
         loop {
             for frame in self.connection.receive_frames().map_err(quic_error)? {
                 if let QuicFrame::Stream {
@@ -878,6 +877,11 @@ impl Http3ServerConnection {
                         {
                             return Err(HttpError::InvalidResponse);
                         }
+                        if self.state.settings_received()
+                            && let Some(request) = ready_request.take()
+                        {
+                            return Ok(request);
+                        }
                     } else if id & 3 == 0 {
                         let index = if let Some(index) =
                             requests.iter().position(|stream| stream.id == id)
@@ -914,10 +918,11 @@ impl Http3ServerConnection {
                                 head = Some(self.protocol.request(&request_frame)?);
                             }
                         }
-                        if !self.state.settings_received() {
-                            return Err(HttpError::InvalidResponse);
+                        let request = (id, head.ok_or(HttpError::InvalidResponse)?);
+                        if self.state.settings_received() {
+                            return Ok(request);
                         }
-                        return Ok((id, head.ok_or(HttpError::InvalidResponse)?));
+                        ready_request = Some(request);
                     }
                 }
             }

@@ -337,6 +337,10 @@ impl QuicTransportParameters {
                 at = end;
                 continue;
             }
+            if bit.is_none() {
+                at = end;
+                continue;
+            }
             let value = if id == 12 {
                 if n != 0 {
                     return Err(QuicError::InvalidPacket);
@@ -1514,6 +1518,9 @@ mod tests {
         let mut duplicate = wire.clone();
         duplicate.try_extend_from_slice(&[3, 1, 63]).unwrap();
         assert!(QuicTransportParameters::decode(&duplicate).is_err());
+        let mut greased = wire.clone();
+        greased.try_extend_from_slice(&[0x40, 0x1f, 0]).unwrap();
+        assert_eq!(QuicTransportParameters::decode(&greased).unwrap(), parameters);
         assert!(QuicRecovery::new(1199).is_err())
     }
     #[test]

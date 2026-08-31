@@ -639,7 +639,7 @@ impl QuicServerListener {
         }
         let mut finished_crypto = QuicStreamAssembler::new(64);
         let mut expected_client_handshake = 0;
-        let (finished, message) = 'finished: loop {
+        let (finished, message) = 'packets: loop {
             let (amount, from) = self
                 .socket
                 .receive_from(&mut datagram)
@@ -658,16 +658,20 @@ impl QuicServerListener {
                 cursor = used;
             }
             while cursor < amount {
-                let (packet, used) = HandshakePacket::open(
+                let (packet, used) = match HandshakePacket::open(
                     &datagram[cursor..amount],
                     &read_handshake,
                     expected_client_handshake,
-                )?;
+                ) {
+                    Ok(packet) => packet,
+                    Err(error @ (QuicError::Allocation | QuicError::Limit)) => return Err(error),
+                    Err(_) => continue 'packets,
+                };
                 cursor += used;
                 expected_client_handshake = packet.packet_number + 1;
                 insert_crypto_frames(&packet.payload, &mut finished_crypto)?;
                 if let Some(message) = handshake_message(finished_crypto.contiguous(), 0)? {
-                    break 'finished (packet, message);
+                    break 'packets (packet, message);
                 }
             }
         };
@@ -687,7 +691,8 @@ impl QuicServerListener {
             packet_number: server_handshake_packets as u64,
             payload: handshake_ack_payload,
         }
-        .seal(&write_handshake)?;
+        .seal(&write_handshake)
+        .map_err(|_| QuicError::HandshakeConfirmation)?;
         state.authorize_datagram_send(handshake_ack.len())?;
         self.socket
             .send_to(&handshake_ack, peer)
@@ -720,7 +725,9 @@ impl QuicServerListener {
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
             pending_frames: Vector::new(),
         };
-        connection.send_frames(&[QuicFrame::HandshakeDone])?;
+        connection
+            .send_frames(&[QuicFrame::HandshakeDone])
+            .map_err(|_| QuicError::HandshakeConfirmation)?;
         Ok(connection)
     }
 }
