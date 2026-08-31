@@ -1774,3 +1774,17 @@ semantic-execution tests; the release driver passes 17 tests. All eight pinned
 std/TLS Wine modes reproduce their exact recorded PE sizes and SHA-256 hashes
 and return 42. Patent review: NOT_TRIGGERED; this is bounded conventional
 PE/COFF relocation handling.
+
+Final PE validation and serialization now resolve a writable-only named code
+pointer through the same unique typed `CoffTextSection` definition admitted by
+archive retention. A conventional global text definition retains precedence;
+when no such definition exists, conflicting typed identities, a non-code
+definition, and a one-past text offset fail closed under the containing CRT or
+TLS error class. The stable CRT initializer fixture exercises the typed named
+path through its emitted image-base VA and rejects a second conflicting typed
+identity. The Linux release gate passes 844 unit tests, 2 object-evidence
+tests, 10 conformance tests, 351 replacement tests, and 128 semantic-execution
+tests; the release driver passes 17 tests. All eight pinned std/TLS Wine modes
+reproduce their exact recorded sizes and SHA-256 hashes and return 42. Patent
+review: NOT_TRIGGERED; this completes bounded conventional PE/COFF symbol and
+section resolution without introducing a new mechanism.

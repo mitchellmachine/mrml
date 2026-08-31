@@ -9772,8 +9772,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                             .ok_or(LinkerError::OffsetOverflow)?
                     }
                 }
-                PeWritableRelocationTarget::TextSymbol(symbol) => TEXT_RVA
-                    .checked_add(resolve_symbol(inputs, &linked_layouts, symbol)?)
+                PeWritableRelocationTarget::TextSymbol(_) => TEXT_RVA
+                    .checked_add(resolve_pe_code_pointer_target(
+                        inputs,
+                        &linked_layouts,
+                        relocation.target,
+                        match data.kind {
+                            PeDataKind::TlsCallback(_) => LinkerError::UnsupportedCoffTls,
+                            _ => LinkerError::UnsupportedCoff,
+                        },
+                    )?)
                     .ok_or(LinkerError::OffsetOverflow)?,
                 PeWritableRelocationTarget::TlsSection { identity, offset } => {
                     let (target_index, target_offset) = writable_section(identity, offset)?;
@@ -11130,22 +11138,61 @@ fn resolve_pe_code_pointer_target(
 ) -> Result<usize, LinkerError> {
     match target {
         PeWritableRelocationTarget::TextSymbol(symbol) => {
+            let mut saw_symbol = false;
+            let mut global = None;
+            let mut typed = None;
+            let mut typed_ambiguous = false;
             for (input, layout) in inputs.iter().zip(layouts.iter()) {
-                let Some(definition) = input_definition_target(input, symbol) else {
-                    continue;
-                };
-                let LinkDefinitionTarget::Text(offset) = definition else {
-                    return Err(invalid_error);
-                };
-                if offset >= input.text.len() {
-                    return Err(invalid_error);
+                let definitions = core::iter::once(LinkDefinition {
+                    symbol: input.symbol,
+                    target: input.symbol_target,
+                })
+                .chain(input.additional_definitions.iter().copied());
+                for definition in definitions.filter(|definition| definition.symbol == symbol) {
+                    saw_symbol = true;
+                    let offset = match definition.target {
+                        LinkDefinitionTarget::Text(offset) => {
+                            if global.is_some() {
+                                return Err(invalid_error);
+                            }
+                            offset
+                        }
+                        LinkDefinitionTarget::CoffTextSection { offset, .. } => offset,
+                        _ => continue,
+                    };
+                    if offset >= input.text.len() {
+                        return Err(invalid_error);
+                    }
+                    let resolved = layout
+                        .text
+                        .checked_add(offset)
+                        .ok_or(LinkerError::OffsetOverflow)?;
+                    match definition.target {
+                        LinkDefinitionTarget::Text(_) => global = Some(resolved),
+                        LinkDefinitionTarget::CoffTextSection { .. } => match typed {
+                            None => typed = Some((definition.target, resolved)),
+                            Some((target, previous))
+                                if target == definition.target && previous == resolved => {}
+                            Some(_) => typed_ambiguous = true,
+                        },
+                        _ => unreachable!(),
+                    }
                 }
-                return layout
-                    .text
-                    .checked_add(offset)
-                    .ok_or(LinkerError::OffsetOverflow);
             }
-            Err(LinkerError::UndefinedSymbol)
+            if let Some(resolved) = global {
+                return Ok(resolved);
+            }
+            if typed_ambiguous {
+                return Err(invalid_error);
+            }
+            if let Some((_, resolved)) = typed {
+                return Ok(resolved);
+            }
+            if saw_symbol {
+                Err(invalid_error)
+            } else {
+                Err(LinkerError::UndefinedSymbol)
+            }
         }
         PeWritableRelocationTarget::CoffSection { identity, offset } => {
             let mut found = false;
@@ -15080,12 +15127,7 @@ mod tests {
         ordinary[175..177].copy_from_slice(&0i16.to_le_bytes());
         let mut ordinary_storage = storage;
         assert_eq!(
-            decode_x86_64_coff_writable_data_fragment(
-                &ordinary,
-                0,
-                "entry",
-                &mut ordinary_storage,
-            ),
+            decode_x86_64_coff_writable_data_fragment(&ordinary, 0, "entry", &mut ordinary_storage,),
             Err(LinkerError::UnsupportedCoff)
         );
     }
@@ -15693,10 +15735,7 @@ mod tests {
         };
         let first_relocation = [PeWritableRelocation {
             offset: 0,
-            target: PeWritableRelocationTarget::CoffSection {
-                identity: first_initializer,
-                offset: 0,
-            },
+            target: PeWritableRelocationTarget::TextSymbol("first_initializer"),
         }];
         let second_relocation = [PeWritableRelocation {
             offset: 0,
@@ -15812,6 +15851,34 @@ mod tests {
         assert_eq!(read_image_u64(48), 0x0000_0001_4000_1001);
         assert_eq!(read_image_u64(56), 0x0000_0001_4000_1002);
         assert_eq!(read_image_u64(64), 0);
+
+        let conflicting_definitions = [LinkDefinition {
+            symbol: "first_initializer",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(63, 1).unwrap(),
+                offset: 0,
+            },
+        }];
+        let conflicting_input = LinkInput {
+            symbol: ".text$conflicting_initializer",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(63, 1).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &conflicting_definitions,
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input, conflicting_input],
+                "entry",
+                &[],
+                &writable,
+            ),
+            Err(LinkerError::UnsupportedCoff)
+        );
     }
 
     #[test]
