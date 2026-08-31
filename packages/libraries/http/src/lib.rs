@@ -4,6 +4,12 @@ use core::fmt;
 use mrml_runtime::{Text, Vector};
 use mrml_tls::TlsClientStream;
 
+mod http2;
+mod http3;
+
+pub use http2::{HTTP2_CLIENT_PREFACE, Http2Client, Http2Frame, Http2FrameKind, Http2Server};
+pub use http3::{Http3Client, Http3Frame, Http3FrameKind, Http3Server};
+
 const MAX_HEADER: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HttpError {
@@ -133,10 +139,27 @@ impl Url {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Header {
     pub name: Text,
     pub value: Text,
+}
+
+/// A transport-independent request decoded from an HTTP/2 or HTTP/3 stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestHead {
+    pub method: Text,
+    pub scheme: Text,
+    pub authority: Text,
+    pub target: Text,
+    pub headers: Vector<Header>,
+}
+
+/// A transport-independent response decoded from an HTTP/2 or HTTP/3 stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResponseHead {
+    pub status: u16,
+    pub headers: Vector<Header>,
 }
 enum Framing {
     Length(u64),
@@ -344,8 +367,8 @@ impl Client {
         let original_host = current.host.clone();
         let original_port = current.port;
         for _ in 0..=redirects {
-            let address = mrml_runtime::TcpStream::resolve_host(&current.host)
-                .map_err(|_| HttpError::Tls)?;
+            let address =
+                mrml_runtime::TcpStream::resolve_host(&current.host).map_err(|_| HttpError::Tls)?;
             if !allow_endpoint(&current, address) {
                 return Err(HttpError::InvalidUrl);
             }
@@ -371,7 +394,8 @@ impl Client {
         headers: &[(&str, &str)],
         allow_sensitive: bool,
     ) -> Result<Response, HttpError> {
-        let address = mrml_runtime::TcpStream::resolve_host(&url.host).map_err(|_| HttpError::Tls)?;
+        let address =
+            mrml_runtime::TcpStream::resolve_host(&url.host).map_err(|_| HttpError::Tls)?;
         self.request_resolved(url, address, method, headers, allow_sensitive)
     }
     fn request_resolved(
@@ -554,15 +578,11 @@ mod tests {
     #[test]
     fn checked_follow_rejects_a_resolved_endpoint_before_connecting() {
         let mut observed = None;
-        let result = Client::new().get_follow_checked(
-            "https://localhost/",
-            &[],
-            0,
-            |url, address| {
+        let result =
+            Client::new().get_follow_checked("https://localhost/", &[], 0, |url, address| {
                 observed = Some((url.host.clone(), address));
                 false
-            },
-        );
+            });
         assert!(matches!(result, Err(HttpError::InvalidUrl)));
         let (host, address) = observed.unwrap();
         assert_eq!(host, "localhost");

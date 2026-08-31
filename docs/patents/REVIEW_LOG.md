@@ -10932,3 +10932,23 @@ nested framing itself introduces no new signature equation: ML-DSA covers the
 canonical unsigned object, and OpenPGP covers the exact object containing that
 first signature. Search and legal-status confidence remain **LOW** pending the
 targeted review.
+
+# 2026-08-31 — Bounded HTTP/2 and HTTP/3 protocol-stream profiles
+
+MRML source: `packages/libraries/http/src/{http2,http3,lib}.rs`.
+
+Patent review: **TRIGGERED** — this increment implements bounded HTTP/2 frame
+handling and a literal-only HPACK profile, plus HTTP/3 frame handling and a
+zero-required-insert-count literal-only QPACK profile. It does not implement
+QUIC, congestion control, loss recovery, connection migration, HTTP/3
+datagrams, or a new compression algorithm. The implementation is independently
+authored from the public wire requirements and rejects unsupported compression
+representations rather than importing another implementation.
+
+HTTP/2, HPACK, HTTP/3, QPACK, and QUIC are standardized protocol areas with
+IETF intellectual-property declaration processes. The required claim-by-claim
+worldwide family and authoritative national-register review has not been
+completed. This record therefore makes no patent-clearance, license-coverage,
+non-infringement, essentiality, validity, or legal conclusion. Search and
+legal-status confidence remain **LOW**; technical overlap beyond the named
+standard wire mechanisms remains unassessed.
