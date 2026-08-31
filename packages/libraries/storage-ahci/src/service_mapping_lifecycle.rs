@@ -1530,20 +1530,34 @@ mod tests {
 
         let mut full = ServiceSupervisor::<0>::new();
         // SAFETY: the same modeled lifecycle requirements documented above
-        // remain true; this attempt fails transactionally before publication.
-        let failure = unsafe {
-            owner.activate(
+        // remain true; this attempt fails transactionally before publication
+        // and must return both uninstalled manager mechanisms.
+        let (failure, verifier, delay) = match unsafe {
+            crate::activate_and_install_x86_ahci_service_exit_slot(
+                owner,
                 RestartPolicy::ONCE_IMMEDIATE,
                 &mut full,
                 &mut fixture.runtime,
+                RejectActiveRoot { calls: 0 },
+                Delay(10),
             )
-        }
-        .err()
-        .unwrap_or_else(|| panic!("zero-capacity supervisor must reject publication"));
+        } {
+            Err(crate::X86AhciServiceManagerActivationFailure::Activation {
+                failure,
+                verifier,
+                delay,
+            }) => (failure, verifier, delay),
+            Err(crate::X86AhciServiceManagerActivationFailure::Installation(_)) => {
+                panic!("activation denial must not reach manager installation")
+            }
+            Ok(_) => panic!("zero-capacity supervisor must reject publication"),
+        };
         assert_eq!(
             failure.error(),
             crate::KernelAhciMappingSetActivationError::Service(ServiceError::Full)
         );
+        assert_eq!(verifier.calls, 0);
+        assert_eq!(delay.0, 10);
         assert_eq!(fixture.runtime.construction_pending(target_task), Ok(true));
         assert_eq!(fixture.runtime.load().runnable(), 1);
         assert_eq!(failure.owner().root(), PhysAddr::new(TABLE_BASE).unwrap());
@@ -1552,38 +1566,36 @@ mod tests {
         let mut supervisor = ServiceSupervisor::<1>::new();
         // SAFETY: this consumes the retained exact owner under the same modeled
         // PAT, alias-exclusion, and inactive-root assumptions.
-        let active = unsafe {
-            failure.into_owner().activate(
+        let manager_slot = match unsafe {
+            crate::activate_and_install_x86_ahci_service_exit_slot(
+                failure.into_owner(),
                 RestartPolicy::ONCE_IMMEDIATE,
                 &mut supervisor,
                 &mut fixture.runtime,
+                RejectActiveRoot { calls: 0 },
+                Delay(11),
             )
-        }
-        .unwrap_or_else(|failure| panic!("exact activation must succeed: {:?}", failure.error()));
+        } {
+            Ok(slot) => slot,
+            Err(_) => panic!("exact activation and manager installation must succeed"),
+        };
+        assert_eq!(manager_slot.task(), Some(target_task));
+        let installed_service = manager_slot
+            .service()
+            .unwrap_or_else(|| panic!("occupied manager slot must retain the service binding"));
+        assert_eq!(supervisor.task(installed_service), Ok(Some(target_task)));
+        assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
+        assert_eq!(fixture.runtime.load().runnable(), 2);
+        assert!(manager_slot.occupied());
+        let (active, lease) = manager_slot
+            .into_parts()
+            .unwrap_or_else(|| panic!("unrouted manager slot must return both exact owners"));
         let service_id = active.service();
         assert_eq!(active.task(), target_task);
         assert_eq!(active.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(active.target(), target);
         assert!(active.abar_mapping().is_some());
         assert!(active.cpu_mappings().fully_installed());
-        assert_eq!(supervisor.task(active.service()), Ok(Some(target_task)));
-        assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
-        assert_eq!(fixture.runtime.load().runnable(), 2);
-        let manager_slot = match unsafe {
-            crate::install_x86_ahci_service_exit_slot(
-                active,
-                RejectActiveRoot { calls: 0 },
-                Delay(11),
-            )
-        } {
-            Ok(slot) => slot,
-            Err(_) => panic!("exact active owner must bind the concrete x86 manager backend"),
-        };
-        assert!(manager_slot.occupied());
-        assert_eq!(manager_slot.task(), Some(target_task));
-        let (active, lease) = manager_slot
-            .into_parts()
-            .unwrap_or_else(|| panic!("unrouted manager slot must return both exact owners"));
         let (native_task, launch, backend) = lease.into_parts();
         assert_eq!(native_task, prepared.task());
         assert_eq!(launch, prepared.launch());

@@ -253,7 +253,9 @@ pub use x86_coherent_data_sync::AhciX86CoherentDataSync;
 #[cfg(target_arch = "x86_64")]
 pub use x86_teardown_reacquisition::{
     AhciX86ActiveMappingVerifier, AhciX86TeardownReacquisition, AhciX86TeardownReacquisitionError,
-    CurrentAhciX86ActiveMappingVerifier, install_x86_ahci_service_exit_slot,
+    CurrentAhciX86ActiveMappingVerifier, X86AhciServiceExitSlot,
+    X86AhciServiceManagerActivationFailure, activate_and_install_x86_ahci_service_exit_slot,
+    install_x86_ahci_service_exit_slot,
 };
 
 pub struct AhciBlockProvider<'a> {

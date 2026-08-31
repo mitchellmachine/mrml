@@ -1754,6 +1754,23 @@ generic backend, checks the exact task binding, recovers the active owner,
 lease, verifier, and delay unchanged, and then continues the existing full
 teardown model. This is source/unit evidence, not installed trap execution.
 
+Activation and manager installation now have one consuming x86 API boundary.
+It revalidates and publishes the exact mapped service, then installs the active
+mapping owner and derived one-use teardown lease before returning to a
+dispatcher. The unsafe caller must exclude interrupts and scheduling across
+that synchronous transition. Activation denial returns the complete
+preactivation owner, mapping hierarchy, verifier, and delay unchanged; success
+returns only the occupied manager slot rather than an unretained runnable AHCI
+owner. The controlled test exercises both denial/retry and success. Bootloader
+launch construction, static manager retention, and installed trap execution
+remain incomplete, so this is source and Linux unit-test evidence only.
+
+Patent review: **NOT_TRIGGERED**. Synchronously composing existing activation
+and manager-slot installation while returning all linear owners on failure is
+conventional lifecycle wiring. It adds no parser, controller command, DMA
+behavior, persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Deriving identity from an existing linear
 owner and atomically composing existing backend, lease, and bounded-slot types
 is conventional ownership wiring. It adds no parser, controller command, DMA

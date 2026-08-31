@@ -8,8 +8,74 @@ use crate::{
     reconstruct_bound_ahci_port, verify_current_x86_ahci_mappings,
 };
 use core::marker::PhantomData;
-use mrml_kernel::NativeDeviceServiceTask;
 use mrml_kernel::arch::x86_64::PageTableStore;
+use mrml_kernel::{NativeDeviceServiceTask, RestartPolicy, ServiceSupervisor, TaskRuntime};
+
+pub type X86AhciServiceExitSlot<
+    'resources,
+    'views,
+    S,
+    V,
+    D,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> = crate::KernelAhciServiceExitSlot<
+    'resources,
+    S,
+    crate::KernelAhciManagerTeardownLease<AhciX86TeardownReacquisition<'views, V, D>>,
+    P,
+    O,
+    M,
+    TASKS,
+    TASK_CAPABILITIES,
+    AUTHORITIES,
+>;
+
+pub enum X86AhciServiceManagerActivationFailure<
+    'resources,
+    'views,
+    S: PageTableStore,
+    V: AhciX86ActiveMappingVerifier,
+    D,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    Activation {
+        failure: crate::KernelAhciMappingSetActivationFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        verifier: V,
+        delay: D,
+    },
+    Installation(
+        crate::KernelAhciServiceExitSlotInstallError<
+            'resources,
+            S,
+            crate::KernelAhciManagerTeardownLease<AhciX86TeardownReacquisition<'views, V, D>>,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    ),
+}
 
 /// Read-only active-root check used before any teardown view is reconstructed.
 ///
@@ -154,6 +220,88 @@ pub unsafe fn install_x86_ahci_service_exit_slot<
     let lease =
         unsafe { crate::KernelAhciManagerTeardownLease::mint(native_task, launch, backend) };
     crate::KernelAhciServiceExitSlot::install(active, lease)
+}
+
+/// Publishes the exact mapped service and synchronously installs its complete
+/// manager exit owner before returning control to a dispatcher.
+///
+/// # Safety
+///
+/// The caller must satisfy `KernelAhciPreactivationMappingSetOwner::activate`
+/// and `install_x86_ahci_service_exit_slot`, and must exclude scheduling,
+/// interrupts, or any other path capable of dispatching the newly runnable
+/// task until this function returns its occupied slot. The returned slot must
+/// be retained by the controller manager before dispatch begins.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub unsafe fn activate_and_install_x86_ahci_service_exit_slot<
+    'resources,
+    'views,
+    S: PageTableStore,
+    V: AhciX86ActiveMappingVerifier,
+    D,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+    const SERVICES: usize,
+>(
+    owner: crate::KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    restart_policy: RestartPolicy,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    verifier: V,
+    delay: D,
+) -> Result<
+    X86AhciServiceExitSlot<
+        'resources,
+        'views,
+        S,
+        V,
+        D,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    X86AhciServiceManagerActivationFailure<
+        'resources,
+        'views,
+        S,
+        V,
+        D,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let active = match unsafe { owner.activate(restart_policy, supervisor, runtime) } {
+        Ok(active) => active,
+        Err(failure) => {
+            return Err(X86AhciServiceManagerActivationFailure::Activation {
+                failure,
+                verifier,
+                delay,
+            });
+        }
+    };
+    unsafe { install_x86_ahci_service_exit_slot(active, verifier, delay) }
+        .map_err(X86AhciServiceManagerActivationFailure::Installation)
 }
 
 // SAFETY: verification precedes all raw-view construction. Every fallible

@@ -745,6 +745,10 @@ impl<
         self.entry.as_ref().map(|(active, _)| active.task())
     }
 
+    pub fn service(&self) -> Option<ServiceId> {
+        self.entry.as_ref().map(|(active, _)| active.service())
+    }
+
     /// Recovers the exact unconsumed manager pair when dispatch is cancelled
     /// before a successful exit route. An already consumed slot returns none.
     pub fn into_parts(
