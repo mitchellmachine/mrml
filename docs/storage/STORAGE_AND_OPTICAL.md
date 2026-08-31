@@ -1626,8 +1626,8 @@ state quarantine, concrete-root retention across acquisition and sanitization
 retry, exact concrete retirement and five-leaf withdrawal, frozen mutation
 denial, quiescence retry, exact address-space cleanup, concrete-owner release,
 and delayed successor dispatch. This is typed API, controlled backend, and
-unit-test evidence only. The repository has no production controller-manager
-lease implementation or installed trap routing, and no installed
+unit-test evidence only. The repository has no installed controller-manager
+minting or trap routing, and no installed
 CPL3/`INT 0x80`, active page-table/TLB or IOMMU invalidation, KVM/WHP, or
 physical AHCI execution was exercised.
 
@@ -1637,8 +1637,8 @@ Any other decoded request is returned unchanged before lease access, freezing,
 MMIO, DMA, or mapping mutation. The token is descriptive only: it cannot name
 or obtain a service, and the non-copy active owner plus exact one-shot manager
 lease remain mandatory authority inputs. This connects the shared syscall
-decoder to the manager API in source, but the installed trap dispatcher and a
-production controller-manager lease remain unimplemented.
+decoder to the manager API in source, but installed manager minting and trap
+dispatch remain unimplemented.
 
 The installed AHCI service entry now consumes its complete dispatcher state
 into a non-copy stop owner at the first fail-closed dispatch result. It erases
@@ -1667,9 +1667,8 @@ exit consumes no user pointer, name, or token as authority: it can only consume
 the pair already held by the manager slot. Empty-slot requests fail closed, and
 binding or lifecycle failure restores the same pair for exact retry; successful
 freeze leaves the slot empty and transfers both owners into the existing frozen
-handoff. This closes the typed manager-storage gap in source, but the concrete
-controller-manager lease implementation and installed trap dispatcher remain
-unfinished.
+handoff. This closes the typed manager-storage gap in source, but installed
+manager minting and the trap dispatcher remain unfinished.
 
 The slot now also accepts the canonical decoded syscall request at a dedicated
 trap-boundary adapter. Non-exit requests and exits from any task other than the
@@ -1725,8 +1724,8 @@ and provides an unsafe current-CR3 entry which requires interrupts and
 concurrent hierarchy mutation to remain excluded. Kernel simulation tests
 exact-match two-page device mappings and reject root, physical-frame, and cache
 selector substitution. The wrapper is now available to the controller-manager
-reacquisition backend; that concrete backend and installed trap connection
-remain incomplete. These Linux unit tests do not execute CR3 access or prove
+reacquisition backend; installed manager minting and the trap connection remain
+incomplete. These Linux unit tests do not execute CR3 access or prove
 PAT contents, TLB state, IOMMU state, physical AHCI, or SMP exclusion.
 
 A concrete x86 controller-manager reacquisition backend now performs that
@@ -1740,8 +1739,26 @@ mapping effects. The final assembler also returns every linear input on layout
 mismatch instead of discarding them. The controlled lifecycle test injects
 active-root rejection and proves the verifier call and exact delay-owner
 retention before any raw view is formed. Success remains source-composed rather
-than installed: no controller-manager instance or trap path mints this backend
-yet, and Linux tests do not exercise CR3, MMIO, DMA, IOMMU, PAT, or hardware.
+than installed: no booted controller-manager instance or trap path uses this
+backend yet, and Linux tests do not exercise CR3, MMIO, DMA, IOMMU, PAT, or
+hardware.
+
+The x86 manager minting API now derives the opaque native-task identity and
+bound launch exclusively from the non-copy active mapping owner, creates the
+concrete backend and one-use lease, and installs that exact pair into the
+bounded exit slot in one unsafe transition. It accepts no caller-supplied task,
+launch, service name, or object identifier. An unrouted slot can now be consumed
+to recover both owners exactly, so cancelled startup does not rely on Drop or
+lose mapping authority. The controlled lifecycle test installs the concrete
+generic backend, checks the exact task binding, recovers the active owner,
+lease, verifier, and delay unchanged, and then continues the existing full
+teardown model. This is source/unit evidence, not installed trap execution.
+
+Patent review: **NOT_TRIGGERED**. Deriving identity from an existing linear
+owner and atomically composing existing backend, lease, and bounded-slot types
+is conventional ownership wiring. It adds no parser, controller command, DMA
+behavior, persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
 
 Patent review: **NOT_TRIGGERED**. Sequentially composing existing exact mapping
 verification and typed teardown-view constructors, with linear owner return on

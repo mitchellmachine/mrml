@@ -9,6 +9,7 @@ use crate::{
 };
 use core::marker::PhantomData;
 use mrml_kernel::NativeDeviceServiceTask;
+use mrml_kernel::arch::x86_64::PageTableStore;
 
 /// Read-only active-root check used before any teardown view is reconstructed.
 ///
@@ -84,6 +85,75 @@ impl<'views, V, D> AhciX86TeardownReacquisition<'views, V, D> {
     pub fn into_parts(self) -> (V, D) {
         (self.verifier, self.delay)
     }
+}
+
+/// Mints the concrete x86 reacquisition backend from manager-retained
+/// mechanisms and binds it to the exact active task and launch in one step.
+///
+/// # Safety
+///
+/// The caller must hold the controller manager's exclusive assignment,
+/// mapping-generation, DMA/IOMMU, PAT-coherence, and no-alias proofs for
+/// `active`. `verifier` and `delay` must satisfy
+/// [`AhciX86TeardownReacquisition::new`] for that same assignment. The returned
+/// slot must be retained until routed or explicitly
+/// recovered with `KernelAhciServiceExitSlot::into_parts`.
+#[allow(clippy::type_complexity)]
+pub unsafe fn install_x86_ahci_service_exit_slot<
+    'resources,
+    'views,
+    S: PageTableStore,
+    V: AhciX86ActiveMappingVerifier,
+    D,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>(
+    active: crate::ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    verifier: V,
+    delay: D,
+) -> Result<
+    crate::KernelAhciServiceExitSlot<
+        'resources,
+        S,
+        crate::KernelAhciManagerTeardownLease<AhciX86TeardownReacquisition<'views, V, D>>,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    crate::KernelAhciServiceExitSlotInstallError<
+        'resources,
+        S,
+        crate::KernelAhciManagerTeardownLease<AhciX86TeardownReacquisition<'views, V, D>>,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let native_task = active.native_task();
+    let launch = active.launch();
+    let backend = unsafe { AhciX86TeardownReacquisition::new(verifier, delay) };
+    let lease =
+        unsafe { crate::KernelAhciManagerTeardownLease::mint(native_task, launch, backend) };
+    crate::KernelAhciServiceExitSlot::install(active, lease)
 }
 
 // SAFETY: verification precedes all raw-view construction. Every fallible

@@ -1542,6 +1542,27 @@ mod tests {
         assert_eq!(supervisor.task(active.service()), Ok(Some(target_task)));
         assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
         assert_eq!(fixture.runtime.load().runnable(), 2);
+        let manager_slot = match unsafe {
+            crate::install_x86_ahci_service_exit_slot(
+                active,
+                RejectActiveRoot { calls: 0 },
+                Delay(11),
+            )
+        } {
+            Ok(slot) => slot,
+            Err(_) => panic!("exact active owner must bind the concrete x86 manager backend"),
+        };
+        assert!(manager_slot.occupied());
+        assert_eq!(manager_slot.task(), Some(target_task));
+        let (active, lease) = manager_slot
+            .into_parts()
+            .unwrap_or_else(|| panic!("unrouted manager slot must return both exact owners"));
+        let (native_task, launch, backend) = lease.into_parts();
+        assert_eq!(native_task, prepared.task());
+        assert_eq!(launch, prepared.launch());
+        let (verifier, delay) = backend.into_parts();
+        assert_eq!(verifier.calls, 0);
+        assert_eq!(delay.0, 11);
         let mut command_list = [0; 1024];
         let mut received_fis = [0; 256];
         let mut command_tables = [0; 1024];

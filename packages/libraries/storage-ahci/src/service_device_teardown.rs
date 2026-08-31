@@ -743,6 +743,26 @@ impl<
         self.entry.as_ref().map(|(active, _)| active.task())
     }
 
+    /// Recovers the exact unconsumed manager pair when dispatch is cancelled
+    /// before a successful exit route. An already consumed slot returns none.
+    pub fn into_parts(
+        self,
+    ) -> Option<(
+        crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        L,
+    )> {
+        self.entry
+    }
+
     /// Consumes the installed pair only for an admitted exit request. Any
     /// binding or lifecycle failure restores the same owners into the slot.
     pub fn route<const SERVICES: usize>(
