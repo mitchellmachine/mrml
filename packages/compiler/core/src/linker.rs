@@ -604,12 +604,14 @@ pub enum LinkRelocationTarget<'a> {
     PeImportAddress {
         library: &'a str,
         symbol: &'a str,
+        hint: u16,
     },
     /// A selected PE data/constant short import. It inventories one exact
     /// loader-populated IAT slot but owns no text field to patch.
     PeImportMetadata {
         library: &'a str,
         symbol: &'a str,
+        hint: u16,
     },
     /// An exact selected COFF TLS section. PE TLS directory, template, index,
     /// and thread-lifecycle layout remain a later serializer gate.
@@ -1088,6 +1090,7 @@ pub struct CoffShortImport<'a> {
     pub symbol: &'a str,
     pub library: &'a str,
     pub kind: CoffShortImportKind,
+    pub hint: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1113,7 +1116,7 @@ fn decode_x86_64_coff_short_import_header(
     if object.get(..4) != Some(b"\0\0\xff\xff") {
         return Ok(None);
     }
-    if read_u16(object, 4)? != 0 || read_u16(object, 6)? != 0x8664 || read_u16(object, 16)? != 0 {
+    if read_u16(object, 4)? != 0 || read_u16(object, 6)? != 0x8664 {
         return Err(LinkerError::UnsupportedCoff);
     }
     let kind = match read_u16(object, 18)? {
@@ -1156,6 +1159,7 @@ fn decode_x86_64_coff_short_import_header(
         symbol,
         library,
         kind,
+        hint: read_u16(object, 16)?,
     }))
 }
 
@@ -1201,6 +1205,7 @@ pub fn decode_x86_64_coff_short_import_with_alias<'data, 'relocations, 'definiti
             target: LinkRelocationTarget::PeImportMetadata {
                 library: import.library,
                 symbol: import.symbol,
+                hint: import.hint,
             },
             addend: 0,
         };
@@ -1219,6 +1224,7 @@ pub fn decode_x86_64_coff_short_import_with_alias<'data, 'relocations, 'definiti
         target: LinkRelocationTarget::PeImportAddress {
             library: import.library,
             symbol: import.symbol,
+            hint: import.hint,
         },
         addend: -4,
     };
@@ -8388,29 +8394,43 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     let mut import_count = 0usize;
     for input in inputs {
         for relocation in input.relocations {
-            let (library, symbol) = match relocation.target {
-                LinkRelocationTarget::PeImportAddress { library, symbol }
-                | LinkRelocationTarget::PeImportMetadata { library, symbol } => (library, symbol),
+            let (library, symbol, hint) = match relocation.target {
+                LinkRelocationTarget::PeImportAddress {
+                    library,
+                    symbol,
+                    hint,
+                }
+                | LinkRelocationTarget::PeImportMetadata {
+                    library,
+                    symbol,
+                    hint,
+                } => (library, symbol, hint),
                 _ => continue,
             };
             validate_pe_import_library(library)?;
             validate_symbol(symbol)?;
-            if imports[..import_count]
-                .iter()
-                .any(|import| *import == Some((library, symbol)))
-            {
+            if let Some(existing_hint) = imports[..import_count].iter().find_map(|import| {
+                import
+                    .filter(|(candidate_library, candidate_symbol, _)| {
+                        *candidate_library == library && *candidate_symbol == symbol
+                    })
+                    .map(|(_, _, candidate_hint)| candidate_hint)
+            }) {
+                if existing_hint != hint {
+                    return Err(LinkerError::InvalidCoffAssociation);
+                }
                 continue;
             }
             let slot = imports
                 .get_mut(import_count)
                 .ok_or(LinkerError::TooManyInputs)?;
-            *slot = Some((library, symbol));
+            *slot = Some((library, symbol, hint));
             import_count += 1;
         }
     }
     let mut import_libraries = [None; MAX_LINK_INPUTS];
     let mut import_library_count = 0usize;
-    for (library, _) in imports[..import_count].iter().flatten().copied() {
+    for (library, _, _) in imports[..import_count].iter().flatten().copied() {
         if import_libraries[..import_library_count]
             .iter()
             .any(|existing| *existing == Some(library))
@@ -8441,7 +8461,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         {
             readonly_size = align(readonly_size, 8)?;
             for (import_index, import) in imports[..import_count].iter().enumerate() {
-                if import.is_some_and(|(candidate, _)| candidate == library) {
+                if import.is_some_and(|(candidate, _, _)| candidate == library) {
                     import_lookup_offsets[import_index] = readonly_size;
                     readonly_size = readonly_size
                         .checked_add(8)
@@ -8453,7 +8473,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 .ok_or(LinkerError::OffsetOverflow)?;
             import_library_name_offsets[library_index] = 0;
         }
-        for (index, (_, symbol)) in imports[..import_count]
+        for (index, (_, symbol, _)) in imports[..import_count]
             .iter()
             .flatten()
             .copied()
@@ -8779,7 +8799,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         {
             writable_size = align(writable_size, 8)?;
             for (import_index, import) in imports[..import_count].iter().enumerate() {
-                if import.is_some_and(|(candidate, _)| candidate == library) {
+                if import.is_some_and(|(candidate, _, _)| candidate == library) {
                     import_address_offsets[import_index] = writable_size;
                     writable_size = writable_size
                         .checked_add(8)
@@ -9185,7 +9205,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     {
         let first_import = imports[..import_count]
             .iter()
-            .position(|import| import.is_some_and(|(candidate, _)| candidate == library))
+            .position(|import| import.is_some_and(|(candidate, _, _)| candidate == library))
             .ok_or(LinkerError::InvalidCoff)?;
         let descriptor = readonly_raw + import_directory_offset + library_index * 20;
         patch_u32(
@@ -9204,7 +9224,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             to_u32_link(writable_rva + import_address_offsets[first_import])?,
         )?;
     }
-    for (index, (_, symbol)) in imports[..import_count]
+    for (index, (_, symbol, hint)) in imports[..import_count]
         .iter()
         .flatten()
         .copied()
@@ -9223,6 +9243,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             writable_raw + import_address_offsets[index],
             u64::try_from(hint_name_rva).map_err(|_| LinkerError::OffsetOverflow)?,
         )?;
+        patch_u16(bytes, readonly_raw + import_hint_offsets[index], hint)?;
         copy_at(
             bytes,
             readonly_raw + import_hint_offsets[index] + 2,
@@ -9590,10 +9611,15 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     }
     for (input, layout) in inputs.iter().zip(linked_layouts.iter()) {
         for relocation in input.relocations {
-            if let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target {
+            if let LinkRelocationTarget::PeImportAddress {
+                library,
+                symbol,
+                hint,
+            } = relocation.target
+            {
                 let import_index = imports[..import_count]
                     .iter()
-                    .position(|import| *import == Some((library, symbol)))
+                    .position(|import| *import == Some((library, symbol, hint)))
                     .ok_or(LinkerError::UndefinedSymbol)?;
                 let place = layout
                     .text
@@ -10343,11 +10369,15 @@ fn link_x86_64_static_aligned_into(
                 | LinkRelocationTarget::RequiredSymbol(symbol)
                 | LinkRelocationTarget::LocalSymbol(symbol)
                 | LinkRelocationTarget::PeWritableSymbol(symbol) => validate_symbol(symbol)?,
-                LinkRelocationTarget::PeImportAddress { library, symbol } => {
+                LinkRelocationTarget::PeImportAddress {
+                    library, symbol, ..
+                } => {
                     validate_pe_import_library(library)?;
                     validate_symbol(symbol)?;
                 }
-                LinkRelocationTarget::PeImportMetadata { library, symbol } => {
+                LinkRelocationTarget::PeImportMetadata {
+                    library, symbol, ..
+                } => {
                     validate_pe_import_library(library)?;
                     validate_symbol(symbol)?;
                     if relocation.offset != 0
@@ -12594,6 +12624,7 @@ mod tests {
                 symbol: "WaitOnAddress",
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 kind: CoffShortImportKind::Code,
+                hint: 0,
             })
         );
         assert_eq!(
@@ -12620,6 +12651,7 @@ mod tests {
                 target: LinkRelocationTarget::PeImportAddress {
                     library: "api-ms-win-core-synch-l1-2-0.dll",
                     symbol: "WaitOnAddress",
+                    hint: 0,
                 },
                 addend: -4,
             }]
@@ -12633,6 +12665,7 @@ mod tests {
                 symbol: "WaitOnAddress",
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 kind: CoffShortImportKind::Data,
+                hint: 0,
             })
         );
         assert_eq!(
@@ -12670,6 +12703,7 @@ mod tests {
                 target: LinkRelocationTarget::PeImportMetadata {
                     library: "api-ms-win-core-synch-l1-2-0.dll",
                     symbol: "WaitOnAddress",
+                    hint: 0,
                 },
                 addend: 0,
             }]
@@ -12697,6 +12731,26 @@ mod tests {
             x86_64_coff_short_import(&transformed_name),
             Err(LinkerError::UnsupportedCoff)
         );
+        let mut hinted_import = object.clone();
+        hinted_import[16..18].copy_from_slice(&0x1234u16.to_le_bytes());
+        assert_eq!(
+            x86_64_coff_short_import(&hinted_import)
+                .unwrap()
+                .unwrap()
+                .hint,
+            0x1234
+        );
+        let mut hinted_relocations = relocations;
+        let hinted_input = decode_x86_64_coff_short_import(&hinted_import, &mut hinted_relocations)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            hinted_input.relocations,
+            [LinkRelocation {
+                target: LinkRelocationTarget::PeImportAddress { hint: 0x1234, .. },
+                ..
+            }]
+        ));
         let mut trailing = object.clone();
         trailing.push(0);
         assert!(matches!(
@@ -15358,6 +15412,7 @@ mod tests {
             target: LinkRelocationTarget::PeImportAddress {
                 library: "demo.dll",
                 symbol: "Ping",
+                hint: 0,
             },
             addend: -4,
         }];
@@ -15385,6 +15440,24 @@ mod tests {
         assert_eq!(&pe.bytes()[0x43a..0x43e], b"Ping");
         assert_eq!(&pe.bytes()[0x43f..0x447], b"demo.dll");
         assert_eq!(read_i32(pe.bytes(), 0x202).unwrap(), 0x1ffa);
+
+        let conflicting_relocation = [LinkRelocation {
+            target: LinkRelocationTarget::PeImportAddress {
+                library: "demo.dll",
+                symbol: "Ping",
+                hint: 1,
+            },
+            ..relocation[0]
+        }];
+        let conflicting_input = LinkInput {
+            symbol: "conflicting_hint",
+            relocations: &conflicting_relocation,
+            ..input
+        };
+        assert_eq!(
+            link_x86_64_pe::<2048, 8192>(&[input, conflicting_input], "entry"),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
     }
 
     #[test]
@@ -15394,6 +15467,7 @@ mod tests {
             target: LinkRelocationTarget::PeImportMetadata {
                 library: "demo.dll",
                 symbol: "DATA",
+                hint: 7,
             },
             addend: 0,
         }];
@@ -15423,6 +15497,7 @@ mod tests {
         assert_eq!(read_u32(pe.bytes(), 0x16c).unwrap(), 16);
         assert_eq!(read_image_u64(0x428), 0x2038);
         assert_eq!(read_image_u64(0x600), 0x2038);
+        assert_eq!(read_u16(pe.bytes(), 0x438).unwrap(), 7);
         assert_eq!(&pe.bytes()[0x43a..0x43e], b"DATA");
         assert_eq!(&pe.bytes()[0x43f..0x447], b"demo.dll");
         assert_eq!(pe.bytes()[0x200], 0xc3);

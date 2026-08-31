@@ -2201,10 +2201,16 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                     .relocations
                     .iter()
                     .find_map(|relocation| match relocation.target {
-                        LinkRelocationTarget::PeImportAddress { library, symbol }
-                        | LinkRelocationTarget::PeImportMetadata { library, symbol } => {
-                            Some((library, symbol))
+                        LinkRelocationTarget::PeImportAddress {
+                            library,
+                            symbol,
+                            hint,
                         }
+                        | LinkRelocationTarget::PeImportMetadata {
+                            library,
+                            symbol,
+                            hint,
+                        } => Some((library, symbol, hint)),
                         _ => None,
                     })
             })?
@@ -2228,11 +2234,12 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                             target: LinkRelocationTarget::CoffSection { identity, offset },
                             ..relocation
                         }
-                    } else if let Some((library, import)) = import_target(symbol) {
+                    } else if let Some((library, import, hint)) = import_target(symbol) {
                         LinkRelocation {
                             target: LinkRelocationTarget::PeImportAddress {
                                 library,
                                 symbol: import,
+                                hint,
                             },
                             ..relocation
                         }
@@ -3053,6 +3060,7 @@ mod tests {
                 target: LinkRelocationTarget::PeImportMetadata {
                     library: "api-ms-win-core-synch-l1-2-0.dll",
                     symbol: "WaitOnAddress",
+                    hint: 0,
                 },
                 ..
             }]
@@ -3163,6 +3171,7 @@ mod tests {
             target: LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 symbol: "WaitOnAddress",
+                hint: 0,
             },
             addend: -4,
         }];
@@ -3192,6 +3201,7 @@ mod tests {
             LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 symbol: "WaitOnAddress",
+                hint: 0,
             }
         );
 
@@ -3200,6 +3210,7 @@ mod tests {
             target: LinkRelocationTarget::PeImportMetadata {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 symbol: "DATA",
+                hint: 0,
             },
             addend: 0,
         }];
@@ -3232,6 +3243,7 @@ mod tests {
             LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 symbol: "DATA",
+                hint: 0,
             }
         );
 

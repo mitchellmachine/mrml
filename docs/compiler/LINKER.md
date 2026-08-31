@@ -1607,3 +1607,15 @@ and an end-to-end PE data import with empty synthetic text. The complete
 build passes. No pinned ORACLE-0003 archive member selected by the current
 probes uses this form, so this is bounded unit/driver structural evidence, not
 new `std`, Wine, native Windows, WHP, or physical-hardware execution evidence.
+
+Named short imports now preserve the complete 16-bit COFF hint instead of
+requiring it to be zero. The typed code/data/constant import records carry that
+hint through driver contextualization; PE hint/name serialization writes it
+before the exact imported symbol, and duplicate `(library, symbol)` identities
+must agree on the hint or fail closed. Unit coverage uses a nonzero header hint
+and verifies the exact emitted PE hint field. The complete 839-unit
+compiler-core gate, its 2 object-evidence and 10 conformance tests, 351
+replacement tests, and 128 semantic tests pass, and the release driver build
+passes. Ordinal imports and name transformations remain unsupported. This is
+format/serialization evidence only; no new runtime or physical-hardware claim
+is made.

@@ -4544,3 +4544,16 @@ tests, and 128 semantic-execution tests; the Linux release driver build also
 passes. This is independently constructed unit and driver structural evidence;
 the current pinned ORACLE-0003 probes select no data/constant short-import
 member, and no new Windows runtime or physical-hardware claim is made.
+
+## Typed PE named-import hints
+
+The linker now retains the complete 16-bit hint from direct-name AMD64 COFF
+short imports across code thunks, data/constant metadata, driver IAT
+contextualization, deduplication, and PE hint/name serialization. Duplicate
+library/symbol identities with conflicting hints fail closed. A nonzero fixture
+is asserted in both the decoded typed relocation and final PE bytes. The Linux
+release compiler-core gate passes 839 unit tests, 2 object-evidence tests, 10
+conformance tests, 351 replacement tests, and 128 semantic-execution tests; the
+Linux release driver build also passes. Ordinal imports and name
+transformations remain unsupported, and no new runtime or hardware evidence is
+claimed.
