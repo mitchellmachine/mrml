@@ -5555,13 +5555,21 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             && tls_sections.contains(
                 usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?,
             );
-        // IMAGE_REL_AMD64_REL32 is the ordinary code relocation. Rust's
+        // IMAGE_REL_AMD64_REL32 through REL32_5 differ only by the number of
+        // trailing instruction bytes included in the PC-relative base. Rust's
         // Windows TLS access sequence additionally uses IMAGE_REL_AMD64_SECREL
         // for the offset within the selected TLS template; retain that target
         // as typed PE TLS work rather than treating it as an unknown encoding.
-        if relocation_type != 4 && !(relocation_type == 11 && target_is_tls) {
-            return Err(LinkerError::UnsupportedCoffRelocation);
-        }
+        let trailing_bytes = match relocation_type {
+            relocation @ 4..=9 => {
+                u8::try_from(relocation - 4).map_err(|_| LinkerError::OffsetOverflow)?
+            }
+            11 if target_is_tls => 0,
+            _ => return Err(LinkerError::UnsupportedCoffRelocation),
+        };
+        let relative_bias = 4i64
+            .checked_add(i64::from(trailing_bytes))
+            .ok_or(LinkerError::OffsetOverflow)?;
         let field_addend = read_i32(text, field_offset)?;
         let (target, addend) = if target_section == 0 {
             (
@@ -5571,7 +5579,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     symbols_end,
                     string_size,
                 )?),
-                i64::from(field_addend) - 4,
+                i64::from(field_addend) - relative_bias,
             )
         } else if target_section == text_section {
             let text_offset = usize::try_from(read_u32(object, target_offset + 8)?)
@@ -5581,7 +5589,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             }
             (
                 LinkRelocationTarget::InputText(text_offset),
-                i64::from(field_addend) - 4,
+                i64::from(field_addend) - relative_bias,
             )
         } else if target_section > 0
             && other_text_sections
@@ -5626,7 +5634,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             } else {
                 return Err(LinkerError::UnsupportedCoffRelocationTarget);
             };
-            (target, i64::from(field_addend) - 4)
+            (target, i64::from(field_addend) - relative_bias)
         } else if target_section > 0
             && readonly_sections
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
@@ -5649,7 +5657,10 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             if data_offset > readonly_data.len() {
                 return Err(LinkerError::InvalidRelocationOffset);
             }
-            (LinkRelocationTarget::ReadonlyData(data_offset), -4)
+            (
+                LinkRelocationTarget::ReadonlyData(data_offset),
+                -relative_bias,
+            )
         } else if target_section > 0
             && discarded_readonly_sections
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
@@ -5682,7 +5693,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                         identity: CoffSectionIdentity::new(object_identity, section)?,
                         offset: target_offset,
                     },
-                    -4,
+                    -relative_bias,
                 )
             } else {
                 let storage_class = *object
@@ -5697,7 +5708,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 } else {
                     LinkRelocationTarget::LocalSymbol(name)
                 };
-                (target, i64::from(field_addend) - 4)
+                (target, i64::from(field_addend) - relative_bias)
             }
         } else if target_section > 0
             && writable_sections
@@ -5735,7 +5746,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     string_size,
                 )?)
             };
-            (target, i64::from(field_addend) - 4)
+            (target, i64::from(field_addend) - relative_bias)
         } else if target_is_tls {
             let section = u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
             let target_header = 20 + (usize::from(section) - 1) * 40;
@@ -5758,7 +5769,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 if relocation_type == 11 {
                     i64::from(field_addend)
                 } else {
-                    i64::from(field_addend) - 4
+                    i64::from(field_addend) - relative_bias
                 },
             )
         } else {
@@ -13089,6 +13100,47 @@ mod tests {
             decode_x86_64_coff(&wrong_relocation[..object.len()], &mut relocation_storage),
             Err(LinkerError::UnsupportedCoffRelocation)
         );
+    }
+
+    #[test]
+    fn decodes_bounded_coff_text_relative_trailing_bytes() {
+        let caller_code = MachineCode::<16>::from_bytes_for_test(&[
+            0xe8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0xc3,
+        ]);
+        let relocation = X86_64PcRelativeRelocation {
+            offset: 1,
+            symbol: "target",
+            kind: X86_64PcRelativeRelocationKind::Branch,
+        };
+        let caller =
+            emit_x86_64_coff_with_relocation::<256, 16>("entry", &caller_code, relocation).unwrap();
+        let target_code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let target = emit_x86_64_coff::<192, 8>("target", &target_code).unwrap();
+        let mut target_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let target = decode_x86_64_coff(target.bytes(), &mut target_relocations).unwrap();
+        let relocation_offset = usize::try_from(read_u32(caller.bytes(), 44).unwrap()).unwrap();
+
+        for (kind, trailing_bytes) in (4u16..=9).zip(0i64..=5) {
+            let mut variant = caller.bytes().to_vec();
+            variant[relocation_offset + 8..relocation_offset + 10]
+                .copy_from_slice(&kind.to_le_bytes());
+            let mut caller_relocations = [LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("unused"),
+                addend: 0,
+            }; MAX_LINK_RELOCATIONS];
+            let caller = decode_x86_64_coff(&variant, &mut caller_relocations).unwrap();
+            assert_eq!(caller.relocations[0].addend, -4 - trailing_bytes);
+            let linked = link_x86_64_static::<64>(&[caller, target], "entry").unwrap();
+            assert_eq!(
+                read_i32(linked.bytes(), 1).unwrap(),
+                i32::try_from(11 - trailing_bytes).unwrap()
+            );
+        }
     }
 
     #[test]
