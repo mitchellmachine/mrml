@@ -10,8 +10,8 @@ mod huffman;
 mod quic;
 
 pub use http2::{
-    Http2Client, Http2ClientConnection, Http2Frame, Http2FrameKind, Http2Response, Http2Server,
-    Http2ServerConnection, HTTP2_CLIENT_PREFACE,
+    Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame, Http2FrameKind,
+    Http2Response, Http2Server, Http2ServerConnection, HTTP2_CLIENT_PREFACE,
 };
 pub use http3::{
     Http3Client, Http3ConnectionState, Http3Frame, Http3FrameKind, Http3RequestStreamState,

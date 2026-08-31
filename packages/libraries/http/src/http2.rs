@@ -73,10 +73,14 @@ const HPACK_STATIC: [(&str, &str); 61] = [
 pub enum Http2FrameKind {
     Data,
     Headers,
+    Priority,
+    RstStream,
     Settings,
+    PushPromise,
     Ping,
     GoAway,
     WindowUpdate,
+    Continuation,
     Unknown(u8),
 }
 
@@ -96,10 +100,14 @@ impl Http2Frame {
         let ty = match self.kind {
             Http2FrameKind::Data => 0,
             Http2FrameKind::Headers => 1,
+            Http2FrameKind::Priority => 2,
+            Http2FrameKind::RstStream => 3,
             Http2FrameKind::Settings => 4,
+            Http2FrameKind::PushPromise => 5,
             Http2FrameKind::Ping => 6,
             Http2FrameKind::GoAway => 7,
             Http2FrameKind::WindowUpdate => 8,
+            Http2FrameKind::Continuation => 9,
             Http2FrameKind::Unknown(v) => v,
         };
         if matches!(
@@ -109,8 +117,15 @@ impl Http2Frame {
         {
             return Err(HttpError::InvalidResponse);
         }
-        if matches!(self.kind, Http2FrameKind::Data | Http2FrameKind::Headers)
-            && self.stream_id == 0
+        if matches!(
+            self.kind,
+            Http2FrameKind::Data
+                | Http2FrameKind::Headers
+                | Http2FrameKind::Priority
+                | Http2FrameKind::RstStream
+                | Http2FrameKind::PushPromise
+                | Http2FrameKind::Continuation
+        ) && self.stream_id == 0
         {
             return Err(HttpError::InvalidResponse);
         }
@@ -137,10 +152,14 @@ impl Http2Frame {
         let kind = match input[3] {
             0 => Http2FrameKind::Data,
             1 => Http2FrameKind::Headers,
+            2 => Http2FrameKind::Priority,
+            3 => Http2FrameKind::RstStream,
             4 => Http2FrameKind::Settings,
+            5 => Http2FrameKind::PushPromise,
             6 => Http2FrameKind::Ping,
             7 => Http2FrameKind::GoAway,
             8 => Http2FrameKind::WindowUpdate,
+            9 => Http2FrameKind::Continuation,
             v => Http2FrameKind::Unknown(v),
         };
         if matches!(
@@ -150,7 +169,25 @@ impl Http2Frame {
         {
             return Err(HttpError::InvalidResponse);
         }
-        if matches!(kind, Http2FrameKind::Data | Http2FrameKind::Headers) && stream_id == 0 {
+        if matches!(
+            kind,
+            Http2FrameKind::Data
+                | Http2FrameKind::Headers
+                | Http2FrameKind::Priority
+                | Http2FrameKind::RstStream
+                | Http2FrameKind::PushPromise
+                | Http2FrameKind::Continuation
+        ) && stream_id == 0
+        {
+            return Err(HttpError::InvalidResponse);
+        }
+        if (kind == Http2FrameKind::Ping && n != 8)
+            || (kind == Http2FrameKind::RstStream && n != 4)
+            || (kind == Http2FrameKind::Priority && n != 5)
+            || (kind == Http2FrameKind::Settings && input[4] & 1 != 0 && n != 0)
+            || (kind == Http2FrameKind::Settings && n % 6 != 0)
+            || (kind == Http2FrameKind::WindowUpdate && n != 4)
+        {
             return Err(HttpError::InvalidResponse);
         }
         let mut payload = Vector::new();
@@ -167,6 +204,100 @@ impl Http2Frame {
             9 + n,
         ))
     }
+}
+
+pub struct Http2ConnectionState {
+    settings_received: bool,
+    continuation_stream: Option<u32>,
+    last_peer_stream: u32,
+    connection_window: u32,
+}
+impl Http2ConnectionState {
+    pub const fn new() -> Self {
+        Self {
+            settings_received: false,
+            continuation_stream: None,
+            last_peer_stream: 0,
+            connection_window: 65_535,
+        }
+    }
+    pub fn receive(&mut self, frame: &Http2Frame) -> Result<(), HttpError> {
+        if let Some(stream) = self.continuation_stream {
+            if frame.kind != Http2FrameKind::Continuation || frame.stream_id != stream {
+                return Err(HttpError::InvalidResponse);
+            }
+        } else if frame.kind == Http2FrameKind::Continuation {
+            return Err(HttpError::InvalidResponse);
+        }
+        match frame.kind {
+            Http2FrameKind::Settings => {
+                if frame.flags & 1 == 0 {
+                    validate_settings(&frame.payload)?;
+                    self.settings_received = true;
+                }
+            }
+            Http2FrameKind::Headers | Http2FrameKind::PushPromise => {
+                if frame.flags & 4 == 0 {
+                    self.continuation_stream = Some(frame.stream_id);
+                }
+                self.last_peer_stream = self.last_peer_stream.max(frame.stream_id);
+            }
+            Http2FrameKind::Continuation if frame.flags & 4 != 0 => {
+                self.continuation_stream = None;
+            }
+            Http2FrameKind::WindowUpdate => {
+                let increment = u32::from_be_bytes([
+                    frame.payload[0],
+                    frame.payload[1],
+                    frame.payload[2],
+                    frame.payload[3],
+                ]) & 0x7fff_ffff;
+                if increment == 0 {
+                    return Err(HttpError::InvalidResponse);
+                }
+                if frame.stream_id == 0 {
+                    self.connection_window = self
+                        .connection_window
+                        .checked_add(increment)
+                        .filter(|value| *value <= 0x7fff_ffff)
+                        .ok_or(HttpError::InvalidResponse)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    pub fn settings_received(&self) -> bool {
+        self.settings_received
+    }
+}
+impl Default for Http2ConnectionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn validate_settings(payload: &[u8]) -> Result<(), HttpError> {
+    if payload.len() % 6 != 0 {
+        return Err(HttpError::InvalidResponse);
+    }
+    let mut seen = Vector::new();
+    for setting in payload.chunks_exact(6) {
+        let identifier = u16::from_be_bytes([setting[0], setting[1]]);
+        let value = u32::from_be_bytes([setting[2], setting[3], setting[4], setting[5]]);
+        if seen.contains(&identifier) {
+            return Err(HttpError::InvalidResponse);
+        }
+        seen.try_push(identifier)
+            .map_err(|_| HttpError::Allocation)?;
+        match identifier {
+            2 if value > 1 => return Err(HttpError::InvalidResponse),
+            4 if value > 0x7fff_ffff => return Err(HttpError::InvalidResponse),
+            5 if !(16_384..=16_777_215).contains(&value) => return Err(HttpError::InvalidResponse),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn integer(out: &mut Vector<u8>, prefix: u8, bits: u8, mut value: usize) -> Result<(), HttpError> {
@@ -625,9 +756,10 @@ impl Http2ServerConnection {
             return Err(HttpError::InvalidResponse);
         }
         let first = read_server_frame(&mut stream)?;
-        if first.kind != Http2FrameKind::Settings || first.flags != 0 || !first.payload.is_empty() {
+        if first.kind != Http2FrameKind::Settings || first.flags != 0 {
             return Err(HttpError::InvalidResponse);
         }
+        validate_settings(&first.payload)?;
         let protocol = Http2Server::new();
         stream
             .write_all(&protocol.settings()?)
@@ -772,5 +904,50 @@ mod tests {
         assert_eq!(request.scheme, "http");
         assert_eq!(request.authority, "www.example.com");
         assert_eq!(request.target, "/");
+    }
+    #[test]
+    fn validates_settings_continuations_and_window_updates() {
+        let mut state = Http2ConnectionState::new();
+        state
+            .receive(&Http2Frame {
+                kind: Http2FrameKind::Settings,
+                flags: 0,
+                stream_id: 0,
+                payload: [0, 5, 0, 0, 0x40, 0].into(),
+            })
+            .unwrap();
+        assert!(state.settings_received());
+        state
+            .receive(&Http2Frame {
+                kind: Http2FrameKind::Headers,
+                flags: 0,
+                stream_id: 1,
+                payload: Vector::new(),
+            })
+            .unwrap();
+        assert!(state
+            .receive(&Http2Frame {
+                kind: Http2FrameKind::Data,
+                flags: 0,
+                stream_id: 1,
+                payload: Vector::new(),
+            })
+            .is_err());
+        state
+            .receive(&Http2Frame {
+                kind: Http2FrameKind::Continuation,
+                flags: 4,
+                stream_id: 1,
+                payload: Vector::new(),
+            })
+            .unwrap();
+        assert!(state
+            .receive(&Http2Frame {
+                kind: Http2FrameKind::WindowUpdate,
+                flags: 0,
+                stream_id: 0,
+                payload: [0, 0, 0, 0].into(),
+            })
+            .is_err());
     }
 }
