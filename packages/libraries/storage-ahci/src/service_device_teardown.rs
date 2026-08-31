@@ -557,6 +557,60 @@ pub struct KernelAhciServiceExitSlot<
     )>,
 }
 
+/// Persistent controller-manager state across the operation-3 trap boundary.
+/// A successful route moves the exact active owners out of `slot` and into
+/// `frozen`; neither state is exposed as a copyable token.
+#[must_use = "the AHCI manager state must be retained through teardown"]
+pub struct KernelAhciServiceExitManager<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    slot:
+        KernelAhciServiceExitSlot<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    frozen: Option<
+        FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceExitManagerDispatchError {
+    TeardownPending,
+    Dispatch(KernelAhciServiceExitDispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceExitRouted {
+    task: TaskId,
+    service: ServiceId,
+}
+
+impl KernelAhciServiceExitRouted {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+}
+
 pub struct KernelAhciServiceExitSlotInstallError<
     'resources,
     S: PageTableStore,
@@ -1011,6 +1065,179 @@ impl<
             .decode_request()
             .map_err(KernelAhciServiceExitDispatchError::Decode)?;
         self.route_decoded(request, supervisor, runtime)
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> KernelAhciServiceExitManager<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn empty() -> Self {
+        Self {
+            slot: KernelAhciServiceExitSlot::empty(),
+            frozen: None,
+        }
+    }
+
+    /// Adopts already populated manager storage without extracting its owners.
+    pub fn from_slot(
+        slot: KernelAhciServiceExitSlot<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    ) -> Result<
+        Self,
+        KernelAhciServiceExitSlot<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    > {
+        if !slot.occupied() {
+            return Err(slot);
+        }
+        Ok(Self { slot, frozen: None })
+    }
+
+    pub const fn teardown_pending(&self) -> bool {
+        self.frozen.is_some()
+    }
+
+    pub fn task(&self) -> Option<TaskId> {
+        self.frozen
+            .as_ref()
+            .map(FrozenKernelAhciServiceExit::task)
+            .or_else(|| self.slot.task())
+    }
+
+    pub fn service(&self) -> Option<ServiceId> {
+        self.frozen
+            .as_ref()
+            .map(FrozenKernelAhciServiceExit::service)
+            .or_else(|| self.slot.service())
+    }
+
+    pub fn populate(
+        &mut self,
+        active: crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        lease: L,
+    ) -> Result<
+        (),
+        KernelAhciServiceExitSlotPopulationFailure<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        if self.frozen.is_some() {
+            return Err(KernelAhciServiceExitSlotPopulationFailure {
+                error: KernelAhciServiceExitSlotPopulationError::Occupied,
+                active,
+                lease,
+            });
+        }
+        self.slot.populate(active, lease)
+    }
+
+    /// Routes and retains one exact exit atomically from the manager's point
+    /// of view. A successful freeze publishes only a descriptive receipt; the
+    /// linear frozen owner remains inside this state.
+    pub fn route_frame<const SERVICES: usize>(
+        &mut self,
+        frame: &UserCallFrame,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<KernelAhciServiceExitRouted, KernelAhciServiceExitManagerDispatchError> {
+        if self.frozen.is_some() {
+            return Err(KernelAhciServiceExitManagerDispatchError::TeardownPending);
+        }
+        let task = self
+            .slot
+            .task()
+            .ok_or(KernelAhciServiceExitManagerDispatchError::Dispatch(
+                KernelAhciServiceExitDispatchError::Route(
+                    KernelAhciServiceExitSlotRouteError::Empty,
+                ),
+            ))?;
+        let service =
+            self.slot
+                .service()
+                .ok_or(KernelAhciServiceExitManagerDispatchError::Dispatch(
+                    KernelAhciServiceExitDispatchError::Route(
+                        KernelAhciServiceExitSlotRouteError::Empty,
+                    ),
+                ))?;
+        let frozen = self
+            .slot
+            .route_frame(frame, supervisor, runtime)
+            .map_err(KernelAhciServiceExitManagerDispatchError::Dispatch)?;
+        debug_assert_eq!(frozen.task(), task);
+        self.frozen = Some(frozen);
+        Ok(KernelAhciServiceExitRouted { task, service })
+    }
+
+    /// Transfers the retained frozen owner and now-empty slot together to the
+    /// controller teardown executor. Active or empty managers are returned
+    /// unchanged.
+    pub fn into_frozen_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            FrozenKernelAhciServiceExit<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self.frozen.take() {
+            Some(frozen) => Ok((self.slot, frozen)),
+            None => Err(self),
+        }
     }
 }
 

@@ -1710,19 +1710,35 @@ mod tests {
         ));
         let mut hostile_frame = user_call_frame(3);
         hostile_frame.cs = 0;
+        let mut exit_manager = crate::KernelAhciServiceExitManager::from_slot(exit_slot)
+            .unwrap_or_else(|_| panic!("occupied slot must become retained manager state"));
         assert!(matches!(
-            exit_slot.route_frame(&hostile_frame, &supervisor, &mut fixture.runtime),
-            Err(crate::KernelAhciServiceExitDispatchError::Decode(
-                UserCallDecodeError::Return(UserReturnError::InvalidPrivilege)
+            exit_manager.route_frame(&hostile_frame, &supervisor, &mut fixture.runtime),
+            Err(crate::KernelAhciServiceExitManagerDispatchError::Dispatch(
+                crate::KernelAhciServiceExitDispatchError::Decode(UserCallDecodeError::Return(
+                    UserReturnError::InvalidPrivilege
+                ))
             ))
         ));
-        assert!(exit_slot.occupied());
-        let frozen = exit_slot
+        assert!(!exit_manager.teardown_pending());
+        let routed = exit_manager
             .route_frame(&user_call_frame(3), &supervisor, &mut fixture.runtime)
             .unwrap_or_else(|failure| {
                 let _ = failure;
                 panic!("exact active owner and lease must freeze")
             });
+        assert_eq!(routed.task(), target_task);
+        assert_eq!(routed.service(), service_id);
+        assert!(exit_manager.teardown_pending());
+        assert_eq!(exit_manager.task(), Some(target_task));
+        assert_eq!(exit_manager.service(), Some(service_id));
+        assert!(matches!(
+            exit_manager.route_frame(&user_call_frame(3), &supervisor, &mut fixture.runtime),
+            Err(crate::KernelAhciServiceExitManagerDispatchError::TeardownPending)
+        ));
+        let (mut exit_slot, frozen) = exit_manager
+            .into_frozen_parts()
+            .unwrap_or_else(|_| panic!("routed manager must retain the frozen owner"));
         assert!(!exit_slot.occupied());
         assert!(matches!(
             exit_slot.route(exit_request, &supervisor, &mut fixture.runtime),

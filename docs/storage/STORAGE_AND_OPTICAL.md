@@ -1776,6 +1776,24 @@ fails closed, activation populates the fixed slot, and cancellation recovers
 the exact retained owners. No bootloader static or booted trap route uses this
 storage yet.
 
+The trap boundary now has a persistent manager state above that slot. A valid
+exact-task operation-3 frame atomically moves the active slot owners into a
+manager-retained frozen owner and returns only a descriptive task/service
+receipt. Malformed frames leave the active state unchanged. Once frozen, replay
+and attempted replacement fail closed while the same task, service, mapping
+root, and teardown lease remain retained. The frozen owner and the now-empty
+slot can only be transferred together to the next controller teardown stage.
+The controlled lifecycle test covers malformed-frame denial, exact routing,
+receipt identity, pending-state replay denial, and retained-owner transfer.
+This does not yet retain reacquisition/quiescence retries or connect the booted
+dispatcher, so installed trap execution remains incomplete.
+
+Patent review: **NOT_TRIGGERED**. Moving existing linear owners between bounded
+active and frozen manager states and returning a non-authorizing receipt is
+conventional lifecycle state management. It adds no parser, controller command,
+DMA behavior, persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Preallocating an empty optional owner slot and
 rejecting replacement before consuming linear inputs is conventional bounded
 state management. It adds no parser, controller command, DMA behavior,
