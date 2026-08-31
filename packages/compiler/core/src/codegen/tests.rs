@@ -18185,24 +18185,37 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_add(b).unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_sub(b).unwrap_or(fallback) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_mul(b) }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_add(b).unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_sub(b).unwrap_or(fallback) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_mul(b) }",
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
-                    &function,
-                    &NoConstants,
-                    X86_64Abi::SystemV,
-                )
-                .is_err(),
-                "{source}"
-            );
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert_eq!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                    )
+                    .unwrap_err()
+                    .kind,
+                    expected,
+                    "{source}"
+                );
+            }
         }
     }
 
