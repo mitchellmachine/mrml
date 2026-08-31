@@ -605,6 +605,12 @@ pub enum LinkRelocationTarget<'a> {
         library: &'a str,
         symbol: &'a str,
     },
+    /// A selected PE data/constant short import. It inventories one exact
+    /// loader-populated IAT slot but owns no text field to patch.
+    PeImportMetadata {
+        library: &'a str,
+        symbol: &'a str,
+    },
     /// An exact selected COFF TLS section. PE TLS directory, template, index,
     /// and thread-lifecycle layout remain a later serializer gate.
     PeTlsSection {
@@ -1081,6 +1087,14 @@ pub struct CoffObjectSymbol<'a> {
 pub struct CoffShortImport<'a> {
     pub symbol: &'a str,
     pub library: &'a str,
+    pub kind: CoffShortImportKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoffShortImportKind {
+    Code,
+    Data,
+    Constant,
 }
 
 pub struct CoffObjectSymbols<'a> {
@@ -1099,13 +1113,15 @@ fn decode_x86_64_coff_short_import_header(
     if object.get(..4) != Some(b"\0\0\xff\xff") {
         return Ok(None);
     }
-    if read_u16(object, 4)? != 0
-        || read_u16(object, 6)? != 0x8664
-        || read_u16(object, 16)? != 0
-        || read_u16(object, 18)? != 4
-    {
+    if read_u16(object, 4)? != 0 || read_u16(object, 6)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
+    let kind = match read_u16(object, 18)? {
+        4 => CoffShortImportKind::Code,
+        5 => CoffShortImportKind::Data,
+        6 => CoffShortImportKind::Constant,
+        _ => return Err(LinkerError::UnsupportedCoff),
+    };
     let payload_size =
         usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
     let payload_end = 20usize
@@ -1136,7 +1152,11 @@ fn decode_x86_64_coff_short_import_header(
     let library = core::str::from_utf8(&payload[library_start..library_end])
         .map_err(|_| LinkerError::InvalidCoff)?;
     validate_pe_import_library(library)?;
-    Ok(Some(CoffShortImport { symbol, library }))
+    Ok(Some(CoffShortImport {
+        symbol,
+        library,
+        kind,
+    }))
 }
 
 fn validate_pe_import_library(library: &str) -> Result<(), LinkerError> {
@@ -1159,9 +1179,40 @@ pub fn decode_x86_64_coff_short_import<'data, 'relocations, 'definitions>(
     object: &'data [u8],
     relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
 ) -> Result<Option<LinkInput<'data, 'relocations, 'definitions>>, LinkerError> {
+    decode_x86_64_coff_short_import_with_alias(object, None, relocation_storage)
+}
+
+pub fn decode_x86_64_coff_short_import_with_alias<'data, 'relocations, 'definitions>(
+    object: &'data [u8],
+    alias: Option<&'data str>,
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+) -> Result<Option<LinkInput<'data, 'relocations, 'definitions>>, LinkerError> {
     let Some(import) = decode_x86_64_coff_short_import_header(object)? else {
         return Ok(None);
     };
+    if import.kind != CoffShortImportKind::Code {
+        let alias = alias.ok_or(LinkerError::InvalidCoffAssociation)?;
+        if alias.strip_prefix("__imp_") != Some(import.symbol) {
+            return Err(LinkerError::InvalidCoffAssociation);
+        }
+        validate_symbol(alias)?;
+        relocation_storage[0] = LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::PeImportMetadata {
+                library: import.library,
+                symbol: import.symbol,
+            },
+            addend: 0,
+        };
+        return Ok(Some(LinkInput {
+            symbol: alias,
+            symbol_target: LinkDefinitionTarget::PeImportAddress,
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[],
+            relocations: &relocation_storage[..1],
+        }));
+    }
     const THUNK: &[u8] = &[0xff, 0x25, 0, 0, 0, 0];
     relocation_storage[0] = LinkRelocation {
         offset: 2,
@@ -8337,9 +8388,10 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     let mut import_count = 0usize;
     for input in inputs {
         for relocation in input.relocations {
-            let LinkRelocationTarget::PeImportAddress { library, symbol } = relocation.target
-            else {
-                continue;
+            let (library, symbol) = match relocation.target {
+                LinkRelocationTarget::PeImportAddress { library, symbol }
+                | LinkRelocationTarget::PeImportMetadata { library, symbol } => (library, symbol),
+                _ => continue,
             };
             validate_pe_import_library(library)?;
             validate_symbol(symbol)?;
@@ -9568,6 +9620,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 )?;
                 continue;
             }
+            if matches!(
+                relocation.target,
+                LinkRelocationTarget::PeImportMetadata { .. }
+            ) {
+                continue;
+            }
             if let LinkRelocationTarget::PeTlsSection {
                 identity,
                 offset,
@@ -10289,6 +10347,21 @@ fn link_x86_64_static_aligned_into(
                     validate_pe_import_library(library)?;
                     validate_symbol(symbol)?;
                 }
+                LinkRelocationTarget::PeImportMetadata { library, symbol } => {
+                    validate_pe_import_library(library)?;
+                    validate_symbol(symbol)?;
+                    if relocation.offset != 0
+                        || relocation.addend != 0
+                        || !input.text.is_empty()
+                        || !input.readonly_data.is_empty()
+                        || input.relocations.len() != 1
+                        || input.symbol_target != LinkDefinitionTarget::PeImportAddress
+                        || !input.additional_definitions.is_empty()
+                        || input.symbol.strip_prefix("__imp_") != Some(symbol)
+                    {
+                        return Err(LinkerError::InvalidCoffAssociation);
+                    }
+                }
                 LinkRelocationTarget::PeTlsSection { identity, .. }
                 | LinkRelocationTarget::PeWritableSection { identity, .. }
                     if identity.object == 0 || identity.section == 0 =>
@@ -10318,7 +10391,9 @@ fn link_x86_64_static_aligned_into(
             }
             if !matches!(
                 relocation.target,
-                LinkRelocationTarget::RequiredSymbol(_) | LinkRelocationTarget::PeWritableSymbol(_)
+                LinkRelocationTarget::RequiredSymbol(_)
+                    | LinkRelocationTarget::PeWritableSymbol(_)
+                    | LinkRelocationTarget::PeImportMetadata { .. }
             ) {
                 relocation
                     .offset
@@ -10380,6 +10455,7 @@ fn link_x86_64_static_aligned_into(
                 LinkRelocationTarget::PeWritableSymbol(_)
                 | LinkRelocationTarget::PeWritableSection { .. }
                 | LinkRelocationTarget::PeImportAddress { .. }
+                | LinkRelocationTarget::PeImportMetadata { .. }
                 | LinkRelocationTarget::PeTlsSection { .. } => continue,
                 _ => {}
             }
@@ -10397,6 +10473,7 @@ fn link_x86_64_static_aligned_into(
                 LinkRelocationTarget::PeWritableSymbol(_) => unreachable!(),
                 LinkRelocationTarget::PeWritableSection { .. } => unreachable!(),
                 LinkRelocationTarget::PeImportAddress { .. } => unreachable!(),
+                LinkRelocationTarget::PeImportMetadata { .. } => unreachable!(),
                 LinkRelocationTarget::PeTlsSection { .. } => unreachable!(),
                 LinkRelocationTarget::InputText(offset) => layout
                     .text
@@ -12512,6 +12589,14 @@ mod tests {
 
         let inventory = inventory_x86_64_coff_symbols(&object).unwrap();
         assert_eq!(
+            x86_64_coff_short_import(&object).unwrap(),
+            Some(CoffShortImport {
+                symbol: "WaitOnAddress",
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                kind: CoffShortImportKind::Code,
+            })
+        );
+        assert_eq!(
             inventory.symbols().collect::<Result<std::vec::Vec<_>, _>>(),
             Ok(std::vec![CoffObjectSymbol {
                 name: "WaitOnAddress",
@@ -12542,10 +12627,76 @@ mod tests {
 
         let mut data_import = object.clone();
         data_import[18..20].copy_from_slice(&5u16.to_le_bytes());
-        assert!(matches!(
-            inventory_x86_64_coff_symbols(&data_import),
+        assert_eq!(
+            x86_64_coff_short_import(&data_import).unwrap(),
+            Some(CoffShortImport {
+                symbol: "WaitOnAddress",
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                kind: CoffShortImportKind::Data,
+            })
+        );
+        assert_eq!(
+            inventory_x86_64_coff_symbols(&data_import)
+                .unwrap()
+                .symbols()
+                .collect::<Result<std::vec::Vec<_>, _>>(),
+            Ok(std::vec![CoffObjectSymbol {
+                name: "WaitOnAddress",
+                kind: CoffObjectSymbolKind::Definition,
+            }])
+        );
+        let mut data_relocations = relocations;
+        assert_eq!(
+            decode_x86_64_coff_short_import(&data_import, &mut data_relocations),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
+        let data_input = decode_x86_64_coff_short_import_with_alias(
+            &data_import,
+            Some("__imp_WaitOnAddress"),
+            &mut data_relocations,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(data_input.symbol, "__imp_WaitOnAddress");
+        assert_eq!(
+            data_input.symbol_target,
+            LinkDefinitionTarget::PeImportAddress
+        );
+        assert!(data_input.text.is_empty());
+        assert_eq!(
+            data_input.relocations,
+            &[LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::PeImportMetadata {
+                    library: "api-ms-win-core-synch-l1-2-0.dll",
+                    symbol: "WaitOnAddress",
+                },
+                addend: 0,
+            }]
+        );
+        assert_eq!(
+            decode_x86_64_coff_short_import_with_alias(
+                &data_import,
+                Some("__imp_Other"),
+                &mut data_relocations,
+            ),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
+        let mut constant_import = object.clone();
+        constant_import[18..20].copy_from_slice(&6u16.to_le_bytes());
+        assert_eq!(
+            x86_64_coff_short_import(&constant_import)
+                .unwrap()
+                .unwrap()
+                .kind,
+            CoffShortImportKind::Constant
+        );
+        let mut transformed_name = object.clone();
+        transformed_name[18..20].copy_from_slice(&8u16.to_le_bytes());
+        assert_eq!(
+            x86_64_coff_short_import(&transformed_name),
             Err(LinkerError::UnsupportedCoff)
-        ));
+        );
         let mut trailing = object.clone();
         trailing.push(0);
         assert!(matches!(
@@ -15234,6 +15385,68 @@ mod tests {
         assert_eq!(&pe.bytes()[0x43a..0x43e], b"Ping");
         assert_eq!(&pe.bytes()[0x43f..0x447], b"demo.dll");
         assert_eq!(read_i32(pe.bytes(), 0x202).unwrap(), 0x1ffa);
+    }
+
+    #[test]
+    fn emits_bounded_pe_data_import_without_a_synthetic_text_field() {
+        let metadata = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::PeImportMetadata {
+                library: "demo.dll",
+                symbol: "DATA",
+            },
+            addend: 0,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let import = LinkInput {
+            symbol: "__imp_DATA",
+            symbol_target: LinkDefinitionTarget::PeImportAddress,
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[],
+            relocations: &metadata,
+        };
+        let pe = link_x86_64_pe::<2048, 8192>(&[entry, import], "entry").unwrap();
+        let read_image_u64 =
+            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
+
+        assert_eq!(read_u32(pe.bytes(), 0x110).unwrap(), 0x2000);
+        assert_eq!(read_u32(pe.bytes(), 0x114).unwrap(), 40);
+        assert_eq!(read_u32(pe.bytes(), 0x168).unwrap(), 0x3000);
+        assert_eq!(read_u32(pe.bytes(), 0x16c).unwrap(), 16);
+        assert_eq!(read_image_u64(0x428), 0x2038);
+        assert_eq!(read_image_u64(0x600), 0x2038);
+        assert_eq!(&pe.bytes()[0x43a..0x43e], b"DATA");
+        assert_eq!(&pe.bytes()[0x43f..0x447], b"demo.dll");
+        assert_eq!(pe.bytes()[0x200], 0xc3);
+
+        let malformed_metadata = [LinkRelocation {
+            addend: 1,
+            ..metadata[0]
+        }];
+        let malformed_import = LinkInput {
+            relocations: &malformed_metadata,
+            ..import
+        };
+        assert_eq!(
+            link_x86_64_pe::<2048, 8192>(&[entry, malformed_import], "entry"),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
+        let mismatched_import = LinkInput {
+            symbol: "__imp_OTHER",
+            ..import
+        };
+        assert_eq!(
+            link_x86_64_pe::<2048, 8192>(&[entry, mismatched_import], "entry"),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
     }
 
     #[test]

@@ -1449,14 +1449,15 @@ production readiness, broad `alloc` conformance, or physical-hardware evidence.
 An isolated canonical compiler-core package gate at this exact checkpoint passed
 815 unit tests and 123 semantic-execution tests with zero failures.
 
-The first pinned ORACLE-0003 `std` boundary recognizes the conventional AMD64
-COFF short-import header during archive symbol inventory. The bounded reader
-currently accepts only version-zero, code imports named directly in the payload,
-an exact NUL-terminated `.dll` library name, and no trailing bytes. It exposes
-only the callable definition used by the selected std path; data/constant
-imports, ordinal imports, decorated-name transformations, and synthesized
-`__imp_` aliases remain unsupported. Archive-selection diagnostics retain the
-exact group, member, and member name on inventory failure.
+The first pinned ORACLE-0003 `std` boundary recognized the conventional AMD64
+COFF short-import header during archive symbol inventory. At that checkpoint,
+the bounded reader accepted only version-zero code imports named directly in
+the payload, an exact NUL-terminated `.dll` library name, and no trailing bytes.
+It exposed only the callable definition used by the selected std path;
+data/constant imports, ordinal imports, decorated-name transformations, and
+synthesized `__imp_` aliases remained unsupported. Archive-selection
+diagnostics retain the exact group, member, and member name on inventory
+failure.
 
 An independently authored `std::thread::available_parallelism` consumer advances
 from the former anonymous inventory rejection through selection of
@@ -1588,3 +1589,21 @@ The release driver and all five pinned std/TLS Wine probes above return 42.
 Wine acceptance proves these exact relocation-bearing images remain loadable at
 the observed address; forced nonpreferred-base rebasing, native Windows, WHP,
 and physical-hardware relocation remain unverified.
+
+Direct-name version-zero AMD64 COFF short imports now retain a typed code,
+data, or constant kind. Code imports keep their six-byte indirect-jump thunk.
+Data and constant imports instead require the archive index to associate the
+exact `__imp_` alias with the payload symbol; they define only that
+loader-populated IAT slot and carry a metadata-only typed `(library, symbol)`
+record into PE import-table construction. The generic linker validates that
+record but never treats it as a text patch field, and the PE serializer emits
+one deduplicated import/IAT entry without fabricating callable code. Missing or
+mismatched aliases, ordinal imports, decorated-name transformations, malformed
+payloads, and trailing bytes continue to fail closed. Focused fixtures cover
+both accepted kinds, exact alias association, contextualized IAT references,
+and an end-to-end PE data import with empty synthetic text. The complete
+839-unit compiler-core gate, its 2 object-evidence and 10 conformance tests,
+351 replacement tests, and 128 semantic tests pass, and the release driver
+build passes. No pinned ORACLE-0003 archive member selected by the current
+probes uses this form, so this is bounded unit/driver structural evidence, not
+new `std`, Wine, native Windows, WHP, or physical-hardware execution evidence.

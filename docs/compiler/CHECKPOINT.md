@@ -4528,3 +4528,19 @@ probe, 10 conformance tests, and 335 replacement tests: 866 compiler tests per
 host. Higher-ranked term binders, projection terms in clause heads and premise
 type positions, concrete/rigid projection-premise proof, backtracking, caching,
 coinduction, and source syntax remain unsupported.
+
+## Typed PE data and constant short imports
+
+The linker now distinguishes direct-name version-zero AMD64 COFF code, data,
+and constant short imports. Data and constant members require an exact archive
+index association between the payload symbol and its `__imp_` alias, define
+only the loader-populated IAT slot, and retain a metadata-only typed
+`(library, symbol)` record for PE import-table emission. They do not synthesize
+callable text or expose the payload name as an IAT definition. Missing or
+mismatched aliases, ordinal forms, name transformations, malformed payloads,
+and trailing bytes fail closed. The Linux release compiler-core gate passes
+839 unit tests, 2 object-evidence tests, 10 conformance tests, 351 replacement
+tests, and 128 semantic-execution tests; the Linux release driver build also
+passes. This is independently constructed unit and driver structural evidence;
+the current pinned ORACLE-0003 probes select no data/constant short-import
+member, and no new Windows runtime or physical-hardware claim is made.

@@ -9,17 +9,18 @@ use mrml_runtime::{
     MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
 use mrml_rustc::{
-    CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffTextComdatSelection,
-    ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections,
-    LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget,
-    MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS,
-    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
-    ObjectFormat, PeDataKind, PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData,
-    PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
-    compile_source_function_with_options, decode_unix_archive,
+    CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffShortImportKind,
+    CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
+    ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
+    LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS,
+    MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS,
+    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeDataKind, PeReadonlyAbsoluteRelocation,
+    PeRuntimeFunction, PeWritableData, PeWritableRelocation, PeWritableRelocationTarget,
+    TargetLayout, compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
     decode_x86_64_coff_runtime_functions_with_section_identities,
-    decode_x86_64_coff_section_identity_readonly_fragment, decode_x86_64_coff_short_import,
+    decode_x86_64_coff_section_identity_readonly_fragment,
+    decode_x86_64_coff_short_import_with_alias,
     decode_x86_64_coff_text_fragment_with_section_identities_from_inventory,
     decode_x86_64_coff_writable_data_fragment_with_section_identities,
     decode_x86_64_elf_selected_definitions_from_sections,
@@ -1123,16 +1124,23 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                 .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
             let (input, selection_policy) = match format {
                 ObjectFormat::Coff if coff_short_import.is_some() => {
-                    let mut input = decode_x86_64_coff_short_import(object, arena)
-                        .map_err(|error| {
-                            anyhow!(
-                                "COFF object {} short import decode: {}",
-                                object_index,
-                                error
-                            )
-                        })?
-                        .ok_or_else(|| anyhow!("COFF short import changed after inventory"))?;
-                    if let Some(alias) = object_import_alias[object_index] {
+                    let mut input = decode_x86_64_coff_short_import_with_alias(
+                        object,
+                        object_import_alias[object_index],
+                        arena,
+                    )
+                    .map_err(|error| {
+                        anyhow!(
+                            "COFF object {} short import decode: {}",
+                            object_index,
+                            error
+                        )
+                    })?
+                    .ok_or_else(|| anyhow!("COFF short import changed after inventory"))?;
+                    if coff_short_import
+                        .is_some_and(|import| import.kind == CoffShortImportKind::Code)
+                        && let Some(alias) = object_import_alias[object_index]
+                    {
                         definitions[0] = LinkDefinition {
                             symbol: alias,
                             target: LinkDefinitionTarget::PeImportAddress,
@@ -2182,16 +2190,19 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
     };
     let import_target = |symbol: &str| {
         inputs.iter().find_map(|input| {
-            let defines_import = input.additional_definitions.iter().any(|definition| {
-                definition.symbol == symbol
-                    && definition.target == LinkDefinitionTarget::PeImportAddress
-            });
+            let defines_import = (input.symbol == symbol
+                && input.symbol_target == LinkDefinitionTarget::PeImportAddress)
+                || input.additional_definitions.iter().any(|definition| {
+                    definition.symbol == symbol
+                        && definition.target == LinkDefinitionTarget::PeImportAddress
+                });
             defines_import.then(|| {
                 input
                     .relocations
                     .iter()
                     .find_map(|relocation| match relocation.target {
-                        LinkRelocationTarget::PeImportAddress { library, symbol } => {
+                        LinkRelocationTarget::PeImportAddress { library, symbol }
+                        | LinkRelocationTarget::PeImportMetadata { library, symbol } => {
                             Some((library, symbol))
                         }
                         _ => None,
@@ -3007,6 +3018,45 @@ mod tests {
         let archives = [archive];
         let refs = link_object_refs(&archives, ObjectFormat::Coff, "__imp_WaitOnAddress").unwrap();
         assert_eq!(&refs.import_alias[..], &[Some("__imp_WaitOnAddress")]);
+
+        let mut data_import = short_import_object();
+        data_import[18..20].copy_from_slice(&5u16.to_le_bytes());
+        let mut data_archive = Vector::with_capacity(1024).unwrap();
+        data_archive.try_extend_from_slice(b"!<arch>\n").unwrap();
+        append_archive_member(&mut data_archive, "/", &index);
+        append_archive_member(&mut data_archive, "import.o/", &data_import);
+        let data_archives = [data_archive];
+        let data_refs =
+            link_object_refs(&data_archives, ObjectFormat::Coff, "__imp_WaitOnAddress").unwrap();
+        let mut relocations = relocation_arenas(1).unwrap();
+        let mut definitions = definition_arenas(1).unwrap();
+        let decoded = decode_link_inputs(
+            &data_refs.bytes,
+            &data_refs.archive_group,
+            &data_refs.archive_member,
+            &data_refs.import_alias,
+            ObjectFormat::Coff,
+            &mut relocations,
+            &mut definitions,
+        )
+        .unwrap();
+        assert_eq!(decoded.inputs.len(), 1);
+        assert_eq!(decoded.inputs[0].symbol, "__imp_WaitOnAddress");
+        assert_eq!(
+            decoded.inputs[0].symbol_target,
+            LinkDefinitionTarget::PeImportAddress
+        );
+        assert!(decoded.inputs[0].text.is_empty());
+        assert!(matches!(
+            decoded.inputs[0].relocations,
+            [LinkRelocation {
+                target: LinkRelocationTarget::PeImportMetadata {
+                    library: "api-ms-win-core-synch-l1-2-0.dll",
+                    symbol: "WaitOnAddress",
+                },
+                ..
+            }]
+        ));
     }
 
     #[test]
@@ -3142,6 +3192,46 @@ mod tests {
             LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
                 symbol: "WaitOnAddress",
+            }
+        );
+
+        let data_metadata = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::PeImportMetadata {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                symbol: "DATA",
+            },
+            addend: 0,
+        }];
+        let data_import = LinkInput {
+            symbol: "__imp_DATA",
+            symbol_target: LinkDefinitionTarget::PeImportAddress,
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[],
+            relocations: &data_metadata,
+        };
+        let data_alias_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("__imp_DATA"),
+            addend: -4,
+        }];
+        let data_alias_user = LinkInput {
+            relocations: &data_alias_relocation,
+            ..input
+        };
+        let mut data_import_arenas = relocation_arenas(2).unwrap();
+        let data_import_contextual = contextualize_pe_writable_relocations(
+            &[data_alias_user, data_import],
+            &[],
+            &mut data_import_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            data_import_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeImportAddress {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                symbol: "DATA",
             }
         );
 
