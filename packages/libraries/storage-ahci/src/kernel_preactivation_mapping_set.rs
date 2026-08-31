@@ -681,6 +681,14 @@ impl<
     pub const fn cpu_mappings(&self) -> AhciInstalledCpuMappings {
         self.owner.cpu_mappings()
     }
+
+    pub(crate) const fn launch(&self) -> crate::BoundAhciServiceLaunch {
+        self.owner.prepared.launch()
+    }
+
+    pub(crate) const fn abar_mapping(&self) -> Option<AhciAbarMapping> {
+        self.owner.abar_mapping()
+    }
 }
 
 impl<

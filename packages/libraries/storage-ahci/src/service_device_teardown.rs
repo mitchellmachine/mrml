@@ -634,6 +634,692 @@ pub enum AhciServiceTeardownReacquisitionError<L, E, R, M, D> {
     },
 }
 
+/// Concrete-root teardown owner after the controller manager transfers its
+/// one-use register, command-memory, and data-buffer views. The frozen page
+/// table and every memory-resource mapping owner remain indivisible here.
+pub struct ReacquiredKernelAhciServiceTeardown<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    frozen: crate::FrozenKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    backend: AhciCommandBackendTeardown<R, M, D>,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    ReacquiredKernelAhciServiceTeardown<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.frozen.root()
+    }
+}
+
+pub struct QuarantinedKernelAhciServiceTeardown<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    frozen: crate::FrozenKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    backend: AhciCommandBackendTeardown<R, M, D>,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    QuarantinedKernelAhciServiceTeardown<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.frozen.root()
+    }
+
+    pub const fn acquired_mapping(&self) -> AhciAbarMapping {
+        self.backend.mapping()
+    }
+}
+
+pub enum KernelAhciServiceTeardownReacquisitionError<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    Lease {
+        error: L::Error,
+        frozen: FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            MM,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    },
+    Binding {
+        error: AhciServiceTaskBindingError,
+        quarantine: QuarantinedKernelAhciServiceTeardown<
+            'resources,
+            S,
+            L::Registers,
+            L::CommandMemory,
+            L::DataIo,
+            P,
+            O,
+            MM,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    },
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciServiceTeardownReacquisitionError<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn lease_error(&self) -> Option<&L::Error> {
+        match self {
+            Self::Lease { error, .. } => Some(error),
+            Self::Binding { .. } => None,
+        }
+    }
+
+    pub const fn binding_error(&self) -> Option<AhciServiceTaskBindingError> {
+        match self {
+            Self::Lease { .. } => None,
+            Self::Binding { error, .. } => Some(*error),
+        }
+    }
+
+    pub fn into_retry(
+        self,
+    ) -> Result<
+        (
+            L::Error,
+            FrozenKernelAhciServiceExit<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                MM,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self {
+            Self::Lease { error, frozen } => Ok((error, frozen)),
+            other => Err(other),
+        }
+    }
+
+    pub fn into_quarantine(
+        self,
+    ) -> Result<
+        QuarantinedKernelAhciServiceTeardown<
+            'resources,
+            S,
+            L::Registers,
+            L::CommandMemory,
+            L::DataIo,
+            P,
+            O,
+            MM,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        Self,
+    > {
+        match self {
+            Self::Binding { quarantine, .. } => Ok(quarantine),
+            other => Err(other),
+        }
+    }
+}
+
+/// Transfers the trusted teardown views only after the concrete kernel mapping
+/// set is execution-frozen, then independently exact-matches every returned
+/// device identity before any MMIO or DMA transition.
+pub fn reacquire_frozen_kernel_ahci_service_teardown<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>(
+    exit: FrozenKernelAhciServiceExit<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+) -> Result<
+    ReacquiredKernelAhciServiceTeardown<
+        'resources,
+        S,
+        L::Registers,
+        L::CommandMemory,
+        L::DataIo,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    KernelAhciServiceTeardownReacquisitionError<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let FrozenKernelAhciServiceExit { frozen, lease } = exit;
+    // SAFETY: begin_active_kernel_ahci_service_exit matched this consuming
+    // lease to the exact opaque native-task identity and launch before it
+    // created the retained freeze. No safe API can resume that task here.
+    let backend = match unsafe { lease.reacquire() } {
+        Ok(backend) => backend,
+        Err((error, lease)) => {
+            return Err(KernelAhciServiceTeardownReacquisitionError::Lease {
+                error,
+                frozen: FrozenKernelAhciServiceExit { frozen, lease },
+            });
+        }
+    };
+    let spec = frozen.launch().spec();
+    let binding = if frozen.abar_mapping() != Some(backend.mapping())
+        || backend.mapping() != spec.mapping()
+    {
+        Some(AhciServiceTaskBindingError::MappingMismatch)
+    } else if backend.port() != &ActiveAhciPort::from_layout(spec.layout()) {
+        Some(AhciServiceTaskBindingError::PortMismatch)
+    } else if backend.data_region() != spec.data() {
+        Some(AhciServiceTaskBindingError::DataRegionMismatch)
+    } else {
+        None
+    };
+    if let Some(error) = binding {
+        return Err(KernelAhciServiceTeardownReacquisitionError::Binding {
+            error,
+            quarantine: QuarantinedKernelAhciServiceTeardown { frozen, backend },
+        });
+    }
+    Ok(ReacquiredKernelAhciServiceTeardown { frozen, backend })
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceDeviceQuiesceFailure {
+    MappingMismatch { port: ActiveAhciPort },
+    Engine(AhciEngineFailure),
+    Cleanup(AhciCleanupFailure),
+    DataSanitization(InstalledAhciPortDma),
+    DmaWithdrawal(InstalledAhciPortDma),
+}
+
+pub struct FrozenKernelAhciServiceQuiesceError<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    frozen: crate::FrozenKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    failure: KernelAhciServiceDeviceQuiesceFailure,
+    data_region: AhciDataDmaRegion,
+    registers: R,
+    command_memory: M,
+    data_io: D,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    FrozenKernelAhciServiceQuiesceError<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn failure(&self) -> &KernelAhciServiceDeviceQuiesceFailure {
+        &self.failure
+    }
+
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.frozen.root()
+    }
+}
+
+/// Concrete kernel owner after device/data/DMA quiescence and destruction of
+/// every borrowed service-address-space view. Page-table and memory-resource
+/// ownership remains retained for the following retirement/withdrawal gate.
+pub struct QuiescedKernelAhciServiceTask<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    frozen: crate::FrozenKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> QuiescedKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.frozen.root()
+    }
+}
+
+pub fn quiesce_reacquired_kernel_ahci_service<
+    'resources,
+    S: PageTableStore,
+    R: AhciRegisterIo,
+    M: AhciCommandMemoryIo,
+    D: AhciDataBufferIo,
+    B: AhciPortDmaBackend,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>(
+    owner: ReacquiredKernelAhciServiceTeardown<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    dma_backend: &mut B,
+) -> Result<
+    QuiescedKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    FrozenKernelAhciServiceQuiesceError<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let ReacquiredKernelAhciServiceTeardown { frozen, backend } = owner;
+    let (mapping, port, data_region, mut registers, mut command_memory, mut data_io) =
+        backend.into_parts();
+    if frozen.abar_mapping() != Some(mapping) {
+        return Err(FrozenKernelAhciServiceQuiesceError {
+            frozen,
+            failure: KernelAhciServiceDeviceQuiesceFailure::MappingMismatch { port },
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        });
+    }
+    let stopped = match stop_ahci_port_engine(mapping, port, &mut registers) {
+        Ok(stopped) => stopped,
+        Err(failure) => {
+            return Err(FrozenKernelAhciServiceQuiesceError {
+                frozen,
+                failure: KernelAhciServiceDeviceQuiesceFailure::Engine(failure),
+                data_region,
+                registers,
+                command_memory,
+                data_io,
+            });
+        }
+    };
+    let dma = match reclaim_stopped_ahci_port_dma(
+        mapping,
+        stopped,
+        &mut registers,
+        &mut command_memory,
+    ) {
+        Ok(dma) => dma,
+        Err(failure) => {
+            return Err(FrozenKernelAhciServiceQuiesceError {
+                frozen,
+                failure: KernelAhciServiceDeviceQuiesceFailure::Cleanup(failure),
+                data_region,
+                registers,
+                command_memory,
+                data_io,
+            });
+        }
+    };
+    if data_io.sanitize(data_region).is_err() {
+        return Err(FrozenKernelAhciServiceQuiesceError {
+            frozen,
+            failure: KernelAhciServiceDeviceQuiesceFailure::DataSanitization(dma),
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        });
+    }
+    if let Err(error) = revoke_ahci_port_dma(dma, dma_backend) {
+        return Err(FrozenKernelAhciServiceQuiesceError {
+            frozen,
+            failure: KernelAhciServiceDeviceQuiesceFailure::DmaWithdrawal(error.into_owner()),
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        });
+    }
+    drop(data_io);
+    drop(command_memory);
+    drop(registers);
+    Ok(QuiescedKernelAhciServiceTask { frozen })
+}
+
+pub fn resume_frozen_kernel_ahci_service_quiescence<
+    'resources,
+    S: PageTableStore,
+    R,
+    M,
+    D: AhciDataBufferIo,
+    B: AhciPortDmaBackend,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>(
+    error: FrozenKernelAhciServiceQuiesceError<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    dma_backend: &mut B,
+) -> Result<
+    QuiescedKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    FrozenKernelAhciServiceQuiesceError<
+        'resources,
+        S,
+        R,
+        M,
+        D,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let FrozenKernelAhciServiceQuiesceError {
+        frozen,
+        failure,
+        data_region,
+        registers,
+        command_memory,
+        mut data_io,
+    } = error;
+    let dma = match failure {
+        KernelAhciServiceDeviceQuiesceFailure::DataSanitization(dma) => {
+            if data_io.sanitize(data_region).is_err() {
+                return Err(FrozenKernelAhciServiceQuiesceError {
+                    frozen,
+                    failure: KernelAhciServiceDeviceQuiesceFailure::DataSanitization(dma),
+                    data_region,
+                    registers,
+                    command_memory,
+                    data_io,
+                });
+            }
+            dma
+        }
+        KernelAhciServiceDeviceQuiesceFailure::DmaWithdrawal(dma) => dma,
+        failure => {
+            return Err(FrozenKernelAhciServiceQuiesceError {
+                frozen,
+                failure,
+                data_region,
+                registers,
+                command_memory,
+                data_io,
+            });
+        }
+    };
+    if let Err(error) = revoke_ahci_port_dma(dma, dma_backend) {
+        return Err(FrozenKernelAhciServiceQuiesceError {
+            frozen,
+            failure: KernelAhciServiceDeviceQuiesceFailure::DmaWithdrawal(error.into_owner()),
+            data_region,
+            registers,
+            command_memory,
+            data_io,
+        });
+    }
+    drop(data_io);
+    drop(command_memory);
+    drop(registers);
+    Ok(QuiescedKernelAhciServiceTask { frozen })
+}
+
 impl<L, E, R, M, D> AhciServiceTeardownReacquisitionError<L, E, R, M, D> {
     pub const fn lease_error(&self) -> Option<&E> {
         match self {

@@ -1599,15 +1599,27 @@ the frozen address space and mappings remain live. Only then may retirement and
 CPU/ABAR mapping withdrawal proceed; successor dispatch remains withheld
 through exact cleanup.
 
-The focused Linux AHCI suite passes all 138 tests. Coverage includes equal task
+The same freeze-first transfer now consumes the concrete kernel mapping-set
+owner without reconstructing or copying a generic mapping owner. The retained
+inactive page-table hierarchy, ABAR leaf, four CPU/DMA leaves, and their memory
+resource records remain one typed owner while the lease is retried, every
+returned mapping/port/data identity is independently exact-matched, the device
+is stopped, data is sanitized, DMA is withdrawn, and all borrowed views are
+destroyed. Retryable acquisition, sanitization, and DMA failures keep that
+exact frozen root; substitution produces a quarantine which also retains it.
+Retirement plus concrete SMP translation and mapping withdrawal is the next
+dependency gate.
+
+The focused Linux AHCI suite passes all 147 tests. Coverage includes equal task
 tokens from different runtimes, pre-freeze current-task and supervisor denial
 without reacquisition, retry after lease-reacquisition failure, substituted
-state quarantine, frozen mutation denial, quiescence retry, and the existing
+state quarantine, concrete-root retention across acquisition and sanitization
+retry, frozen mutation denial, quiescence retry, and the existing generic
 retirement/unmap/cleanup/dispatch chain. This is typed API, controlled backend,
-and unit-test evidence only. The repository has no production
-controller-manager lease implementation or installed operation-3 routing, and
-no installed CPL3/`INT 0x80`, active page-table/TLB/IOMMU, KVM/WHP, or physical
-AHCI execution was exercised.
+and unit-test evidence only. The repository has no production controller-manager
+lease implementation or installed operation-3 routing, and no installed
+CPL3/`INT 0x80`, active page-table/TLB/IOMMU, KVM/WHP, or physical AHCI execution
+was exercised.
 
 Complexity impact: MEDIUM
 TCB impact: LOW

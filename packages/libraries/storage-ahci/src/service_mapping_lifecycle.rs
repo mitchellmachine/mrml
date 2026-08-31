@@ -1441,7 +1441,7 @@ mod tests {
         let mut received_fis = [0; 256];
         let mut command_tables = [0; 1024];
         let calls = Cell::new(0);
-        let lease = TeardownLease::new(
+        let mut lease = TeardownLease::new(
             prepared.task(),
             prepared.launch(),
             &mut command_list,
@@ -1449,6 +1449,8 @@ mod tests {
             &mut command_tables,
             &calls,
         );
+        lease.failures = 1;
+        lease.sanitize_failures = 1;
         let failure = crate::begin_active_kernel_ahci_service_exit(
             active,
             lease,
@@ -1481,6 +1483,35 @@ mod tests {
         assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(fixture.runtime.load().runnable(), 1);
         assert_eq!(calls.get(), 0);
+        let error = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
+            .err()
+            .unwrap_or_else(|| panic!("injected manager reacquisition failure must retain root"));
+        assert_eq!(error.lease_error(), Some(&1));
+        let (_, frozen) = error
+            .into_retry()
+            .unwrap_or_else(|_| panic!("lease failure must retain the concrete frozen owner"));
+        assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(calls.get(), 1);
+        let reacquired = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
+            .unwrap_or_else(|_| panic!("exact manager state must reacquire after retry"));
+        assert_eq!(reacquired.task(), target_task);
+        assert_eq!(reacquired.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        let mut dma_backend = DmaBackend::default();
+        let error = crate::quiesce_reacquired_kernel_ahci_service(reacquired, &mut dma_backend)
+            .err()
+            .unwrap_or_else(|| panic!("injected sanitization failure must retain the root"));
+        assert_eq!(error.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert!(matches!(
+            error.failure(),
+            crate::KernelAhciServiceDeviceQuiesceFailure::DataSanitization(_)
+        ));
+        assert_eq!(dma_backend.removals, 0);
+        let quiesced = crate::resume_frozen_kernel_ahci_service_quiescence(error, &mut dma_backend)
+            .unwrap_or_else(|_| panic!("exact concrete owner must quiesce after retry"));
+        assert_eq!(quiesced.task(), target_task);
+        assert_eq!(quiesced.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(dma_backend.removals, 1);
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
@@ -2247,15 +2278,17 @@ mod tests {
         };
         assert!(retained.cpu().complete());
         abar_backend.fail_remove = false;
-        assert!(remove_ahci_service_mappings(
-            retained,
-            control,
-            &capabilities,
-            &mut abar_backend,
-            &mut cpu_backend,
-        )
-        .unwrap()
-        .complete());
+        assert!(
+            remove_ahci_service_mappings(
+                retained,
+                control,
+                &capabilities,
+                &mut abar_backend,
+                &mut cpu_backend,
+            )
+            .unwrap()
+            .complete()
+        );
     }
 
     #[test]

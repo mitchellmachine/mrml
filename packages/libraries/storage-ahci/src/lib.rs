@@ -45,72 +45,71 @@ mod userspace_syscall_adapter;
 mod x86_coherent_data_sync;
 
 use mrml_interface_storage_block_provider_v1::{
-    decode_enumerate_request, encode_block_device_catalog, encode_enumerate_response,
-    BlockProviderDevice, BlockProviderTransport, EnumerateError, ProtocolError,
-    ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
+    BlockProviderDevice, BlockProviderTransport, ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
+    EnumerateError, ProtocolError, decode_enumerate_request, encode_block_device_catalog,
+    encode_enumerate_response,
 };
 
-pub use ahci_cleanup::{reclaim_stopped_ahci_port_dma, AhciCleanupError, AhciCleanupFailure};
+pub use ahci_cleanup::{AhciCleanupError, AhciCleanupFailure, reclaim_stopped_ahci_port_dma};
 pub use ahci_command::{
-    prepare_ahci_dma_command, AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure,
-    AhciDataDmaRegion, PreparedAhciCommand, AHCI_MAX_TRANSFER_BYTES,
+    AHCI_MAX_TRANSFER_BYTES, AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure,
+    AhciDataDmaRegion, PreparedAhciCommand, prepare_ahci_dma_command,
 };
 pub use ahci_command_execute::{
-    execute_ahci_dma_command, AhciCommandCompletion, AhciCommandExecuteError,
-    AhciCommandExecuteFailure, AHCI_COMMAND_COMPLETION_POLL_LIMIT,
+    AHCI_COMMAND_COMPLETION_POLL_LIMIT, AhciCommandCompletion, AhciCommandExecuteError,
+    AhciCommandExecuteFailure, execute_ahci_dma_command,
 };
 pub use ahci_command_memory::{
-    initialize_ahci_command_memory, AhciCommandMemoryError, AhciCommandMemoryFailure,
-    AhciCommandMemoryIo, InitializedAhciCommandMemory,
+    AhciCommandMemoryError, AhciCommandMemoryFailure, AhciCommandMemoryIo,
+    InitializedAhciCommandMemory, initialize_ahci_command_memory,
 };
 pub use ahci_command_recycle::{
-    recycle_ahci_command_slot, AhciCommandRecycleError, AhciCommandRecycleFailure,
-    RecycledAhciCommand,
+    AhciCommandRecycleError, AhciCommandRecycleFailure, RecycledAhciCommand,
+    recycle_ahci_command_slot,
 };
 pub use ahci_controller::{
-    reset_ahci_controller, AhciControllerError, AhciControllerSnapshot, AhciRegisterIo,
-    NativeAhciRegisterIo, AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT,
-    AHCI_VERSION_OFFSET,
+    AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT, AHCI_VERSION_OFFSET,
+    AhciControllerError, AhciControllerSnapshot, AhciRegisterIo, NativeAhciRegisterIo,
+    reset_ahci_controller,
 };
 pub use ahci_discovery::{
-    AhciAbarDescriptor, AhciDiscoveryError, AhciPciFunctionSnapshot, PciFunctionLocation,
     AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE, AHCI_PCI_SUBCLASS,
+    AhciAbarDescriptor, AhciDiscoveryError, AhciPciFunctionSnapshot, PciFunctionLocation,
 };
 pub use ahci_dma::{
-    prepare_ahci_port_dma, revoke_ahci_port_dma, AhciDmaRegion, AhciPortDmaBackend,
-    AhciPortDmaError, AhciPortDmaLayout, AhciPortDmaRequest, AhciPortDmaRevocationError,
-    InstalledAhciPortDma, AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES,
-    AHCI_COMMAND_TABLE_ALIGNMENT, AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_ALIGNMENT,
-    AHCI_RECEIVED_FIS_BYTES,
+    AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_ALIGNMENT,
+    AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_ALIGNMENT, AHCI_RECEIVED_FIS_BYTES,
+    AhciDmaRegion, AhciPortDmaBackend, AhciPortDmaError, AhciPortDmaLayout, AhciPortDmaRequest,
+    AhciPortDmaRevocationError, InstalledAhciPortDma, prepare_ahci_port_dma, revoke_ahci_port_dma,
 };
 pub use ahci_engine::{
-    start_ahci_port_engine, stop_ahci_port_engine, ActiveAhciPort, AhciEngineError,
-    AhciEngineFailure, StoppedAhciPort, AHCI_ENGINE_STOP_POLL_LIMIT,
+    AHCI_ENGINE_STOP_POLL_LIMIT, ActiveAhciPort, AhciEngineError, AhciEngineFailure,
+    StoppedAhciPort, start_ahci_port_engine, stop_ahci_port_engine,
 };
 pub use ahci_flush::{
-    flush_ahci_cache, AhciFlushError, AhciFlushFailure, AHCI_FLUSH_COMPLETION_POLL_LIMIT,
+    AHCI_FLUSH_COMPLETION_POLL_LIMIT, AhciFlushError, AhciFlushFailure, flush_ahci_cache,
 };
 pub use ahci_mapping::{
-    install_ahci_service_abar, map_ahci_abar, remove_ahci_service_abar, AhciAbarMapping,
-    AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError,
-    InstalledAhciAbarMapping, AHCI_ABAR_PAGE_PERMISSIONS, AHCI_MMIO_PAGE_BYTES,
+    AHCI_ABAR_PAGE_PERMISSIONS, AHCI_MMIO_PAGE_BYTES, AhciAbarMapping, AhciAbarMappingBackend,
+    AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError, InstalledAhciAbarMapping,
+    install_ahci_service_abar, map_ahci_abar, remove_ahci_service_abar,
 };
 pub use ahci_port::{
-    discover_ahci_ports, AhciPortDeviceKind, AhciPortDiscoveryError, AhciPortError,
-    AhciPortLinkSpeed, AhciPortLinkState, AhciPortPowerState, AhciPortSnapshot,
-    AhciPortSnapshotSet, AHCI_ATAPI_SIGNATURE, AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE, AHCI_MAX_PORTS,
+    AHCI_ATAPI_SIGNATURE, AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE, AHCI_MAX_PORTS,
     AHCI_PORT_BASE_OFFSET, AHCI_PORT_COMMAND_ISSUE_OFFSET, AHCI_PORT_COMMAND_OFFSET,
     AHCI_PORT_INTERRUPT_ENABLE_OFFSET, AHCI_PORT_MULTIPLIER_SIGNATURE,
     AHCI_PORT_SATA_ACTIVE_OFFSET, AHCI_PORT_SATA_STATUS_OFFSET, AHCI_PORT_SIGNATURE_OFFSET,
-    AHCI_PORT_STRIDE_BYTES, AHCI_SATA_SIGNATURE,
+    AHCI_PORT_STRIDE_BYTES, AHCI_SATA_SIGNATURE, AhciPortDeviceKind, AhciPortDiscoveryError,
+    AhciPortError, AhciPortLinkSpeed, AhciPortLinkState, AhciPortPowerState, AhciPortSnapshot,
+    AhciPortSnapshotSet, discover_ahci_ports,
 };
 pub use ahci_port_program::{
-    program_ahci_port_dma_bases, AhciPortProgramError, AhciPortProgramFailure,
-    ProgrammedAhciPortDma,
+    AhciPortProgramError, AhciPortProgramFailure, ProgrammedAhciPortDma,
+    program_ahci_port_dma_bases,
 };
 pub use ahci_reset::{
-    reset_ahci_sata_port, AhciPortResetError, AhciPortResetFailure, AhciResetIo,
-    AHCI_RESET_LINK_POLL_LIMIT,
+    AHCI_RESET_LINK_POLL_LIMIT, AhciPortResetError, AhciPortResetFailure, AhciResetIo,
+    reset_ahci_sata_port,
 };
 pub use block_io_adapter::{
     AhciBlockControlAdapter, AhciBlockControlBackend, AhciBlockControlError, AhciBlockIoAdapter,
@@ -129,24 +128,21 @@ pub use data_service_loop::{
     ReceivedAhciDataEnvelope,
 };
 pub use dispatch_service::{
-    AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls,
-    ReceivedAhciDispatchEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
+    AHCI_DISPATCH_REQUEST_BYTES, AhciDispatchService, AhciDispatchServiceError,
+    AhciDispatchSyscalls, ReceivedAhciDispatchEnvelope,
 };
 pub use kernel_abar_page_table::{
     KernelAhciAbarPreactivationError, KernelAhciAbarPreactivationOwner,
     KernelAhciAbarRollbackFailure,
 };
 pub use kernel_preactivation_mapping_set::{
-    ActiveKernelAhciMappingSetOwner, KernelAhciMappingSetActivationError,
-    FrozenKernelAhciMappingSetOwner, KernelAhciMappingSetActivationFailure,
+    ActiveKernelAhciMappingSetOwner, FrozenKernelAhciMappingSetOwner,
+    KernelAhciMappingSetActivationError, KernelAhciMappingSetActivationFailure,
     KernelAhciMappingSetFreezeFailure, KernelAhciPreactivationMappingSetError,
-    KernelAhciPreactivationMappingSetQuarantineError,
+    KernelAhciPreactivationMappingSetInstallFailure, KernelAhciPreactivationMappingSetInstallState,
+    KernelAhciPreactivationMappingSetOwner, KernelAhciPreactivationMappingSetQuarantineError,
     KernelAhciPreactivationMappingSetQuarantineFailure,
-    KernelAhciPreactivationMappingSetInstallFailure,
-    KernelAhciPreactivationMappingSetInstallState,
-    KernelAhciPreactivationMappingSetOwner,
-    KernelAhciPreactivationMappingSetRollbackFailure,
-    KernelAhciQuarantinedMappingSetOwner,
+    KernelAhciPreactivationMappingSetRollbackFailure, KernelAhciQuarantinedMappingSetOwner,
 };
 pub use kernel_service_cpu_mapping::{
     KernelAhciServiceCpuMappingAdapter, KernelAhciServiceCpuMappingAdapterError,
@@ -156,12 +152,12 @@ pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryError};
 pub use native_port_reconstruction::{
-    reconstruct_installed_ahci_port, AhciNativePortReconstructionError,
+    AhciNativePortReconstructionError, reconstruct_installed_ahci_port,
 };
 pub use native_service_state::{
+    AHCI_DISPATCH_SCRATCH_BYTES, AhciNativeServiceBuffers, AhciNativeServicePreparationError,
+    AhciNativeServiceState, AhciNativeServiceStateError,
     bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
-    AhciNativeServiceBuffers, AhciNativeServicePreparationError, AhciNativeServiceState,
-    AhciNativeServiceStateError, AHCI_DISPATCH_SCRATCH_BYTES,
 };
 #[cfg(target_arch = "x86_64")]
 pub use native_service_state::{
@@ -171,53 +167,59 @@ pub use native_service_state::{
 };
 pub use platform_io::{AhciMonotonicDelay, AhciPlatformIo};
 pub use service_bootstrap::{
-    bootstrap_installed_ahci_entry, bootstrap_installed_ahci_service, AhciReplyBinding,
-    AhciServiceBootstrapError, AhciServiceEntryRegisters,
+    AhciReplyBinding, AhciServiceBootstrapError, AhciServiceEntryRegisters,
+    bootstrap_installed_ahci_entry, bootstrap_installed_ahci_service,
 };
 pub use service_cpu_mapping::{
-    install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings, AhciInstalledCpuMappings,
-    AhciServiceCpuMappingBackend, AhciServiceCpuMappingError, AhciServiceCpuMappingRemovalError,
-    AhciServiceCpuMappingRequest, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
+    AHCI_SERVICE_CPU_MAPPING_RIGHTS, AhciInstalledCpuMappings, AhciServiceCpuMappingBackend,
+    AhciServiceCpuMappingError, AhciServiceCpuMappingRemovalError, AhciServiceCpuMappingRequest,
+    install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
 };
 pub use service_device_teardown::{
-    begin_active_ahci_service_exit, begin_active_kernel_ahci_service_exit,
-    complete_retired_ahci_service_cleanup,
-    dispatch_retired_ahci_service_task, quiesce_ahci_command_backend, quiesce_ahci_service_device,
-    quiesce_reacquired_ahci_service, reacquire_frozen_ahci_service_teardown,
-    remove_quiesced_ahci_service_mappings, remove_retired_ahci_service_mappings,
-    resume_ahci_command_backend_teardown, resume_ahci_service_device_teardown,
-    resume_frozen_ahci_service_quiescence, retire_quiesced_ahci_service_task,
     AhciCommandBackendQuiesceError, AhciRetiredMappingRemovalError, AhciRetiredServiceCleanupError,
     AhciServiceDeviceQuiesceError, AhciServiceDispatchError, AhciServiceExitFreezeError,
     AhciServiceTaskBindingError, AhciServiceTaskRetirementError, AhciServiceTeardownLease,
     AhciServiceTeardownLeaseBindingError, AhciServiceTeardownReacquisitionError,
     DispatchedAhciServiceTask, FrozenAhciServiceExit, FrozenAhciServiceQuiesceError,
-    FrozenKernelAhciServiceExit, KernelAhciServiceExitFreezeError,
-    PendingAhciServiceDeviceTeardown, QuarantinedAhciServiceTeardown, QuiescedAhciCommandBackend,
-    QuiescedAhciServiceMappings, QuiescedAhciServiceTask, ReacquiredAhciServiceTeardown,
-    RetiredAhciServiceCleanupComplete, RetiredAhciServiceMappingsRemoved, RetiredAhciServiceTask,
+    FrozenKernelAhciServiceExit, FrozenKernelAhciServiceQuiesceError,
+    KernelAhciServiceDeviceQuiesceFailure, KernelAhciServiceExitFreezeError,
+    KernelAhciServiceTeardownReacquisitionError, PendingAhciServiceDeviceTeardown,
+    QuarantinedAhciServiceTeardown, QuarantinedKernelAhciServiceTeardown,
+    QuiescedAhciCommandBackend, QuiescedAhciServiceMappings, QuiescedAhciServiceTask,
+    QuiescedKernelAhciServiceTask, ReacquiredAhciServiceTeardown,
+    ReacquiredKernelAhciServiceTeardown, RetiredAhciServiceCleanupComplete,
+    RetiredAhciServiceMappingsRemoved, RetiredAhciServiceTask, begin_active_ahci_service_exit,
+    begin_active_kernel_ahci_service_exit, complete_retired_ahci_service_cleanup,
+    dispatch_retired_ahci_service_task, quiesce_ahci_command_backend, quiesce_ahci_service_device,
+    quiesce_reacquired_ahci_service, quiesce_reacquired_kernel_ahci_service,
+    reacquire_frozen_ahci_service_teardown, reacquire_frozen_kernel_ahci_service_teardown,
+    remove_quiesced_ahci_service_mappings, remove_retired_ahci_service_mappings,
+    resume_ahci_command_backend_teardown, resume_ahci_service_device_teardown,
+    resume_frozen_ahci_service_quiescence, resume_frozen_kernel_ahci_service_quiescence,
+    retire_quiesced_ahci_service_task,
 };
 pub use service_launch::{
-    AhciServiceLaunchSpec, AhciServiceLaunchSpecError, AHCI_COMMAND_LIST_AUTHORITY_INDEX,
-    AHCI_COMMAND_TABLES_AUTHORITY_INDEX, AHCI_DEVICE_AUTHORITY_INDEX,
-    AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX, AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX,
-    AHCI_RECEIVED_FIS_AUTHORITY_INDEX, AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES,
+    AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
+    AHCI_DEVICE_AUTHORITY_INDEX, AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
+    AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX, AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
+    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES, AhciServiceLaunchSpec,
+    AhciServiceLaunchSpecError,
 };
 pub use service_launch_record::{
-    prepare_bound_ahci_native_service_task, AhciNativeServiceTaskPreparationFailure,
-    AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciServiceLaunchRecordError,
-    BoundAhciServiceLaunch, InstalledAhciServiceLaunch, PreparedAhciNativeServiceTask,
+    AhciNativeServiceTaskPreparationFailure, AhciServiceCpuMapping, AhciServiceLaunchRecord,
+    AhciServiceLaunchRecordError, BoundAhciServiceLaunch, InstalledAhciServiceLaunch,
+    PreparedAhciNativeServiceTask, prepare_bound_ahci_native_service_task,
 };
 pub use service_loop::{
     AhciEnumerationServiceLoop, AhciServiceLoopError, AhciServiceSyscalls, ReceivedAhciEnvelope,
 };
 pub use service_mapping_lifecycle::{
-    activate_mapped_ahci_service_task, install_ahci_service_mappings,
-    install_prepared_ahci_service_mappings, remove_ahci_service_mappings,
     ActiveAhciNativeServiceTask, AhciServiceActivationError, AhciServiceActivationFailure,
     AhciServiceMappingInstallError, AhciServiceMappingRemovalError, AhciServiceMappingTeardown,
     MappedAhciNativeServiceTask, PreparedAhciServiceMappingError,
-    PreparedAhciServiceMappingFailure,
+    PreparedAhciServiceMappingFailure, activate_mapped_ahci_service_task,
+    install_ahci_service_mappings, install_prepared_ahci_service_mappings,
+    remove_ahci_service_mappings,
 };
 #[cfg(target_arch = "x86_64")]
 pub use userspace_syscall_adapter::NativeAhciRawSyscall;
@@ -255,8 +257,8 @@ impl BlockProviderTransport for AhciBlockProvider<'_> {
 mod provider_tests {
     use super::*;
     use mrml_interface_storage_block_provider_v1::{
-        decode_enumerate_response, encode_enumerate_request, BorrowedWriteView, OpaqueHandle,
-        BLOCK_DEVICE_FLAG_FLUSH,
+        BLOCK_DEVICE_FLAG_FLUSH, BorrowedWriteView, OpaqueHandle, decode_enumerate_response,
+        encode_enumerate_request,
     };
 
     #[test]
