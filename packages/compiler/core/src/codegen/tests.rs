@@ -18554,24 +18554,37 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u16) -> u8 { a.checked_shl(n).unwrap_or_default() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, n: i32) -> bool { a.checked_shr(n).is_some() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, n: u32) -> u64 { a.checked_shl(n) }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u16) -> u8 { a.checked_shl(n).unwrap_or_default() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, n: i32) -> bool { a.checked_shr(n).is_some() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, n: u32) -> u64 { a.checked_shl(n) }",
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
-                    &function,
-                    &NoConstants,
-                    X86_64Abi::SystemV,
-                )
-                .is_err(),
-                "{source}"
-            );
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert_eq!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                    )
+                    .unwrap_err()
+                    .kind,
+                    expected,
+                    "{source}"
+                );
+            }
         }
     }
 
