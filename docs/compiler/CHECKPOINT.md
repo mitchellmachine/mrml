@@ -1563,6 +1563,18 @@ Wine 11.16 loaded the image and returned 42. The direct authored entry does not
 prove TLS-variable access, destructor execution, native Windows, general `std`,
 complete PE startup/TLS lifecycle, WHP, or physical hardware.
 
+The durable pinned TLS-access probe compiles an independently authored Rust
+2024 const `thread_local!` `Cell<u32>`. Its exact Windows gnullvm object carries
+one `REL32` `_tls_index` reference and two `SECREL` references to the exact
+`.tls$$...VALUE` section. MRML emitted a deterministic 3,584-byte PE with
+SHA-256
+`7a6198a697c7b5823bbd207304550ec9765a9f5ba0182cbeff564555a87e177e`;
+Wine 11.16 initialized the TLS template, and the authored entry read 40, stored
+42, read it back through the TLS sequence, and returned 42. This is one hosted
+main-thread const TLS access, not destructor registration or execution,
+secondary-thread initialization, dynamic TLS, native Windows, general `std`,
+WHP, or physical hardware.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.

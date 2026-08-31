@@ -1519,3 +1519,16 @@ initializer invocation. This is one hosted Wine execution path through `std`,
 not native Windows evidence, general `std` conformance, production runtime
 closure, complete PE startup/TLS lifecycle beyond these exact table shapes, WHP
 evidence, or physical-hardware evidence.
+
+The separate durable `check_pinned_std_tls_execution.sh` probe compiles an
+independently authored Rust 2024 `thread_local!` containing a const-initialized
+`Cell<u32>`. The exact pinned Windows gnullvm object uses one `REL32` reference
+to `_tls_index` and two `SECREL` references to its exact `.tls$$...VALUE`
+section. MRML links the selected closure into a deterministic 3,584-byte PE with
+SHA-256
+`7a6198a697c7b5823bbd207304550ec9765a9f5ba0182cbeff564555a87e177e`.
+Wine 11.16 initialized the PE TLS template; the authored entry read 40 through
+the thread-local access sequence, stored 42, read it back, and returned 42.
+This is one hosted main-thread const TLS access, not destructor registration or
+execution, secondary-thread initialization, dynamic TLS, native Windows,
+general `std`, WHP, or physical-hardware evidence.
