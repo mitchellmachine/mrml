@@ -600,6 +600,16 @@ impl<
         self.owner.cpu_mappings()
     }
 
+    pub(crate) const fn native_task(
+        &self,
+    ) -> mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }> {
+        self.owner.prepared.task()
+    }
+
+    pub(crate) const fn launch(&self) -> crate::BoundAhciServiceLaunch {
+        self.owner.prepared.launch()
+    }
+
     /// Freezes the exact currently executing service while retaining the
     /// concrete page-table hierarchy and all five mapping/resource owners.
     /// This transition performs no device, DMA, mapping, or cleanup operation.

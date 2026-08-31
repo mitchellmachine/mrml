@@ -1,13 +1,14 @@
 //! Device quiescence gate before AHCI service mapping withdrawal.
 
 use crate::{
-    reclaim_stopped_ahci_port_dma, remove_ahci_service_mappings, revoke_ahci_port_dma,
-    stop_ahci_port_engine, ActiveAhciPort, AhciAbarMapping, AhciAbarRemovalBackend,
-    AhciCleanupFailure, AhciCommandBackendTeardown, AhciCommandMemoryIo, AhciDataBufferIo,
-    AhciDataDmaRegion, AhciEngineFailure, AhciPortDmaBackend, AhciRegisterIo,
-    AhciServiceCpuMappingBackend, AhciServiceMappingRemovalError, AhciServiceMappingTeardown,
-    BoundAhciServiceLaunch, InstalledAhciPortDma,
+    ActiveAhciPort, AhciAbarMapping, AhciAbarRemovalBackend, AhciCleanupFailure,
+    AhciCommandBackendTeardown, AhciCommandMemoryIo, AhciDataBufferIo, AhciDataDmaRegion,
+    AhciEngineFailure, AhciPortDmaBackend, AhciRegisterIo, AhciServiceCpuMappingBackend,
+    AhciServiceMappingRemovalError, AhciServiceMappingTeardown, BoundAhciServiceLaunch,
+    InstalledAhciPortDma, reclaim_stopped_ahci_port_dma, remove_ahci_service_mappings,
+    revoke_ahci_port_dma, stop_ahci_port_engine,
 };
+use mrml_kernel::arch::x86_64::PageTableStore;
 use mrml_kernel::{
     Capability, CapabilitySpace, NativeDeviceServiceTask, ServiceAddressSpaceEraser,
     ServiceCleanupError, ServiceCleanupTicket, ServiceId, ServiceSupervisor,
@@ -299,6 +300,204 @@ pub enum AhciServiceExitFreezeError<L> {
         active: crate::ActiveAhciNativeServiceTask,
         lease: L,
     },
+}
+
+/// Exact manager lease paired with the execution-frozen concrete page-table
+/// and mapping-set owner. Neither component can be substituted independently.
+pub struct FrozenKernelAhciServiceExit<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    frozen: crate::FrozenKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    lease: L,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> FrozenKernelAhciServiceExit<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.frozen.root()
+    }
+    pub const fn lease(&self) -> &L {
+        &self.lease
+    }
+}
+
+pub enum KernelAhciServiceExitFreezeError<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    LeaseBinding {
+        error: AhciServiceTeardownLeaseBindingError,
+        active: crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        lease: L,
+    },
+    Lifecycle {
+        failure: crate::KernelAhciMappingSetFreezeFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        lease: L,
+    },
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciServiceExitFreezeError<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub fn into_parts(
+        self,
+    ) -> (
+        crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        L,
+    ) {
+        match self {
+            Self::LeaseBinding { active, lease, .. } => (active, lease),
+            Self::Lifecycle { failure, lease } => (failure.into_active(), lease),
+        }
+    }
+}
+
+/// Binds the controller manager's one-use teardown authority before freezing
+/// the concrete active task. Every failure returns both unchanged owners.
+pub fn begin_active_kernel_ahci_service_exit<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+    const SERVICES: usize,
+>(
+    active: crate::ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    lease: L,
+    supervisor: &ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+) -> Result<
+    FrozenKernelAhciServiceExit<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    KernelAhciServiceExitFreezeError<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let binding_error = if lease.native_task() != active.native_task() {
+        Some(AhciServiceTeardownLeaseBindingError::NativeTaskMismatch)
+    } else if lease.launch() != active.launch() {
+        Some(AhciServiceTeardownLeaseBindingError::LaunchMismatch)
+    } else {
+        None
+    };
+    if let Some(error) = binding_error {
+        return Err(KernelAhciServiceExitFreezeError::LeaseBinding {
+            error,
+            active,
+            lease,
+        });
+    }
+    match active.freeze_current(supervisor, runtime) {
+        Ok(frozen) => Ok(FrozenKernelAhciServiceExit { frozen, lease }),
+        Err(failure) => Err(KernelAhciServiceExitFreezeError::Lifecycle { failure, lease }),
+    }
 }
 
 impl<L> AhciServiceExitFreezeError<L> {

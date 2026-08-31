@@ -1399,7 +1399,10 @@ makes only the bound task runnable. That concrete active owner can now consume
 the exact-current-task freeze transition while retaining its service identity,
 root/target, and all mapping resources; a non-current freeze failure returns the
 unchanged active owner, and freezing performs no device, DMA, mapping, or
-retirement operation. The trusted launcher must still establish
+retirement operation. The one-use controller-manager teardown lease is now
+exact-matched to that concrete owner's runtime-bound native task and retained
+launch before the freeze; binding or lifecycle failure returns both owners, and
+successful freeze does not invoke lease reacquisition. The trusted launcher must still establish
 the initial descriptor/device-object correlation; the record binds data and
 grants no authority. Full-lifetime PAT3=UC and cacheable-alias proof, active
 freeze/quiescence and mapping withdrawal, SMP TLB withdrawal, IOMMU binding,

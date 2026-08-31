@@ -1437,11 +1437,27 @@ mod tests {
         assert_eq!(supervisor.task(active.service()), Ok(Some(target_task)));
         assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
         assert_eq!(fixture.runtime.load().runnable(), 2);
-        let failure = active
-            .freeze_current(&supervisor, &mut fixture.runtime)
-            .err()
-            .unwrap_or_else(|| panic!("non-current task must not freeze"));
-        let active = failure.into_active();
+        let mut command_list = [0; 1024];
+        let mut received_fis = [0; 256];
+        let mut command_tables = [0; 1024];
+        let calls = Cell::new(0);
+        let lease = TeardownLease::new(
+            prepared.task(),
+            prepared.launch(),
+            &mut command_list,
+            &mut received_fis,
+            &mut command_tables,
+            &calls,
+        );
+        let failure = crate::begin_active_kernel_ahci_service_exit(
+            active,
+            lease,
+            &supervisor,
+            &mut fixture.runtime,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("non-current task must not freeze"));
+        let (active, lease) = failure.into_parts();
         assert_eq!(active.task(), target_task);
         assert!(matches!(
             fixture.runtime.start(),
@@ -1451,16 +1467,20 @@ mod tests {
             fixture.runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target_task
         ));
-        let frozen = active
-            .freeze_current(&supervisor, &mut fixture.runtime)
-            .unwrap_or_else(|failure| {
-                panic!("exact active owner must freeze: {:?}", failure.error())
-            });
+        let frozen = crate::begin_active_kernel_ahci_service_exit(
+            active,
+            lease,
+            &supervisor,
+            &mut fixture.runtime,
+        )
+        .unwrap_or_else(|failure| {
+            let _ = failure;
+            panic!("exact active owner and lease must freeze")
+        });
         assert_eq!(frozen.task(), target_task);
         assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
-        assert_eq!(frozen.target(), target);
-        assert!(frozen.cpu_mappings().fully_installed());
         assert_eq!(fixture.runtime.load().runnable(), 1);
+        assert_eq!(calls.get(), 0);
     }
 
     #[test]

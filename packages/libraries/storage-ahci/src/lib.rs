@@ -180,7 +180,8 @@ pub use service_cpu_mapping::{
     AhciServiceCpuMappingRequest, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
 };
 pub use service_device_teardown::{
-    begin_active_ahci_service_exit, complete_retired_ahci_service_cleanup,
+    begin_active_ahci_service_exit, begin_active_kernel_ahci_service_exit,
+    complete_retired_ahci_service_cleanup,
     dispatch_retired_ahci_service_task, quiesce_ahci_command_backend, quiesce_ahci_service_device,
     quiesce_reacquired_ahci_service, reacquire_frozen_ahci_service_teardown,
     remove_quiesced_ahci_service_mappings, remove_retired_ahci_service_mappings,
@@ -191,6 +192,7 @@ pub use service_device_teardown::{
     AhciServiceTaskBindingError, AhciServiceTaskRetirementError, AhciServiceTeardownLease,
     AhciServiceTeardownLeaseBindingError, AhciServiceTeardownReacquisitionError,
     DispatchedAhciServiceTask, FrozenAhciServiceExit, FrozenAhciServiceQuiesceError,
+    FrozenKernelAhciServiceExit, KernelAhciServiceExitFreezeError,
     PendingAhciServiceDeviceTeardown, QuarantinedAhciServiceTeardown, QuiescedAhciCommandBackend,
     QuiescedAhciServiceMappings, QuiescedAhciServiceTask, ReacquiredAhciServiceTeardown,
     RetiredAhciServiceCleanupComplete, RetiredAhciServiceMappingsRemoved, RetiredAhciServiceTask,
