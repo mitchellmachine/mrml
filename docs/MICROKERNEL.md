@@ -10256,10 +10256,11 @@ returns the combined owner unchanged for retry; a wrong-runtime dispatch failure
 likewise returns the cleaned association owner. An installed restart coordinator
 therefore need not reconstruct association identity from names or task IDs. Only
 complete resource and supervisor cleanup exposes successor dispatch. The
-normal-retirement dispatch result can then split into the one-use runtime dispatch
-and a separate typed restart owner retaining the exact retired service generation,
-task, and association receipt; neither token reconstructs the other. After that
-dispatch is consumed, the storage restart join accepts only a fresh active launch
+retirement, fault, and protocol-violation dispatch results can each split into the
+one-use runtime dispatch and a separate typed stopped-generation restart owner
+retaining the exact service generation, task, and association receipt; neither
+token reconstructs the other. After that dispatch is consumed, the storage restart
+join accepts only a fresh active launch
 receipt with the same provider object, association generation, filesystem and
 block provider generations, and system generation. It then invokes the kernel's
 constructed restart transaction; any association or kernel rejection returns both

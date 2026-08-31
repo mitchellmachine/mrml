@@ -145,7 +145,7 @@ pub use filesystem_provider_launch::{
     ResourceReleasedNativeFilesystemProviderRetirementCleanupFailure,
     ResourceReleasedNativeFilesystemProviderViolationCleanupFailure,
     ResourceReleasedRetiredNativeFilesystemProvider,
-    ResourceReleasedViolatingNativeFilesystemProvider, RestartableRetiredNativeFilesystemProvider,
+    ResourceReleasedViolatingNativeFilesystemProvider, RestartableStoppedNativeFilesystemProvider,
     RestartedNativeFilesystemProvider, RetiredNativeFilesystemProvider,
     RetiredNativeFilesystemProviderTeardownFailure, ViolatingNativeFilesystemProvider,
     ViolatingNativeFilesystemProviderTeardownFailure, activate_native_filesystem_provider,
