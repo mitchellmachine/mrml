@@ -1748,3 +1748,15 @@ NOT_TRIGGERED; this pins bounded conventional archive and COFF identity rules.
 The Linux release gate passes 844 unit tests, 2 object-evidence tests, 10
 conformance tests, 351 replacement tests, and 128 semantic-execution tests;
 the release compiler-driver gate passes 16 tests.
+
+The PE driver's post-selection pass now reaches a bounded fixed point over
+dependencies originating only in selected writable, CRT-initializer, or TLS
+callback fragments. A named code pointer retains the complete archive member
+that provides the first conventional global definition or one unique typed
+text-section definition; conflicting typed section identities remain
+unselected and fail closed during final validation. Newly retained members are
+rescanned for further writable-only dependencies, so correctness does not rely
+on a duplicate relocation appearing in code. The release compiler-driver gate
+passes 17/17. All eight pinned std/TLS Wine modes reproduce their exact recorded
+PE sizes and SHA-256 hashes and return 42. Patent review: NOT_TRIGGERED; this is
+bounded conventional archive reachability and COFF relocation handling.

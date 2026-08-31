@@ -4642,6 +4642,16 @@ object-evidence tests, 10/10 conformance tests, 351/351 replacements, and
 128/128 semantic tests; the release compiler-driver gate passes 16/16. Patent
 review: NOT_TRIGGERED.
 
+PE archive retention now follows named code-pointer dependencies that occur
+only in selected writable, CRT, or TLS callback fragments. It retains the whole
+defining archive member for a conventional global or unique typed text-section
+definition, refuses conflicting typed identities, and repeats to a bounded
+fixed point for dependencies introduced by newly selected members. The release
+compiler-driver gate passes 17/17. The pinned parallelism, time, random, sleep,
+const TLS, lazy TLS, child-thread TLS, and destructor TLS Wine probes all
+reproduce their exact recorded PE sizes and SHA-256 hashes and return 42.
+Patent review: NOT_TRIGGERED.
+
 Read-only COMDAT relocation decoding now retains exact projected target-section
 identity for section-defined global symbols as well as static symbols. True
 section-zero externals remain name-based for archive resolution. Focused

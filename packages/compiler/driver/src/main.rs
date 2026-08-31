@@ -1706,7 +1706,7 @@ fn retain_named_code_targets<'data, 'relocations, 'definitions>(
     Ok(changed)
 }
 
-fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
+fn retain_writable_relocation_targets<'data, 'relocations, 'definitions>(
     inputs: &[LinkInput<'data, 'relocations, 'definitions>],
     archive_group: &[u16],
     archive_member: &[u16],
@@ -1717,34 +1717,81 @@ fn retain_writable_section_targets<'data, 'relocations, 'definitions>(
 ) -> Result<bool> {
     let mut changed = false;
     for relocation in writable_data.iter().flat_map(|data| data.relocations) {
-        if let PeWritableRelocationTarget::CoffSection { identity, .. } = relocation.target {
-            let already_selected = selected.inputs.iter().any(|input| {
-                matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
-                    || input.additional_definitions.iter().any(|definition| {
-                        matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
-                    })
-            });
-            if already_selected {
-                continue;
+        let target_index = match relocation.target {
+            PeWritableRelocationTarget::CoffSection { identity, .. } => {
+                let defines_identity = |input: &LinkInput<'_, '_, '_>| {
+                    matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                        || input.additional_definitions.iter().any(|definition| {
+                            matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+                        })
+                };
+                if selected.inputs.iter().any(defines_identity) {
+                    continue;
+                }
+                inputs.iter().position(defines_identity)
             }
-            let Some(target_index) = inputs.iter().position(|input| {
-                matches!(input.symbol_target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
-                    || input.additional_definitions.iter().any(|definition| {
-                        matches!(definition.target, LinkDefinitionTarget::CoffTextSection { identity: candidate, .. } | LinkDefinitionTarget::CoffSection { identity: candidate, .. } if candidate == identity)
+            PeWritableRelocationTarget::TextSymbol(symbol) => {
+                let code_definitions = |input: &LinkInput<'data, 'relocations, 'definitions>| {
+                    core::iter::once(LinkDefinition {
+                        symbol: input.symbol,
+                        target: input.symbol_target,
                     })
-            }) else {
-                continue;
-            };
-            changed |= retain_input_archive_member(
-                inputs,
-                archive_group,
-                archive_member,
-                source_object,
-                comdat_selection,
-                selected,
-                target_index,
-            )?;
-        }
+                    .chain(input.additional_definitions.iter().copied())
+                    .filter(move |definition| {
+                        definition.symbol == symbol
+                            && matches!(
+                                definition.target,
+                                LinkDefinitionTarget::Text(_)
+                                    | LinkDefinitionTarget::CoffTextSection { .. }
+                            )
+                    })
+                };
+                if selected
+                    .inputs
+                    .iter()
+                    .any(|input| code_definitions(input).next().is_some())
+                {
+                    continue;
+                }
+                let mut global = None;
+                let mut typed = None;
+                let mut ambiguous_typed = false;
+                for (index, input) in inputs.iter().enumerate() {
+                    for definition in code_definitions(input) {
+                        match definition.target {
+                            LinkDefinitionTarget::Text(_) => {
+                                if global.is_none() {
+                                    global = Some(index);
+                                }
+                            }
+                            LinkDefinitionTarget::CoffTextSection { .. } => match typed {
+                                None => typed = Some((index, definition.target)),
+                                Some((_, target)) if target == definition.target => {}
+                                Some(_) => ambiguous_typed = true,
+                            },
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                global.or_else(|| (!ambiguous_typed).then_some(typed?.0))
+            }
+            PeWritableRelocationTarget::Readonly { .. }
+            | PeWritableRelocationTarget::TlsSection { .. }
+            | PeWritableRelocationTarget::WritableSection { .. }
+            | PeWritableRelocationTarget::WritableSymbol(_) => None,
+        };
+        let Some(target_index) = target_index else {
+            continue;
+        };
+        changed |= retain_input_archive_member(
+            inputs,
+            archive_group,
+            archive_member,
+            source_object,
+            comdat_selection,
+            selected,
+            target_index,
+        )?;
     }
     Ok(changed)
 }
@@ -2338,25 +2385,30 @@ fn write_linked_pe(
     }
     let writable_count = writable_fragment_count(objects)?;
     let mut probe_writable_arenas = writable_relocation_arenas(writable_count)?;
-    let probe_writable_data = selected_writable_data(
-        objects,
-        archive_group,
-        archive_member,
-        archive_indexed,
-        &selected,
-        &mut probe_writable_arenas,
-    )?;
     let writable_frontier_start = selected.inputs.len();
-    retain_writable_section_targets(
-        &decoded.inputs,
-        &decoded.archive_group,
-        &decoded.archive_member,
-        &decoded.source_object,
-        &decoded.comdat_selection,
-        &mut selected,
-        &probe_writable_data,
-    )?;
-    drop(probe_writable_data);
+    loop {
+        let probe_writable_data = selected_writable_data(
+            objects,
+            archive_group,
+            archive_member,
+            archive_indexed,
+            &selected,
+            &mut probe_writable_arenas,
+        )?;
+        let changed = retain_writable_relocation_targets(
+            &decoded.inputs,
+            &decoded.archive_group,
+            &decoded.archive_member,
+            &decoded.source_object,
+            &decoded.comdat_selection,
+            &mut selected,
+            &probe_writable_data,
+        )?;
+        drop(probe_writable_data);
+        if !changed {
+            break;
+        }
+    }
     let named_frontier_start = selected.inputs.len();
     retain_named_code_targets(
         &decoded.inputs,
@@ -3915,6 +3967,133 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn retains_unique_named_code_targets_referenced_only_by_writable_data() {
+        let callback_identity = CoffSectionIdentity::new(21, 3).unwrap();
+        let callback_definitions = [LinkDefinition {
+            symbol: "callback",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: callback_identity,
+                offset: 1,
+            },
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let callback = LinkInput {
+            symbol: ".text$callback",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: callback_identity,
+                offset: 0,
+            },
+            additional_definitions: &callback_definitions,
+            text: &[0x90, 0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let callback_unwind = LinkInput {
+            symbol: ".xdata$callback",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: CoffSectionIdentity::new(21, 4).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[1],
+            relocations: &[],
+        };
+        let inputs = [entry, callback, callback_unwind];
+        let mut selected = selected_link_inputs(
+            &inputs,
+            &[0, 4, 4],
+            &[0, 7, 7],
+            &[0, 20, 20],
+            &[CoffTextComdatSelection::None; 3],
+            "entry",
+        )
+        .unwrap();
+        let callback_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("callback"),
+        }];
+        let writable = [PeWritableData {
+            symbol: ".CRT$XIC",
+            identity: Some(CoffSectionIdentity::new(20, 5).unwrap()),
+            kind: mrml_rustc::linker::PeDataKind::CrtInitializer(
+                mrml_rustc::linker::PeCrtInitializerOrder::new(
+                    mrml_rustc::linker::PeCrtInitializerFamily::I,
+                    b'C',
+                )
+                .unwrap(),
+            ),
+            selection: mrml_rustc::linker::PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &callback_relocation,
+        }];
+        assert!(
+            retain_writable_relocation_targets(
+                &inputs,
+                &[0, 4, 4],
+                &[0, 7, 7],
+                &[0, 20, 20],
+                &[CoffTextComdatSelection::None; 3],
+                &mut selected,
+                &writable,
+            )
+            .unwrap()
+        );
+        assert_eq!(selected.inputs.len(), 3);
+        assert_eq!(&selected.archive_member[..], &[0, 7, 7]);
+
+        let conflicting_definitions = [LinkDefinition {
+            symbol: "callback",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(22, 1).unwrap(),
+                offset: 0,
+            },
+        }];
+        let conflicting = LinkInput {
+            symbol: ".text$other_callback",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(22, 1).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &conflicting_definitions,
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let ambiguous_inputs = [entry, callback, conflicting];
+        let mut ambiguous_selected = selected_link_inputs(
+            &ambiguous_inputs,
+            &[0, 4, 4],
+            &[0, 7, 8],
+            &[0, 20, 21],
+            &[CoffTextComdatSelection::None; 3],
+            "entry",
+        )
+        .unwrap();
+        assert!(
+            !retain_writable_relocation_targets(
+                &ambiguous_inputs,
+                &[0, 4, 4],
+                &[0, 7, 8],
+                &[0, 20, 21],
+                &[CoffTextComdatSelection::None; 3],
+                &mut ambiguous_selected,
+                &writable,
+            )
+            .unwrap()
+        );
+        assert_eq!(&ambiguous_selected.inputs[..], &[entry]);
     }
 
     #[test]
