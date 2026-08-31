@@ -524,6 +524,13 @@ pub enum QuicFrame {
         id: u64,
         maximum: u64,
     },
+    NewConnectionId {
+        sequence: u64,
+        retire_prior_to: u64,
+        connection_id: Vector<u8>,
+        reset_token: [u8; 16],
+    },
+    RetireConnectionId(u64),
     PathChallenge([u8; 8]),
     PathResponse([u8; 8]),
     ConnectionClose {
@@ -618,6 +625,32 @@ impl QuicFrame {
                 put_varint(out, 0x11)?;
                 put_varint(out, *id)?;
                 put_varint(out, *maximum)
+            }
+            Self::NewConnectionId {
+                sequence,
+                retire_prior_to,
+                connection_id,
+                reset_token,
+            } => {
+                if connection_id.is_empty()
+                    || connection_id.len() > 20
+                    || retire_prior_to > sequence
+                {
+                    return Err(QuicError::InvalidFrame);
+                }
+                put_varint(out, 0x18)?;
+                put_varint(out, *sequence)?;
+                put_varint(out, *retire_prior_to)?;
+                out.try_push(connection_id.len() as u8)
+                    .map_err(|_| QuicError::Allocation)?;
+                out.try_extend_from_slice(connection_id)
+                    .map_err(|_| QuicError::Allocation)?;
+                out.try_extend_from_slice(reset_token)
+                    .map_err(|_| QuicError::Allocation)
+            }
+            Self::RetireConnectionId(sequence) => {
+                put_varint(out, 0x19)?;
+                put_varint(out, *sequence)
             }
             Self::PathChallenge(value) => {
                 put_varint(out, 0x1a)?;
@@ -725,6 +758,26 @@ impl QuicFrame {
                 id: take_varint(input, at)?,
                 maximum: take_varint(input, at)?,
             }),
+            0x18 => {
+                let sequence = take_varint(input, at)?;
+                let retire_prior_to = take_varint(input, at)?;
+                let length = *input.get(*at).ok_or(QuicError::Truncated)? as usize;
+                *at += 1;
+                if length == 0 || length > 20 || retire_prior_to > sequence {
+                    return Err(QuicError::InvalidFrame);
+                }
+                let connection_id = bytes(input, at, length)?;
+                let token = bytes(input, at, 16)?;
+                let mut reset_token = [0; 16];
+                reset_token.copy_from_slice(&token);
+                Ok(Self::NewConnectionId {
+                    sequence,
+                    retire_prior_to,
+                    connection_id,
+                    reset_token,
+                })
+            }
+            0x19 => Ok(Self::RetireConnectionId(take_varint(input, at)?)),
             0x1a | 0x1b => {
                 let value = bytes(input, at, 8)?;
                 let mut a = [0; 8];
@@ -1408,6 +1461,12 @@ mod tests {
             QuicFrame::Crypto {
                 offset: 4,
                 data: [b't', b'l', b's'].into(),
+            },
+            QuicFrame::NewConnectionId {
+                sequence: 1,
+                retire_prior_to: 0,
+                connection_id: [9, 8, 7, 6].into(),
+                reset_token: [5; 16],
             },
             QuicFrame::PathChallenge([7; 8]),
         ];

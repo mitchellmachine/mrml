@@ -637,19 +637,40 @@ impl QuicServerListener {
                 .send_to(&packet, peer)
                 .map_err(|_| QuicError::Io)?;
         }
-        let (amount, from) = self
-            .socket
-            .receive_from(&mut datagram)
-            .map_err(|_| QuicError::Io)?;
-        if from != peer {
-            return Err(QuicError::ProtocolViolation);
-        }
-        state.on_datagram_received(amount)?;
-        let (finished, _) = HandshakePacket::open(&datagram[..amount], &read_handshake, 0)?;
         let mut finished_crypto = QuicStreamAssembler::new(64);
-        insert_crypto_frames(&finished.payload, &mut finished_crypto)?;
-        let message =
-            handshake_message(finished_crypto.contiguous(), 0)?.ok_or(QuicError::Truncated)?;
+        let mut expected_client_handshake = 0;
+        let (finished, message) = 'finished: loop {
+            let (amount, from) = self
+                .socket
+                .receive_from(&mut datagram)
+                .map_err(|_| QuicError::Io)?;
+            if from != peer {
+                return Err(QuicError::UnexpectedPeer);
+            }
+            state.on_datagram_received(amount)?;
+            let mut cursor = 0;
+            if let Ok((_, used)) = InitialPacket::open(
+                &datagram[..amount],
+                initial_keys.as_ref().ok_or(QuicError::Crypto)?,
+                expected_initial,
+            )
+            {
+                cursor = used;
+            }
+            while cursor < amount {
+                let (packet, used) = HandshakePacket::open(
+                    &datagram[cursor..amount],
+                    &read_handshake,
+                    expected_client_handshake,
+                )?;
+                cursor += used;
+                expected_client_handshake = packet.packet_number + 1;
+                insert_crypto_frames(&packet.payload, &mut finished_crypto)?;
+                if let Some(message) = handshake_message(finished_crypto.contiguous(), 0)? {
+                    break 'finished (packet, message);
+                }
+            }
+        };
         tls.receive_client_finished(message)
             .map_err(|_| QuicError::Tls)?;
         let mut handshake_ack_payload = Vector::new();

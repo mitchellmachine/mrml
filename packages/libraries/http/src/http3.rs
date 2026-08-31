@@ -1091,10 +1091,36 @@ mod tests {
         }) else {
             panic!("failed to start HTTP/3 loopback server");
         };
-        let mut client = Http3ClientConnection::connect("localhost", port).unwrap();
-        let response = client.request("GET", "localhost", "/loopback", &[]).unwrap();
-        assert_eq!(response.status, 200);
-        assert_eq!(&response.body[..], b"http3 loopback");
+        if let Some(curl) = mrml_runtime::environment_variable("MRML_HTTP3_CURL") {
+            let endpoint = mrml_runtime::mrml_format!("localhost:{port}:127.0.0.1");
+            let url = mrml_runtime::mrml_format!("https://localhost:{port}/loopback");
+            let output = mrml_runtime::Command::new(&curl)
+                .args([
+                    "--http3-only",
+                    "--silent",
+                    "--show-error",
+                    "--noproxy",
+                    "*",
+                    "--cacert",
+                ])
+                .arg(&issuer_path)
+                .args(["--resolve"])
+                .arg(&endpoint)
+                .arg(&url)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "curl failed: {}",
+                core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
+            );
+            assert_eq!(&output.stdout[..], b"http3 loopback");
+        } else {
+            let mut client = Http3ClientConnection::connect("localhost", port).unwrap();
+            let response = client.request("GET", "localhost", "/loopback", &[]).unwrap();
+            assert_eq!(response.status, 200);
+            assert_eq!(&response.body[..], b"http3 loopback");
+        }
         assert!(worker.join());
     }
 }
