@@ -4630,6 +4630,18 @@ conformance tests, 351/351 replacements, and 128/128 semantic tests. The
 release driver and all eight pinned std/TLS Wine modes pass with exact recorded
 hashes and exit 42. Patent review: NOT_TRIGGERED.
 
+Ordered archive selection now pins the exact `__mingw_TLScallback` dependency
+shape observed at the ORACLE-0003 MinGW TLS boundary: a selected member's named
+reference pulls a unique typed text-section additional definition at a nonzero
+offset and atomically retains that defining member's sibling fragments.
+Conflicting same-named typed identities fail closed instead of selecting an
+arbitrary member. The regression fixture is independently authored; pinned
+archive inspection found three `REL32` references in `tlssup.o` and the global
+definition in `tlsthrd.o`. The Linux release gate passes 844/844 units, 2/2
+object-evidence tests, 10/10 conformance tests, 351/351 replacements, and
+128/128 semantic tests; the release compiler-driver gate passes 16/16. Patent
+review: NOT_TRIGGERED.
+
 Read-only COMDAT relocation decoding now retains exact projected target-section
 identity for section-defined global symbols as well as static symbols. True
 section-zero externals remain name-based for archive resolution. Focused

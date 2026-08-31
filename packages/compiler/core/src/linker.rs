@@ -12421,6 +12421,102 @@ mod tests {
     }
 
     #[test]
+    fn ordered_archive_selection_resolves_typed_mingw_tls_callback_definition() {
+        let entry_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("__dyn_tls_init"),
+            addend: -4,
+        }];
+        let callback_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("__mingw_TLScallback"),
+            addend: -4,
+        }];
+        let callback_identity = CoffSectionIdentity::new(17, 1).unwrap();
+        let callback_definition = [LinkDefinition {
+            symbol: "__mingw_TLScallback",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: callback_identity,
+                offset: 1,
+            },
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &entry_relocation,
+        };
+        let tls_support = LinkInput {
+            symbol: "__dyn_tls_init",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(16, 1).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &callback_relocation,
+        };
+        let thread_support = LinkInput {
+            symbol: ".text",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: callback_identity,
+                offset: 0,
+            },
+            additional_definitions: &callback_definition,
+            text: &[0xc3, 0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let thread_unwind = LinkInput {
+            symbol: ".xdata",
+            symbol_target: LinkDefinitionTarget::CoffSection {
+                identity: CoffSectionIdentity::new(17, 2).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &[],
+            text: &[],
+            readonly_data: &[1],
+            relocations: &[],
+        };
+        let inputs = [entry, tls_support, thread_support, thread_unwind];
+        let selection =
+            select_ordered_static_link_members(&inputs, &[0, 1, 1, 1], &[0, 1, 2, 2], "entry")
+                .unwrap();
+        assert_eq!(selection.indices(), &[0, 1, 2, 3]);
+
+        let ambiguous_definition = [LinkDefinition {
+            symbol: "__mingw_TLScallback",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(18, 1).unwrap(),
+                offset: 0,
+            },
+        }];
+        let ambiguous = LinkInput {
+            symbol: ".text",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: CoffSectionIdentity::new(18, 1).unwrap(),
+                offset: 0,
+            },
+            additional_definitions: &ambiguous_definition,
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let ambiguous_inputs = [entry, tls_support, thread_support, ambiguous];
+        let ambiguous_selection = select_ordered_static_link_members(
+            &ambiguous_inputs,
+            &[0, 1, 1, 1],
+            &[0, 1, 2, 3],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(ambiguous_selection.indices(), &[0, 1]);
+    }
+
+    #[test]
     fn ordered_archive_selection_extracts_all_fragments_of_one_member() {
         let call_helper = [LinkRelocation {
             offset: 0,

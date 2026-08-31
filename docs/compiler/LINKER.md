@@ -1734,3 +1734,17 @@ replacement tests, and 128 semantic-execution tests; the release driver and all
 eight pinned std/TLS Wine modes pass with exact recorded hashes and exit 42.
 Patent review: NOT_TRIGGERED; this is conventional bounded PE/COFF identity
 retention.
+
+The ordered archive fixed point now has explicit regression coverage for the
+pinned MinGW TLS-support boundary. The selected TLS-support member's named
+`__mingw_TLScallback` dependency resolves through the defining member's unique
+typed text-section additional definition at a nonzero offset, and selecting
+that definition retains every projected fragment of the same archive member.
+Two same-named definitions with different section identities remain ambiguous
+and are not guessed. Exact ORACLE-0003 inspection found three `REL32`
+references in `tlssup.o` and the definition in `tlsthrd.o`; the test fixture is
+independently authored and does not copy either object. Patent review:
+NOT_TRIGGERED; this pins bounded conventional archive and COFF identity rules.
+The Linux release gate passes 844 unit tests, 2 object-evidence tests, 10
+conformance tests, 351 replacement tests, and 128 semantic-execution tests;
+the release compiler-driver gate passes 16 tests.
