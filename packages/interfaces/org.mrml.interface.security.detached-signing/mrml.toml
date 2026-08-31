@@ -1,0 +1,46 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.interface.security.detached-signing"
+kind = "interface"
+name = "mrml-interface-security-detached-signing-v1"
+profile = "interface"
+
+[interface]
+abi = "mrml-call-v1"
+fingerprint = "cec34f00e8f740633824b5402a9dc3a3bd970db743bf2bf5026d794554ad28e7"
+generation = 1
+schema = "1.mri"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_interface_security_detached_signing_v1"
+
+[rust]
+crate_name = "mrml_interface_security_detached_signing_v1"
+crate_type = "lib"
+source = "packages/interfaces/org.mrml.interface.security.detached-signing/src/lib.rs"
+
+[[host_build]]
+targets = ["WINDOWS", "LINUX"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[[projected_build]]
+targets = ["UEFI"]

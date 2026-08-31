@@ -7,9 +7,9 @@ use mrml_runtime::{
 use mrml_ssh::{RsaPrivateKey, RsaPublicKey, sign_sshsig, verify_sshsig};
 
 use crate::{
-    Commit, FileDiff, Index, IndexEntry, IndexError, Object, ObjectError, ObjectId, ObjectKind,
-    PackError, PackObject, decode_loose_object, encode_loose_object, encode_pack, parse_pack,
-    parse_tree,
+    Commit, FileDiff, Index, IndexEntry, IndexError, Object, ObjectError, ObjectFormat, ObjectId,
+    ObjectKind, PackError, PackObject, decode_loose_object, encode_loose_object_with_format,
+    encode_pack_with_format, parse_pack_with_format, parse_tree_with_format,
 };
 
 const MAX_INDEX_BYTES: usize = 64 * 1024 * 1024;
@@ -23,6 +23,7 @@ const MAX_DEPTH: usize = 128;
 pub struct Repository {
     pub worktree: Text,
     pub git_dir: Text,
+    object_format: ObjectFormat,
     pack_cache: RefCell<Vector<PackObject>>,
 }
 
@@ -65,6 +66,39 @@ pub enum RebaseOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitSignatureFormat {
+    OpenPgp,
+    Ssh,
+}
+
+enum CommitSigning<'a> {
+    Single(
+        GitSignatureFormat,
+        &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+    ),
+    Hybrid(
+        &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+    ),
+}
+
+impl GitSignatureFormat {
+    const fn begin_marker(self) -> &'static str {
+        match self {
+            Self::OpenPgp => "-----BEGIN PGP SIGNATURE-----",
+            Self::Ssh => "-----BEGIN SSH SIGNATURE-----",
+        }
+    }
+
+    const fn end_marker(self) -> &'static str {
+        match self {
+            Self::OpenPgp => "-----END PGP SIGNATURE-----",
+            Self::Ssh => "-----END SSH SIGNATURE-----",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepositoryError {
     File(FileError),
     Index(IndexError),
@@ -90,6 +124,7 @@ pub enum RepositoryError {
     NoChanges,
     MergeRequired,
     Signing,
+    UnsupportedObjectFormat,
 }
 
 impl Repository {
@@ -105,9 +140,11 @@ impl Repository {
         loop {
             let marker = join_path(&current, ".git");
             if path_is_directory(&marker) {
+                let object_format = repository_object_format(&marker)?;
                 return Ok(Self {
                     worktree: current,
                     git_dir: marker,
+                    object_format,
                     pack_cache: RefCell::new(Vector::new()),
                 });
             }
@@ -126,6 +163,13 @@ impl Repository {
     }
 
     pub fn init(path: &str) -> Result<Self, RepositoryError> {
+        Self::init_with_format(path, ObjectFormat::Sha1)
+    }
+
+    pub fn init_with_format(
+        path: &str,
+        object_format: ObjectFormat,
+    ) -> Result<Self, RepositoryError> {
         create_dir_all(path)?;
         let worktree = canonical_path(path)?;
         let git_dir = join_path(&worktree, ".git");
@@ -137,10 +181,13 @@ impl Repository {
         create_dir_all(&join_path(&git_dir, "refs/heads"))?;
         create_dir_all(&join_path(&git_dir, "refs/tags"))?;
         write_file(&join_path(&git_dir, "HEAD"), b"ref: refs/heads/main\n")?;
-        write_file(
-            &join_path(&git_dir, "config"),
-            b"[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
-        )?;
+        let config = match object_format {
+            ObjectFormat::Sha1 => "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
+            ObjectFormat::Sha256 => {
+                "[extensions]\n\tobjectformat = sha256\n[core]\n\trepositoryformatversion = 1\n\tbare = false\n"
+            }
+        };
+        write_file(&join_path(&git_dir, "config"), config.as_bytes())?;
         write_file(
             &join_path(&git_dir, "description"),
             b"Unnamed MRML repository\n",
@@ -148,8 +195,13 @@ impl Repository {
         Ok(Self {
             worktree,
             git_dir,
+            object_format,
             pack_cache: RefCell::new(Vector::new()),
         })
+    }
+
+    pub const fn object_format(&self) -> ObjectFormat {
+        self.object_format
     }
 
     pub fn current_branch(&self) -> Result<Option<Text>, RepositoryError> {
@@ -159,7 +211,7 @@ impl Repository {
             validate_reference(reference)?;
             return Ok(reference.strip_prefix("refs/heads/").map(Into::into));
         }
-        ObjectId::parse(head)
+        ObjectId::parse_for(self.object_format, head)
             .map(|_| None)
             .ok_or(RepositoryError::InvalidHead)
     }
@@ -171,7 +223,7 @@ impl Repository {
             validate_reference(reference)?;
             return self.read_reference(reference);
         }
-        ObjectId::parse(head)
+        ObjectId::parse_for(self.object_format, head)
             .map(Some)
             .ok_or(RepositoryError::InvalidHead)
     }
@@ -179,9 +231,12 @@ impl Repository {
     pub fn index(&self) -> Result<Index, RepositoryError> {
         let path = join_path(&self.git_dir, "index");
         if !path_is_file(&path) {
-            return Ok(Index::empty());
+            return Ok(Index::empty_with_format(self.object_format));
         }
-        Ok(Index::parse(&read_file_bounded(&path, MAX_INDEX_BYTES)?)?)
+        Ok(Index::parse_with_format(
+            &read_file_bounded(&path, MAX_INDEX_BYTES)?,
+            self.object_format,
+        )?)
     }
 
     pub fn write_object(
@@ -189,7 +244,7 @@ impl Repository {
         kind: ObjectKind,
         contents: &[u8],
     ) -> Result<ObjectId, RepositoryError> {
-        let (id, encoded) = encode_loose_object(kind, contents);
+        let (id, encoded) = encode_loose_object_with_format(self.object_format, kind, contents);
         let hex = id.to_hex();
         let directory = join_path(&join_path(&self.git_dir, "objects"), &hex[..2]);
         let path = join_path(&directory, &hex[2..]);
@@ -201,6 +256,9 @@ impl Repository {
     }
 
     pub fn read_object(&self, id: ObjectId) -> Result<Object, RepositoryError> {
+        if id.format() != self.object_format {
+            return Err(RepositoryError::InvalidReference);
+        }
         let hex = id.to_hex();
         let path = join_path(
             &join_path(&self.git_dir, "objects"),
@@ -209,19 +267,21 @@ impl Repository {
         if path_is_file(&path) {
             let encoded = read_file_bounded(&path, MAX_WORKTREE_FILE)?;
             let object = decode_loose_object(&encoded)?;
-            let (computed, _) = encode_loose_object(object.kind, &object.contents);
+            let (computed, _) =
+                encode_loose_object_with_format(self.object_format, object.kind, &object.contents);
             if computed != id {
                 return Err(RepositoryError::InvalidHead);
             }
             return Ok(object);
         }
-        if let Some(object) = self
-            .pack_cache
-            .borrow()
-            .iter()
-            .find(|object| object.id == id)
-            .cloned()
-        {
+        let cached = {
+            let cache = self.pack_cache.borrow();
+            cache
+                .binary_search_by_key(&id, |object| object.id)
+                .ok()
+                .map(|index| cache[index].clone())
+        };
+        if let Some(object) = cached {
             return Ok(Object {
                 kind: object.kind,
                 contents: object.contents,
@@ -243,9 +303,11 @@ impl Repository {
                     }
                     let bytes =
                         read_file_bounded(&join_path(&pack_root, &entry.name), MAX_PACK_BYTES)?;
-                    let objects = parse_pack(&bytes)?;
+                    let objects = parse_pack_with_format(&bytes, self.object_format)?;
                     let found = objects.iter().find(|object| object.id == id).cloned();
-                    self.pack_cache.borrow_mut().extend(objects);
+                    let mut cache = self.pack_cache.borrow_mut();
+                    cache.extend(objects);
+                    cache.sort_unstable_by_key(|object| object.id);
                     if let Some(packed) = found {
                         return Ok(Object {
                             kind: packed.kind,
@@ -259,7 +321,7 @@ impl Repository {
     }
 
     pub fn import_pack(&self, source: &[u8]) -> Result<Vector<ObjectId>, RepositoryError> {
-        let objects = parse_pack(source)?;
+        let objects = parse_pack_with_format(source, self.object_format)?;
         let mut ids = Vector::new();
         for object in objects {
             let id = self.write_object(object.kind, &object.contents)?;
@@ -285,20 +347,22 @@ impl Repository {
             let object = self.read_object(id)?;
             match object.kind {
                 ObjectKind::Commit => {
-                    let commit = Commit::parse(&object.contents)?;
+                    let commit = Commit::parse_with_format(&object.contents, self.object_format)?;
                     pending.push(commit.tree);
                     pending.extend(commit.parents.iter().copied());
                 }
-                ObjectKind::Tree => {
-                    pending.extend(parse_tree(&object.contents)?.iter().map(|entry| entry.id))
-                }
+                ObjectKind::Tree => pending.extend(
+                    parse_tree_with_format(&object.contents, self.object_format)?
+                        .iter()
+                        .map(|entry| entry.id),
+                ),
                 ObjectKind::Tag => {
                     let text = core::str::from_utf8(&object.contents)
                         .map_err(|_| RepositoryError::InvalidReference)?;
                     let target = text
                         .lines()
                         .find_map(|line| line.strip_prefix("object "))
-                        .and_then(ObjectId::parse)
+                        .and_then(|value| ObjectId::parse_for(self.object_format, value))
                         .ok_or(RepositoryError::InvalidReference)?;
                     pending.push(target);
                 }
@@ -311,7 +375,64 @@ impl Repository {
                 contents: object.contents,
             });
         }
-        encode_pack(&objects).map_err(Into::into)
+        encode_pack_with_format(&objects, self.object_format).map_err(Into::into)
+    }
+
+    pub fn validate_commit_tips(&self, tips: &[ObjectId]) -> Result<(), RepositoryError> {
+        let mut pending = Vector::new();
+        for tip in tips {
+            if tip.format() != self.object_format {
+                return Err(RepositoryError::InvalidReference);
+            }
+            pending.push((*tip, ObjectKind::Commit));
+        }
+        let mut seen = Vector::new();
+        while let Some((id, expected_kind)) = pending.pop() {
+            let object = self.read_object(id)?;
+            if object.kind != expected_kind {
+                return Err(RepositoryError::InvalidReference);
+            }
+            if seen.contains(&id) {
+                continue;
+            }
+            if seen.len() >= MAX_WORKTREE_ENTRIES || pending.len() > MAX_WORKTREE_ENTRIES {
+                return Err(RepositoryError::TooManyFiles);
+            }
+            match object.kind {
+                ObjectKind::Commit => {
+                    let commit = Commit::parse_with_format(&object.contents, self.object_format)?;
+                    if commit.parents.len() > MAX_WORKTREE_ENTRIES - seen.len() {
+                        return Err(RepositoryError::TooManyFiles);
+                    }
+                    pending.push((commit.tree, ObjectKind::Tree));
+                    pending.extend(
+                        commit
+                            .parents
+                            .iter()
+                            .map(|parent| (*parent, ObjectKind::Commit)),
+                    );
+                }
+                ObjectKind::Tree => {
+                    let entries = parse_tree_with_format(&object.contents, self.object_format)?;
+                    if entries.len() > MAX_WORKTREE_ENTRIES - seen.len() {
+                        return Err(RepositoryError::TooManyFiles);
+                    }
+                    for entry in entries {
+                        let kind = match entry.mode {
+                            0o40000 => ObjectKind::Tree,
+                            0o100644 | 0o100755 | 0o120000 => ObjectKind::Blob,
+                            0o160000 => return Err(RepositoryError::UnsupportedFileType),
+                            _ => return Err(RepositoryError::InvalidReference),
+                        };
+                        pending.push((entry.id, kind));
+                    }
+                }
+                ObjectKind::Tag => return Err(RepositoryError::InvalidReference),
+                ObjectKind::Blob => {}
+            }
+            seen.push(id);
+        }
+        Ok(())
     }
 
     pub fn resolve_revision(&self, revision: &str) -> Result<ObjectId, RepositoryError> {
@@ -363,7 +484,7 @@ impl Repository {
         if revision == "HEAD" {
             return self.head()?.ok_or(RepositoryError::ReferenceMissing);
         }
-        if let Some(id) = ObjectId::parse(revision) {
+        if let Some(id) = ObjectId::parse_for(self.object_format, revision) {
             return Ok(id);
         }
         if revision.starts_with("refs/") {
@@ -392,7 +513,7 @@ impl Repository {
                         .map_err(|_| RepositoryError::InvalidReference)?
                         .lines()
                         .find_map(|line| line.strip_prefix("object "))
-                        .and_then(ObjectId::parse)
+                        .and_then(|value| ObjectId::parse_for(self.object_format, value))
                         .ok_or(RepositoryError::InvalidReference)?;
                 }
                 _ => return Err(RepositoryError::InvalidReference),
@@ -406,7 +527,7 @@ impl Repository {
         let path = join_path(&self.git_dir, reference);
         if path_is_file(&path) {
             let value = read_file_text_bounded(&path, 4096)?;
-            return ObjectId::parse(value.trim())
+            return ObjectId::parse_for(self.object_format, value.trim())
                 .map(Some)
                 .ok_or(RepositoryError::InvalidReference);
         }
@@ -431,7 +552,7 @@ impl Repository {
                 continue;
             }
             if let Some(hex) = line.strip_prefix('^') {
-                if !can_peel || ObjectId::parse(hex).is_none() {
+                if !can_peel || ObjectId::parse_for(self.object_format, hex).is_none() {
                     return Err(RepositoryError::InvalidReference);
                 }
                 can_peel = false;
@@ -441,7 +562,8 @@ impl Repository {
                 .split_once(' ')
                 .ok_or(RepositoryError::InvalidReference)?;
             validate_reference(reference)?;
-            let id = ObjectId::parse(hex).ok_or(RepositoryError::InvalidReference)?;
+            let id = ObjectId::parse_for(self.object_format, hex)
+                .ok_or(RepositoryError::InvalidReference)?;
             if output.len() >= MAX_WORKTREE_ENTRIES
                 || output.iter().any(|(existing, _)| existing == reference)
             {
@@ -458,7 +580,10 @@ impl Repository {
         if object.kind != ObjectKind::Commit {
             return Err(RepositoryError::InvalidReference);
         }
-        Ok(Commit::parse(&object.contents)?)
+        Ok(Commit::parse_with_format(
+            &object.contents,
+            self.object_format,
+        )?)
     }
 
     pub fn history(
@@ -480,7 +605,7 @@ impl Repository {
     }
 
     pub fn tree_index(&self, tree: ObjectId) -> Result<Index, RepositoryError> {
-        let mut index = Index::empty();
+        let mut index = Index::empty_with_format(self.object_format);
         self.flatten_tree(tree, "", 0, &mut index)?;
         Ok(index)
     }
@@ -499,7 +624,7 @@ impl Repository {
         if object.kind != ObjectKind::Tree {
             return Err(RepositoryError::InvalidReference);
         }
-        for entry in parse_tree(&object.contents)? {
+        for entry in parse_tree_with_format(&object.contents, self.object_format)? {
             let path = if prefix.is_empty() {
                 entry.name.clone()
             } else {
@@ -749,7 +874,7 @@ impl Repository {
             }
         }
         names.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-        let mut merged = Index::empty();
+        let mut merged = Index::empty_with_format(self.object_format);
         let mut conflicts: Vector<(Text, Option<Vector<u8>>, Option<Vector<u8>>)> = Vector::new();
         for path in names {
             let b = base_index.entry(&path);
@@ -800,6 +925,7 @@ impl Repository {
         if !conflicts.is_empty() {
             let clean = Index {
                 version: 2,
+                format: self.object_format,
                 entries: merged
                     .entries
                     .iter()
@@ -858,7 +984,8 @@ impl Repository {
             return Err(RepositoryError::ReferenceMissing);
         }
         let value = read_file_text_bounded(&original_path, 4096)?;
-        let original = ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+        let original = ObjectId::parse_for(self.object_format, value.trim())
+            .ok_or(RepositoryError::InvalidReference)?;
         let index = self.tree_index(self.read_commit(original)?.tree)?;
         self.materialize_index(&index)?;
         self.update_current_branch(original)?;
@@ -886,7 +1013,7 @@ impl Repository {
         }
         let base_index = match picked.parents.first() {
             Some(id) => self.tree_index(self.read_commit(*id)?.tree)?,
-            None => Index::empty(),
+            None => Index::empty_with_format(self.object_format),
         };
         let ours_index = self.tree_index(self.read_commit(ours)?.tree)?;
         let theirs_index = self.tree_index(picked.tree)?;
@@ -903,7 +1030,7 @@ impl Repository {
             }
         }
         names.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-        let mut merged = Index::empty();
+        let mut merged = Index::empty_with_format(self.object_format);
         let mut conflicts: Vector<(Text, Option<Vector<u8>>, Option<Vector<u8>>)> = Vector::new();
         for path in names {
             let b = base_index.entry(&path);
@@ -958,6 +1085,7 @@ impl Repository {
         if !conflicts.is_empty() {
             let clean = Index {
                 version: 2,
+                format: self.object_format,
                 entries: merged
                     .entries
                     .iter()
@@ -1093,7 +1221,8 @@ impl Repository {
             return Err(RepositoryError::ReferenceMissing);
         }
         let value = read_file_text_bounded(&original_path, 4096)?;
-        let original = ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+        let original = ObjectId::parse_for(self.object_format, value.trim())
+            .ok_or(RepositoryError::InvalidReference)?;
         let index = self.tree_index(self.read_commit(original)?.tree)?;
         self.materialize_index(&index)?;
         self.update_current_branch(original)?;
@@ -1118,7 +1247,8 @@ impl Repository {
             return Err(RepositoryError::ReferenceMissing);
         }
         let value = read_file_text_bounded(&original_path, 4096)?;
-        let original = ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+        let original = ObjectId::parse_for(self.object_format, value.trim())
+            .ok_or(RepositoryError::InvalidReference)?;
         let index = self.tree_index(self.read_commit(original)?.tree)?;
         self.materialize_index(&index)?;
         self.update_current_branch(original)?;
@@ -1212,7 +1342,7 @@ impl Repository {
         let base = if staged {
             match self.head()? {
                 Some(id) => self.tree_index(self.read_commit(id)?.tree)?,
-                None => Index::empty(),
+                None => Index::empty_with_format(self.object_format),
             }
         } else {
             index.clone()
@@ -1479,7 +1609,8 @@ impl Repository {
                 self.collect_references(&path, &name, output)?;
             } else {
                 let value = read_file_text_bounded(&path, 4096)?;
-                let id = ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+                let id = ObjectId::parse_for(self.object_format, value.trim())
+                    .ok_or(RepositoryError::InvalidReference)?;
                 output.push((name, id));
             }
         }
@@ -1598,6 +1729,30 @@ impl Repository {
         timestamp: u64,
         key: &RsaPrivateKey,
     ) -> Result<ObjectId, RepositoryError> {
+        self.create_signed_tag_with(
+            name,
+            message,
+            tagger,
+            email,
+            timestamp,
+            GitSignatureFormat::Ssh,
+            |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
+        )
+    }
+
+    pub fn create_signed_tag_with<F>(
+        &self,
+        name: &str,
+        message: &str,
+        tagger: &str,
+        email: &str,
+        timestamp: u64,
+        signature_format: GitSignatureFormat,
+        signer: F,
+    ) -> Result<ObjectId, RepositoryError>
+    where
+        F: FnOnce(&[u8]) -> Result<Text, RepositoryError>,
+    {
         let reference = mrml_runtime::mrml_format!("refs/tags/{name}");
         validate_reference(&reference)?;
         let path = join_path(&self.git_dir, &reference);
@@ -1614,8 +1769,8 @@ impl Repository {
         );
         unsigned.push_str(message.trim());
         unsigned.push('\n');
-        let signature =
-            sign_sshsig(key, "git", unsigned.as_bytes()).map_err(|_| RepositoryError::Signing)?;
+        let signature = signer(unsigned.as_bytes())?;
+        validate_signature_armor(&signature, signature_format)?;
         let mut contents = unsigned;
         contents.push_str(&signature);
         let id = self.write_object(ObjectKind::Tag, contents.as_bytes())?;
@@ -1631,23 +1786,26 @@ impl Repository {
         id: ObjectId,
         key: &RsaPublicKey,
     ) -> Result<(), RepositoryError> {
+        self.verify_tag_signature_with(id, GitSignatureFormat::Ssh, |payload, armor| {
+            verify_sshsig(key, "git", payload, armor).map_err(|_| RepositoryError::Signing)
+        })
+    }
+
+    pub fn verify_tag_signature_with<F>(
+        &self,
+        id: ObjectId,
+        signature_format: GitSignatureFormat,
+        verifier: F,
+    ) -> Result<(), RepositoryError>
+    where
+        F: FnOnce(&[u8], &str) -> Result<(), RepositoryError>,
+    {
         let object = self.read_object(id)?;
         if object.kind != ObjectKind::Tag {
             return Err(RepositoryError::InvalidReference);
         }
-        let marker = b"-----BEGIN SSH SIGNATURE-----";
-        let offset = object
-            .contents
-            .windows(marker.len())
-            .position(|part| part == marker)
-            .ok_or(RepositoryError::Signing)?;
-        if offset == 0 || object.contents[offset - 1] != b'\n' {
-            return Err(RepositoryError::Signing);
-        }
-        let unsigned = &object.contents[..offset];
-        let armor = core::str::from_utf8(&object.contents[offset..])
-            .map_err(|_| RepositoryError::Signing)?;
-        verify_sshsig(key, "git", unsigned, armor).map_err(|_| RepositoryError::Signing)
+        let (unsigned, armor) = split_tag_signature(&object.contents, signature_format)?;
+        verifier(unsigned, armor)
     }
 
     pub fn remotes(&self) -> Result<Vector<(Text, Text)>, RepositoryError> {
@@ -1729,6 +1887,9 @@ impl Repository {
         source: &str,
         id: ObjectId,
     ) -> Result<(), RepositoryError> {
+        if id.format() != self.object_format {
+            return Err(RepositoryError::InvalidReference);
+        }
         validate_config_name(remote)?;
         let branch = source
             .strip_prefix("refs/heads/")
@@ -1802,19 +1963,14 @@ impl Repository {
         validate_config_name(section)?;
         validate_config_name(key)?;
         let config = read_file_text_bounded(&join_path(&self.git_dir, "config"), 1024 * 1024)?;
-        let target = mrml_runtime::mrml_format!("[{section}]");
-        let mut active = false;
-        for raw in config.lines() {
-            let line = raw.trim();
-            if line.starts_with('[') {
-                active = target == line;
-            } else if active {
-                if let Some((found, value)) = line.split_once('=') {
-                    if found.trim() == key {
-                        return Ok(Some(value.trim().into()));
-                    }
-                }
-            }
+        if let Some(value) = config_text_value(&config, section, key) {
+            return Ok(Some(value));
+        }
+        if let Some(path) = global_git_config_path()
+            && path_is_file(&path)
+        {
+            let global = read_file_text_bounded(&path, 1024 * 1024)?;
+            return Ok(config_text_value(&global, section, key));
         }
         Ok(None)
     }
@@ -1822,14 +1978,7 @@ impl Repository {
     fn autocrlf_mode(&self) -> Result<(bool, bool), RepositoryError> {
         let mut value = self.config_value("core", "autocrlf")?;
         if value.is_none() {
-            let global = mrml_runtime::environment_variable("GIT_CONFIG_GLOBAL").or_else(|| {
-                mrml_runtime::environment_variable(if cfg!(windows) {
-                    "USERPROFILE"
-                } else {
-                    "HOME"
-                })
-                .map(|home| join_path(&home, ".gitconfig"))
-            });
+            let global = global_git_config_path();
             if let Some(path) = global
                 && path_is_file(&path)
             {
@@ -1870,13 +2019,13 @@ impl Repository {
                     output.push_str(&mrml_runtime::mrml_format!("\t{key} = {value}\n"));
                     wrote = true;
                 }
-                active = target == line;
+                active = config_section_matches(line, section);
                 found_section |= active;
             }
             if active
                 && line
                     .split_once('=')
-                    .is_some_and(|(found, _)| found.trim() == key)
+                    .is_some_and(|(found, _)| found.trim().eq_ignore_ascii_case(key))
             {
                 output.push_str(&mrml_runtime::mrml_format!("\t{key} = {value}\n"));
                 wrote = true;
@@ -2123,7 +2272,7 @@ impl Repository {
             contents.push(b' ');
             contents.extend(item.name.as_bytes().iter().copied());
             contents.push(0);
-            contents.extend(item.id.0);
+            contents.extend(item.id.as_bytes().iter().copied());
         }
         self.write_object(ObjectKind::Tree, &contents)
     }
@@ -2146,7 +2295,63 @@ impl Repository {
         timestamp: u64,
         key: &RsaPrivateKey,
     ) -> Result<ObjectId, RepositoryError> {
-        self.commit_internal(message, name, email, timestamp, Some(key))
+        self.commit_signed_with(
+            message,
+            name,
+            email,
+            timestamp,
+            GitSignatureFormat::Ssh,
+            |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
+        )
+    }
+
+    pub fn commit_signed_with<F>(
+        &self,
+        message: &str,
+        name: &str,
+        email: &str,
+        timestamp: u64,
+        signature_format: GitSignatureFormat,
+        mut signer: F,
+    ) -> Result<ObjectId, RepositoryError>
+    where
+        F: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+    {
+        self.commit_internal(
+            message,
+            name,
+            email,
+            timestamp,
+            Some(CommitSigning::Single(signature_format, &mut signer)),
+        )
+    }
+
+    /// Create a commit whose canonical payload is signed first with ML-DSA-65,
+    /// then covered (including that first signature) by an OpenPGP signature.
+    /// Stock Git can verify the outer OpenPGP signature; MRML requires both.
+    pub fn commit_hybrid_signed_with<M, P>(
+        &self,
+        message: &str,
+        name: &str,
+        email: &str,
+        timestamp: u64,
+        mut ml_dsa_signer: M,
+        mut openpgp_signer: P,
+    ) -> Result<ObjectId, RepositoryError>
+    where
+        M: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        P: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+    {
+        self.commit_internal(
+            message,
+            name,
+            email,
+            timestamp,
+            Some(CommitSigning::Hybrid(
+                &mut ml_dsa_signer,
+                &mut openpgp_signer,
+            )),
+        )
     }
 
     fn commit_internal(
@@ -2155,7 +2360,7 @@ impl Repository {
         name: &str,
         email: &str,
         timestamp: u64,
-        key: Option<&RsaPrivateKey>,
+        signer: Option<CommitSigning<'_>>,
     ) -> Result<ObjectId, RepositoryError> {
         validate_identity(name, email)?;
         if message.trim().is_empty() || message.chars().any(|character| character == '\0') {
@@ -2181,8 +2386,8 @@ impl Repository {
         }
         if path_is_file(&merge_head_path) {
             let value = read_file_text_bounded(&merge_head_path, 4096)?;
-            let merge_parent =
-                ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+            let merge_parent = ObjectId::parse_for(self.object_format, value.trim())
+                .ok_or(RepositoryError::InvalidReference)?;
             contents.push_str(&mrml_runtime::mrml_format!("parent {merge_parent}\n"));
         }
         contents.push_str(&mrml_runtime::mrml_format!(
@@ -2198,18 +2403,31 @@ impl Repository {
         unsigned.push('\n');
         unsigned.push_str(message.trim());
         unsigned.push('\n');
-        if let Some(key) = key {
-            let armor = sign_sshsig(key, "git", unsigned.as_bytes())
-                .map_err(|_| RepositoryError::Signing)?;
-            for (index, line) in armor.lines().enumerate() {
-                if index == 0 {
-                    contents.push_str("gpgsig ");
-                } else {
-                    contents.push(' ');
+        if let Some(signer) = signer {
+            let (signature_format, armor) = match signer {
+                CommitSigning::Single(signature_format, signer) => {
+                    (signature_format, signer(unsigned.as_bytes())?)
                 }
-                contents.push_str(line);
-                contents.push('\n');
-            }
+                CommitSigning::Hybrid(ml_dsa_signer, openpgp_signer) => {
+                    let ml_dsa = ml_dsa_signer(unsigned.as_bytes())?;
+                    validate_ml_dsa_armor(&ml_dsa)?;
+                    append_multiline_header(&mut contents, "mrml-mldsa65", &ml_dsa);
+                    let mut outer_payload = contents.clone();
+                    outer_payload.push('\n');
+                    outer_payload.push_str(message.trim());
+                    outer_payload.push('\n');
+                    (
+                        GitSignatureFormat::OpenPgp,
+                        openpgp_signer(outer_payload.as_bytes())?,
+                    )
+                }
+            };
+            validate_signature_armor(&armor, signature_format)?;
+            let header = match self.object_format {
+                ObjectFormat::Sha1 => "gpgsig",
+                ObjectFormat::Sha256 => "gpgsig-sha256",
+            };
+            append_multiline_header(&mut contents, header, &armor);
             contents.push('\n');
             contents.push_str(message.trim());
             contents.push('\n');
@@ -2248,12 +2466,51 @@ impl Repository {
         id: ObjectId,
         key: &RsaPublicKey,
     ) -> Result<(), RepositoryError> {
+        self.verify_commit_signature_with(id, GitSignatureFormat::Ssh, |payload, armor| {
+            verify_sshsig(key, "git", payload, armor).map_err(|_| RepositoryError::Signing)
+        })
+    }
+
+    pub fn verify_commit_signature_with<F>(
+        &self,
+        id: ObjectId,
+        signature_format: GitSignatureFormat,
+        verifier: F,
+    ) -> Result<(), RepositoryError>
+    where
+        F: FnOnce(&[u8], &str) -> Result<(), RepositoryError>,
+    {
         let object = self.read_object(id)?;
         if object.kind != ObjectKind::Commit {
             return Err(RepositoryError::InvalidReference);
         }
-        let (unsigned, armor) = split_commit_signature(&object.contents)?;
-        verify_sshsig(key, "git", &unsigned, &armor).map_err(|_| RepositoryError::Signing)
+        let (unsigned, armor) =
+            split_commit_signature(&object.contents, self.object_format, signature_format)?;
+        verifier(&unsigned, &armor)
+    }
+
+    pub fn verify_hybrid_commit_signature_with<P, M>(
+        &self,
+        id: ObjectId,
+        openpgp_verifier: P,
+        ml_dsa_verifier: M,
+    ) -> Result<(), RepositoryError>
+    where
+        P: FnOnce(&[u8], &str) -> Result<(), RepositoryError>,
+        M: FnOnce(&[u8], &str) -> Result<(), RepositoryError>,
+    {
+        let object = self.read_object(id)?;
+        if object.kind != ObjectKind::Commit {
+            return Err(RepositoryError::InvalidReference);
+        }
+        let (outer_payload, openpgp) = split_commit_signature(
+            &object.contents,
+            self.object_format,
+            GitSignatureFormat::OpenPgp,
+        )?;
+        openpgp_verifier(&outer_payload, &openpgp)?;
+        let (base_payload, ml_dsa) = split_ml_dsa_commit_signature(&outer_payload)?;
+        ml_dsa_verifier(&base_payload, &ml_dsa)
     }
 
     fn create_commit_object(
@@ -2330,7 +2587,10 @@ impl Repository {
         let stash_path = join_path(&self.git_dir, "refs/stash");
         let previous = if path_is_file(&stash_path) {
             let value = read_file_text_bounded(&stash_path, 4096)?;
-            Some(ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?)
+            Some(
+                ObjectId::parse_for(self.object_format, value.trim())
+                    .ok_or(RepositoryError::InvalidReference)?,
+            )
         } else {
             None
         };
@@ -2354,7 +2614,8 @@ impl Repository {
             return Ok(Vector::new());
         }
         let value = read_file_text_bounded(&path, 4096)?;
-        let id = ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+        let id = ObjectId::parse_for(self.object_format, value.trim())
+            .ok_or(RepositoryError::InvalidReference)?;
         self.history(id, limit)
     }
 
@@ -2367,7 +2628,8 @@ impl Repository {
             return Err(RepositoryError::ReferenceMissing);
         }
         let value = read_file_text_bounded(&path, 4096)?;
-        let id = ObjectId::parse(value.trim()).ok_or(RepositoryError::InvalidReference)?;
+        let id = ObjectId::parse_for(self.object_format, value.trim())
+            .ok_or(RepositoryError::InvalidReference)?;
         let commit = self.read_commit(id)?;
         let snapshot = self.tree_index(commit.tree)?;
         self.materialize_index(&snapshot)?;
@@ -2384,7 +2646,7 @@ impl Repository {
         let clean_crlf = self.autocrlf_mode()?.0;
         let base = match self.head()? {
             Some(head) => self.tree_index(self.read_commit(head)?.tree)?,
-            None => Index::empty(),
+            None => Index::empty_with_format(self.object_format),
         };
         let mut names: Vector<Text> = base
             .entries
@@ -2415,7 +2677,10 @@ impl Repository {
                         error.into()
                     }
                 })?;
-                Some(ObjectId::blob(&clean_worktree_bytes(&bytes, clean_crlf)))
+                Some(ObjectId::blob_with_format(
+                    self.object_format,
+                    &clean_worktree_bytes(&bytes, clean_crlf),
+                ))
             };
             let unstaged = index_id != disk_id;
             if staged || unstaged {
@@ -2506,20 +2771,113 @@ impl Repository {
 }
 
 fn config_text_value(text: &str, section: &str, key: &str) -> Option<Text> {
-    let target = mrml_runtime::mrml_format!("[{section}]");
     let mut active = false;
+    let mut selected = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.starts_with('[') {
-            active = line.eq_ignore_ascii_case(&target);
+            active = config_section_matches(line, section);
         } else if active
             && let Some((found, value)) = line.split_once('=')
             && found.trim().eq_ignore_ascii_case(key)
         {
-            return Some(value.trim().into());
+            selected = Some(value.trim().into());
         }
     }
-    None
+    selected
+}
+
+fn config_section_matches(header: &str, section: &str) -> bool {
+    let Some(inner) = header
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .map(str::trim)
+    else {
+        return false;
+    };
+    if inner.eq_ignore_ascii_case(section) {
+        return true;
+    }
+    let Some((base, subsection)) = section.split_once('.') else {
+        return false;
+    };
+    let Some(split) = inner.find(char::is_whitespace) else {
+        return false;
+    };
+    let found_base = inner[..split].trim();
+    let quoted = inner[split..].trim();
+    found_base.eq_ignore_ascii_case(base)
+        && quoted
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .is_some_and(|value| value.eq_ignore_ascii_case(subsection))
+}
+
+fn global_git_config_path() -> Option<Text> {
+    mrml_runtime::environment_variable("GIT_CONFIG_GLOBAL").or_else(|| {
+        mrml_runtime::environment_variable(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(|home| join_path(&home, ".gitconfig"))
+    })
+}
+
+fn repository_object_format(git_dir: &str) -> Result<ObjectFormat, RepositoryError> {
+    let config = read_file_text_bounded(&join_path(git_dir, "config"), 1024 * 1024)?;
+    parse_repository_object_format(&config)
+}
+
+fn parse_repository_object_format(config: &str) -> Result<ObjectFormat, RepositoryError> {
+    let mut section = Text::new();
+    let mut repository_version = None;
+    let mut object_format = None;
+    for raw in config.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(['#', ';']) {
+            continue;
+        }
+        if line.starts_with('[') {
+            let name = line
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .ok_or(RepositoryError::UnsupportedObjectFormat)?;
+            section = name.trim().into();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            if section.eq_ignore_ascii_case("extensions")
+                || (section.eq_ignore_ascii_case("core")
+                    && line.eq_ignore_ascii_case("repositoryformatversion"))
+            {
+                return Err(RepositoryError::UnsupportedObjectFormat);
+            }
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if section.eq_ignore_ascii_case("core")
+            && key.eq_ignore_ascii_case("repositoryformatversion")
+        {
+            if repository_version.is_some() {
+                return Err(RepositoryError::UnsupportedObjectFormat);
+            }
+            repository_version = Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|_| RepositoryError::UnsupportedObjectFormat)?,
+            );
+        } else if section.eq_ignore_ascii_case("extensions") {
+            if !key.eq_ignore_ascii_case("objectformat") || object_format.is_some() {
+                return Err(RepositoryError::UnsupportedObjectFormat);
+            }
+            object_format = Some(value);
+        }
+    }
+    match (repository_version.unwrap_or(0), object_format) {
+        (0, None) => Ok(ObjectFormat::Sha1),
+        (1, None) => Ok(ObjectFormat::Sha1),
+        (1, Some(value)) if value.eq_ignore_ascii_case("sha1") => Ok(ObjectFormat::Sha1),
+        (1, Some(value)) if value.eq_ignore_ascii_case("sha256") => Ok(ObjectFormat::Sha256),
+        _ => Err(RepositoryError::UnsupportedObjectFormat),
+    }
 }
 
 fn clean_worktree_bytes(source: &[u8], enabled: bool) -> Vector<u8> {
@@ -2723,7 +3081,66 @@ fn validate_config_name(value: &str) -> Result<(), RepositoryError> {
     }
 }
 
-fn split_commit_signature(contents: &[u8]) -> Result<(Vector<u8>, Text), RepositoryError> {
+fn split_commit_signature(
+    contents: &[u8],
+    object_format: ObjectFormat,
+    signature_format: GitSignatureFormat,
+) -> Result<(Vector<u8>, Text), RepositoryError> {
+    let text = core::str::from_utf8(contents).map_err(|_| RepositoryError::Signing)?;
+    let (headers, message) = text.split_once("\n\n").ok_or(RepositoryError::Signing)?;
+    let expected = match object_format {
+        ObjectFormat::Sha1 => "gpgsig ",
+        ObjectFormat::Sha256 => "gpgsig-sha256 ",
+    };
+    let mut unsigned = Text::new();
+    let mut armor = Text::new();
+    let mut signing = false;
+    let mut found = false;
+    for line in headers.split('\n') {
+        if let Some(first) = line.strip_prefix(expected) {
+            if found {
+                return Err(RepositoryError::Signing);
+            }
+            found = true;
+            signing = true;
+            armor.push_str(first);
+            armor.push('\n');
+        } else if signing && line.starts_with(' ') {
+            armor.push_str(&line[1..]);
+            armor.push('\n');
+        } else if line.starts_with("gpgsig ") || line.starts_with("gpgsig-sha256 ") {
+            return Err(RepositoryError::Signing);
+        } else {
+            signing = false;
+            unsigned.push_str(line);
+            unsigned.push('\n');
+        }
+    }
+    if !found {
+        return Err(RepositoryError::Signing);
+    }
+    validate_signature_armor(&armor, signature_format)?;
+    unsigned.push('\n');
+    unsigned.push_str(message);
+    let mut bytes = Vector::new();
+    bytes.extend(unsigned.bytes());
+    Ok((bytes, armor))
+}
+
+fn append_multiline_header(contents: &mut Text, name: &str, value: &str) {
+    for (index, line) in value.lines().enumerate() {
+        if index == 0 {
+            contents.push_str(name);
+            contents.push(' ');
+        } else {
+            contents.push(' ');
+        }
+        contents.push_str(line);
+        contents.push('\n');
+    }
+}
+
+fn split_ml_dsa_commit_signature(contents: &[u8]) -> Result<(Vector<u8>, Text), RepositoryError> {
     let text = core::str::from_utf8(contents).map_err(|_| RepositoryError::Signing)?;
     let (headers, message) = text.split_once("\n\n").ok_or(RepositoryError::Signing)?;
     let mut unsigned = Text::new();
@@ -2731,7 +3148,7 @@ fn split_commit_signature(contents: &[u8]) -> Result<(Vector<u8>, Text), Reposit
     let mut signing = false;
     let mut found = false;
     for line in headers.split('\n') {
-        if let Some(first) = line.strip_prefix("gpgsig ") {
+        if let Some(first) = line.strip_prefix("mrml-mldsa65 ") {
             if found {
                 return Err(RepositoryError::Signing);
             }
@@ -2751,11 +3168,76 @@ fn split_commit_signature(contents: &[u8]) -> Result<(Vector<u8>, Text), Reposit
     if !found {
         return Err(RepositoryError::Signing);
     }
+    validate_ml_dsa_armor(&armor)?;
     unsigned.push('\n');
     unsigned.push_str(message);
     let mut bytes = Vector::new();
     bytes.extend(unsigned.bytes());
     Ok((bytes, armor))
+}
+
+fn validate_ml_dsa_armor(armor: &str) -> Result<(), RepositoryError> {
+    const BEGIN: &str = "-----BEGIN MRML ML-DSA-65 SIGNATURE-----";
+    const END: &str = "-----END MRML ML-DSA-65 SIGNATURE-----";
+    const MAX_BYTES: usize = 8 * 1024;
+    let mut lines = armor.lines();
+    if armor.len() > MAX_BYTES
+        || armor.contains(['\0', '\r'])
+        || lines.next() != Some(BEGIN)
+        || lines.next_back() != Some(END)
+        || lines.clone().count() != 69
+        || lines.enumerate().any(|(index, line)| {
+            line.len() != if index == 68 { 60 } else { 64 }
+                || !line
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+        })
+    {
+        return Err(RepositoryError::Signing);
+    }
+    Ok(())
+}
+
+fn split_tag_signature(
+    contents: &[u8],
+    signature_format: GitSignatureFormat,
+) -> Result<(&[u8], &str), RepositoryError> {
+    let text = core::str::from_utf8(contents).map_err(|_| RepositoryError::Signing)?;
+    let marker = signature_format.begin_marker();
+    let offset = text.find(marker).ok_or(RepositoryError::Signing)?;
+    if offset == 0 || text.as_bytes()[offset - 1] != b'\n' {
+        return Err(RepositoryError::Signing);
+    }
+    let armor = &text[offset..];
+    validate_signature_armor(armor, signature_format)?;
+    Ok((&contents[..offset], armor))
+}
+
+fn validate_signature_armor(
+    armor: &str,
+    signature_format: GitSignatureFormat,
+) -> Result<(), RepositoryError> {
+    const MAX_SIGNATURE_BYTES: usize = 256 * 1024;
+    const MAX_SIGNATURE_LINES: usize = 4096;
+    let line_count = armor.lines().count();
+    if armor.is_empty()
+        || armor.len() > MAX_SIGNATURE_BYTES
+        || armor.contains(['\0', '\r'])
+        || !(3..=MAX_SIGNATURE_LINES).contains(&line_count)
+    {
+        return Err(RepositoryError::Signing);
+    }
+    let trimmed = armor.strip_suffix('\n').unwrap_or(armor);
+    let mut lines = trimmed.lines();
+    if lines.next() != Some(signature_format.begin_marker())
+        || lines.next_back() != Some(signature_format.end_marker())
+        || lines.any(|line| {
+            line == signature_format.begin_marker() || line == signature_format.end_marker()
+        })
+    {
+        return Err(RepositoryError::Signing);
+    }
+    Ok(())
 }
 
 fn remote_section(line: &str) -> Option<&str> {
@@ -2843,7 +3325,10 @@ impl fmt::Display for RepositoryError {
             Self::MergeRequired => {
                 formatter.write_str("non-fast-forward merge requires native three-way merge")
             }
-            Self::Signing => formatter.write_str("Git SSH signature is missing or invalid"),
+            Self::Signing => formatter.write_str("Git signature is missing or invalid"),
+            Self::UnsupportedObjectFormat => {
+                formatter.write_str("unsupported or inconsistent Git repository object format")
+            }
             Self::NotRepository => formatter.write_str("not an MRML Git repository"),
             Self::AlreadyExists => formatter.write_str("repository metadata already exists"),
             Self::UnsupportedLayout => {
@@ -2878,6 +3363,8 @@ impl core::error::Error for RepositoryError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
+    use mrml_crypto::{ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ml_dsa_65_keygen};
     use mrml_runtime::{process_id, remove_dir_all, temporary_directory};
 
     fn decode_hex(text: &str) -> Vector<u8> {
@@ -2919,6 +3406,134 @@ mod tests {
         create_dir_all(&nested).unwrap();
         assert_eq!(Repository::discover(&nested).unwrap(), repository);
         remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn initializes_and_operates_sha256_repository_natively() {
+        let path = root("init-sha256");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        assert_eq!(repository.object_format(), ObjectFormat::Sha256);
+        assert_eq!(
+            Repository::discover(&path).unwrap().object_format(),
+            ObjectFormat::Sha256
+        );
+        write_file(&join_path(&path, "tracked"), b"sha256").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        assert_eq!(repository.index().unwrap().format, ObjectFormat::Sha256);
+        let commit = repository
+            .commit("sha256", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        assert_eq!(commit.format(), ObjectFormat::Sha256);
+        assert_eq!(commit.to_hex().len(), 64);
+        assert_eq!(repository.head().unwrap(), Some(commit));
+        assert_eq!(repository.read_commit(commit).unwrap().message, "sha256\n");
+        let packed = parse_pack_with_format(
+            &repository.pack_reachable(commit).unwrap(),
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        assert!(packed.iter().any(|object| object.id == commit));
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn validates_advertised_commit_tips_before_reference_updates() {
+        let path = root("validate-advertised-tips");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        write_file(&join_path(&path, "tracked"), b"tip").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let commit = repository
+            .commit("tip", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        assert_eq!(repository.validate_commit_tips(&[commit]), Ok(()));
+
+        let blob = repository
+            .write_object(ObjectKind::Blob, b"not a commit")
+            .unwrap();
+        assert_eq!(
+            repository.validate_commit_tips(&[blob]),
+            Err(RepositoryError::InvalidReference)
+        );
+        let missing = ObjectId::parse_for(
+            ObjectFormat::Sha256,
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        assert_eq!(
+            repository.validate_commit_tips(&[missing]),
+            Err(RepositoryError::ReferenceMissing)
+        );
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn rejects_inconsistent_repository_object_format_configuration() {
+        let path = root("invalid-object-format");
+        let repository = Repository::init(&path).unwrap();
+        write_file(
+            &join_path(&repository.git_dir, "config"),
+            b"[core]\n\trepositoryformatversion = 0\n[extensions]\n\tobjectformat = sha256\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Repository::discover(&path),
+            Err(RepositoryError::UnsupportedObjectFormat)
+        );
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn rejects_malformed_or_unvalued_repository_format_configuration() {
+        assert_eq!(
+            parse_repository_object_format(
+                "[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat\n"
+            ),
+            Err(RepositoryError::UnsupportedObjectFormat)
+        );
+        assert_eq!(
+            parse_repository_object_format("[core]\nrepositoryformatversion\n"),
+            Err(RepositoryError::UnsupportedObjectFormat)
+        );
+        assert_eq!(
+            parse_repository_object_format("[core\nrepositoryformatversion = 1\n"),
+            Err(RepositoryError::UnsupportedObjectFormat)
+        );
+        assert_eq!(
+            parse_repository_object_format("[core]\nbare\nrepositoryformatversion = 0\n"),
+            Ok(ObjectFormat::Sha1)
+        );
+    }
+
+    #[test]
+    fn repository_format_and_effective_config_parsing_match_git_basics() {
+        assert_eq!(
+            parse_repository_object_format(
+                "[core]\nrepositoryFormatVersion = 1\n[extensions]\nobjectFormat = SHA1\n"
+            ),
+            Ok(ObjectFormat::Sha1)
+        );
+        assert_eq!(
+            parse_repository_object_format("[core]\nrepositoryFormatVersion = 1\n"),
+            Ok(ObjectFormat::Sha1)
+        );
+        assert_eq!(
+            config_text_value("[tag]\ngpgSign = false\ngpgsign = true\n", "TAG", "GPGSIGN")
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            config_text_value(
+                "[gpg \"openpgp\"]\npublicKeyFile = current.asc\n",
+                "gpg.openpgp",
+                "publickeyfile"
+            )
+            .as_deref(),
+            Some("current.asc")
+        );
     }
 
     #[test]
@@ -3070,7 +3685,7 @@ mod tests {
                 &commit.to_hex()[2..]
             )
         )));
-        let packed = parse_pack(&repository.pack_reachable(commit).unwrap()).unwrap();
+        let packed = crate::parse_pack(&repository.pack_reachable(commit).unwrap()).unwrap();
         assert!(
             packed
                 .iter()
@@ -3123,6 +3738,107 @@ mod tests {
             Err(RepositoryError::Signing)
         );
         remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn sha256_commit_uses_gpgsig_sha256_and_generic_openpgp_payload() {
+        let path = root("signed-sha256-commit");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        write_file(&join_path(&path, "tracked"), b"signed").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let armor = "-----BEGIN PGP SIGNATURE-----\nZmFrZQ==\n-----END PGP SIGNATURE-----\n";
+        let id = repository
+            .commit_signed_with(
+                "signed",
+                "Signer",
+                "signer@example.invalid",
+                7,
+                GitSignatureFormat::OpenPgp,
+                |payload| {
+                    assert!(payload.ends_with(b"\n\nsigned\n"));
+                    Ok(armor.into())
+                },
+            )
+            .unwrap();
+        let object = repository.read_object(id).unwrap();
+        assert!(
+            object
+                .contents
+                .windows(b"gpgsig-sha256 ".len())
+                .any(|part| part == b"gpgsig-sha256 ")
+        );
+        assert!(
+            !object
+                .contents
+                .windows(b"\ngpgsig ".len())
+                .any(|part| part == b"\ngpgsig ")
+        );
+        repository
+            .verify_commit_signature_with(id, GitSignatureFormat::OpenPgp, |payload, found| {
+                assert!(payload.ends_with(b"\n\nsigned\n"));
+                assert_eq!(found, armor);
+                Ok(())
+            })
+            .unwrap();
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn hybrid_commit_nests_ml_dsa_under_openpgp_for_both_object_formats() {
+        let mut public = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[31u8; 32], &mut public, &mut secret).unwrap();
+        let pgp = "-----BEGIN PGP SIGNATURE-----\nZmFrZQ==\n-----END PGP SIGNATURE-----\n";
+        for format in [ObjectFormat::Sha1, ObjectFormat::Sha256] {
+            let path = root(match format {
+                ObjectFormat::Sha1 => "hybrid-sha1",
+                ObjectFormat::Sha256 => "hybrid-sha256",
+            });
+            let repository = Repository::init_with_format(&path, format).unwrap();
+            write_file(&join_path(&path, "tracked"), b"hybrid").unwrap();
+            repository.stage(&Vector::from(["tracked".into()])).unwrap();
+            let id = repository
+                .commit_hybrid_signed_with(
+                    "hybrid",
+                    "Signer",
+                    "signer@example.invalid",
+                    9,
+                    |payload| {
+                        sign_ml_dsa_65_git_payload(&secret, payload, &[37u8; 32])
+                            .map_err(|_| RepositoryError::Signing)
+                    },
+                    |payload| {
+                        assert!(
+                            payload
+                                .windows(b"mrml-mldsa65 ".len())
+                                .any(|part| part == b"mrml-mldsa65 ")
+                        );
+                        Ok(pgp.into())
+                    },
+                )
+                .unwrap();
+            repository
+                .verify_hybrid_commit_signature_with(
+                    id,
+                    |payload, found| {
+                        assert!(
+                            payload
+                                .windows(b"mrml-mldsa65 ".len())
+                                .any(|part| part == b"mrml-mldsa65 ")
+                        );
+                        assert_eq!(found, pgp);
+                        Ok(())
+                    },
+                    |payload, armor| {
+                        verify_ml_dsa_65_git_payload(&public, payload, armor)
+                            .map_err(|_| RepositoryError::Signing)
+                    },
+                )
+                .unwrap();
+            remove_dir_all(&path).unwrap();
+        }
     }
 
     #[test]

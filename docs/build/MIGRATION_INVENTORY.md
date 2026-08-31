@@ -367,6 +367,65 @@ library tests plus the binary's one inline test on each host. `mrml doctor` and
 `mrml audit` passed with 48 external-command sites. No live remote, external
 host key/signing operation, KVM, bare metal, or physical hardware was exercised.
 
+The 2026-08-30 native Git object-format and standalone OpenPGP action was checked
+on an Arch Linux host with the dated `nightly-2026-08-29` toolchain. Exact
+outcomes were:
+
+- `RUSTFLAGS='-D warnings' ./target/debug/mrml build mrml-crypto --target
+  linux`, and the corresponding commands for `mrml-openpgp`,
+  `mrml-interface-security-detached-signing-v1`, and `mrml-git` — PASS for
+  Linux debug; the corresponding `mrml-git --release` build also passed;
+- canonical `./target/debug/mrml test ... --target linux` runs — PASS: 37
+  `mrml-crypto` tests, 10 `mrml-openpgp` tests, seven detached-signing-interface
+  tests, and 77 `mrml-git` library tests plus its one binary test;
+- `./target/debug/mrml manifest fmt --check`, `./target/debug/mrml manifest
+  check`, `./target/debug/mrml manifest lock --check`,
+  `./target/debug/mrml doctor`, and `./target/debug/mrml audit` — PASS. The
+  resulting inventory covered 60 components, 171 dependency records, 92
+  features, 88 outputs, 61 external-command sites, and seven included files;
+- direct `rustc -D warnings` no-`std` builds for the
+  `x86_64-unknown-uefi` target — PASS for `mrml-crypto`, `mrml-openpgp`, and the
+  detached-signing interface. This is compile-only evidence, not an early-boot,
+  runtime-provider, or physical-hardware result. The component-select UEFI
+  frontend does not select projected libraries independently, so no canonical
+  UEFI frontend build is claimed;
+- `./target/mrml-native/linux/debug/mrml-git signing verify HEAD` — PASS for
+  the checked-in public key, exact documented primary fingerprint, and checked
+  SHA-256 `HEAD`;
+- `./target/mrml-native/linux/release/mrml-git status` — PASS against this
+  checkout's packed SHA-256 history and dirty-file inventory in approximately
+  21.5 seconds.
+
+A disposable hosted controlled probe used Git 2.55.0 and GnuPG 2.4.9. The
+standalone interface signer created commits and annotated tags in separate
+SHA-1 and SHA-256 repositories with a disposable Ed25519 key and an explicitly
+selected SHA-256 OpenPGP digest. System `git fsck --full --strict`, `git
+verify-commit --raw HEAD`, and `git verify-tag --raw v1` all passed in both
+repositories. The SHA-1 commit used ordinary `gpgsig` framing; the SHA-256
+commit had a 64-hex object ID and `gpgsig-sha256`. Both commit and tag GnuPG
+`VALIDSIG` records selected digest ID 8 in each repository. Separate standalone
+detached signatures using SHA-256, SHA-384, and SHA-512 also passed GnuPG
+verification with digest IDs 8, 9, and 10 respectively. A second fresh SHA-256
+repository exercised the public `mrml-git` CLI end to end: `init`,
+`signing configure-openpgp`, `commit --sign`, `tag-sign`, `signing verify`, and
+`signing verify-tag` all passed; Git strict fsck and the independent GnuPG
+commit/tag verifiers passed for the resulting objects. GnuPG was only an
+independent test oracle: the implementation has no runtime GnuPG executable,
+agent, keyring, or process dependency.
+
+This is Linux hosted-process and direct cross-compile evidence. No live SSH
+remote, Windows, KVM, bare-metal, or physical-hardware path was exercised. The
+remote fetch path still installs only advertised branch references: peeled tag
+advertisements parse, but tag references are not installed.
+
+A separate `git fsck --full --strict` against the shared development checkout
+failed because six existing loose-object paths were zero-length; it also
+reported dangling trees. Their modification times predated this verification
+pass, none appeared in `git rev-list --objects --all`, the current signed `HEAD`
+remained readable and verifiable, and this work did not remove or repair
+user-owned `.git` state. The clean fsck result above is therefore limited to the
+disposable interoperability repository.
+
 The host-tool move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-tools -- --check`,

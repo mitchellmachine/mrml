@@ -4,16 +4,26 @@
 
 use mrml_error::{Context, Result, anyhow};
 use mrml_git::{
-    Cli, MergeOutcome, NativeChangeKind, RebaseOutcome, Repository, check_ssh, fetch_ssh, push_ssh,
-    validate_positional,
+    Cli, GitSignatureFormat, MergeOutcome, NativeChangeKind, ObjectFormat, OpenPgpDigestAlgorithm,
+    OpenPgpFingerprint, OpenPgpPublicKey, OpenPgpSigningKey, OpenPgpVerificationPolicy,
+    RebaseOutcome, Repository, check_ssh, fetch_ssh, inspect_ssh, parse_public_key_ascii, push_ssh,
+    sign_git_payload_via_interface, validate_positional, verify_detached_ascii,
+};
+use mrml_interface_detached_signing_v1::{
+    OpenPgpDigestAlgorithm as InterfaceOpenPgpDigestAlgorithm, OpenPgpGitSigningPurpose,
 };
 use mrml_runtime::{
-    Text, Vector, mrml_format as format, mrml_println as println, read_file_text_bounded,
+    Text, Vector, join_path, mrml_format as format, mrml_println as println, path_is_file,
+    read_file_bounded, read_file_text_bounded,
 };
 use mrml_ssh::{
     RsaPrivateKey, SshRemote, encode_rsa_public_key, parse_rsa_private_pem, parse_rsa_public_line,
 };
 use mrml_terminal_style::Colorize;
+
+const MRML_OPENPGP_FINGERPRINT: &str = "6EE75495B0427A4F3F97BA1C14D70434990F1CA9";
+const MRML_OPENPGP_PUBLIC_KEY: &str = "docs/keys/mrml-commit-signing-key.asc";
+const MRML_OPENPGP_KEY_NOT_AFTER: u64 = 1_851_111_680;
 
 fn native_repository(repository: Option<&str>) -> Result<Repository> {
     Repository::discover(repository.unwrap_or(".")).map_err(|error| anyhow!("{}", error))
@@ -101,6 +111,7 @@ fn help() {
         "[-C PATH] push [remote] [branch]",
         "[-C PATH] remote",
         "[-C PATH] ssh <add|set|auth|info|check> ...",
+        "[-C PATH] signing configure-openpgp <seed> [public-key [primary-fingerprint [sha256|sha384|sha512]]]",
         "[-C PATH] signing <configure|auto|status|off|verify|verify-tag> ...",
         "[-C PATH] tag [name]",
         "[-C PATH] tag-sign <name> <message>",
@@ -109,7 +120,7 @@ fn help() {
         println!("  mrml-git {}", usage);
     }
     println!(
-        "\nPulls are fast-forward only. SSH signing is repository-local. No command invokes host Git or OpenSSH."
+        "\nPulls are fast-forward only. OpenPGP signing and verification are in-process; the host seed-file bridge is explicit, and the host adapter exercises the bounded MRML signing-interface codec. Capability-authorized isolated service routing remains planned. Fetch and clone install advertised branch references only; tag references are not installed. No command invokes host Git, GnuPG, or OpenSSH."
     );
 }
 
@@ -191,7 +202,7 @@ fn ssh_credentials(repository: &Repository) -> Result<(RsaPrivateKey, Vector<u8>
         .ok_or_else(|| anyhow!("run ssh auth <private-key.pem> <host-public-key> first"))?;
     ssh_credentials_paths(&private, &host)
 }
-fn repository_signing_key(repository: &Repository) -> Result<RsaPrivateKey> {
+fn repository_ssh_signing_key(repository: &Repository) -> Result<RsaPrivateKey> {
     let path = repository
         .config_value("user", "signingkey")
         .map_err(|error| anyhow!("{}", error))?
@@ -201,7 +212,7 @@ fn repository_signing_key(repository: &Repository) -> Result<RsaPrivateKey> {
         read_file_text_bounded(&path, 64 * 1024).map_err(|_| anyhow!("cannot read signing key"))?;
     parse_rsa_private_pem(&text).map_err(|error| anyhow!("invalid signing key: {}", error))
 }
-fn repository_verification_key(repository: &Repository) -> Result<mrml_ssh::RsaPublicKey> {
+fn repository_ssh_verification_key(repository: &Repository) -> Result<mrml_ssh::RsaPublicKey> {
     let path = repository
         .config_value("gpg.ssh", "allowedSignersFile")
         .map_err(|error| anyhow!("{}", error))?
@@ -209,6 +220,426 @@ fn repository_verification_key(repository: &Repository) -> Result<mrml_ssh::RsaP
     let text = read_file_text_bounded(&path, 64 * 1024)
         .map_err(|_| anyhow!("cannot read allowed signer"))?;
     parse_rsa_public_line(&text).map_err(|error| anyhow!("invalid allowed signer: {}", error))
+}
+
+fn repository_signature_format(repository: &Repository) -> Result<GitSignatureFormat> {
+    let configured = repository
+        .config_value("gpg", "format")
+        .map_err(|error| anyhow!("{}", error))?;
+    match configured.as_deref() {
+        None => {
+            let user_key = repository
+                .config_value("user", "signingkey")
+                .map_err(|error| anyhow!("{}", error))?;
+            let ssh_key = repository
+                .config_value("ssh", "privateKey")
+                .map_err(|error| anyhow!("{}", error))?;
+            let ssh_allowed = repository
+                .config_value("gpg.ssh", "allowedSignersFile")
+                .map_err(|error| anyhow!("{}", error))?;
+            if user_key.is_none() && (ssh_key.is_some() || ssh_allowed.is_some()) {
+                Ok(GitSignatureFormat::Ssh)
+            } else {
+                Ok(GitSignatureFormat::OpenPgp)
+            }
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("openpgp") || value.eq_ignore_ascii_case("gpg") =>
+        {
+            Ok(GitSignatureFormat::OpenPgp)
+        }
+        Some(value) if value.eq_ignore_ascii_case("ssh") => Ok(GitSignatureFormat::Ssh),
+        Some(value) => Err(anyhow!("unsupported Git signature format '{}'", value)),
+    }
+}
+
+fn repository_openpgp_public_key(repository: &Repository) -> Result<Text> {
+    let configured = repository
+        .config_value("gpg.openpgp", "publicKeyFile")
+        .map_err(|error| anyhow!("{}", error))?;
+    let path = configured.unwrap_or_else(|| MRML_OPENPGP_PUBLIC_KEY.into());
+    let path = if mrml_runtime::path_is_absolute(&path) {
+        path
+    } else {
+        join_path(&repository.worktree, &path)
+    };
+    if !path_is_file(&path) {
+        return Err(anyhow!(
+            "OpenPGP verification key '{}' is unavailable; configure gpg.openpgp.publicKeyFile",
+            path
+        ));
+    }
+    Ok(path)
+}
+
+fn repository_openpgp_seed(repository: &Repository) -> Result<Text> {
+    let configured = repository
+        .config_value("gpg.openpgp", "privateSeedFile")
+        .map_err(|error| anyhow!("{}", error))?
+        .ok_or_else(|| {
+            anyhow!(
+                "OpenPGP signing requires gpg.openpgp.privateSeedFile; run signing configure-openpgp"
+            )
+        })?;
+    let path = if mrml_runtime::path_is_absolute(&configured) {
+        configured
+    } else {
+        join_path(&repository.worktree, &configured)
+    };
+    if !path_is_file(&path) {
+        return Err(anyhow!("configured OpenPGP private seed is unavailable"));
+    }
+    Ok(path)
+}
+
+fn repository_openpgp_fingerprint_text(repository: &Repository) -> Result<Text> {
+    repository
+        .config_value("gpg.openpgp", "allowedFingerprint")
+        .map_err(|error| anyhow!("{}", error))
+        .map(|value| value.unwrap_or_else(|| MRML_OPENPGP_FINGERPRINT.into()))
+}
+
+fn repository_openpgp_fingerprint(repository: &Repository) -> Result<OpenPgpFingerprint> {
+    let value = repository_openpgp_fingerprint_text(repository)?;
+    OpenPgpFingerprint::parse_hex(&value)
+        .map_err(|error| anyhow!("invalid primary fingerprint: {}", error))
+}
+
+fn openpgp_fingerprint_text(fingerprint: OpenPgpFingerprint) -> Text {
+    let mut encoded = [0u8; 40];
+    fingerprint
+        .write_hex(&mut encoded)
+        .expect("fixed OpenPGP fingerprint buffer");
+    core::str::from_utf8(&encoded)
+        .expect("hexadecimal OpenPGP fingerprint")
+        .into()
+}
+
+fn repository_openpgp_revoked(repository: &Repository) -> Result<bool> {
+    let configured = repository
+        .config_value("gpg.openpgp", "revoked")
+        .map_err(|error| anyhow!("{}", error))?;
+    match configured.as_deref() {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(anyhow!("invalid gpg.openpgp.revoked value")),
+    }
+}
+
+fn repository_openpgp_key_not_after(
+    repository: &Repository,
+    fingerprint: OpenPgpFingerprint,
+) -> Result<Option<u64>> {
+    let configured = repository
+        .config_value("gpg.openpgp", "keyNotAfter")
+        .map_err(|error| anyhow!("{}", error))?;
+    match configured.as_deref() {
+        Some(value) if value.eq_ignore_ascii_case("none") => Ok(None),
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value != 0)
+            .map(Some)
+            .ok_or_else(|| anyhow!("invalid gpg.openpgp.keyNotAfter value")),
+        None if fingerprint
+            == OpenPgpFingerprint::parse_hex(MRML_OPENPGP_FINGERPRINT)
+                .expect("checked MRML fingerprint") =>
+        {
+            Ok(Some(MRML_OPENPGP_KEY_NOT_AFTER))
+        }
+        None => Ok(None),
+    }
+}
+
+fn repository_openpgp_digest(repository: &Repository) -> Result<OpenPgpDigestAlgorithm> {
+    let configured = repository
+        .config_value("gpg.openpgp", "digestAlgorithm")
+        .map_err(|error| anyhow!("{}", error))?;
+    match configured.as_deref() {
+        None => Ok(OpenPgpDigestAlgorithm::Sha512),
+        Some(value) if value.eq_ignore_ascii_case("sha256") => Ok(OpenPgpDigestAlgorithm::Sha256),
+        Some(value) if value.eq_ignore_ascii_case("sha384") => Ok(OpenPgpDigestAlgorithm::Sha384),
+        Some(value) if value.eq_ignore_ascii_case("sha512") => Ok(OpenPgpDigestAlgorithm::Sha512),
+        Some(value) => Err(anyhow!(
+            "unsupported OpenPGP digest '{}'; use sha256, sha384, or sha512",
+            value
+        )),
+    }
+}
+
+const fn openpgp_digest_name(digest: OpenPgpDigestAlgorithm) -> &'static str {
+    match digest {
+        OpenPgpDigestAlgorithm::Sha256 => "sha256",
+        OpenPgpDigestAlgorithm::Sha384 => "sha384",
+        OpenPgpDigestAlgorithm::Sha512 => "sha512",
+    }
+}
+
+const fn signing_interface_digest(
+    digest: OpenPgpDigestAlgorithm,
+) -> InterfaceOpenPgpDigestAlgorithm {
+    match digest {
+        OpenPgpDigestAlgorithm::Sha256 => InterfaceOpenPgpDigestAlgorithm::Sha256,
+        OpenPgpDigestAlgorithm::Sha384 => InterfaceOpenPgpDigestAlgorithm::Sha384,
+        OpenPgpDigestAlgorithm::Sha512 => InterfaceOpenPgpDigestAlgorithm::Sha512,
+    }
+}
+
+fn load_openpgp_public_key(repository: &Repository) -> Result<OpenPgpPublicKey> {
+    let path = repository_openpgp_public_key(repository)?;
+    let public = read_file_bounded(&path, mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES)
+        .map_err(|_| anyhow!("cannot read OpenPGP public key"))?;
+    let mut scratch = [0u8; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let key = parse_public_key_ascii(&public, &mut scratch)
+        .map_err(|error| anyhow!("invalid OpenPGP public key: {}", error))?;
+    if key.fingerprint() != repository_openpgp_fingerprint(repository)? {
+        return Err(anyhow!(
+            "OpenPGP public key fingerprint does not match owner policy"
+        ));
+    }
+    Ok(key)
+}
+
+fn load_openpgp_signing_key(repository: &Repository) -> Result<OpenPgpSigningKey> {
+    let public = load_openpgp_public_key(repository)?;
+    let path = repository_openpgp_seed(repository)?;
+    let mut bytes = read_file_bounded(&path, 32)
+        .map_err(|_| anyhow!("cannot read bounded OpenPGP private seed"))?;
+    OpenPgpSigningKey::from_seed_bytes_and_public_key(&mut bytes, public)
+        .map_err(|error| anyhow!("invalid OpenPGP private seed: {}", error))
+}
+
+fn sign_openpgp(
+    repository: &Repository,
+    payload: &[u8],
+    purpose: OpenPgpGitSigningPurpose,
+) -> Result<Text> {
+    let digest_algorithm = repository_openpgp_digest(repository)?;
+    let interface_digest = signing_interface_digest(digest_algorithm);
+    if InterfaceOpenPgpDigestAlgorithm::from_wire(interface_digest.wire()).is_none() {
+        return Err(anyhow!(
+            "OpenPGP digest is unavailable through the signing interface"
+        ));
+    }
+    let key = load_openpgp_signing_key(repository)?;
+    let fingerprint = repository_openpgp_fingerprint(repository)?;
+    let not_after = repository_openpgp_key_not_after(repository, fingerprint)?;
+    let revoked = repository_openpgp_revoked(repository)?;
+    let public_key = key.public_key();
+    let armor = sign_git_payload_via_interface(
+        key,
+        purpose,
+        interface_digest,
+        not_after,
+        revoked,
+        payload,
+        mrml_runtime::unix_time_seconds,
+    )
+    .map_err(|error| anyhow!("OpenPGP signing failed: {}", error))?;
+    let validation_time = mrml_runtime::unix_time_seconds()
+        .ok_or_else(|| anyhow!("system time is unavailable for OpenPGP policy"))?;
+    let mut scratch = [0u8; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+    verify_detached_ascii(
+        &public_key,
+        payload,
+        &armor,
+        &OpenPgpVerificationPolicy {
+            expected_primary_fingerprint: fingerprint,
+            validation_time: Some(validation_time),
+            key_not_after: not_after,
+            key_revoked: revoked,
+            enforce_signature_expiration: true,
+        },
+        &mut scratch,
+    )
+    .map_err(|error| anyhow!("OpenPGP signing self-check failed: {}", error))?;
+    let armor = core::str::from_utf8(&armor)
+        .map_err(|_| anyhow!("OpenPGP library returned non-UTF-8 ASCII armor"))?;
+    Ok(armor.into())
+}
+
+fn verify_openpgp(repository: &Repository, payload: &[u8], armor: &str) -> Result<()> {
+    let public_key = load_openpgp_public_key(repository)?;
+    let fingerprint = repository_openpgp_fingerprint(repository)?;
+    let not_after = repository_openpgp_key_not_after(repository, fingerprint)?;
+    let revoked = repository_openpgp_revoked(repository)?;
+    let now = mrml_runtime::unix_time_seconds()
+        .ok_or_else(|| anyhow!("system time is unavailable for OpenPGP policy"))?;
+    let mut scratch = [0u8; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+    verify_detached_ascii(
+        &public_key,
+        payload,
+        armor.as_bytes(),
+        &OpenPgpVerificationPolicy {
+            expected_primary_fingerprint: fingerprint,
+            validation_time: Some(now),
+            key_not_after: not_after,
+            key_revoked: revoked,
+            enforce_signature_expiration: true,
+        },
+        &mut scratch,
+    )
+    .map_err(|error| anyhow!("OpenPGP verification failed: {}", error))?;
+    Ok(())
+}
+
+fn repository_identity(repository: &Repository) -> Result<(Text, Text)> {
+    let name = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_NAME")
+        .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_NAME"))
+        .or_else(|| repository.config_value("user", "name").ok().flatten())
+        .unwrap_or_else(|| "MRML User".into());
+    let email = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_EMAIL")
+        .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_EMAIL"))
+        .or_else(|| repository.config_value("user", "email").ok().flatten())
+        .unwrap_or_else(|| "mrml@localhost".into());
+    Ok((name, email))
+}
+
+fn repository_signed_commit(
+    repository: &Repository,
+    message: &str,
+    name: &str,
+    email: &str,
+    timestamp: u64,
+) -> Result<mrml_git::ObjectId> {
+    match repository_signature_format(repository)? {
+        GitSignatureFormat::Ssh => {
+            let key = repository_ssh_signing_key(repository)?;
+            repository
+                .commit_signed(message, name, email, timestamp, &key)
+                .map_err(|error| anyhow!("{}", error))
+        }
+        GitSignatureFormat::OpenPgp => {
+            let mut signing_error = None;
+            let result = repository.commit_signed_with(
+                message,
+                name,
+                email,
+                timestamp,
+                GitSignatureFormat::OpenPgp,
+                |payload| match sign_openpgp(
+                    repository,
+                    payload,
+                    OpenPgpGitSigningPurpose::GitCommit,
+                ) {
+                    Ok(signature) => Ok(signature),
+                    Err(error) => {
+                        signing_error = Some(format!("{}", error));
+                        Err(mrml_git::RepositoryError::Signing)
+                    }
+                },
+            );
+            repository_result_with_detail(result, signing_error)
+        }
+    }
+}
+
+fn repository_signed_tag(
+    repository: &Repository,
+    tag: &str,
+    message: &str,
+    name: &str,
+    email: &str,
+    timestamp: u64,
+) -> Result<mrml_git::ObjectId> {
+    match repository_signature_format(repository)? {
+        GitSignatureFormat::Ssh => {
+            let key = repository_ssh_signing_key(repository)?;
+            repository
+                .create_signed_tag(tag, message, name, email, timestamp, &key)
+                .map_err(|error| anyhow!("{}", error))
+        }
+        GitSignatureFormat::OpenPgp => {
+            let mut signing_error = None;
+            let result = repository.create_signed_tag_with(
+                tag,
+                message,
+                name,
+                email,
+                timestamp,
+                GitSignatureFormat::OpenPgp,
+                |payload| match sign_openpgp(
+                    repository,
+                    payload,
+                    OpenPgpGitSigningPurpose::GitAnnotatedTag,
+                ) {
+                    Ok(signature) => Ok(signature),
+                    Err(error) => {
+                        signing_error = Some(format!("{}", error));
+                        Err(mrml_git::RepositoryError::Signing)
+                    }
+                },
+            );
+            repository_result_with_detail(result, signing_error)
+        }
+    }
+}
+
+fn repository_verify_commit(repository: &Repository, id: mrml_git::ObjectId) -> Result<Text> {
+    match repository_signature_format(repository)? {
+        GitSignatureFormat::Ssh => {
+            let key = repository_ssh_verification_key(repository)?;
+            repository
+                .verify_commit_signature(id, &key)
+                .map_err(|error| anyhow!("{}", error))?;
+            Ok("SSH".into())
+        }
+        GitSignatureFormat::OpenPgp => {
+            let mut verification_error = None;
+            let result = repository.verify_commit_signature_with(
+                id,
+                GitSignatureFormat::OpenPgp,
+                |payload, armor| match verify_openpgp(repository, payload, armor) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        verification_error = Some(format!("{}", error));
+                        Err(mrml_git::RepositoryError::Signing)
+                    }
+                },
+            );
+            repository_result_with_detail(result, verification_error)?;
+            Ok("OpenPGP".into())
+        }
+    }
+}
+
+fn repository_verify_tag(repository: &Repository, id: mrml_git::ObjectId) -> Result<Text> {
+    match repository_signature_format(repository)? {
+        GitSignatureFormat::Ssh => {
+            let key = repository_ssh_verification_key(repository)?;
+            repository
+                .verify_tag_signature(id, &key)
+                .map_err(|error| anyhow!("{}", error))?;
+            Ok("SSH".into())
+        }
+        GitSignatureFormat::OpenPgp => {
+            let mut verification_error = None;
+            let result = repository.verify_tag_signature_with(
+                id,
+                GitSignatureFormat::OpenPgp,
+                |payload, armor| match verify_openpgp(repository, payload, armor) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        verification_error = Some(format!("{}", error));
+                        Err(mrml_git::RepositoryError::Signing)
+                    }
+                },
+            );
+            repository_result_with_detail(result, verification_error)?;
+            Ok("OpenPGP".into())
+        }
+    }
+}
+
+fn repository_result_with_detail<T>(
+    result: core::result::Result<T, mrml_git::RepositoryError>,
+    detail: Option<Text>,
+) -> Result<T> {
+    match (result, detail) {
+        (Ok(value), _) => Ok(value),
+        (Err(_), Some(detail)) => Err(anyhow!("{}", detail)),
+        (Err(error), None) => Err(anyhow!("{}", error)),
+    }
 }
 
 fn native_fetch(repository: Option<&str>, name: &str) -> Result<()> {
@@ -258,19 +689,83 @@ fn config_value(repository: Option<&str>, key: &str) -> Option<Text> {
 }
 
 fn print_signing_status(repository: Option<&str>) -> Result<()> {
-    native_repository(repository)?;
+    let repo = native_repository(repository)?;
+    let signature_format = repository_signature_format(&repo)?;
+    println!(
+        "{} {}",
+        "object format".green().bold(),
+        repo.object_format()
+    );
+    println!(
+        "{} {}",
+        "signature format".green().bold(),
+        match signature_format {
+            GitSignatureFormat::OpenPgp => "openpgp",
+            GitSignatureFormat::Ssh => "ssh",
+        }
+    );
     for (label, key) in [
-        ("format", "gpg.format"),
-        ("key", "user.signingkey"),
-        ("commits", "commit.gpgsign"),
-        ("tags", "tag.gpgsign"),
-        ("allowed signers", "gpg.ssh.allowedSignersFile"),
+        ("key selector", "user.signingkey"),
+        ("commit auto-sign", "commit.gpgsign"),
+        ("tag auto-sign", "tag.gpgsign"),
     ] {
         println!(
             "{} {}",
             label.green().bold(),
             config_value(repository, key).unwrap_or_else(|| "not configured".into())
         );
+    }
+    match signature_format {
+        GitSignatureFormat::OpenPgp => {
+            match repository_openpgp_public_key(&repo) {
+                Ok(path) => println!("{} {}", "public key".green().bold(), path),
+                Err(error) => println!("{} {}", "public key".yellow().bold(), error),
+            }
+            println!(
+                "{} {}",
+                "private seed".green().bold(),
+                if repository_openpgp_seed(&repo).is_ok() {
+                    "configured"
+                } else {
+                    "not configured"
+                }
+            );
+            println!(
+                "{} {}",
+                "primary fingerprint".green().bold(),
+                repository_openpgp_fingerprint_text(&repo)?
+            );
+            let digest = repository_openpgp_digest(&repo)?;
+            println!(
+                "{} {} (interface {})",
+                "signature digest".green().bold(),
+                openpgp_digest_name(digest),
+                signing_interface_digest(digest).wire()
+            );
+            let fingerprint = repository_openpgp_fingerprint(&repo)?;
+            println!(
+                "{} {}",
+                "key not after".green().bold(),
+                repository_openpgp_key_not_after(&repo, fingerprint)?
+                    .map(|value| format!("{}", value))
+                    .unwrap_or_else(|| "not configured".into())
+            );
+            println!(
+                "{} {}",
+                "owner revocation".green().bold(),
+                if repository_openpgp_revoked(&repo)? {
+                    "revoked"
+                } else {
+                    "not revoked"
+                }
+            );
+        }
+        GitSignatureFormat::Ssh => println!(
+            "{} {}",
+            "allowed signers".green().bold(),
+            config_value(repository, "gpg.ssh.allowedSignersFile")
+                .unwrap_or_else(|| "not configured".into())
+        ),
     }
     Ok(())
 }
@@ -302,7 +797,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
         "init" if tail.len() <= 1 => {
             checked_positionals(tail)?;
             let path = tail.first().map(Text::as_str).or(repository).unwrap_or(".");
-            let initialized = Repository::init(path).map_err(|error| anyhow!("{}", error))?;
+            let initialized = Repository::init_with_format(path, ObjectFormat::Sha256)
+                .map_err(|error| anyhow!("{}", error))?;
             println!(
                 "Initialized empty MRML Git repository in {}",
                 initialized.git_dir
@@ -327,7 +823,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let host_path = mrml_runtime::environment_variable("MRML_GIT_SSH_HOST_KEY")
                 .ok_or_else(|| anyhow!("clone requires MRML_GIT_SSH_HOST_KEY"))?;
             let (key, host) = ssh_credentials_paths(&private_path, &host_path)?;
-            let repo = Repository::init(&target).map_err(|error| anyhow!("{}", error))?;
+            let remote_info =
+                inspect_ssh(&remote, &key, &host).map_err(|error| anyhow!("{}", error))?;
+            let repo = Repository::init_with_format(&target, remote_info.object_format)
+                .map_err(|error| anyhow!("{}", error))?;
             repo.set_remote("origin", &tail[0], false)
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("ssh", "privateKey", &private_path)
@@ -652,15 +1151,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             };
             require_arguments("commit", words)?;
             let message = join_words(words);
-            let name = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_NAME")
-                .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_NAME"))
-                .unwrap_or_else(|| "MRML User".into());
-            let email = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_EMAIL")
-                .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_EMAIL"))
-                .unwrap_or_else(|| "mrml@localhost".into());
             let timestamp = mrml_runtime::unix_time_seconds()
                 .ok_or_else(|| anyhow!("system time is unavailable"))?;
             let repo = native_repository(repository)?;
+            let (name, email) = repository_identity(&repo)?;
             let sign = sign
                 || repo
                     .config_value("commit", "gpgsign")
@@ -668,12 +1162,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     .flatten()
                     .is_some_and(|value| value.eq_ignore_ascii_case("true"));
             let id = if sign {
-                let key = repository_signing_key(&repo)?;
-                repo.commit_signed(&message, &name, &email, timestamp, &key)
+                repository_signed_commit(&repo, &message, &name, &email, timestamp)?
             } else {
                 repo.commit(&message, &name, &email, timestamp)
-            }
-            .map_err(|error| anyhow!("{}", error))?;
+                    .map_err(|error| anyhow!("{}", error))?
+            };
             println!("[{}] {}", (&id.to_hex()[..12]).bright_green(), message);
             Ok(())
         }
@@ -814,15 +1307,98 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .map_err(|error| anyhow!("{}", error))?;
             print_signing_status(repository)
         }
-        "signing" if tail.len() == 1 && tail[0] == "auto" => {
-            if config_value(repository, "gpg.format").as_deref() != Some("ssh")
-                || config_value(repository, "user.signingkey").is_none()
-            {
+        "signing" if (2..=5).contains(&tail.len()) && tail[0] == "configure-openpgp" => {
+            checked_positionals(&tail[1..])?;
+            let repo = native_repository(repository)?;
+            let seed_path = tail[1].as_str();
+            let public_key = tail
+                .get(2)
+                .map(Text::as_str)
+                .unwrap_or(MRML_OPENPGP_PUBLIC_KEY);
+            let fingerprint = tail
+                .get(3)
+                .map(Text::as_str)
+                .unwrap_or(MRML_OPENPGP_FINGERPRINT);
+            let digest = tail.get(4).map(Text::as_str).unwrap_or("sha512");
+            let expected = OpenPgpFingerprint::parse_hex(fingerprint)
+                .map_err(|error| anyhow!("invalid primary fingerprint: {}", error))?;
+            let canonical_fingerprint = openpgp_fingerprint_text(expected);
+            let digest = match digest {
+                value if value.eq_ignore_ascii_case("sha256") => "sha256",
+                value if value.eq_ignore_ascii_case("sha384") => "sha384",
+                value if value.eq_ignore_ascii_case("sha512") => "sha512",
+                value => {
+                    return Err(anyhow!(
+                        "unsupported OpenPGP digest '{}'; use sha256, sha384, or sha512",
+                        value
+                    ));
+                }
+            };
+            let checked_public_path = if mrml_runtime::path_is_absolute(public_key) {
+                public_key.into()
+            } else {
+                join_path(&repo.worktree, public_key)
+            };
+            let public = read_file_bounded(
+                &checked_public_path,
+                mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES,
+            )
+            .map_err(|_| anyhow!("cannot read OpenPGP public key"))?;
+            let mut public_scratch = [0u8; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+            let parsed_public = parse_public_key_ascii(&public, &mut public_scratch)
+                .map_err(|error| anyhow!("invalid OpenPGP public key: {}", error))?;
+            if parsed_public.fingerprint() != expected {
                 return Err(anyhow!(
-                    "run signing configure <key> [allowed-signers] first"
+                    "OpenPGP public key fingerprint does not match requested fingerprint"
                 ));
             }
+            let checked_seed_path = if mrml_runtime::path_is_absolute(seed_path) {
+                seed_path.into()
+            } else {
+                join_path(&repo.worktree, seed_path)
+            };
+            let mut seed_bytes = read_file_bounded(&checked_seed_path, 32)
+                .map_err(|_| anyhow!("cannot read bounded OpenPGP private seed"))?;
+            let _key =
+                OpenPgpSigningKey::from_seed_bytes_and_public_key(&mut seed_bytes, parsed_public)
+                    .map_err(|error| anyhow!("invalid OpenPGP private seed: {}", error))?;
+            repo.set_config_value("gpg", "format", "openpgp")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("user", "signingkey", &canonical_fingerprint)
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.openpgp", "privateSeedFile", seed_path)
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.openpgp", "publicKeyFile", public_key)
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.openpgp", "allowedFingerprint", &canonical_fingerprint)
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.openpgp", "digestAlgorithm", digest)
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value(
+                "gpg.openpgp",
+                "keyNotAfter",
+                if expected
+                    == OpenPgpFingerprint::parse_hex(MRML_OPENPGP_FINGERPRINT)
+                        .expect("checked MRML fingerprint")
+                {
+                    "1851111680"
+                } else {
+                    "none"
+                },
+            )
+            .map_err(|error| anyhow!("{}", error))?;
+            print_signing_status(repository)
+        }
+        "signing" if tail.len() == 1 && tail[0] == "auto" => {
             let repo = native_repository(repository)?;
+            match repository_signature_format(&repo)? {
+                GitSignatureFormat::Ssh => {
+                    repository_ssh_signing_key(&repo)?;
+                }
+                GitSignatureFormat::OpenPgp => {
+                    let _key = load_openpgp_signing_key(&repo)?;
+                }
+            }
             repo.set_config_value("commit", "gpgsign", "true")
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("tag", "gpgsign", "true")
@@ -844,12 +1420,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let id = repo
                 .resolve_revision(&tail[1])
                 .map_err(|error| anyhow!("{}", error))?;
-            let key = repository_verification_key(&repo)?;
-            repo.verify_commit_signature(id, &key)
-                .map_err(|error| anyhow!("{}", error))?;
+            let format = repository_verify_commit(&repo, id)?;
             println!(
                 "{} commit {}",
-                "valid SSH signature".green().bold(),
+                format!("valid {} signature", format).green().bold(),
                 &id.to_hex()[..12]
             );
             Ok(())
@@ -860,10 +1434,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let id = repo
                 .resolve_revision(&tail[1])
                 .map_err(|error| anyhow!("{}", error))?;
-            let key = repository_verification_key(&repo)?;
-            repo.verify_tag_signature(id, &key)
-                .map_err(|error| anyhow!("{}", error))?;
-            println!("{} tag {}", "valid SSH signature".green().bold(), tail[1]);
+            let format = repository_verify_tag(&repo, id)?;
+            println!(
+                "{} tag {}",
+                format!("valid {} signature", format).green().bold(),
+                tail[1]
+            );
             Ok(())
         }
         "tag" if tail.is_empty() => {
@@ -884,20 +1460,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .flatten()
                 .is_some_and(|value| value.eq_ignore_ascii_case("true"));
             let id = if auto {
-                let key = repository_signing_key(&repo)?;
-                let name = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_NAME")
-                    .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_NAME"))
-                    .unwrap_or_else(|| "MRML User".into());
-                let email = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_EMAIL")
-                    .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_EMAIL"))
-                    .unwrap_or_else(|| "mrml@localhost".into());
+                let (name, email) = repository_identity(&repo)?;
                 let timestamp = mrml_runtime::unix_time_seconds()
                     .ok_or_else(|| anyhow!("system time is unavailable"))?;
-                repo.create_signed_tag(&tail[0], &tail[0], &name, &email, timestamp, &key)
+                repository_signed_tag(&repo, &tail[0], &tail[0], &name, &email, timestamp)?
             } else {
                 repo.create_tag(&tail[0])
-            }
-            .map_err(|error| anyhow!("{}", error))?;
+                    .map_err(|error| anyhow!("{}", error))?
+            };
             if auto {
                 println!("Signed tag {} at {}", tail[0], &id.to_hex()[..12]);
             } else {
@@ -909,18 +1479,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             checked_positionals(&tail[..1])?;
             let message = join_words(&tail[1..]);
             let repo = native_repository(repository)?;
-            let key = repository_signing_key(&repo)?;
-            let name = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_NAME")
-                .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_NAME"))
-                .unwrap_or_else(|| "MRML User".into());
-            let email = mrml_runtime::environment_variable("MRML_GIT_AUTHOR_EMAIL")
-                .or_else(|| mrml_runtime::environment_variable("GIT_AUTHOR_EMAIL"))
-                .unwrap_or_else(|| "mrml@localhost".into());
+            let (name, email) = repository_identity(&repo)?;
             let timestamp = mrml_runtime::unix_time_seconds()
                 .ok_or_else(|| anyhow!("system time is unavailable"))?;
-            let id = repo
-                .create_signed_tag(&tail[0], &message, &name, &email, timestamp, &key)
-                .map_err(|error| anyhow!("{}", error))?;
+            let id = repository_signed_tag(&repo, &tail[0], &message, &name, &email, timestamp)?;
             println!("Signed tag {} at {}", tail[0], &id.to_hex()[..12]);
             Ok(())
         }
@@ -999,7 +1561,14 @@ mod tests {
             &temporary_directory(),
             &mrml_runtime::mrml_format!("mrml-git-cli-{}", process_id()),
         );
-        Repository::init(&path).unwrap();
+        let repository = Repository::init(&path).unwrap();
+        repository
+            .set_config_value("commit", "gpgsign", "false")
+            .unwrap();
+        repository
+            .set_config_value("tag", "gpgsign", "false")
+            .unwrap();
+        repository.set_config_value("gpg", "format", "ssh").unwrap();
         invoke(&path, "status", &[]);
         let tracked = join_path(&path, "tracked.txt");
         write_file(&tracked, b"base\n").unwrap();

@@ -1,5 +1,5 @@
 use crate::inflate::inflate_zlib_prefix;
-use crate::{ObjectId, ObjectKind, Sha1, encode_loose_object};
+use crate::{ObjectFormat, ObjectId, ObjectKind, encode_loose_object_with_format};
 use core::fmt;
 use mrml_runtime::Vector;
 
@@ -26,6 +26,7 @@ pub enum PackError {
     Delta,
     MissingBase,
     TrailingData,
+    ObjectId,
 }
 
 struct Decoded {
@@ -47,10 +48,18 @@ struct Packed {
 }
 
 pub fn parse_pack(source: &[u8]) -> Result<Vector<PackObject>, PackError> {
-    if source.len() < 12 + 20 {
+    parse_pack_with_format(source, ObjectFormat::Sha1)
+}
+
+pub fn parse_pack_with_format(
+    source: &[u8],
+    format: ObjectFormat,
+) -> Result<Vector<PackObject>, PackError> {
+    let hash_length = format.hash_len();
+    if source.len() < 12 + hash_length {
         return Err(PackError::Truncated);
     }
-    let data_end = source.len() - 20;
+    let data_end = source.len() - hash_length;
     if &source[..4] != b"PACK" {
         return Err(PackError::Signature);
     }
@@ -62,7 +71,7 @@ pub fn parse_pack(source: &[u8]) -> Result<Vector<PackObject>, PackError> {
     if count > MAX_OBJECTS {
         return Err(PackError::TooManyObjects);
     }
-    if Sha1::digest(&source[..data_end]) != source[data_end..] {
+    if format.hash_bytes(&source[..data_end]).as_bytes() != &source[data_end..] {
         return Err(PackError::Checksum);
     }
     let mut cursor = 12usize;
@@ -103,14 +112,14 @@ pub fn parse_pack(source: &[u8]) -> Result<Vector<PackObject>, PackError> {
                 Base::Offset(base_offset)
             }
             7 => {
-                let id = ObjectId(
+                let id = ObjectId::from_bytes(
+                    format,
                     source
-                        .get(cursor..cursor + 20)
-                        .ok_or(PackError::Truncated)?
-                        .try_into()
-                        .map_err(|_| PackError::Truncated)?,
-                );
-                cursor += 20;
+                        .get(cursor..cursor + hash_length)
+                        .ok_or(PackError::Truncated)?,
+                )
+                .ok_or(PackError::ObjectId)?;
+                cursor += hash_length;
                 Base::Id(id)
             }
             _ => Base::None,
@@ -143,7 +152,10 @@ pub fn parse_pack(source: &[u8]) -> Result<Vector<PackObject>, PackError> {
         for entry in remaining {
             let base = match &entry.base {
                 Base::None => None,
-                Base::Offset(offset) => decoded.iter().find(|decoded| decoded.offset == *offset),
+                Base::Offset(offset) => decoded
+                    .binary_search_by_key(offset, |decoded| decoded.offset)
+                    .ok()
+                    .map(|index| &decoded[index]),
                 Base::Id(id) => decoded.iter().find(|decoded| decoded.object.id == *id),
             };
             if !matches!(&entry.base, Base::None) && base.is_none() {
@@ -165,11 +177,17 @@ pub fn parse_pack(source: &[u8]) -> Result<Vector<PackObject>, PackError> {
                 };
                 (kind, entry.inflated)
             };
-            let (id, _) = encode_loose_object(kind, &contents);
-            decoded.push(Decoded {
+            let (id, _) = encode_loose_object_with_format(format, kind, &contents);
+            let decoded_object = Decoded {
                 offset: entry.offset,
                 object: PackObject { id, kind, contents },
-            });
+            };
+            let insertion = decoded
+                .binary_search_by_key(&entry.offset, |candidate| candidate.offset)
+                .unwrap_or_else(|index| index);
+            decoded
+                .try_insert(insertion, decoded_object)
+                .map_err(|_| PackError::TooLarge)?;
         }
         if deferred.len() == before {
             return Err(PackError::MissingBase);
@@ -180,6 +198,13 @@ pub fn parse_pack(source: &[u8]) -> Result<Vector<PackObject>, PackError> {
 }
 
 pub fn encode_pack(objects: &[PackObject]) -> Result<Vector<u8>, PackError> {
+    encode_pack_with_format(objects, ObjectFormat::Sha1)
+}
+
+pub fn encode_pack_with_format(
+    objects: &[PackObject],
+    format: ObjectFormat,
+) -> Result<Vector<u8>, PackError> {
     if objects.len() > MAX_OBJECTS {
         return Err(PackError::TooManyObjects);
     }
@@ -196,11 +221,15 @@ pub fn encode_pack(objects: &[PackObject]) -> Result<Vector<u8>, PackError> {
             ObjectKind::Blob => 3,
             ObjectKind::Tag => 4,
         };
+        let (expected, _) = encode_loose_object_with_format(format, object.kind, &object.contents);
+        if object.id.format() != format || object.id != expected {
+            return Err(PackError::ObjectId);
+        }
         encode_object_header(kind, object.contents.len(), &mut pack);
         deflate_stored(&object.contents, &mut pack);
     }
-    let checksum = Sha1::digest(&pack);
-    pack.extend(checksum);
+    let checksum = format.hash_bytes(&pack);
+    pack.extend(checksum.as_bytes().iter().copied());
     Ok(pack)
 }
 
@@ -367,6 +396,7 @@ impl fmt::Display for PackError {
             Self::Delta => "invalid pack delta",
             Self::MissingBase => "thin pack or missing delta base",
             Self::TrailingData => "unexpected trailing pack data",
+            Self::ObjectId => "packed object ID does not match its object format or contents",
         })
     }
 }
@@ -380,15 +410,18 @@ mod tests {
         deflate_stored(data, &mut out);
         out
     }
-    fn pack_blob(data: &[u8]) -> Vector<u8> {
+    fn pack_blob_with_format(data: &[u8], format: ObjectFormat) -> Vector<u8> {
         let mut pack = Vector::from(*b"PACK");
         pack.extend(2u32.to_be_bytes());
         pack.extend(1u32.to_be_bytes());
         pack.push(0x30 | data.len() as u8);
         pack.extend(raw_stored(data));
-        let sum = Sha1::digest(&pack);
-        pack.extend(sum);
+        let sum = format.hash_bytes(&pack);
+        pack.extend(sum.as_bytes().iter().copied());
         pack
+    }
+    fn pack_blob(data: &[u8]) -> Vector<u8> {
+        pack_blob_with_format(data, ObjectFormat::Sha1)
     }
     #[test]
     fn parses_and_authenticates_blob_pack() {
@@ -422,8 +455,8 @@ mod tests {
         pack.push(0x69);
         pack.push((delta_offset - base_offset) as u8);
         pack.extend(raw_stored(&delta));
-        let sum = Sha1::digest(&pack);
-        pack.extend(sum);
+        let sum = ObjectFormat::Sha1.hash_bytes(&pack);
+        pack.extend(sum.as_bytes().iter().copied());
         let objects = parse_pack(&pack).unwrap();
         assert_eq!(&*objects[1].contents, b"natXYZ!");
         assert_eq!(objects[1].id, ObjectId::blob(b"natXYZ!"));
@@ -436,12 +469,12 @@ mod tests {
         pack.extend(2u32.to_be_bytes());
         pack.extend(2u32.to_be_bytes());
         encode_object_header(7, delta.len(), &mut pack);
-        pack.extend(ObjectId::blob(base).0);
+        pack.extend(ObjectId::blob(base).as_bytes().iter().copied());
         pack.extend(raw_stored(&delta));
         encode_object_header(3, base.len(), &mut pack);
         pack.extend(raw_stored(base));
-        let sum = Sha1::digest(&pack);
-        pack.extend(sum);
+        let sum = ObjectFormat::Sha1.hash_bytes(&pack);
+        pack.extend(sum.as_bytes().iter().copied());
         let objects = parse_pack(&pack).unwrap();
         assert!(objects.iter().any(|object| &*object.contents == base));
         assert!(objects.iter().any(
@@ -465,5 +498,71 @@ mod tests {
         let encoded = encode_pack(&inputs).unwrap();
         let decoded = parse_pack(&encoded).unwrap();
         assert_eq!(decoded, inputs);
+    }
+
+    #[test]
+    fn sha256_pack_round_trips_with_sha256_trailer() {
+        let input = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"native"),
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"native"),
+        };
+        let encoded = encode_pack_with_format(&[input.clone()], ObjectFormat::Sha256).unwrap();
+        assert_eq!(
+            &encoded[encoded.len() - ObjectFormat::Sha256.hash_len()..],
+            ObjectFormat::Sha256
+                .hash_bytes(&encoded[..encoded.len() - ObjectFormat::Sha256.hash_len()])
+                .as_bytes()
+        );
+        assert_eq!(
+            &*parse_pack_with_format(&encoded, ObjectFormat::Sha256).unwrap(),
+            &[input]
+        );
+        assert_eq!(parse_pack(&encoded), Err(PackError::Checksum));
+    }
+
+    #[test]
+    fn sha256_ref_delta_uses_full_width_base_id() {
+        let base = b"native";
+        let delta = [6, 7, 0x90, 3, 4, b'X', b'Y', b'Z', b'!'];
+        let base_id = ObjectId::blob_with_format(ObjectFormat::Sha256, base);
+        let mut pack = Vector::from(*b"PACK");
+        pack.extend(2u32.to_be_bytes());
+        pack.extend(2u32.to_be_bytes());
+        encode_object_header(7, delta.len(), &mut pack);
+        pack.extend(base_id.as_bytes().iter().copied());
+        pack.extend(raw_stored(&delta));
+        encode_object_header(3, base.len(), &mut pack);
+        pack.extend(raw_stored(base));
+        let sum = ObjectFormat::Sha256.hash_bytes(&pack);
+        pack.extend(sum.as_bytes().iter().copied());
+        let objects = parse_pack_with_format(&pack, ObjectFormat::Sha256).unwrap();
+        assert!(objects.iter().any(|object| object.id == base_id));
+        assert!(objects.iter().any(|object| {
+            &*object.contents == b"natXYZ!"
+                && object.id == ObjectId::blob_with_format(ObjectFormat::Sha256, b"natXYZ!")
+        }));
+    }
+
+    #[test]
+    fn exact_encoder_rejects_mixed_or_incorrect_ids() {
+        let mixed = PackObject {
+            id: ObjectId::blob(b"native"),
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"native"),
+        };
+        assert_eq!(
+            encode_pack_with_format(&[mixed], ObjectFormat::Sha256),
+            Err(PackError::ObjectId)
+        );
+        let incorrect = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"other"),
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"native"),
+        };
+        assert_eq!(
+            encode_pack_with_format(&[incorrect], ObjectFormat::Sha256),
+            Err(PackError::ObjectId)
+        );
     }
 }

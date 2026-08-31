@@ -1,0 +1,46 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.interface.security.ml-dsa-signing"
+kind = "interface"
+name = "mrml-interface-security-ml-dsa-signing-v1"
+profile = "interface"
+
+[interface]
+abi = "mrml-call-v1"
+fingerprint = "eb6cca8c8d972a32dc0471c0bfb522eec15a712ec7f9e6b973d6a8a804b30038"
+generation = 1
+schema = "1.mri"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_interface_security_ml_dsa_signing_v1"
+
+[rust]
+crate_name = "mrml_interface_security_ml_dsa_signing_v1"
+crate_type = "lib"
+source = "packages/interfaces/org.mrml.interface.security.ml-dsa-signing/src/lib.rs"
+
+[[host_build]]
+targets = ["WINDOWS", "LINUX"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[[projected_build]]
+targets = ["UEFI"]

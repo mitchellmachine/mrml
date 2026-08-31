@@ -10850,3 +10850,85 @@ AMD64 PE import-library code thunk as fixed instruction bytes plus a typed IAT
 target and retains fail-closed serialization. It introduces no new import
 encoding, loader algorithm, compression, cryptography, or symbol-resolution
 policy. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-30 — AV1 intra-edge reconstruction and directional filtering integration
+
+MRML source: `packages/libraries/av1/src/{block_state,lib,prediction}.rs`.
+
+This correction extends partially reconstructed intra-prediction edges from
+their last available sample, retains luma and chroma neighbor modes for exact
+filter-type selection, and connects the existing directional corner-filter,
+edge-filter, and edge-upsampling primitives to block reconstruction. It follows
+the normative AV1 prediction process and introduces no independent MRML codec
+algorithm.
+
+Patent review: **TRIGGERED** — this changes an implemented AV1 prediction path
+and therefore remains inside the persistent worldwide AV1 coding-tool,
+prediction, and license review recorded in the 2026-08-23 initial landscape.
+The byte-exact first-frame result is technical conformance evidence only; it
+does not establish patent clearance, license coverage, non-infringement, or a
+result for any material national or regional right. Search and legal-status
+confidence remain **LOW**.
+
+# 2026-08-30 — Opus SILK loss, DTX, and partial-LBRR decoder corrections
+
+MRML source: `packages/libraries/opus/src/{lib,silk_codec,silk_packet}.rs`.
+
+This correction sizes existing SILK loss/FEC scratch storage for every valid
+constituent duration, prepares codec state on DTX mode transitions, routes each
+zero-/one-byte constituent through stateful concealment while keeping its FEC
+output zero, and reconstructs/counts only the protected portions of partial
+mono LBRR and the mid-bearing portions of asymmetric-stereo LBRR. Contiguous
+protected intervals retain one resampling grid. It corrects the existing RFC
+6716 syntax and decoder mechanisms and introduces no independent MRML codec
+algorithm.
+
+Patent review: **TRIGGERED** — this changes implemented SILK/LBRR
+reconstruction and therefore remains inside the persistent worldwide Opus
+SILK/CELT, range-coding, stereo, pitch-tool, and IETF-IPR review recorded in the
+2026-08-23 initial landscape. The existing worldwide review remains in force;
+this correction does not establish patent clearance, license coverage,
+non-infringement, or a result for any material national or regional right.
+Search and legal-status confidence remain **LOW**; technical overlap remains
+unassessed.
+
+# 2026-08-30 — Git SHA-256 and standalone OpenPGP v4 Ed25519Legacy compatibility
+
+MRML source: `packages/libraries/crypto/src/{ed25519,sha512,zeroize}.rs`,
+`packages/libraries/openpgp`,
+`packages/interfaces/org.mrml.interface.security.detached-signing`, and
+`packages/tools/git`.
+
+Patent review: **NOT_TRIGGERED**. This increment directly implements the
+published SHA-384/SHA-512 and Ed25519 operations required by the project's
+existing version-4 Ed25519Legacy OpenPGP key, the narrow RFC 9580 packet/armor
+compatibility profile, and Git's published SHA-1/SHA-256 object and protocol
+distinctions. The signing interface is a conventional bounded service codec
+scoped to Git commit/tag statements and reusable OpenPGP keys. It introduces no
+new signature equation, hash construction, repository algorithm, key-agreement
+mechanism, one-time-signature mechanism, or key-provisioning scheme.
+
+The IETF IPR searches for [RFC 8032](https://datatracker.ietf.org/ipr/search/?rfc=8032&submit=rfc)
+and [RFC 9580](https://datatracker.ietf.org/ipr/search/?rfc=9580&submit=rfc) were
+checked as technical screening. The implementation does not use RFC 6637 ECDH,
+ECDSA, or the related session-key mechanisms. Version-4 Ed25519Legacy support is
+limited to compatibility with the already-selected current key and is not a new
+MRML trust-root format. This screen does not establish worldwide patent
+clearance, non-infringement, or legal advice.
+
+# 2026-08-31 — Original ML-DSA-65 and nested Git hybrid signatures
+
+MRML source: `packages/libraries/crypto/src/{ml_dsa,signing_key_cache}.rs`
+and `packages/tools/git/src/{hybrid_signing,repository}.rs`.
+
+Patent review: **TRIGGERED** — ML-DSA-65 directly implements the standardized
+FIPS 204 mechanism and the Git framing composes it with the independently
+implemented OpenPGP signature. NIST's post-quantum-cryptography process and
+published intellectual-property statements are relevant technical screening,
+but this increment has not completed the required claim-by-claim worldwide
+family and national-register review. The implementation therefore makes no
+patent-clearance, license-coverage, non-infringement, or legal conclusion. The
+nested framing itself introduces no new signature equation: ML-DSA covers the
+canonical unsigned object, and OpenPGP covers the exact object containing that
+first signature. Search and legal-status confidence remain **LOW** pending the
+targeted review.

@@ -3,9 +3,11 @@
 use mrml_runtime::{Text, Vector};
 
 mod diff;
+mod hybrid_signing;
 mod index;
 mod inflate;
 mod object;
+mod openpgp_provider;
 mod pack;
 mod remote;
 mod repository;
@@ -13,22 +15,38 @@ mod sha1;
 mod transport;
 
 pub use diff::FileDiff;
+pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
+pub use mrml_openpgp::{
+    DigestAlgorithm as OpenPgpDigestAlgorithm, Error as OpenPgpError,
+    Fingerprint as OpenPgpFingerprint, PublicKey as OpenPgpPublicKey,
+    SigningKey as OpenPgpSigningKey, VerificationPolicy as OpenPgpVerificationPolicy,
+    VerifiedSignature as VerifiedOpenPgpSignature, parse_public_key_ascii, sign_detached_ascii,
+    verify_detached_ascii, verify_detached_ascii_with_public_key,
+};
 pub use object::{
     Commit, Object, ObjectError, ObjectKind, TreeEntry, decode_loose_object, encode_loose_object,
-    parse_tree,
+    encode_loose_object_with_format, parse_tree, parse_tree_with_format,
 };
-pub use pack::{PackError, PackObject, encode_pack, parse_pack};
-pub use remote::{FetchError, FetchResult, PushError, PushResult, check_ssh, fetch_ssh, push_ssh};
+pub use openpgp_provider::{
+    OpenPgpServiceError, describe_public_key_via_interface, sign_git_payload_via_interface,
+};
+pub use pack::{
+    PackError, PackObject, encode_pack, encode_pack_with_format, parse_pack, parse_pack_with_format,
+};
+pub use remote::{
+    FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
+    push_ssh,
+};
 pub use repository::{
-    BlameLine, MergeOutcome, NativeChange, NativeChangeKind, RebaseOutcome, Repository,
-    RepositoryError,
+    BlameLine, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind, RebaseOutcome,
+    Repository, RepositoryError,
 };
-pub use sha1::{ObjectId, Sha1};
+pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
     extract_pack_response, fetch_request, parse_advertisement, parse_push_response,
-    parse_push_response_mode, push_request, push_request_mode,
+    parse_push_response_mode, push_request, push_request_mode, push_request_mode_negotiated,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

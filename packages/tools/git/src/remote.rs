@@ -1,6 +1,6 @@
 use crate::{
     ObjectId, Repository, extract_pack_response, fetch_request, parse_advertisement,
-    parse_push_response_mode, push_request_mode,
+    parse_push_response_mode, push_request_mode_negotiated,
 };
 use core::fmt;
 use mrml_runtime::{Text, Vector};
@@ -13,6 +13,11 @@ pub struct FetchResult {
     pub objects: Vector<ObjectId>,
     pub branches: Vector<(Text, ObjectId)>,
     pub default_branch: Option<Text>,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteInfo {
+    pub references: usize,
+    pub object_format: crate::ObjectFormat,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FetchError {
@@ -41,6 +46,9 @@ pub fn fetch_ssh(
     let advertisement_bytes = collect_until_flush(&mut channel)?;
     let advertisement =
         parse_advertisement(&advertisement_bytes).map_err(|_| FetchError::Protocol)?;
+    if advertisement.object_format != repository.object_format() {
+        return Err(FetchError::Protocol);
+    }
     let mut wants = Vector::new();
     for reference in &advertisement.refs {
         if reference.name.starts_with("refs/heads/") && !wants.contains(&reference.id) {
@@ -75,6 +83,13 @@ pub fn fetch_ssh(
     {
         capabilities.push("ofs-delta");
     }
+    if let Some(capability) = advertisement
+        .capabilities
+        .iter()
+        .find(|capability| capability.starts_with("object-format="))
+    {
+        capabilities.push(capability.as_str());
+    }
     let request = fetch_request(&wants, &[], &capabilities).map_err(|_| FetchError::Protocol)?;
     channel.send_all(&request).map_err(|_| FetchError::Ssh)?;
     channel.send_eof().map_err(|_| FetchError::Ssh)?;
@@ -83,6 +98,9 @@ pub fn fetch_ssh(
     let objects = repository
         .import_pack(&pack)
         .map_err(|_| FetchError::Pack)?;
+    repository
+        .validate_commit_tips(&wants)
+        .map_err(|_| FetchError::Repository)?;
     let default_branch = advertisement.capabilities.iter().find_map(|capability| {
         capability
             .strip_prefix("symref=HEAD:refs/heads/")
@@ -125,7 +143,7 @@ fn collect_until_flush(channel: &mut GitChannel) -> Result<Vector<u8>, FetchErro
         match channel.receive_event().map_err(|_| FetchError::Ssh)? {
             ChannelEvent::Data { bytes, .. } => {
                 append(&mut output, &bytes)?;
-                if output.windows(4).any(|part| part == b"0000") {
+                if advertisement_has_flush(&output)? {
                     return Ok(output);
                 }
             }
@@ -134,6 +152,35 @@ fn collect_until_flush(channel: &mut GitChannel) -> Result<Vector<u8>, FetchErro
             _ => {}
         }
     }
+}
+fn advertisement_has_flush(source: &[u8]) -> Result<bool, FetchError> {
+    let mut cursor = 0usize;
+    while cursor < source.len() {
+        if source.len() - cursor < 4 {
+            return Ok(false);
+        }
+        let mut length = 0usize;
+        for byte in &source[cursor..cursor + 4] {
+            length = length.checked_mul(16).ok_or(FetchError::Protocol)?
+                + match byte {
+                    b'0'..=b'9' => (*byte - b'0') as usize,
+                    b'a'..=b'f' => (*byte - b'a' + 10) as usize,
+                    b'A'..=b'F' => (*byte - b'A' + 10) as usize,
+                    _ => return Err(FetchError::Protocol),
+                };
+        }
+        if length == 0 {
+            return Ok(true);
+        }
+        if length < 4 || length > 65_520 {
+            return Err(FetchError::Protocol);
+        }
+        if source.len() - cursor < length {
+            return Ok(false);
+        }
+        cursor = cursor.checked_add(length).ok_or(FetchError::TooLarge)?;
+    }
+    Ok(false)
 }
 fn collect_to_close(channel: &mut GitChannel) -> Result<Vector<u8>, FetchError> {
     let mut output = Vector::new();
@@ -174,6 +221,14 @@ pub fn check_ssh(
     key: &RsaPrivateKey,
     host_key: &[u8],
 ) -> Result<usize, FetchError> {
+    Ok(inspect_ssh(remote, key, host_key)?.references)
+}
+
+pub fn inspect_ssh(
+    remote: &SshRemote,
+    key: &RsaPrivateKey,
+    host_key: &[u8],
+) -> Result<RemoteInfo, FetchError> {
     let user = remote.user.as_deref().unwrap_or("git");
     let authenticated =
         AuthenticatedSsh::connect(&remote.host, remote.port.unwrap_or(22), user, key, host_key)
@@ -181,10 +236,11 @@ pub fn check_ssh(
     let mut channel = GitChannel::open(authenticated, GitService::UploadPack, &remote.path)
         .map_err(|_| FetchError::Ssh)?;
     let bytes = collect_until_flush(&mut channel)?;
-    Ok(parse_advertisement(&bytes)
-        .map_err(|_| FetchError::Protocol)?
-        .refs
-        .len())
+    let advertisement = parse_advertisement(&bytes).map_err(|_| FetchError::Protocol)?;
+    Ok(RemoteInfo {
+        references: advertisement.refs.len(),
+        object_format: advertisement.object_format,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -219,6 +275,9 @@ pub fn push_ssh(
     let advertisement_bytes = collect_until_flush(&mut channel).map_err(map_fetch_push)?;
     let advertisement =
         parse_advertisement(&advertisement_bytes).map_err(|_| PushError::Protocol)?;
+    if advertisement.object_format != repository.object_format() {
+        return Err(PushError::Protocol);
+    }
     if !advertisement
         .capabilities
         .iter()
@@ -236,14 +295,14 @@ pub fn push_ssh(
         .iter()
         .find(|entry| entry.name == reference)
         .map(|entry| entry.id)
-        .unwrap_or(ObjectId([0; 20]));
+        .unwrap_or(ObjectId::zero(repository.object_format()));
     let new = repository
         .resolve_revision(branch)
         .map_err(|_| PushError::Repository)?;
     if old == new {
         return Ok(PushResult { old, new });
     }
-    if old != ObjectId([0; 20]) {
+    if !old.is_zero() {
         match repository.is_ancestor(old, new) {
             Ok(true) => {}
             Ok(false) => return Err(PushError::NonFastForward),
@@ -253,8 +312,15 @@ pub fn push_ssh(
     let pack = repository
         .pack_reachable(new)
         .map_err(|_| PushError::Repository)?;
-    let request = push_request_mode(old, new, &reference, &pack, side_band)
-        .map_err(|_| PushError::Protocol)?;
+    let request = push_request_mode_negotiated(
+        old,
+        new,
+        &reference,
+        &pack,
+        side_band,
+        advertisement.object_format_explicit,
+    )
+    .map_err(|_| PushError::Protocol)?;
     channel.send_all(&request).map_err(|_| PushError::Ssh)?;
     channel.send_eof().map_err(|_| PushError::Ssh)?;
     let response = collect_to_close(&mut channel).map_err(map_fetch_push)?;
@@ -286,3 +352,24 @@ impl fmt::Display for PushError {
     }
 }
 impl core::error::Error for PushError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertisement_flush_is_recognized_only_at_packet_boundaries() {
+        let mut wire = Vector::new();
+        crate::encode_packet(
+            b"0000000000000000000000000000000000000000000000000000000000000000 capabilities^{}\0object-format=sha256\n",
+            &mut wire,
+        )
+        .unwrap();
+        assert!(!advertisement_has_flush(&wire).unwrap());
+        crate::encode_flush(&mut wire);
+        assert!(advertisement_has_flush(&wire).unwrap());
+        for end in 0..wire.len() - 4 {
+            assert!(!advertisement_has_flush(&wire[..end]).unwrap());
+        }
+    }
+}

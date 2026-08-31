@@ -2,7 +2,7 @@ use core::fmt;
 use mrml_runtime::{Text, Vector};
 
 use crate::inflate::inflate_zlib;
-use crate::{ObjectId, Sha1};
+use crate::{ObjectFormat, ObjectId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectKind {
@@ -58,15 +58,20 @@ impl ObjectKind {
 /// DEFLATE blocks are deliberately uncompressed. This keeps the implementation
 /// small and auditable while remaining readable by other Git implementations.
 pub fn encode_loose_object(kind: ObjectKind, contents: &[u8]) -> (ObjectId, Vector<u8>) {
+    encode_loose_object_with_format(ObjectFormat::Sha1, kind, contents)
+}
+
+pub fn encode_loose_object_with_format(
+    format: ObjectFormat,
+    kind: ObjectKind,
+    contents: &[u8],
+) -> (ObjectId, Vector<u8>) {
     let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
-    let mut hash = Sha1::new();
-    hash.update(header.as_bytes());
-    hash.update(contents);
-    let id = ObjectId(hash.finalize());
     let total = header.len() + contents.len();
     let mut plain = Vector::new();
     plain.extend(header.as_bytes().iter().copied());
     plain.extend(contents.iter().copied());
+    let id = format.hash_bytes(&plain);
     let mut output = Vector::new();
     output.extend([0x78, 0x01]);
     let mut offset = 0;
@@ -126,6 +131,10 @@ impl core::error::Error for ObjectError {}
 
 impl Commit {
     pub fn parse(contents: &[u8]) -> Result<Self, ObjectError> {
+        Self::parse_with_format(contents, ObjectFormat::Sha1)
+    }
+
+    pub fn parse_with_format(contents: &[u8], format: ObjectFormat) -> Result<Self, ObjectError> {
         let text = core::str::from_utf8(contents).map_err(|_| ObjectError::InvalidHeader)?;
         let (headers, message) = text.split_once("\n\n").ok_or(ObjectError::InvalidHeader)?;
         let mut tree = None;
@@ -133,9 +142,12 @@ impl Commit {
         let mut author = None;
         for line in headers.lines() {
             if let Some(value) = line.strip_prefix("tree ") {
-                tree = ObjectId::parse(value);
+                if tree.is_some() {
+                    return Err(ObjectError::InvalidHeader);
+                }
+                tree = Some(ObjectId::parse_for(format, value).ok_or(ObjectError::InvalidHeader)?);
             } else if let Some(value) = line.strip_prefix("parent ") {
-                parents.push(ObjectId::parse(value).ok_or(ObjectError::InvalidHeader)?);
+                parents.push(ObjectId::parse_for(format, value).ok_or(ObjectError::InvalidHeader)?);
             } else if let Some(value) = line.strip_prefix("author ") {
                 author = Some(Text::from(value));
             }
@@ -150,6 +162,13 @@ impl Commit {
 }
 
 pub fn parse_tree(contents: &[u8]) -> Result<Vector<TreeEntry>, ObjectError> {
+    parse_tree_with_format(contents, ObjectFormat::Sha1)
+}
+
+pub fn parse_tree_with_format(
+    contents: &[u8],
+    format: ObjectFormat,
+) -> Result<Vector<TreeEntry>, ObjectError> {
     let mut entries = Vector::new();
     let mut cursor = 0usize;
     while cursor < contents.len() {
@@ -186,14 +205,15 @@ pub fn parse_tree(contents: &[u8]) -> Result<Vector<TreeEntry>, ObjectError> {
             return Err(ObjectError::InvalidHeader);
         }
         cursor = nul + 1;
-        let id = ObjectId(
+        let hash_len = format.hash_len();
+        let id = ObjectId::from_bytes(
+            format,
             contents
-                .get(cursor..cursor + 20)
-                .ok_or(ObjectError::Truncated)?
-                .try_into()
-                .map_err(|_| ObjectError::Truncated)?,
-        );
-        cursor += 20;
+                .get(cursor..cursor + hash_len)
+                .ok_or(ObjectError::Truncated)?,
+        )
+        .ok_or(ObjectError::InvalidHeader)?;
+        cursor += hash_len;
         if !matches!(mode, 0o40000 | 0o100644 | 0o100755 | 0o120000 | 0o160000) {
             return Err(ObjectError::InvalidHeader);
         }
@@ -263,5 +283,67 @@ mod tests {
         assert_eq!(commit.tree, ObjectId::parse(tree).unwrap());
         assert_eq!(commit.parents[0], ObjectId::parse(parent).unwrap());
         assert_eq!(commit.message, "message\n");
+    }
+
+    #[test]
+    fn sha256_loose_commit_and_tree_use_exact_format() {
+        let tree = ObjectId::blob_with_format(ObjectFormat::Sha256, b"tree");
+        let parent = ObjectId::blob_with_format(ObjectFormat::Sha256, b"parent");
+        let commit_text = mrml_runtime::mrml_format!(
+            "tree {tree}\nparent {parent}\nauthor MRML <mrml@example.invalid> 1 +0000\ncommitter MRML <mrml@example.invalid> 1 +0000\n\nmessage\n"
+        );
+        let (commit_id, encoded) = encode_loose_object_with_format(
+            ObjectFormat::Sha256,
+            ObjectKind::Commit,
+            commit_text.as_bytes(),
+        );
+        assert_eq!(commit_id.format(), ObjectFormat::Sha256);
+        assert_eq!(
+            decode_loose_object(&encoded).unwrap().contents,
+            commit_text.as_bytes()
+        );
+        let commit =
+            Commit::parse_with_format(commit_text.as_bytes(), ObjectFormat::Sha256).unwrap();
+        assert_eq!(commit.tree, tree);
+        assert_eq!(&*commit.parents, &[parent]);
+        assert_eq!(
+            Commit::parse(commit_text.as_bytes()),
+            Err(ObjectError::InvalidHeader)
+        );
+
+        let mut tree_bytes = Vector::from(*b"100644 file\0");
+        tree_bytes.extend(tree.as_bytes().iter().copied());
+        let entries = parse_tree_with_format(&tree_bytes, ObjectFormat::Sha256).unwrap();
+        assert_eq!(entries[0].id, tree);
+        assert_eq!(parse_tree(&tree_bytes), Err(ObjectError::InvalidHeader));
+    }
+
+    #[test]
+    fn rejects_duplicate_or_foreign_width_commit_references() {
+        let sha1 = "1111111111111111111111111111111111111111";
+        let sha256 = "2222222222222222222222222222222222222222222222222222222222222222";
+        let duplicate_tree = mrml_runtime::mrml_format!(
+            "tree {sha256}\ntree {sha256}\nauthor MRML <mrml@example.invalid> 1 +0000\ncommitter MRML <mrml@example.invalid> 1 +0000\n\nmessage\n"
+        );
+        assert_eq!(
+            Commit::parse_with_format(duplicate_tree.as_bytes(), ObjectFormat::Sha256),
+            Err(ObjectError::InvalidHeader)
+        );
+
+        let foreign_tree_then_valid = mrml_runtime::mrml_format!(
+            "tree {sha1}\ntree {sha256}\nauthor MRML <mrml@example.invalid> 1 +0000\ncommitter MRML <mrml@example.invalid> 1 +0000\n\nmessage\n"
+        );
+        assert_eq!(
+            Commit::parse_with_format(foreign_tree_then_valid.as_bytes(), ObjectFormat::Sha256),
+            Err(ObjectError::InvalidHeader)
+        );
+
+        let foreign_parent = mrml_runtime::mrml_format!(
+            "tree {sha256}\nparent {sha1}\nauthor MRML <mrml@example.invalid> 1 +0000\ncommitter MRML <mrml@example.invalid> 1 +0000\n\nmessage\n"
+        );
+        assert_eq!(
+            Commit::parse_with_format(foreign_parent.as_bytes(), ObjectFormat::Sha256),
+            Err(ObjectError::InvalidHeader)
+        );
     }
 }

@@ -301,7 +301,9 @@ name, source, and optional self-library extern. Build mode emits the real binary
 test mode also compiles and runs that binary source as a test harness. Explicit
 compile-time environment records replace Cargo-provided ambient values.
 `mrml-git` exercises the complete path: both hosts build its library and binary,
-then pass 51 library tests and one binary test.
+with dated focused outcomes recorded in
+[MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md) rather than treating a volatile
+test count as part of the build contract.
 
 `mrml-tools` combines exact feature, compile-environment, universal-extern, and
 target-extern records. Linux passes 32 direct tests; Windows reproduces the

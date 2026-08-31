@@ -1,4 +1,5 @@
 use core::fmt;
+use mrml_crypto::Sha256;
 use mrml_runtime::Text;
 
 const INITIAL: [u32; 5] = [
@@ -119,39 +120,139 @@ impl Default for Sha1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ObjectId(pub [u8; 20]);
+/// Hash algorithm selected by a Git repository's `extensions.objectFormat`.
+///
+/// The format is repository-wide. Object IDs from different formats are never
+/// interchangeable even when their contents happen to represent the same Git
+/// object.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ObjectFormat {
+    #[default]
+    Sha1,
+    Sha256,
+}
+
+impl ObjectFormat {
+    pub const fn hash_len(self) -> usize {
+        match self {
+            Self::Sha1 => 20,
+            Self::Sha256 => 32,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Sha1 => "sha1",
+            Self::Sha256 => "sha256",
+        }
+    }
+
+    pub fn hash_bytes(self, bytes: &[u8]) -> ObjectId {
+        match self {
+            Self::Sha1 => ObjectId::Sha1(Sha1::digest(bytes)),
+            Self::Sha256 => ObjectId::Sha256(Sha256::digest(bytes)),
+        }
+    }
+}
+
+impl fmt::Display for ObjectFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ObjectId {
+    Sha1([u8; 20]),
+    Sha256([u8; 32]),
+}
+
+/// Compatibility constructor for the original SHA-1-only API.
+#[allow(non_snake_case)]
+pub const fn ObjectId(bytes: [u8; 20]) -> ObjectId {
+    ObjectId::Sha1(bytes)
+}
 
 impl ObjectId {
     pub fn parse(hex: &str) -> Option<Self> {
-        if hex.len() != 40 {
+        Self::parse_for(ObjectFormat::Sha1, hex)
+    }
+
+    pub fn parse_for(format: ObjectFormat, hex: &str) -> Option<Self> {
+        if hex.len() != format.hash_len().checked_mul(2)? {
             return None;
         }
-        let mut bytes = [0; 20];
-        for (index, byte) in bytes.iter_mut().enumerate() {
-            *byte = decode_hex(hex.as_bytes()[index * 2])?
+        let mut bytes = [0; 32];
+        for (index, byte) in bytes[..format.hash_len()].iter_mut().enumerate() {
+            *byte = decode_hex(*hex.as_bytes().get(index * 2)?)?
                 .checked_mul(16)?
-                .checked_add(decode_hex(hex.as_bytes()[index * 2 + 1])?)?;
+                .checked_add(decode_hex(*hex.as_bytes().get(index * 2 + 1)?)?)?;
         }
-        Some(Self(bytes))
+        Self::from_bytes(format, &bytes[..format.hash_len()])
+    }
+
+    pub fn from_bytes(format: ObjectFormat, bytes: &[u8]) -> Option<Self> {
+        match format {
+            ObjectFormat::Sha1 => Some(Self::Sha1(bytes.try_into().ok()?)),
+            ObjectFormat::Sha256 => Some(Self::Sha256(bytes.try_into().ok()?)),
+        }
     }
 
     pub fn to_hex(self) -> Text {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut output = Text::new();
-        for byte in self.0 {
+        for byte in self.as_bytes() {
             output.push(HEX[(byte >> 4) as usize] as char);
             output.push(HEX[(byte & 15) as usize] as char);
         }
         output
     }
 
+    pub const fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Sha1(bytes) => bytes,
+            Self::Sha256(bytes) => bytes,
+        }
+    }
+
+    pub const fn format(self) -> ObjectFormat {
+        match self {
+            Self::Sha1(_) => ObjectFormat::Sha1,
+            Self::Sha256(_) => ObjectFormat::Sha256,
+        }
+    }
+
+    pub const fn zero(format: ObjectFormat) -> Self {
+        match format {
+            ObjectFormat::Sha1 => Self::Sha1([0; 20]),
+            ObjectFormat::Sha256 => Self::Sha256([0; 32]),
+        }
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.as_bytes().iter().all(|byte| *byte == 0)
+    }
+
     pub fn blob(contents: &[u8]) -> Self {
-        let mut hash = Sha1::new();
+        Self::blob_with_format(ObjectFormat::Sha1, contents)
+    }
+
+    pub fn blob_with_format(format: ObjectFormat, contents: &[u8]) -> Self {
         let header = mrml_runtime::mrml_format!("blob {}\0", contents.len());
-        hash.update(header.as_bytes());
-        hash.update(contents);
-        Self(hash.finalize())
+        match format {
+            ObjectFormat::Sha1 => {
+                let mut hash = Sha1::new();
+                hash.update(header.as_bytes());
+                hash.update(contents);
+                Self::Sha1(hash.finalize())
+            }
+            ObjectFormat::Sha256 => {
+                let mut hash = Sha256::new();
+                hash.update(header.as_bytes());
+                hash.update(contents);
+                Self::Sha256(hash.finalize())
+            }
+        }
     }
 }
 
@@ -191,6 +292,44 @@ mod tests {
         assert_eq!(
             ObjectId::blob(b"").to_hex(),
             "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        );
+    }
+
+    #[test]
+    fn git_sha256_empty_blob_vector() {
+        assert_eq!(
+            ObjectId::blob_with_format(ObjectFormat::Sha256, b"").to_hex(),
+            "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+        );
+    }
+
+    #[test]
+    fn exact_format_parsing_rejects_mixed_lengths() {
+        let sha1 = ObjectId::blob(b"");
+        let sha256 = ObjectId::blob_with_format(ObjectFormat::Sha256, b"");
+        assert_eq!(
+            ObjectId::parse_for(ObjectFormat::Sha1, &sha1.to_hex()),
+            Some(sha1)
+        );
+        assert_eq!(
+            ObjectId::parse_for(ObjectFormat::Sha256, &sha256.to_hex()),
+            Some(sha256)
+        );
+        assert_eq!(
+            ObjectId::parse_for(ObjectFormat::Sha1, &sha256.to_hex()),
+            None
+        );
+        assert_eq!(
+            ObjectId::parse_for(ObjectFormat::Sha256, &sha1.to_hex()),
+            None
+        );
+        assert_eq!(
+            ObjectId::from_bytes(ObjectFormat::Sha1, sha256.as_bytes()),
+            None
+        );
+        assert_eq!(
+            ObjectId::from_bytes(ObjectFormat::Sha256, sha1.as_bytes()),
+            None
         );
     }
 

@@ -26,6 +26,73 @@ or bytes grant no authority.
 This does not implement native call lowering, executable mapping, a provider,
 consumer migration, or runtime interface resolution.
 
+**IMPLEMENTED as a bounded schema, generated codec, and typed in-process host
+adapter:** `org.mrml.interface.security.detached-signing@1` defines one exact
+reusable OpenPGP-v4 Ed25519Legacy binary-document signature profile, separate
+Git commit and annotated-tag purposes, SHA-256/SHA-384/SHA-512 selection, a
+20-byte expected primary-key fingerprint, canonical detached-signature and
+minimal public-key armor formats, and fixed borrowed-memory limits. Its safe
+provider-side dispatcher exposes immutable fingerprint/input slices and only
+the declared mutable output slice. Focused tests cover canonical framing,
+malformed responses, exact fingerprint/purpose/digest route attenuation, and
+read/write-region separation; the codec also cross-compiles as `no_std` for the
+projected UEFI target.
+
+The opaque endpoint and fingerprint remain identities, not authority. A runtime-
+delivered endpoint capability authorizes use only for its exact live endpoint,
+key generation, purpose, digest allowlist, and lifetime. Signing and public-key
+description use separate routes and independently revocable rights; signing use
+does not imply public-key description, and neither implies secret-key export.
+The source type named `IsolatedDetachedSigningTransport` only checks and forwards
+an already-authorized route through a supplied endpoint trait. Its name and
+successful host tests do not create or prove process, microVM, hardware, or key-
+custody isolation.
+
+An actual capability-projected IPC service/provider deployment, supervised
+runtime binding and revocation, owner-authorized key provisioning/lifecycle,
+boot or recovery consumption, and physical-hardware evidence are **PLANNED**.
+The interface is use-only and deliberately does not create, import, export,
+rotate, revoke, or destroy private keys.
+
+```text
+Complexity impact: MEDIUM
+TCB impact: NONE
+New parser boundary: YES
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: PARTIAL
+Existing-object reuse: HIGH
+```
+
+The TCB score describes the implemented host/library increment; no boot or
+runtime provider has been admitted. Isolation is partial because the current
+adapter runs inside the host Git process, while the separate service placement
+remains planned.
+
+`DIGITAL-RIGHTS REVIEW: PASS FOR IMPLEMENTED SCOPE.` The pinned fingerprint is
+identity, the owner-delivered route is authority, owner revocation remains
+authoritative, and the protocol creates no publisher veto, remote dependency,
+DRM, secret-export right, or first-party bypass.
+
+`HOSTILE SECURITY REVIEW: PARTIAL.` Fixed codecs, bounded memory, immutable
+input views, exact output views, caller self-verification, strict OpenPGP/Git
+parsing, and stale-route failure are exercised by focused host tests. Runtime
+capability revocation, crash cleanup, service compromise containment, fuzzing,
+protected custody, and boot/recovery behavior remain unproved and therefore do
+not satisfy the mature-mechanism gate.
+
+**IMPLEMENTED as a bounded schema and generated codec:**
+`org.mrml.interface.security.ml-dsa-signing@1` adds an exact ML-DSA-65
+signing-use route with 32-byte expected public-key digest, canonical Git commit
+or annotated-tag purpose, 16 MiB input bound, 3,309-byte raw-signature output,
+and a separately routable 1,952-byte public-key description. The provider owns
+per-signature randomness. The interface transfers no capability, key material,
+or passphrase; the digest identifies the exact routed key but grants no
+authority. The generated codec passes Linux host testing and an MRML-native
+`no_std` build. A deployed provider, runtime route delivery, boot consumer, and
+hardware custody remain **PLANNED**.
+
 **PARTIALLY IMPLEMENTED loader prerequisite:** the build tool now admits an
 immutable exact-package load plan made only of bounded, page-aligned,
 nonoverlapping sections. It rejects writable-executable mappings, nonexecutable

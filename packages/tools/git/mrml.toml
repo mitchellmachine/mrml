@@ -37,6 +37,24 @@ package = "org.mrml.library.error"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_interface_detached_signing_v1"
+compile_name = "mrml-interface-security-detached-signing-v1"
+package = "org.mrml.interface.security.detached-signing"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_openpgp"
+compile_name = "mrml-openpgp"
+package = "org.mrml.library.openpgp"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
@@ -68,6 +86,6 @@ value = "0.0.1"
 fingerprint = "fnv1a64:05574ad953169823"
 id = "compile-env.dispatch.cargo-pkg-version"
 kind = "compile-env"
-line = 288
+line = 783
 path = "packages/tools/git/src/main.rs"
 reason = "Read the declared compile-time setting cargo-pkg-version for dispatch in org.mrml.tool.git; absence and defaults are handled explicitly at that site."
