@@ -560,6 +560,137 @@ impl RestartableRetiredNativeFilesystemProvider {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderRestartError {
+    CandidateTeardownProgressed,
+    WrongProviderObject,
+    WrongAssociationGeneration,
+    WrongFilesystemProviderGeneration,
+    WrongBlockProviderGeneration,
+    WrongSystemGeneration,
+    Service(ServiceError),
+}
+
+fn validate_native_filesystem_provider_restart_association<I, J>(
+    retired: &FilesystemProviderLaunchReceipt<I>,
+    candidate: &FilesystemProviderLaunchReceipt<J>,
+) -> Result<(), NativeFilesystemProviderRestartError> {
+    if candidate.provider_object != retired.provider_object {
+        return Err(NativeFilesystemProviderRestartError::WrongProviderObject);
+    }
+    if candidate.association_generation != retired.association_generation {
+        return Err(NativeFilesystemProviderRestartError::WrongAssociationGeneration);
+    }
+    if candidate.filesystem_provider_generation != retired.filesystem_provider_generation {
+        return Err(NativeFilesystemProviderRestartError::WrongFilesystemProviderGeneration);
+    }
+    if candidate.block_provider_generation != retired.block_provider_generation {
+        return Err(NativeFilesystemProviderRestartError::WrongBlockProviderGeneration);
+    }
+    if candidate.system_generation != retired.system_generation {
+        return Err(NativeFilesystemProviderRestartError::WrongSystemGeneration);
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct NativeFilesystemProviderRestartFailure {
+    retired: RestartableRetiredNativeFilesystemProvider,
+    candidate: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    error: NativeFilesystemProviderRestartError,
+}
+
+impl NativeFilesystemProviderRestartFailure {
+    pub const fn error(&self) -> NativeFilesystemProviderRestartError {
+        self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        RestartableRetiredNativeFilesystemProvider,
+        FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    ) {
+        (self.retired, self.candidate)
+    }
+}
+
+#[derive(Debug)]
+pub struct RestartedNativeFilesystemProvider {
+    retired: RestartableRetiredNativeFilesystemProvider,
+    active: ActiveNativeFilesystemProvider,
+}
+
+impl RestartedNativeFilesystemProvider {
+    pub const fn retired(&self) -> &RestartableRetiredNativeFilesystemProvider {
+        &self.retired
+    }
+
+    pub const fn active(&self) -> &ActiveNativeFilesystemProvider {
+        &self.active
+    }
+
+    pub fn into_active(self) -> ActiveNativeFilesystemProvider {
+        self.active
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        RestartableRetiredNativeFilesystemProvider,
+        ActiveNativeFilesystemProvider,
+    ) {
+        (self.retired, self.active)
+    }
+}
+
+pub fn restart_and_activate_native_filesystem_provider<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+    const SERVICES: usize,
+>(
+    retired: RestartableRetiredNativeFilesystemProvider,
+    candidate: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    now: u64,
+) -> Result<RestartedNativeFilesystemProvider, NativeFilesystemProviderRestartFailure> {
+    let result = (|| {
+        validate_native_filesystem_provider_restart_association(&retired.receipt, &candidate)?;
+        let active = candidate
+            .instance
+            .active()
+            .ok_or(NativeFilesystemProviderRestartError::CandidateTeardownProgressed)?;
+        let task = active.construction().task();
+        // SAFETY: `candidate` is the exact typed filesystem construction owner;
+        // the equality checks above bind it to the retained retired association,
+        // and the kernel revalidates service generation, task state, policy,
+        // cleanup, budget, backoff, and scheduler state before publication.
+        let binding = unsafe {
+            supervisor.restart_and_activate_constructed(
+                retired.service,
+                candidate.provider_object,
+                task,
+                runtime,
+                now,
+            )
+        }
+        .map_err(NativeFilesystemProviderRestartError::Service)?;
+        Ok(ActiveNativeFilesystemProvider {
+            receipt: candidate,
+            binding,
+        })
+    })();
+    match result {
+        Ok(active) => Ok(RestartedNativeFilesystemProvider { retired, active }),
+        Err(error) => Err(NativeFilesystemProviderRestartFailure {
+            retired,
+            candidate,
+            error,
+        }),
+    }
+}
+
 #[derive(Debug)]
 pub struct CleanedNativeFilesystemProviderRetirementDispatchFailure {
     receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
@@ -2139,6 +2270,72 @@ mod tests {
         assert_eq!(
             NativeFilesystemProviderLaunchSpec::new(association, service, wrong_length, endpoint,),
             Err(NativeFilesystemProviderLaunchSpecError::WrongLaunchDataLength)
+        );
+    }
+
+    #[test]
+    fn restart_association_rejects_every_identity_and_generation_substitution() {
+        let association = association();
+        let retired = receipt(
+            association.filesystem_binding.provider_object,
+            association.handoff(),
+            1_u8,
+        );
+        let exact = receipt(
+            association.filesystem_binding.provider_object,
+            association.handoff(),
+            2_u16,
+        );
+        assert_eq!(
+            validate_native_filesystem_provider_restart_association(&retired, &exact),
+            Ok(())
+        );
+
+        let candidate = |provider_object, candidate: FilesystemBlockAssociation| {
+            receipt(provider_object, candidate.handoff(), 3_u32)
+        };
+        assert_eq!(
+            validate_native_filesystem_provider_restart_association(
+                &retired,
+                &candidate(ObjectId(0xdead), association),
+            ),
+            Err(NativeFilesystemProviderRestartError::WrongProviderObject)
+        );
+        let mut substituted = association;
+        substituted.association_generation += 1;
+        assert_eq!(
+            validate_native_filesystem_provider_restart_association(
+                &retired,
+                &candidate(association.filesystem_binding.provider_object, substituted),
+            ),
+            Err(NativeFilesystemProviderRestartError::WrongAssociationGeneration)
+        );
+        substituted = association;
+        substituted.filesystem_binding.provider_generation += 1;
+        assert_eq!(
+            validate_native_filesystem_provider_restart_association(
+                &retired,
+                &candidate(association.filesystem_binding.provider_object, substituted),
+            ),
+            Err(NativeFilesystemProviderRestartError::WrongFilesystemProviderGeneration)
+        );
+        substituted = association;
+        substituted.block_binding.provider_generation += 1;
+        assert_eq!(
+            validate_native_filesystem_provider_restart_association(
+                &retired,
+                &candidate(association.filesystem_binding.provider_object, substituted),
+            ),
+            Err(NativeFilesystemProviderRestartError::WrongBlockProviderGeneration)
+        );
+        substituted = association;
+        substituted.filesystem_binding.system_generation += 1;
+        assert_eq!(
+            validate_native_filesystem_provider_restart_association(
+                &retired,
+                &candidate(association.filesystem_binding.provider_object, substituted),
+            ),
+            Err(NativeFilesystemProviderRestartError::WrongSystemGeneration)
         );
     }
 
