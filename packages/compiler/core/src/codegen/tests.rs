@@ -18143,26 +18143,45 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div_exact(b).unwrap_or(0) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_div_exact(b).unwrap_or(0) }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> bool { a.checked_div_exact(b).is_some() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b).is_none() }",
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div_exact(b).unwrap_or(0) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b) }",
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_div_exact(b).unwrap_or(0) }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> bool { a.checked_div_exact(b).is_some() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b).is_none() }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            assert!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
-                    &function,
-                    &NoConstants,
-                    X86_64Abi::SystemV,
-                )
-                .is_err(),
-                "{source}"
-            );
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert_eq!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                    )
+                    .unwrap_err()
+                    .kind,
+                    expected,
+                    "{source}"
+                );
+            }
         }
     }
 
