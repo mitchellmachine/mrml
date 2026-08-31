@@ -1765,6 +1765,23 @@ owner. The controlled test exercises both denial/retry and success. Bootloader
 launch construction, static manager retention, and installed trap execution
 remain incomplete, so this is source and Linux unit-test evidence only.
 
+The manager slot can now be allocated empty before PCI discovery and populated
+later through a consuming transition. Population rejects replacement before
+examining incoming identity and returns the incoming active owner and lease
+unchanged on either occupancy or binding denial. The x86 activation boundary
+can populate this preallocated storage directly, so success exposes no loose
+active owner and the same slot remains available after a consumed exit for an
+explicit future restart. The controlled lifecycle test proves empty routing
+fails closed, activation populates the fixed slot, and cancellation recovers
+the exact retained owners. No bootloader static or booted trap route uses this
+storage yet.
+
+Patent review: **NOT_TRIGGERED**. Preallocating an empty optional owner slot and
+rejecting replacement before consuming linear inputs is conventional bounded
+state management. It adds no parser, controller command, DMA behavior,
+persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Synchronously composing existing activation
 and manager-slot installation while returning all linear owners on failure is
 conventional lifecycle wiring. It adds no parser, controller command, DMA

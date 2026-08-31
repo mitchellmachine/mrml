@@ -197,7 +197,8 @@ pub use service_device_teardown::{
     KernelAhciServiceDispatchError, KernelAhciServiceExitDispatchError,
     KernelAhciServiceExitFreezeError, KernelAhciServiceExitRequest,
     KernelAhciServiceExitRequestError, KernelAhciServiceExitSlot,
-    KernelAhciServiceExitSlotInstallError, KernelAhciServiceExitSlotRouteError,
+    KernelAhciServiceExitSlotInstallError, KernelAhciServiceExitSlotPopulationError,
+    KernelAhciServiceExitSlotPopulationFailure, KernelAhciServiceExitSlotRouteError,
     KernelAhciServiceTaskRetirementError, KernelAhciServiceTeardownReacquisitionError,
     KernelAhciTeardownReacquisitionBackend, PendingAhciServiceDeviceTeardown,
     QuarantinedAhciServiceTeardown, QuarantinedKernelAhciServiceTeardown,
@@ -255,7 +256,7 @@ pub use x86_teardown_reacquisition::{
     AhciX86ActiveMappingVerifier, AhciX86TeardownReacquisition, AhciX86TeardownReacquisitionError,
     CurrentAhciX86ActiveMappingVerifier, X86AhciServiceExitSlot,
     X86AhciServiceManagerActivationFailure, activate_and_install_x86_ahci_service_exit_slot,
-    install_x86_ahci_service_exit_slot,
+    activate_and_populate_x86_ahci_service_exit_slot, install_x86_ahci_service_exit_slot,
 };
 
 pub struct AhciBlockProvider<'a> {

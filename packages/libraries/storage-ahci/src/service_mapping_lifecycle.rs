@@ -1550,6 +1550,9 @@ mod tests {
             Err(crate::X86AhciServiceManagerActivationFailure::Installation(_)) => {
                 panic!("activation denial must not reach manager installation")
             }
+            Err(crate::X86AhciServiceManagerActivationFailure::Population(_)) => {
+                panic!("activation denial must not reach manager storage")
+            }
             Ok(_) => panic!("zero-capacity supervisor must reject publication"),
         };
         assert_eq!(
@@ -1566,8 +1569,17 @@ mod tests {
         let mut supervisor = ServiceSupervisor::<1>::new();
         // SAFETY: this consumes the retained exact owner under the same modeled
         // PAT, alias-exclusion, and inactive-root assumptions.
-        let manager_slot = match unsafe {
-            crate::activate_and_install_x86_ahci_service_exit_slot(
+        let mut manager_slot = crate::X86AhciServiceExitSlot::empty();
+        assert!(!manager_slot.occupied());
+        let empty_exit =
+            crate::KernelAhciServiceExitRequest::admit(mrml_kernel::SyscallRequest::Exit).unwrap();
+        assert!(matches!(
+            manager_slot.route(empty_exit, &supervisor, &mut fixture.runtime),
+            Err(crate::KernelAhciServiceExitSlotRouteError::Empty)
+        ));
+        match unsafe {
+            crate::activate_and_populate_x86_ahci_service_exit_slot(
+                &mut manager_slot,
                 failure.into_owner(),
                 RestartPolicy::ONCE_IMMEDIATE,
                 &mut supervisor,
@@ -1576,9 +1588,9 @@ mod tests {
                 Delay(11),
             )
         } {
-            Ok(slot) => slot,
+            Ok(()) => {}
             Err(_) => panic!("exact activation and manager installation must succeed"),
-        };
+        }
         assert_eq!(manager_slot.task(), Some(target_task));
         let installed_service = manager_slot
             .service()

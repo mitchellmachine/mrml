@@ -75,6 +75,19 @@ pub enum X86AhciServiceManagerActivationFailure<
             AUTHORITIES,
         >,
     ),
+    Population(
+        crate::KernelAhciServiceExitSlotPopulationFailure<
+            'resources,
+            S,
+            crate::KernelAhciManagerTeardownLease<AhciX86TeardownReacquisition<'views, V, D>>,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    ),
 }
 
 /// Read-only active-root check used before any teardown view is reconstructed.
@@ -302,6 +315,95 @@ pub unsafe fn activate_and_install_x86_ahci_service_exit_slot<
     };
     unsafe { install_x86_ahci_service_exit_slot(active, verifier, delay) }
         .map_err(X86AhciServiceManagerActivationFailure::Installation)
+}
+
+/// Activates into manager storage allocated before service discovery. No
+/// active owner is returned to the caller: success is represented only by the
+/// occupied storage supplied by the manager.
+///
+/// # Safety
+///
+/// This has the same activation, assignment, mapping, PAT, no-alias, and
+/// dispatch-exclusion requirements as
+/// [`activate_and_install_x86_ahci_service_exit_slot`]. `storage` must be the
+/// manager's exclusive persistent slot for this assignment.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub unsafe fn activate_and_populate_x86_ahci_service_exit_slot<
+    'resources,
+    'views,
+    S: PageTableStore,
+    V: AhciX86ActiveMappingVerifier,
+    D,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+    const SERVICES: usize,
+>(
+    storage: &mut X86AhciServiceExitSlot<
+        'resources,
+        'views,
+        S,
+        V,
+        D,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    owner: crate::KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    restart_policy: RestartPolicy,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    verifier: V,
+    delay: D,
+) -> Result<
+    (),
+    X86AhciServiceManagerActivationFailure<
+        'resources,
+        'views,
+        S,
+        V,
+        D,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let active = match unsafe { owner.activate(restart_policy, supervisor, runtime) } {
+        Ok(active) => active,
+        Err(failure) => {
+            return Err(X86AhciServiceManagerActivationFailure::Activation {
+                failure,
+                verifier,
+                delay,
+            });
+        }
+    };
+    let native_task = active.native_task();
+    let launch = active.launch();
+    let backend = unsafe { AhciX86TeardownReacquisition::new(verifier, delay) };
+    let lease =
+        unsafe { crate::KernelAhciManagerTeardownLease::mint(native_task, launch, backend) };
+    storage
+        .populate(active, lease)
+        .map_err(X86AhciServiceManagerActivationFailure::Population)
 }
 
 // SAFETY: verification precedes all raw-view construction. Every fallible

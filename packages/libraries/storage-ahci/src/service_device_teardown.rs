@@ -583,6 +583,37 @@ pub struct KernelAhciServiceExitSlotInstallError<
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceExitSlotPopulationError {
+    Occupied,
+    LeaseBinding(AhciServiceTeardownLeaseBindingError),
+}
+
+pub struct KernelAhciServiceExitSlotPopulationFailure<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    error: KernelAhciServiceExitSlotPopulationError,
+    active: crate::ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    lease: L,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelAhciServiceExitSlotRouteError {
     Empty,
     LeaseBinding(AhciServiceTeardownLeaseBindingError),
@@ -681,6 +712,52 @@ impl<
 impl<
     'resources,
     S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciServiceExitSlotPopulationFailure<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> KernelAhciServiceExitSlotPopulationError {
+        self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        L,
+    ) {
+        (self.active, self.lease)
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
     L: AhciServiceTeardownLease,
     const P: usize,
     const O: usize,
@@ -690,6 +767,64 @@ impl<
     const AUTHORITIES: usize,
 > KernelAhciServiceExitSlot<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
 {
+    /// Creates fixed manager storage before any AHCI service owner exists.
+    pub const fn empty() -> Self {
+        Self { entry: None }
+    }
+
+    /// Populates previously allocated manager storage. Replacement is denied
+    /// before binding checks and returns both incoming owners unchanged.
+    pub fn populate(
+        &mut self,
+        active: crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        lease: L,
+    ) -> Result<
+        (),
+        KernelAhciServiceExitSlotPopulationFailure<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        let error = if self.entry.is_some() {
+            Some(KernelAhciServiceExitSlotPopulationError::Occupied)
+        } else if lease.native_task() != active.native_task() {
+            Some(KernelAhciServiceExitSlotPopulationError::LeaseBinding(
+                AhciServiceTeardownLeaseBindingError::NativeTaskMismatch,
+            ))
+        } else if lease.launch() != active.launch() {
+            Some(KernelAhciServiceExitSlotPopulationError::LeaseBinding(
+                AhciServiceTeardownLeaseBindingError::LaunchMismatch,
+            ))
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return Err(KernelAhciServiceExitSlotPopulationFailure {
+                error,
+                active,
+                lease,
+            });
+        }
+        self.entry = Some((active, lease));
+        Ok(())
+    }
+
     /// Installs exactly one active owner and its stable manager lease before
     /// service dispatch. A mismatch returns both unchanged owners.
     pub fn install(
