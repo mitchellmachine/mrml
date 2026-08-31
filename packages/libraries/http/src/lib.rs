@@ -10,7 +10,10 @@ mod quic;
 
 pub use http2::{HTTP2_CLIENT_PREFACE, Http2Client, Http2Frame, Http2FrameKind, Http2Server};
 pub use http3::{Http3Client, Http3Frame, Http3FrameKind, Http3Server};
-pub use quic::{InitialPacket, QuicError, QuicFrame, QuicInitialKeys, QuicRole};
+pub use quic::{
+    InitialPacket, QuicError, QuicFrame, QuicInitialKeys, QuicRecovery, QuicRole,
+    QuicTransportParameters, SentPacket,
+};
 
 const MAX_HEADER: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

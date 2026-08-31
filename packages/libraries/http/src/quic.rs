@@ -28,6 +28,247 @@ pub enum QuicRole {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuicTransportParameters {
+    pub max_idle_timeout_ms: u64,
+    pub max_udp_payload_size: u64,
+    pub initial_max_data: u64,
+    pub initial_max_stream_data_bidi_local: u64,
+    pub initial_max_stream_data_bidi_remote: u64,
+    pub initial_max_streams_bidi: u64,
+    pub active_connection_id_limit: u64,
+    pub disable_active_migration: bool,
+}
+
+impl Default for QuicTransportParameters {
+    fn default() -> Self {
+        Self {
+            max_idle_timeout_ms: 30_000,
+            max_udp_payload_size: 1200,
+            initial_max_data: 1 << 20,
+            initial_max_stream_data_bidi_local: 256 << 10,
+            initial_max_stream_data_bidi_remote: 256 << 10,
+            initial_max_streams_bidi: 32,
+            active_connection_id_limit: 2,
+            disable_active_migration: false,
+        }
+    }
+}
+impl QuicTransportParameters {
+    pub fn encode(&self) -> Result<Vector<u8>, QuicError> {
+        if !(1200..=65527).contains(&self.max_udp_payload_size)
+            || self.active_connection_id_limit < 2
+        {
+            return Err(QuicError::Limit);
+        }
+        let mut out = Vector::new();
+        for (id, value) in [
+            (1, self.max_idle_timeout_ms),
+            (3, self.max_udp_payload_size),
+            (4, self.initial_max_data),
+            (5, self.initial_max_stream_data_bidi_local),
+            (6, self.initial_max_stream_data_bidi_remote),
+            (8, self.initial_max_streams_bidi),
+            (14, self.active_connection_id_limit),
+        ] {
+            let mut encoded = Vector::new();
+            put_varint(&mut encoded, value)?;
+            put_varint(&mut out, id)?;
+            put_varint(&mut out, encoded.len() as u64)?;
+            out.try_extend_from_slice(&encoded)
+                .map_err(|_| QuicError::Allocation)?;
+        }
+        if self.disable_active_migration {
+            put_varint(&mut out, 12)?;
+            put_varint(&mut out, 0)?
+        }
+        Ok(out)
+    }
+    pub fn decode(input: &[u8]) -> Result<Self, QuicError> {
+        let mut result = Self::default();
+        let mut at = 0;
+        let mut seen = 0u16;
+        while at < input.len() {
+            let id = take_varint(input, &mut at)?;
+            let n = usize::try_from(take_varint(input, &mut at)?).map_err(|_| QuicError::Limit)?;
+            let end = at.checked_add(n).ok_or(QuicError::Limit)?;
+            if end > input.len() {
+                return Err(QuicError::Truncated);
+            }
+            let bit = match id {
+                1 => Some(0),
+                3 => Some(1),
+                4 => Some(2),
+                5 => Some(3),
+                6 => Some(4),
+                8 => Some(5),
+                12 => Some(6),
+                14 => Some(7),
+                _ => None,
+            };
+            if let Some(bit) = bit {
+                if seen & (1 << bit) != 0 {
+                    return Err(QuicError::InvalidPacket);
+                }
+                seen |= 1 << bit;
+            }
+            let mut field_at = at;
+            let value = if id == 12 {
+                if n != 0 {
+                    return Err(QuicError::InvalidPacket);
+                }
+                0
+            } else {
+                let value = take_varint(&input[..end], &mut field_at)?;
+                if field_at != end {
+                    return Err(QuicError::InvalidPacket);
+                }
+                value
+            };
+            match id {
+                1 => result.max_idle_timeout_ms = value,
+                3 => result.max_udp_payload_size = value,
+                4 => result.initial_max_data = value,
+                5 => result.initial_max_stream_data_bidi_local = value,
+                6 => result.initial_max_stream_data_bidi_remote = value,
+                8 => result.initial_max_streams_bidi = value,
+                12 => result.disable_active_migration = true,
+                14 => result.active_connection_id_limit = value,
+                _ => {}
+            }
+            at = end;
+        }
+        if !(1200..=65527).contains(&result.max_udp_payload_size)
+            || result.active_connection_id_limit < 2
+        {
+            return Err(QuicError::Limit);
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SentPacket {
+    pub number: u64,
+    pub sent_micros: u64,
+    pub bytes: u64,
+    pub ack_eliciting: bool,
+    pub in_flight: bool,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuicRecovery {
+    pub congestion_window: u64,
+    pub bytes_in_flight: u64,
+    pub slow_start_threshold: u64,
+    pub smoothed_rtt_micros: u64,
+    pub rtt_variance_micros: u64,
+    pub minimum_rtt_micros: u64,
+    pub latest_rtt_micros: u64,
+    max_datagram: u64,
+    recovery_start_micros: u64,
+}
+impl QuicRecovery {
+    pub fn new(max_datagram: u64) -> Result<Self, QuicError> {
+        if !(1200..=65527).contains(&max_datagram) {
+            return Err(QuicError::Limit);
+        }
+        let window = (10 * max_datagram).min((2 * max_datagram).max(14720));
+        Ok(Self {
+            congestion_window: window,
+            bytes_in_flight: 0,
+            slow_start_threshold: u64::MAX,
+            smoothed_rtt_micros: 0,
+            rtt_variance_micros: 0,
+            minimum_rtt_micros: u64::MAX,
+            latest_rtt_micros: 0,
+            max_datagram,
+            recovery_start_micros: 0,
+        })
+    }
+    pub fn can_send(&self, bytes: u64) -> bool {
+        self.bytes_in_flight
+            .checked_add(bytes)
+            .is_some_and(|v| v <= self.congestion_window)
+    }
+    pub fn on_sent(&mut self, packet: SentPacket) -> Result<(), QuicError> {
+        if packet.in_flight {
+            self.bytes_in_flight = self
+                .bytes_in_flight
+                .checked_add(packet.bytes)
+                .ok_or(QuicError::Limit)?
+        }
+        Ok(())
+    }
+    pub fn on_ack(
+        &mut self,
+        packet: SentPacket,
+        ack_time_micros: u64,
+        ack_delay_micros: u64,
+    ) -> Result<(), QuicError> {
+        if ack_time_micros < packet.sent_micros {
+            return Err(QuicError::InvalidPacket);
+        }
+        let sample = ack_time_micros - packet.sent_micros;
+        self.latest_rtt_micros = sample;
+        self.minimum_rtt_micros = self.minimum_rtt_micros.min(sample);
+        let adjusted = if sample > self.minimum_rtt_micros.saturating_add(ack_delay_micros) {
+            sample - ack_delay_micros
+        } else {
+            sample
+        };
+        if self.smoothed_rtt_micros == 0 {
+            self.smoothed_rtt_micros = adjusted;
+            self.rtt_variance_micros = adjusted / 2
+        } else {
+            let difference = self.smoothed_rtt_micros.abs_diff(adjusted);
+            self.rtt_variance_micros = (3 * self.rtt_variance_micros + difference) / 4;
+            self.smoothed_rtt_micros = (7 * self.smoothed_rtt_micros + adjusted) / 8
+        }
+        if packet.in_flight {
+            self.bytes_in_flight = self.bytes_in_flight.saturating_sub(packet.bytes)
+        }
+        if packet.ack_eliciting && packet.sent_micros > self.recovery_start_micros {
+            if self.congestion_window < self.slow_start_threshold {
+                self.congestion_window = self.congestion_window.saturating_add(packet.bytes)
+            } else {
+                let increase =
+                    self.max_datagram.saturating_mul(packet.bytes) / self.congestion_window.max(1);
+                self.congestion_window = self.congestion_window.saturating_add(increase)
+            }
+        }
+        Ok(())
+    }
+    pub fn on_loss(&mut self, packet: SentPacket, now_micros: u64) {
+        if packet.in_flight {
+            self.bytes_in_flight = self.bytes_in_flight.saturating_sub(packet.bytes)
+        }
+        if packet.sent_micros <= self.recovery_start_micros {
+            return;
+        }
+        self.recovery_start_micros = now_micros;
+        self.congestion_window = (self.congestion_window / 2).max(2 * self.max_datagram);
+        self.slow_start_threshold = self.congestion_window;
+    }
+    pub fn loss_delay_micros(&self) -> u64 {
+        let base = self.latest_rtt_micros.max(self.smoothed_rtt_micros);
+        (base.saturating_mul(9) / 8).max(1_000)
+    }
+    pub fn probe_timeout_micros(
+        &self,
+        max_ack_delay_micros: u64,
+        handshake_confirmed: bool,
+    ) -> u64 {
+        let base = self.smoothed_rtt_micros.max(333_000);
+        let variance = (4 * self.rtt_variance_micros).max(1_000);
+        base.saturating_add(variance)
+            .saturating_add(if handshake_confirmed {
+                max_ack_delay_micros
+            } else {
+                0
+            })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuicFrame {
     Padding,
     Ping,
@@ -550,5 +791,41 @@ mod tests {
             InitialPacket::open(&corrupted, &keys, 7),
             Err(QuicError::Crypto)
         );
+    }
+    #[test]
+    fn transport_parameters_reject_duplicates_and_bad_datagrams() {
+        let parameters = QuicTransportParameters::default();
+        let wire = parameters.encode().unwrap();
+        assert_eq!(QuicTransportParameters::decode(&wire).unwrap(), parameters);
+        let mut duplicate = wire.clone();
+        duplicate.try_extend_from_slice(&[3, 1, 63]).unwrap();
+        assert!(QuicTransportParameters::decode(&duplicate).is_err());
+        assert!(QuicRecovery::new(1199).is_err())
+    }
+    #[test]
+    fn new_reno_bounds_flight_and_halves_on_loss() {
+        let mut recovery = QuicRecovery::new(1200).unwrap();
+        let initial = recovery.congestion_window;
+        let packet = SentPacket {
+            number: 1,
+            sent_micros: 1000,
+            bytes: 1200,
+            ack_eliciting: true,
+            in_flight: true,
+        };
+        recovery.on_sent(packet).unwrap();
+        assert_eq!(recovery.bytes_in_flight, 1200);
+        recovery.on_ack(packet, 101_000, 0).unwrap();
+        assert_eq!(recovery.bytes_in_flight, 0);
+        assert!(recovery.congestion_window > initial);
+        let packet = SentPacket {
+            number: 2,
+            sent_micros: 200_000,
+            ..packet
+        };
+        recovery.on_sent(packet).unwrap();
+        recovery.on_loss(packet, 300_000);
+        assert!(recovery.congestion_window >= 2400);
+        assert_eq!(recovery.slow_start_threshold, recovery.congestion_window)
     }
 }
