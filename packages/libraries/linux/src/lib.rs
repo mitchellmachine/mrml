@@ -384,6 +384,23 @@ impl NativeUdpSocket {
         };
         (amount >= 0).then_some(amount as usize)
     }
+
+    pub fn set_timeout_millis(&self, read_timeout: bool, milliseconds: u64) -> bool {
+        let value = TimeVal {
+            seconds: (milliseconds / 1000) as isize,
+            microseconds: ((milliseconds % 1000) * 1000) as isize,
+        };
+        let option = if read_timeout { 20 } else { 21 };
+        (unsafe {
+            setsockopt(
+                self.0,
+                1,
+                option,
+                (&value as *const TimeVal).cast(),
+                core::mem::size_of::<TimeVal>() as u32,
+            )
+        }) == 0
+    }
 }
 
 #[cfg(unix)]

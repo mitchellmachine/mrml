@@ -106,6 +106,20 @@ impl UdpSocket {
             .send_to(buffer, peer.ip, peer.port)
             .ok_or(NetError::WriteFailed)
     }
+
+    pub fn set_read_timeout_millis(&self, milliseconds: u64) -> Result<(), NetError> {
+        self.native
+            .set_timeout_millis(true, milliseconds)
+            .then_some(())
+            .ok_or(NetError::TimeoutFailed)
+    }
+
+    pub fn set_write_timeout_millis(&self, milliseconds: u64) -> Result<(), NetError> {
+        self.native
+            .set_timeout_millis(false, milliseconds)
+            .then_some(())
+            .ok_or(NetError::TimeoutFailed)
+    }
 }
 
 impl TcpStream {

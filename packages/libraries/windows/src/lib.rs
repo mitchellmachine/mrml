@@ -1093,6 +1093,20 @@ impl NativeUdpSocket {
         };
         (amount >= 0).then_some(amount as usize)
     }
+
+    pub fn set_timeout_millis(&self, read_timeout: bool, milliseconds: u64) -> bool {
+        let value = milliseconds.min(u32::MAX as u64) as u32;
+        let option = if read_timeout { 0x1006 } else { 0x1005 };
+        (unsafe {
+            setsockopt(
+                self.0,
+                0xffff,
+                option,
+                (&value as *const u32).cast(),
+                core::mem::size_of::<u32>() as i32,
+            )
+        }) == 0
+    }
 }
 
 #[cfg(windows)]
