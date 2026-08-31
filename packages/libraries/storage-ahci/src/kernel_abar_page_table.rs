@@ -252,10 +252,24 @@ impl<
     }
 }
 
-struct ExactInactiveAbarBackend<'a, S> {
+pub(crate) struct ExactInactiveAbarBackend<'a, S> {
     tables: &'a mut InactivePageTableMappingBackend<S>,
     expected: AhciAbarMapping,
     target: ObjectId,
+}
+
+impl<'a, S> ExactInactiveAbarBackend<'a, S> {
+    pub(crate) fn new(
+        tables: &'a mut InactivePageTableMappingBackend<S>,
+        expected: AhciAbarMapping,
+        target: ObjectId,
+    ) -> ExactInactiveAbarBackend<'a, S> {
+        Self {
+            tables,
+            expected,
+            target,
+        }
+    }
 }
 
 // SAFETY: this private backend is constructed only inside the capability- and

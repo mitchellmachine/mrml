@@ -6,8 +6,8 @@ use crate::{
 };
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, MemoryMappingBackend, MemoryMappingId,
-    MemoryMappingOperationError, MemoryObjectId, MemoryPoolTable, MemoryResourceError, Rights,
-    PAGE_SIZE,
+    MemoryMappingOperationError, MemoryObjectId, MemoryPoolTable, MemoryResourceError, ObjectId,
+    Rights, PAGE_SIZE,
 };
 
 const MAPPING_COUNT: usize = 4;
@@ -20,6 +20,7 @@ pub enum KernelAhciServiceCpuMappingAdapterError {
     WrongMemoryObject(usize),
     WrongAllocationGeneration(usize),
     WrongPhysicalBacking(usize),
+    WrongServiceTarget,
     InvalidTarget,
 }
 
@@ -45,6 +46,7 @@ pub struct KernelAhciServiceCpuMappingAdapter<
     memory_objects: [MemoryObjectId; MAPPING_COUNT],
     memory_capabilities: [Capability; MAPPING_COUNT],
     target_capability: Capability,
+    target: ObjectId,
     requests: [AhciServiceCpuMappingRequest; MAPPING_COUNT],
     mappings: [Option<MemoryMappingId>; MAPPING_COUNT],
 }
@@ -55,6 +57,7 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         record: AhciServiceLaunchRecord,
+        expected_target: ObjectId,
         memory: &'a mut MemoryPoolTable<P, O, M>,
         backend: &'a mut B,
         capabilities: &'a CapabilitySpace<C>,
@@ -65,6 +68,9 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
         let target = capabilities
             .authorize_exact(target_capability, TARGET_RIGHTS)
             .map_err(KernelAhciServiceCpuMappingAdapterError::Capability)?;
+        if target != expected_target {
+            return Err(KernelAhciServiceCpuMappingAdapterError::WrongServiceTarget);
+        }
         let requests = crate::service_cpu_mapping::mapping_requests(record);
         for index in 0..MAPPING_COUNT {
             let object = capabilities
@@ -106,6 +112,7 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
             memory_objects,
             memory_capabilities,
             target_capability,
+            target,
             requests,
             mappings: [None; MAPPING_COUNT],
         })
@@ -119,6 +126,55 @@ impl<'a, B, const P: usize, const O: usize, const M: usize, const C: usize>
         self.requests
             .iter()
             .position(|expected| *expected == request)
+    }
+
+    pub(crate) fn backend(&self) -> &B {
+        self.backend
+    }
+
+    pub(crate) fn backend_mut(&mut self) -> &mut B {
+        self.backend
+    }
+
+    pub(crate) fn target(&self) -> ObjectId {
+        self.target
+    }
+
+    /// Confirms that one retained mapping ID still describes the exact
+    /// launch request before a combined owner treats its page-table leaf as
+    /// belonging to this CPU/DMA range.
+    pub(crate) fn verify_installed_mapping(
+        &self,
+        index: usize,
+        request: AhciServiceCpuMappingRequest,
+    ) -> Result<(), KernelAhciServiceCpuMappingAdapterError> {
+        if index >= MAPPING_COUNT || self.requests[index] != request {
+            return Err(KernelAhciServiceCpuMappingAdapterError::WrongMemoryObject(
+                index,
+            ));
+        }
+        let mapping = self.mappings[index]
+            .ok_or(KernelAhciServiceCpuMappingAdapterError::WrongPhysicalBacking(index))?;
+        let backend_request = self
+            .memory
+            .mapping_revocation_request(mapping, self.target_capability, self.capabilities)
+            .map_err(KernelAhciServiceCpuMappingAdapterError::Resource)?;
+        let described = backend_request.mapping();
+        let physical = backend_request
+            .physical()
+            .ok_or(KernelAhciServiceCpuMappingAdapterError::WrongPhysicalBacking(index))?;
+        if backend_request.target() != self.target
+            || described.object() != self.memory_objects[index]
+            || described.virtual_page() != request.virtual_base() / PAGE_SIZE
+            || described.object_page() != 0
+            || described.pages() != request.mapped_bytes() / PAGE_SIZE
+            || described.access() != Rights::READ.union(Rights::WRITE)
+            || physical.start().get() != request.physical_base()
+            || physical.pages() != request.mapped_bytes() / PAGE_SIZE
+        {
+            return Err(KernelAhciServiceCpuMappingAdapterError::WrongPhysicalBacking(index));
+        }
+        Ok(())
     }
 }
 
@@ -340,6 +396,7 @@ mod tests {
         let mut native = NativeMappings::default();
         let mut adapter = KernelAhciServiceCpuMappingAdapter::new(
             launch_record,
+            ObjectId(0x900),
             &mut table,
             &mut native,
             &capabilities,
@@ -366,6 +423,7 @@ mod tests {
         assert!(matches!(
             KernelAhciServiceCpuMappingAdapter::new(
                 record(public_objects, substituted_generations),
+                ObjectId(0x900),
                 &mut table,
                 &mut native,
                 &capabilities,

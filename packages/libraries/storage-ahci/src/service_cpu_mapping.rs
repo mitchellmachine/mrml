@@ -78,6 +78,20 @@ impl AhciInstalledCpuMappings {
     pub fn fully_installed(&self) -> bool {
         self.installed.iter().all(|installed| *installed)
     }
+
+    pub(crate) const fn from_progress(
+        requests: [AhciServiceCpuMappingRequest; CPU_MAPPING_COUNT],
+        installed: [bool; CPU_MAPPING_COUNT],
+    ) -> Self {
+        Self {
+            requests,
+            installed,
+        }
+    }
+
+    pub(crate) const fn installed(self, index: usize) -> bool {
+        self.installed[index]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

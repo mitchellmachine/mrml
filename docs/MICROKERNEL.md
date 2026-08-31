@@ -9992,13 +9992,15 @@ retained launch, then accepts only the launch-bound prepared task whose
 generation remains construction-pending in the exact borrowed `TaskRuntime`,
 whose saved CR3 root matches the exclusively owned inactive hierarchy, and whose
 service-domain target matches that backend. Its immutable runtime borrow
-prevents safe activation or context mutation while the owner exists. A private backend
-installs only the exact `USER_MMIO_READ_WRITE` launch range; the owner can verify
-the leaves and returns the prepared task only after capability-revalidated exact
-rollback. Wrong runtime, root, target, ABAR generation/geometry, or capability
-fails before publication. Mutation-before-error rollback uncertainty retains
-the owner and poisons the hierarchy. The Linux AHCI suite passes 143 tests and
-the Linux kernel suite passes 709.
+prevents safe activation or context mutation while the owner exists. A separate
+non-copy `KernelAhciPreactivationMappingSetOwner` composes that private backend
+with the exact kernel memory-resource adapter and installs/verifies the
+`USER_MMIO_READ_WRITE` ABAR plus all four launch-named ordinary user RW/NX
+CPU mappings in the same inactive hierarchy, retaining reverse-removal progress
+and resource records. Wrong runtime, root, target, ABAR generation/geometry,
+resource identity, or capability fails before publication. Mutation-before-error
+rollback uncertainty retains the owner and poisons the hierarchy. The Linux
+AHCI suite passes 146 tests and the Linux kernel suite passes 709.
 
 This is controlled Linux-host, in-memory page-table evidence only. The unsafe
 caller must keep PAT index 3 UC on every CPU that may later execute the task,
@@ -10006,11 +10008,10 @@ exclude cacheable aliases for the complete installed lifetime, and establish
 exclusive root ownership plus the trusted correlation between the descriptor's
 PCI location/vendor/device identity and the capability-bound device object;
 neither relation is retained in the launch record. Runtime/root equality does
-not prove uniqueness. The owner deliberately does not implement the public
-generic mapping traits or create `MappedAhciNativeServiceTask`. Dropping it is
-not an activation seal: no later owner yet binds the four CPU mappings, consumes
-and revalidates the exact root and effective leaves, or converts poison into
-permanent task quarantine.
+not prove uniqueness. These owners deliberately do not implement the public
+generic mapping traits or create `MappedAhciNativeServiceTask`. Dropping them is
+not an activation seal: no later owner yet consumes and revalidates the exact
+root and effective leaves or converts poison into permanent task quarantine.
 There is no active-root lifetime/removal owner, local or SMP TLB withdrawal,
 IOMMU binding, installed CPL3/INT80 entry, live KVM/WHP run, volatile AHCI
 register access, or physical-device evidence. The mapping record itself remains

@@ -1,12 +1,12 @@
 //! Combined pre-launch ownership of AHCI MMIO and CPU mappings.
 
 use crate::{
+    AhciAbarDescriptor, AhciAbarMappingBackend, AhciAbarMappingError, AhciAbarRemovalBackend,
+    AhciAbarRemovalError, AhciInstalledCpuMappings, AhciServiceCpuMappingBackend,
+    AhciServiceCpuMappingError, AhciServiceCpuMappingRemovalError, AhciServiceLaunchRecord,
+    AhciServiceLaunchRecordError, InstalledAhciAbarMapping, PreparedAhciNativeServiceTask,
     install_ahci_service_abar, install_ahci_service_cpu_mappings, remove_ahci_service_abar,
-    remove_ahci_service_cpu_mappings, AhciAbarDescriptor, AhciAbarMappingBackend,
-    AhciAbarMappingError, AhciAbarRemovalBackend, AhciAbarRemovalError, AhciInstalledCpuMappings,
-    AhciServiceCpuMappingBackend, AhciServiceCpuMappingError, AhciServiceCpuMappingRemovalError,
-    AhciServiceLaunchRecord, AhciServiceLaunchRecordError, InstalledAhciAbarMapping,
-    PreparedAhciNativeServiceTask,
+    remove_ahci_service_cpu_mappings,
 };
 use mrml_kernel::{
     Capability, CapabilitySpace, NativeDeviceServiceActivationError, RestartPolicy, ServiceError,
@@ -368,22 +368,23 @@ pub fn remove_ahci_service_mappings<
 mod tests {
     use super::*;
     use crate::{
-        ActiveAhciPort, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPciFunctionSnapshot,
-        AhciPortDmaBackend, AhciPortDmaLayout, AhciRegisterIo, AhciServiceCpuMapping,
-        AhciServiceCpuMappingRequest, PciFunctionLocation, AHCI_SERVICE_CPU_MAPPING_RIGHTS,
+        AHCI_SERVICE_CPU_MAPPING_RIGHTS, ActiveAhciPort, AhciAbarMapping, AhciDataDmaRegion,
+        AhciDmaRegion, AhciPciFunctionSnapshot, AhciPortDmaBackend, AhciPortDmaLayout,
+        AhciRegisterIo, AhciServiceCpuMapping, AhciServiceCpuMappingRequest, PciFunctionLocation,
     };
     use core::cell::Cell;
     use mrml_interface_storage_block_provider_v1::{
-        BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, BlockProviderDevice, OpaqueHandle,
     };
     use mrml_kernel::arch::x86_64::{
         InactivePageTableMappingBackend, InactivePageTableMappingError, Mapping, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, UserContext,
     };
     use mrml_kernel::{
-        prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
-        IsolationPlacement, IsolationServiceSpec, ObjectId, PhysAddr, Priority, Rights,
-        TaskRuntime, TotalMicrovmClass, PAGE_SIZE,
+        Capability, DeviceServiceLaunchAttachment, IsolationPlacement, IsolationServiceSpec,
+        MemoryBackingBackendRequest, MemoryBackingKind, MemoryObjectBackingBackend, MemoryObjectId,
+        MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, ObjectId, PAGE_SIZE, PhysAddr,
+        Priority, Rights, TaskRuntime, TotalMicrovmClass, prepare_native_device_service_task,
     };
 
     const TABLE_BASE: u64 = 0x60_0000;
@@ -391,11 +392,17 @@ mod tests {
     #[derive(Default)]
     struct WriteFault {
         remaining: Cell<usize>,
+        calls: Cell<usize>,
+        fail_at: Cell<Option<usize>>,
     }
 
     impl WriteFault {
         fn arm(&self, failures: usize) {
             self.remaining.set(failures);
+        }
+
+        fn fail_next(&self) {
+            self.fail_at.set(Some(self.calls.get()));
         }
     }
 
@@ -471,6 +478,12 @@ mod tests {
                 .get_mut(slot)
                 .and_then(|page| page.get_mut(index))
                 .ok_or(PageTableBuildError::Storage)? = value;
+            let calls = self.fault.calls.get();
+            self.fault.calls.set(calls + 1);
+            if self.fault.fail_at.get() == Some(calls) {
+                self.fault.fail_at.set(None);
+                return Err(PageTableBuildError::Storage);
+            }
             let remaining = self.fault.remaining.get();
             if remaining != 0 {
                 self.fault.remaining.set(remaining - 1);
@@ -1005,6 +1018,477 @@ mod tests {
         )
         .unwrap();
         (runtime, source, correct, wrong, bound)
+    }
+
+    // SAFETY: the test backing backend models an already-exclusive zeroed
+    // physical run and accepts scrubbed release without exposing any alias.
+    struct TestBacking;
+
+    unsafe impl MemoryObjectBackingBackend for TestBacking {
+        type Error = ();
+
+        fn claim_zeroed(&mut self, _: MemoryBackingBackendRequest) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn release_scrubbed(&mut self, _: MemoryBackingBackendRequest) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    struct ResourceFixture {
+        memory: MemoryPoolTable<1, 4, 4>,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory_objects: [MemoryObjectId; 4],
+        mapping_capabilities: [Capability; 4],
+        authorities: CapabilitySpace<64>,
+        abar_mapping_capability: Capability,
+        abar_control_capability: Capability,
+        target_capability: Capability,
+        runtime: TaskRuntime<3, 8>,
+        prepared: crate::PreparedAhciNativeServiceTask,
+    }
+
+    fn resource_record(objects: [ObjectId; 4], generations: [u64; 4]) -> AhciServiceLaunchRecord {
+        let region = |index: usize, physical_base: u64, bytes: u64| AhciDmaRegion {
+            memory_object: objects[index],
+            allocation_generation: generations[index],
+            physical_base,
+            bytes,
+        };
+        AhciServiceLaunchRecord::new(
+            4,
+            3,
+            8,
+            BlockProviderDevice {
+                session: OpaqueHandle::new(1, 2).unwrap(),
+                logical_block_bytes: 512,
+                flags: BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET,
+                logical_block_count: 100,
+                media_generation: 7,
+            },
+            AhciAbarMapping {
+                device_object: ObjectId(10),
+                configuration_generation: 11,
+                mapping_generation: 12,
+                physical_base: 0x10_0000,
+                virtual_base: 0x20_0000,
+                bytes: 0x2000,
+            },
+            AhciPortDmaLayout {
+                device_object: ObjectId(10),
+                configuration_generation: 11,
+                mapping_generation: 12,
+                port: 2,
+                command_slot_count: 4,
+                command_list: region(0, 0x30_0000, 1024),
+                received_fis: region(1, 0x31_0000, 256),
+                command_tables: region(2, 0x32_0000, 1024),
+                dma_generation: 13,
+            },
+            AhciDataDmaRegion {
+                memory_object: objects[3],
+                allocation_generation: generations[3],
+                physical_base: 0x40_0000,
+                bytes: 4096,
+            },
+            [
+                AhciServiceCpuMapping::new(1, 0x30_0000).unwrap(),
+                AhciServiceCpuMapping::new(2, 0x31_0000).unwrap(),
+                AhciServiceCpuMapping::new(3, 0x32_0000).unwrap(),
+                AhciServiceCpuMapping::new(4, 0x40_0000).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn resource_fixture() -> ResourceFixture {
+        let mut memory = MemoryPoolTable::<1, 4, 4>::new(31).unwrap();
+        let mut authorities = CapabilitySpace::<64>::new();
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::DELEGATE)
+            .union(Rights::CONTROL)
+            .union(Rights::MAP)
+            .union(Rights::PIN)
+            .union(Rights::INSPECT);
+        let (pool, pool_capability) = memory
+            .create_root(4, 4, 0, pool_rights, &mut authorities)
+            .unwrap();
+        let object_rights = Rights::READ
+            .union(Rights::WRITE)
+            .union(Rights::MAP)
+            .union(Rights::PIN)
+            .union(Rights::INSPECT)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let physical = [0x30_0000, 0x31_0000, 0x32_0000, 0x40_0000];
+        let mut objects = [None; 4];
+        let mut mapping_capabilities = [Capability::from_token(0); 4];
+        let mut object_authorities = [None; 4];
+        let mut backing = TestBacking;
+        for index in 0..4 {
+            let (object, owner) = memory
+                .allocate_object(
+                    pool,
+                    pool_capability,
+                    1,
+                    MemoryBackingKind::Anonymous,
+                    object_rights,
+                    &mut authorities,
+                )
+                .unwrap();
+            memory
+                .bind_physical_backing(
+                    object,
+                    owner,
+                    MemoryPhysicalBacking::new(PhysAddr::new(physical[index]).unwrap(), 1).unwrap(),
+                    &authorities,
+                    &mut backing,
+                )
+                .unwrap();
+            let object_authority = authorities.authorize(owner, Rights::READ).unwrap();
+            mapping_capabilities[index] = authorities
+                .insert(object_authority, AHCI_SERVICE_CPU_MAPPING_RIGHTS)
+                .unwrap();
+            objects[index] = Some(object);
+            object_authorities[index] = Some(object_authority);
+        }
+        let memory_objects = objects.map(Option::unwrap);
+        let object_ids = object_authorities.map(Option::unwrap);
+        let generations = memory_objects.map(|object| u64::from(object.generation()));
+        let abar_mapping_capability = authorities
+            .insert(
+                ObjectId(10),
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            )
+            .unwrap();
+        let abar_control_capability = authorities.insert(ObjectId(10), Rights::CONTROL).unwrap();
+        let target_capability = authorities
+            .insert(ObjectId(1), Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+
+        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let context =
+            |root| UserContext::new(PhysAddr::new(root).unwrap(), 0x40_0000, 0x7000_0000).unwrap();
+        let source = runtime
+            .create(Priority::NORMAL, context(0x50_0000))
+            .unwrap();
+        let target = runtime
+            .create_for_construction(Priority::NORMAL, context(TABLE_BASE))
+            .unwrap();
+        let endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(40), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let launch_data = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(30), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let roles = [
+            (ObjectId(10), Rights::CONTROL),
+            (
+                object_ids[0],
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                object_ids[1],
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                object_ids[2],
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            ),
+            (
+                object_ids[3],
+                Rights::PIN.union(Rights::MAP).union(Rights::WRITE),
+            ),
+            (
+                object_ids[3],
+                Rights::PIN.union(Rights::MAP).union(Rights::READ),
+            ),
+        ];
+        let mut handles = [Capability::from_token(0); crate::AHCI_SERVICE_AUTHORITY_COUNT];
+        let authority_specs = core::array::from_fn(|index| {
+            handles[index] = runtime
+                .capabilities_mut(source)
+                .unwrap()
+                .insert(roles[index].0, roles[index].1.union(Rights::DELEGATE))
+                .unwrap();
+            (roles[index].0, handles[index], roles[index].1)
+        });
+        let attachment = {
+            let capabilities = runtime.capabilities(source).unwrap();
+            DeviceServiceLaunchAttachment::new(
+                service(),
+                8,
+                ObjectId(30),
+                9,
+                crate::AHCI_SERVICE_LAUNCH_BYTES as u32,
+                launch_data,
+                authority_specs,
+                capabilities,
+            )
+            .unwrap()
+        };
+        let bound = resource_record(object_ids, generations)
+            .bind(service(), attachment)
+            .unwrap();
+        let prepared = crate::prepare_bound_ahci_native_service_task(
+            &mut runtime,
+            source,
+            target,
+            bound,
+            ObjectId(40),
+            endpoint,
+            source,
+            ObjectId(42),
+        )
+        .unwrap();
+        ResourceFixture {
+            memory,
+            pool,
+            pool_capability,
+            memory_objects,
+            mapping_capabilities,
+            authorities,
+            abar_mapping_capability,
+            abar_control_capability,
+            target_capability,
+            runtime,
+            prepared,
+        }
+    }
+
+    #[test]
+    fn kernel_preactivation_mapping_set_owns_all_five_leaves_and_rolls_back() {
+        let mut fixture = resource_fixture();
+        let prepared = fixture.prepared;
+        let launch = prepared.launch();
+        let spec = launch.spec();
+        let target = spec.service().domain();
+        let layout = spec.layout();
+        let data = spec.data();
+        let regions = [
+            layout.command_list,
+            layout.received_fis,
+            layout.command_tables,
+            AhciDmaRegion {
+                memory_object: data.memory_object,
+                allocation_generation: data.allocation_generation,
+                physical_base: data.physical_base,
+                bytes: data.bytes,
+            },
+        ];
+        let cpu_ranges: [Mapping; 4] = core::array::from_fn(|index| {
+            let mapping = launch.cpu_mappings()[index];
+            Mapping::new(
+                mrml_kernel::arch::x86_64::VirtAddr::new(mapping.virtual_base()).unwrap(),
+                PhysAddr::new(regions[index].physical_base).unwrap(),
+                regions[index].bytes.div_ceil(PAGE_SIZE),
+                PagePermissions::USER_READ_WRITE,
+            )
+            .unwrap()
+        });
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, target, &fault);
+        // SAFETY: this test keeps the target construction-pending, the root
+        // unreachable, and the exact memory/resource owners alive until the
+        // explicit rollback below. It models no active CPU, PAT, or hardware.
+        let owner = unsafe {
+            crate::KernelAhciPreactivationMappingSetOwner::install(
+                prepared,
+                descriptor(),
+                fixture.abar_mapping_capability,
+                fixture.abar_control_capability,
+                fixture.mapping_capabilities,
+                &fixture.authorities,
+                &fixture.runtime,
+                &mut tables,
+                &mut fixture.memory,
+                fixture.memory_objects,
+                fixture.target_capability,
+            )
+        }
+        .unwrap_or_else(|failure| {
+            panic!(
+                "complete preactivation set must install: {:?}",
+                failure.error()
+            )
+        });
+        assert_eq!(owner.prepared(), prepared);
+        assert_eq!(owner.target(), target);
+        assert!(owner.abar_mapping().is_some());
+        assert!(owner.cpu_mappings().fully_installed());
+        assert_eq!(owner.verify_exact(), Ok(()));
+        let returned = match owner.rollback() {
+            Ok(returned) => returned,
+            Err(_) => panic!("exact preactivation rollback must succeed"),
+        };
+        assert_eq!(returned, prepared);
+        assert_eq!(
+            fixture
+                .memory
+                .usage(fixture.pool, fixture.pool_capability, &fixture.authorities,)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+
+        let builder = tables.into_builder().unwrap();
+        let abar = spec.mapping();
+        let abar_page_mapping = Mapping::new(
+            mrml_kernel::arch::x86_64::VirtAddr::new(abar.virtual_base).unwrap(),
+            PhysAddr::new(abar.physical_base).unwrap(),
+            abar.bytes / PAGE_SIZE,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .unwrap();
+        assert_eq!(builder.verify_unmapped(abar_page_mapping), Ok(()));
+        for range in cpu_ranges {
+            assert_eq!(builder.verify_unmapped(range), Ok(()));
+        }
+    }
+
+    #[test]
+    fn kernel_preactivation_mapping_set_rejects_target_and_memory_substitution() {
+        let mut fixture = resource_fixture();
+        let wrong_target = fixture
+            .authorities
+            .insert(ObjectId(0xdead), Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, ObjectId(1), &fault);
+        // SAFETY: the modeled hierarchy remains inactive and unreachable; this
+        // call is expected to fail before any page-table or resource mutation.
+        let failure = unsafe {
+            crate::KernelAhciPreactivationMappingSetOwner::install(
+                fixture.prepared,
+                descriptor(),
+                fixture.abar_mapping_capability,
+                fixture.abar_control_capability,
+                fixture.mapping_capabilities,
+                &fixture.authorities,
+                &fixture.runtime,
+                &mut tables,
+                &mut fixture.memory,
+                fixture.memory_objects,
+                wrong_target,
+            )
+        }
+        .err()
+        .unwrap_or_else(|| panic!("substituted target must be denied"));
+        assert_eq!(
+            failure.error(),
+            crate::KernelAhciPreactivationMappingSetError::CpuAdapter(
+                crate::KernelAhciServiceCpuMappingAdapterError::WrongServiceTarget
+            )
+        );
+        assert!(failure.retained().is_none());
+        assert_eq!(
+            fixture
+                .memory
+                .usage(fixture.pool, fixture.pool_capability, &fixture.authorities,)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+        assert_eq!(
+            tables
+                .into_builder()
+                .unwrap()
+                .store()
+                .read(PhysAddr::new(TABLE_BASE).unwrap(), 0),
+            Ok(0)
+        );
+
+        let mut fixture = resource_fixture();
+        let substituted = fixture
+            .authorities
+            .insert(ObjectId(0xbeef), AHCI_SERVICE_CPU_MAPPING_RIGHTS)
+            .unwrap();
+        let mut cpu = fixture.mapping_capabilities;
+        cpu[0] = substituted;
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, ObjectId(1), &fault);
+        // SAFETY: as above, exact capability preflight must fail before
+        // publishing either the ABAR or a memory-resource mapping.
+        let failure = unsafe {
+            crate::KernelAhciPreactivationMappingSetOwner::install(
+                fixture.prepared,
+                descriptor(),
+                fixture.abar_mapping_capability,
+                fixture.abar_control_capability,
+                cpu,
+                &fixture.authorities,
+                &fixture.runtime,
+                &mut tables,
+                &mut fixture.memory,
+                fixture.memory_objects,
+                fixture.target_capability,
+            )
+        }
+        .err()
+        .unwrap_or_else(|| panic!("substituted memory object must be denied"));
+        assert_eq!(
+            failure.error(),
+            crate::KernelAhciPreactivationMappingSetError::CpuAdapter(
+                crate::KernelAhciServiceCpuMappingAdapterError::WrongMemoryObject(0)
+            )
+        );
+        assert!(failure.retained().is_none());
+        assert_eq!(
+            tables
+                .into_builder()
+                .unwrap()
+                .store()
+                .read(PhysAddr::new(TABLE_BASE).unwrap(), 0),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn kernel_preactivation_mapping_set_poison_retains_the_inactive_owner() {
+        let mut fixture = resource_fixture();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, ObjectId(1), &fault);
+        // SAFETY: the modeled root remains exclusively owned and unreachable;
+        // the owner is retained on any uncertain cleanup.
+        let owner = unsafe {
+            crate::KernelAhciPreactivationMappingSetOwner::install(
+                fixture.prepared,
+                descriptor(),
+                fixture.abar_mapping_capability,
+                fixture.abar_control_capability,
+                fixture.mapping_capabilities,
+                &fixture.authorities,
+                &fixture.runtime,
+                &mut tables,
+                &mut fixture.memory,
+                fixture.memory_objects,
+                fixture.target_capability,
+            )
+        }
+        .unwrap_or_else(|failure| {
+            panic!(
+                "complete preactivation set must install: {:?}",
+                failure.error()
+            )
+        });
+        fault.fail_next();
+        fault.arm(1);
+        let failure = match owner.rollback() {
+            Ok(_) => panic!("uncertain ABAR withdrawal must retain the owner"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            failure.error(),
+            crate::KernelAhciPreactivationMappingSetError::CpuRemoval(_)
+        ));
+        assert!(failure.owner().page_tables_poisoned());
+        drop(failure.into_owner());
     }
 
     #[test]

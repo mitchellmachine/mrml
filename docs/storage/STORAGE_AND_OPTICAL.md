@@ -1367,19 +1367,22 @@ A concrete preactivation ABAR page-table owner is now **PARTIALLY IMPLEMENTED
 IN SOURCE**. It checks the live mapping/control handles and exact launch-bound
 ABAR generation/geometry, then matches the prepared task's owning runtime and
 construction-pending generation, saved CR3 root, service-domain target, and
-launch-bound range before using a private inactive-hierarchy backend. Tests
-cover authority, generation/geometry and runtime/root/target substitution, exact
-installation/verification/rollback, poison retention after
-mutation-before-error rollback uncertainty, and the explicit limitation that
-PCI identity-only descriptor changes are not rechecked. The owner cannot create
-the existing mapped-task token. The Linux AHCI suite passes 143 tests and the
-Linux kernel suite passes 709. This is not an activation seal or active mapping
-owner. Root uniqueness, descriptor-identity/device-object correlation,
-full-lifetime PAT3=UC and alias exclusion, an owner combining this concrete
-inactive ABAR hierarchy with the four concrete CPU mappings, activation-time
-effective-leaf revalidation, permanent task quarantine or activation exclusion
-on poison, SMP TLB withdrawal, IOMMU binding, installed CPL3, KVM/WHP, and
-physical evidence remain absent.
+launch-bound range before using a private inactive-hierarchy backend. A separate
+non-copy mapping-set owner now composes that backend with the kernel
+`MemoryPoolTable` adapter and installs/verifies the ABAR plus all four
+launch-named CPU mappings in the same exact inactive hierarchy. It retains
+per-mapping progress and resource records and withdraws CPU mappings in reverse
+order before ABAR. Tests cover authority, generation/geometry,
+runtime/root/target and resource substitution, exact installation/
+verification/rollback, poison retention after mutation-before-error rollback
+uncertainty, and the explicit limitation that PCI identity-only descriptor
+changes are not rechecked. Neither owner can create the existing mapped-task
+token. The Linux AHCI suite passes 146 tests and the Linux kernel suite passes
+709. This is not an activation seal or active mapping owner. Root uniqueness,
+descriptor-identity/device-object correlation, full-lifetime PAT3=UC and alias
+exclusion, activation-time effective-leaf revalidation, permanent task
+quarantine or activation exclusion on poison, SMP TLB withdrawal, IOMMU
+binding, installed CPL3, KVM/WHP, and physical evidence remain absent.
 
 Complexity impact: LOW
 TCB impact: LOW

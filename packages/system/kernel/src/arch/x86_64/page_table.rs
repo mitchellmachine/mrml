@@ -840,6 +840,34 @@ impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
             .map_err(InactivePageTableMappingError::PageTable)
     }
 
+    /// Verifies one exact task-local ordinary user RW/NX range without the
+    /// device-memory PAT selector. This is used for launch-owned CPU/DMA
+    /// buffers that share the same inactive hierarchy as a device mapping.
+    pub fn verify_user_rw_nx(
+        &self,
+        target: ObjectId,
+        virtual_start: VirtAddr,
+        physical_start: PhysAddr,
+        pages: u64,
+    ) -> Result<(), InactivePageTableMappingError> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        if target != self.target {
+            return Err(InactivePageTableMappingError::WrongTarget);
+        }
+        let mapping = Mapping::new(
+            virtual_start,
+            physical_start,
+            pages,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
+        self.builder
+            .verify_mapped(mapping)
+            .map_err(InactivePageTableMappingError::PageTable)
+    }
+
     /// Returns the hierarchy only when every adapter operation remained exact.
     pub fn into_builder(self) -> Result<PageTableBuilder<S>, InactivePageTableMappingError> {
         if self.poisoned {

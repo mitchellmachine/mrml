@@ -1509,16 +1509,18 @@ A concrete preactivation ABAR owner is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 It checks both exact device handles and the descriptor's launch-bound ABAR
 generation/geometry, then binds the prepared task's runtime generation, saved
 CR3 root, service-domain target, and launch mapping to an exclusively owned
-inactive x86 hierarchy. The private backend installs exact user-device leaves;
-explicit verification and rollback remain under the non-copy owner. Tests cover
-authority, ABAR generation/geometry, runtime/root/target substitution, exact
-install/verify/rollback, poison retention after mutation-before-error rollback,
-and the explicit limitation that PCI identity-only descriptor changes are not
-rechecked here. The owner intentionally cannot produce the existing mapped-task
-token. The Linux AHCI suite passes 143 tests and the Linux kernel suite passes
-709. Root uniqueness, descriptor-identity/device-object correlation, PAT/alias
-lifetime, an owner combining this concrete inactive ABAR hierarchy with the
-four concrete CPU mappings, activation-time effective-leaf revalidation,
+inactive x86 hierarchy. A separate non-copy mapping-set owner now composes that
+backend with a kernel `MemoryPoolTable` adapter and installs/verifies the ABAR
+plus all four launch-named CPU mappings in the same exact hierarchy. It retains
+all mapping progress, verifies every leaf and resource record, and withdraws
+CPU mappings in reverse order before ABAR. Tests cover authority,
+ABAR generation/geometry, runtime/root/target and resource substitution,
+exact install/verify/rollback, poison retention after mutation-before-error
+rollback, and the explicit limitation that PCI identity-only descriptor
+changes are not rechecked here. Neither owner intentionally produces the
+existing mapped-task token. The Linux AHCI suite passes 146 tests and the Linux
+kernel suite passes 709. Root uniqueness, descriptor-identity/device-object
+correlation, PAT/alias lifetime, activation-time effective-leaf revalidation,
 permanent task quarantine or activation exclusion on poison, SMP TLB, IOMMU,
 installed CPL3, KVM/WHP, and physical evidence remain absent.
 

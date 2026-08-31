@@ -336,13 +336,16 @@ access. The security/acceptance gate is canonical in
   runtime, saved CR3 root, service-domain target, and launch-bound ABAR. Its
   private backend is not a generic mapped-task backend; explicit rollback
   returns the prepared task only after exact withdrawal, and uncertain rollback
-  retains the owner while poisoning the hierarchy. This is not an activation
-  seal: root uniqueness, descriptor-PCI-identity/device-object correlation,
-  PAT3=UC, and alias exclusion remain unsafe caller obligations for the complete
-  installed lifetime, while an owner combining this concrete inactive ABAR
-  hierarchy with the four concrete CPU mappings, activation-time effective-leaf
-  revalidation, permanent task quarantine or activation exclusion on poison,
-  active-root ownership, SMP TLB withdrawal, and IOMMU teardown remain required.
+  retains the owner while poisoning the hierarchy. A separate non-copy owner
+  now combines this concrete inactive ABAR hierarchy with the four exact
+  launch-named CPU mappings in one retained `MemoryPoolTable`/page-table
+  adapter, verifies all five leaves and mapping records, and withdraws CPU
+  mappings in reverse order before ABAR. This is not an activation seal: root
+  uniqueness, descriptor-PCI-identity/device-object correlation, PAT3=UC, and
+  alias exclusion remain unsafe caller obligations for the complete installed
+  lifetime; activation-time effective-leaf revalidation, permanent task
+  quarantine or activation exclusion on poison, active-root ownership, SMP
+  TLB withdrawal, and IOMMU teardown remain required.
   Generic syscall/user-buffer copies reject device-selector leaves so
   non-volatile byte-copy machinery cannot access registers.
 - Restart commit publishes and returns the exact service/task generations as
