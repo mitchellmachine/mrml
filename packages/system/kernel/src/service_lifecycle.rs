@@ -298,6 +298,90 @@ impl SupervisedConstructedServiceFaultDispatchFailure {
     }
 }
 
+/// A supervisor-bound constructed service stopped for a protocol violation.
+/// The violation retirement remains linear until exact cleanup succeeds.
+#[derive(Debug)]
+pub struct SupervisedConstructedServiceViolation {
+    binding: SupervisedServiceTask,
+    retirement: TaskViolationRetirement,
+    cleanup: ServiceCleanupTicket,
+}
+
+impl SupervisedConstructedServiceViolation {
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.binding.task
+    }
+
+    pub const fn cleanup(&self) -> ServiceCleanupTicket {
+        self.cleanup
+    }
+}
+
+#[derive(Debug)]
+pub struct SupervisedConstructedServiceViolationCleanupFailure<E> {
+    error: ServiceCleanupError<E>,
+    violation: SupervisedConstructedServiceViolation,
+}
+
+impl<E> SupervisedConstructedServiceViolationCleanupFailure<E> {
+    pub const fn error(&self) -> &ServiceCleanupError<E> {
+        &self.error
+    }
+
+    pub fn into_violation(self) -> SupervisedConstructedServiceViolation {
+        self.violation
+    }
+}
+
+#[derive(Debug)]
+pub struct CleanedSupervisedConstructedServiceViolation {
+    binding: SupervisedServiceTask,
+    retirement: TaskViolationRetirement,
+}
+
+impl CleanedSupervisedConstructedServiceViolation {
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.binding.task
+    }
+
+    pub fn dispatch<const TASKS: usize, const CAPS: usize>(
+        self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<TaskTerminationDispatch, SupervisedConstructedServiceViolationDispatchFailure> {
+        match runtime.dispatch_after_violation(self.retirement) {
+            Ok(dispatch) => Ok(dispatch),
+            Err(error) => Err(SupervisedConstructedServiceViolationDispatchFailure {
+                error,
+                cleaned: self,
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SupervisedConstructedServiceViolationDispatchFailure {
+    error: TaskTerminationDispatchError,
+    cleaned: CleanedSupervisedConstructedServiceViolation,
+}
+
+impl SupervisedConstructedServiceViolationDispatchFailure {
+    pub const fn error(&self) -> TaskTerminationDispatchError {
+        self.error
+    }
+
+    pub fn into_cleaned(self) -> CleanedSupervisedConstructedServiceViolation {
+        self.cleaned
+    }
+}
+
 impl SupervisedConstructedServiceDispatchFailure {
     pub const fn error(&self) -> TaskTerminationDispatchError {
         self.error
@@ -1355,6 +1439,34 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         })
     }
 
+    /// Stops the exact current constructed service after a protocol violation
+    /// while retaining the violation retirement until cleanup completes.
+    pub fn violate_current_constructed_service<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        binding: SupervisedServiceTask,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        violation: TaskProtocolViolation,
+    ) -> Result<SupervisedConstructedServiceViolation, ServiceError> {
+        if runtime.current() != Some(binding.task) {
+            return Err(ServiceError::TaskMismatch);
+        }
+        let plan = self.prepare_bound_current_retirement(binding, runtime.identity(), 0)?;
+        let retirement = runtime
+            .terminate_current_violation(violation)
+            .map_err(ServiceError::Runtime)?;
+        let cleanup = ServiceCleanupTicket {
+            service: plan.service,
+            task: plan.task,
+            context: retirement.context,
+        };
+        self.commit_current_retirement(plan, ServiceState::Faulted, cleanup);
+        Ok(SupervisedConstructedServiceViolation {
+            binding,
+            retirement,
+            cleanup,
+        })
+    }
+
     /// Removes the exact current constructed service from scheduler execution
     /// while retaining its domain and authority for device-specific quiescence.
     /// No successor can dispatch until the freeze is retired.
@@ -1816,6 +1928,50 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             })
         })();
         result.map_err(|error| SupervisedConstructedServiceFaultCleanupFailure { error, fault })
+    }
+
+    /// Erases one exact protocol-violating constructed-service address space
+    /// while retaining its violation owner on every failure.
+    pub fn complete_constructed_service_violation_cleanup<E: ServiceAddressSpaceEraser>(
+        &mut self,
+        violation: SupervisedConstructedServiceViolation,
+        eraser: &mut E,
+    ) -> Result<
+        CleanedSupervisedConstructedServiceViolation,
+        SupervisedConstructedServiceViolationCleanupFailure<E::Error>,
+    > {
+        let result = (|| {
+            if self.identity != Some(violation.binding.supervisor) {
+                return Err(ServiceCleanupError::Service(ServiceError::InvalidService));
+            }
+            let ticket = violation.cleanup;
+            let slot = ticket.service.slot as usize;
+            let entry = self
+                .slot(ticket.service)
+                .map_err(ServiceCleanupError::Service)?;
+            if entry.launch_class != ServiceLaunchClass::Constructed
+                || violation.binding.service != ticket.service
+                || violation.binding.task != ticket.task
+                || entry.state != ServiceState::Faulted
+                || entry.cleanup != Some(ticket)
+            {
+                return Err(ServiceCleanupError::Service(
+                    ServiceError::InvalidCleanupTicket,
+                ));
+            }
+            eraser
+                .erase(ticket.task, ticket.context)
+                .map_err(ServiceCleanupError::Eraser)?;
+            self.slots[slot].cleanup = None;
+            Ok(CleanedSupervisedConstructedServiceViolation {
+                binding: violation.binding,
+                retirement: violation.retirement,
+            })
+        })();
+        result.map_err(|error| SupervisedConstructedServiceViolationCleanupFailure {
+            error,
+            violation,
+        })
     }
 
     /// Completes cleanup only for the exact supervisor-bound constructed
@@ -2507,6 +2663,66 @@ mod tests {
         let mut eraser = TestEraser::default();
         let cleaned = supervisor
             .complete_constructed_service_fault_cleanup(failure.into_fault(), &mut eraser)
+            .unwrap();
+        assert_eq!(cleaned.service(), binding.service());
+        assert_eq!(cleaned.task(), native.task());
+        assert_eq!(eraser.erased.map(|(task, _)| task), Some(native.task()));
+        assert_eq!(supervisor.pending_cleanup(binding.service()), Ok(None));
+        let dispatch = cleaned.dispatch(&mut runtime).unwrap();
+        assert_eq!(dispatch.user().map(|(task, _)| task), Some(source));
+    }
+
+    #[test]
+    fn constructed_service_violation_retains_cleanup_before_successor_dispatch() {
+        let (mut runtime, source, native, _, object) = constructed_native_service_pair();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        // SAFETY: the fixture retains the complete constructed task and exact
+        // lifecycle object in this runtime.
+        let binding = unsafe {
+            supervisor.register_and_activate_constructed(
+                object,
+                native.task(),
+                RestartPolicy::ONCE_IMMEDIATE,
+                &mut runtime,
+            )
+        }
+        .unwrap();
+        runtime.start();
+        runtime.yield_current().unwrap();
+        let violation = supervisor
+            .violate_current_constructed_service(
+                binding,
+                &mut runtime,
+                TaskProtocolViolation::BufferedReceiveMappingDrift,
+            )
+            .unwrap();
+        assert_eq!(violation.service(), binding.service());
+        assert_eq!(violation.task(), native.task());
+        assert_eq!(supervisor.state(binding.service()), Ok(ServiceState::Faulted));
+        assert_eq!(
+            supervisor.pending_cleanup(binding.service()),
+            Ok(Some(violation.cleanup()))
+        );
+
+        let mut rejecting = TestEraser {
+            fail: true,
+            erased: None,
+        };
+        let failure = supervisor
+            .complete_constructed_service_violation_cleanup(violation, &mut rejecting)
+            .unwrap_err();
+        assert_eq!(failure.error(), &ServiceCleanupError::Eraser(()));
+        assert!(supervisor
+            .pending_cleanup(binding.service())
+            .unwrap()
+            .is_some());
+
+        let mut eraser = TestEraser::default();
+        let cleaned = supervisor
+            .complete_constructed_service_violation_cleanup(
+                failure.into_violation(),
+                &mut eraser,
+            )
             .unwrap();
         assert_eq!(cleaned.service(), binding.service());
         assert_eq!(cleaned.task(), native.task());

@@ -10448,23 +10448,24 @@ quiescence, supervisor retirement, mapping withdrawal, cleanup, and delayed
 dispatch through linear typed owners is conventional fail-closed lifecycle
 synchronization. See `docs/patents/REVIEW_LOG.md`.
 
-Non-device constructed services now share a narrower supervisor-bound
-retirement and fault paths **IMPLEMENTED IN SOURCE**. The exact minted
+Non-device constructed services now share narrower supervisor-bound retirement,
+fault, and protocol-violation paths **IMPLEMENTED IN SOURCE**. The exact minted
 `SupervisedServiceTask` must identify the current task in the originating
 runtime before termination. Voluntary retirement records `Exited`; a user fault
-records `Faulted` and retains the exact fault disposition. Both paths retain
-their scheduler owner without exposing a successor dispatch. Exact supervisor,
-service generation, task, state, and cleanup-ticket matching precede
-address-space erasure; backend uncertainty returns the unchanged retirement or
-fault for retry. Only the corresponding cleaned linear owner can request the
-runtime-bound successor dispatch. The Linux-host kernel suite passes all 716
-tests and the release `MRML_NATIVE` build passes. This is scheduler, lifecycle,
-and controlled eraser evidence; no installed FAT32 process, active
+records `Faulted` and retains the exact fault disposition; a protocol violation
+also records `Faulted` while retaining its typed violation reason. All three
+paths retain their scheduler owner without exposing a successor dispatch. Exact
+supervisor, service generation, task, state, and cleanup-ticket matching precede
+address-space erasure; backend uncertainty returns the unchanged owner for
+retry. Only the corresponding cleaned linear owner can request the runtime-bound
+successor dispatch. The Linux-host kernel suite passes all 717 tests and the
+release `MRML_NATIVE` build passes. This is scheduler, lifecycle, and controlled
+eraser evidence; no installed FAT32 process, active
 page-table/TLB withdrawal, KVM/WHP, or physical storage execution was exercised.
 
-Patent review: `NOT_TRIGGERED` — supervisor-bound task retirement and fault
-containment, exact cleanup, and delayed scheduler dispatch reuse conventional
-lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
+Patent review: `NOT_TRIGGERED` — supervisor-bound task retirement, fault and
+protocol-violation containment, exact cleanup, and delayed scheduler dispatch
+reuse conventional lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
 
 Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
 memory-resource root. The kernel reserves exactly one `Shared` page from an
