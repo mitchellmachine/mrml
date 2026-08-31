@@ -1673,6 +1673,196 @@ pub unsafe fn remove_retired_kernel_ahci_service_mappings<
     }
 }
 
+pub struct RetiredKernelAhciServiceCleanupComplete {
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    launch: BoundAhciServiceLaunch,
+}
+
+impl RetiredKernelAhciServiceCleanupComplete {
+    pub const fn service(&self) -> ServiceId {
+        self.retirement.service()
+    }
+}
+
+pub struct KernelAhciRetiredServiceCleanupError<
+    'resources,
+    S: PageTableStore,
+    E,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    error: ServiceCleanupError<E>,
+    owner: RetiredKernelAhciServiceMappingsRemoved<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    E,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciRetiredServiceCleanupError<
+        'resources,
+        S,
+        E,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> &ServiceCleanupError<E> {
+        &self.error
+    }
+
+    pub fn into_owner(
+        self,
+    ) -> RetiredKernelAhciServiceMappingsRemoved<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        self.owner
+    }
+}
+
+/// Erases the exact retired address space while its empty concrete root and
+/// memory-resource owner remain retained, then releases that owner only after
+/// the supervisor accepts the same cleanup ticket.
+///
+/// # Safety
+///
+/// The mapping backend which produced `owner` must truthfully have withdrawn
+/// every leaf and required translation. `eraser` success must mean the retired
+/// address space can no longer be entered or addressed. Dispatch must remain
+/// withheld until this operation succeeds.
+pub unsafe fn complete_retired_kernel_ahci_service_cleanup<
+    'resources,
+    S: PageTableStore,
+    E: ServiceAddressSpaceEraser,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+    const SERVICES: usize,
+>(
+    owner: RetiredKernelAhciServiceMappingsRemoved<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    eraser: &mut E,
+) -> Result<
+    RetiredKernelAhciServiceCleanupComplete,
+    KernelAhciRetiredServiceCleanupError<
+        'resources,
+        S,
+        E::Error,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let RetiredKernelAhciServiceMappingsRemoved {
+        owner: mapping_owner,
+        retirement,
+    } = owner;
+    // SAFETY: the caller supplies the exact mapping-withdrawal and erasure
+    // truthfulness proof while the retained owner prevents premature release.
+    match unsafe {
+        supervisor.complete_supervised_native_device_service_cleanup(&retirement, eraser)
+    } {
+        Ok(()) => {
+            let launch = mapping_owner.prepared().launch();
+            // SAFETY: cleanup above succeeded for this retirement while all
+            // concrete mappings were already removed by the only constructor.
+            let _prepared = unsafe { mapping_owner.release_after_retired_cleanup() };
+            Ok(RetiredKernelAhciServiceCleanupComplete { retirement, launch })
+        }
+        Err(error) => Err(KernelAhciRetiredServiceCleanupError {
+            error,
+            owner: RetiredKernelAhciServiceMappingsRemoved {
+                owner: mapping_owner,
+                retirement,
+            },
+        }),
+    }
+}
+
+pub struct KernelAhciServiceDispatchError {
+    error: TaskTerminationDispatchError,
+    owner: RetiredKernelAhciServiceCleanupComplete,
+}
+
+impl KernelAhciServiceDispatchError {
+    pub const fn error(&self) -> TaskTerminationDispatchError {
+        self.error
+    }
+
+    pub fn into_owner(self) -> RetiredKernelAhciServiceCleanupComplete {
+        self.owner
+    }
+}
+
+pub fn dispatch_retired_kernel_ahci_service_task<
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+>(
+    owner: RetiredKernelAhciServiceCleanupComplete,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+) -> Result<DispatchedAhciServiceTask, KernelAhciServiceDispatchError> {
+    let RetiredKernelAhciServiceCleanupComplete { retirement, launch } = owner;
+    match retirement.dispatch(runtime) {
+        Ok(retirement) => Ok(DispatchedAhciServiceTask { retirement, launch }),
+        Err(error) => {
+            let dispatch_error = error.error();
+            Err(KernelAhciServiceDispatchError {
+                error: dispatch_error,
+                owner: RetiredKernelAhciServiceCleanupComplete {
+                    retirement: error.into_retirement(),
+                    launch,
+                },
+            })
+        }
+    }
+}
+
 impl<L, E, R, M, D> AhciServiceTeardownReacquisitionError<L, E, R, M, D> {
     pub const fn lease_error(&self) -> Option<&E> {
         match self {

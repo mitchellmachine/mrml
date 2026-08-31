@@ -1613,19 +1613,23 @@ CPU/DMA leaves in reverse order and then the ABAR, with backend success carrying
 the required translation-withdrawal contract; failure retains the retirement
 and incomplete concrete owner. Success keeps the empty page-table/resource
 owner paired with the retirement while successor dispatch remains withheld.
-Exact supervisor address-space cleanup and release of that final concrete owner
-is the next dependency gate.
+Exact supervisor cleanup now erases the retired address space while that empty
+concrete owner remains live, releases its page-table and memory-resource borrows
+only after the same cleanup ticket succeeds, and then permits the retained
+termination owner to dispatch the already selected successor. Cleanup denial
+retains the entire empty root/retirement pair for exact retry.
 
 The focused Linux AHCI suite passes all 147 tests. Coverage includes equal task
 tokens from different runtimes, pre-freeze current-task and supervisor denial
 without reacquisition, retry after lease-reacquisition failure, substituted
 state quarantine, concrete-root retention across acquisition and sanitization
 retry, exact concrete retirement and five-leaf withdrawal, frozen mutation
-denial, quiescence retry, and the existing generic cleanup/dispatch chain. This
-is typed API, controlled backend, and unit-test evidence only. The repository
-has no production controller-manager lease implementation or installed
-operation-3 routing, and no installed CPL3/`INT 0x80`, active page-table/TLB or
-IOMMU invalidation, KVM/WHP, or physical AHCI execution was exercised.
+denial, quiescence retry, exact address-space cleanup, concrete-owner release,
+and delayed successor dispatch. This is typed API, controlled backend, and
+unit-test evidence only. The repository has no production controller-manager
+lease implementation or installed operation-3 routing, and no installed
+CPL3/`INT 0x80`, active page-table/TLB or IOMMU invalidation, KVM/WHP, or
+physical AHCI execution was exercised.
 
 Complexity impact: MEDIUM
 TCB impact: LOW
