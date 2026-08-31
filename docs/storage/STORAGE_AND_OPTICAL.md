@@ -1953,6 +1953,24 @@ standard platform plumbing. It adds no AHCI command, DMA behavior, persistent
 format, or new authority model. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
+The same retained native backend now performs the read-only identity phase
+before BAR sizing. It reads vendor/device, class/subclass/programming interface,
+header type, and BAR5 only for its exact requester, decodes those fixed-width
+registers into an authority-free snapshot with no asserted extent, and consumes
+itself directly into the exclusive sizing owner. Invalid generation, absent or
+non-AHCI identity, unsupported header/BAR encoding, or caller-substituted
+pre-sized geometry returns the native backend in a typed admission failure;
+snapshot bytes never substitute for the retained exclusive owner. A host test
+checks exact register-field decoding without port I/O, and all 155 Linux AHCI
+tests pass. Native and UEFI compilation are the only platform evidence: no
+configuration port, guest, or physical device was exercised.
+
+Patent review: **NOT_TRIGGERED**. Fixed-width decoding of conventional PCI type-
+zero identity registers and directly retaining the existing exclusive backend
+through admission is standard enumeration plumbing. It adds no AHCI command,
+DMA behavior, persistent format, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
 success and error owners in a bounded manager state is conventional fail-closed
 lifecycle composition. It adds no parser, controller command, DMA behavior,

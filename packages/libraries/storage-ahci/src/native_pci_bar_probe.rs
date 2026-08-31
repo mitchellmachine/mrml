@@ -1,11 +1,17 @@
 //! Native x86 PCI configuration mechanism-one adapter for one AHCI BAR probe.
 
-use crate::{AhciPciBarProbeIo, PciFunctionLocation};
+use crate::{
+    AhciDiscoveryError, AhciPciBarProbeIo, AhciPciFunctionSnapshot, ExclusiveAhciPciFunction,
+    PciFunctionLocation,
+};
 use core::arch::asm;
 
 const ADDRESS_PORT: u16 = 0x0cf8;
 const DATA_PORT: u16 = 0x0cfc;
 const COMMAND_OFFSET: u8 = 0x04;
+const IDENTITY_OFFSET: u8 = 0x00;
+const CLASS_OFFSET: u8 = 0x08;
+const HEADER_OFFSET: u8 = 0x0c;
 const ABAR_OFFSET: u8 = 0x24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +45,32 @@ impl NativeAhciPciBarProbe {
         self.location
     }
 
+    /// Reads the authority-free identity tuple for the retained function and
+    /// consumes this backend directly into the exclusive BAR transaction
+    /// owner. The snapshot is never accepted as a substitute for this owner.
+    pub fn into_exclusive(
+        mut self,
+        configuration_generation: u64,
+    ) -> Result<ExclusiveAhciPciFunction<Self>, NativeAhciPciAdmissionFailure> {
+        let identity = unsafe { self.read_dword(IDENTITY_OFFSET) };
+        let class = unsafe { self.read_dword(CLASS_OFFSET) };
+        let header = unsafe { self.read_dword(HEADER_OFFSET) };
+        let abar = unsafe { self.read_dword(ABAR_OFFSET) };
+        let snapshot = snapshot_from_registers(
+            self.location,
+            configuration_generation,
+            identity,
+            class,
+            header,
+            abar,
+        );
+        // SAFETY: `self` retains the exact exclusive/quiescent function and
+        // mechanism-one exclusion established by `new`; the snapshot was read
+        // synchronously from that same retained requester.
+        unsafe { ExclusiveAhciPciFunction::admit(snapshot, self) }
+            .map_err(|(error, backend)| NativeAhciPciAdmissionFailure { error, backend })
+    }
+
     fn selector(
         &self,
         location: PciFunctionLocation,
@@ -48,6 +80,58 @@ impl NativeAhciPciBarProbe {
             return Err(NativeAhciPciBarProbeError::WrongFunction);
         }
         Ok(configuration_selector(location, offset))
+    }
+
+    unsafe fn read_dword(&mut self, offset: u8) -> u32 {
+        let selector = configuration_selector(self.location, offset);
+        unsafe { select(selector) };
+        let value: u32;
+        unsafe {
+            asm!(
+                "in eax, dx",
+                in("dx") DATA_PORT,
+                lateout("eax") value,
+                options(nostack, preserves_flags)
+            )
+        };
+        value
+    }
+}
+
+pub struct NativeAhciPciAdmissionFailure {
+    error: AhciDiscoveryError,
+    backend: NativeAhciPciBarProbe,
+}
+
+impl NativeAhciPciAdmissionFailure {
+    pub const fn error(&self) -> AhciDiscoveryError {
+        self.error
+    }
+
+    pub fn into_backend(self) -> NativeAhciPciBarProbe {
+        self.backend
+    }
+}
+
+const fn snapshot_from_registers(
+    location: PciFunctionLocation,
+    configuration_generation: u64,
+    identity: u32,
+    class: u32,
+    header: u32,
+    abar: u32,
+) -> AhciPciFunctionSnapshot {
+    AhciPciFunctionSnapshot {
+        location,
+        configuration_generation,
+        vendor_id: identity as u16,
+        device_id: (identity >> 16) as u16,
+        header_type: (header >> 16) as u8,
+        class: (class >> 24) as u8,
+        subclass: (class >> 16) as u8,
+        programming_interface: (class >> 8) as u8,
+        abar,
+        abar_bytes: 0,
     }
 }
 
@@ -150,6 +234,29 @@ mod tests {
             0x807a_ff04
         );
         assert_eq!(configuration_selector(location, ABAR_OFFSET), 0x807a_ff24);
+    }
+
+    #[test]
+    fn snapshot_decodes_exact_type_zero_identity_fields() {
+        let location = PciFunctionLocation::new(0, 0, 31, 2).unwrap();
+        let snapshot = snapshot_from_registers(
+            location,
+            9,
+            0x7a62_8086,
+            0x0106_0102,
+            0x0080_0000,
+            0xf7f0_0000,
+        );
+        assert_eq!(snapshot.location, location);
+        assert_eq!(snapshot.configuration_generation, 9);
+        assert_eq!(snapshot.vendor_id, 0x8086);
+        assert_eq!(snapshot.device_id, 0x7a62);
+        assert_eq!(snapshot.header_type, 0x80);
+        assert_eq!(snapshot.class, 0x01);
+        assert_eq!(snapshot.subclass, 0x06);
+        assert_eq!(snapshot.programming_interface, 0x01);
+        assert_eq!(snapshot.abar, 0xf7f0_0000);
+        assert_eq!(snapshot.abar_bytes, 0);
     }
 
     #[test]

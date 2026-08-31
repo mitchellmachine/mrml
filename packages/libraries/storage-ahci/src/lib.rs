@@ -165,7 +165,9 @@ pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryError};
 #[cfg(target_arch = "x86_64")]
-pub use native_pci_bar_probe::{NativeAhciPciBarProbe, NativeAhciPciBarProbeError};
+pub use native_pci_bar_probe::{
+    NativeAhciPciAdmissionFailure, NativeAhciPciBarProbe, NativeAhciPciBarProbeError,
+};
 pub use native_port_reconstruction::{
     AhciNativePortReconstructionError, reconstruct_bound_ahci_port, reconstruct_installed_ahci_port,
 };
