@@ -138,7 +138,8 @@ pub use kernel_abar_page_table::{
 };
 pub use kernel_preactivation_mapping_set::{
     ActiveKernelAhciMappingSetOwner, KernelAhciMappingSetActivationError,
-    KernelAhciMappingSetActivationFailure, KernelAhciPreactivationMappingSetError,
+    FrozenKernelAhciMappingSetOwner, KernelAhciMappingSetActivationFailure,
+    KernelAhciMappingSetFreezeFailure, KernelAhciPreactivationMappingSetError,
     KernelAhciPreactivationMappingSetQuarantineError,
     KernelAhciPreactivationMappingSetQuarantineFailure,
     KernelAhciPreactivationMappingSetInstallFailure,

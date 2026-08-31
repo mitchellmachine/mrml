@@ -17,7 +17,9 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, MemoryPoolTable,
     NativeDeviceServiceActivationError, ObjectId, PAGE_SIZE, PhysAddr, RestartPolicy, ServiceError,
-    ServiceId, ServiceSupervisor, SupervisedServiceTask, TaskId, TaskRuntime, TaskRuntimeError,
+    ServiceId, ServiceSupervisor, SupervisedNativeDeviceServiceFreeze,
+    SupervisedNativeDeviceServiceRetirementError, SupervisedServiceTask, TaskId, TaskRuntime,
+    TaskRuntimeError,
 };
 
 type CpuOperationError = KernelAhciServiceCpuMappingOperationError<InactivePageTableMappingError>;
@@ -299,6 +301,59 @@ pub struct ActiveKernelAhciMappingSetOwner<
     binding: SupervisedServiceTask,
 }
 
+/// Execution-frozen concrete AHCI mapping set. Device quiescence and every
+/// mapping/root resource remain retained for the next teardown transition.
+#[must_use = "the frozen service and mapping resources require explicit quiescence and retirement"]
+pub struct FrozenKernelAhciMappingSetOwner<
+    'resources,
+    S,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> where
+    S: PageTableStore,
+{
+    owner: KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+}
+
+pub struct KernelAhciMappingSetFreezeFailure<
+    'resources,
+    S,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> where
+    S: PageTableStore,
+{
+    error: SupervisedNativeDeviceServiceRetirementError,
+    active: ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
 pub struct KernelAhciMappingSetActivationFailure<
     'resources,
     S,
@@ -543,6 +598,109 @@ impl<
 
     pub const fn cpu_mappings(&self) -> AhciInstalledCpuMappings {
         self.owner.cpu_mappings()
+    }
+
+    /// Freezes the exact currently executing service while retaining the
+    /// concrete page-table hierarchy and all five mapping/resource owners.
+    /// This transition performs no device, DMA, mapping, or cleanup operation.
+    pub fn freeze_current<const SERVICES: usize>(
+        self,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<
+        FrozenKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        KernelAhciMappingSetFreezeFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        let active = self;
+        let native = active.owner.prepared.task();
+        match supervisor.freeze_current_native_device_service(active.binding, native, runtime) {
+            Ok(frozen) => Ok(FrozenKernelAhciMappingSetOwner {
+                owner: active.owner,
+                frozen,
+            }),
+            Err(error) => Err(KernelAhciMappingSetFreezeFailure { error, active }),
+        }
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> FrozenKernelAhciMappingSetOwner<'resources, S, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn service(&self) -> ServiceId {
+        self.frozen.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.frozen.task()
+    }
+
+    pub const fn root(&self) -> PhysAddr {
+        self.owner.root()
+    }
+
+    pub const fn target(&self) -> ObjectId {
+        self.owner.target()
+    }
+
+    pub const fn cpu_mappings(&self) -> AhciInstalledCpuMappings {
+        self.owner.cpu_mappings()
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> KernelAhciMappingSetFreezeFailure<'resources, S, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn error(&self) -> SupervisedNativeDeviceServiceRetirementError {
+        self.error
+    }
+
+    pub fn into_active(
+        self,
+    ) -> ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        self.active
     }
 }
 

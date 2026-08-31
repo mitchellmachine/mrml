@@ -1437,6 +1437,30 @@ mod tests {
         assert_eq!(supervisor.task(active.service()), Ok(Some(target_task)));
         assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
         assert_eq!(fixture.runtime.load().runnable(), 2);
+        let failure = active
+            .freeze_current(&supervisor, &mut fixture.runtime)
+            .err()
+            .unwrap_or_else(|| panic!("non-current task must not freeze"));
+        let active = failure.into_active();
+        assert_eq!(active.task(), target_task);
+        assert!(matches!(
+            fixture.runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { .. }
+        ));
+        assert!(matches!(
+            fixture.runtime.yield_current(),
+            Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target_task
+        ));
+        let frozen = active
+            .freeze_current(&supervisor, &mut fixture.runtime)
+            .unwrap_or_else(|failure| {
+                panic!("exact active owner must freeze: {:?}", failure.error())
+            });
+        assert_eq!(frozen.task(), target_task);
+        assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(frozen.target(), target);
+        assert!(frozen.cpu_mappings().fully_installed());
+        assert_eq!(fixture.runtime.load().runnable(), 1);
     }
 
     #[test]
