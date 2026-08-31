@@ -283,11 +283,14 @@ pub use scheduler::{
     SchedulerLoad, TaskAttachError, TaskId, TaskMigration, TaskState,
 };
 pub use service_lifecycle::{
-    AccountedServiceSupervisor, AccountedServiceSupervisorError, RestartPolicy,
+    AccountedServiceSupervisor, AccountedServiceSupervisorError,
+    CleanedSupervisedConstructedService, RestartPolicy,
     ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
     ServiceDeadlineCancellationError, ServiceError, ServiceFault, ServiceId, ServiceRecovery,
     ServiceRecoveryError, ServiceRegistrationPlan, ServiceRestartCommit, ServiceRetirement,
     ServiceState, ServiceSupervisor, ServiceViolation, SupervisedNativeDeviceServiceDispatch,
+    SupervisedConstructedServiceCleanupFailure, SupervisedConstructedServiceDispatchFailure,
+    SupervisedConstructedServiceRetirement,
     SupervisedNativeDeviceServiceDispatchError, SupervisedNativeDeviceServiceFreeze,
     SupervisedNativeDeviceServiceFrozenRetirementError,
     SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError,

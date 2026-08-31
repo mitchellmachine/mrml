@@ -139,6 +139,91 @@ pub struct ServiceRetirement {
     pub dispatch: TaskTerminationDispatch,
 }
 
+/// A supervisor-bound constructed service whose task has stopped but whose
+/// address space has not yet been erased. Successor dispatch is withheld by
+/// the retained termination owner.
+#[derive(Debug)]
+pub struct SupervisedConstructedServiceRetirement {
+    binding: SupervisedServiceTask,
+    termination: TaskTermination,
+    cleanup: ServiceCleanupTicket,
+}
+
+impl SupervisedConstructedServiceRetirement {
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.binding.task
+    }
+
+    pub const fn cleanup(&self) -> ServiceCleanupTicket {
+        self.cleanup
+    }
+}
+
+#[derive(Debug)]
+pub struct SupervisedConstructedServiceCleanupFailure<E> {
+    error: ServiceCleanupError<E>,
+    retirement: SupervisedConstructedServiceRetirement,
+}
+
+impl<E> SupervisedConstructedServiceCleanupFailure<E> {
+    pub const fn error(&self) -> &ServiceCleanupError<E> {
+        &self.error
+    }
+
+    pub fn into_retirement(self) -> SupervisedConstructedServiceRetirement {
+        self.retirement
+    }
+}
+
+#[derive(Debug)]
+pub struct CleanedSupervisedConstructedService {
+    binding: SupervisedServiceTask,
+    termination: TaskTermination,
+}
+
+impl CleanedSupervisedConstructedService {
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.binding.task
+    }
+
+    pub fn dispatch<const TASKS: usize, const CAPS: usize>(
+        self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<TaskTerminationDispatch, SupervisedConstructedServiceDispatchFailure> {
+        match runtime.dispatch_after_termination(self.termination) {
+            Ok(dispatch) => Ok(dispatch),
+            Err(error) => Err(SupervisedConstructedServiceDispatchFailure {
+                error,
+                cleaned: self,
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SupervisedConstructedServiceDispatchFailure {
+    error: TaskTerminationDispatchError,
+    cleaned: CleanedSupervisedConstructedService,
+}
+
+impl SupervisedConstructedServiceDispatchFailure {
+    pub const fn error(&self) -> TaskTerminationDispatchError {
+        self.error
+    }
+
+    pub fn into_cleaned(self) -> CleanedSupervisedConstructedService {
+        self.cleaned
+    }
+}
+
 /// Exact supervisor, service generation, and runtime task binding minted by
 /// constructed-task publication. The binding identifies lifecycle state but
 /// grants no authority independently of the supervisor and live runtime.
@@ -1128,6 +1213,36 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         self.exit_current_at(runtime, 0)
     }
 
+    /// Stops the exact current constructed service while retaining its
+    /// termination until supervisor-bound address-space cleanup completes.
+    pub fn retire_current_constructed_service<
+        const TASKS: usize,
+        const CAPS: usize,
+    >(
+        &mut self,
+        binding: SupervisedServiceTask,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<SupervisedConstructedServiceRetirement, ServiceError> {
+        if runtime.current() != Some(binding.task) {
+            return Err(ServiceError::TaskMismatch);
+        }
+        let plan = self.prepare_bound_current_retirement(binding, runtime.identity(), 0)?;
+        let (termination, context) = runtime
+            .terminate_current_with_context()
+            .map_err(ServiceError::Runtime)?;
+        let cleanup = ServiceCleanupTicket {
+            service: plan.service,
+            task: plan.task,
+            context,
+        };
+        self.commit_current_retirement(plan, ServiceState::Exited, cleanup);
+        Ok(SupervisedConstructedServiceRetirement {
+            binding,
+            termination,
+            cleanup,
+        })
+    }
+
     /// Removes the exact current constructed service from scheduler execution
     /// while retaining its domain and authority for device-specific quiescence.
     /// No successor can dispatch until the freeze is retired.
@@ -1507,6 +1622,47 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .map_err(ServiceCleanupError::Eraser)?;
         self.slots[slot].cleanup = None;
         Ok(())
+    }
+
+    /// Erases one exact constructed-service address space while preserving the
+    /// retained retirement on every validation or backend failure.
+    pub fn complete_constructed_service_cleanup<E: ServiceAddressSpaceEraser>(
+        &mut self,
+        retirement: SupervisedConstructedServiceRetirement,
+        eraser: &mut E,
+    ) -> Result<CleanedSupervisedConstructedService, SupervisedConstructedServiceCleanupFailure<E::Error>>
+    {
+        let result = (|| {
+            if self.identity != Some(retirement.binding.supervisor) {
+                return Err(ServiceCleanupError::Service(ServiceError::InvalidService));
+            }
+            let ticket = retirement.cleanup;
+            let slot = ticket.service.slot as usize;
+            let entry = self
+                .slot(ticket.service)
+                .map_err(ServiceCleanupError::Service)?;
+            if entry.launch_class != ServiceLaunchClass::Constructed
+                || retirement.binding.service != ticket.service
+                || retirement.binding.task != ticket.task
+                || entry.cleanup != Some(ticket)
+            {
+                return Err(ServiceCleanupError::Service(
+                    ServiceError::InvalidCleanupTicket,
+                ));
+            }
+            eraser
+                .erase(ticket.task, ticket.context)
+                .map_err(ServiceCleanupError::Eraser)?;
+            self.slots[slot].cleanup = None;
+            Ok(CleanedSupervisedConstructedService {
+                binding: retirement.binding,
+                termination: retirement.termination,
+            })
+        })();
+        result.map_err(|error| SupervisedConstructedServiceCleanupFailure {
+            error,
+            retirement,
+        })
     }
 
     /// Completes cleanup only for the exact supervisor-bound constructed
@@ -2081,6 +2237,70 @@ mod tests {
         let first = prepare(&mut runtime, first_target);
         let second = prepare(&mut runtime, second_target);
         (runtime, source, first, second, object)
+    }
+
+    #[test]
+    fn constructed_service_retirement_withholds_dispatch_until_exact_cleanup() {
+        let (mut runtime, source, native, _, object) = constructed_native_service_pair();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        // SAFETY: `native` retains the complete construction owner and the
+        // lifecycle object comes from that same admitted service spec.
+        let binding = unsafe {
+            supervisor.register_and_activate_constructed(
+                object,
+                native.task(),
+                RestartPolicy::ONCE_IMMEDIATE,
+                &mut runtime,
+            )
+        }
+        .unwrap();
+        assert!(matches!(
+            runtime.start(),
+            ScheduleOutcome::Switch { to, .. } if to == source
+        ));
+        assert!(matches!(
+            runtime.yield_current().unwrap(),
+            ScheduleOutcome::Switch { to, .. } if to == native.task()
+        ));
+
+        let retirement = supervisor
+            .retire_current_constructed_service(binding, &mut runtime)
+            .unwrap();
+        assert_eq!(retirement.service(), binding.service());
+        assert_eq!(retirement.task(), native.task());
+        assert_eq!(supervisor.state(binding.service()), Ok(ServiceState::Exited));
+        assert_eq!(
+            supervisor.pending_cleanup(binding.service()),
+            Ok(Some(retirement.cleanup()))
+        );
+        // The scheduler may select the successor internally, but the caller
+        // receives no executable dispatch context until cleanup consumes the
+        // retained termination below.
+        assert_eq!(runtime.current(), Some(source));
+
+        let mut rejecting = TestEraser {
+            fail: true,
+            erased: None,
+        };
+        let failure = supervisor
+            .complete_constructed_service_cleanup(retirement, &mut rejecting)
+            .unwrap_err();
+        assert_eq!(failure.error(), &ServiceCleanupError::Eraser(()));
+        assert!(supervisor
+            .pending_cleanup(binding.service())
+            .unwrap()
+            .is_some());
+
+        let mut eraser = TestEraser::default();
+        let cleaned = supervisor
+            .complete_constructed_service_cleanup(failure.into_retirement(), &mut eraser)
+            .unwrap();
+        assert_eq!(cleaned.service(), binding.service());
+        assert_eq!(cleaned.task(), native.task());
+        assert_eq!(supervisor.pending_cleanup(binding.service()), Ok(None));
+        assert_eq!(eraser.erased.map(|(task, _)| task), Some(native.task()));
+        let dispatch = cleaned.dispatch(&mut runtime).unwrap();
+        assert_eq!(dispatch.user().map(|(task, _)| task), Some(source));
     }
 
     #[test]

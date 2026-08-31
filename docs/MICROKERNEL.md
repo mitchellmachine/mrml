@@ -10441,6 +10441,22 @@ quiescence, supervisor retirement, mapping withdrawal, cleanup, and delayed
 dispatch through linear typed owners is conventional fail-closed lifecycle
 synchronization. See `docs/patents/REVIEW_LOG.md`.
 
+Non-device constructed services now share a narrower supervisor-bound
+retirement path **IMPLEMENTED IN SOURCE**. The exact minted
+`SupervisedServiceTask` must identify the current task in the originating
+runtime before termination. Retirement records `Exited` and retains the
+termination owner without exposing a successor dispatch. Exact supervisor,
+service generation, task, and cleanup-ticket matching precede address-space
+erasure; backend uncertainty returns the unchanged retirement for retry. Only
+the cleaned linear owner can request the runtime-bound successor dispatch. The
+Linux-host kernel suite passes all 715 tests. This is scheduler, lifecycle, and
+controlled eraser evidence; no installed FAT32 process, active page-table/TLB
+withdrawal, KVM/WHP, or physical storage execution was exercised.
+
+Patent review: `NOT_TRIGGERED` — supervisor-bound task retirement, exact cleanup,
+and delayed scheduler dispatch reuse conventional lifecycle mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
+
 Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
 memory-resource root. The kernel reserves exactly one `Shared` page from an
 explicit pool into the source task, retains its typed table generation, and
