@@ -5681,13 +5681,8 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             return Err(LinkerError::UnsupportedCoffRelocation);
         }
         let relocation_type = read_u16(object, offset + 8)?;
-        let target_offset = symbol_offset
-            .checked_add(
-                target_index
-                    .checked_mul(18)
-                    .ok_or(LinkerError::OffsetOverflow)?,
-            )
-            .ok_or(LinkerError::OffsetOverflow)?;
+        let target_offset =
+            coff_relocation_symbol_offset(object, symbol_offset, symbol_count, target_index)?;
         let target_section = read_i16(object, target_offset + 12)?;
         let target_is_tls = target_section > 0
             && tls_sections.contains(
@@ -11495,6 +11490,63 @@ fn coff_symbol_name<'a>(
     Ok(name)
 }
 
+fn coff_relocation_symbol_offset(
+    object: &[u8],
+    symbol_offset: usize,
+    symbol_count: usize,
+    target_index: usize,
+) -> Result<usize, LinkerError> {
+    let target = symbol_offset
+        .checked_add(
+            target_index
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
+    if storage_class != 105 {
+        return Ok(target);
+    }
+    if read_u32(object, target + 8)? != 0
+        || read_i16(object, target + 12)? != 0
+        || read_u16(object, target + 14)? != 0
+        || object.get(target + 17).copied() != Some(1)
+    {
+        return Err(LinkerError::InvalidCoffAssociation);
+    }
+    let auxiliary = target.checked_add(18).ok_or(LinkerError::OffsetOverflow)?;
+    let fallback_index =
+        usize::try_from(read_u32(object, auxiliary)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    if read_u32(object, auxiliary + 4)? != 3 {
+        return Err(LinkerError::UnsupportedCoffSymbol);
+    }
+    if object
+        .get(auxiliary + 8..auxiliary + 18)
+        .ok_or(LinkerError::InvalidCoff)?
+        .iter()
+        .any(|byte| *byte != 0)
+        || fallback_index >= symbol_count
+        || fallback_index == target_index
+        || fallback_index == target_index + 1
+    {
+        return Err(LinkerError::InvalidCoffAssociation);
+    }
+    let fallback = symbol_offset
+        .checked_add(
+            fallback_index
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if object.get(fallback + 16).copied() != Some(2)
+        || object.get(fallback + 17).copied() != Some(0)
+        || read_i16(object, fallback + 12)? <= 0
+    {
+        return Err(LinkerError::InvalidCoffAssociation);
+    }
+    Ok(fallback)
+}
+
 fn coff_section_name<'a>(
     raw: &'a [u8],
     object: &'a [u8],
@@ -11674,6 +11726,26 @@ mod tests {
         object[147..149].copy_from_slice(&2i16.to_le_bytes());
         object[151] = 2;
         object[153..157].copy_from_slice(&4u32.to_le_bytes());
+        object
+    }
+
+    fn two_fragment_coff_with_weak_alias() -> std::vec::Vec<u8> {
+        let original = two_fragment_coff();
+        let mut object = std::vec![0u8; original.len() + 36];
+        object[..135].copy_from_slice(&original[..135]);
+        object[8..12].copy_from_slice(&117u32.to_le_bytes());
+        object[12..16].copy_from_slice(&4u32.to_le_bytes());
+
+        object[135..140].copy_from_slice(b"alias");
+        object[151] = 105;
+        object[152] = 1;
+        object[153..157].copy_from_slice(&3u32.to_le_bytes());
+        object[157..161].copy_from_slice(&3u32.to_le_bytes());
+
+        object[171..177].copy_from_slice(b"helper");
+        object[183..185].copy_from_slice(&2i16.to_le_bytes());
+        object[187] = 2;
+        object[189..193].copy_from_slice(&4u32.to_le_bytes());
         object
     }
 
@@ -13937,6 +14009,51 @@ mod tests {
                 &mut legacy_definitions,
             ),
             Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn resolves_bounded_coff_weak_aliases_to_exact_strong_fallbacks() {
+        fn decode_first(object: &[u8]) -> Result<LinkRelocationTarget<'_>, LinkerError> {
+            let mut relocations = [LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("unused"),
+                addend: 0,
+            }; MAX_LINK_RELOCATIONS];
+            let mut definitions = [LinkDefinition {
+                symbol: "unused",
+                target: LinkDefinitionTarget::Text(0),
+            }; MAX_LINK_DEFINITIONS];
+            let decoded =
+                decode_x86_64_coff_text_fragment(object, 0, &mut relocations, &mut definitions)?;
+            Ok(decoded.relocations[0].target)
+        }
+
+        let object = two_fragment_coff_with_weak_alias();
+        assert_eq!(
+            decode_first(&object),
+            Ok(LinkRelocationTarget::Symbol("helper"))
+        );
+
+        let mut unsupported_search = object.clone();
+        unsupported_search[157..161].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            decode_first(&unsupported_search),
+            Err(LinkerError::UnsupportedCoffSymbol)
+        );
+
+        let mut auxiliary_target = object.clone();
+        auxiliary_target[153..157].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            decode_first(&auxiliary_target),
+            Err(LinkerError::InvalidCoffAssociation)
+        );
+
+        let mut chained = object;
+        chained[187] = 105;
+        assert_eq!(
+            decode_first(&chained),
+            Err(LinkerError::InvalidCoffAssociation)
         );
     }
 

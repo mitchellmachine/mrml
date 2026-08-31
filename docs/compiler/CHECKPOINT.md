@@ -4682,6 +4682,17 @@ release driver passes 17/17. All eight pinned std/TLS Wine modes reproduce their
 exact recorded sizes and SHA-256 hashes and return 42. Patent review:
 NOT_TRIGGERED.
 
+AMD64 COFF text relocation decoding now resolves the exact bounded
+`IMAGE_SYM_CLASS_WEAK_EXTERNAL`/`SEARCH_ALIAS` form observed twice in the pinned
+profiler runtime to its same-object strong fallback definition. Other search
+policies, auxiliary-record targets, chained aliases, and non-strong fallbacks
+remain rejected. Exact inspection found no weak externals in the pinned core,
+alloc, or std archives. The Linux release gate passes 845/845 units, 2/2 object
+evidence, 10/10 conformance, 351/351 replacements, and 128/128 semantic tests;
+the release compiler-driver gate passes 17/17. All eight pinned std/TLS Wine
+modes reproduce exact recorded sizes and SHA-256 hashes and return 42. Patent
+review: NOT_TRIGGERED.
+
 Read-only COMDAT relocation decoding now retains exact projected target-section
 identity for section-defined global symbols as well as static symbols. True
 section-zero externals remain name-based for archive resolution. Focused

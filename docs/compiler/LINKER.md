@@ -1802,3 +1802,21 @@ compiler-core gate passes 844/844 units, 2/2 object evidence, 10/10 conformance,
 passes 17/17. All eight pinned std/TLS Wine modes reproduce their exact recorded
 sizes and SHA-256 hashes and return 42. Patent review: NOT_TRIGGERED; this is
 bounded conventional PE/COFF symbol resolution.
+
+Selected AMD64 COFF text relocations now follow the bounded weak-external alias
+shape observed in the exact ORACLE-0003 profiler runtime: storage class 105,
+one zero-reserved auxiliary record, `SEARCH_ALIAS` characteristic 3, and an
+in-range tag index naming a same-object strong section definition. The decoder
+resolves the relocation directly to that strong fallback before applying the
+existing text/read-only/writable/TLS target classification. Other weak-search
+policies, auxiliary targets, chained weak aliases, and non-strong or undefined
+fallbacks fail closed. Exact archive inspection found two such aliases in
+`libprofiler_builtins` (`__llvm_profile_counter_bias` and
+`__llvm_profile_bitmap_bias`) and none in the pinned core, alloc, or std
+archives. The independently authored fixture covers the accepted alias plus
+unsupported-policy, auxiliary-index, and chained-alias rejection. The Linux
+release gate passes 845/845 units, 2/2 object evidence, 10/10 conformance,
+351/351 replacements, and 128/128 semantic tests; the release driver passes
+17/17. All eight pinned std/TLS Wine modes reproduce exact recorded sizes and
+SHA-256 hashes and return 42. Patent review: NOT_TRIGGERED; this is bounded
+conventional PE/COFF symbol-table decoding.
