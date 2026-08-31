@@ -671,6 +671,22 @@ unsafe extern "system" {
     fn setsockopt(socket: usize, level: i32, name: i32, value: *const i8, length: i32) -> i32;
     fn recv(socket: usize, buffer: *mut i8, length: i32, flags: i32) -> i32;
     fn send(socket: usize, buffer: *const i8, length: i32, flags: i32) -> i32;
+    fn recvfrom(
+        socket: usize,
+        buffer: *mut i8,
+        length: i32,
+        flags: i32,
+        address: *mut SockAddr,
+        address_length: *mut i32,
+    ) -> i32;
+    fn sendto(
+        socket: usize,
+        buffer: *const i8,
+        length: i32,
+        flags: i32,
+        address: *const SockAddr,
+        address_length: i32,
+    ) -> i32;
     fn closesocket(socket: usize) -> i32;
     fn getaddrinfo(
         node: *const i8,
@@ -1005,6 +1021,82 @@ impl NativeTcpListener {
 
 #[cfg(windows)]
 impl Drop for NativeTcpListener {
+    fn drop(&mut self) {
+        let _ = unsafe { closesocket(self.0) };
+    }
+}
+
+#[cfg(windows)]
+pub struct NativeUdpSocket(usize);
+
+#[cfg(windows)]
+unsafe impl Send for NativeUdpSocket {}
+
+#[cfg(windows)]
+impl NativeUdpSocket {
+    pub fn bind(ip: [u8; 4], port: u16) -> Option<Self> {
+        if !initialize_winsock() {
+            return None;
+        }
+        let handle = unsafe { socket(2, 2, 17) };
+        if handle == usize::MAX {
+            return None;
+        }
+        let address = socket_address(ip, port);
+        if unsafe { bind(handle, &address, core::mem::size_of::<SockAddr>() as i32) } != 0 {
+            let _ = unsafe { closesocket(handle) };
+            return None;
+        }
+        Some(Self(handle))
+    }
+
+    pub fn local_port(&self) -> Option<u16> {
+        let mut address = socket_address([0; 4], 0);
+        let mut length = core::mem::size_of::<SockAddr>() as i32;
+        (unsafe { getsockname(self.0, &mut address, &mut length) } == 0)
+            .then(|| u16::from_be_bytes(address.port))
+    }
+
+    pub fn receive_from(&self, buffer: &mut [u8]) -> Option<(usize, [u8; 4], u16)> {
+        let mut address = socket_address([0; 4], 0);
+        let mut length = core::mem::size_of::<SockAddr>() as i32;
+        let amount = unsafe {
+            recvfrom(
+                self.0,
+                buffer.as_mut_ptr().cast(),
+                buffer.len().min(i32::MAX as usize) as i32,
+                0,
+                &mut address,
+                &mut length,
+            )
+        };
+        (amount >= 0 && length as usize >= core::mem::size_of::<SockAddr>()).then(|| {
+            (
+                amount as usize,
+                address.address,
+                u16::from_be_bytes(address.port),
+            )
+        })
+    }
+
+    pub fn send_to(&self, buffer: &[u8], ip: [u8; 4], port: u16) -> Option<usize> {
+        let address = socket_address(ip, port);
+        let amount = unsafe {
+            sendto(
+                self.0,
+                buffer.as_ptr().cast(),
+                buffer.len().min(i32::MAX as usize) as i32,
+                0,
+                &address,
+                core::mem::size_of::<SockAddr>() as i32,
+            )
+        };
+        (amount >= 0).then_some(amount as usize)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for NativeUdpSocket {
     fn drop(&mut self) {
         let _ = unsafe { closesocket(self.0) };
     }

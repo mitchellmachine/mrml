@@ -66,6 +66,48 @@ pub struct TcpStream {
     native: mrml_linux::NativeTcpStream,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SocketAddress {
+    pub ip: [u8; 4],
+    pub port: u16,
+}
+
+pub struct UdpSocket {
+    #[cfg(windows)]
+    native: mrml_windows::NativeUdpSocket,
+    #[cfg(unix)]
+    native: mrml_linux::NativeUdpSocket,
+}
+
+impl UdpSocket {
+    pub fn bind(ip: [u8; 4], port: u16) -> Result<Self, NetError> {
+        #[cfg(windows)]
+        let native = mrml_windows::NativeUdpSocket::bind(ip, port);
+        #[cfg(unix)]
+        let native = mrml_linux::NativeUdpSocket::bind(ip, port);
+        native
+            .map(|native| Self { native })
+            .ok_or(NetError::BindFailed)
+    }
+
+    pub fn local_port(&self) -> Result<u16, NetError> {
+        self.native.local_port().ok_or(NetError::BindFailed)
+    }
+
+    pub fn receive_from(&self, buffer: &mut [u8]) -> Result<(usize, SocketAddress), NetError> {
+        self.native
+            .receive_from(buffer)
+            .map(|(amount, ip, port)| (amount, SocketAddress { ip, port }))
+            .ok_or(NetError::ReadFailed)
+    }
+
+    pub fn send_to(&self, buffer: &[u8], peer: SocketAddress) -> Result<usize, NetError> {
+        self.native
+            .send_to(buffer, peer.ip, peer.port)
+            .ok_or(NetError::WriteFailed)
+    }
+}
+
 impl TcpStream {
     /// Resolve a host once so callers can validate the exact IPv4 endpoint before connecting.
     pub fn resolve_host(host: &str) -> Result<[u8; 4], NetError> {
@@ -164,5 +206,30 @@ mod tests {
     #[test]
     fn resolves_localhost() {
         assert!(TcpStream::resolve_host("localhost").is_ok());
+    }
+
+    #[test]
+    fn loopback_udp_preserves_datagram_and_peer_identity() {
+        let server = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        let client = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        let server_port = server.local_port().unwrap();
+        let client_port = client.local_port().unwrap();
+        assert_eq!(
+            client
+                .send_to(
+                    b"quic",
+                    SocketAddress {
+                        ip: [127, 0, 0, 1],
+                        port: server_port,
+                    },
+                )
+                .unwrap(),
+            4
+        );
+        let mut input = [0u8; 16];
+        let (amount, peer) = server.receive_from(&mut input).unwrap();
+        assert_eq!(&input[..amount], b"quic");
+        assert_eq!(peer.ip, [127, 0, 0, 1]);
+        assert_eq!(peer.port, client_port);
     }
 }

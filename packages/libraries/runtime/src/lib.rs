@@ -27,7 +27,7 @@ pub use file::{
     remove_file, rename_file, write_file, write_new_file, write_secret_file,
 };
 pub use map::OrderedMap;
-pub use net::{NetError, TcpListener, TcpStream};
+pub use net::{NetError, SocketAddress, TcpListener, TcpStream, UdpSocket};
 pub use output::{write_stderr, write_stdout};
 pub use owned::Owned;
 pub use process::{

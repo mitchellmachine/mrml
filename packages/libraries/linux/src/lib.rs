@@ -125,6 +125,22 @@ unsafe extern "C" {
     fn accept(socket: c_int, address: *mut SockAddr, length: *mut u32) -> c_int;
     fn connect(socket: c_int, address: *const SockAddr, length: u32) -> c_int;
     fn getsockname(socket: c_int, address: *mut SockAddr, length: *mut u32) -> c_int;
+    fn recvfrom(
+        socket: c_int,
+        buffer: *mut c_void,
+        length: usize,
+        flags: c_int,
+        address: *mut SockAddr,
+        address_length: *mut u32,
+    ) -> isize;
+    fn sendto(
+        socket: c_int,
+        buffer: *const c_void,
+        length: usize,
+        flags: c_int,
+        address: *const SockAddr,
+        address_length: u32,
+    ) -> isize;
     fn setsockopt(
         socket: c_int,
         level: c_int,
@@ -299,6 +315,79 @@ impl NativeTcpListener {
 
 #[cfg(unix)]
 impl Drop for NativeTcpListener {
+    fn drop(&mut self) {
+        let _ = unsafe { close(self.0) };
+    }
+}
+
+#[cfg(unix)]
+pub struct NativeUdpSocket(c_int);
+
+#[cfg(unix)]
+unsafe impl Send for NativeUdpSocket {}
+
+#[cfg(unix)]
+impl NativeUdpSocket {
+    pub fn bind(ip: [u8; 4], port: u16) -> Option<Self> {
+        let handle = unsafe { socket(2, 2, 17) };
+        if handle < 0 {
+            return None;
+        }
+        let address = socket_address(ip, port);
+        if unsafe { bind(handle, &address, core::mem::size_of::<SockAddr>() as u32) } != 0 {
+            let _ = unsafe { close(handle) };
+            return None;
+        }
+        Some(Self(handle))
+    }
+
+    pub fn local_port(&self) -> Option<u16> {
+        let mut address = socket_address([0; 4], 0);
+        let mut length = core::mem::size_of::<SockAddr>() as u32;
+        (unsafe { getsockname(self.0, &mut address, &mut length) } == 0)
+            .then(|| u16::from_be_bytes(address.port))
+    }
+
+    pub fn receive_from(&self, buffer: &mut [u8]) -> Option<(usize, [u8; 4], u16)> {
+        let mut address = socket_address([0; 4], 0);
+        let mut length = core::mem::size_of::<SockAddr>() as u32;
+        let amount = unsafe {
+            recvfrom(
+                self.0,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                0,
+                &mut address,
+                &mut length,
+            )
+        };
+        (amount >= 0 && length as usize >= core::mem::size_of::<SockAddr>()).then(|| {
+            (
+                amount as usize,
+                address.address,
+                u16::from_be_bytes(address.port),
+            )
+        })
+    }
+
+    pub fn send_to(&self, buffer: &[u8], ip: [u8; 4], port: u16) -> Option<usize> {
+        let address = socket_address(ip, port);
+        let amount = unsafe {
+            sendto(
+                self.0,
+                buffer.as_ptr().cast(),
+                buffer.len(),
+                0,
+                &address,
+                core::mem::size_of::<SockAddr>() as u32,
+            )
+        };
+        (amount >= 0).then_some(amount as usize)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for NativeUdpSocket {
     fn drop(&mut self) {
         let _ = unsafe { close(self.0) };
     }
