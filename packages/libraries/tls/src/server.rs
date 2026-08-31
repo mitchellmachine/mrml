@@ -367,6 +367,242 @@ fn client_offer(
     Ok((session, group, share, protocols, transport_parameters))
 }
 
+pub struct QuicTlsServerFlight {
+    pub server_hello: Vector<u8>,
+    pub handshake_messages: Vector<Vector<u8>>,
+    pub client_handshake_secret: [u8; 32],
+    pub server_handshake_secret: [u8; 32],
+    pub client_application_secret: [u8; 32],
+    pub server_application_secret: [u8; 32],
+    pub peer_transport_parameters: Vector<u8>,
+}
+
+pub struct QuicTlsServerHandshake {
+    expected_client_finished: [u8; 32],
+    complete: bool,
+}
+
+impl QuicTlsServerHandshake {
+    pub fn accept(
+        client_hello: &[u8],
+        transport_parameters: &[u8],
+        config: &TlsServerConfig,
+    ) -> Result<(Self, QuicTlsServerFlight), TlsError> {
+        if transport_parameters.len() > 4096 || config.ocsp_response.is_none() {
+            return Err(TlsError::Handshake);
+        }
+        let (session, group, share, protocols, peer_transport_parameters) =
+            client_offer(client_hello)?;
+        if !protocols.iter().any(|protocol| protocol == "h3") {
+            return Err(TlsError::Handshake);
+        }
+        let peer_transport_parameters = peer_transport_parameters.ok_or(TlsError::Handshake)?;
+        let (server_share, mut shared) = if group == X25519_MLKEM768 {
+            let (public, secret) = hybrid_server_share(share)?;
+            let mut shared = Vector::new();
+            shared
+                .try_extend_from_slice(&secret)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            (public, shared)
+        } else {
+            let peer: [u8; 32] = share.try_into().map_err(|_| TlsError::Handshake)?;
+            let mut scalar = [0; 32];
+            mrml_runtime::fill_random(&mut scalar).map_err(|_| TlsError::AuthenticationFailed)?;
+            let public = x25519_public(scalar);
+            let secret = x25519_shared(scalar, peer).ok_or(TlsError::AuthenticationFailed)?;
+            scalar.fill(0);
+            let mut public_bytes = Vector::new();
+            public_bytes
+                .try_extend_from_slice(&public)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            let mut shared = Vector::new();
+            shared
+                .try_extend_from_slice(&secret)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            (public_bytes, shared)
+        };
+        let mut random = [0; 32];
+        mrml_runtime::fill_random(&mut random).map_err(|_| TlsError::AuthenticationFailed)?;
+        let mut body = Vector::new();
+        body.try_extend_from_slice(&[3, 3])
+            .map_err(|_| TlsError::AllocationFailed)?;
+        body.try_extend_from_slice(&random)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        body.try_push(session.len() as u8)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        body.try_extend_from_slice(session)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        u16_push(&mut body, TLS_AES_128_GCM_SHA256 as usize)?;
+        body.try_push(0).map_err(|_| TlsError::AllocationFailed)?;
+        let mut hello_extensions = Vector::new();
+        u16_push(&mut hello_extensions, 43)?;
+        u16_push(&mut hello_extensions, 2)?;
+        hello_extensions
+            .try_extend_from_slice(&[3, 4])
+            .map_err(|_| TlsError::AllocationFailed)?;
+        u16_push(&mut hello_extensions, 51)?;
+        u16_push(&mut hello_extensions, 4 + server_share.len())?;
+        u16_push(&mut hello_extensions, group as usize)?;
+        u16_push(&mut hello_extensions, server_share.len())?;
+        hello_extensions
+            .try_extend_from_slice(&server_share)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        u16_push(&mut body, hello_extensions.len())?;
+        body.try_extend_from_slice(&hello_extensions)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let server_hello = handshake(2, &body)?;
+
+        let mut transcript = Transcript::new();
+        transcript.update(client_hello);
+        transcript.update(&server_hello);
+        let mut schedule = KeySchedule::new();
+        schedule.mix_shared_secret(&shared);
+        shared.fill(0);
+        let client_hs = schedule.traffic_secret(false, &transcript.hash());
+        let server_hs = schedule.traffic_secret(true, &transcript.hash());
+
+        let mut encrypted_extensions = Vector::new();
+        let mut alpn = Vector::new();
+        alpn.try_extend_from_slice(&[0, 3, 2, b'h', b'3'])
+            .map_err(|_| TlsError::AllocationFailed)?;
+        u16_push(&mut encrypted_extensions, 16)?;
+        u16_push(&mut encrypted_extensions, alpn.len())?;
+        encrypted_extensions
+            .try_extend_from_slice(&alpn)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        u16_push(&mut encrypted_extensions, 57)?;
+        u16_push(&mut encrypted_extensions, transport_parameters.len())?;
+        encrypted_extensions
+            .try_extend_from_slice(transport_parameters)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let mut encrypted_extensions_body = Vector::new();
+        u16_push(&mut encrypted_extensions_body, encrypted_extensions.len())?;
+        encrypted_extensions_body
+            .try_extend_from_slice(&encrypted_extensions)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let extensions = handshake(8, &encrypted_extensions_body)?;
+        transcript.update(&extensions);
+
+        let mut certificate_body = Vector::new();
+        certificate_body
+            .try_push(0)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let mut certificate_list = Vector::new();
+        for (index, certificate) in config.certificates.iter().enumerate() {
+            u24_push(&mut certificate_list, certificate.len())?;
+            certificate_list
+                .try_extend_from_slice(certificate)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            if index == 0 {
+                let response = config.ocsp_response.as_ref().ok_or(TlsError::Certificate)?;
+                let mut status = Vector::new();
+                status.try_push(1).map_err(|_| TlsError::AllocationFailed)?;
+                u24_push(&mut status, response.len())?;
+                status
+                    .try_extend_from_slice(response)
+                    .map_err(|_| TlsError::AllocationFailed)?;
+                u16_push(&mut certificate_list, 4 + status.len())?;
+                u16_push(&mut certificate_list, 5)?;
+                u16_push(&mut certificate_list, status.len())?;
+                certificate_list
+                    .try_extend_from_slice(&status)
+                    .map_err(|_| TlsError::AllocationFailed)?;
+            } else {
+                u16_push(&mut certificate_list, 0)?;
+            }
+        }
+        u24_push(&mut certificate_body, certificate_list.len())?;
+        certificate_body
+            .try_extend_from_slice(&certificate_list)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let certificate = handshake(11, &certificate_body)?;
+        transcript.update(&certificate);
+
+        let mut signed = Vector::new();
+        signed
+            .try_extend_from_slice(&[0x20; 64])
+            .map_err(|_| TlsError::AllocationFailed)?;
+        signed
+            .try_extend_from_slice(b"TLS 1.3, server CertificateVerify\0")
+            .map_err(|_| TlsError::AllocationFailed)?;
+        signed
+            .try_extend_from_slice(&transcript.hash())
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let mut salt = [0; 32];
+        mrml_runtime::fill_random(&mut salt).map_err(|_| TlsError::AuthenticationFailed)?;
+        let mut signature = Vector::new();
+        signature
+            .try_resize(config.modulus.len(), 0)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        rsa_pss_sha256_sign(
+            &config.modulus,
+            &config.private_exponent,
+            &signed,
+            &salt,
+            &mut signature,
+        )
+        .map_err(|_| TlsError::AuthenticationFailed)?;
+        salt.fill(0);
+        let mut verify_body = Vector::new();
+        u16_push(&mut verify_body, 0x0804)?;
+        u16_push(&mut verify_body, signature.len())?;
+        verify_body
+            .try_extend_from_slice(&signature)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let certificate_verify = handshake(15, &verify_body)?;
+        transcript.update(&certificate_verify);
+        let finished = handshake(20, &finished_verify_data(&server_hs, &transcript.hash()))?;
+        transcript.update(&finished);
+        let hash = transcript.hash();
+        schedule.finish_handshake();
+        let client_application_secret = schedule.application_traffic_secret(false, &hash);
+        let server_application_secret = schedule.application_traffic_secret(true, &hash);
+        let expected_client_finished = finished_verify_data(&client_hs, &hash);
+        let mut handshake_messages = Vector::new();
+        for message in [extensions, certificate, certificate_verify, finished] {
+            handshake_messages
+                .try_push(message)
+                .map_err(|_| TlsError::AllocationFailed)?;
+        }
+        Ok((
+            Self {
+                expected_client_finished,
+                complete: false,
+            },
+            QuicTlsServerFlight {
+                server_hello,
+                handshake_messages,
+                client_handshake_secret: client_hs,
+                server_handshake_secret: server_hs,
+                client_application_secret,
+                server_application_secret,
+                peer_transport_parameters,
+            },
+        ))
+    }
+
+    pub fn receive_client_finished(&mut self, message: &[u8]) -> Result<(), TlsError> {
+        if self.complete || message.len() != 36 || message[0] != 20 || message[1..4] != [0, 0, 32] {
+            return Err(TlsError::Handshake);
+        }
+        if self
+            .expected_client_finished
+            .iter()
+            .zip(&message[4..])
+            .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+            != 0
+        {
+            return Err(TlsError::AuthenticationFailed);
+        }
+        self.complete = true;
+        Ok(())
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+}
+
 pub struct TlsServerStream {
     stream: TcpStream,
     read_keys: RecordKeys,
