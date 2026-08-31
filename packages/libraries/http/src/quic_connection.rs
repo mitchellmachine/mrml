@@ -1,10 +1,11 @@
 use mrml_runtime::{Instant, SocketAddress, TcpStream, UdpSocket, Vector};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
-use crate::quic::initial_destination_id;
+use crate::quic::initial_version_and_destination_id;
 use crate::{
     HandshakePacket, InitialPacket, QuicConnectionState, QuicError, QuicFrame, QuicInitialKeys,
-    QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, SentPacket, ShortPacket,
+    QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, QuicVersion, SentPacket,
+    ShortPacket,
 };
 
 const CRYPTO_CHUNK: usize = 900;
@@ -23,6 +24,27 @@ fn random_connection_id() -> Result<Vector<u8>, QuicError> {
     let mut bytes = [0; CONNECTION_ID_LENGTH];
     mrml_runtime::fill_random(&mut bytes).map_err(|_| QuicError::Crypto)?;
     Ok(bytes.into())
+}
+
+fn validate_version_information(
+    parameters: &QuicTransportParameters,
+    version: QuicVersion,
+    received_by_server: bool,
+) -> Result<(), QuicError> {
+    let Some(chosen) = parameters.chosen_version else {
+        return if version == QuicVersion::V1 {
+            Ok(())
+        } else {
+            Err(QuicError::TransportParameter)
+        };
+    };
+    if chosen != version.wire()
+        || !matches!(chosen, 0x0000_0001 | 0x6b33_43cf)
+        || (received_by_server && !parameters.available_versions.contains(&chosen))
+    {
+        return Err(QuicError::TransportParameter);
+    }
+    Ok(())
 }
 
 fn crypto_payload(offset: usize, bytes: &[u8]) -> Result<Vector<u8>, QuicError> {
@@ -101,6 +123,7 @@ pub struct QuicConnection {
     peer_ack_delay_exponent: u8,
     peer_max_ack_delay_micros: u64,
     pending_frames: Vector<QuicFrame>,
+    version: QuicVersion,
 }
 
 struct PendingPacket {
@@ -112,6 +135,10 @@ struct PendingPacket {
 impl QuicConnection {
     pub fn state(&self) -> &QuicConnectionState {
         &self.state
+    }
+
+    pub fn version(&self) -> QuicVersion {
+        self.version
     }
 
     pub fn open_bidi_stream(&mut self) -> Result<u64, QuicError> {
@@ -344,26 +371,55 @@ impl QuicConnection {
 pub struct QuicClientConnection;
 impl QuicClientConnection {
     pub fn connect(host: &str, port: u16) -> Result<QuicConnection, QuicError> {
-        let peer = SocketAddress {
-            ip: TcpStream::resolve_host(host).map_err(|_| QuicError::Io)?,
-            port,
+        Self::connect_version(host, port, QuicVersion::V1)
+    }
+
+    pub fn connect_v2(host: &str, port: u16) -> Result<QuicConnection, QuicError> {
+        Self::connect_version(host, port, QuicVersion::V2)
+    }
+
+    pub fn connect_version(
+        host: &str,
+        port: u16,
+        version: QuicVersion,
+    ) -> Result<QuicConnection, QuicError> {
+        let address = TcpStream::resolve_host(host).map_err(|_| QuicError::Io)?;
+        Self::connect_resolved(host, address, port, version)
+    }
+
+    pub fn connect_resolved(
+        host: &str,
+        address: [u8; 4],
+        port: u16,
+        version: QuicVersion,
+    ) -> Result<QuicConnection, QuicError> {
+        let peer = SocketAddress { ip: address, port };
+        let bind_ip = if address[0] == 127 {
+            [127, 0, 0, 1]
+        } else {
+            [0, 0, 0, 0]
         };
-        let socket = UdpSocket::bind([0, 0, 0, 0], 0).map_err(|_| QuicError::Io)?;
+        let socket = UdpSocket::bind(bind_ip, 0).map_err(|_| QuicError::SocketBind)?;
         socket
             .set_read_timeout_millis(30_000)
-            .map_err(|_| QuicError::Io)?;
+            .map_err(|_| QuicError::SocketTimeout)?;
         socket
             .set_write_timeout_millis(30_000)
-            .map_err(|_| QuicError::Io)?;
+            .map_err(|_| QuicError::SocketTimeout)?;
         let destination_id = random_connection_id()?;
         let source_id = random_connection_id()?;
         let mut local_parameters = QuicTransportParameters::default();
         local_parameters.initial_source_connection_id = source_id.clone();
+        local_parameters.chosen_version = Some(version.wire());
+        local_parameters.available_versions =
+            [QuicVersion::V2.wire(), QuicVersion::V1.wire()].into();
         let encoded_parameters = local_parameters.encode()?;
         let (mut tls, client_hello) =
             QuicTlsClientHandshake::new(host, &encoded_parameters).map_err(|_| QuicError::Tls)?;
-        let client_initial = QuicInitialKeys::derive(&destination_id, QuicRole::Client)?;
-        let server_initial = QuicInitialKeys::derive(&destination_id, QuicRole::Server)?;
+        let client_initial =
+            QuicInitialKeys::derive_for(version, &destination_id, QuicRole::Client)?;
+        let server_initial =
+            QuicInitialKeys::derive_for(version, &destination_id, QuicRole::Server)?;
         for (packet_number, chunk) in client_hello.chunks(CRYPTO_CHUNK).enumerate() {
             let packet = InitialPacket {
                 destination_id: destination_id.clone(),
@@ -371,8 +427,10 @@ impl QuicClientConnection {
                 packet_number: packet_number as u64,
                 payload: crypto_payload(packet_number * CRYPTO_CHUNK, chunk)?,
             }
-            .seal_padded(&client_initial)?;
-            socket.send_to(&packet, peer).map_err(|_| QuicError::Io)?;
+            .seal_padded_for(version, &client_initial)?;
+            socket
+                .send_to(&packet, peer)
+                .map_err(|_| QuicError::SocketWrite)?;
         }
         let mut server_initial_crypto = QuicStreamAssembler::new(64 * 1024);
         let mut expected_initial = 0;
@@ -381,12 +439,16 @@ impl QuicClientConnection {
             let mut datagram = [0; 65_527];
             let (amount, from) = socket
                 .receive_from(&mut datagram)
-                .map_err(|_| QuicError::Io)?;
+                .map_err(|_| QuicError::SocketRead)?;
             if from != peer {
                 return Err(QuicError::UnexpectedPeer);
             }
-            let (packet, _) =
-                InitialPacket::open(&datagram[..amount], &server_initial, expected_initial)?;
+            let (packet, _) = InitialPacket::open_for(
+                version,
+                &datagram[..amount],
+                &server_initial,
+                expected_initial,
+            )?;
             if packet.destination_id != source_id {
                 return Err(QuicError::InvalidPacket);
             }
@@ -401,8 +463,10 @@ impl QuicClientConnection {
                 break tls.receive_server_hello(message).map_err(quic_tls_error)?;
             }
         };
-        let read_handshake = QuicInitialKeys::from_traffic_secret(&handshake_secrets.server)?;
-        let write_handshake = QuicInitialKeys::from_traffic_secret(&handshake_secrets.client)?;
+        let read_handshake =
+            QuicInitialKeys::from_traffic_secret_for(version, &handshake_secrets.server)?;
+        let write_handshake =
+            QuicInitialKeys::from_traffic_secret_for(version, &handshake_secrets.client)?;
         let mut handshake_crypto = QuicStreamAssembler::new(1024 * 1024);
         let mut handshake_at = 0;
         let mut expected_handshake = 0;
@@ -410,12 +474,16 @@ impl QuicClientConnection {
             let mut datagram = [0; 65_527];
             let (amount, from) = socket
                 .receive_from(&mut datagram)
-                .map_err(|_| QuicError::Io)?;
+                .map_err(|_| QuicError::SocketRead)?;
             if from != peer {
                 return Err(QuicError::UnexpectedPeer);
             }
-            let (packet, _) =
-                HandshakePacket::open(&datagram[..amount], &read_handshake, expected_handshake)?;
+            let (packet, _) = HandshakePacket::open_for(
+                version,
+                &datagram[..amount],
+                &read_handshake,
+                expected_handshake,
+            )?;
             expected_handshake = packet.packet_number + 1;
             insert_crypto_frames(&packet.payload, &mut handshake_crypto)?;
             while let Some(message) =
@@ -430,6 +498,7 @@ impl QuicClientConnection {
         };
         let peer_parameters =
             QuicTransportParameters::decode(&application.peer_transport_parameters)?;
+        validate_version_information(&peer_parameters, version, false)?;
         let peer_id = server_id.ok_or(QuicError::ProtocolViolation)?;
         if peer_parameters.original_destination_connection_id.as_ref() != Some(&destination_id)
             || peer_parameters.initial_source_connection_id != peer_id
@@ -450,17 +519,23 @@ impl QuicClientConnection {
             packet_number: 0,
             payload: finished_payload,
         }
-        .seal(&write_handshake)?;
-        socket.send_to(&finished, peer).map_err(|_| QuicError::Io)?;
+        .seal_for(version, &write_handshake)?;
+        socket
+            .send_to(&finished, peer)
+            .map_err(|_| QuicError::SocketWrite)?;
         let mut datagram = [0; 65_527];
         let (amount, from) = socket
             .receive_from(&mut datagram)
-            .map_err(|_| QuicError::HandshakeConfirmation)?;
+            .map_err(|_| QuicError::SocketRead)?;
         if from != peer {
             return Err(QuicError::UnexpectedPeer);
         }
-        let (handshake_ack, _) =
-            HandshakePacket::open(&datagram[..amount], &read_handshake, expected_handshake)?;
+        let (handshake_ack, _) = HandshakePacket::open_for(
+            version,
+            &datagram[..amount],
+            &read_handshake,
+            expected_handshake,
+        )?;
         let mut at = 0;
         let mut finished_acknowledged = false;
         while at < handshake_ack.payload.len() {
@@ -484,8 +559,8 @@ impl QuicClientConnection {
             peer,
             local_id: source_id,
             peer_id,
-            read_keys: QuicInitialKeys::from_traffic_secret(&application.server)?,
-            write_keys: QuicInitialKeys::from_traffic_secret(&application.client)?,
+            read_keys: QuicInitialKeys::from_traffic_secret_for(version, &application.server)?,
+            write_keys: QuicInitialKeys::from_traffic_secret_for(version, &application.client)?,
             state,
             next_packet_number: 0,
             expected_packet_number: 0,
@@ -496,6 +571,7 @@ impl QuicClientConnection {
             peer_ack_delay_exponent: peer_parameters.ack_delay_exponent as u8,
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
             pending_frames: Vector::new(),
+            version,
         };
         let mut early_frames = Vector::new();
         loop {
@@ -556,6 +632,7 @@ impl QuicServerListener {
         let mut client_id = None;
         let mut peer = None;
         let mut expected_initial = 0;
+        let mut version = None;
         let mut state = QuicConnectionState::new(QuicRole::Server, &self.parameters);
         let client_hello = loop {
             let (amount, from) = self
@@ -568,11 +645,18 @@ impl QuicServerListener {
             peer = Some(from);
             state.on_datagram_received(amount)?;
             if initial_keys.is_none() {
-                let id = initial_destination_id(&datagram[..amount])?;
-                initial_keys = Some(QuicInitialKeys::derive(&id, QuicRole::Client)?);
+                let (incoming_version, id) =
+                    initial_version_and_destination_id(&datagram[..amount])?;
+                version = Some(incoming_version);
+                initial_keys = Some(QuicInitialKeys::derive_for(
+                    incoming_version,
+                    &id,
+                    QuicRole::Client,
+                )?);
                 original_destination_id = Some(id);
             }
-            let (packet, _) = InitialPacket::open(
+            let (packet, _) = InitialPacket::open_for(
+                version.ok_or(QuicError::InvalidPacket)?,
                 &datagram[..amount],
                 initial_keys.as_ref().ok_or(QuicError::Crypto)?,
                 expected_initial,
@@ -596,15 +680,20 @@ impl QuicServerListener {
         let client_id = client_id.ok_or(QuicError::ProtocolViolation)?;
         let original_destination_id =
             original_destination_id.ok_or(QuicError::ProtocolViolation)?;
+        let version = version.ok_or(QuicError::ProtocolViolation)?;
         let server_id = random_connection_id()?;
         let mut local_parameters = self.parameters.clone();
         local_parameters.original_destination_connection_id = Some(original_destination_id.clone());
         local_parameters.initial_source_connection_id = server_id.clone();
+        local_parameters.chosen_version = Some(version.wire());
+        local_parameters.available_versions =
+            [QuicVersion::V2.wire(), QuicVersion::V1.wire()].into();
         let encoded_parameters = local_parameters.encode()?;
         let (mut tls, flight) =
             QuicTlsServerHandshake::accept(&client_hello, &encoded_parameters, config)
                 .map_err(|_| QuicError::Tls)?;
-        let server_initial = QuicInitialKeys::derive(&original_destination_id, QuicRole::Server)?;
+        let server_initial =
+            QuicInitialKeys::derive_for(version, &original_destination_id, QuicRole::Server)?;
         for (number, chunk) in flight.server_hello.chunks(CRYPTO_CHUNK).enumerate() {
             let mut payload = crypto_payload(number * CRYPTO_CHUNK, chunk)?;
             if number == 0 {
@@ -622,15 +711,16 @@ impl QuicServerListener {
                 packet_number: number as u64,
                 payload,
             }
-            .seal(&server_initial)?;
+            .seal_for(version, &server_initial)?;
             state.authorize_datagram_send(packet.len())?;
             self.socket
                 .send_to(&packet, peer)
                 .map_err(|_| QuicError::Io)?;
         }
-        let read_handshake = QuicInitialKeys::from_traffic_secret(&flight.client_handshake_secret)?;
+        let read_handshake =
+            QuicInitialKeys::from_traffic_secret_for(version, &flight.client_handshake_secret)?;
         let write_handshake =
-            QuicInitialKeys::from_traffic_secret(&flight.server_handshake_secret)?;
+            QuicInitialKeys::from_traffic_secret_for(version, &flight.server_handshake_secret)?;
         let mut handshake_bytes = Vector::new();
         for message in &flight.handshake_messages {
             handshake_bytes
@@ -645,7 +735,7 @@ impl QuicServerListener {
                 packet_number: number as u64,
                 payload: crypto_payload(number * CRYPTO_CHUNK, chunk)?,
             }
-            .seal(&write_handshake)?;
+            .seal_for(version, &write_handshake)?;
             state.authorize_datagram_send(packet.len())?;
             self.socket
                 .send_to(&packet, peer)
@@ -663,7 +753,8 @@ impl QuicServerListener {
             }
             state.on_datagram_received(amount)?;
             let mut cursor = 0;
-            if let Ok((_, used)) = InitialPacket::open(
+            if let Ok((_, used)) = InitialPacket::open_for(
+                version,
                 &datagram[..amount],
                 initial_keys.as_ref().ok_or(QuicError::Crypto)?,
                 expected_initial,
@@ -671,7 +762,8 @@ impl QuicServerListener {
                 cursor = used;
             }
             while cursor < amount {
-                let (packet, used) = match HandshakePacket::open(
+                let (packet, used) = match HandshakePacket::open_for(
+                    version,
                     &datagram[cursor..amount],
                     &read_handshake,
                     expected_client_handshake,
@@ -704,13 +796,14 @@ impl QuicServerListener {
             packet_number: server_handshake_packets as u64,
             payload: handshake_ack_payload,
         }
-        .seal(&write_handshake)
+        .seal_for(version, &write_handshake)
         .map_err(|_| QuicError::HandshakeConfirmation)?;
         state.authorize_datagram_send(handshake_ack.len())?;
         self.socket
             .send_to(&handshake_ack, peer)
             .map_err(|_| QuicError::Io)?;
         let peer_parameters = QuicTransportParameters::decode(&flight.peer_transport_parameters)?;
+        validate_version_information(&peer_parameters, version, true)?;
         if peer_parameters.original_destination_connection_id.is_some()
             || peer_parameters.initial_source_connection_id != client_id
         {
@@ -725,8 +818,14 @@ impl QuicServerListener {
             peer,
             local_id: server_id,
             peer_id: client_id,
-            read_keys: QuicInitialKeys::from_traffic_secret(&flight.client_application_secret)?,
-            write_keys: QuicInitialKeys::from_traffic_secret(&flight.server_application_secret)?,
+            read_keys: QuicInitialKeys::from_traffic_secret_for(
+                version,
+                &flight.client_application_secret,
+            )?,
+            write_keys: QuicInitialKeys::from_traffic_secret_for(
+                version,
+                &flight.server_application_secret,
+            )?,
             state,
             next_packet_number: 0,
             expected_packet_number: 0,
@@ -737,10 +836,38 @@ impl QuicServerListener {
             peer_ack_delay_exponent: peer_parameters.ack_delay_exponent as u8,
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
             pending_frames: Vector::new(),
+            version,
         };
         connection
             .send_frames(&[QuicFrame::HandshakeDone])
             .map_err(|_| QuicError::HandshakeConfirmation)?;
         Ok(connection)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_information_prevents_v2_downgrade_and_mismatch() {
+        let mut parameters = QuicTransportParameters::default();
+        assert!(validate_version_information(&parameters, QuicVersion::V1, true).is_ok());
+        assert_eq!(
+            validate_version_information(&parameters, QuicVersion::V2, true),
+            Err(QuicError::TransportParameter)
+        );
+        parameters.chosen_version = Some(QuicVersion::V2.wire());
+        parameters.available_versions = [QuicVersion::V2.wire(), QuicVersion::V1.wire()].into();
+        assert!(validate_version_information(&parameters, QuicVersion::V2, true).is_ok());
+        assert_eq!(
+            validate_version_information(&parameters, QuicVersion::V1, true),
+            Err(QuicError::TransportParameter)
+        );
+        parameters.available_versions = [QuicVersion::V1.wire()].into();
+        assert_eq!(
+            validate_version_information(&parameters, QuicVersion::V2, true),
+            Err(QuicError::TransportParameter)
+        );
     }
 }

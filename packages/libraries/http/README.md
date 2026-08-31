@@ -2,7 +2,7 @@
 
 **Status: IMPLEMENTED for the bounded Canadian baseline; not production-ready.**
 The library provides HTTPS/1.1, authenticated HTTP/2 client/server connections,
-and single-path QUIC v1 plus HTTP/3 client/server connections.
+and single-path QUIC v1/v2 plus HTTP/3 client/server connections.
 
 `Http2Client` and `Http2Server` encode and decode the HTTP/2 connection preface,
 SETTINGS, HEADERS, DATA, PING, GOAWAY, and WINDOW_UPDATE frame envelopes. Their
@@ -23,13 +23,20 @@ control, path state, and UDP I/O remain single-owner. This accelerates QPACK and
 response framing without introducing multipath or shared mutable QUIC state.
 
 `QuicClientConnection` and `QuicServerListener` bind the protocol to bounded UDP
-I/O. They implement v1 Initial, Handshake, and 1-RTT packet protection; CRYPTO
-and STREAM reassembly; TLS 1.3 `h3` ALPN and transport parameters; the
+I/O. They implement RFC 9000 v1 and RFC 9369 v2 Initial, Handshake, and 1-RTT
+packet protection; version-specific salts, HKDF labels, wire codepoints, and
+long-header types; authenticated RFC 9368 `version_information` validation;
+CRYPTO and STREAM reassembly; TLS 1.3 `h3` ALPN and transport parameters; the
 anti-amplification limit; ACK processing; NewReno-like congestion accounting;
 bounded timeout retransmission; flow control; server HANDSHAKE_DONE; and
 PATH_CHALLENGE/PATH_RESPONSE validation before accepting a rebound address.
 Initial datagrams are padded to at least 1200 bytes, and the hybrid TLS
 ClientHello is fragmented across CRYPTO frames when needed.
+Servers accept direct v1 and v2 connections. Clients retain v1 as the
+compatibility default and expose `connect_v2`/`connect_version` for an explicit
+v2 first flight. Missing or inconsistent version information fails closed for
+v2; legacy v1-only peers may omit it. The implementation does not claim Retry,
+0-RTT, compatible-version switching during one handshake, or session tickets.
 
 All TLS clients request and require a current issuer-signed stapled OCSP
 response by default, so the policy applies equally to HTTP/1.1, HTTP/2, and
@@ -63,6 +70,8 @@ private-key, and OCSP fixtures with `MRML_HTTP2_LOOPBACK_*` or
 `MRML_HTTP3_LOOPBACK_*`, plus `MRML_HTTP2_CURL` or `MRML_HTTP3_CURL`. The curl
 HTTP/2 probe also covers TLS 1.3 compatibility ChangeCipherSpec handling and
 the default OpenSSL X25519MLKEM768-first negotiation.
+Setting `MRML_HTTP3_LOOPBACK_V2=1` uses the MRML client for a direct,
+authenticated end-to-end QUIC v2 HTTP/3 loopback.
 
 Live HTTP/1.1 URL and range tests remain opt-in through their existing
 environment variables. The focused tests exercise codecs, RFC vectors,

@@ -1,5 +1,22 @@
 # Patent review log
 
+# 2026-08-31 — QUIC version 2 bounded extension — Canada
+
+Patent review: **TRIGGERED**, disposition **CONDITIONAL_PROCEED** under the
+Canada-only HTTP/3 and QUIC baseline below. The extension implements RFC 9369's
+permanent wire codepoint, long-header type mapping, Initial salt, and HKDF label
+separation, plus RFC 9368 authenticated `version_information` parsing and
+downgrade checks. It retains the same single path, TLS 1.3, NewReno-like
+recovery, core HTTP/3, zero-capacity QPACK, and disabled 0-RTT profile.
+
+The IETF shepherd record for `draft-ietf-quic-v2`, which became RFC 9369,
+states that the authors were reminded of BCP 79 obligations and that there were
+no disclosures to file. The IETF database is not exhaustive and this does not
+establish patent clearance. No new Canadian claim family was identified for
+the version-specific constants and authenticated version list. The existing
+Canadian limitations, exclusions, confidence **MEDIUM**, and no-clearance
+conclusion remain unchanged. This technical screen is not legal advice.
+
 # 2026-08-31 — Bounded HTTP/3 response workers — Canada
 
 Patent review: **TRIGGERED**, governed by the 2026-08-31 HTTP/3 and QUIC
@@ -11007,6 +11024,8 @@ do not exist.
 - RFC 9000 — QUIC version 1
 - RFC 9001 — QUIC-TLS
 - RFC 9002 — loss detection and congestion control
+- RFC 9368 — compatible version negotiation and authenticated version information
+- RFC 9369 — QUIC version 2
 - RFC 9114 — HTTP/3
 - RFC 9204 — QPACK
 
@@ -11036,6 +11055,8 @@ do not exist.
 - one active QUIC data path
 - standard RFC 9000 path validation and rebinding
 - standard RFC 9001 TLS 1.3 and ALPN
+- direct RFC 9369 QUIC v2 and retained QUIC v1 compatibility
+- RFC 9368 authenticated version information and downgrade validation
 - RFC 9002 NewReno-like congestion control
 - RFC 9114 core HTTP/3
 - QPACK static/literal operation with dynamic capacity zero
@@ -11070,7 +11091,9 @@ advice or patent clearance.
 
 The bounded profile is implemented in
 `packages/libraries/{runtime,tls,http}`. The implementation contains IPv4 UDP
-socket deadlines; QUIC v1 Initial, Handshake, and 1-RTT protection; standard
+socket deadlines; QUIC v1/v2 Initial, Handshake, and 1-RTT protection;
+version-specific RFC 9369 salts, labels, codepoints, and long-header types;
+authenticated RFC 9368 version information and downgrade rejection; standard
 TLS 1.3 QUIC secrets and `h3` ALPN; X25519MLKEM768-first negotiation with
 X25519 fallback; RSA-PSS, ECDSA P-256/SHA-256, and ECDSA P-384/SHA-384 peer
 authentication; mandatory client-side stapled-OCSP checking for HTTP/1.1,

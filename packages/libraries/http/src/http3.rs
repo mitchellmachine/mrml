@@ -1,6 +1,6 @@
 use crate::{
     Header, HttpError, QuicClientConnection, QuicConnection, QuicFrame, QuicServerListener,
-    QuicStreamAssembler, RequestHead, ResponseHead, valid_header, valid_value,
+    QuicStreamAssembler, QuicVersion, RequestHead, ResponseHead, valid_header, valid_value,
 };
 use mrml_runtime::{JoinHandle, Receiver, Sender, Vector};
 use mrml_tls::TlsServerConfig;
@@ -685,7 +685,29 @@ pub struct Http3ClientConnection {
 }
 impl Http3ClientConnection {
     pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
-        let mut connection = QuicClientConnection::connect(host, port).map_err(quic_error)?;
+        Self::connect_version(host, port, QuicVersion::V1)
+    }
+    pub fn connect_v2(host: &str, port: u16) -> Result<Self, HttpError> {
+        Self::connect_version(host, port, QuicVersion::V2)
+    }
+    pub fn connect_version(host: &str, port: u16, version: QuicVersion) -> Result<Self, HttpError> {
+        let mut connection =
+            QuicClientConnection::connect_version(host, port, version).map_err(quic_error)?;
+        send_critical_streams(&mut connection)?;
+        Ok(Self {
+            connection,
+            protocol: Http3Client::new(),
+            state: Http3ConnectionState::new(),
+        })
+    }
+    pub fn connect_resolved(
+        host: &str,
+        address: [u8; 4],
+        port: u16,
+        version: QuicVersion,
+    ) -> Result<Self, HttpError> {
+        let mut connection = QuicClientConnection::connect_resolved(host, address, port, version)
+            .map_err(quic_error)?;
         send_critical_streams(&mut connection)?;
         Ok(Self {
             connection,
@@ -1302,8 +1324,16 @@ mod tests {
             .unwrap();
         let listener = QuicServerListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
+        let server_error = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
+        let worker_error = server_error.clone();
         let Ok(worker) = mrml_runtime::spawn_joinable(move || {
-            let mut server = Http3ServerConnection::accept(listener, &config).unwrap();
+            let mut server = match Http3ServerConnection::accept(listener, &config) {
+                Ok(server) => server,
+                Err(error) => {
+                    *worker_error.lock() = Some(error);
+                    return;
+                }
+            };
             let (id, request) = server.next_request().unwrap();
             assert_eq!(request.method, "GET");
             assert_eq!(request.target, "/loopback");
@@ -1311,7 +1341,11 @@ mod tests {
         }) else {
             panic!("failed to start HTTP/3 loopback server");
         };
-        if let Some(curl) = mrml_runtime::environment_variable("MRML_HTTP3_CURL") {
+        let test_v2 =
+            mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_V2").as_deref() == Some("1");
+        if let Some(curl) =
+            mrml_runtime::environment_variable("MRML_HTTP3_CURL").filter(|_| !test_v2)
+        {
             let endpoint = mrml_runtime::mrml_format!("localhost:{port}:127.0.0.1");
             let url = mrml_runtime::mrml_format!("https://localhost:{port}/loopback");
             let output = mrml_runtime::Command::new(&curl)
@@ -1336,7 +1370,42 @@ mod tests {
             );
             assert_eq!(&output.stdout[..], b"http3 loopback");
         } else {
-            let mut client = Http3ClientConnection::connect("localhost", port).unwrap();
+            let mut client = if test_v2 {
+                let mut connection = QuicClientConnection::connect_resolved(
+                    "localhost",
+                    [127, 0, 0, 1],
+                    port,
+                    QuicVersion::V2,
+                )
+                .unwrap_or_else(|error| panic!("QUIC v2 handshake failed: {error:?}"));
+                assert_eq!(connection.version(), QuicVersion::V2);
+                send_critical_streams(&mut connection)
+                    .unwrap_or_else(|error| panic!("QUIC v2 critical streams failed: {error:?}"));
+                Ok(Http3ClientConnection {
+                    connection,
+                    protocol: Http3Client::new(),
+                    state: Http3ConnectionState::new(),
+                })
+            } else {
+                Http3ClientConnection::connect_resolved(
+                    "localhost",
+                    [127, 0, 0, 1],
+                    port,
+                    QuicVersion::V1,
+                )
+            }
+            .unwrap_or_else(|error| {
+                let started = mrml_runtime::Instant::now();
+                while server_error.lock().is_none()
+                    && started.elapsed() < core::time::Duration::from_secs(2)
+                {
+                    mrml_runtime::yield_now();
+                }
+                panic!(
+                    "HTTP/3 client failed: {error:?}; server: {:?}",
+                    *server_error.lock()
+                )
+            });
             let response = client
                 .request("GET", "localhost", "/loopback", &[])
                 .unwrap();

@@ -27,7 +27,7 @@ pub use http3::{
 pub use quic::{
     HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,
     QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole, QuicStreamAssembler,
-    QuicTransportParameters, SentPacket, ShortPacket,
+    QuicTransportParameters, QuicVersion, SentPacket, ShortPacket,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
 

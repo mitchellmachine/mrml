@@ -3,12 +3,80 @@ use mrml_crypto::{
 };
 use mrml_runtime::Vector;
 
-const V1: u32 = 1;
 const V1_INITIAL_SALT: [u8; 20] = [
     0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad,
     0xcc, 0xbb, 0x7f, 0x0a,
 ];
+const V2_INITIAL_SALT: [u8; 20] = [
+    0x0d, 0xed, 0xe3, 0xde, 0xf7, 0x00, 0xa6, 0xdb, 0x81, 0x93, 0x81, 0xbe, 0x6e, 0x26, 0x9d, 0xcb,
+    0xf9, 0xbd, 0x2e, 0xd9,
+];
 const MAX_DATAGRAM: usize = 65_527;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuicVersion {
+    V1,
+    V2,
+}
+
+impl QuicVersion {
+    pub const fn wire(self) -> u32 {
+        match self {
+            Self::V1 => 0x0000_0001,
+            Self::V2 => 0x6b33_43cf,
+        }
+    }
+
+    pub const fn from_wire(value: u32) -> Option<Self> {
+        match value {
+            0x0000_0001 => Some(Self::V1),
+            0x6b33_43cf => Some(Self::V2),
+            _ => None,
+        }
+    }
+
+    const fn initial_type(self) -> u8 {
+        match self {
+            Self::V1 => 0xc0,
+            Self::V2 => 0xd0,
+        }
+    }
+
+    const fn handshake_type(self) -> u8 {
+        match self {
+            Self::V1 => 0xe0,
+            Self::V2 => 0xf0,
+        }
+    }
+
+    const fn initial_salt(self) -> &'static [u8; 20] {
+        match self {
+            Self::V1 => &V1_INITIAL_SALT,
+            Self::V2 => &V2_INITIAL_SALT,
+        }
+    }
+
+    const fn key_label(self) -> &'static [u8] {
+        match self {
+            Self::V1 => b"quic key",
+            Self::V2 => b"quicv2 key",
+        }
+    }
+
+    const fn iv_label(self) -> &'static [u8] {
+        match self {
+            Self::V1 => b"quic iv",
+            Self::V2 => b"quicv2 iv",
+        }
+    }
+
+    const fn hp_label(self) -> &'static [u8] {
+        match self {
+            Self::V1 => b"quic hp",
+            Self::V2 => b"quicv2 hp",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuicError {
@@ -22,6 +90,10 @@ pub enum QuicError {
     FlowControl,
     ProtocolViolation,
     Io,
+    SocketBind,
+    SocketTimeout,
+    SocketRead,
+    SocketWrite,
     Tls,
     TlsCertificate,
     TlsAuthentication,
@@ -38,11 +110,16 @@ pub enum QuicError {
     },
 }
 
-pub fn initial_destination_id(input: &[u8]) -> Result<Vector<u8>, QuicError> {
+pub fn initial_version_and_destination_id(
+    input: &[u8],
+) -> Result<(QuicVersion, Vector<u8>), QuicError> {
     if input.len() < 7 || input[0] & 0xc0 != 0xc0 {
         return Err(QuicError::InvalidPacket);
     }
-    if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != V1 {
+    let version =
+        QuicVersion::from_wire(u32::from_be_bytes([input[1], input[2], input[3], input[4]]))
+            .ok_or(QuicError::InvalidPacket)?;
+    if input[0] & 0xf0 != version.initial_type() {
         return Err(QuicError::InvalidPacket);
     }
     let length = input[5] as usize;
@@ -52,7 +129,7 @@ pub fn initial_destination_id(input: &[u8]) -> Result<Vector<u8>, QuicError> {
     let mut id = Vector::new();
     id.try_extend_from_slice(&input[6..6 + length])
         .map_err(|_| QuicError::Allocation)?;
-    Ok(id)
+    Ok((version, id))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +298,8 @@ pub struct QuicTransportParameters {
     pub max_ack_delay_ms: u64,
     pub active_connection_id_limit: u64,
     pub disable_active_migration: bool,
+    pub chosen_version: Option<u32>,
+    pub available_versions: Vector<u32>,
 }
 
 impl Default for QuicTransportParameters {
@@ -240,6 +319,8 @@ impl Default for QuicTransportParameters {
             max_ack_delay_ms: 25,
             active_connection_id_limit: 2,
             disable_active_migration: false,
+            chosen_version: None,
+            available_versions: Vector::new(),
         }
     }
 }
@@ -254,6 +335,9 @@ impl QuicTransportParameters {
                 .original_destination_connection_id
                 .as_ref()
                 .is_some_and(|id| id.len() > 20)
+            || self.available_versions.len() > 64
+            || self.available_versions.iter().any(|version| *version == 0)
+            || self.chosen_version == Some(0)
         {
             return Err(QuicError::Limit);
         }
@@ -288,6 +372,24 @@ impl QuicTransportParameters {
             put_varint(&mut out, 12)?;
             put_varint(&mut out, 0)?
         }
+        if let Some(chosen) = self.chosen_version {
+            if self.available_versions.is_empty() {
+                return Err(QuicError::TransportParameter);
+            }
+            let mut versions = Vector::new();
+            versions
+                .try_extend_from_slice(&chosen.to_be_bytes())
+                .map_err(|_| QuicError::Allocation)?;
+            for version in &self.available_versions {
+                versions
+                    .try_extend_from_slice(&version.to_be_bytes())
+                    .map_err(|_| QuicError::Allocation)?;
+            }
+            put_varint(&mut out, 0x11)?;
+            put_varint(&mut out, versions.len() as u64)?;
+            out.try_extend_from_slice(&versions)
+                .map_err(|_| QuicError::Allocation)?;
+        }
         put_varint(&mut out, 15)?;
         put_varint(&mut out, self.initial_source_connection_id.len() as u64)?;
         out.try_extend_from_slice(&self.initial_source_connection_id)
@@ -297,7 +399,7 @@ impl QuicTransportParameters {
     pub fn decode(input: &[u8]) -> Result<Self, QuicError> {
         let mut result = Self::default();
         let mut at = 0;
-        let mut seen = 0u16;
+        let mut seen = 0u32;
         while at < input.len() {
             let id = take_varint(input, &mut at)?;
             let n = usize::try_from(take_varint(input, &mut at)?).map_err(|_| QuicError::Limit)?;
@@ -320,6 +422,7 @@ impl QuicTransportParameters {
                 10 => Some(11),
                 11 => Some(12),
                 15 => Some(13),
+                0x11 => Some(14),
                 _ => None,
             };
             if let Some(bit) = bit {
@@ -343,6 +446,37 @@ impl QuicTransportParameters {
                     result.initial_source_connection_id = connection_id;
                 }
                 at = end;
+                continue;
+            }
+            if id == 0x11 {
+                if n < 8 || n % 4 != 0 {
+                    return Err(QuicError::TransportParameter);
+                }
+                let chosen = u32::from_be_bytes(
+                    input[at..at + 4]
+                        .try_into()
+                        .map_err(|_| QuicError::Truncated)?,
+                );
+                if chosen == 0 {
+                    return Err(QuicError::TransportParameter);
+                }
+                result.chosen_version = Some(chosen);
+                at += 4;
+                while at < end {
+                    let version = u32::from_be_bytes(
+                        input[at..at + 4]
+                            .try_into()
+                            .map_err(|_| QuicError::Truncated)?,
+                    );
+                    if version == 0 || result.available_versions.contains(&version) {
+                        return Err(QuicError::TransportParameter);
+                    }
+                    result
+                        .available_versions
+                        .try_push(version)
+                        .map_err(|_| QuicError::Allocation)?;
+                    at += 4;
+                }
                 continue;
             }
             if bit.is_none() {
@@ -824,10 +958,18 @@ pub struct QuicInitialKeys {
 }
 impl QuicInitialKeys {
     pub fn derive(destination_id: &[u8], role: QuicRole) -> Result<Self, QuicError> {
+        Self::derive_for(QuicVersion::V1, destination_id, role)
+    }
+
+    pub fn derive_for(
+        version: QuicVersion,
+        destination_id: &[u8],
+        role: QuicRole,
+    ) -> Result<Self, QuicError> {
         if destination_id.len() > 20 {
             return Err(QuicError::Limit);
         }
-        let initial = hkdf_extract(&V1_INITIAL_SALT, destination_id);
+        let initial = hkdf_extract(version.initial_salt(), destination_id);
         let mut secret = [0; 32];
         let label = if role == QuicRole::Client {
             b"client in".as_slice()
@@ -840,9 +982,9 @@ impl QuicInitialKeys {
         let mut key = [0; 16];
         let mut iv = [0; 12];
         let mut header = [0; 16];
-        if !hkdf_expand_label(&secret, b"quic key", &[], &mut key)
-            || !hkdf_expand_label(&secret, b"quic iv", &[], &mut iv)
-            || !hkdf_expand_label(&secret, b"quic hp", &[], &mut header)
+        if !hkdf_expand_label(&secret, version.key_label(), &[], &mut key)
+            || !hkdf_expand_label(&secret, version.iv_label(), &[], &mut iv)
+            || !hkdf_expand_label(&secret, version.hp_label(), &[], &mut header)
         {
             return Err(QuicError::Crypto);
         }
@@ -857,12 +999,19 @@ impl QuicInitialKeys {
     }
 
     pub fn from_traffic_secret(secret: &[u8; 32]) -> Result<Self, QuicError> {
+        Self::from_traffic_secret_for(QuicVersion::V1, secret)
+    }
+
+    pub fn from_traffic_secret_for(
+        version: QuicVersion,
+        secret: &[u8; 32],
+    ) -> Result<Self, QuicError> {
         let mut key = [0; 16];
         let mut iv = [0; 12];
         let mut header = [0; 16];
-        if !hkdf_expand_label(secret, b"quic key", &[], &mut key)
-            || !hkdf_expand_label(secret, b"quic iv", &[], &mut iv)
-            || !hkdf_expand_label(secret, b"quic hp", &[], &mut header)
+        if !hkdf_expand_label(secret, version.key_label(), &[], &mut key)
+            || !hkdf_expand_label(secret, version.iv_label(), &[], &mut iv)
+            || !hkdf_expand_label(secret, version.hp_label(), &[], &mut header)
         {
             return Err(QuicError::Crypto);
         }
@@ -1090,6 +1239,14 @@ pub struct HandshakePacket {
 
 impl HandshakePacket {
     pub fn seal(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
+        self.seal_for(QuicVersion::V1, keys)
+    }
+
+    pub fn seal_for(
+        &self,
+        version: QuicVersion,
+        keys: &QuicInitialKeys,
+    ) -> Result<Vector<u8>, QuicError> {
         if self.destination_id.len() > 20
             || self.source_id.len() > 20
             || self.payload.len() > MAX_DATAGRAM
@@ -1098,9 +1255,9 @@ impl HandshakePacket {
         }
         let packet_number_length = 4usize;
         let mut out = Vector::new();
-        out.try_push(0xe0 | (packet_number_length as u8 - 1))
+        out.try_push(version.handshake_type() | (packet_number_length as u8 - 1))
             .map_err(|_| QuicError::Allocation)?;
-        out.try_extend_from_slice(&V1.to_be_bytes())
+        out.try_extend_from_slice(&version.wire().to_be_bytes())
             .map_err(|_| QuicError::Allocation)?;
         out.try_push(self.destination_id.len() as u8)
             .map_err(|_| QuicError::Allocation)?;
@@ -1154,10 +1311,19 @@ impl HandshakePacket {
         keys: &QuicInitialKeys,
         expected_packet_number: u64,
     ) -> Result<(Self, usize), QuicError> {
-        if input.len() < 7 || input[0] & 0xf0 != 0xe0 || input[0] & 0x40 == 0 {
+        Self::open_for(QuicVersion::V1, input, keys, expected_packet_number)
+    }
+
+    pub fn open_for(
+        version: QuicVersion,
+        input: &[u8],
+        keys: &QuicInitialKeys,
+        expected_packet_number: u64,
+    ) -> Result<(Self, usize), QuicError> {
+        if input.len() < 7 || input[0] & 0xf0 != version.handshake_type() || input[0] & 0x40 == 0 {
             return Err(QuicError::InvalidPacket);
         }
-        if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != V1 {
+        if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != version.wire() {
             return Err(QuicError::InvalidPacket);
         }
         let mut at = 5;
@@ -1192,7 +1358,7 @@ impl HandshakePacket {
         sample.copy_from_slice(&input[packet_number_offset + 4..packet_number_offset + 20]);
         let mask = aes128_encrypt_block(&keys.header, &sample);
         let first = input[0] ^ (mask[0] & 0x0f);
-        if first & 0x30 != 0x20 || first & 0x0c != 0 {
+        if first & 0x30 != version.handshake_type() & 0x30 || first & 0x0c != 0 {
             return Err(QuicError::InvalidPacket);
         }
         let packet_number_length = (first as usize & 3) + 1;
@@ -1245,9 +1411,17 @@ impl HandshakePacket {
 
 impl InitialPacket {
     pub fn seal_padded(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
+        self.seal_padded_for(QuicVersion::V1, keys)
+    }
+
+    pub fn seal_padded_for(
+        &self,
+        version: QuicVersion,
+        keys: &QuicInitialKeys,
+    ) -> Result<Vector<u8>, QuicError> {
         let mut packet = self.clone();
         loop {
-            let sealed = packet.seal(keys)?;
+            let sealed = packet.seal_for(version, keys)?;
             if sealed.len() >= 1200 {
                 return Ok(sealed);
             }
@@ -1258,6 +1432,14 @@ impl InitialPacket {
         }
     }
     pub fn seal(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
+        self.seal_for(QuicVersion::V1, keys)
+    }
+
+    pub fn seal_for(
+        &self,
+        version: QuicVersion,
+        keys: &QuicInitialKeys,
+    ) -> Result<Vector<u8>, QuicError> {
         if self.destination_id.len() > 20
             || self.source_id.len() > 20
             || self.payload.len() > MAX_DATAGRAM
@@ -1266,9 +1448,9 @@ impl InitialPacket {
         }
         let pn_len = 4usize;
         let mut out = Vector::new();
-        out.try_push(0xc0 | (pn_len as u8 - 1))
+        out.try_push(version.initial_type() | (pn_len as u8 - 1))
             .map_err(|_| QuicError::Allocation)?;
-        out.try_extend_from_slice(&V1.to_be_bytes())
+        out.try_extend_from_slice(&version.wire().to_be_bytes())
             .map_err(|_| QuicError::Allocation)?;
         out.try_push(self.destination_id.len() as u8)
             .map_err(|_| QuicError::Allocation)?;
@@ -1324,10 +1506,19 @@ impl InitialPacket {
         keys: &QuicInitialKeys,
         expected_packet_number: u64,
     ) -> Result<(Self, usize), QuicError> {
-        if input.len() < 7 || input[0] & 0xc0 != 0xc0 || input[0] & 0x30 != 0 {
+        Self::open_for(QuicVersion::V1, input, keys, expected_packet_number)
+    }
+
+    pub fn open_for(
+        version: QuicVersion,
+        input: &[u8],
+        keys: &QuicInitialKeys,
+        expected_packet_number: u64,
+    ) -> Result<(Self, usize), QuicError> {
+        if input.len() < 7 || input[0] & 0xf0 != version.initial_type() {
             return Err(QuicError::InvalidPacket);
         }
-        if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != V1 {
+        if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != version.wire() {
             return Err(QuicError::InvalidPacket);
         }
         let mut at = 5;
@@ -1461,6 +1652,49 @@ mod tests {
         assert_eq!(&k.header[..], &hex("9f50449e04a0e810283a1e9933adedd2")[..])
     }
     #[test]
+    fn rfc9369_v2_initial_secrets_and_packet_types() {
+        let destination = hex("8394c8f03e515708");
+        let client =
+            QuicInitialKeys::derive_for(QuicVersion::V2, &destination, QuicRole::Client).unwrap();
+        assert_eq!(
+            &client.key[..],
+            &hex("8b1a0bc121284290a29e0971b5cd045d")[..]
+        );
+        assert_eq!(&client.iv[..], &hex("91f73e2351d8fa91660e909f")[..]);
+        assert_eq!(
+            &client.header[..],
+            &hex("45b95e15235d6f45a6b19cbcb0294ba9")[..]
+        );
+        let server =
+            QuicInitialKeys::derive_for(QuicVersion::V2, &destination, QuicRole::Server).unwrap();
+        assert_eq!(
+            &server.key[..],
+            &hex("82db637861d55e1d011f19ea71d5d2a7")[..]
+        );
+        assert_eq!(&server.iv[..], &hex("dd13c276499c0249d3310652")[..]);
+        assert_eq!(
+            &server.header[..],
+            &hex("edf6d05c83121201b436e16877593c3a")[..]
+        );
+
+        let packet = InitialPacket {
+            destination_id: destination,
+            source_id: [1, 2, 3, 4].into(),
+            packet_number: 2,
+            payload: [1, 2, 3, 4, 5].into(),
+        };
+        let wire = packet.seal_for(QuicVersion::V2, &client).unwrap();
+        assert_eq!(&wire[1..5], &QuicVersion::V2.wire().to_be_bytes());
+        assert_eq!(wire[0] & 0xf0, 0xd0);
+        assert_eq!(
+            InitialPacket::open_for(QuicVersion::V2, &wire, &client, 2)
+                .unwrap()
+                .0,
+            packet
+        );
+        assert!(InitialPacket::open(&wire, &client, 2).is_err());
+    }
+    #[test]
     fn frames_round_trip_and_reject_truncation() {
         let frames = [
             QuicFrame::Ping,
@@ -1520,7 +1754,9 @@ mod tests {
     }
     #[test]
     fn transport_parameters_reject_duplicates_and_bad_datagrams() {
-        let parameters = QuicTransportParameters::default();
+        let mut parameters = QuicTransportParameters::default();
+        parameters.chosen_version = Some(QuicVersion::V2.wire());
+        parameters.available_versions = [QuicVersion::V2.wire(), QuicVersion::V1.wire()].into();
         let wire = parameters.encode().unwrap();
         assert_eq!(QuicTransportParameters::decode(&wire).unwrap(), parameters);
         let mut duplicate = wire.clone();
@@ -1590,15 +1826,23 @@ mod tests {
     }
     #[test]
     fn handshake_packets_and_minimum_initial_datagrams() {
-        let keys = QuicInitialKeys::from_traffic_secret(&[9; 32]).unwrap();
         let packet = HandshakePacket {
             destination_id: [1, 2, 3, 4].into(),
             source_id: [5, 6, 7, 8].into(),
             packet_number: 12,
             payload: (*b"encrypted handshake").into(),
         };
-        let wire = packet.seal(&keys).unwrap();
-        assert_eq!(HandshakePacket::open(&wire, &keys, 12).unwrap().0, packet);
+        for version in [QuicVersion::V1, QuicVersion::V2] {
+            let keys = QuicInitialKeys::from_traffic_secret_for(version, &[9; 32]).unwrap();
+            let wire = packet.seal_for(version, &keys).unwrap();
+            assert_eq!(
+                HandshakePacket::open_for(version, &wire, &keys, 12)
+                    .unwrap()
+                    .0,
+                packet
+            );
+            assert_eq!(wire[0] & 0xf0, version.handshake_type());
+        }
         let initial_keys = QuicInitialKeys::derive(&[1, 2, 3, 4], QuicRole::Client).unwrap();
         let initial = InitialPacket {
             destination_id: [1, 2, 3, 4].into(),
