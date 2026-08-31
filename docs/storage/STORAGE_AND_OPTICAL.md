@@ -1836,6 +1836,24 @@ state to the existing cleanup path. Failure-owner behavior remains covered by
 the underlying mapping-set rollback tests; installed SMP invalidation, IOMMU,
 booted dispatch, and hardware were not exercised.
 
+Address-space cleanup is now manager-owned. It consumes only the retained empty
+root/retirement pair, calls the exact supervisor cleanup gate, and releases the
+concrete page-table and memory-resource owner only after the eraser succeeds.
+Wrong-supervisor or eraser failure restores the complete removed-mappings owner
+for retry and returns the diagnostic separately. Success retains the final
+retirement/launch dispatch owner, returns only the service receipt, and rejects
+cleanup replay. The controlled lifecycle test denies cleanup through an empty
+supervisor without invoking the eraser, retries through the exact supervisor,
+checks resource-ledger release, and transfers the retained final owner to the
+existing delayed-dispatch path. Dispatch itself is the remaining manager-state
+transition; no installed trap, SMP hardware, IOMMU, or physical AHCI ran.
+
+Patent review: **NOT_TRIGGERED**. Retaining existing cleanup success/error
+owners until exact erasure and supervisor acceptance is conventional
+fail-closed lifecycle composition. It adds no parser, controller command, DMA
+behavior, persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining the existing reverse-order mapping
 withdrawal success/error owners with their supervisor token is conventional
 fail-closed lifecycle composition. It adds no parser, controller command, DMA

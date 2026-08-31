@@ -1847,26 +1847,31 @@ mod tests {
             unsafe { teardown_manager.remove_mappings() },
             Err(crate::KernelAhciServiceManagerMappingRemovalError::AlreadyRemoved)
         );
-        let (_exit_slot, removed) = teardown_manager
-            .into_mappings_removed_parts()
-            .unwrap_or_else(|_| panic!("manager must retain the empty retired root"));
-        assert_eq!(removed.service(), service_id);
-        assert_eq!(removed.task(), target_task);
-        assert_eq!(removed.root(), PhysAddr::new(TABLE_BASE).unwrap());
-        assert!(removed.mappings_complete());
         assert_eq!(fixture.runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
         assert!(supervisor.pending_cleanup(service_id).unwrap().is_some());
         let mut eraser = AddressSpaceEraser::default();
+        // SAFETY: mappings are withdrawn, but an unrelated supervisor must
+        // reject cleanup and return the complete empty-root owner.
+        assert!(matches!(
+            unsafe { teardown_manager.complete_cleanup(&mut wrong_supervisor, &mut eraser) },
+            Err(crate::KernelAhciServiceManagerCleanupError::Cleanup(_))
+        ));
+        assert!(teardown_manager.mappings_removed());
+        assert_eq!(eraser.erased, None);
         // SAFETY: all five mappings were withdrawn above and the controlled
         // eraser truthfully records exact address-space destruction.
-        let cleaned = unsafe {
-            crate::complete_retired_kernel_ahci_service_cleanup(
-                removed,
-                &mut supervisor,
-                &mut eraser,
-            )
-        }
-        .unwrap_or_else(|_| panic!("exact concrete cleanup must complete"));
+        let cleaned_receipt =
+            unsafe { teardown_manager.complete_cleanup(&mut supervisor, &mut eraser) }
+                .unwrap_or_else(|_| panic!("exact concrete cleanup must complete"));
+        assert_eq!(cleaned_receipt.service(), service_id);
+        assert!(teardown_manager.cleanup_complete());
+        assert!(matches!(
+            unsafe { teardown_manager.complete_cleanup(&mut supervisor, &mut eraser) },
+            Err(crate::KernelAhciServiceManagerCleanupError::AlreadyComplete)
+        ));
+        let (_exit_slot, cleaned) = teardown_manager
+            .into_cleanup_complete_parts()
+            .unwrap_or_else(|_| panic!("manager must retain the cleanup dispatch owner"));
         assert_eq!(cleaned.service(), service_id);
         assert_eq!(eraser.erased.map(|(task, _)| task), Some(target_task));
         assert_eq!(supervisor.pending_cleanup(service_id), Ok(None));

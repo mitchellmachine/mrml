@@ -703,6 +703,7 @@ pub struct KernelAhciServiceTeardownManager<
             AUTHORITIES,
         >,
     >,
+    cleanup_complete: Option<RetiredKernelAhciServiceCleanupComplete>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -768,6 +769,24 @@ pub struct KernelAhciServiceMappingsRemoved {
     task: TaskId,
     service: ServiceId,
     root: mrml_kernel::PhysAddr,
+}
+
+#[derive(Debug)]
+pub enum KernelAhciServiceManagerCleanupError<E> {
+    NotRemoved,
+    AlreadyComplete,
+    Cleanup(ServiceCleanupError<E>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceCleanupCompleted {
+    service: ServiceId,
+}
+
+impl KernelAhciServiceCleanupCompleted {
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
 }
 
 impl KernelAhciServiceMappingsRemoved {
@@ -1552,6 +1571,7 @@ impl<
             quiesced: None,
             retired: None,
             mappings_removed: None,
+            cleanup_complete: None,
         })
     }
 
@@ -1577,6 +1597,10 @@ impl<
 
     pub const fn mappings_removed(&self) -> bool {
         self.mappings_removed.is_some()
+    }
+
+    pub const fn cleanup_complete(&self) -> bool {
+        self.cleanup_complete.is_some()
     }
 
     pub fn quiesce_failure(&self) -> Option<&KernelAhciServiceDeviceQuiesceFailure> {
@@ -1911,6 +1935,68 @@ impl<
     > {
         match self.mappings_removed.take() {
             Some(removed) => Ok((self.slot, removed)),
+            None => Err(self),
+        }
+    }
+
+    /// Erases the retired address space and releases its empty concrete owner
+    /// only after the exact supervisor accepts cleanup. Failure restores the
+    /// complete removed-mappings owner for retry.
+    ///
+    /// # Safety
+    ///
+    /// The retained mapping backend must have truthfully withdrawn every leaf,
+    /// and eraser success must make the address space permanently unreachable.
+    pub unsafe fn complete_cleanup<E: ServiceAddressSpaceEraser, const SERVICES: usize>(
+        &mut self,
+        supervisor: &mut ServiceSupervisor<SERVICES>,
+        eraser: &mut E,
+    ) -> Result<KernelAhciServiceCleanupCompleted, KernelAhciServiceManagerCleanupError<E::Error>>
+    {
+        if self.cleanup_complete.is_some() {
+            return Err(KernelAhciServiceManagerCleanupError::AlreadyComplete);
+        }
+        let removed = self
+            .mappings_removed
+            .take()
+            .ok_or(KernelAhciServiceManagerCleanupError::NotRemoved)?;
+        match unsafe { complete_retired_kernel_ahci_service_cleanup(removed, supervisor, eraser) } {
+            Ok(cleaned) => {
+                let receipt = KernelAhciServiceCleanupCompleted {
+                    service: cleaned.service(),
+                };
+                self.cleanup_complete = Some(cleaned);
+                Ok(receipt)
+            }
+            Err(error) => {
+                let KernelAhciRetiredServiceCleanupError { error, owner } = error;
+                self.mappings_removed = Some(owner);
+                Err(KernelAhciServiceManagerCleanupError::Cleanup(error))
+            }
+        }
+    }
+
+    pub fn into_cleanup_complete_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            RetiredKernelAhciServiceCleanupComplete,
+        ),
+        Self,
+    > {
+        match self.cleanup_complete.take() {
+            Some(cleaned) => Ok((self.slot, cleaned)),
             None => Err(self),
         }
     }
