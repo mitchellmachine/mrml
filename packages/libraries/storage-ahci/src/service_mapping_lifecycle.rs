@@ -1542,6 +1542,37 @@ mod tests {
         assert_eq!(removed.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert!(removed.mappings_complete());
         assert_eq!(fixture.runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
+        assert!(supervisor.pending_cleanup(service_id).unwrap().is_some());
+        let mut eraser = AddressSpaceEraser::default();
+        // SAFETY: all five mappings were withdrawn above and the controlled
+        // eraser truthfully records exact address-space destruction.
+        let cleaned = unsafe {
+            crate::complete_retired_kernel_ahci_service_cleanup(
+                removed,
+                &mut supervisor,
+                &mut eraser,
+            )
+        }
+        .unwrap_or_else(|_| panic!("exact concrete cleanup must complete"));
+        assert_eq!(cleaned.service(), service_id);
+        assert_eq!(eraser.erased.map(|(task, _)| task), Some(target_task));
+        assert_eq!(supervisor.pending_cleanup(service_id), Ok(None));
+        assert_eq!(
+            fixture
+                .memory
+                .usage(fixture.pool, fixture.pool_capability, &fixture.authorities,)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+        let dispatched =
+            crate::dispatch_retired_kernel_ahci_service_task(cleaned, &mut fixture.runtime)
+                .unwrap_or_else(|_| panic!("cleaned concrete retirement must dispatch"));
+        assert_eq!(dispatched.service(), service_id);
+        assert_eq!(
+            dispatched.dispatch().user().map(|(task, _)| task),
+            Some(prepared.task().source_task())
+        );
     }
 
     #[test]

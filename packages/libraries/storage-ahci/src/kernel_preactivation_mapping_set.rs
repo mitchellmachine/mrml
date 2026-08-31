@@ -1266,6 +1266,19 @@ impl<
         self.withdraw_all_mappings()
     }
 
+    /// Releases the empty concrete hierarchy after exact supervisor cleanup.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the matching completed retirement cleanup, prove
+    /// this owner is no longer reachable by any CPU or device, and ensure no
+    /// stale translation can address the retained root or leaves.
+    pub(crate) unsafe fn release_after_retired_cleanup(self) -> PreparedAhciNativeServiceTask {
+        debug_assert!(self.abar.is_none());
+        debug_assert!(self.cpu.complete());
+        self.prepared
+    }
+
     fn withdraw_all_mappings(
         self,
     ) -> Result<
