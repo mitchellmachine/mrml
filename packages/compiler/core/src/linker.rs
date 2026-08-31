@@ -624,6 +624,10 @@ pub enum LinkRelocationTarget<'a> {
     /// The nested target retains its exact object/section identity until the
     /// final PE RVAs are frozen.
     PeImageRelative(PeImageRelativeTarget<'a>),
+    /// An eight-byte PE virtual address (`IMAGE_REL_AMD64_ADDR64`). The same
+    /// nested target identity is retained, but the serializer adds the image
+    /// base and records the field in the base-relocation directory.
+    PeAbsoluteAddress(PeImageRelativeTarget<'a>),
     InputText(usize),
     ReadonlyData(usize),
     /// A validated `mov reg, [rip + GOT]` whose fixed-image target is local
@@ -3433,6 +3437,11 @@ fn coff_section_is_referenced(
                             identity: target,
                             ..
                         },
+                    ) | LinkRelocationTarget::PeAbsoluteAddress(
+                        PeImageRelativeTarget::CoffSection {
+                            identity: target,
+                            ..
+                        },
                     ) if target == identity
                 )
             })
@@ -3485,6 +3494,9 @@ fn symbol_is_referenced(
                         | LinkRelocationTarget::GotPcRelativeSymbol(target)
                         | LinkRelocationTarget::RequiredSymbol(target)
                         | LinkRelocationTarget::PeImageRelative(
+                            PeImageRelativeTarget::Symbol(target),
+                        )
+                        | LinkRelocationTarget::PeAbsoluteAddress(
                             PeImageRelativeTarget::Symbol(target),
                         )
                         if target == symbol
@@ -5631,19 +5643,31 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
         // Windows TLS access sequence additionally uses IMAGE_REL_AMD64_SECREL
         // for the offset within the selected TLS template; retain that target
         // as typed PE TLS work rather than treating it as an unknown encoding.
+        let absolute_address = relocation_type == 1;
         let image_relative = relocation_type == 3;
         let trailing_bytes = match relocation_type {
-            3 => 0,
+            1 | 3 => 0,
             relocation @ 4..=9 => {
                 u8::try_from(relocation - 4).map_err(|_| LinkerError::OffsetOverflow)?
             }
             11 if target_is_tls => 0,
             _ => return Err(LinkerError::UnsupportedCoffRelocation),
         };
+        field_offset
+            .checked_add(if absolute_address { 8 } else { 4 })
+            .filter(|end| *end <= text.len())
+            .ok_or(LinkerError::InvalidRelocationOffset)?;
         let relative_bias = 4i64
             .checked_add(i64::from(trailing_bytes))
             .ok_or(LinkerError::OffsetOverflow)?;
-        let field_addend = read_i32(text, field_offset)?;
+        let field_addend = if absolute_address {
+            i64::from_le_bytes(read_u64_coff(text, field_offset)?.to_le_bytes())
+        } else {
+            i64::from(read_i32(text, field_offset)?)
+        };
+        let relative_addend = field_addend
+            .checked_sub(relative_bias)
+            .ok_or(LinkerError::OffsetOverflow)?;
         let (target, addend) = if target_section == 0 {
             (
                 LinkRelocationTarget::Symbol(coff_symbol_name(
@@ -5652,7 +5676,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     symbols_end,
                     string_size,
                 )?),
-                i64::from(field_addend) - relative_bias,
+                relative_addend,
             )
         } else if target_section == text_section {
             let text_offset = usize::try_from(read_u32(object, target_offset + 8)?)
@@ -5662,7 +5686,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             }
             (
                 LinkRelocationTarget::InputText(text_offset),
-                i64::from(field_addend) - relative_bias,
+                relative_addend,
             )
         } else if target_section > 0
             && other_text_sections
@@ -5707,7 +5731,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             } else {
                 return Err(LinkerError::UnsupportedCoffRelocationTarget);
             };
-            (target, i64::from(field_addend) - relative_bias)
+            (target, relative_addend)
         } else if target_section > 0
             && readonly_sections
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
@@ -5720,20 +5744,32 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             let readonly_start = readonly_span.ok_or(LinkerError::InvalidCoff)?.0;
             let symbol_value = usize::try_from(read_u32(object, target_offset + 8)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
-            let field_addend =
-                usize::try_from(field_addend).map_err(|_| LinkerError::InvalidRelocationOffset)?;
             let data_offset = target_raw
                 .checked_sub(readonly_start)
                 .and_then(|offset| offset.checked_add(symbol_value))
-                .and_then(|offset| offset.checked_add(field_addend))
                 .ok_or(LinkerError::OffsetOverflow)?;
-            if data_offset > readonly_data.len() {
-                return Err(LinkerError::InvalidRelocationOffset);
+            if absolute_address || image_relative {
+                if data_offset > readonly_data.len() {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                (
+                    LinkRelocationTarget::ReadonlyData(data_offset),
+                    relative_addend,
+                )
+            } else {
+                let field_addend = usize::try_from(field_addend)
+                    .map_err(|_| LinkerError::InvalidRelocationOffset)?;
+                let data_offset = data_offset
+                    .checked_add(field_addend)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                if data_offset > readonly_data.len() {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                (
+                    LinkRelocationTarget::ReadonlyData(data_offset),
+                    -relative_bias,
+                )
             }
-            (
-                LinkRelocationTarget::ReadonlyData(data_offset),
-                -relative_bias,
-            )
         } else if target_section > 0
             && discarded_readonly_sections
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
@@ -5755,18 +5791,29 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     .map_err(|_| LinkerError::OffsetOverflow)?;
                 let symbol_value = usize::try_from(read_u32(object, target_offset + 8)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
-                let field_addend = usize::try_from(field_addend)
-                    .map_err(|_| LinkerError::InvalidRelocationOffset)?;
-                let target_offset = symbol_value
-                    .checked_add(field_addend)
-                    .filter(|offset| *offset <= section_size)
-                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                let target_offset = if absolute_address || image_relative {
+                    symbol_value
+                } else {
+                    symbol_value
+                        .checked_add(
+                            usize::try_from(field_addend)
+                                .map_err(|_| LinkerError::InvalidRelocationOffset)?,
+                        )
+                        .ok_or(LinkerError::OffsetOverflow)?
+                };
+                if target_offset > section_size {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
                 (
                     LinkRelocationTarget::CoffSection {
                         identity: CoffSectionIdentity::new(object_identity, section)?,
                         offset: target_offset,
                     },
-                    -relative_bias,
+                    if absolute_address || image_relative {
+                        relative_addend
+                    } else {
+                        -relative_bias
+                    },
                 )
             } else {
                 let storage_class = *object
@@ -5781,7 +5828,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 } else {
                     LinkRelocationTarget::LocalSymbol(name)
                 };
-                (target, i64::from(field_addend) - relative_bias)
+                (target, relative_addend)
             }
         } else if target_section > 0
             && writable_sections
@@ -5819,7 +5866,7 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     string_size,
                 )?)
             };
-            (target, i64::from(field_addend) - relative_bias)
+            (target, relative_addend)
         } else if target_is_tls {
             let section = u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?;
             let target_header = 20 + (usize::from(section) - 1) * 40;
@@ -5840,15 +5887,15 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                     section_relative: relocation_type == 11,
                 },
                 if relocation_type == 11 {
-                    i64::from(field_addend)
+                    field_addend
                 } else {
-                    i64::from(field_addend) - relative_bias
+                    relative_addend
                 },
             )
         } else {
             return Err(LinkerError::UnsupportedCoffRelocationTarget);
         };
-        let (target, addend) = if image_relative {
+        let (target, addend) = if image_relative || absolute_address {
             let target = match target {
                 LinkRelocationTarget::Symbol(symbol) => PeImageRelativeTarget::Symbol(symbol),
                 LinkRelocationTarget::LocalSymbol(symbol) => {
@@ -5873,7 +5920,11 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 _ => return Err(LinkerError::UnsupportedCoffRelocationTarget),
             };
             (
-                LinkRelocationTarget::PeImageRelative(target),
+                if absolute_address {
+                    LinkRelocationTarget::PeAbsoluteAddress(target)
+                } else {
+                    LinkRelocationTarget::PeImageRelative(target)
+                },
                 addend
                     .checked_add(relative_bias)
                     .ok_or(LinkerError::OffsetOverflow)?,
@@ -8559,17 +8610,20 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     let mut import_count = 0usize;
     for input in inputs {
         for relocation in input.relocations {
-            let (library, target) = match relocation.target {
-                LinkRelocationTarget::PeImportAddress { library, target }
-                | LinkRelocationTarget::PeImportMetadata {
-                    library, target, ..
-                }
-                | LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::ImportAddress {
-                    library,
-                    target,
-                }) => (library, target),
-                _ => continue,
-            };
+            let (library, target) =
+                match relocation.target {
+                    LinkRelocationTarget::PeImportAddress { library, target }
+                    | LinkRelocationTarget::PeImportMetadata {
+                        library, target, ..
+                    }
+                    | LinkRelocationTarget::PeImageRelative(
+                        PeImageRelativeTarget::ImportAddress { library, target },
+                    )
+                    | LinkRelocationTarget::PeAbsoluteAddress(
+                        PeImageRelativeTarget::ImportAddress { library, target },
+                    ) => (library, target),
+                    _ => continue,
+                };
             validate_pe_import_library(library)?;
             validate_pe_import_target(target)?;
             if let Some(existing_target) = imports[..import_count].iter().find_map(|import| {
@@ -9112,6 +9166,22 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 readonly_rva
                     .checked_add(tls_directory_offset)
                     .and_then(|rva| rva.checked_add(field_offset))
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )?;
+        }
+    }
+    for (input, layout) in inputs.iter().zip(linked_layouts.iter()) {
+        for relocation in input.relocations {
+            if !matches!(
+                relocation.target,
+                LinkRelocationTarget::PeAbsoluteAddress(_)
+            ) {
+                continue;
+            }
+            record_base_relocation(
+                TEXT_RVA
+                    .checked_add(layout.text)
+                    .and_then(|rva| rva.checked_add(relocation.offset))
                     .ok_or(LinkerError::OffsetOverflow)?,
             )?;
         }
@@ -9868,7 +9938,20 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 )?;
                 continue;
             }
-            if let LinkRelocationTarget::PeImageRelative(target) = relocation.target {
+            if matches!(
+                relocation.target,
+                LinkRelocationTarget::PeImageRelative(_)
+                    | LinkRelocationTarget::PeAbsoluteAddress(_)
+            ) {
+                let absolute_address = matches!(
+                    relocation.target,
+                    LinkRelocationTarget::PeAbsoluteAddress(_)
+                );
+                let target = match relocation.target {
+                    LinkRelocationTarget::PeImageRelative(target)
+                    | LinkRelocationTarget::PeAbsoluteAddress(target) => target,
+                    _ => unreachable!(),
+                };
                 let target_rva = match target {
                     PeImageRelativeTarget::Symbol(symbol)
                     | PeImageRelativeTarget::LocalSymbol(symbol) => {
@@ -9940,20 +10023,33 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 };
                 let value = i128::try_from(target_rva)
                     .map_err(|_| LinkerError::OffsetOverflow)?
-                    .checked_add(i128::from(relocation.addend))
-                    .and_then(|value| u32::try_from(value).ok())
+                    .checked_add(if absolute_address {
+                        i128::try_from(IMAGE_BASE).map_err(|_| LinkerError::OffsetOverflow)?
+                    } else {
+                        0
+                    })
+                    .and_then(|value| value.checked_add(i128::from(relocation.addend)))
                     .ok_or(LinkerError::RelocationOverflow)?;
                 let place = layout
                     .text
                     .checked_add(relocation.offset)
                     .ok_or(LinkerError::OffsetOverflow)?;
-                patch_u32(
-                    bytes,
-                    HEADERS
-                        .checked_add(place)
-                        .ok_or(LinkerError::OffsetOverflow)?,
-                    value,
-                )?;
+                let output = HEADERS
+                    .checked_add(place)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                if absolute_address {
+                    patch_u64(
+                        bytes,
+                        output,
+                        u64::try_from(value).map_err(|_| LinkerError::RelocationOverflow)?,
+                    )?;
+                } else {
+                    patch_u32(
+                        bytes,
+                        output,
+                        u32::try_from(value).map_err(|_| LinkerError::RelocationOverflow)?,
+                    )?;
+                }
                 continue;
             }
             let (writable_index, target_offset) = match relocation.target {
@@ -10662,7 +10758,8 @@ fn link_x86_64_static_aligned_into(
                 }
                 LinkRelocationTarget::PeTlsSection { .. }
                 | LinkRelocationTarget::PeWritableSection { .. } => {}
-                LinkRelocationTarget::PeImageRelative(target) => {
+                LinkRelocationTarget::PeImageRelative(target)
+                | LinkRelocationTarget::PeAbsoluteAddress(target) => {
                     validate_pe_image_relative_target(input, target)?;
                 }
                 LinkRelocationTarget::InputText(offset) if offset > input.text.len() => {
@@ -10690,9 +10787,17 @@ fn link_x86_64_static_aligned_into(
                     | LinkRelocationTarget::PeWritableSymbol(_)
                     | LinkRelocationTarget::PeImportMetadata { .. }
             ) {
+                let field_width = if matches!(
+                    relocation.target,
+                    LinkRelocationTarget::PeAbsoluteAddress(_)
+                ) {
+                    8
+                } else {
+                    4
+                };
                 relocation
                     .offset
-                    .checked_add(4)
+                    .checked_add(field_width)
                     .filter(|end| *end <= input.text.len())
                     .ok_or(LinkerError::InvalidRelocationOffset)?;
             }
@@ -10752,7 +10857,8 @@ fn link_x86_64_static_aligned_into(
                 | LinkRelocationTarget::PeImportAddress { .. }
                 | LinkRelocationTarget::PeImportMetadata { .. }
                 | LinkRelocationTarget::PeTlsSection { .. }
-                | LinkRelocationTarget::PeImageRelative(_) => continue,
+                | LinkRelocationTarget::PeImageRelative(_)
+                | LinkRelocationTarget::PeAbsoluteAddress(_) => continue,
                 _ => {}
             }
             let place = layout
@@ -10772,6 +10878,7 @@ fn link_x86_64_static_aligned_into(
                 LinkRelocationTarget::PeImportMetadata { .. } => unreachable!(),
                 LinkRelocationTarget::PeTlsSection { .. } => unreachable!(),
                 LinkRelocationTarget::PeImageRelative(_) => unreachable!(),
+                LinkRelocationTarget::PeAbsoluteAddress(_) => unreachable!(),
                 LinkRelocationTarget::InputText(offset) => layout
                     .text
                     .checked_add(offset)
@@ -13388,6 +13495,71 @@ mod tests {
         let target = decode_x86_64_coff(target.bytes(), &mut target_relocations).unwrap();
         let pe = link_x86_64_pe::<2048, 8192>(&[caller, target], "entry").unwrap();
         assert_eq!(read_u32(pe.bytes(), 0x201).unwrap(), 0x100c);
+    }
+
+    #[test]
+    fn decodes_emits_and_rebases_bounded_coff_text_absolute_addresses() {
+        let caller_code = MachineCode::<16>::from_bytes_for_test(&[
+            0x48, 0xb8, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xc3,
+        ]);
+        let relocation = X86_64PcRelativeRelocation {
+            offset: 2,
+            symbol: "target",
+            kind: X86_64PcRelativeRelocationKind::Data,
+        };
+        let caller =
+            emit_x86_64_coff_with_relocation::<256, 16>("entry", &caller_code, relocation).unwrap();
+        let relocation_offset = usize::try_from(read_u32(caller.bytes(), 44).unwrap()).unwrap();
+        let mut absolute = caller.bytes().to_vec();
+        absolute[relocation_offset + 8..relocation_offset + 10]
+            .copy_from_slice(&1u16.to_le_bytes());
+        let mut caller_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let caller = decode_x86_64_coff(&absolute, &mut caller_relocations).unwrap();
+        assert_eq!(
+            caller.relocations,
+            &[LinkRelocation {
+                offset: 2,
+                target: LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(
+                    "target"
+                ),),
+                addend: -8,
+            }]
+        );
+
+        let target_code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let target = emit_x86_64_coff::<192, 8>("target", &target_code).unwrap();
+        let mut target_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let target = decode_x86_64_coff(target.bytes(), &mut target_relocations).unwrap();
+        let pe = link_x86_64_pe::<2048, 8192>(&[caller, target], "entry").unwrap();
+        assert_eq!(
+            u64::from_le_bytes(pe.bytes()[0x202..0x20a].try_into().unwrap()),
+            0x0000_0001_4000_1008
+        );
+        assert_eq!(read_u32(pe.bytes(), 0x98 + 152).unwrap(), 0x2000);
+        assert_eq!(read_u32(pe.bytes(), 0x98 + 156).unwrap(), 12);
+        assert_eq!(read_u32(pe.bytes(), 0x400).unwrap(), 0x1000);
+        assert_eq!(read_u16(pe.bytes(), 0x408).unwrap(), 0xa002);
+
+        let overflow_relocation = [LinkRelocation {
+            addend: i64::MIN,
+            ..caller.relocations[0]
+        }];
+        let overflow = LinkInput {
+            relocations: &overflow_relocation,
+            ..caller
+        };
+        assert_eq!(
+            link_x86_64_pe::<2048, 8192>(&[overflow, target], "entry"),
+            Err(LinkerError::RelocationOverflow)
+        );
     }
 
     #[test]

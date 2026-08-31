@@ -2245,7 +2245,12 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                         relocation
                     }
                 }
-                LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(symbol)) => {
+                LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(symbol))
+                | LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(symbol)) => {
+                    let absolute_address = matches!(
+                        relocation.target,
+                        LinkRelocationTarget::PeAbsoluteAddress(_)
+                    );
                     let target = if let Some((identity, offset)) = typed_section_target(symbol) {
                         PeImageRelativeTarget::CoffSection { identity, offset }
                     } else if let Some((library, target)) = import_target(symbol) {
@@ -2256,7 +2261,11 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                         PeImageRelativeTarget::Symbol(symbol)
                     };
                     LinkRelocation {
-                        target: LinkRelocationTarget::PeImageRelative(target),
+                        target: if absolute_address {
+                            LinkRelocationTarget::PeAbsoluteAddress(target)
+                        } else {
+                            LinkRelocationTarget::PeImageRelative(target)
+                        },
                         ..relocation
                     }
                 }
@@ -3174,6 +3183,30 @@ mod tests {
         assert_eq!(
             image_relative_contextual[0].relocations[0].target,
             LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::WritableSymbol("marker",))
+        );
+
+        let absolute_relocation = [LinkRelocation {
+            target: LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::Symbol(
+                "marker",
+            )),
+            ..relocation[0]
+        }];
+        let absolute_input = LinkInput {
+            relocations: &absolute_relocation,
+            ..input
+        };
+        let mut absolute_arenas = relocation_arenas(1).unwrap();
+        let absolute_contextual = contextualize_pe_writable_relocations(
+            &[absolute_input],
+            &writable,
+            &mut absolute_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            absolute_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeAbsoluteAddress(PeImageRelativeTarget::WritableSymbol(
+                "marker",
+            ))
         );
 
         let definition = [LinkDefinition {
