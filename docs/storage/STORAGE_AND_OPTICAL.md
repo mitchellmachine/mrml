@@ -1934,6 +1934,25 @@ retention are standard fail-closed lifecycle composition. This adds no AHCI
 controller command, DMA behavior, persistent format, or new authority model.
 See [the patent review log](../patents/REVIEW_LOG.md).
 
+The exclusive BAR transaction now has a native x86 PCI configuration
+mechanism-one backend. Its unsafe constructor accepts only segment zero and
+requires the caller to retain the exact quiescent function, disable local
+interrupts, and exclude every other CPU from `0xCF8/0xCFC` access. The backend
+retains one requester identity, rejects any substituted bus/device/function
+before I/O, and exposes only exact 16-bit command-register and 32-bit BAR5
+accesses; it is not a general ambient PCI interface. Host tests verify selector
+encoding and segment/function denial without executing port instructions. The
+154-test Linux AHCI suite passes, as do the AHCI native release build and the
+AHCI-manager UEFI bootloader release build. This proves source composition and
+cross-target compilation only: no port I/O, booted guest, PCI function,
+interrupt/SMP exclusion, or physical AHCI hardware was exercised.
+
+Patent review: **NOT_TRIGGERED**. Conventional PCI mechanism-one selector and
+exact-width port access, narrowed to an existing linear BAR-sizing owner, is
+standard platform plumbing. It adds no AHCI command, DMA behavior, persistent
+format, or new authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
 success and error owners in a bounded manager state is conventional fail-closed
 lifecycle composition. It adds no parser, controller command, DMA behavior,

@@ -32,6 +32,8 @@ mod kernel_service_cpu_mapping;
 mod mapped_command_memory;
 mod mapped_data_buffer;
 mod native_mapped_memory;
+#[cfg(target_arch = "x86_64")]
+mod native_pci_bar_probe;
 mod native_port_reconstruction;
 mod native_service_state;
 mod platform_io;
@@ -162,6 +164,8 @@ pub use kernel_service_cpu_mapping::{
 pub use mapped_command_memory::AhciMappedCommandMemory;
 pub use mapped_data_buffer::{AhciDataBufferSync, AhciMappedDataBuffer};
 pub use native_mapped_memory::{AhciNativeMappedMemory, AhciNativeMappedMemoryError};
+#[cfg(target_arch = "x86_64")]
+pub use native_pci_bar_probe::{NativeAhciPciBarProbe, NativeAhciPciBarProbeError};
 pub use native_port_reconstruction::{
     AhciNativePortReconstructionError, reconstruct_bound_ahci_port, reconstruct_installed_ahci_port,
 };
