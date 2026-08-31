@@ -85,6 +85,284 @@ pub enum AhciAbarSizeProbeError {
     MisalignedAbar,
 }
 
+const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
+const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+
+/// Exclusive configuration-space mechanism for one assigned, quiescent AHCI
+/// function. Implementations must use exact-width accesses and report no
+/// success until the access has completed.
+///
+/// # Safety
+///
+/// The implementation must address only `location`, retain exclusive function
+/// ownership, and ensure no device, firmware, or peer can race command/BAR5
+/// accesses for the duration of a probe.
+pub unsafe trait AhciPciBarProbeIo {
+    type Error;
+
+    fn read_command(&mut self, location: PciFunctionLocation) -> Result<u16, Self::Error>;
+    fn write_command(
+        &mut self,
+        location: PciFunctionLocation,
+        value: u16,
+    ) -> Result<(), Self::Error>;
+    fn read_abar(&mut self, location: PciFunctionLocation) -> Result<u32, Self::Error>;
+    fn write_abar(&mut self, location: PciFunctionLocation, value: u32) -> Result<(), Self::Error>;
+}
+
+/// Linear owner for one exclusive, quiescent AHCI PCI function during BAR5
+/// sizing. The backend is never exposed separately while a transaction may be
+/// incompletely restored.
+#[must_use = "exclusive PCI function ownership must be retained"]
+pub struct ExclusiveAhciPciFunction<B> {
+    snapshot: AhciPciFunctionSnapshot,
+    backend: B,
+}
+
+impl<B: AhciPciBarProbeIo> ExclusiveAhciPciFunction<B> {
+    /// Admits a read-only enumerator snapshot before any configuration write.
+    /// `abar_bytes` must be zero because only this owner may establish it.
+    ///
+    /// # Safety
+    ///
+    /// `backend` must exclusively own the exact function in `snapshot`, the
+    /// function must be quiescent, and no concurrent configuration access may
+    /// occur until this owner is consumed.
+    pub unsafe fn admit(
+        snapshot: AhciPciFunctionSnapshot,
+        backend: B,
+    ) -> Result<Self, (AhciDiscoveryError, B)> {
+        if snapshot.abar_bytes != 0 {
+            return Err((AhciDiscoveryError::InvalidAbarSize, backend));
+        }
+        if let Err(error) = validate_ahci_snapshot_fixed(snapshot) {
+            return Err((error, backend));
+        }
+        Ok(Self { snapshot, backend })
+    }
+
+    pub const fn location(&self) -> PciFunctionLocation {
+        self.snapshot.location
+    }
+
+    /// Recovers the exclusive backend only while no probe is in flight. A
+    /// failed uncertain transaction remains sealed in its failure owner.
+    pub fn into_backend(self) -> B {
+        self.backend
+    }
+
+    pub fn probe_abar(
+        mut self,
+    ) -> Result<ProbedAhciPciFunction<B>, AhciPciBarProbeFailure<B, B::Error>> {
+        let location = self.snapshot.location;
+        let original_abar = match self.backend.read_abar(location) {
+            Ok(value) if value == self.snapshot.abar => value,
+            Ok(_) => {
+                return Err(AhciPciBarProbeFailure::clean(
+                    self,
+                    AhciPciBarProbeError::Drift,
+                ));
+            }
+            Err(error) => {
+                return Err(AhciPciBarProbeFailure::clean(
+                    self,
+                    AhciPciBarProbeError::Backend(error),
+                ));
+            }
+        };
+        let original_command = match self.backend.read_command(location) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(AhciPciBarProbeFailure::clean(
+                    self,
+                    AhciPciBarProbeError::Backend(error),
+                ));
+            }
+        };
+        let disabled = original_command & !(PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER);
+        if let Err(error) = self.backend.write_command(location, disabled) {
+            return Err(AhciPciBarProbeFailure::uncertain(
+                self,
+                AhciPciBarProbeError::Backend(error),
+            ));
+        }
+        match self.backend.read_command(location) {
+            Ok(value) if value == disabled => {}
+            Ok(_) => {
+                return Err(restore_probe_failure(
+                    self,
+                    original_command,
+                    original_abar,
+                    AhciPciBarProbeError::DisableMismatch,
+                ));
+            }
+            Err(error) => {
+                return Err(restore_probe_failure(
+                    self,
+                    original_command,
+                    original_abar,
+                    AhciPciBarProbeError::Backend(error),
+                ));
+            }
+        }
+        if let Err(error) = self.backend.write_abar(location, u32::MAX) {
+            return Err(restore_probe_failure(
+                self,
+                original_command,
+                original_abar,
+                AhciPciBarProbeError::Backend(error),
+            ));
+        }
+        let size_mask = match self.backend.read_abar(location) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(restore_probe_failure(
+                    self,
+                    original_command,
+                    original_abar,
+                    AhciPciBarProbeError::Backend(error),
+                ));
+            }
+        };
+        let restored = restore_exact(&mut self.backend, location, original_command, original_abar);
+        match restored {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(AhciPciBarProbeFailure::uncertain(
+                    self,
+                    AhciPciBarProbeError::RestorationMismatch,
+                ));
+            }
+            Err(error) => {
+                return Err(AhciPciBarProbeFailure::uncertain(
+                    self,
+                    AhciPciBarProbeError::RestorationBackend(error),
+                ));
+            }
+        }
+        let bytes = match AhciAbarSizeProbe::new(original_abar, size_mask, original_abar).bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(AhciPciBarProbeFailure::clean(
+                    self,
+                    AhciPciBarProbeError::Geometry(error),
+                ));
+            }
+        };
+        self.snapshot.abar_bytes = bytes;
+        let descriptor = match AhciAbarDescriptor::validate(self.snapshot) {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                return Err(AhciPciBarProbeFailure::clean(
+                    self,
+                    AhciPciBarProbeError::Discovery(error),
+                ));
+            }
+        };
+        Ok(ProbedAhciPciFunction {
+            descriptor,
+            owner: self,
+        })
+    }
+}
+
+pub struct ProbedAhciPciFunction<B> {
+    descriptor: AhciAbarDescriptor,
+    owner: ExclusiveAhciPciFunction<B>,
+}
+
+impl<B> ProbedAhciPciFunction<B> {
+    pub const fn descriptor(&self) -> AhciAbarDescriptor {
+        self.descriptor
+    }
+
+    pub fn into_owner(self) -> ExclusiveAhciPciFunction<B> {
+        self.owner
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum AhciPciBarProbeError<E> {
+    Backend(E),
+    Drift,
+    DisableMismatch,
+    RestorationBackend(E),
+    RestorationMismatch,
+    Geometry(AhciAbarSizeProbeError),
+    Discovery(AhciDiscoveryError),
+}
+
+pub struct AhciPciBarProbeFailure<B, E> {
+    owner: ExclusiveAhciPciFunction<B>,
+    error: AhciPciBarProbeError<E>,
+    restored: bool,
+}
+
+impl<B, E> AhciPciBarProbeFailure<B, E> {
+    fn clean(owner: ExclusiveAhciPciFunction<B>, error: AhciPciBarProbeError<E>) -> Self {
+        Self {
+            owner,
+            error,
+            restored: true,
+        }
+    }
+
+    fn uncertain(owner: ExclusiveAhciPciFunction<B>, error: AhciPciBarProbeError<E>) -> Self {
+        Self {
+            owner,
+            error,
+            restored: false,
+        }
+    }
+
+    pub const fn error(&self) -> &AhciPciBarProbeError<E> {
+        &self.error
+    }
+
+    pub const fn restored(&self) -> bool {
+        self.restored
+    }
+
+    pub fn into_retry(self) -> Result<ExclusiveAhciPciFunction<B>, Self> {
+        if self.restored {
+            Ok(self.owner)
+        } else {
+            Err(self)
+        }
+    }
+}
+
+fn restore_exact<B: AhciPciBarProbeIo>(
+    backend: &mut B,
+    location: PciFunctionLocation,
+    command: u16,
+    abar: u32,
+) -> Result<bool, B::Error> {
+    backend.write_abar(location, abar)?;
+    let abar_matches = backend.read_abar(location)? == abar;
+    backend.write_command(location, command)?;
+    let command_matches = backend.read_command(location)? == command;
+    Ok(abar_matches && command_matches)
+}
+
+fn restore_probe_failure<B: AhciPciBarProbeIo>(
+    mut owner: ExclusiveAhciPciFunction<B>,
+    command: u16,
+    abar: u32,
+    error: AhciPciBarProbeError<B::Error>,
+) -> AhciPciBarProbeFailure<B, B::Error> {
+    match restore_exact(&mut owner.backend, owner.snapshot.location, command, abar) {
+        Ok(true) => AhciPciBarProbeFailure::clean(owner, error),
+        Ok(false) => {
+            AhciPciBarProbeFailure::uncertain(owner, AhciPciBarProbeError::RestorationMismatch)
+        }
+        Err(error) => AhciPciBarProbeFailure::uncertain(
+            owner,
+            AhciPciBarProbeError::RestorationBackend(error),
+        ),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PciFunctionLocation {
     pub segment: u16,
@@ -156,40 +434,8 @@ impl AhciAbarDescriptor {
     }
 
     pub fn validate(snapshot: AhciPciFunctionSnapshot) -> Result<Self, AhciDiscoveryError> {
-        if snapshot.vendor_id == 0 || snapshot.vendor_id == u16::MAX {
-            return Err(AhciDiscoveryError::AbsentFunction);
-        }
-        if snapshot.configuration_generation == 0 {
-            return Err(AhciDiscoveryError::InvalidGeneration);
-        }
-        if snapshot.header_type & 0x7f != 0 {
-            return Err(AhciDiscoveryError::UnsupportedHeader);
-        }
-        if (
-            snapshot.class,
-            snapshot.subclass,
-            snapshot.programming_interface,
-        ) != (
-            AHCI_PCI_CLASS,
-            AHCI_PCI_SUBCLASS,
-            AHCI_PCI_PROGRAMMING_INTERFACE,
-        ) {
-            return Err(AhciDiscoveryError::NotAhci);
-        }
-        if snapshot.abar & PCI_BAR_IO_SPACE != 0 {
-            return Err(AhciDiscoveryError::IoBar);
-        }
-        if snapshot.abar & PCI_MEMORY_BAR_TYPE_MASK != PCI_MEMORY_BAR_32_BIT {
-            return Err(AhciDiscoveryError::UnsupportedMemoryBar);
-        }
-        if snapshot.abar & PCI_MEMORY_BAR_PREFETCHABLE != 0 {
-            return Err(AhciDiscoveryError::PrefetchableBar);
-        }
-
+        validate_ahci_snapshot_fixed(snapshot)?;
         let physical_base = u64::from(snapshot.abar & PCI_MEMORY_BAR_ADDRESS_MASK);
-        if physical_base == 0 {
-            return Err(AhciDiscoveryError::MissingAbar);
-        }
         if snapshot.abar_bytes < AHCI_ABAR_MINIMUM_BYTES || !snapshot.abar_bytes.is_power_of_two() {
             return Err(AhciDiscoveryError::InvalidAbarSize);
         }
@@ -208,9 +454,107 @@ impl AhciAbarDescriptor {
     }
 }
 
+fn validate_ahci_snapshot_fixed(
+    snapshot: AhciPciFunctionSnapshot,
+) -> Result<(), AhciDiscoveryError> {
+    if snapshot.vendor_id == 0 || snapshot.vendor_id == u16::MAX {
+        return Err(AhciDiscoveryError::AbsentFunction);
+    }
+    if snapshot.configuration_generation == 0 {
+        return Err(AhciDiscoveryError::InvalidGeneration);
+    }
+    if snapshot.header_type & 0x7f != 0 {
+        return Err(AhciDiscoveryError::UnsupportedHeader);
+    }
+    if (
+        snapshot.class,
+        snapshot.subclass,
+        snapshot.programming_interface,
+    ) != (
+        AHCI_PCI_CLASS,
+        AHCI_PCI_SUBCLASS,
+        AHCI_PCI_PROGRAMMING_INTERFACE,
+    ) {
+        return Err(AhciDiscoveryError::NotAhci);
+    }
+    if snapshot.abar & PCI_BAR_IO_SPACE != 0 {
+        return Err(AhciDiscoveryError::IoBar);
+    }
+    if snapshot.abar & PCI_MEMORY_BAR_TYPE_MASK != PCI_MEMORY_BAR_32_BIT {
+        return Err(AhciDiscoveryError::UnsupportedMemoryBar);
+    }
+    if snapshot.abar & PCI_MEMORY_BAR_PREFETCHABLE != 0 {
+        return Err(AhciDiscoveryError::PrefetchableBar);
+    }
+
+    let physical_base = u64::from(snapshot.abar & PCI_MEMORY_BAR_ADDRESS_MASK);
+    if physical_base == 0 {
+        return Err(AhciDiscoveryError::MissingAbar);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Config {
+        command: u16,
+        abar: u32,
+        size_mask: u32,
+        writes: usize,
+        drift_restore: bool,
+    }
+
+    // SAFETY: this deterministic model addresses only the supplied function
+    // and has no access outside its owned command/BAR values.
+    unsafe impl AhciPciBarProbeIo for Config {
+        type Error = ();
+
+        fn read_command(&mut self, _: PciFunctionLocation) -> Result<u16, Self::Error> {
+            Ok(self.command)
+        }
+
+        fn write_command(&mut self, _: PciFunctionLocation, value: u16) -> Result<(), Self::Error> {
+            self.command = value;
+            self.writes += 1;
+            Ok(())
+        }
+
+        fn read_abar(&mut self, _: PciFunctionLocation) -> Result<u32, Self::Error> {
+            Ok(if self.abar == u32::MAX {
+                self.size_mask
+            } else {
+                self.abar
+            })
+        }
+
+        fn write_abar(&mut self, _: PciFunctionLocation, value: u32) -> Result<(), Self::Error> {
+            self.abar = if self.drift_restore && value != u32::MAX {
+                value + 0x1000
+            } else {
+                value
+            };
+            self.writes += 1;
+            Ok(())
+        }
+    }
+
+    fn config(mask: u32) -> Config {
+        Config {
+            command: PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | 1,
+            abar: snapshot().abar,
+            size_mask: mask,
+            writes: 0,
+            drift_restore: false,
+        }
+    }
+
+    fn unprobed_snapshot() -> AhciPciFunctionSnapshot {
+        let mut value = snapshot();
+        value.abar_bytes = 0;
+        value
+    }
 
     fn snapshot() -> AhciPciFunctionSnapshot {
         AhciPciFunctionSnapshot {
@@ -348,5 +692,69 @@ mod tests {
             AhciAbarSizeProbe::new(0, 0xffff_e000, 0).bytes(),
             Err(AhciAbarSizeProbeError::MissingAbar)
         );
+    }
+
+    #[test]
+    fn exclusive_probe_disables_and_exactly_restores_configuration() {
+        // SAFETY: the controlled backend exclusively models this exact,
+        // quiescent function for the duration of the owner.
+        let owner =
+            unsafe { ExclusiveAhciPciFunction::admit(unprobed_snapshot(), config(0xffff_e000)) }
+                .unwrap_or_else(|_| panic!("valid unprobed identity must admit"));
+        let probed = owner
+            .probe_abar()
+            .unwrap_or_else(|_| panic!("exact probe and restoration must succeed"));
+        assert_eq!(probed.descriptor().bytes, 0x2000);
+        let backend = probed.into_owner().into_backend();
+        assert_eq!(
+            backend.command,
+            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | 1
+        );
+        assert_eq!(backend.abar, snapshot().abar);
+        assert_eq!(backend.writes, 4);
+    }
+
+    #[test]
+    fn geometry_failure_returns_only_an_exactly_restored_retry_owner() {
+        // SAFETY: the controlled backend exclusively models this exact,
+        // quiescent function for the duration of the owner.
+        let owner =
+            unsafe { ExclusiveAhciPciFunction::admit(unprobed_snapshot(), config(0xffff_d000)) }
+                .unwrap_or_else(|_| panic!("valid unprobed identity must admit"));
+        let failure = owner
+            .probe_abar()
+            .err()
+            .unwrap_or_else(|| panic!("malformed mask must fail"));
+        assert!(failure.restored());
+        assert_eq!(
+            failure.error(),
+            &AhciPciBarProbeError::Geometry(AhciAbarSizeProbeError::MalformedSizeMask)
+        );
+        let backend = match failure.into_retry() {
+            Ok(owner) => owner.into_backend(),
+            Err(_) => panic!("exactly restored failure must return its retry owner"),
+        };
+        assert_eq!(
+            backend.command,
+            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | 1
+        );
+        assert_eq!(backend.abar, snapshot().abar);
+    }
+
+    #[test]
+    fn restoration_drift_seals_the_exclusive_owner() {
+        let mut backend = config(0xffff_e000);
+        backend.drift_restore = true;
+        // SAFETY: the controlled backend exclusively models this exact,
+        // quiescent function for the duration of the owner.
+        let owner = unsafe { ExclusiveAhciPciFunction::admit(unprobed_snapshot(), backend) }
+            .unwrap_or_else(|_| panic!("valid unprobed identity must admit"));
+        let failure = owner
+            .probe_abar()
+            .err()
+            .unwrap_or_else(|| panic!("restoration drift must fail"));
+        assert!(!failure.restored());
+        assert_eq!(failure.error(), &AhciPciBarProbeError::RestorationMismatch);
+        assert!(failure.into_retry().is_err());
     }
 }

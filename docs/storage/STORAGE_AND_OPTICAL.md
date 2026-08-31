@@ -1913,6 +1913,27 @@ and requiring exact restoration before publishing geometry is standard bounded
 validation. It adds no controller command, DMA behavior, persistent format, or
 authority model. See [the patent review log](../patents/REVIEW_LOG.md).
 
+BAR5 sizing now has a linear exclusive-function transaction owner. Unsafe
+admission requires a quiescent, exclusively assigned exact PCI function and an
+exact-width backend; a read-only snapshot with already-asserted size is
+rejected. The transaction first re-reads BAR5 for drift, disables memory-space
+and bus-master decode, verifies the disabled command, performs the all-ones
+probe, restores BAR5 and command, and re-reads both before invoking the bounded
+geometry decoder. Success retains the exclusive backend beside the descriptor.
+A geometry or other clean failure returns a retry owner only after exact
+restoration; write uncertainty, restoration error, or restoration drift seals
+the owner in a non-retryable failure. Controlled tests cover exact success,
+restored malformed-mask retry, and restoration-drift quarantine. This is typed
+API and Linux unit-test evidence using a deterministic backend; no native PCI
+configuration adapter, boot-time assignment, guest execution, or physical AHCI
+hardware was exercised.
+
+Patent review: **NOT_TRIGGERED**. The conventional PCI BAR-sizing sequence,
+decode-disable discipline, exact restoration checks, and linear failure
+retention are standard fail-closed lifecycle composition. This adds no AHCI
+controller command, DMA behavior, persistent format, or new authority model.
+See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
 success and error owners in a bounded manager state is conventional fail-closed
 lifecycle composition. It adds no parser, controller command, DMA behavior,
