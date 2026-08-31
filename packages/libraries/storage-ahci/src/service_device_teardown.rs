@@ -457,6 +457,22 @@ pub enum KernelAhciServiceExitSlotRouteError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceExitDispatchError {
+    Unmanaged { request: SyscallRequest },
+    NoCurrentTask,
+    Route(KernelAhciServiceExitSlotRouteError),
+}
+
+impl KernelAhciServiceExitDispatchError {
+    pub const fn unmanaged_request(self) -> Option<SyscallRequest> {
+        match self {
+            Self::Unmanaged { request } => Some(request),
+            Self::NoCurrentTask | Self::Route(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelAhciServiceExitRequest(());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -636,6 +652,44 @@ impl<
                 Err(error)
             }
         }
+    }
+
+    /// Classifies one canonical decoded request at the trap boundary. Only an
+    /// exit from the exact task already retained by this manager slot reaches
+    /// the consuming route; every other request is returned unchanged for the
+    /// ordinary syscall dispatcher.
+    pub fn route_decoded<const SERVICES: usize>(
+        &mut self,
+        request: SyscallRequest,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<
+        FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        KernelAhciServiceExitDispatchError,
+    > {
+        let exit = KernelAhciServiceExitRequest::admit(request).map_err(|error| {
+            KernelAhciServiceExitDispatchError::Unmanaged {
+                request: error.request(),
+            }
+        })?;
+        let current = runtime
+            .current()
+            .ok_or(KernelAhciServiceExitDispatchError::NoCurrentTask)?;
+        if self.task() != Some(current) {
+            return Err(KernelAhciServiceExitDispatchError::Unmanaged { request });
+        }
+        self.route(exit, supervisor, runtime)
+            .map_err(KernelAhciServiceExitDispatchError::Route)
     }
 }
 

@@ -1662,6 +1662,22 @@ handoff. This closes the typed manager-storage gap in source, but the concrete
 controller-manager lease implementation and installed trap dispatcher remain
 unfinished.
 
+The slot now also accepts the canonical decoded syscall request at a dedicated
+trap-boundary adapter. Non-exit requests and exits from any task other than the
+slot's exact opaque runtime-bound task are returned unchanged for ordinary
+dispatch without consuming the slot. Absence of a current task fails closed;
+only the exact current AHCI task reaches freeze-first routing. Controlled tests
+cover non-exit pass-through, no-current-task denial, a different task's ordinary
+exit, retained ownership after each denial, exact-task freeze, and empty-slot
+replay denial. The bootloader's installed dispatcher is not yet connected to
+this adapter, so this remains source-tested integration API evidence rather
+than installed trap execution.
+
+Patent review: **NOT_TRIGGERED**. Exact-current-task classification over an
+existing decoded enum and retained linear owner is conventional dispatcher
+composition and adds no parser, device, DMA, or authority mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Complexity impact: LOW
 TCB impact: LOW
 New parser boundary: NO

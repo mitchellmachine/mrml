@@ -1477,6 +1477,27 @@ mod tests {
             .unwrap_or_else(|_| panic!("exact active owner and manager lease must bind"));
         assert!(exit_slot.occupied());
         assert_eq!(exit_slot.task(), Some(target_task));
+        let unmanaged = exit_slot
+            .route_decoded(
+                mrml_kernel::SyscallRequest::Yield,
+                &supervisor,
+                &mut fixture.runtime,
+            )
+            .err()
+            .unwrap_or_else(|| panic!("non-exit request must remain unmanaged"));
+        assert_eq!(
+            unmanaged.unmanaged_request(),
+            Some(mrml_kernel::SyscallRequest::Yield)
+        );
+        assert!(matches!(
+            exit_slot.route_decoded(
+                mrml_kernel::SyscallRequest::Exit,
+                &supervisor,
+                &mut fixture.runtime,
+            ),
+            Err(crate::KernelAhciServiceExitDispatchError::NoCurrentTask)
+        ));
+        assert!(exit_slot.occupied());
         assert!(matches!(
             exit_slot.route(exit_request, &supervisor, &mut fixture.runtime),
             Err(crate::KernelAhciServiceExitSlotRouteError::Lifecycle(_))
@@ -1487,12 +1508,29 @@ mod tests {
             fixture.runtime.start(),
             mrml_kernel::ScheduleOutcome::Switch { .. }
         ));
+        let unmanaged = exit_slot
+            .route_decoded(
+                mrml_kernel::SyscallRequest::Exit,
+                &supervisor,
+                &mut fixture.runtime,
+            )
+            .err()
+            .unwrap_or_else(|| panic!("another task's exit must remain unmanaged"));
+        assert_eq!(
+            unmanaged.unmanaged_request(),
+            Some(mrml_kernel::SyscallRequest::Exit)
+        );
+        assert!(exit_slot.occupied());
         assert!(matches!(
             fixture.runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target_task
         ));
         let frozen = exit_slot
-            .route(exit_request, &supervisor, &mut fixture.runtime)
+            .route_decoded(
+                mrml_kernel::SyscallRequest::Exit,
+                &supervisor,
+                &mut fixture.runtime,
+            )
             .unwrap_or_else(|failure| {
                 let _ = failure;
                 panic!("exact active owner and lease must freeze")
