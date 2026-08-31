@@ -94,6 +94,11 @@ fn aes128_encrypt(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
     state
 }
 
+/// Encrypt one AES-128 block. QUIC uses this primitive for header protection.
+pub fn aes128_encrypt_block(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
+    aes128_encrypt(key, input)
+}
+
 /// Applies AES-128 in counter mode using a big-endian 128-bit counter.
 /// Encryption and decryption are the same operation. The counter advances
 /// once per block and wrapping is rejected before any output is changed.

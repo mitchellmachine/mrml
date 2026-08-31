@@ -24,7 +24,7 @@ mod zeroize;
 
 #[cfg(feature = "runtime")]
 pub use aead::{chacha20_poly1305_open, chacha20_poly1305_seal};
-pub use aes_gcm::{aes128_ctr_xor, aes128_gcm_open, aes128_gcm_seal};
+pub use aes_gcm::{aes128_ctr_xor, aes128_encrypt_block, aes128_gcm_open, aes128_gcm_seal};
 pub use chacha20::{chacha20_block, chacha20_xor};
 pub use ed25519::{ed25519_public, ed25519_public_is_valid, ed25519_sign, ed25519_verify};
 #[cfg(feature = "runtime")]

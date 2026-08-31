@@ -33,6 +33,12 @@ package = "org.mrml.library.runtime"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_tls"
 compile_name = "mrml-tls"
 package = "org.mrml.library.tls"
