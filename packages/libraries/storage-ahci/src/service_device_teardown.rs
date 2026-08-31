@@ -688,6 +688,9 @@ pub struct KernelAhciServiceTeardownManager<
             AUTHORITIES,
         >,
     >,
+    retired: Option<
+        RetiredKernelAhciServiceTask<'resources, S, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    >,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -724,6 +727,35 @@ pub struct KernelAhciServiceQuiesced {
     task: TaskId,
     service: ServiceId,
     root: mrml_kernel::PhysAddr,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceManagerRetirementError {
+    NotQuiesced,
+    AlreadyRetired,
+    Quarantined,
+    Lifecycle(SupervisedNativeDeviceServiceRetirementError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceRetired {
+    task: TaskId,
+    service: ServiceId,
+    root: mrml_kernel::PhysAddr,
+}
+
+impl KernelAhciServiceRetired {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn root(self) -> mrml_kernel::PhysAddr {
+        self.root
+    }
 }
 
 impl KernelAhciServiceQuiesced {
@@ -1478,6 +1510,7 @@ impl<
             quarantine_error: None,
             quiesce_error: None,
             quiesced: None,
+            retired: None,
         })
     }
 
@@ -1495,6 +1528,10 @@ impl<
 
     pub const fn quiesced(&self) -> bool {
         self.quiesced.is_some()
+    }
+
+    pub const fn retired(&self) -> bool {
+        self.retired.is_some()
     }
 
     pub fn quiesce_failure(&self) -> Option<&KernelAhciServiceDeviceQuiesceFailure> {
@@ -1681,6 +1718,82 @@ impl<
     > {
         match self.quiesced.take() {
             Some(quiesced) => Ok((self.slot, quiesced)),
+            None => Err(self),
+        }
+    }
+
+    /// Retires only the manager-retained quiesced owner. Lifecycle denial
+    /// reconstructs the same quiesced state for exact retry.
+    ///
+    /// # Safety
+    ///
+    /// The platform mechanisms used by `quiesce` must have truthfully enforced
+    /// device stop, data sanitization, and DMA withdrawal.
+    pub unsafe fn retire<const SERVICES: usize>(
+        &mut self,
+        supervisor: &mut ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<KernelAhciServiceRetired, KernelAhciServiceManagerRetirementError> {
+        if self.retired.is_some() {
+            return Err(KernelAhciServiceManagerRetirementError::AlreadyRetired);
+        }
+        if self.quarantine.is_some() {
+            return Err(KernelAhciServiceManagerRetirementError::Quarantined);
+        }
+        let quiesced = self
+            .quiesced
+            .take()
+            .ok_or(KernelAhciServiceManagerRetirementError::NotQuiesced)?;
+        match unsafe { retire_quiesced_kernel_ahci_service_task(quiesced, supervisor, runtime) } {
+            Ok(retired) => {
+                let receipt = KernelAhciServiceRetired {
+                    task: retired.task(),
+                    service: retired.service(),
+                    root: retired.root(),
+                };
+                self.retired = Some(retired);
+                Ok(receipt)
+            }
+            Err(error) => {
+                let diagnostic = error.error();
+                self.quiesced = Some(error.into_owner());
+                Err(KernelAhciServiceManagerRetirementError::Lifecycle(
+                    diagnostic,
+                ))
+            }
+        }
+    }
+
+    pub fn into_retired_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            RetiredKernelAhciServiceTask<
+                'resources,
+                S,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self.retired.take() {
+            Some(retired) => Ok((self.slot, retired)),
             None => Err(self),
         }
     }

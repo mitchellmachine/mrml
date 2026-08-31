@@ -1813,6 +1813,23 @@ checks task/service/root receipt identity, and rejects replay. Retirement and
 mapping withdrawal are still transferred to the existing typed path rather
 than retained by this manager; no booted dispatcher or hardware ran.
 
+Supervisor retirement is now retained by the same manager. It consumes only
+the internally held quiesced owner. A wrong-supervisor or lifecycle denial
+reconstructs that exact quiesced owner for retry; success stores the retirement
+token together with the concrete mapping/resource root and returns only a
+task/service/root receipt. Repeated retirement after success is rejected. The
+controlled lifecycle test first presents an empty supervisor, verifies denial
+and retained quiesced state, then retries against the exact supervisor and
+continues the existing mapping-withdrawal path. Mapping removal, address-space
+cleanup, and successor dispatch are not yet manager-retained, and this remains
+Linux unit-test rather than installed or hardware evidence.
+
+Patent review: **NOT_TRIGGERED**. Retaining existing supervisor-retirement
+success and retry owners inside the bounded manager state is conventional
+fail-closed lifecycle composition. It adds no parser, controller command, DMA
+behavior, persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining existing device-quiescence retry and
 success owners inside the bounded manager state is conventional fail-closed
 lifecycle composition. It adds no parser, controller command, DMA algorithm,

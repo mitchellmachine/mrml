@@ -1805,23 +1805,32 @@ mod tests {
             teardown_manager.quiesce(&mut dma_backend),
             Err(crate::KernelAhciServiceManagerQuiesceError::AlreadyQuiesced)
         );
-        let (_exit_slot, quiesced) = teardown_manager
-            .into_quiesced_parts()
-            .unwrap_or_else(|_| panic!("manager must retain the exact quiesced owner"));
-        assert_eq!(quiesced.task(), target_task);
-        assert_eq!(quiesced.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(dma_backend.removals, 1);
         assert_eq!(calls.get(), 2);
+        let mut wrong_supervisor = ServiceSupervisor::<1>::new();
+        // SAFETY: the controlled quiescence proof is unchanged; the wrong
+        // supervisor must deny retirement and return the quiesced owner.
+        assert!(matches!(
+            unsafe { teardown_manager.retire(&mut wrong_supervisor, &mut fixture.runtime) },
+            Err(crate::KernelAhciServiceManagerRetirementError::Lifecycle(_))
+        ));
+        assert!(teardown_manager.quiesced());
         // SAFETY: the controlled register/data/DMA models above truthfully
         // completed quiescence and retain the exact frozen owner.
-        let retired = unsafe {
-            crate::retire_quiesced_kernel_ahci_service_task(
-                quiesced,
-                &mut supervisor,
-                &mut fixture.runtime,
-            )
-        }
-        .unwrap_or_else(|_| panic!("exact concrete frozen task must retire"));
+        let retired_receipt =
+            unsafe { teardown_manager.retire(&mut supervisor, &mut fixture.runtime) }
+                .unwrap_or_else(|_| panic!("exact concrete frozen task must retire"));
+        assert_eq!(retired_receipt.service(), service_id);
+        assert_eq!(retired_receipt.task(), target_task);
+        assert_eq!(retired_receipt.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert!(teardown_manager.retired());
+        assert_eq!(
+            unsafe { teardown_manager.retire(&mut supervisor, &mut fixture.runtime) },
+            Err(crate::KernelAhciServiceManagerRetirementError::AlreadyRetired)
+        );
+        let (_exit_slot, retired) = teardown_manager
+            .into_retired_parts()
+            .unwrap_or_else(|_| panic!("manager must retain the exact retired owner"));
         assert_eq!(retired.service(), service_id);
         assert_eq!(retired.task(), target_task);
         assert_eq!(retired.root(), PhysAddr::new(TABLE_BASE).unwrap());
