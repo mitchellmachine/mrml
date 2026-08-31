@@ -1708,6 +1708,23 @@ This is retained-model source and unit-test evidence only: it does not verify a
 hardware current CR3, SMP TLB invalidation, IOMMU state, an installed trap, or
 physical AHCI execution.
 
+The x86 kernel now supplies a read-only exact-active-mapping verifier which
+checks the selected CR3 root plus every effective 4 KiB leaf's physical frame,
+user/write/execute permissions, and device-PAT selector. The AHCI adapter
+composes that mechanism over the launch-bound ABAR and all four CPU/DMA ranges,
+and provides an unsafe current-CR3 entry which requires interrupts and
+concurrent hierarchy mutation to remain excluded. Kernel simulation tests
+exact-match two-page device mappings and reject root, physical-frame, and cache
+selector substitution. The wrapper is now available to the controller-manager
+reacquisition backend; that concrete backend and installed trap connection
+remain incomplete. These Linux unit tests do not execute CR3 access or prove
+PAT contents, TLB state, IOMMU state, physical AHCI, or SMP exclusion.
+
+Patent review: **NOT_TRIGGERED**. Exact comparison of existing page-table leaf
+attributes against an already authorized mapping is conventional validation.
+It adds no controller command, DMA behavior, parser format, or authority model.
+See [the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Repeating exact validation of existing mapping
 descriptors before reconstructing unsafe bounded views is conventional
 fail-closed lifecycle validation. It adds no controller command, DMA behavior,

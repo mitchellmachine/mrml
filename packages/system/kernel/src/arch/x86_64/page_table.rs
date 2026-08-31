@@ -1244,6 +1244,21 @@ impl ActivePageTables {
         active_leaf_from_store(&IdentityMappedPageTables, self.root, address)
     }
 
+    /// Verifies one complete 4 KiB mapping against the current effective leaf
+    /// state without changing the hierarchy.
+    pub fn verify_mapped(
+        &self,
+        expected_root: PhysAddr,
+        mapping: Mapping,
+    ) -> Result<(), PageTableBuildError> {
+        verify_active_mapping_from_store(
+            &IdentityMappedPageTables,
+            self.root,
+            expected_root,
+            mapping,
+        )
+    }
+
     /// Validates every active leaf touched by a bounded user copy. The caller
     /// must keep page-table mutation excluded through the subsequent copy.
     pub fn resolve_user_buffer(
@@ -1333,6 +1348,46 @@ impl ActivePageTables {
         tables.unmap_exact(expected)?;
         invalidate_mapping(expected)
     }
+}
+
+fn verify_active_mapping_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    expected_root: PhysAddr,
+    mapping: Mapping,
+) -> Result<(), PageTableBuildError> {
+    if root != expected_root {
+        return Err(PageTableBuildError::MappingMismatch);
+    }
+    for page in 0..mapping.pages() {
+        let offset = page
+            .checked_mul(PAGE_SIZE)
+            .ok_or(PageTableBuildError::MappingMismatch)?;
+        let virtual_address = mapping
+            .virtual_start()
+            .get()
+            .checked_add(offset)
+            .and_then(|address| VirtAddr::new(address).ok())
+            .ok_or(PageTableBuildError::MappingMismatch)?;
+        let expected_physical = mapping
+            .physical_start()
+            .get()
+            .checked_add(offset)
+            .and_then(|address| PhysAddr::new(address).ok())
+            .ok_or(PageTableBuildError::MappingMismatch)?;
+        let leaf = active_leaf_from_store(store, root, virtual_address)?
+            .ok_or(PageTableBuildError::MappingMismatch)?;
+        let permissions = mapping.permissions();
+        if leaf.physical() != expected_physical
+            || leaf.writable() != permissions.writable()
+            || leaf.executable() != permissions.executable()
+            || leaf.user() != permissions.user()
+            || leaf.device_pat_index_three() != permissions.device_memory()
+        {
+            return Err(PageTableBuildError::MappingMismatch);
+        }
+    }
+    Ok(())
 }
 
 fn invalidate_mapping(mapping: Mapping) -> Result<(), PageTableBuildError> {
@@ -1934,6 +1989,59 @@ mod tests {
             },
             Err(ActiveMappingRevocationError::WrongRoot)
         ));
+    }
+
+    #[test]
+    fn active_mapping_verification_exact_matches_root_extent_and_permissions() {
+        let store = Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        };
+        let mapping = Mapping::new(
+            VirtAddr::new(0x20_0000).unwrap(),
+            PhysAddr::new(0x40_0000).unwrap(),
+            2,
+            PagePermissions::USER_MMIO_READ_WRITE,
+        )
+        .unwrap();
+        let mut builder = PageTableBuilder::new(store).unwrap();
+        builder.map(mapping).unwrap();
+        let root = builder.root();
+        assert_eq!(
+            verify_active_mapping_from_store(builder.store(), root, root, mapping),
+            Ok(())
+        );
+        assert_eq!(
+            verify_active_mapping_from_store(
+                builder.store(),
+                root,
+                PhysAddr::new(root.get() + PAGE_SIZE).unwrap(),
+                mapping,
+            ),
+            Err(PageTableBuildError::MappingMismatch)
+        );
+        let normal = Mapping::new(
+            mapping.virtual_start(),
+            mapping.physical_start(),
+            mapping.pages(),
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        assert_eq!(
+            verify_active_mapping_from_store(builder.store(), root, root, normal),
+            Err(PageTableBuildError::MappingMismatch)
+        );
+        let substituted = Mapping::new(
+            mapping.virtual_start(),
+            PhysAddr::new(mapping.physical_start().get() + PAGE_SIZE).unwrap(),
+            mapping.pages(),
+            mapping.permissions(),
+        )
+        .unwrap();
+        assert_eq!(
+            verify_active_mapping_from_store(builder.store(), root, root, substituted),
+            Err(PageTableBuildError::MappingMismatch)
+        );
     }
 
     #[test]

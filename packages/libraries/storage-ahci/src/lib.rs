@@ -5,6 +5,8 @@
 //! This library contains device mechanism only. The storage service retains
 //! object identity, filesystem, transaction, and authority policy.
 
+#[cfg(target_arch = "x86_64")]
+mod active_mapping_verification;
 mod ahci_cleanup;
 mod ahci_command;
 mod ahci_command_execute;
@@ -50,6 +52,11 @@ use mrml_interface_storage_block_provider_v1::{
     encode_enumerate_response,
 };
 
+#[cfg(target_arch = "x86_64")]
+pub use active_mapping_verification::{
+    ActiveAhciMappingVerificationError, verify_active_x86_ahci_mappings,
+    verify_current_x86_ahci_mappings,
+};
 pub use ahci_cleanup::{AhciCleanupError, AhciCleanupFailure, reclaim_stopped_ahci_port_dma};
 pub use ahci_command::{
     AHCI_MAX_TRANSFER_BYTES, AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure,
