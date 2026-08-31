@@ -6,6 +6,7 @@ use mrml_tls::TlsClientStream;
 
 mod http2;
 mod http3;
+mod huffman;
 mod quic;
 
 pub use http2::{

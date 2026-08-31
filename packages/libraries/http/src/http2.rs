@@ -5,6 +5,69 @@ use crate::{valid_header, valid_value, Header, HttpError, RequestHead, ResponseH
 
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
+const HPACK_STATIC: [(&str, &str); 61] = [
+    (":authority", ""),
+    (":method", "GET"),
+    (":method", "POST"),
+    (":path", "/"),
+    (":path", "/index.html"),
+    (":scheme", "http"),
+    (":scheme", "https"),
+    (":status", "200"),
+    (":status", "204"),
+    (":status", "206"),
+    (":status", "304"),
+    (":status", "400"),
+    (":status", "404"),
+    (":status", "500"),
+    ("accept-charset", ""),
+    ("accept-encoding", "gzip, deflate"),
+    ("accept-language", ""),
+    ("accept-ranges", ""),
+    ("accept", ""),
+    ("access-control-allow-origin", ""),
+    ("age", ""),
+    ("allow", ""),
+    ("authorization", ""),
+    ("cache-control", ""),
+    ("content-disposition", ""),
+    ("content-encoding", ""),
+    ("content-language", ""),
+    ("content-length", ""),
+    ("content-location", ""),
+    ("content-range", ""),
+    ("content-type", ""),
+    ("cookie", ""),
+    ("date", ""),
+    ("etag", ""),
+    ("expect", ""),
+    ("expires", ""),
+    ("from", ""),
+    ("host", ""),
+    ("if-match", ""),
+    ("if-modified-since", ""),
+    ("if-none-match", ""),
+    ("if-range", ""),
+    ("if-unmodified-since", ""),
+    ("last-modified", ""),
+    ("link", ""),
+    ("location", ""),
+    ("max-forwards", ""),
+    ("proxy-authenticate", ""),
+    ("proxy-authorization", ""),
+    ("range", ""),
+    ("referer", ""),
+    ("refresh", ""),
+    ("retry-after", ""),
+    ("server", ""),
+    ("set-cookie", ""),
+    ("strict-transport-security", ""),
+    ("transfer-encoding", ""),
+    ("user-agent", ""),
+    ("vary", ""),
+    ("via", ""),
+    ("www-authenticate", ""),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Http2FrameKind {
@@ -137,8 +200,18 @@ fn literal(out: &mut Vector<u8>, name: &str, value: &str) -> Result<(), HttpErro
     {
         return Err(HttpError::InvalidUrl);
     }
-    out.try_push(0).map_err(|_| HttpError::Allocation)?;
-    string(out, name)?;
+    if let Some(index) = HPACK_STATIC
+        .iter()
+        .position(|entry| *entry == (name, value))
+    {
+        return integer(out, 0x80, 7, index + 1);
+    }
+    if let Some(index) = HPACK_STATIC.iter().position(|entry| entry.0 == name) {
+        integer(out, 0, 4, index + 1)?;
+    } else {
+        out.try_push(0).map_err(|_| HttpError::Allocation)?;
+        string(out, name)?;
+    }
     string(out, value)
 }
 fn valid_field_name(name: &str) -> bool {
@@ -176,27 +249,61 @@ fn decode_int(input: &[u8], at: &mut usize, bits: u8) -> Result<usize, HttpError
     }
 }
 fn decode_string(input: &[u8], at: &mut usize) -> Result<Text, HttpError> {
-    if *at >= input.len() || input[*at] & 0x80 != 0 {
+    if *at >= input.len() {
         return Err(HttpError::InvalidResponse);
     }
+    let huffman = input[*at] & 0x80 != 0;
     let n = decode_int(input, at, 7)?;
     let end = at.checked_add(n).ok_or(HttpError::InvalidResponse)?;
     if end > input.len() {
         return Err(HttpError::InvalidResponse);
     }
-    let s = core::str::from_utf8(&input[*at..end]).map_err(|_| HttpError::InvalidResponse)?;
+    let decoded = if huffman {
+        Some(crate::huffman::decode(&input[*at..end], MAX_FRAME)?)
+    } else {
+        None
+    };
+    let bytes = decoded.as_deref().unwrap_or(&input[*at..end]);
+    let s = core::str::from_utf8(bytes).map_err(|_| HttpError::InvalidResponse)?;
     *at = end;
     Text::try_from_str(s).map_err(|_| HttpError::Allocation)
 }
 fn decode_block(input: &[u8]) -> Result<Vector<Header>, HttpError> {
     let mut at = 0;
     let mut out = Vector::new();
+    let mut allow_size_update = true;
     while at < input.len() {
-        if input[at] != 0 {
-            return Err(HttpError::InvalidResponse);
+        let first = input[at];
+        if first & 0xe0 == 0x20 {
+            if !allow_size_update || decode_int(input, &mut at, 5)? != 0 {
+                return Err(HttpError::InvalidResponse);
+            }
+            continue;
         }
-        at += 1;
-        let name = decode_string(input, &mut at)?;
+        allow_size_update = false;
+        if first & 0x80 != 0 {
+            let index = decode_int(input, &mut at, 7)?;
+            let (name, value) = *HPACK_STATIC
+                .get(index.checked_sub(1).ok_or(HttpError::InvalidResponse)?)
+                .ok_or(HttpError::InvalidResponse)?;
+            out.try_push(Header {
+                name: name.into(),
+                value: value.into(),
+            })
+            .map_err(|_| HttpError::Allocation)?;
+            continue;
+        }
+        let bits = if first & 0x40 != 0 { 6 } else { 4 };
+        let index = decode_int(input, &mut at, bits)?;
+        let name = if index == 0 {
+            decode_string(input, &mut at)?
+        } else {
+            HPACK_STATIC
+                .get(index - 1)
+                .ok_or(HttpError::InvalidResponse)?
+                .0
+                .into()
+        };
         let value = decode_string(input, &mut at)?;
         if !valid_field_name(&name)
             || name.bytes().any(|b| b.is_ascii_uppercase())
@@ -233,7 +340,7 @@ impl Http2Client {
                 kind: Http2FrameKind::Settings,
                 flags: 0,
                 stream_id: 0,
-                payload: Vector::new(),
+                payload: [0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0].into(),
             }
             .encode()?,
         )
@@ -645,5 +752,25 @@ mod tests {
         assert!(Http2Client::new()
             .request("GET", "https", "x", "/", &[("Bad", "x")], true)
             .is_err())
+    }
+    #[test]
+    fn decodes_rfc_huffman_and_static_index_request() {
+        let payload: Vector<u8> = [
+            0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab,
+            0x90, 0xf4, 0xff,
+        ]
+        .into();
+        let request = Http2Server::new()
+            .request(&Http2Frame {
+                kind: Http2FrameKind::Headers,
+                flags: 5,
+                stream_id: 1,
+                payload,
+            })
+            .unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.scheme, "http");
+        assert_eq!(request.authority, "www.example.com");
+        assert_eq!(request.target, "/");
     }
 }
