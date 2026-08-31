@@ -19,12 +19,139 @@ pub enum QuicError {
     Crypto,
     Allocation,
     Limit,
+    FlowControl,
+    ProtocolViolation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuicRole {
     Client,
     Server,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuicPacketSpace {
+    Initial,
+    Handshake,
+    Application,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuicConnectionPhase {
+    Handshaking,
+    Active,
+    Draining,
+    Closed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuicConnectionState {
+    role: QuicRole,
+    phase: QuicConnectionPhase,
+    address_validated: bool,
+    bytes_received: u64,
+    bytes_sent: u64,
+    peer_max_data: u64,
+    peer_max_stream_data: u64,
+    peer_max_streams_bidi: u64,
+    sent_stream_data: u64,
+    opened_bidi: u64,
+    next_bidi_stream: u64,
+    pending_path_challenge: Option<[u8; 8]>,
+}
+
+impl QuicConnectionState {
+    pub fn new(role: QuicRole, peer: &QuicTransportParameters) -> Self {
+        Self {
+            role,
+            phase: QuicConnectionPhase::Handshaking,
+            address_validated: role == QuicRole::Client,
+            bytes_received: 0,
+            bytes_sent: 0,
+            peer_max_data: peer.initial_max_data,
+            peer_max_stream_data: peer.initial_max_stream_data_bidi_remote,
+            peer_max_streams_bidi: peer.initial_max_streams_bidi,
+            sent_stream_data: 0,
+            opened_bidi: 0,
+            next_bidi_stream: if role == QuicRole::Client { 0 } else { 1 },
+            pending_path_challenge: None,
+        }
+    }
+    pub fn phase(&self) -> QuicConnectionPhase {
+        self.phase
+    }
+    pub fn on_datagram_received(&mut self, bytes: usize) -> Result<(), QuicError> {
+        self.bytes_received = self
+            .bytes_received
+            .checked_add(bytes as u64)
+            .ok_or(QuicError::Limit)?;
+        Ok(())
+    }
+    pub fn authorize_datagram_send(&mut self, bytes: usize) -> Result<(), QuicError> {
+        let next = self
+            .bytes_sent
+            .checked_add(bytes as u64)
+            .ok_or(QuicError::Limit)?;
+        if self.role == QuicRole::Server
+            && !self.address_validated
+            && next > self.bytes_received.saturating_mul(3)
+        {
+            return Err(QuicError::FlowControl);
+        }
+        self.bytes_sent = next;
+        Ok(())
+    }
+    pub fn validate_address(&mut self) {
+        self.address_validated = true
+    }
+    pub fn activate(&mut self) -> Result<(), QuicError> {
+        if self.phase != QuicConnectionPhase::Handshaking {
+            return Err(QuicError::ProtocolViolation);
+        }
+        self.phase = QuicConnectionPhase::Active;
+        Ok(())
+    }
+    pub fn open_bidi_stream(&mut self) -> Result<u64, QuicError> {
+        if self.phase != QuicConnectionPhase::Active
+            || self.opened_bidi >= self.peer_max_streams_bidi
+        {
+            return Err(QuicError::FlowControl);
+        }
+        let id = self.next_bidi_stream;
+        self.next_bidi_stream = self
+            .next_bidi_stream
+            .checked_add(4)
+            .ok_or(QuicError::Limit)?;
+        self.opened_bidi += 1;
+        Ok(id)
+    }
+    pub fn authorize_stream_send(&mut self, amount: usize) -> Result<(), QuicError> {
+        let amount = amount as u64;
+        let total = self
+            .sent_stream_data
+            .checked_add(amount)
+            .ok_or(QuicError::Limit)?;
+        if total > self.peer_max_data || amount > self.peer_max_stream_data {
+            return Err(QuicError::FlowControl);
+        }
+        self.sent_stream_data = total;
+        Ok(())
+    }
+    pub fn start_path_validation(&mut self, challenge: [u8; 8]) -> QuicFrame {
+        self.pending_path_challenge = Some(challenge);
+        QuicFrame::PathChallenge(challenge)
+    }
+    pub fn on_path_response(&mut self, response: [u8; 8]) -> Result<(), QuicError> {
+        if self.pending_path_challenge != Some(response) {
+            return Err(QuicError::ProtocolViolation);
+        }
+        self.pending_path_challenge = None;
+        self.address_validated = true;
+        Ok(())
+    }
+    pub fn close(&mut self) {
+        self.phase = QuicConnectionPhase::Closed
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -757,7 +884,184 @@ pub struct InitialPacket {
     pub packet_number: u64,
     pub payload: Vector<u8>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HandshakePacket {
+    pub destination_id: Vector<u8>,
+    pub source_id: Vector<u8>,
+    pub packet_number: u64,
+    pub payload: Vector<u8>,
+}
+
+impl HandshakePacket {
+    pub fn seal(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
+        if self.destination_id.len() > 20
+            || self.source_id.len() > 20
+            || self.payload.len() > MAX_DATAGRAM
+        {
+            return Err(QuicError::Limit);
+        }
+        let packet_number_length = 4usize;
+        let mut out = Vector::new();
+        out.try_push(0xe0 | (packet_number_length as u8 - 1))
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_extend_from_slice(&V1.to_be_bytes())
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_push(self.destination_id.len() as u8)
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_extend_from_slice(&self.destination_id)
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_push(self.source_id.len() as u8)
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_extend_from_slice(&self.source_id)
+            .map_err(|_| QuicError::Allocation)?;
+        put_varint(
+            &mut out,
+            (packet_number_length + self.payload.len() + 16) as u64,
+        )?;
+        let packet_number_offset = out.len();
+        out.try_extend_from_slice(&(self.packet_number as u32).to_be_bytes())
+            .map_err(|_| QuicError::Allocation)?;
+        let mut encrypted = Vector::new();
+        encrypted
+            .try_resize(self.payload.len(), 0)
+            .map_err(|_| QuicError::Allocation)?;
+        let mut tag = [0; 16];
+        if !aes128_gcm_seal(
+            &keys.key,
+            &keys.nonce(self.packet_number),
+            &out,
+            &self.payload,
+            &mut encrypted,
+            &mut tag,
+        ) {
+            return Err(QuicError::Crypto);
+        }
+        out.try_extend_from_slice(&encrypted)
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_extend_from_slice(&tag)
+            .map_err(|_| QuicError::Allocation)?;
+        if out.len() < packet_number_offset + 20 {
+            return Err(QuicError::InvalidPacket);
+        }
+        let mut sample = [0; 16];
+        sample.copy_from_slice(&out[packet_number_offset + 4..packet_number_offset + 20]);
+        let mask = aes128_encrypt_block(&keys.header, &sample);
+        out[0] ^= mask[0] & 0x0f;
+        for index in 0..packet_number_length {
+            out[packet_number_offset + index] ^= mask[index + 1];
+        }
+        Ok(out)
+    }
+
+    pub fn open(
+        input: &[u8],
+        keys: &QuicInitialKeys,
+        expected_packet_number: u64,
+    ) -> Result<(Self, usize), QuicError> {
+        if input.len() < 7 || input[0] & 0xf0 != 0xe0 || input[0] & 0x40 == 0 {
+            return Err(QuicError::InvalidPacket);
+        }
+        if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != V1 {
+            return Err(QuicError::InvalidPacket);
+        }
+        let mut at = 5;
+        let destination_length = *input.get(at).ok_or(QuicError::Truncated)? as usize;
+        at += 1;
+        if destination_length > 20 || input.len().saturating_sub(at) < destination_length + 1 {
+            return Err(QuicError::InvalidPacket);
+        }
+        let mut destination_id = Vector::new();
+        destination_id
+            .try_extend_from_slice(&input[at..at + destination_length])
+            .map_err(|_| QuicError::Allocation)?;
+        at += destination_length;
+        let source_length = input[at] as usize;
+        at += 1;
+        if source_length > 20 || input.len().saturating_sub(at) < source_length {
+            return Err(QuicError::InvalidPacket);
+        }
+        let mut source_id = Vector::new();
+        source_id
+            .try_extend_from_slice(&input[at..at + source_length])
+            .map_err(|_| QuicError::Allocation)?;
+        at += source_length;
+        let protected_length =
+            usize::try_from(take_varint(input, &mut at)?).map_err(|_| QuicError::Limit)?;
+        let packet_end = at.checked_add(protected_length).ok_or(QuicError::Limit)?;
+        if packet_end > input.len() || protected_length < 17 || at + 20 > packet_end {
+            return Err(QuicError::Truncated);
+        }
+        let packet_number_offset = at;
+        let mut sample = [0; 16];
+        sample.copy_from_slice(&input[packet_number_offset + 4..packet_number_offset + 20]);
+        let mask = aes128_encrypt_block(&keys.header, &sample);
+        let first = input[0] ^ (mask[0] & 0x0f);
+        if first & 0x30 != 0x20 || first & 0x0c != 0 {
+            return Err(QuicError::InvalidPacket);
+        }
+        let packet_number_length = (first as usize & 3) + 1;
+        if protected_length < packet_number_length + 16 {
+            return Err(QuicError::Truncated);
+        }
+        let mut truncated = 0u64;
+        let mut number = [0; 4];
+        for index in 0..packet_number_length {
+            let byte = input[packet_number_offset + index] ^ mask[index + 1];
+            number[4 - packet_number_length + index] = byte;
+            truncated = (truncated << 8) | byte as u64;
+        }
+        let packet_number =
+            reconstruct_packet_number(truncated, packet_number_length, expected_packet_number)?;
+        let aad_end = packet_number_offset + packet_number_length;
+        let mut aad = Vector::new();
+        aad.try_extend_from_slice(&input[..aad_end])
+            .map_err(|_| QuicError::Allocation)?;
+        aad[0] = first;
+        aad[packet_number_offset..aad_end].copy_from_slice(&number[4 - packet_number_length..]);
+        let encrypted_end = packet_end - 16;
+        let mut tag = [0; 16];
+        tag.copy_from_slice(&input[encrypted_end..packet_end]);
+        let mut payload = Vector::new();
+        payload
+            .try_resize(encrypted_end - aad_end, 0)
+            .map_err(|_| QuicError::Allocation)?;
+        if !aes128_gcm_open(
+            &keys.key,
+            &keys.nonce(packet_number),
+            &aad,
+            &input[aad_end..encrypted_end],
+            &tag,
+            &mut payload,
+        ) {
+            return Err(QuicError::Crypto);
+        }
+        Ok((
+            Self {
+                destination_id,
+                source_id,
+                packet_number,
+                payload,
+            },
+            packet_end,
+        ))
+    }
+}
+
 impl InitialPacket {
+    pub fn seal_padded(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
+        let mut packet = self.clone();
+        loop {
+            let sealed = packet.seal(keys)?;
+            if sealed.len() >= 1200 {
+                return Ok(sealed);
+            }
+            packet
+                .payload
+                .try_resize(packet.payload.len() + (1200 - sealed.len()), 0)
+                .map_err(|_| QuicError::Allocation)?;
+        }
+    }
     pub fn seal(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
         if self.destination_id.len() > 20
             || self.source_id.len() > 20
@@ -1070,5 +1374,57 @@ mod tests {
         assert_eq!(stream.insert(1, b"X", false), Err(QuicError::InvalidFrame));
         stream.consume(2).unwrap();
         assert_eq!(stream.contiguous(), b"llo");
+    }
+    #[test]
+    fn handshake_packets_and_minimum_initial_datagrams() {
+        let keys = QuicInitialKeys::from_traffic_secret(&[9; 32]).unwrap();
+        let packet = HandshakePacket {
+            destination_id: [1, 2, 3, 4].into(),
+            source_id: [5, 6, 7, 8].into(),
+            packet_number: 12,
+            payload: (*b"encrypted handshake").into(),
+        };
+        let wire = packet.seal(&keys).unwrap();
+        assert_eq!(HandshakePacket::open(&wire, &keys, 12).unwrap().0, packet);
+        let initial_keys = QuicInitialKeys::derive(&[1, 2, 3, 4], QuicRole::Client).unwrap();
+        let initial = InitialPacket {
+            destination_id: [1, 2, 3, 4].into(),
+            source_id: [9, 8, 7, 6].into(),
+            packet_number: 0,
+            payload: [1].into(),
+        };
+        assert!(initial.seal_padded(&initial_keys).unwrap().len() >= 1200);
+    }
+    #[test]
+    fn connection_state_enforces_amplification_flow_and_path_validation() {
+        let parameters = QuicTransportParameters {
+            initial_max_data: 8,
+            initial_max_stream_data_bidi_remote: 4,
+            initial_max_streams_bidi: 1,
+            ..QuicTransportParameters::default()
+        };
+        let mut server = QuicConnectionState::new(QuicRole::Server, &parameters);
+        server.on_datagram_received(100).unwrap();
+        server.authorize_datagram_send(300).unwrap();
+        assert_eq!(
+            server.authorize_datagram_send(1),
+            Err(QuicError::FlowControl)
+        );
+        let challenge = [3; 8];
+        assert_eq!(
+            server.start_path_validation(challenge),
+            QuicFrame::PathChallenge(challenge)
+        );
+        assert_eq!(
+            server.on_path_response([4; 8]),
+            Err(QuicError::ProtocolViolation)
+        );
+        server.on_path_response(challenge).unwrap();
+        server.authorize_datagram_send(1000).unwrap();
+        server.activate().unwrap();
+        assert_eq!(server.open_bidi_stream().unwrap(), 1);
+        assert_eq!(server.open_bidi_stream(), Err(QuicError::FlowControl));
+        server.authorize_stream_send(4).unwrap();
+        assert_eq!(server.authorize_stream_send(5), Err(QuicError::FlowControl));
     }
 }

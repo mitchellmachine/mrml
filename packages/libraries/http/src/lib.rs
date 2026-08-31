@@ -8,11 +8,12 @@ mod http2;
 mod http3;
 mod quic;
 
-pub use http2::{HTTP2_CLIENT_PREFACE, Http2Client, Http2Frame, Http2FrameKind, Http2Server};
+pub use http2::{Http2Client, Http2Frame, Http2FrameKind, Http2Server, HTTP2_CLIENT_PREFACE};
 pub use http3::{Http3Client, Http3Frame, Http3FrameKind, Http3Server};
 pub use quic::{
-    InitialPacket, QuicError, QuicFrame, QuicInitialKeys, QuicRecovery, QuicRole,
-    QuicStreamAssembler, QuicTransportParameters, SentPacket, ShortPacket,
+    HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,
+    QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole, QuicStreamAssembler,
+    QuicTransportParameters, SentPacket, ShortPacket,
 };
 
 const MAX_HEADER: usize = 64 * 1024;
@@ -611,11 +612,9 @@ mod tests {
             .get_follow(&url, &[("Range", "bytes=0-1023")], 8)
             .unwrap();
         assert_eq!(response.status, 206);
-        assert!(
-            response
-                .header("content-range")
-                .is_some_and(|value| value.starts_with("bytes 0-1023/"))
-        );
+        assert!(response
+            .header("content-range")
+            .is_some_and(|value| value.starts_with("bytes 0-1023/")));
         assert_eq!(response.read_to_end(2048).unwrap().len(), 1024);
     }
 }
