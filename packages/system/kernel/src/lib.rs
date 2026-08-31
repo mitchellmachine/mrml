@@ -284,15 +284,16 @@ pub use scheduler::{
 };
 pub use service_lifecycle::{
     AccountedServiceSupervisor, AccountedServiceSupervisorError,
-    CleanedSupervisedConstructedService, RestartPolicy,
+    CleanedSupervisedConstructedService, CleanedSupervisedConstructedServiceFault, RestartPolicy,
     ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
     ServiceDeadlineCancellationError, ServiceError, ServiceFault, ServiceId, ServiceRecovery,
     ServiceRecoveryError, ServiceRegistrationPlan, ServiceRestartCommit, ServiceRetirement,
-    ServiceState, ServiceSupervisor, ServiceViolation, SupervisedNativeDeviceServiceDispatch,
-    SupervisedConstructedServiceCleanupFailure, SupervisedConstructedServiceDispatchFailure,
-    SupervisedConstructedServiceRetirement,
-    SupervisedNativeDeviceServiceDispatchError, SupervisedNativeDeviceServiceFreeze,
-    SupervisedNativeDeviceServiceFrozenRetirementError,
+    ServiceState, ServiceSupervisor, ServiceViolation, SupervisedConstructedServiceCleanupFailure,
+    SupervisedConstructedServiceDispatchFailure, SupervisedConstructedServiceFault,
+    SupervisedConstructedServiceFaultCleanupFailure,
+    SupervisedConstructedServiceFaultDispatchFailure, SupervisedConstructedServiceRetirement,
+    SupervisedNativeDeviceServiceDispatch, SupervisedNativeDeviceServiceDispatchError,
+    SupervisedNativeDeviceServiceFreeze, SupervisedNativeDeviceServiceFrozenRetirementError,
     SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError,
     SupervisedServiceTask,
 };
