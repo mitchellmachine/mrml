@@ -1,6 +1,116 @@
-use crate::{Header, HttpError, RequestHead, ResponseHead, valid_header, valid_value};
+use crate::{valid_header, valid_value, Header, HttpError, RequestHead, ResponseHead};
 use mrml_runtime::Vector;
 const MAX_FRAME: usize = 1024 * 1024;
+const QPACK_STATIC: [(&str, &str); 99] = [
+    (":authority", ""),
+    (":path", "/"),
+    ("age", "0"),
+    ("content-disposition", ""),
+    ("content-length", "0"),
+    ("cookie", ""),
+    ("date", ""),
+    ("etag", ""),
+    ("if-modified-since", ""),
+    ("if-none-match", ""),
+    ("last-modified", ""),
+    ("link", ""),
+    ("location", ""),
+    ("referer", ""),
+    ("set-cookie", ""),
+    (":method", "CONNECT"),
+    (":method", "DELETE"),
+    (":method", "GET"),
+    (":method", "HEAD"),
+    (":method", "OPTIONS"),
+    (":method", "POST"),
+    (":method", "PUT"),
+    (":scheme", "http"),
+    (":scheme", "https"),
+    (":status", "103"),
+    (":status", "200"),
+    (":status", "304"),
+    (":status", "404"),
+    (":status", "503"),
+    ("accept", "*/*"),
+    ("accept", "application/dns-message"),
+    ("accept-encoding", "gzip, deflate, br"),
+    ("accept-ranges", "bytes"),
+    ("access-control-allow-headers", "cache-control"),
+    ("access-control-allow-headers", "content-type"),
+    ("access-control-allow-origin", "*"),
+    ("cache-control", "max-age=0"),
+    ("cache-control", "max-age=2592000"),
+    ("cache-control", "max-age=604800"),
+    ("cache-control", "no-cache"),
+    ("cache-control", "no-store"),
+    ("cache-control", "public, max-age=31536000"),
+    ("content-encoding", "br"),
+    ("content-encoding", "gzip"),
+    ("content-type", "application/dns-message"),
+    ("content-type", "application/javascript"),
+    ("content-type", "application/json"),
+    ("content-type", "application/x-www-form-urlencoded"),
+    ("content-type", "image/gif"),
+    ("content-type", "image/jpeg"),
+    ("content-type", "image/png"),
+    ("content-type", "text/css"),
+    ("content-type", "text/html; charset=utf-8"),
+    ("content-type", "text/plain"),
+    ("content-type", "text/plain;charset=utf-8"),
+    ("range", "bytes=0-"),
+    ("strict-transport-security", "max-age=31536000"),
+    (
+        "strict-transport-security",
+        "max-age=31536000; includesubdomains",
+    ),
+    (
+        "strict-transport-security",
+        "max-age=31536000; includesubdomains; preload",
+    ),
+    ("vary", "accept-encoding"),
+    ("vary", "origin"),
+    ("x-content-type-options", "nosniff"),
+    ("x-xss-protection", "1; mode=block"),
+    (":status", "100"),
+    (":status", "204"),
+    (":status", "206"),
+    (":status", "302"),
+    (":status", "400"),
+    (":status", "403"),
+    (":status", "421"),
+    (":status", "425"),
+    (":status", "500"),
+    ("accept-language", ""),
+    ("access-control-allow-credentials", "FALSE"),
+    ("access-control-allow-credentials", "TRUE"),
+    ("access-control-allow-headers", "*"),
+    ("access-control-allow-methods", "get"),
+    ("access-control-allow-methods", "get, post, options"),
+    ("access-control-allow-methods", "options"),
+    ("access-control-expose-headers", "content-length"),
+    ("access-control-request-headers", "content-type"),
+    ("access-control-request-method", "get"),
+    ("access-control-request-method", "post"),
+    ("alt-svc", "clear"),
+    ("authorization", ""),
+    (
+        "content-security-policy",
+        "script-src 'none'; object-src 'none'; base-uri 'none'",
+    ),
+    ("early-data", "1"),
+    ("expect-ct", ""),
+    ("forwarded", ""),
+    ("if-range", ""),
+    ("origin", ""),
+    ("purpose", "prefetch"),
+    ("server", ""),
+    ("timing-allow-origin", "*"),
+    ("upgrade-insecure-requests", "1"),
+    ("user-agent", ""),
+    ("x-forwarded-for", ""),
+    ("x-frame-options", "deny"),
+    ("x-frame-options", "sameorigin"),
+];
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Http3FrameKind {
     Data,
@@ -95,6 +205,26 @@ fn qstr(out: &mut Vector<u8>, s: &str) -> Result<(), HttpError> {
     out.try_extend_from_slice(s.as_bytes())
         .map_err(|_| HttpError::Allocation)
 }
+fn qread_string(input: &[u8], at: &mut usize) -> Result<mrml_runtime::Text, HttpError> {
+    if *at >= input.len() {
+        return Err(HttpError::InvalidResponse);
+    }
+    let huffman = input[*at] & 0x80 != 0;
+    let length = qread_int(input, at, 7)?;
+    let end = at.checked_add(length).ok_or(HttpError::InvalidResponse)?;
+    if end > input.len() {
+        return Err(HttpError::InvalidResponse);
+    }
+    let decoded = if huffman {
+        Some(crate::huffman::decode(&input[*at..end], MAX_FRAME)?)
+    } else {
+        None
+    };
+    let value = core::str::from_utf8(decoded.as_deref().unwrap_or(&input[*at..end]))
+        .map_err(|_| HttpError::InvalidResponse)?;
+    *at = end;
+    mrml_runtime::Text::try_from_str(value).map_err(|_| HttpError::Allocation)
+}
 fn qint(out: &mut Vector<u8>, prefix: u8, bits: u8, mut value: usize) -> Result<(), HttpError> {
     let max = (1usize << bits) - 1;
     if value < max {
@@ -153,9 +283,17 @@ fn qblock(fields: &[(&str, &str)]) -> Result<Vector<u8>, HttpError> {
         if !valid_field_name(n) || n.bytes().any(|b| b.is_ascii_uppercase()) || !valid_value(v) {
             return Err(HttpError::InvalidUrl);
         }
-        qint(&mut o, 0x20, 3, n.len())?;
-        o.try_extend_from_slice(n.as_bytes())
-            .map_err(|_| HttpError::Allocation)?;
+        if let Some(index) = QPACK_STATIC.iter().position(|entry| *entry == (*n, *v)) {
+            qint(&mut o, 0xc0, 6, index)?;
+            continue;
+        }
+        if let Some(index) = QPACK_STATIC.iter().position(|entry| entry.0 == *n) {
+            qint(&mut o, 0x50, 4, index)?;
+        } else {
+            qint(&mut o, 0x20, 3, n.len())?;
+            o.try_extend_from_slice(n.as_bytes())
+                .map_err(|_| HttpError::Allocation)?;
+        }
         qstr(&mut o, v)?
     }
     Ok(o)
@@ -164,42 +302,62 @@ fn valid_field_name(name: &str) -> bool {
     valid_header(name) || name.strip_prefix(':').is_some_and(valid_header)
 }
 fn qdecode(input: &[u8]) -> Result<Vector<Header>, HttpError> {
-    if input.len() < 2 || input[0] != 0 || input[1] != 0 {
+    if input.len() < 2 {
         return Err(HttpError::InvalidResponse);
     }
-    let mut at = 2;
+    let mut at = 0;
+    if qread_int(input, &mut at, 8)? != 0 {
+        return Err(HttpError::InvalidResponse);
+    }
+    let sign = input.get(at).ok_or(HttpError::InvalidResponse)? & 0x80 != 0;
+    if sign || qread_int(input, &mut at, 7)? != 0 {
+        return Err(HttpError::InvalidResponse);
+    }
     let mut o = Vector::new();
     while at < input.len() {
         let b = input[at];
-        if b & 0xf8 != 0x20 {
+        let (name, value) = if b & 0x80 != 0 {
+            if b & 0x40 == 0 {
+                return Err(HttpError::InvalidResponse);
+            }
+            let index = qread_int(input, &mut at, 6)?;
+            let &(name, value) = QPACK_STATIC.get(index).ok_or(HttpError::InvalidResponse)?;
+            (name.into(), value.into())
+        } else if b & 0xc0 == 0x40 {
+            if b & 0x10 == 0 {
+                return Err(HttpError::InvalidResponse);
+            }
+            let index = qread_int(input, &mut at, 4)?;
+            let name: mrml_runtime::Text = QPACK_STATIC
+                .get(index)
+                .ok_or(HttpError::InvalidResponse)?
+                .0
+                .into();
+            (name, qread_string(input, &mut at)?)
+        } else if b & 0xe0 == 0x20 {
+            let huffman_name = b & 0x08 != 0;
+            let length = qread_int(input, &mut at, 3)?;
+            if length == 0 || input.len() - at < length {
+                return Err(HttpError::InvalidResponse);
+            }
+            let decoded = if huffman_name {
+                Some(crate::huffman::decode(&input[at..at + length], MAX_FRAME)?)
+            } else {
+                None
+            };
+            let name = core::str::from_utf8(decoded.as_deref().unwrap_or(&input[at..at + length]))
+                .map_err(|_| HttpError::InvalidResponse)?;
+            let name = mrml_runtime::Text::try_from_str(name).map_err(|_| HttpError::Allocation)?;
+            at += length;
+            (name, qread_string(input, &mut at)?)
+        } else {
+            return Err(HttpError::InvalidResponse);
+        };
+        if !valid_field_name(&name) || !valid_value(&value) {
             return Err(HttpError::InvalidResponse);
         }
-        let nl = qread_int(input, &mut at, 3)?;
-        if nl == 0 || input.len() - at < nl {
-            return Err(HttpError::InvalidResponse);
-        }
-        let name =
-            core::str::from_utf8(&input[at..at + nl]).map_err(|_| HttpError::InvalidResponse)?;
-        at += nl;
-        if at >= input.len() || input[at] & 0x80 != 0 {
-            return Err(HttpError::InvalidResponse);
-        }
-        let vl = input[at] as usize;
-        at += 1;
-        if input.len() - at < vl {
-            return Err(HttpError::InvalidResponse);
-        }
-        let value =
-            core::str::from_utf8(&input[at..at + vl]).map_err(|_| HttpError::InvalidResponse)?;
-        at += vl;
-        if !valid_field_name(name) || !valid_value(value) {
-            return Err(HttpError::InvalidResponse);
-        }
-        o.try_push(Header {
-            name: name.into(),
-            value: value.into(),
-        })
-        .map_err(|_| HttpError::Allocation)?
+        o.try_push(Header { name, value })
+            .map_err(|_| HttpError::Allocation)?
     }
     Ok(o)
 }
@@ -352,5 +510,16 @@ mod tests {
             assert_eq!(read_varint(&o, &mut at).unwrap(), v);
             assert_eq!(at, o.len())
         }
+    }
+    #[test]
+    fn decodes_rfc_static_name_reference() {
+        let block = [
+            0x00, 0x00, 0x51, 0x0b, b'/', b'i', b'n', b'd', b'e', b'x', b'.', b'h', b't', b'm',
+            b'l',
+        ];
+        let fields = qdecode(&block).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, ":path");
+        assert_eq!(fields[0].value, "/index.html");
     }
 }
