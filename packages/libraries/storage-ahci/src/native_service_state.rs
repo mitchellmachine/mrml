@@ -230,6 +230,34 @@ pub struct AhciNativeServiceState<'a, 'm, A, R, S> {
         AhciCommandBlockBackend<'a, A, R, AhciMappedCommandMemory<'m>, AhciMappedDataBuffer<'m, S>>,
 }
 
+/// Fail-stopped userspace owner retained across the non-returning operation-3
+/// syscall. It keeps the exact register, active-port, command-memory, data,
+/// and authorizer borrows live until the kernel freezes the service and the
+/// controller manager performs a later authenticated handoff.
+pub struct AhciNativeServiceStopOwner<'a, 'm, A, R, S, E> {
+    error: AhciDispatchServiceError<E>,
+    state: AhciNativeServiceState<'a, 'm, A, R, S>,
+}
+
+impl<'a, 'm, A, R, S, E> AhciNativeServiceStopOwner<'a, 'm, A, R, S, E> {
+    pub const fn error(&self) -> &AhciDispatchServiceError<E> {
+        &self.error
+    }
+
+    pub const fn device(&self) -> BlockProviderDevice {
+        self.state.device
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        AhciDispatchServiceError<E>,
+        AhciNativeServiceState<'a, 'm, A, R, S>,
+    ) {
+        (self.error, self.state)
+    }
+}
+
 /// Constructs all installed mechanism state needed by the bounded dispatcher.
 ///
 /// # Safety
@@ -308,8 +336,13 @@ impl<'a, 'm, A: AhciDataCapabilityAuthorizer, R, S> AhciNativeServiceState<'a, '
     }
 }
 
-impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo + AhciResetIo, S: AhciDataBufferSync>
-    AhciNativeServiceState<'_, '_, A, R, S>
+impl<
+    'a,
+    'm,
+    A: AhciDataCapabilityAuthorizer,
+    R: AhciRegisterIo + AhciResetIo,
+    S: AhciDataBufferSync,
+> AhciNativeServiceState<'a, 'm, A, R, S>
 {
     /// Serves exactly one authenticated envelope and retains the backend owner.
     pub fn serve_one<D: AhciDispatchSyscalls>(
@@ -340,6 +373,22 @@ impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo + AhciResetIo, S: AhciDa
                 return error;
             }
         }
+    }
+
+    /// Consumes the service into one non-copy stop owner at the first
+    /// fail-closed dispatch result. Callers must retain the returned owner
+    /// across operation 3; dropping it before the kernel freeze destroys the
+    /// only userspace backend owner and makes safe manager reacquisition
+    /// impossible.
+    pub fn serve_until_stop<D: AhciDispatchSyscalls>(
+        mut self,
+        syscalls: &mut D,
+        request: &mut [u8; AHCI_DISPATCH_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+        scratch: &mut [u8],
+    ) -> AhciNativeServiceStopOwner<'a, 'm, A, R, S, D::Error> {
+        let error = self.serve_until_error(syscalls, request, capability_tokens, scratch);
+        AhciNativeServiceStopOwner { error, state: self }
     }
 }
 
@@ -800,7 +849,7 @@ mod tests {
             calls: 0,
             reject: false,
         };
-        let mut state = AhciNativeServiceState::new(
+        let state = AhciNativeServiceState::new(
             &mut authorizer,
             installed,
             owner,
@@ -812,18 +861,18 @@ mod tests {
         let mut request = [0xa5; AHCI_DISPATCH_REQUEST_BYTES];
         let mut tokens = [u64::MAX];
         let mut scratch = [0xcc; 512];
-        assert_eq!(
-            state.serve_until_error(
-                &mut InvalidEnvelope,
-                &mut request,
-                &mut tokens,
-                &mut scratch,
-            ),
-            AhciDispatchServiceError::InvalidEnvelope
+        let stop = state.serve_until_stop(
+            &mut InvalidEnvelope,
+            &mut request,
+            &mut tokens,
+            &mut scratch,
         );
+        assert_eq!(stop.error(), &AhciDispatchServiceError::InvalidEnvelope);
+        assert_eq!(stop.device(), installed.record().device());
         assert_eq!(request, [0; AHCI_DISPATCH_REQUEST_BYTES]);
         assert_eq!(tokens, [0]);
         assert_eq!(scratch, [0; 512]);
+        let (_, state) = stop.into_parts();
         assert!(state.into_parts().1.is_available());
     }
 

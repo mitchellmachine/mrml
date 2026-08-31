@@ -447,7 +447,7 @@ unsafe extern "sysv64" fn mrml_ahci_receiver(
     let mut authorizer =
         AhciInstalledDataAuthorizer::from_installed_launch(NativeAhciRawSyscall, launch);
     let delay = mrml_kernel::arch::x86_64::ApStartupTiming::detect().unwrap_or_else(|_| halt());
-    let mut state = unsafe {
+    let state = unsafe {
         prepare_bootstrapped_native_x86_coherent_ahci_service(
             &mut authorizer,
             launch,
@@ -456,14 +456,18 @@ unsafe extern "sysv64" fn mrml_ahci_receiver(
     }
     .unwrap_or_else(|_| halt());
     let (request, capability_tokens, scratch) = buffers.dispatch_buffers();
-    let _error = state.serve_until_error(
+    let stop = state.serve_until_stop(
         &mut syscalls,
         request,
         capability_tokens,
         scratch,
     );
-    drop(state);
     buffers.erase();
+    // Operation 3 never returns. Suppress destructor execution explicitly so
+    // the exact backend owner remains live in the frozen service image for the
+    // controller manager's subsequent authenticated handoff.
+    let stop = core::mem::ManuallyDrop::new(stop);
+    core::hint::black_box(&stop);
     unsafe { terminate(3) }
 }
 

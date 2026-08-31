@@ -1627,7 +1627,7 @@ retry, exact concrete retirement and five-leaf withdrawal, frozen mutation
 denial, quiescence retry, exact address-space cleanup, concrete-owner release,
 and delayed successor dispatch. This is typed API, controlled backend, and
 unit-test evidence only. The repository has no production controller-manager
-lease implementation or installed operation-3 routing, and no installed
+lease implementation or installed trap routing, and no installed
 CPL3/`INT 0x80`, active page-table/TLB or IOMMU invalidation, KVM/WHP, or
 physical AHCI execution was exercised.
 
@@ -1639,6 +1639,21 @@ or obtain a service, and the non-copy active owner plus exact one-shot manager
 lease remain mandatory authority inputs. This connects the shared syscall
 decoder to the manager API in source, but the installed trap dispatcher and a
 production controller-manager lease remain unimplemented.
+
+The installed AHCI service entry now consumes its complete dispatcher state
+into a non-copy stop owner at the first fail-closed dispatch result. It erases
+the separate launch, request, capability-token, and transfer buffers, then
+retains that owner with destructor execution suppressed across the non-returning
+operation-3 syscall. Consequently the register, active-port, command-memory,
+data-buffer, and authorizer owners are no longer destroyed before the kernel
+freeze. This is source, unit-test, and `MRML_NATIVE` build evidence only; a
+fixed authenticated manager-readable handoff location, installed trap routing,
+and the production controller-manager lease remain the next dependency gate.
+
+Patent review: **NOT_TRIGGERED**. Linear ownership retention and destructor
+suppression across an existing non-returning stop syscall are conventional
+lifecycle mechanisms and add no parser, device, DMA, or authority mechanism.
+See [the patent review log](../patents/REVIEW_LOG.md).
 
 Patent review: **NOT_TRIGGERED**. Admitting an existing decoded enum variant
 into a non-authorizing typed routing token is conventional fail-closed API

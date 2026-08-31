@@ -156,7 +156,7 @@ pub use native_port_reconstruction::{
 };
 pub use native_service_state::{
     AHCI_DISPATCH_SCRATCH_BYTES, AhciNativeServiceBuffers, AhciNativeServicePreparationError,
-    AhciNativeServiceState, AhciNativeServiceStateError,
+    AhciNativeServiceState, AhciNativeServiceStateError, AhciNativeServiceStopOwner,
     bootstrap_and_prepare_installed_ahci_service, prepare_installed_ahci_service_state,
 };
 #[cfg(target_arch = "x86_64")]
