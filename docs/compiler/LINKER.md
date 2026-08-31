@@ -1544,3 +1544,16 @@ stored 42, the second access observed 42, and the counter proved exactly one
 initializer call. This is bounded main-thread lazy initialization without a
 destructor, not re-entrant or poisoned initialization, secondary-thread state,
 TLS teardown, native Windows, general `std`, WHP, or physical-hardware evidence.
+
+The probe's `thread` mode imports exact `CreateThread`, `WaitForSingleObject`,
+`GetExitCodeThread`, and `CloseHandle` thunks from the pinned self-contained
+kernel32 archive. Both the main and child routines use `_tls_index` plus exact
+`SECREL` references to one const TLS cell. MRML emits a deterministic 3,584-byte
+PE with SHA-256
+`6e9bdb946cb9778b00316f499672d7157ba40d639aa6798a33f211c21379c36a`.
+Wine 11.16 returned 42 only after the main thread changed its value from 40 to
+41, the new thread independently observed 40 and changed it to 42, the child
+exit code was 42, and the main thread still observed 41. This is bounded hosted
+secondary-thread TLS template/isolation evidence, not concurrent stress,
+destructor execution, thread-detach callback behavior, dynamic TLS, native
+Windows, general `std`, WHP, or physical hardware.

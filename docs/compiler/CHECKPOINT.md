@@ -1587,6 +1587,17 @@ call. The const mode remained byte-identical and also returned 42. This does not
 cover destructors, re-entrant or poisoned initialization, secondary-thread TLS,
 teardown, native Windows, general `std`, WHP, or physical hardware.
 
+The TLS probe's `thread` mode resolves exact pinned kernel32 thread/wait/exit/
+close imports and executes `_tls_index` plus `SECREL` access from both main and
+child routines. MRML emitted a deterministic 3,584-byte PE with SHA-256
+`6e9bdb946cb9778b00316f499672d7157ba40d639aa6798a33f211c21379c36a`;
+Wine 11.16 returned 42 after the main thread changed its template value from 40
+to 41, the child independently observed 40 and changed it to 42, the child exit
+code was 42, and the main thread remained 41. This proves one bounded hosted
+secondary-thread template/isolation path, not concurrent stress, destructors,
+thread-detach callbacks, dynamic TLS, native Windows, general `std`, WHP, or
+physical hardware.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.
