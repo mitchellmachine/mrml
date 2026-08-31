@@ -3,7 +3,7 @@ use crate::{
     X25519_MLKEM768, finished_verify_data, hybrid_client_share, verify_server_chain,
 };
 use mrml_crypto::{x25519_public, x25519_shared};
-use mrml_runtime::{TcpStream, Vector};
+use mrml_runtime::{TcpStream, Text, Vector};
 
 fn push_u16(out: &mut Vector<u8>, value: usize) -> Result<(), TlsError> {
     if value > u16::MAX as usize {
@@ -28,6 +28,7 @@ fn extension(out: &mut Vector<u8>, kind: u16, value: &[u8]) -> Result<(), TlsErr
 
 fn client_hello(
     host: &str,
+    protocols: &[&str],
 ) -> Result<(Vector<u8>, Option<HybridClientSecret>, [u8; 32]), TlsError> {
     if host.is_empty() || host.len() > 253 || !host.is_ascii() {
         return Err(TlsError::Handshake);
@@ -54,6 +55,27 @@ fn client_hello(
     sni.try_extend_from_slice(host.as_bytes())
         .map_err(|_| TlsError::AllocationFailed)?;
     extension(&mut extensions, 0, &sni)?;
+    if !protocols.is_empty() {
+        let mut names = Vector::new();
+        for protocol in protocols {
+            if protocol.is_empty() || protocol.len() > u8::MAX as usize || !protocol.is_ascii() {
+                return Err(TlsError::Handshake);
+            }
+            names
+                .try_push(protocol.len() as u8)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            names
+                .try_extend_from_slice(protocol.as_bytes())
+                .map_err(|_| TlsError::AllocationFailed)?;
+        }
+        let mut alpn = Vector::new();
+        push_u16(&mut alpn, names.len())?;
+        alpn.try_extend_from_slice(&names)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        extension(&mut extensions, 16, &alpn)?;
+    }
+    // Request a TLS 1.3 stapled OCSP response for the leaf certificate.
+    extension(&mut extensions, 5, &[1, 0, 0, 0, 0])?;
     extension(&mut extensions, 43, &[2, 3, 4])?;
     extension(&mut extensions, 13, &[0, 4, 8, 4, 4, 1])?;
     if hybrid_enabled {
@@ -108,6 +130,48 @@ fn client_hello(
         .try_extend_from_slice(&body)
         .map_err(|_| TlsError::AllocationFailed)?;
     Ok((handshake, secret, fallback))
+}
+
+fn encrypted_extensions(message: &[u8], offered: &[&str]) -> Result<Option<Text>, TlsError> {
+    let mut cursor = Cursor::new(message);
+    if cursor.u8()? != 8 || cursor.u24()? != message.len() - 4 {
+        return Err(TlsError::Handshake);
+    }
+    let total = cursor.u16()? as usize;
+    let mut extensions = Cursor::new(cursor.take(total)?);
+    if !cursor.done() {
+        return Err(TlsError::Handshake);
+    }
+    let mut selected = None;
+    while !extensions.done() {
+        let kind = extensions.u16()?;
+        let length = extensions.u16()? as usize;
+        let value = extensions.take(length)?;
+        if kind == 16 {
+            if selected.is_some() {
+                return Err(TlsError::Handshake);
+            }
+            let mut a = Cursor::new(value);
+            let list = a.u16()? as usize;
+            if list != value.len() - 2 {
+                return Err(TlsError::Handshake);
+            }
+            let n = a.u8()? as usize;
+            let bytes = a.take(n)?;
+            if !a.done() {
+                return Err(TlsError::Handshake);
+            }
+            let protocol = core::str::from_utf8(bytes).map_err(|_| TlsError::Handshake)?;
+            if !offered.contains(&protocol) {
+                return Err(TlsError::Handshake);
+            }
+            selected = Some(Text::try_from_str(protocol).map_err(|_| TlsError::AllocationFailed)?);
+        }
+    }
+    if !offered.is_empty() && selected.is_none() {
+        return Err(TlsError::Handshake);
+    }
+    Ok(selected)
 }
 
 fn record(stream: &mut TcpStream) -> Result<(u8, Vector<u8>), TlsError> {
@@ -322,6 +386,7 @@ pub struct TlsClientStream {
     pending: Vector<u8>,
     pending_position: usize,
     negotiated_group: u16,
+    negotiated_protocol: Option<Text>,
 }
 impl TlsClientStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, TlsError> {
@@ -331,6 +396,18 @@ impl TlsClientStream {
 
     /// Connect to an exact IPv4 address while authenticating `host` with TLS.
     pub fn connect_resolved(host: &str, address: [u8; 4], port: u16) -> Result<Self, TlsError> {
+        Self::connect_resolved_with_alpn(host, address, port, &[])
+    }
+    pub fn connect_with_alpn(host: &str, port: u16, protocols: &[&str]) -> Result<Self, TlsError> {
+        let address = TcpStream::resolve_host(host).map_err(|_| TlsError::Io)?;
+        Self::connect_resolved_with_alpn(host, address, port, protocols)
+    }
+    pub fn connect_resolved_with_alpn(
+        host: &str,
+        address: [u8; 4],
+        port: u16,
+        protocols: &[&str],
+    ) -> Result<Self, TlsError> {
         let mut stream = TcpStream::connect(address, port).map_err(|_| TlsError::Io)?;
         stream
             .set_read_timeout_millis(30_000)
@@ -338,7 +415,7 @@ impl TlsClientStream {
         stream
             .set_write_timeout_millis(30_000)
             .map_err(|_| TlsError::Io)?;
-        let (client_hello, hybrid, mut fallback) = client_hello(host)?;
+        let (client_hello, hybrid, mut fallback) = client_hello(host, protocols)?;
         send_plain_handshake(&mut stream, &client_hello)?;
         let (mut kind, mut server_hello) = record(&mut stream)?;
         while kind == 20 {
@@ -379,6 +456,7 @@ impl TlsClientStream {
         let mut got_extensions = false;
         let mut got_certificate = false;
         let mut got_verify = false;
+        let mut negotiated_protocol = None;
         loop {
             let (kind, encrypted) = record(&mut stream)?;
             if kind == 20 {
@@ -420,6 +498,7 @@ impl TlsClientStream {
                         if got_extensions {
                             return Err(TlsError::Handshake);
                         }
+                        negotiated_protocol = encrypted_extensions(&message, protocols)?;
                         got_extensions = true;
                         transcript.update(&message)
                     }
@@ -489,6 +568,7 @@ impl TlsClientStream {
                             pending: Vector::new(),
                             pending_position: 0,
                             negotiated_group: group,
+                            negotiated_protocol,
                         });
                     }
                     _ => return Err(TlsError::Handshake),
@@ -506,6 +586,9 @@ impl TlsClientStream {
     }
     pub const fn negotiated_group(&self) -> u16 {
         self.negotiated_group
+    }
+    pub fn negotiated_protocol(&self) -> Option<&str> {
+        self.negotiated_protocol.as_deref()
     }
     pub fn read(&mut self, output: &mut [u8]) -> Result<usize, TlsError> {
         if self.pending_position < self.pending.len() {
@@ -556,9 +639,22 @@ mod tests {
         if crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
             return;
         }
-        let (hello, hybrid, _) = client_hello("example.com").unwrap();
+        let (hello, hybrid, _) = client_hello("example.com", &["h2", "http/1.1"]).unwrap();
         assert!(hybrid.is_none());
         assert!(hello.len() > 32);
+    }
+    #[test]
+    fn encrypted_extensions_require_an_offered_alpn() {
+        let message = [8, 0, 0, 10, 0, 8, 0, 16, 0, 4, 0, 2, 1, b'h'];
+        assert_eq!(
+            encrypted_extensions(&message, &["h2"]),
+            Err(TlsError::Handshake)
+        );
+        let message = [8, 0, 0, 11, 0, 9, 0, 16, 0, 5, 0, 3, 2, b'h', b'2'];
+        assert_eq!(
+            encrypted_extensions(&message, &["h2"]).unwrap().as_deref(),
+            Some("h2")
+        );
     }
 
     #[test]
