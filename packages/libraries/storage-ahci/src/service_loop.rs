@@ -1,8 +1,8 @@
 use crate::AhciBlockProvider;
 use mrml_interface_storage_block_provider_v1::{
-    decode_enumerate_request, decode_enumerate_response, encode_enumerate_request,
-    BlockProviderDevice, BlockProviderTransport, BorrowedWriteView, ProtocolError,
-    ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
+    BlockProviderDevice, BlockProviderTransport, BorrowedWriteView, ENUMERATE_REQUEST_BYTES,
+    ENUMERATE_RESPONSE_BYTES, ProtocolError, decode_enumerate_request, decode_enumerate_response,
+    encode_enumerate_request,
 };
 use mrml_kernel::Capability;
 
@@ -158,7 +158,7 @@ impl<'a> AhciEnumerationServiceLoop<'a> {
 mod tests {
     use super::*;
     use mrml_interface_storage_block_provider_v1::{
-        encode_enumerate_request, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH,
+        BLOCK_DEVICE_FLAG_FLUSH, OpaqueHandle, encode_enumerate_request,
     };
 
     const TOKEN: u64 = (9_u64 << 32) | 4;

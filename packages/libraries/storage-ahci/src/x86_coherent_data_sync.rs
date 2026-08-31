@@ -1,7 +1,7 @@
 //! x86-64 visibility transitions for platform-proven coherent AHCI data DMA.
 
 use crate::{AhciDataBufferSync, AhciDataDmaRegion};
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{Ordering, compiler_fence};
 
 /// Exact-region adapter for a platform-proven cache-coherent x86-64 DMA map.
 ///

@@ -6,7 +6,7 @@
 //! publication. Port engines, DMA, commands, interrupts, ATA/ATAPI, and NCQ are
 //! later layers.
 
-use crate::{AhciAbarMapping, AHCI_ABAR_MINIMUM_BYTES, AHCI_MMIO_PAGE_BYTES};
+use crate::{AHCI_ABAR_MINIMUM_BYTES, AHCI_MMIO_PAGE_BYTES, AhciAbarMapping};
 
 pub const AHCI_CAP_OFFSET: u32 = 0x00;
 pub const AHCI_GHC_OFFSET: u32 = 0x04;

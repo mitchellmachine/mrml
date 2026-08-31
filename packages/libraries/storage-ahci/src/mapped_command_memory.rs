@@ -5,8 +5,8 @@
 //! path from addressing bytes outside the three admitted DMA regions.
 
 use crate::{
-    AhciCommandMemoryIo, AhciDmaRegion, AhciPortDmaLayout, AHCI_COMMAND_LIST_BYTES,
-    AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_BYTES,
+    AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_BYTES,
+    AhciCommandMemoryIo, AhciDmaRegion, AhciPortDmaLayout,
 };
 
 pub struct AhciMappedCommandMemory<'a> {
@@ -151,7 +151,7 @@ fn word_mut(bytes: &mut [u8], offset: u64) -> Result<&mut [u8], ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{initialize_ahci_command_memory, ProgrammedAhciPortDma};
+    use crate::{ProgrammedAhciPortDma, initialize_ahci_command_memory};
     use mrml_kernel::ObjectId;
 
     fn region(object: u64, physical_base: u64, bytes: u64) -> AhciDmaRegion {
@@ -265,21 +265,25 @@ mod tests {
         let mut command_list = [0; 1024];
         let mut received_fis = [0; 256];
         let mut command_tables = [0; 512];
-        assert!(AhciMappedCommandMemory::new(
-            layout(),
-            &mut command_list[..1020],
-            &mut received_fis,
-            &mut command_tables,
-        )
-        .is_none());
+        assert!(
+            AhciMappedCommandMemory::new(
+                layout(),
+                &mut command_list[..1020],
+                &mut received_fis,
+                &mut command_tables,
+            )
+            .is_none()
+        );
         let mut aliased = layout();
         aliased.received_fis.memory_object = aliased.command_list.memory_object;
-        assert!(AhciMappedCommandMemory::new(
-            aliased,
-            &mut command_list,
-            &mut received_fis,
-            &mut command_tables,
-        )
-        .is_none());
+        assert!(
+            AhciMappedCommandMemory::new(
+                aliased,
+                &mut command_list,
+                &mut received_fis,
+                &mut command_tables,
+            )
+            .is_none()
+        );
     }
 }

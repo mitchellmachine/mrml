@@ -1,13 +1,13 @@
 //! Kernel memory-resource adapter for transactional AHCI service mappings.
 
 use crate::{
-    AhciServiceCpuMappingBackend, AhciServiceCpuMappingRequest, AhciServiceLaunchRecord,
-    AHCI_SERVICE_CPU_MAPPING_RIGHTS,
+    AHCI_SERVICE_CPU_MAPPING_RIGHTS, AhciServiceCpuMappingBackend, AhciServiceCpuMappingRequest,
+    AhciServiceLaunchRecord,
 };
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, MemoryMappingBackend, MemoryMappingId,
     MemoryMappingOperationError, MemoryObjectId, MemoryPoolTable, MemoryResourceError, ObjectId,
-    Rights, PAGE_SIZE,
+    PAGE_SIZE, Rights,
 };
 
 const MAPPING_COUNT: usize = 4;
@@ -234,11 +234,11 @@ unsafe impl<B: MemoryMappingBackend, const P: usize, const O: usize, const M: us
 mod tests {
     use super::*;
     use crate::{
-        install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings, AhciAbarMapping,
-        AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout, AhciServiceCpuMapping,
+        AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout,
+        AhciServiceCpuMapping, install_ahci_service_cpu_mappings, remove_ahci_service_cpu_mappings,
     };
     use mrml_interface_storage_block_provider_v1::{
-        BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, BlockProviderDevice, OpaqueHandle,
     };
     use mrml_kernel::{
         MemoryBackingBackendRequest, MemoryBackingKind, MemoryMappingBackendRequest,

@@ -1,8 +1,8 @@
 //! Fail-closed SATA COMRESET and active-port reconstruction.
 
 use crate::{
-    stop_ahci_port_engine, ActiveAhciPort, AhciAbarMapping, AhciCommandMemoryIo, AhciDmaRegion,
-    AhciPortDmaLayout, AhciRegisterIo, StoppedAhciPort, AHCI_SATA_SIGNATURE,
+    AHCI_SATA_SIGNATURE, ActiveAhciPort, AhciAbarMapping, AhciCommandMemoryIo, AhciDmaRegion,
+    AhciPortDmaLayout, AhciRegisterIo, StoppedAhciPort, stop_ahci_port_engine,
 };
 
 const PORT_BASE: u32 = 0x100;

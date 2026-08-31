@@ -1,8 +1,9 @@
 //! Fail-closed consumption of the kernel-installed AHCI entry projection.
 
 use crate::{
-    AhciRawSyscall, AhciServiceLaunchRecordError, AhciUserspaceSyscallError, AhciUserspaceSyscalls,
-    InstalledAhciServiceLaunch, AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES,
+    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES, AhciRawSyscall,
+    AhciServiceLaunchRecordError, AhciUserspaceSyscallError, AhciUserspaceSyscalls,
+    InstalledAhciServiceLaunch,
 };
 use mrml_kernel::{Capability, TaskId};
 
@@ -200,7 +201,7 @@ mod tests {
         AhciServiceCpuMapping, AhciServiceLaunchRecord, AhciSyscallFrame,
     };
     use mrml_interface_storage_block_provider_v1::{
-        BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, BlockProviderDevice, OpaqueHandle,
     };
     use mrml_kernel::{ObjectId, Rights};
 
@@ -369,7 +370,9 @@ mod tests {
         assert_eq!(raw.calls, 2);
         let frame = raw.frames[0].unwrap();
         assert_eq!(
-            (frame.rax, frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (
+                frame.rax, frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9
+            ),
             (
                 6,
                 installed.device_write_data().token(),
@@ -570,16 +573,18 @@ mod tests {
             };
             let mut syscalls = AhciUserspaceSyscalls::new(raw, reply_binding());
             let mut scratch = [0xa5; AHCI_SERVICE_LAUNCH_BYTES];
-            assert!(unsafe {
-                bootstrap_installed_ahci_service(
-                    &mut syscalls,
-                    Capability::from_token(LAUNCH_TOKEN),
-                    provider,
-                    authorities(),
-                    &mut scratch,
-                )
-            }
-            .is_err());
+            assert!(
+                unsafe {
+                    bootstrap_installed_ahci_service(
+                        &mut syscalls,
+                        Capability::from_token(LAUNCH_TOKEN),
+                        provider,
+                        authorities(),
+                        &mut scratch,
+                    )
+                }
+                .is_err()
+            );
             assert_eq!(scratch, [0; AHCI_SERVICE_LAUNCH_BYTES]);
         }
 

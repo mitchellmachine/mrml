@@ -2,10 +2,10 @@
 
 use crate::{AhciBlockIoAdapter, AhciBlockIoBackend};
 use mrml_interface_storage_block_provider_v1::{
-    decode_read_request, decode_read_response, decode_write_request, decode_write_response,
-    encode_read_request, encode_write_request, BlockProviderDevice, BlockProviderReadTransport,
-    BlockProviderWriteTransport, BorrowedReadView, BorrowedWriteView, ProtocolError,
-    READ_REQUEST_BYTES, READ_RESPONSE_BYTES, WRITE_REQUEST_BYTES, WRITE_RESPONSE_BYTES,
+    BlockProviderDevice, BlockProviderReadTransport, BlockProviderWriteTransport, BorrowedReadView,
+    BorrowedWriteView, ProtocolError, READ_REQUEST_BYTES, READ_RESPONSE_BYTES, WRITE_REQUEST_BYTES,
+    WRITE_RESPONSE_BYTES, decode_read_request, decode_read_response, decode_write_request,
+    decode_write_response, encode_read_request, encode_write_request,
 };
 use mrml_kernel::Capability;
 
@@ -205,7 +205,7 @@ mod tests {
     use super::*;
     use crate::AhciBlockIoError;
     use mrml_interface_storage_block_provider_v1::{
-        encode_read_request, encode_write_request, OpaqueHandle,
+        OpaqueHandle, encode_read_request, encode_write_request,
     };
 
     const TOKEN: u64 = (9_u64 << 32) | 4;

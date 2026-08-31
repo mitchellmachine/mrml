@@ -8,11 +8,11 @@
 //! protocol, NCQ operation, or block I/O.
 
 use crate::ahci_controller::{
-    AhciControllerSnapshot, AhciRegisterIo, AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET,
-    AHCI_VERSION_OFFSET, GHC_AHCI_ENABLE, GHC_HBA_RESET, GHC_INTERRUPT_ENABLE,
+    AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_VERSION_OFFSET, AhciControllerSnapshot,
+    AhciRegisterIo, GHC_AHCI_ENABLE, GHC_HBA_RESET, GHC_INTERRUPT_ENABLE,
 };
 use crate::ahci_discovery::AHCI_ABAR_MINIMUM_BYTES;
-use crate::ahci_mapping::{AhciAbarMapping, AHCI_MMIO_PAGE_BYTES};
+use crate::ahci_mapping::{AHCI_MMIO_PAGE_BYTES, AhciAbarMapping};
 use mrml_kernel::ObjectId;
 
 pub const AHCI_MAX_PORTS: usize = 32;

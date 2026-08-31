@@ -96,11 +96,7 @@ mod tests {
     impl AhciMonotonicDelay for Delay {
         fn delay_at_least_microseconds(&mut self, microseconds: u32) -> Result<(), ()> {
             self.requested = microseconds;
-            if self.reject {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if self.reject { Err(()) } else { Ok(()) }
         }
     }
 

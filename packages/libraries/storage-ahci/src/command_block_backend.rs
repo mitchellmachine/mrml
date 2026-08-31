@@ -6,11 +6,11 @@
 //! those mechanisms to the storage service.
 
 use crate::{
+    ActiveAhciPort, AhciAbarMapping, AhciAtaCommand, AhciBlockControlBackend,
+    AhciBlockControlError, AhciBlockIoBackend, AhciBlockIoError, AhciCommandBuildFailure,
+    AhciCommandMemoryIo, AhciDataDmaRegion, AhciFlushFailure, AhciRegisterIo, AhciResetIo,
     execute_ahci_dma_command, flush_ahci_cache, prepare_ahci_dma_command,
-    recycle_ahci_command_slot, reset_ahci_sata_port, ActiveAhciPort, AhciAbarMapping,
-    AhciAtaCommand, AhciBlockControlBackend, AhciBlockControlError, AhciBlockIoBackend,
-    AhciBlockIoError, AhciCommandBuildFailure, AhciCommandMemoryIo, AhciDataDmaRegion,
-    AhciFlushFailure, AhciRegisterIo, AhciResetIo,
+    recycle_ahci_command_slot, reset_ahci_sata_port,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
@@ -214,12 +214,8 @@ impl<'a, A: AhciDataCapabilityAuthorizer, R, M, D> AhciCommandBlockBackend<'a, A
     }
 }
 
-impl<
-        A: AhciDataCapabilityAuthorizer,
-        R: AhciResetIo,
-        M: AhciCommandMemoryIo,
-        D: AhciDataBufferIo,
-    > AhciBlockControlBackend for AhciCommandBlockBackend<'_, A, R, M, D>
+impl<A: AhciDataCapabilityAuthorizer, R: AhciResetIo, M: AhciCommandMemoryIo, D: AhciDataBufferIo>
+    AhciBlockControlBackend for AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
         if device.session != self.session || device.media_generation != self.media_generation {
@@ -269,11 +265,11 @@ impl<
 }
 
 impl<
-        A: AhciDataCapabilityAuthorizer,
-        R: AhciRegisterIo,
-        M: AhciCommandMemoryIo,
-        D: AhciDataBufferIo,
-    > AhciBlockIoBackend for AhciCommandBlockBackend<'_, A, R, M, D>
+    A: AhciDataCapabilityAuthorizer,
+    R: AhciRegisterIo,
+    M: AhciCommandMemoryIo,
+    D: AhciDataBufferIo,
+> AhciBlockIoBackend for AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn read(
         &mut self,
@@ -311,11 +307,11 @@ impl<
 }
 
 impl<
-        A: AhciDataCapabilityAuthorizer,
-        R: AhciRegisterIo,
-        M: AhciCommandMemoryIo,
-        D: AhciDataBufferIo,
-    > AhciCommandBlockBackend<'_, A, R, M, D>
+    A: AhciDataCapabilityAuthorizer,
+    R: AhciRegisterIo,
+    M: AhciCommandMemoryIo,
+    D: AhciDataBufferIo,
+> AhciCommandBlockBackend<'_, A, R, M, D>
 {
     fn execute(
         &mut self,
@@ -642,40 +638,44 @@ mod tests {
             calls: Cell::new(0),
             object: ObjectId(40),
         };
-        assert!(AhciCommandBlockBackend::new(
-            &mut authorizer,
-            OpaqueHandle::new(4, 7).unwrap(),
-            12,
-            Capability::from_token(1),
-            Capability::from_token(2),
-            data,
-            mapping(),
-            ActiveAhciPort::from_layout(layout()),
-            Registers::ready(),
-            Memory::initialized(),
-            DataIo::default(),
-        )
-        .is_some());
+        assert!(
+            AhciCommandBlockBackend::new(
+                &mut authorizer,
+                OpaqueHandle::new(4, 7).unwrap(),
+                12,
+                Capability::from_token(1),
+                Capability::from_token(2),
+                data,
+                mapping(),
+                ActiveAhciPort::from_layout(layout()),
+                Registers::ready(),
+                Memory::initialized(),
+                DataIo::default(),
+            )
+            .is_some()
+        );
         assert_eq!(authorizer.calls.get(), 2);
 
         let mut substituted = Authorizer {
             calls: Cell::new(0),
             object: ObjectId(41),
         };
-        assert!(AhciCommandBlockBackend::new(
-            &mut substituted,
-            OpaqueHandle::new(4, 7).unwrap(),
-            12,
-            Capability::from_token(1),
-            Capability::from_token(2),
-            data,
-            mapping(),
-            ActiveAhciPort::from_layout(layout()),
-            Registers::ready(),
-            Memory::initialized(),
-            DataIo::default(),
-        )
-        .is_none());
+        assert!(
+            AhciCommandBlockBackend::new(
+                &mut substituted,
+                OpaqueHandle::new(4, 7).unwrap(),
+                12,
+                Capability::from_token(1),
+                Capability::from_token(2),
+                data,
+                mapping(),
+                ActiveAhciPort::from_layout(layout()),
+                Registers::ready(),
+                Memory::initialized(),
+                DataIo::default(),
+            )
+            .is_none()
+        );
         assert_eq!(substituted.calls.get(), 1);
     }
 

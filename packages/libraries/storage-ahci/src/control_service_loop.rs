@@ -2,9 +2,9 @@
 
 use crate::{AhciBlockControlAdapter, AhciBlockControlBackend};
 use mrml_interface_storage_block_provider_v1::{
-    decode_flush_request, decode_reset_request, BlockProviderControlTransport, BlockProviderDevice,
-    ProtocolError, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES, RESET_REQUEST_BYTES,
-    RESET_RESPONSE_BYTES,
+    BlockProviderControlTransport, BlockProviderDevice, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES,
+    ProtocolError, RESET_REQUEST_BYTES, RESET_RESPONSE_BYTES, decode_flush_request,
+    decode_reset_request,
 };
 
 const _: () = assert!(FLUSH_REQUEST_BYTES == RESET_REQUEST_BYTES);
@@ -116,8 +116,8 @@ mod tests {
     use super::*;
     use crate::AhciBlockControlError;
     use mrml_interface_storage_block_provider_v1::{
-        decode_flush_response, decode_reset_response, encode_flush_request, encode_reset_request,
-        OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, OpaqueHandle, decode_flush_response,
+        decode_reset_response, encode_flush_request, encode_reset_request,
     };
 
     #[derive(Default)]

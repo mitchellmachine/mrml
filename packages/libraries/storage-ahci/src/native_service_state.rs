@@ -1,13 +1,13 @@
 //! Exact assembly of installed AHCI mechanism state for service dispatch.
 
 use crate::{
-    bootstrap_installed_ahci_entry, reconstruct_installed_ahci_port, ActiveAhciPort,
-    AhciCommandBlockBackend, AhciDataBufferSync, AhciDataCapabilityAuthorizer, AhciDispatchService,
-    AhciDispatchServiceError, AhciDispatchSyscalls, AhciMappedCommandMemory, AhciMappedDataBuffer,
-    AhciNativeMappedMemory, AhciNativeMappedMemoryError, AhciNativePortReconstructionError,
-    AhciRawSyscall, AhciRegisterIo, AhciResetIo, AhciServiceBootstrapError,
-    AhciServiceEntryRegisters, AhciUserspaceSyscalls, InstalledAhciServiceLaunch,
     AHCI_DISPATCH_REQUEST_BYTES, AHCI_MAX_TRANSFER_BYTES, AHCI_SERVICE_LAUNCH_BYTES,
+    ActiveAhciPort, AhciCommandBlockBackend, AhciDataBufferSync, AhciDataCapabilityAuthorizer,
+    AhciDispatchService, AhciDispatchServiceError, AhciDispatchSyscalls, AhciMappedCommandMemory,
+    AhciMappedDataBuffer, AhciNativeMappedMemory, AhciNativeMappedMemoryError,
+    AhciNativePortReconstructionError, AhciRawSyscall, AhciRegisterIo, AhciResetIo,
+    AhciServiceBootstrapError, AhciServiceEntryRegisters, AhciUserspaceSyscalls,
+    InstalledAhciServiceLaunch, bootstrap_installed_ahci_entry, reconstruct_installed_ahci_port,
 };
 use mrml_interface_storage_block_provider_v1::BlockProviderDevice;
 
@@ -347,12 +347,12 @@ impl<A: AhciDataCapabilityAuthorizer, R: AhciRegisterIo + AhciResetIo, S: AhciDa
 mod tests {
     use super::*;
     use crate::{
-        reconstruct_installed_ahci_port, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion,
-        AhciMappedDataBuffer, AhciPortDmaLayout, AhciReplyBinding, AhciServiceCpuMapping,
-        AhciServiceLaunchRecord, ReceivedAhciDispatchEnvelope,
+        AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciMappedDataBuffer, AhciPortDmaLayout,
+        AhciReplyBinding, AhciServiceCpuMapping, AhciServiceLaunchRecord,
+        ReceivedAhciDispatchEnvelope, reconstruct_installed_ahci_port,
     };
     use mrml_interface_storage_block_provider_v1::{
-        OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, OpaqueHandle,
     };
     use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights, TaskId};
 

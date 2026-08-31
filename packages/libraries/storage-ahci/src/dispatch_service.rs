@@ -304,11 +304,10 @@ mod tests {
     use super::*;
     use crate::{AhciBlockControlError, AhciBlockIoError};
     use mrml_interface_storage_block_provider_v1::{
-        decode_enumerate_response, decode_flush_response, decode_read_response,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, BorrowedReadView, BorrowedWriteView,
+        OpaqueHandle, decode_enumerate_response, decode_flush_response, decode_read_response,
         decode_reset_response, decode_write_response, encode_enumerate_request,
         encode_flush_request, encode_read_request, encode_reset_request, encode_write_request,
-        BorrowedReadView, BorrowedWriteView, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH,
-        BLOCK_DEVICE_FLAG_RESET,
     };
 
     const TOKEN: u64 = (19_u64 << 32) | 3;

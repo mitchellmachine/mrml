@@ -5,13 +5,14 @@
 //! selected catalog record and the exact borrowed memory extent.
 
 use mrml_interface_storage_block_provider_v1::{
-    decode_flush_request, decode_read_request, decode_reset_request, decode_write_request,
-    encode_flush_response, encode_read_response, encode_reset_response, encode_write_response,
-    BlockProviderControlTransport, BlockProviderDevice, BlockProviderReadTransport,
-    BlockProviderWriteTransport, FlushError, ProtocolError, ReadError, ResetError, WriteError,
     BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_READ_ONLY, BLOCK_DEVICE_FLAG_RESET,
-    FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES, READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
-    RESET_REQUEST_BYTES, RESET_RESPONSE_BYTES, WRITE_REQUEST_BYTES, WRITE_RESPONSE_BYTES,
+    BlockProviderControlTransport, BlockProviderDevice, BlockProviderReadTransport,
+    BlockProviderWriteTransport, FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES, FlushError,
+    ProtocolError, READ_REQUEST_BYTES, READ_RESPONSE_BYTES, RESET_REQUEST_BYTES,
+    RESET_RESPONSE_BYTES, ReadError, ResetError, WRITE_REQUEST_BYTES, WRITE_RESPONSE_BYTES,
+    WriteError, decode_flush_request, decode_read_request, decode_reset_request,
+    decode_write_request, encode_flush_response, encode_read_response, encode_reset_response,
+    encode_write_response,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -296,9 +297,9 @@ const fn map_write_error(error: AhciBlockIoError) -> WriteError {
 mod tests {
     use super::*;
     use mrml_interface_storage_block_provider_v1::{
-        decode_flush_response, decode_read_response, decode_reset_response, decode_write_response,
-        encode_flush_request, encode_read_request, encode_reset_request, encode_write_request,
-        BorrowedReadView, BorrowedWriteView, OpaqueHandle,
+        BorrowedReadView, BorrowedWriteView, OpaqueHandle, decode_flush_response,
+        decode_read_response, decode_reset_response, decode_write_response, encode_flush_request,
+        encode_read_request, encode_reset_request, encode_write_request,
     };
 
     #[derive(Default)]

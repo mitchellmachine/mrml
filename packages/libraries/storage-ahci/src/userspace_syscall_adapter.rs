@@ -1,8 +1,8 @@
 use crate::{
-    service_bootstrap::AhciReplyBinding, AhciControlServiceSyscalls, AhciDataCapabilityAuthorizer,
+    AHCI_DISPATCH_REQUEST_BYTES, AhciControlServiceSyscalls, AhciDataCapabilityAuthorizer,
     AhciDataServiceSyscalls, AhciDispatchSyscalls, AhciServiceSyscalls, InstalledAhciServiceLaunch,
     ReceivedAhciControlEnvelope, ReceivedAhciDataEnvelope, ReceivedAhciDispatchEnvelope,
-    ReceivedAhciEnvelope, AHCI_DISPATCH_REQUEST_BYTES,
+    ReceivedAhciEnvelope, service_bootstrap::AhciReplyBinding,
 };
 #[cfg(target_arch = "x86_64")]
 use core::arch::asm;
@@ -451,8 +451,8 @@ mod tests {
     use super::*;
     use crate::AhciEnumerationServiceLoop;
     use mrml_interface_storage_block_provider_v1::{
-        decode_enumerate_response, encode_enumerate_request, BlockProviderDevice,
-        BorrowedWriteView, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH,
+        BLOCK_DEVICE_FLAG_FLUSH, BlockProviderDevice, BorrowedWriteView, OpaqueHandle,
+        decode_enumerate_response, encode_enumerate_request,
     };
     use mrml_kernel::TaskId;
 

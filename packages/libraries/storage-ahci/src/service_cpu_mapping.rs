@@ -230,7 +230,7 @@ mod tests {
         AhciServiceCpuMapping, AhciServiceLaunchRecord,
     };
     use mrml_interface_storage_block_provider_v1::{
-        BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, BlockProviderDevice, OpaqueHandle,
     };
 
     #[derive(Default)]

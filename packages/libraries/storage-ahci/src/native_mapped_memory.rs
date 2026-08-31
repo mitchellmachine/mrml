@@ -1,8 +1,8 @@
 //! Native service views over the four preinstalled AHCI CPU mappings.
 
 use crate::{
-    service_cpu_mapping::mapping_requests, AhciMappedCommandMemory, AhciMappedDataBuffer,
-    InstalledAhciServiceLaunch,
+    AhciMappedCommandMemory, AhciMappedDataBuffer, InstalledAhciServiceLaunch,
+    service_cpu_mapping::mapping_requests,
 };
 
 const PAGE_BYTES: u64 = 4096;
@@ -100,7 +100,7 @@ mod tests {
         AhciPortDmaLayout, AhciServiceCpuMapping, AhciServiceLaunchRecord,
     };
     use mrml_interface_storage_block_provider_v1::{
-        BlockProviderDevice, OpaqueHandle, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET,
+        BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, BlockProviderDevice, OpaqueHandle,
     };
     use mrml_kernel::{Capability, ObjectId};
 
