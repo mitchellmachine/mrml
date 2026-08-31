@@ -8,8 +8,8 @@ library_root="$sysroot/lib/rustlib/x86_64-pc-windows-gnullvm/lib"
 self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
-expected_size=2389504
-expected_hash=4360294552160ee4365ce81c843872aa0bb039eb60d50cd07217d615e41b04a7
+expected_size=2393088
+expected_hash=66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6
 
 test -x "$driver" || {
     echo "missing release driver: run ./target/debug/mrml build org.mrml.compiler.driver --target linux --release" >&2
@@ -112,11 +112,11 @@ ulimit -s 8192
     --entry entry -o "$probe/probe.exe"
 
 actual_size=$(wc -c < "$probe/probe.exe" | tr -d ' ')
+actual_hash=$(sha256sum "$probe/probe.exe" | awk '{print $1}')
 test "$actual_size" = "$expected_size" || {
-    echo "unexpected PE size: $actual_size" >&2
+    echo "unexpected PE size/hash: $actual_size $actual_hash" >&2
     exit 1
 }
-actual_hash=$(sha256sum "$probe/probe.exe" | awk '{print $1}')
 test "$actual_hash" = "$expected_hash" || {
     echo "unexpected PE hash: $actual_hash" >&2
     exit 1

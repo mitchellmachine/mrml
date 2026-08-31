@@ -222,10 +222,9 @@ The PE serializer now has an explicit bounded writable-data input. It emits a
 separate page-aligned `.data` section with read/write and non-executable
 characteristics, validates every eight-byte field, and resolves typed `ADDR64`
 targets to absolute addresses in an owning input's checked read-only layout.
-The image remains fixed at its declared base and intentionally emits no base
-relocation table. The existing PE APIs delegate with no writable inputs and
-retain their prior output. COFF writable-section decoding and driver transport
-remain separate gates.
+The later base-relocation milestone supersedes the original fixed-base output
+for images containing absolute VA fields. COFF writable-section decoding and
+driver transport remain separate gates at this historical checkpoint.
 
 The COFF core now decodes one nonempty initialized RW/non-executable
 `.data$...` section into typed writable bytes. Every relocation must be an
@@ -1490,8 +1489,8 @@ when the result is nonzero. Dedicated diagnostic stubs intentionally provide
 no usable allocator, so an unexpected heap path fails closed instead of
 silently broadening the fixture. On the normal 8 MiB Linux stack, MRML linked
 the exact pinned `std` dependency closure and self-contained MinGW import
-archives into a deterministic 2,389,504-byte PE with SHA-256
-`4360294552160ee4365ce81c843872aa0bb039eb60d50cd07217d615e41b04a7`.
+archives into a deterministic 2,393,088-byte PE with SHA-256
+`66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6`.
 The image has separate RX, R/NX, and RW/NX sections plus import, exception,
 TLS, and IAT directories. Exact `.CRT$XLA` through `.CRT$XLZ` fragments retain
 a typed suffix order, form one stable contiguous callback table in RW/NX data,
@@ -1526,7 +1525,7 @@ independently authored Rust 2024 `thread_local!` containing a const-initialized
 to `_tls_index` and two `SECREL` references to its exact `.tls$$...VALUE`
 section. MRML links the selected closure into a deterministic 3,584-byte PE with
 SHA-256
-`7a6198a697c7b5823bbd207304550ec9765a9f5ba0182cbeff564555a87e177e`.
+`1406839fe494dac45307df1223b88b76a25e99f01f41f0ad4d1cf455fcc074b1`.
 Wine 11.16 initialized the PE TLS template; the authored entry read 40 through
 the thread-local access sequence, stored 42, read it back, and returned 42.
 This is one hosted main-thread const TLS access, not destructor registration or
@@ -1538,7 +1537,7 @@ out-of-line initializer that increments an ordinary atomic counter, and accesses
 the TLS value twice. Its exact object retains the `_tls_index` and `SECREL`
 sequence plus one writable-counter reference and an unwind-described initializer
 call. MRML emits a distinct deterministic 3,584-byte PE with SHA-256
-`a7da230949f6e8615a2c71da9a5730cf3df01c42e0943927f0662fdaf560f2ff`.
+`547a11546615a17e3320eae61de7cceca4dcbed0bca7e07990878c2121ffe82a`.
 Wine 11.16 returned 42 only after the first access initialized 40, mutation
 stored 42, the second access observed 42, and the counter proved exactly one
 initializer call. This is bounded main-thread lazy initialization without a
@@ -1550,7 +1549,7 @@ The probe's `thread` mode imports exact `CreateThread`, `WaitForSingleObject`,
 kernel32 archive. Both the main and child routines use `_tls_index` plus exact
 `SECREL` references to one const TLS cell. MRML emits a deterministic 3,584-byte
 PE with SHA-256
-`6e9bdb946cb9778b00316f499672d7157ba40d639aa6798a33f211c21379c36a`.
+`a679f964aaa6f871f734eb768067714eb4ec8e42e2429e18100d03912ebe2059`.
 Wine 11.16 returned 42 only after the main thread changed its value from 40 to
 41, the new thread independently observed 40 and changed it to 42, the child
 exit code was 42, and the main thread still observed 41. This is bounded hosted
@@ -1563,10 +1562,29 @@ that release-increments an ordinary atomic counter. The exact pinned object
 selects `std`'s destructor-list registration path, retains the typed TLS access,
 an unwind-described destroy shim, exact writable/read-only identities, and the
 same bounded kernel32 child-thread imports. MRML emits a deterministic
-2,390,528-byte PE with SHA-256
-`054cc69b907ee04db39979692611d4ce2df93d1fd98c7d2550611b6cecb7e7d3`.
+2,393,600-byte PE with SHA-256
+`84a86a69953250b284a3f514a2d08db4c2eef7f446d7bdebd66eb099e358bcd5`.
 Wine 11.16 returned 42 only after the child accessed and mutated its TLS value,
 thread detach ran the registered destructor, and the main thread acquired an
 exact drop count of one. This is one hosted child-thread destructor path, not
 multiple/re-entrant destructors, panic during teardown, process-detach ordering,
 dynamic TLS, native Windows, broad `std` conformance, WHP, or physical hardware.
+
+PE images with absolute VA fields now carry a bounded base-relocation
+inventory. It includes every selected writable `ADDR64` field, every read-only
+`ADDR64` field, and the four absolute TLS-directory fields. The serializer
+sorts exact RVAs, rejects duplicate or header targets, groups
+`IMAGE_REL_BASED_DIR64` entries by 4 KiB page, pads each block with the standard
+absolute no-op entry, and publishes the resulting directory from the existing
+R/NX section. The bound combines the aggregate selected-relocation frontier,
+the object-wide read-only frontier, and four TLS fields. Only images with a
+complete nonempty inventory clear `IMAGE_FILE_RELOCS_STRIPPED` and set
+`DYNAMIC_BASE`; images containing no absolute addresses retain their previous
+fixed-base bytes. Unit coverage checks deterministic ordering, page grouping,
+duplicate rejection, capacity failure without partial output, and end-to-end
+directory/header fields. The complete 838-unit compiler-core gate, its object
+and conformance groups, 351 replacement tests, and 128 semantic tests pass.
+The release driver and all five pinned std/TLS Wine probes above return 42.
+Wine acceptance proves these exact relocation-bearing images remain loadable at
+the observed address; forced nonpreferred-base rebasing, native Windows, WHP,
+and physical-hardware relocation remain unverified.

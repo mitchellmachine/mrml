@@ -17,25 +17,25 @@ case ${1:-const} in
         probe_name=pinned_std_tls_execution
         probe_source=docs/compiler/probes/pinned_std_tls_execution.rs
         expected_size=3584
-        expected_hash=7a6198a697c7b5823bbd207304550ec9765a9f5ba0182cbeff564555a87e177e
+        expected_hash=1406839fe494dac45307df1223b88b76a25e99f01f41f0ad4d1cf455fcc074b1
         ;;
     lazy)
         probe_name=pinned_std_lazy_tls_execution
         probe_source=docs/compiler/probes/pinned_std_lazy_tls_execution.rs
         expected_size=3584
-        expected_hash=a7da230949f6e8615a2c71da9a5730cf3df01c42e0943927f0662fdaf560f2ff
+        expected_hash=547a11546615a17e3320eae61de7cceca4dcbed0bca7e07990878c2121ffe82a
         ;;
     thread)
         probe_name=pinned_std_thread_tls_execution
         probe_source=docs/compiler/probes/pinned_std_thread_tls_execution.rs
         expected_size=3584
-        expected_hash=6e9bdb946cb9778b00316f499672d7157ba40d639aa6798a33f211c21379c36a
+        expected_hash=a679f964aaa6f871f734eb768067714eb4ec8e42e2429e18100d03912ebe2059
         ;;
     destructor)
         probe_name=pinned_std_tls_destructor_execution
         probe_source=docs/compiler/probes/pinned_std_tls_destructor_execution.rs
-        expected_size=2390528
-        expected_hash=054cc69b907ee04db39979692611d4ce2df93d1fd98c7d2550611b6cecb7e7d3
+        expected_size=2393600
+        expected_hash=84a86a69953250b284a3f514a2d08db4c2eef7f446d7bdebd66eb099e358bcd5
         ;;
     *)
         echo "usage: $0 [const|lazy|thread|destructor]" >&2
@@ -143,11 +143,11 @@ ulimit -s 8192
     --entry entry -o "$probe/probe.exe"
 
 actual_size=$(wc -c < "$probe/probe.exe" | tr -d ' ')
+actual_hash=$(sha256sum "$probe/probe.exe" | awk '{print $1}')
 test "$actual_size" = "$expected_size" || {
-    echo "unexpected PE size: $actual_size" >&2
+    echo "unexpected PE size/hash: $actual_size $actual_hash" >&2
     exit 1
 }
-actual_hash=$(sha256sum "$probe/probe.exe" | awk '{print $1}')
 test "$actual_hash" = "$expected_hash" || {
     echo "unexpected PE hash: $actual_hash" >&2
     exit 1

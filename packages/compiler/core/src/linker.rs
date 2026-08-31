@@ -21,6 +21,11 @@ pub const MAX_LINK_TOTAL_RELOCATIONS: usize = 16_384;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
 /// Object-wide PE read-only fixups are separate from per-fragment code arenas.
 pub const MAX_PE_READONLY_RELOCATIONS: usize = MAX_LINK_FRAGMENTS;
+/// Every selected absolute PE field must be represented before an image may
+/// advertise loader rebasing. This covers the aggregate code/data relocation
+/// frontier, object-wide read-only fixups, and the four TLS-directory VAs.
+pub const MAX_PE_BASE_RELOCATIONS: usize =
+    MAX_LINK_TOTAL_RELOCATIONS + MAX_PE_READONLY_RELOCATIONS + 4;
 /// Runtime metadata is independently bounded but must cover every retained
 /// code fragment from an atomically selected COFF archive member.
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = MAX_LINK_FRAGMENTS;
@@ -8834,6 +8839,122 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             .checked_add(data.zeroed_size)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
+    let readonly_rva = TEXT_RVA
+        .checked_add(linked.readonly_offset)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let provisional_writable_rva = 0x8000_0000u32;
+    let mut base_relocation_rvas = [0u32; MAX_PE_BASE_RELOCATIONS];
+    let mut base_relocation_count = 0usize;
+    let mut record_base_relocation = |rva: usize| -> Result<(), LinkerError> {
+        let slot = base_relocation_rvas
+            .get_mut(base_relocation_count)
+            .ok_or(LinkerError::TooManyRelocations)?;
+        *slot = to_u32_link(rva)?;
+        base_relocation_count = base_relocation_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        Ok(())
+    };
+    if has_tls {
+        for field_offset in [0, 8, 16, 24] {
+            record_base_relocation(
+                readonly_rva
+                    .checked_add(tls_directory_offset)
+                    .and_then(|rva| rva.checked_add(field_offset))
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )?;
+        }
+    }
+    for (index, data) in writable_data.iter().enumerate() {
+        if !writable_kept[index] || data.initialized.is_empty() {
+            continue;
+        }
+        for relocation in data.relocations {
+            record_base_relocation(
+                usize::try_from(provisional_writable_rva)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    .checked_add(writable_offsets[index])
+                    .and_then(|rva| rva.checked_add(relocation.offset))
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )?;
+        }
+    }
+    for relocation in readonly_absolute_relocations {
+        if relocation.kind != PeReadonlyRelocationKind::Address64 {
+            continue;
+        }
+        let pointer_rva = match relocation.readonly_identity {
+            Some(identity) => {
+                let target = resolve_coff_section(
+                    inputs,
+                    &linked_layouts,
+                    identity,
+                    relocation.readonly_offset,
+                )?;
+                readonly_rva
+                    .checked_add(
+                        target
+                            .checked_sub(linked.readonly_offset)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                    )
+                    .ok_or(LinkerError::OffsetOverflow)?
+            }
+            None => resolve_readonly_symbol(
+                inputs,
+                &linked_layouts,
+                linked.readonly_offset,
+                readonly_rva,
+                relocation.readonly_owner,
+                relocation.readonly_offset,
+            )?,
+        };
+        pointer_rva
+            .checked_add(8)
+            .filter(|end| {
+                readonly_rva
+                    .checked_add(readonly_size)
+                    .is_some_and(|readonly_end| pointer_rva >= readonly_rva && *end <= readonly_end)
+            })
+            .ok_or(LinkerError::InvalidRelocationOffset)?;
+        record_base_relocation(pointer_rva)?;
+    }
+    drop(record_base_relocation);
+    sort_pe_base_relocations(&mut base_relocation_rvas[..base_relocation_count]);
+    let base_relocation_size =
+        pe_base_relocation_size(&base_relocation_rvas[..base_relocation_count])?;
+    let base_relocation_offset = if base_relocation_count == 0 {
+        0
+    } else {
+        let offset = align(readonly_size, 4)?;
+        readonly_size = offset
+            .checked_add(base_relocation_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        offset
+    };
+    let writable_rva = if readonly_size == 0 {
+        readonly_rva
+    } else {
+        align(
+            readonly_rva
+                .checked_add(readonly_size)
+                .ok_or(LinkerError::OffsetOverflow)?,
+            SECTION_ALIGNMENT,
+        )?
+    };
+    if base_relocation_count != 0 {
+        for rva in &mut base_relocation_rvas[..base_relocation_count] {
+            if *rva >= provisional_writable_rva {
+                *rva = to_u32_link(
+                    writable_rva
+                        .checked_add(
+                            usize::try_from(*rva - provisional_writable_rva)
+                                .map_err(|_| LinkerError::OffsetOverflow)?,
+                        )
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                )?;
+            }
+        }
+    }
     let text_raw_size = align(text_size, FILE_ALIGNMENT)?;
     let readonly_raw_size = align(readonly_size, FILE_ALIGNMENT)?;
     let readonly_raw = HEADERS
@@ -8852,19 +8973,6 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             capacity: bytes.len(),
         });
     }
-    let readonly_rva = TEXT_RVA
-        .checked_add(linked.readonly_offset)
-        .ok_or(LinkerError::OffsetOverflow)?;
-    let writable_rva = if readonly_size == 0 {
-        readonly_rva
-    } else {
-        align(
-            readonly_rva
-                .checked_add(readonly_size)
-                .ok_or(LinkerError::OffsetOverflow)?,
-            SECTION_ALIGNMENT,
-        )?
-    };
     let size_of_image = if writable_size != 0 {
         align(
             writable_rva
@@ -8900,7 +9008,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         u16::try_from(section_count).map_err(|_| LinkerError::OffsetOverflow)?,
     )?;
     patch_u16(bytes, 0x94, 240)?;
-    patch_u16(bytes, 0x96, 0x022f)?;
+    patch_u16(
+        bytes,
+        0x96,
+        0x022f
+            & if base_relocation_count == 0 {
+                0xffff
+            } else {
+                0xfffe
+            },
+    )?;
 
     let optional = 0x98;
     patch_u16(bytes, optional, 0x20b)?;
@@ -8933,7 +9050,11 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     patch_u32(bytes, optional + 56, to_u32_link(size_of_image)?)?;
     patch_u32(bytes, optional + 60, to_u32_link(HEADERS)?)?;
     patch_u16(bytes, optional + 68, 3)?;
-    patch_u16(bytes, optional + 70, 0x8100)?;
+    patch_u16(
+        bytes,
+        optional + 70,
+        0x8100 | if base_relocation_count == 0 { 0 } else { 0x40 },
+    )?;
     patch_u64(bytes, optional + 72, 0x10_0000)?;
     patch_u64(bytes, optional + 80, 0x1000)?;
     patch_u64(bytes, optional + 88, 0x10_0000)?;
@@ -8972,6 +9093,14 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             to_u32_link(readonly_rva + tls_directory_offset)?,
         )?;
         patch_u32(bytes, optional + 188, 40)?;
+    }
+    if base_relocation_count != 0 {
+        patch_u32(
+            bytes,
+            optional + 152,
+            to_u32_link(readonly_rva + base_relocation_offset)?,
+        )?;
+        patch_u32(bytes, optional + 156, to_u32_link(base_relocation_size)?)?;
     }
 
     write_pe_section(
@@ -9079,6 +9208,24 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             readonly_raw,
             &linked_scratch[linked.readonly_offset..linked.length],
         )?;
+    }
+    if base_relocation_count != 0 {
+        let relocation_output_start = readonly_raw
+            .checked_add(base_relocation_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let relocation_output_end = relocation_output_start
+            .checked_add(base_relocation_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let relocation_output = bytes
+            .get_mut(relocation_output_start..relocation_output_end)
+            .ok_or(LinkerError::OutputTooSmall)?;
+        let serialized = serialize_pe_base_relocations(
+            &mut base_relocation_rvas[..base_relocation_count],
+            relocation_output,
+        )?;
+        if serialized != base_relocation_size {
+            return Err(LinkerError::OffsetOverflow);
+        }
     }
     let mut begin_rvas = [0u32; MAX_PE_RUNTIME_FUNCTIONS];
     let mut end_rvas = [0u32; MAX_PE_RUNTIME_FUNCTIONS];
@@ -10546,6 +10693,82 @@ fn resolve_coff_section(
         }
     }
     resolved.ok_or(LinkerError::UndefinedSymbol)
+}
+
+/// Serializes sorted PE32+ `IMAGE_REL_BASED_DIR64` fixups into page-grouped
+/// base-relocation blocks. The caller supplies exact relocation RVAs; duplicate
+/// fields are rejected rather than relying on loader-specific double patching.
+fn serialize_pe_base_relocations(
+    relocation_rvas: &mut [u32],
+    output: &mut [u8],
+) -> Result<usize, LinkerError> {
+    sort_pe_base_relocations(relocation_rvas);
+    let required = pe_base_relocation_size(relocation_rvas)?;
+    if required > output.len() {
+        return Err(LinkerError::OutputTooSmall);
+    }
+
+    output[..required].fill(0);
+    let mut cursor = 0usize;
+    let mut index = 0usize;
+    while index < relocation_rvas.len() {
+        let page = relocation_rvas[index] & !0xfff;
+        let block = cursor;
+        patch_u32(output, block, page)?;
+        cursor = cursor.checked_add(8).ok_or(LinkerError::OffsetOverflow)?;
+        while index < relocation_rvas.len() && relocation_rvas[index] & !0xfff == page {
+            let page_offset = u16::try_from(relocation_rvas[index] - page)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            patch_u16(output, cursor, 0xa000 | page_offset)?;
+            cursor = cursor.checked_add(2).ok_or(LinkerError::OffsetOverflow)?;
+            index += 1;
+        }
+        cursor = align(cursor, 4)?;
+        patch_u32(
+            output,
+            block + 4,
+            u32::try_from(cursor - block).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+    }
+    Ok(required)
+}
+
+fn sort_pe_base_relocations(relocation_rvas: &mut [u32]) {
+    relocation_rvas.sort_unstable();
+}
+
+fn pe_base_relocation_size(relocation_rvas: &[u32]) -> Result<usize, LinkerError> {
+    let mut required = 0usize;
+    let mut index = 0usize;
+    while index < relocation_rvas.len() {
+        if relocation_rvas[index] == 0
+            || (index != 0 && relocation_rvas[index - 1] == relocation_rvas[index])
+        {
+            return Err(LinkerError::InvalidRelocationOffset);
+        }
+        let page = relocation_rvas[index] & !0xfff;
+        let start = index;
+        index += 1;
+        while index < relocation_rvas.len() && relocation_rvas[index] & !0xfff == page {
+            if relocation_rvas[index - 1] == relocation_rvas[index] {
+                return Err(LinkerError::InvalidRelocationOffset);
+            }
+            index += 1;
+        }
+        let entries = index
+            .checked_sub(start)
+            .and_then(|count| count.checked_mul(2))
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let padded_entries = entries
+            .checked_add(3)
+            .map(|size| size & !3)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        required = required
+            .checked_add(8)
+            .and_then(|size| size.checked_add(padded_entries))
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(required)
 }
 
 fn resolve_readonly_symbol(
@@ -14009,6 +14232,48 @@ mod tests {
     }
 
     #[test]
+    fn serializes_bounded_sorted_pe_dir64_base_relocation_blocks() {
+        let mut relocation_rvas = [0x3008, 0x1008, 0x1ff8, 0x3010, 0x1000];
+        let mut output = [0xa5; 36];
+        let length = serialize_pe_base_relocations(&mut relocation_rvas, &mut output).unwrap();
+        assert_eq!(relocation_rvas, [0x1000, 0x1008, 0x1ff8, 0x3008, 0x3010]);
+        assert_eq!(length, 28);
+        assert_eq!(read_u32(&output, 0).unwrap(), 0x1000);
+        assert_eq!(read_u32(&output, 4).unwrap(), 16);
+        assert_eq!(read_u16(&output, 8).unwrap(), 0xa000);
+        assert_eq!(read_u16(&output, 10).unwrap(), 0xa008);
+        assert_eq!(read_u16(&output, 12).unwrap(), 0xaff8);
+        assert_eq!(read_u16(&output, 14).unwrap(), 0);
+        assert_eq!(read_u32(&output, 16).unwrap(), 0x3000);
+        assert_eq!(read_u32(&output, 20).unwrap(), 12);
+        assert_eq!(read_u16(&output, 24).unwrap(), 0xa008);
+        assert_eq!(read_u16(&output, 26).unwrap(), 0xa010);
+        assert!(output[length..].iter().all(|byte| *byte == 0xa5));
+
+        let mut duplicate = [0x2008, 0x2008];
+        let mut duplicate_output = [0xa5; 12];
+        assert_eq!(
+            serialize_pe_base_relocations(&mut duplicate, &mut duplicate_output),
+            Err(LinkerError::InvalidRelocationOffset)
+        );
+        assert!(duplicate_output.iter().all(|byte| *byte == 0xa5));
+
+        let mut header_rva = [0];
+        assert_eq!(
+            serialize_pe_base_relocations(&mut header_rva, &mut duplicate_output),
+            Err(LinkerError::InvalidRelocationOffset)
+        );
+
+        let mut too_large = [0x2008, 0x3008];
+        let mut too_small = [0xa5; 20];
+        assert_eq!(
+            serialize_pe_base_relocations(&mut too_large, &mut too_small),
+            Err(LinkerError::OutputTooSmall)
+        );
+        assert!(too_small.iter().all(|byte| *byte == 0xa5));
+    }
+
+    #[test]
     fn emits_sorted_pe_runtime_functions_and_readonly_unwind_bytes() {
         let inputs = [
             LinkInput {
@@ -14062,7 +14327,7 @@ mod tests {
     }
 
     #[test]
-    fn emits_rw_nx_pe_data_and_resolves_fixed_addr64_targets() {
+    fn emits_rw_nx_pe_data_and_dir64_base_relocations() {
         let input = LinkInput {
             symbol: "entry",
             symbol_target: LinkDefinitionTarget::Text(0),
@@ -14091,9 +14356,17 @@ mod tests {
             link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], &[writable])
                 .unwrap();
         assert_eq!(read_u16(pe.bytes(), 0x86).unwrap(), 3);
+        assert_eq!(read_u16(pe.bytes(), 0x96).unwrap(), 0x022e);
         assert_eq!(&pe.bytes()[0x1d8..0x1e0], b".data\0\0\0");
         assert_eq!(read_u32(pe.bytes(), 0x1d8 + 12).unwrap(), 0x3000);
         assert_eq!(read_u32(pe.bytes(), 0x1d8 + 36).unwrap(), 0xc000_0040);
+        assert_eq!(read_u16(pe.bytes(), 0x98 + 70).unwrap(), 0x8140);
+        assert_eq!(read_u32(pe.bytes(), 0x98 + 152).unwrap(), 0x2008);
+        assert_eq!(read_u32(pe.bytes(), 0x98 + 156).unwrap(), 12);
+        assert_eq!(read_u32(pe.bytes(), 0x408).unwrap(), 0x3000);
+        assert_eq!(read_u32(pe.bytes(), 0x40c).unwrap(), 12);
+        assert_eq!(read_u16(pe.bytes(), 0x410).unwrap(), 0xa000);
+        assert_eq!(read_u16(pe.bytes(), 0x412).unwrap(), 0);
         assert_eq!(
             u64::from_le_bytes(pe.bytes()[0x600..0x608].try_into().unwrap()),
             0x0000_0001_4000_2000
@@ -14388,17 +14661,23 @@ mod tests {
             link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], &writable)
                 .unwrap();
 
-        let read_image_u64 =
-            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
-        assert_eq!(pe.bytes()[0x400], 9);
-        assert_eq!(read_image_u64(0x408), 0);
-        assert_eq!(read_image_u64(0x410), 0);
-        assert_eq!(read_image_u64(0x418), 0);
-        assert_eq!(read_image_u64(0x420), 0);
-        assert_eq!(read_image_u64(0x428), 0);
-        assert_eq!(read_image_u64(0x430), 0x0000_0001_4000_1001);
-        assert_eq!(read_image_u64(0x438), 0x0000_0001_4000_1002);
-        assert_eq!(read_image_u64(0x440), 0);
+        let writable_raw = usize::try_from(read_u32(pe.bytes(), 0x1d8 + 20).unwrap()).unwrap();
+        let read_image_u64 = |offset| {
+            u64::from_le_bytes(
+                pe.bytes()[writable_raw + offset..writable_raw + offset + 8]
+                    .try_into()
+                    .unwrap(),
+            )
+        };
+        assert_eq!(pe.bytes()[writable_raw], 9);
+        assert_eq!(read_image_u64(8), 0);
+        assert_eq!(read_image_u64(16), 0);
+        assert_eq!(read_image_u64(24), 0);
+        assert_eq!(read_image_u64(32), 0);
+        assert_eq!(read_image_u64(40), 0);
+        assert_eq!(read_image_u64(48), 0x0000_0001_4000_1001);
+        assert_eq!(read_image_u64(56), 0x0000_0001_4000_1002);
+        assert_eq!(read_image_u64(64), 0);
     }
 
     #[test]
@@ -15031,8 +15310,13 @@ mod tests {
             &[writable],
         )
         .unwrap();
+        let writable_raw = usize::try_from(read_u32(pe.bytes(), 0x1d8 + 20).unwrap()).unwrap();
         assert_eq!(
-            u64::from_le_bytes(pe.bytes()[0x400..0x408].try_into().unwrap()),
+            u64::from_le_bytes(
+                pe.bytes()[writable_raw..writable_raw + 8]
+                    .try_into()
+                    .unwrap()
+            ),
             0x0000_0001_4000_1014
         );
     }
