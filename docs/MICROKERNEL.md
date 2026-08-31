@@ -10248,15 +10248,16 @@ withdrawal, backing scrub/release, memory-object release, and address-space
 erasure. Faults retain the exact trap disposition and protocol violations retain
 the exact typed violation alongside the launch receipt through the same resource
 teardown. Both paths exercise an injected mapping-revocation failure that returns
-the progressed owner for retry. Fault and protocol-violation resource release now
-preserve the complete association receipt alongside the respective supervisor
-owner through address-space cleanup and successor dispatch. Both paths exercise
-an injected erasure failure that returns the combined owner unchanged for retry;
-a wrong-runtime dispatch failure likewise returns the cleaned association owner.
-An installed restart coordinator therefore need not reconstruct association
-identity from names or task IDs. Only complete resource and supervisor cleanup
-exposes successor dispatch. The Linux-host storage
-suite passes 164 tests, the kernel suite passes 717, and the storage service passes
+the progressed owner for retry. Voluntary retirement, fault, and
+protocol-violation resource release preserve the complete association receipt
+alongside the respective supervisor owner through address-space cleanup and
+successor dispatch. All three paths exercise an injected erasure failure that
+returns the combined owner unchanged for retry; a wrong-runtime dispatch failure
+likewise returns the cleaned association owner. An installed restart coordinator
+therefore need not reconstruct association identity from names or task IDs. Only
+complete resource and supervisor cleanup exposes successor dispatch. The
+Linux-host storage suite passes 165 tests, the kernel suite passes 717, and the
+storage service passes
 a release `MRML_NATIVE` build. Installed boot composition, hosted execution, and
 physical-device execution remain unverified.
 
