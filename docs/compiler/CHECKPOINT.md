@@ -4612,3 +4612,9 @@ SHA-256
 `c3716a3dbddcb453b1bcd02f93940d1ccd2ae3093c532d34b6c3ead9dc0c65be`
 and returns 42 under Wine 11.16. This is one hosted import/link/load path, not a
 randomness-quality or physical entropy claim.
+
+The `sleep` mode calls `std::thread::sleep` for one millisecond and links the
+exact pinned Windows delay path. It produces 2,393,088 bytes with SHA-256
+`f044c1c51e5a85a169d1bb39bd88307943fe8be28bec2269f430c93e809644cf`
+and returns 42 under Wine 11.16. This is bounded hosted linkage and execution
+evidence, not timing-precision, native Windows, WHP, or physical-timer evidence.

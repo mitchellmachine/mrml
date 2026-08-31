@@ -9,7 +9,7 @@ self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
 test "$#" -le 1 || {
-    echo "usage: $0 [parallelism|time|random]" >&2
+    echo "usage: $0 [parallelism|time|random|sleep]" >&2
     exit 1
 }
 case ${1:-parallelism} in
@@ -31,8 +31,14 @@ case ${1:-parallelism} in
         expected_size=2393088
         expected_hash=c3716a3dbddcb453b1bcd02f93940d1ccd2ae3093c532d34b6c3ead9dc0c65be
         ;;
+    sleep)
+        probe_name=pinned_std_sleep_execution
+        probe_source=docs/compiler/probes/pinned_std_sleep_execution.rs
+        expected_size=2393088
+        expected_hash=f044c1c51e5a85a169d1bb39bd88307943fe8be28bec2269f430c93e809644cf
+        ;;
     *)
-        echo "usage: $0 [parallelism|time|random]" >&2
+        echo "usage: $0 [parallelism|time|random|sleep]" >&2
         exit 1
         ;;
 esac

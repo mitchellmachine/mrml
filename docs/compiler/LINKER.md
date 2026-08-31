@@ -342,15 +342,6 @@ returned 42. This is a 2.73x median result for a small 32-object, import-free
 workload, not archive, large-program, debug-information, or general superiority
 evidence.
 
-The `random` std-probe mode forces `RandomState::new` through `black_box`,
-selecting the exact embedded `bcryptprimitives.dll` direct-name code import for
-`ProcessPrng`. MRML emits a deterministic 2,393,088-byte PE with SHA-256
-`c3716a3dbddcb453b1bcd02f93940d1ccd2ae3093c532d34b6c3ead9dc0c65be`;
-Wine 11.16 returned 42. This verifies that pinned archive selection, the typed
-short-import thunk/IAT identity, PE import serialization, and hosted loader
-resolution agree for this path. It is not a statistical randomness,
-cryptographic-quality, native Windows, or physical entropy-source claim.
-
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can
@@ -1701,3 +1692,20 @@ Wine 11.16 returned 42. The refactored original mode reproduced its existing
 size, hash, and exit 42. This adds one hosted wall-clock linkage/execution path,
 not clock-precision, monotonic-time, native Windows, WHP, or physical-hardware
 evidence.
+
+The `random` std-probe mode forces `RandomState::new` through `black_box`,
+selecting the exact embedded `bcryptprimitives.dll` direct-name code import for
+`ProcessPrng`. MRML emits a deterministic 2,393,088-byte PE with SHA-256
+`c3716a3dbddcb453b1bcd02f93940d1ccd2ae3093c532d34b6c3ead9dc0c65be`;
+Wine 11.16 returned 42. This verifies that pinned archive selection, the typed
+short-import thunk/IAT identity, PE import serialization, and hosted loader
+resolution agree for this path. It is not a statistical randomness,
+cryptographic-quality, native Windows, or physical entropy-source claim.
+
+The same script's `sleep` mode calls `std::thread::sleep` for one millisecond,
+forcing the pinned Windows delay path into the selected archive closure. MRML
+emits a deterministic 2,393,088-byte PE with SHA-256
+`f044c1c51e5a85a169d1bb39bd88307943fe8be28bec2269f430c93e809644cf`;
+Wine 11.16 returned 42 after the call completed. This verifies one bounded
+link/load/execute path through the exact pinned sleep implementation. It is not
+sleep-precision, scheduler, native Windows, WHP, or physical-timer evidence.
