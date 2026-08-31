@@ -1,6 +1,6 @@
 use crate::{
-    HybridClientSecret, KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript,
-    X25519_MLKEM768, finished_verify_data, hybrid_client_share, verify_server_chain,
+    finished_verify_data, hybrid_client_share, verify_server_chain, HybridClientSecret,
+    KeySchedule, RecordKeys, TlsError, Transcript, TLS_AES_128_GCM_SHA256, X25519_MLKEM768,
 };
 use mrml_crypto::{x25519_public, x25519_shared};
 use mrml_runtime::{TcpStream, Text, Vector};
@@ -34,7 +34,7 @@ fn client_hello(
     if host.is_empty() || host.len() > 253 || !host.is_ascii() {
         return Err(TlsError::Handshake);
     }
-    let hybrid_enabled = crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID");
+    let hybrid_enabled = true;
     let (share, secret) = if hybrid_enabled {
         let (share, secret) = hybrid_client_share()?;
         (share, Some(secret))
@@ -697,9 +697,6 @@ impl TlsClientStream {
         let (group, server_key) = server_share(&server_hello)?;
         let mut shared = Vector::new();
         if group == X25519_MLKEM768 {
-            if !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
-                return Err(TlsError::Handshake);
-            }
             shared
                 .try_extend_from_slice(&hybrid.ok_or(TlsError::Handshake)?.complete(server_key)?)
                 .map_err(|_| TlsError::AllocationFailed)?;
@@ -920,13 +917,19 @@ impl TlsClientStream {
 mod tests {
     use super::*;
     #[test]
-    fn hybrid_share_is_not_advertised_without_experimental_gate() {
-        if crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
-            return;
-        }
+    fn hybrid_share_is_advertised_before_x25519() {
         let (hello, hybrid, _) = client_hello("example.com", &["h2", "http/1.1"], None).unwrap();
-        assert!(hybrid.is_none());
+        assert!(hybrid.is_some());
         assert!(hello.len() > 32);
+        let hybrid_position = hello
+            .windows(2)
+            .position(|bytes| bytes == X25519_MLKEM768.to_be_bytes())
+            .unwrap();
+        let x25519_position = hello
+            .windows(2)
+            .rposition(|bytes| bytes == [0, 0x1d])
+            .unwrap();
+        assert!(hybrid_position < x25519_position);
     }
     #[test]
     fn encrypted_extensions_require_an_offered_alpn() {
@@ -948,11 +951,9 @@ mod tests {
         ];
         assert_eq!(&quic_extensions(&message).unwrap()[..], &[0xaa, 0xbb]);
         let (_, hello) = QuicTlsClientHandshake::new("example.com", &[1, 2, 3]).unwrap();
-        assert!(
-            hello
-                .windows(7)
-                .any(|window| window == [0, 57, 0, 3, 1, 2, 3])
-        );
+        assert!(hello
+            .windows(7)
+            .any(|window| window == [0, 57, 0, 3, 1, 2, 3]));
     }
 
     #[test]

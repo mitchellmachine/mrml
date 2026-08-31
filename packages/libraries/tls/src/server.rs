@@ -1,6 +1,6 @@
 use crate::{
-    KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript, X25519_MLKEM768,
-    finished_verify_data, hybrid_server_share,
+    finished_verify_data, hybrid_server_share, KeySchedule, RecordKeys, TlsError, Transcript,
+    TLS_AES_128_GCM_SHA256, X25519_MLKEM768,
 };
 use mrml_crypto::{rsa_pss_sha256_sign, x25519_public, x25519_shared};
 use mrml_runtime::{TcpStream, Text, Vector};
@@ -287,7 +287,9 @@ fn send_plain(stream: &mut TcpStream, msg: &[u8]) -> Result<(), TlsError> {
     stream.write_all(&h).map_err(|_| TlsError::Io)?;
     stream.write_all(msg).map_err(|_| TlsError::Io)
 }
-fn client_offer(msg: &[u8]) -> Result<(&[u8], u16, &[u8], Vector<Text>), TlsError> {
+fn client_offer(
+    msg: &[u8],
+) -> Result<(&[u8], u16, &[u8], Vector<Text>, Option<Vector<u8>>), TlsError> {
     let mut c = Cursor::new(msg);
     if c.byte()? != 1 || c.u24()? != msg.len() - 4 || c.take(2)? != [3, 3] {
         return Err(TlsError::Handshake);
@@ -313,6 +315,7 @@ fn client_offer(msg: &[u8]) -> Result<(&[u8], u16, &[u8], Vector<Text>), TlsErro
     let mut hybrid_share = None;
     let mut x25519_share = None;
     let mut protocols = Vector::new();
+    let mut transport_parameters = None;
     while !e.done() {
         let kind = e.u16()?;
         let n = e.u16()? as usize;
@@ -346,17 +349,22 @@ fn client_offer(msg: &[u8]) -> Result<(&[u8], u16, &[u8], Vector<Text>), TlsErro
                     .try_push(Text::try_from_str(protocol).map_err(|_| TlsError::AllocationFailed)?)
                     .map_err(|_| TlsError::AllocationFailed)?;
             }
+        } else if kind == 57 {
+            if transport_parameters.is_some() || value.len() > 4096 {
+                return Err(TlsError::Handshake);
+            }
+            let mut owned = Vector::new();
+            owned
+                .try_extend_from_slice(value)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            transport_parameters = Some(owned);
         }
     }
-    let (group, share) = if crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
-        hybrid_share
-            .map(|share| (X25519_MLKEM768, share))
-            .or_else(|| x25519_share.map(|share| (0x1d, share)))
-    } else {
-        x25519_share.map(|share| (0x1d, share))
-    }
-    .ok_or(TlsError::Handshake)?;
-    Ok((session, group, share, protocols))
+    let (group, share) = hybrid_share
+        .map(|share| (X25519_MLKEM768, share))
+        .or_else(|| x25519_share.map(|share| (0x1d, share)))
+        .ok_or(TlsError::Handshake)?;
+    Ok((session, group, share, protocols, transport_parameters))
 }
 
 pub struct TlsServerStream {
@@ -380,7 +388,7 @@ impl TlsServerStream {
             return Err(TlsError::Handshake);
         }
         let client_hello = &first[5..];
-        let (session, group, share, offered_protocols) = client_offer(client_hello)?;
+        let (session, group, share, offered_protocols, _) = client_offer(client_hello)?;
         let negotiated_protocol = if config.protocols.is_empty() {
             None
         } else {
@@ -628,24 +636,20 @@ impl TlsServerStream {
 mod tests {
     use super::*;
     use crate::TlsClientStream;
-    use mrml_runtime::{TcpListener, environment_variable, read_file};
+    use mrml_runtime::{environment_variable, read_file, TcpListener};
 
     #[test]
     fn pem_decoder_rejects_non_base64_and_trailing_data() {
-        assert!(
-            pem_blocks(
-                b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
-                b"CERTIFICATE"
-            )
-            .is_err()
-        );
-        assert!(
-            pem_blocks(
-                b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
-                b"CERTIFICATE"
-            )
-            .is_err()
-        );
+        assert!(pem_blocks(
+            b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
+            b"CERTIFICATE"
+        )
+        .is_err());
+        assert!(pem_blocks(
+            b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
+            b"CERTIFICATE"
+        )
+        .is_err());
     }
 
     #[test]
@@ -666,17 +670,15 @@ mod tests {
         let config = mrml_runtime::Shared::new(TlsServerConfig::from_pem(&cert, &key).unwrap());
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let socket = listener.accept().unwrap();
-                let mut tls = TlsServerStream::accept(socket, &config).unwrap();
-                let mut request = [0; 4];
-                assert_eq!(tls.read(&mut request).unwrap(), 4);
-                assert_eq!(&request, b"ping");
-                tls.write_all(b"pong").unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let socket = listener.accept().unwrap();
+            let mut tls = TlsServerStream::accept(socket, &config).unwrap();
+            let mut request = [0; 4];
+            assert_eq!(tls.read(&mut request).unwrap(), 4);
+            assert_eq!(&request, b"ping");
+            tls.write_all(b"pong").unwrap();
+        })
+        .is_ok());
         let mut client = TlsClientStream::connect("localhost", port).unwrap();
         assert_eq!(client.negotiated_group(), X25519_MLKEM768);
         client.write_all(b"ping").unwrap();
