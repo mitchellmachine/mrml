@@ -23,6 +23,11 @@ pub enum QuicError {
     ProtocolViolation,
     Io,
     Tls,
+    UnexpectedPeer,
+    ConnectionId,
+    TransportParameter,
+    HandshakeConfirmation,
+    PeerClosed { code: u64, frame_type: u64 },
 }
 
 pub fn initial_destination_id(input: &[u8]) -> Result<Vector<u8>, QuicError> {

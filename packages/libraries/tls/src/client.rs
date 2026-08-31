@@ -657,6 +657,8 @@ pub struct TlsClientStream {
     pending_position: usize,
     negotiated_group: u16,
     negotiated_protocol: Option<Text>,
+    read_secret: [u8; 32],
+    write_secret: [u8; 32],
 }
 impl TlsClientStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, TlsError> {
@@ -825,12 +827,12 @@ impl TlsClientStream {
                         transcript.update(&message);
                         schedule.finish_handshake();
                         let application_hash = transcript.hash();
-                        let read_keys = RecordKeys::from_traffic_secret(
-                            &schedule.application_traffic_secret(true, &application_hash),
-                        );
-                        let write_keys = RecordKeys::from_traffic_secret(
-                            &schedule.application_traffic_secret(false, &application_hash),
-                        );
+                        let read_secret =
+                            schedule.application_traffic_secret(true, &application_hash);
+                        let write_secret =
+                            schedule.application_traffic_secret(false, &application_hash);
+                        let read_keys = RecordKeys::from_traffic_secret(&read_secret);
+                        let write_keys = RecordKeys::from_traffic_secret(&write_secret);
                         let verify = finished_verify_data(&client_hs, &transcript.hash());
                         let mut finished = Vector::new();
                         finished
@@ -851,6 +853,8 @@ impl TlsClientStream {
                             pending_position: 0,
                             negotiated_group: group,
                             negotiated_protocol,
+                            read_secret,
+                            write_secret,
                         });
                     }
                     _ => return Err(TlsError::Handshake),
@@ -904,6 +908,37 @@ impl TlsClientStream {
                     return Ok(0);
                 }
                 22 => {
+                    let mut at = 0;
+                    while at < self.pending.len() {
+                        if self.pending.len() - at < 4 {
+                            return Err(TlsError::Handshake);
+                        }
+                        let length = ((self.pending[at + 1] as usize) << 16)
+                            | ((self.pending[at + 2] as usize) << 8)
+                            | self.pending[at + 3] as usize;
+                        let end = at.checked_add(4 + length).ok_or(TlsError::Handshake)?;
+                        if end > self.pending.len() {
+                            return Err(TlsError::Handshake);
+                        }
+                        if self.pending[at] == 24 {
+                            if length != 1 || self.pending[at + 4] > 1 {
+                                return Err(TlsError::Handshake);
+                            }
+                            crate::update_application_traffic_secret(&mut self.read_secret)?;
+                            self.read_keys = RecordKeys::from_traffic_secret(&self.read_secret);
+                            if self.pending[at + 4] == 1 {
+                                let mut response = Vector::new();
+                                self.write_keys.seal(22, &[24, 0, 0, 1, 0], &mut response)?;
+                                self.stream.write_all(&response).map_err(|_| TlsError::Io)?;
+                                crate::update_application_traffic_secret(&mut self.write_secret)?;
+                                self.write_keys =
+                                    RecordKeys::from_traffic_secret(&self.write_secret);
+                            }
+                        } else if self.pending[at] != 4 {
+                            return Err(TlsError::Handshake);
+                        }
+                        at = end;
+                    }
                     self.pending.clear();
                     continue;
                 }
@@ -968,8 +1003,10 @@ mod tests {
         if mrml_runtime::environment_variable("MRML_TLS_REQUIRE_HYBRID").is_some() {
             assert_eq!(tls.negotiated_group(), X25519_MLKEM768);
         }
-        tls.write_all(b"HEAD / HTTP/1.1\r\nHost: huggingface.co\r\nConnection: close\r\n\r\n")
+        tls.write_all(b"HEAD / HTTP/1.1\r\n").unwrap();
+        tls.write_all(mrml_runtime::mrml_format!("Host: {}\r\n", host).as_bytes())
             .unwrap();
+        tls.write_all(b"Connection: close\r\n\r\n").unwrap();
         let mut response = [0u8; 64];
         let read = tls.read(&mut response).unwrap();
         assert!(read >= 12);

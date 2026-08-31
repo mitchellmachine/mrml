@@ -1,5 +1,5 @@
 use mrml_runtime::{Text, Vector};
-use mrml_tls::{TlsClientStream, TlsServerStream};
+use mrml_tls::{TlsClientStream, TlsError, TlsServerStream};
 
 use crate::{valid_header, valid_value, Header, HttpError, RequestHead, ResponseHead};
 
@@ -604,13 +604,21 @@ pub struct Http2Response {
 fn tls_read_exact_client(stream: &mut TlsClientStream, out: &mut [u8]) -> Result<(), HttpError> {
     let mut at = 0;
     while at < out.len() {
-        let count = stream.read(&mut out[at..]).map_err(|_| HttpError::Tls)?;
+        let count = stream.read(&mut out[at..]).map_err(map_tls_read_error)?;
         if count == 0 {
             return Err(HttpError::Io);
         }
         at += count;
     }
     Ok(())
+}
+fn map_tls_read_error(error: TlsError) -> HttpError {
+    match error {
+        TlsError::InvalidRecord | TlsError::SequenceExhausted => HttpError::TlsRecord,
+        TlsError::AuthenticationFailed => HttpError::TlsAuthentication,
+        TlsError::Io => HttpError::TlsTransport,
+        _ => HttpError::Tls,
+    }
 }
 fn tls_read_exact_server(stream: &mut TlsServerStream, out: &mut [u8]) -> Result<(), HttpError> {
     let mut at = 0;
@@ -668,6 +676,22 @@ impl Http2ClientConnection {
         let protocol = Http2Client::new();
         stream
             .write_all(&protocol.connection_bytes()?)
+            .map_err(|_| HttpError::Tls)?;
+        let settings = read_client_frame(&mut stream)?;
+        if settings.kind != Http2FrameKind::Settings || settings.flags != 0 {
+            return Err(HttpError::InvalidResponse);
+        }
+        validate_settings(&settings.payload)?;
+        stream
+            .write_all(
+                &Http2Frame {
+                    kind: Http2FrameKind::Settings,
+                    flags: 1,
+                    stream_id: 0,
+                    payload: Vector::new(),
+                }
+                .encode()?,
+            )
             .map_err(|_| HttpError::Tls)?;
         Ok(Self { stream, protocol })
     }
@@ -906,6 +930,37 @@ mod tests {
         assert_eq!(request.target, "/");
     }
     #[test]
+    fn request_wire_matches_independent_h2_probe() {
+        let connection = Http2Client::new().connection_bytes().unwrap();
+        let mut expected_connection = Vector::new();
+        expected_connection
+            .try_extend_from_slice(HTTP2_CLIENT_PREFACE)
+            .unwrap();
+        expected_connection
+            .try_extend_from_slice(&[
+                0, 0, 12, 4, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+            ])
+            .unwrap();
+        assert_eq!(connection, expected_connection);
+        let (_, wire) = Http2Client::new()
+            .request(
+                "GET",
+                "https",
+                "huggingface.co",
+                "/",
+                &[("user-agent", "mrml-http/1")],
+                true,
+            )
+            .unwrap();
+        let expected: Vector<u8> = [
+            0x00, 0x00, 0x21, 0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x82, 0x87, 0x01, 0x0e, b'h',
+            b'u', b'g', b'g', b'i', b'n', b'g', b'f', b'a', b'c', b'e', b'.', b'c', b'o', 0x84,
+            0x0f, 0x2b, 0x0b, b'm', b'r', b'm', b'l', b'-', b'h', b't', b't', b'p', b'/', b'1',
+        ]
+        .into();
+        assert_eq!(wire, expected);
+    }
+    #[test]
     fn validates_settings_continuations_and_window_updates() {
         let mut state = Http2ConnectionState::new();
         state
@@ -949,5 +1004,17 @@ mod tests {
                 payload: [0, 0, 0, 0].into(),
             })
             .is_err());
+    }
+
+    #[test]
+    fn live_http2_get_when_configured() {
+        let Some(host) = mrml_runtime::environment_variable("MRML_HTTP2_LIVE_HOST") else {
+            return;
+        };
+        let mut connection = Http2ClientConnection::connect(&host, 443).unwrap();
+        let response = connection
+            .request("GET", &host, "/", &[("user-agent", "mrml-http/1")])
+            .unwrap();
+        assert!((100..=599).contains(&response.status));
     }
 }

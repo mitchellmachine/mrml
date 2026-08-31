@@ -35,6 +35,9 @@ pub enum HttpError {
     BodyTooLarge,
     RedirectLimit,
     Tls,
+    TlsRecord,
+    TlsAuthentication,
+    TlsTransport,
     Io,
     Allocation,
 }
@@ -48,6 +51,9 @@ impl fmt::Display for HttpError {
             Self::BodyTooLarge => "HTTP body exceeds limit",
             Self::RedirectLimit => "HTTP redirect limit exceeded",
             Self::Tls => "HTTPS transport failed",
+            Self::TlsRecord => "invalid TLS record",
+            Self::TlsAuthentication => "TLS record authentication failed",
+            Self::TlsTransport => "TLS socket transport failed",
             Self::Io => "HTTP I/O failed",
             Self::Allocation => "HTTP allocation failed",
         })

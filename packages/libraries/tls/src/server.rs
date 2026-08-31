@@ -289,7 +289,17 @@ fn send_plain(stream: &mut TcpStream, msg: &[u8]) -> Result<(), TlsError> {
 }
 fn client_offer(
     msg: &[u8],
-) -> Result<(&[u8], u16, &[u8], Vector<Text>, Option<Vector<u8>>), TlsError> {
+) -> Result<
+    (
+        &[u8],
+        u16,
+        &[u8],
+        Vector<Text>,
+        Option<Vector<u8>>,
+        bool,
+    ),
+    TlsError,
+> {
     let mut c = Cursor::new(msg);
     if c.byte()? != 1 || c.u24()? != msg.len() - 4 || c.take(2)? != [3, 3] {
         return Err(TlsError::Handshake);
@@ -316,6 +326,7 @@ fn client_offer(
     let mut x25519_share = None;
     let mut protocols = Vector::new();
     let mut transport_parameters = None;
+    let mut status_requested = false;
     while !e.done() {
         let kind = e.u16()?;
         let n = e.u16()? as usize;
@@ -349,6 +360,11 @@ fn client_offer(
                     .try_push(Text::try_from_str(protocol).map_err(|_| TlsError::AllocationFailed)?)
                     .map_err(|_| TlsError::AllocationFailed)?;
             }
+        } else if kind == 5 {
+            if status_requested || value != [1, 0, 0, 0, 0] {
+                return Err(TlsError::Handshake);
+            }
+            status_requested = true;
         } else if kind == 57 {
             if transport_parameters.is_some() || value.len() > 4096 {
                 return Err(TlsError::Handshake);
@@ -364,7 +380,14 @@ fn client_offer(
         .map(|share| (X25519_MLKEM768, share))
         .or_else(|| x25519_share.map(|share| (0x1d, share)))
         .ok_or(TlsError::Handshake)?;
-    Ok((session, group, share, protocols, transport_parameters))
+    Ok((
+        session,
+        group,
+        share,
+        protocols,
+        transport_parameters,
+        status_requested,
+    ))
 }
 
 pub struct QuicTlsServerFlight {
@@ -391,7 +414,7 @@ impl QuicTlsServerHandshake {
         if transport_parameters.len() > 4096 || config.ocsp_response.is_none() {
             return Err(TlsError::Handshake);
         }
-        let (session, group, share, protocols, peer_transport_parameters) =
+        let (session, group, share, protocols, peer_transport_parameters, status_requested) =
             client_offer(client_hello)?;
         if !protocols.iter().any(|protocol| protocol == "h3") {
             return Err(TlsError::Handshake);
@@ -493,7 +516,7 @@ impl QuicTlsServerHandshake {
             certificate_list
                 .try_extend_from_slice(certificate)
                 .map_err(|_| TlsError::AllocationFailed)?;
-            if index == 0 {
+            if index == 0 && status_requested {
                 let response = config.ocsp_response.as_ref().ok_or(TlsError::Certificate)?;
                 let mut status = Vector::new();
                 status.try_push(1).map_err(|_| TlsError::AllocationFailed)?;
@@ -624,7 +647,8 @@ impl TlsServerStream {
             return Err(TlsError::Handshake);
         }
         let client_hello = &first[5..];
-        let (session, group, share, offered_protocols, _) = client_offer(client_hello)?;
+        let (session, group, share, offered_protocols, _, status_requested) =
+            client_offer(client_hello)?;
         let negotiated_protocol = if config.protocols.is_empty() {
             None
         } else {
@@ -731,7 +755,7 @@ impl TlsServerStream {
             u24_push(&mut list, cert.len())?;
             list.try_extend_from_slice(cert)
                 .map_err(|_| TlsError::AllocationFailed)?;
-            if certificate_index == 0 {
+            if certificate_index == 0 && status_requested {
                 if let Some(response) = &config.ocsp_response {
                     let mut status = Vector::new();
                     status.try_push(1).map_err(|_| TlsError::AllocationFailed)?;
@@ -886,6 +910,79 @@ mod tests {
             b"CERTIFICATE"
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_pss_signature_verifies_with_openssl_when_configured() {
+        let Some(openssl) = environment_variable("MRML_TLS_OPENSSL") else {
+            return;
+        };
+        let Some(cert_path) = environment_variable("MRML_TLS_SERVER_TEST_CERT") else {
+            return;
+        };
+        let Some(key_path) = environment_variable("MRML_TLS_SERVER_TEST_KEY") else {
+            return;
+        };
+        let config = TlsServerConfig::from_pem(
+            &read_file(&cert_path).unwrap(),
+            &read_file(&key_path).unwrap(),
+        )
+        .unwrap();
+        let message = b"MRML TLS RSA-PSS interoperability probe";
+        let mut salt = [0x5a; 32];
+        let mut signature = Vector::new();
+        signature.try_resize(config.modulus.len(), 0).unwrap();
+        rsa_pss_sha256_sign(
+            &config.modulus,
+            &config.private_exponent,
+            message,
+            &salt,
+            &mut signature,
+        )
+        .unwrap();
+        salt.fill(0);
+        let stem = mrml_runtime::mrml_format!(
+            "/tmp/mrml-tls-pss-{}",
+            mrml_runtime::process_id()
+        );
+        let message_path = mrml_runtime::mrml_format!("{stem}.message");
+        let signature_path = mrml_runtime::mrml_format!("{stem}.signature");
+        let public_path = mrml_runtime::mrml_format!("{stem}.public.pem");
+        mrml_runtime::write_file(&message_path, message).unwrap();
+        mrml_runtime::write_file(&signature_path, &signature).unwrap();
+        let public = mrml_runtime::Command::new(&openssl)
+            .args(["x509", "-pubkey", "-noout", "-in"])
+            .arg(&cert_path)
+            .args(["-out"])
+            .arg(&public_path)
+            .output()
+            .unwrap();
+        assert!(public.status.success());
+        let verified = mrml_runtime::Command::new(&openssl)
+            .args([
+                "dgst",
+                "-sha256",
+                "-sigopt",
+                "rsa_padding_mode:pss",
+                "-sigopt",
+                "rsa_pss_saltlen:32",
+                "-verify",
+            ])
+            .arg(&public_path)
+            .args(["-signature"])
+            .arg(&signature_path)
+            .arg(&message_path)
+            .output()
+            .unwrap();
+        assert!(
+            verified.status.success(),
+            "OpenSSL rejected MRML RSA-PSS: {}",
+            core::str::from_utf8(&verified.stderr).unwrap_or("non-UTF-8 error")
+        );
+        mrml_runtime::remove_file(&message_path).unwrap();
+        mrml_runtime::remove_file(&signature_path).unwrap();
+        mrml_runtime::remove_file(&public_path).unwrap();
     }
 
     #[test]

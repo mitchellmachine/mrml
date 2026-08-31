@@ -767,6 +767,49 @@ pub struct Http3ServerConnection {
     protocol: Http3Server,
     state: Http3ConnectionState,
 }
+
+struct IncomingHttp3Stream {
+    id: u64,
+    bytes: QuicStreamAssembler,
+    parsed: usize,
+    stream_type: Option<u64>,
+}
+
+fn complete_varint(input: &[u8], at: usize) -> Result<Option<(u64, usize)>, HttpError> {
+    let Some(first) = input.get(at) else {
+        return Ok(None);
+    };
+    let width = 1usize << (first >> 6);
+    if input.len().saturating_sub(at) < width {
+        return Ok(None);
+    }
+    let mut end = at;
+    let value = read_varint(input, &mut end)?;
+    Ok(Some((value, end)))
+}
+
+fn complete_http3_frame(input: &[u8]) -> Result<Option<(Http3Frame, usize)>, HttpError> {
+    let Some((_, after_kind)) = complete_varint(input, 0)? else {
+        return Ok(None);
+    };
+    let Some((length, after_length)) = complete_varint(input, after_kind)? else {
+        return Ok(None);
+    };
+    let length = usize::try_from(length).map_err(|_| HttpError::BodyTooLarge)?;
+    let total = after_length
+        .checked_add(length)
+        .ok_or(HttpError::BodyTooLarge)?;
+    if total > MAX_FRAME || input.len() < total {
+        return if total > MAX_FRAME {
+            Err(HttpError::BodyTooLarge)
+        } else {
+            Ok(None)
+        };
+    }
+    let (frame, used) = Http3Frame::decode(&input[..total])?;
+    Ok(Some((frame, used)))
+}
+
 impl Http3ServerConnection {
     pub fn accept(
         listener: QuicServerListener,
@@ -781,6 +824,8 @@ impl Http3ServerConnection {
         })
     }
     pub fn next_request(&mut self) -> Result<(u64, RequestHead), HttpError> {
+        let mut unidirectional: Vector<IncomingHttp3Stream> = Vector::new();
+        let mut requests: Vector<IncomingHttp3Stream> = Vector::new();
         loop {
             for frame in self.connection.receive_frames().map_err(quic_error)? {
                 if let QuicFrame::Stream {
@@ -791,19 +836,88 @@ impl Http3ServerConnection {
                 } = frame
                 {
                     if id & 3 == 2 {
-                        if offset != 0 || fin {
+                        let index = if let Some(index) =
+                            unidirectional.iter().position(|stream| stream.id == id)
+                        {
+                            index
+                        } else {
+                            unidirectional
+                                .try_push(IncomingHttp3Stream {
+                                    id,
+                                    bytes: QuicStreamAssembler::new(1024 * 1024),
+                                    parsed: 0,
+                                    stream_type: None,
+                                })
+                                .map_err(|_| HttpError::Allocation)?;
+                            unidirectional.len() - 1
+                        };
+                        let stream = &mut unidirectional[index];
+                        stream.bytes.insert(offset, &data, fin).map_err(quic_error)?;
+                        if stream.stream_type.is_none() {
+                            let Some((stream_type, used)) =
+                                complete_varint(stream.bytes.contiguous(), 0)?
+                            else {
+                                continue;
+                            };
+                            self.state.open_peer_unidirectional_stream(id, stream_type)?;
+                            stream.stream_type = Some(stream_type);
+                            stream.parsed = used;
+                        }
+                        if stream.stream_type == Some(0) {
+                            loop {
+                                let Some((control, used)) = complete_http3_frame(
+                                    &stream.bytes.contiguous()[stream.parsed..],
+                                )? else {
+                                    break;
+                                };
+                                self.state.receive_control_frame(&control)?;
+                                stream.parsed += used;
+                            }
+                        } else if matches!(stream.stream_type, Some(2) | Some(3))
+                            && stream.parsed < stream.bytes.contiguous().len()
+                        {
                             return Err(HttpError::InvalidResponse);
                         }
-                        receive_control_data(&mut self.state, id, &data)?;
                     } else if id & 3 == 0 {
-                        if offset != 0 || !fin {
+                        let index = if let Some(index) =
+                            requests.iter().position(|stream| stream.id == id)
+                        {
+                            index
+                        } else {
+                            requests
+                                .try_push(IncomingHttp3Stream {
+                                    id,
+                                    bytes: QuicStreamAssembler::new(16 * 1024 * 1024),
+                                    parsed: 0,
+                                    stream_type: None,
+                                })
+                                .map_err(|_| HttpError::Allocation)?;
+                            requests.len() - 1
+                        };
+                        let stream = &mut requests[index];
+                        stream.bytes.insert(offset, &data, fin).map_err(quic_error)?;
+                        if !stream.bytes.is_finished() {
+                            continue;
+                        }
+                        let mut request_state = Http3RequestStreamState::new();
+                        let mut head = None;
+                        while stream.parsed < stream.bytes.contiguous().len() {
+                            let Some((request_frame, used)) = complete_http3_frame(
+                                &stream.bytes.contiguous()[stream.parsed..],
+                            )? else {
+                                return Err(HttpError::InvalidResponse);
+                            };
+                            stream.parsed += used;
+                            let finished = stream.parsed == stream.bytes.contiguous().len();
+                            request_state.receive(&request_frame, finished)?;
+                            if request_frame.kind == Http3FrameKind::Headers && head.is_none() {
+                                head = Some(self.protocol.request(&request_frame)?);
+                            }
+                        }
+                        if !self.state.settings_received() {
                             return Err(HttpError::InvalidResponse);
                         }
-                        let (request, used) = Http3Frame::decode(&data)?;
-                        if used != data.len() {
-                            return Err(HttpError::InvalidResponse);
-                        }
-                        return Ok((id, self.protocol.request(&request)?));
+                        return Ok((id, head.ok_or(HttpError::InvalidResponse)?));
                     }
                 }
             }
@@ -917,5 +1031,70 @@ mod tests {
         request.receive(&data, true).unwrap();
         assert_eq!(request.phase(), Http3StreamPhase::Finished);
         assert!(request.receive(&data, false).is_err());
+    }
+
+    #[test]
+    fn live_http3_get_when_configured() {
+        let Some(host) = mrml_runtime::environment_variable("MRML_HTTP3_LIVE_HOST") else {
+            return;
+        };
+        let mut quic = QuicClientConnection::connect(&host, 443).unwrap();
+        send_critical_streams(&mut quic).unwrap();
+        let mut connection = Http3ClientConnection {
+            connection: quic,
+            protocol: Http3Client::new(),
+            state: Http3ConnectionState::new(),
+        };
+        let response = connection
+            .request("GET", &host, "/", &[("user-agent", "mrml-http/1")])
+            .unwrap();
+        assert!((100..=599).contains(&response.status));
+    }
+
+    #[test]
+    fn authenticated_loopback_when_configured() {
+        let Some(certificate_path) =
+            mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_CERT")
+        else {
+            return;
+        };
+        let Some(issuer_path) = mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_ISSUER")
+        else {
+            return;
+        };
+        let Some(key_path) = mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_KEY") else {
+            return;
+        };
+        let Some(ocsp_path) = mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_OCSP") else {
+            return;
+        };
+        let mut chain = mrml_runtime::read_file(&certificate_path).unwrap();
+        chain
+            .try_extend_from_slice(&mrml_runtime::read_file(&issuer_path).unwrap())
+            .unwrap();
+        let key = mrml_runtime::read_file(&key_path).unwrap();
+        let ocsp = mrml_runtime::read_file(&ocsp_path).unwrap();
+        let config = TlsServerConfig::from_pem(&chain, &key)
+            .unwrap()
+            .with_protocols(&["h3"])
+            .unwrap()
+            .with_ocsp_response(&ocsp)
+            .unwrap();
+        let listener = QuicServerListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let Ok(worker) = mrml_runtime::spawn_joinable(move || {
+            let mut server = Http3ServerConnection::accept(listener, &config).unwrap();
+            let (id, request) = server.next_request().unwrap();
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.target, "/loopback");
+            server.respond(id, 200, &[], b"http3 loopback").unwrap();
+        }) else {
+            panic!("failed to start HTTP/3 loopback server");
+        };
+        let mut client = Http3ClientConnection::connect("localhost", port).unwrap();
+        let response = client.request("GET", "localhost", "/loopback", &[]).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(&response.body[..], b"http3 loopback");
+        assert!(worker.join());
     }
 }

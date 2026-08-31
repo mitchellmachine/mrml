@@ -37,7 +37,12 @@ fn insert_crypto_frames(
     while at < payload.len() {
         match QuicFrame::decode(payload, &mut at)? {
             QuicFrame::Crypto { offset, data } => assembler.insert(offset, &data, false)?,
-            QuicFrame::Padding | QuicFrame::Ack { .. } => {}
+            QuicFrame::Padding | QuicFrame::Ping | QuicFrame::Ack { .. } => {}
+            QuicFrame::ConnectionClose {
+                code, frame_type, ..
+            } => {
+                return Err(QuicError::PeerClosed { code, frame_type });
+            }
             _ => return Err(QuicError::ProtocolViolation),
         }
     }
@@ -76,6 +81,7 @@ pub struct QuicConnection {
     candidate_peer: Option<SocketAddress>,
     peer_ack_delay_exponent: u8,
     peer_max_ack_delay_micros: u64,
+    pending_frames: Vector<QuicFrame>,
 }
 
 struct PendingPacket {
@@ -189,6 +195,9 @@ impl QuicConnection {
     }
 
     pub fn receive_frames(&mut self) -> Result<Vector<QuicFrame>, QuicError> {
+        if !self.pending_frames.is_empty() {
+            return Ok(core::mem::take(&mut self.pending_frames));
+        }
         let mut datagram = [0; 65_527];
         let (amount, peer) = loop {
             match self.socket.receive_from(&mut datagram) {
@@ -282,7 +291,7 @@ impl QuicConnection {
                 _ => None,
             });
             self.state
-                .on_path_response(response.ok_or(QuicError::ProtocolViolation)?)?;
+                .on_path_response(response.ok_or(QuicError::UnexpectedPeer)?)?;
             self.peer = peer;
             self.candidate_peer = None;
             while let Some(index) = frames
@@ -355,7 +364,7 @@ impl QuicClientConnection {
                 .receive_from(&mut datagram)
                 .map_err(|_| QuicError::Io)?;
             if from != peer {
-                return Err(QuicError::ProtocolViolation);
+                return Err(QuicError::UnexpectedPeer);
             }
             let (packet, _) =
                 InitialPacket::open(&datagram[..amount], &server_initial, expected_initial)?;
@@ -366,7 +375,7 @@ impl QuicClientConnection {
             if server_id.is_none() {
                 server_id = Some(packet.source_id.clone());
             } else if server_id.as_ref() != Some(&packet.source_id) {
-                return Err(QuicError::ProtocolViolation);
+                return Err(QuicError::ConnectionId);
             }
             insert_crypto_frames(&packet.payload, &mut server_initial_crypto)?;
             if let Some(message) = handshake_message(server_initial_crypto.contiguous(), 0)? {
@@ -386,7 +395,7 @@ impl QuicClientConnection {
                 .receive_from(&mut datagram)
                 .map_err(|_| QuicError::Io)?;
             if from != peer {
-                return Err(QuicError::ProtocolViolation);
+                return Err(QuicError::UnexpectedPeer);
             }
             let (packet, _) =
                 HandshakePacket::open(&datagram[..amount], &read_handshake, expected_handshake)?;
@@ -409,16 +418,51 @@ impl QuicClientConnection {
         if peer_parameters.original_destination_connection_id.as_ref() != Some(&destination_id)
             || peer_parameters.initial_source_connection_id != peer_id
         {
-            return Err(QuicError::ProtocolViolation);
+            return Err(QuicError::TransportParameter);
         }
+        let mut finished_payload = crypto_payload(0, &application.client_finished)?;
+        QuicFrame::Ack {
+            largest: expected_handshake.saturating_sub(1),
+            delay: 0,
+            first_range: expected_handshake.saturating_sub(1),
+            ranges: Vector::new(),
+        }
+        .encode(&mut finished_payload)?;
         let finished = HandshakePacket {
             destination_id: peer_id.clone(),
             source_id: source_id.clone(),
             packet_number: 0,
-            payload: crypto_payload(0, &application.client_finished)?,
+            payload: finished_payload,
         }
         .seal(&write_handshake)?;
         socket.send_to(&finished, peer).map_err(|_| QuicError::Io)?;
+        let mut datagram = [0; 65_527];
+        let (amount, from) = socket
+            .receive_from(&mut datagram)
+            .map_err(|_| QuicError::Io)?;
+        if from != peer {
+            return Err(QuicError::UnexpectedPeer);
+        }
+        let (handshake_ack, _) =
+            HandshakePacket::open(&datagram[..amount], &read_handshake, expected_handshake)?;
+        let mut at = 0;
+        let mut finished_acknowledged = false;
+        while at < handshake_ack.payload.len() {
+            match QuicFrame::decode(&handshake_ack.payload, &mut at)? {
+                QuicFrame::Padding | QuicFrame::Ping => {}
+                QuicFrame::Ack {
+                    largest,
+                    first_range,
+                    ..
+                } if largest == 0 && first_range == 0 => {
+                    finished_acknowledged = true
+                }
+                _ => return Err(QuicError::ProtocolViolation),
+            }
+        }
+        if !finished_acknowledged {
+            return Err(QuicError::HandshakeConfirmation);
+        }
         let state = QuicConnectionState::new(QuicRole::Client, &peer_parameters);
         let recovery = QuicRecovery::new(peer_parameters.max_udp_payload_size)?;
         let mut connection = QuicConnection {
@@ -437,15 +481,34 @@ impl QuicClientConnection {
             candidate_peer: None,
             peer_ack_delay_exponent: peer_parameters.ack_delay_exponent as u8,
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
+            pending_frames: Vector::new(),
         };
-        let frames = connection.receive_frames()?;
-        if !frames
-            .iter()
-            .any(|frame| *frame == QuicFrame::HandshakeDone)
-        {
-            return Err(QuicError::ProtocolViolation);
+        let mut early_frames = Vector::new();
+        loop {
+            let mut frames = connection.receive_frames()?;
+            if let Some(index) = frames
+                .iter()
+                .position(|frame| *frame == QuicFrame::HandshakeDone)
+            {
+                frames.remove(index);
+                for frame in frames {
+                    early_frames
+                        .try_push(frame)
+                        .map_err(|_| QuicError::Allocation)?;
+                }
+                break;
+            }
+            for frame in frames {
+                early_frames
+                    .try_push(frame)
+                    .map_err(|_| QuicError::Allocation)?;
+            }
         }
-        connection.state.activate()?;
+        connection.pending_frames = early_frames;
+        connection
+            .state
+            .activate()
+            .map_err(|_| QuicError::HandshakeConfirmation)?;
         Ok(connection)
     }
 }
@@ -529,11 +592,21 @@ impl QuicServerListener {
                 .map_err(|_| QuicError::Tls)?;
         let server_initial = QuicInitialKeys::derive(&original_destination_id, QuicRole::Server)?;
         for (number, chunk) in flight.server_hello.chunks(CRYPTO_CHUNK).enumerate() {
+            let mut payload = crypto_payload(number * CRYPTO_CHUNK, chunk)?;
+            if number == 0 {
+                QuicFrame::Ack {
+                    largest: expected_initial.saturating_sub(1),
+                    delay: 0,
+                    first_range: expected_initial.saturating_sub(1),
+                    ranges: Vector::new(),
+                }
+                .encode(&mut payload)?;
+            }
             let packet = InitialPacket {
                 destination_id: client_id.clone(),
                 source_id: server_id.clone(),
                 packet_number: number as u64,
-                payload: crypto_payload(number * CRYPTO_CHUNK, chunk)?,
+                payload,
             }
             .seal(&server_initial)?;
             state.authorize_datagram_send(packet.len())?;
@@ -550,6 +623,7 @@ impl QuicServerListener {
                 .try_extend_from_slice(message)
                 .map_err(|_| QuicError::Allocation)?;
         }
+        let server_handshake_packets = handshake_bytes.chunks(CRYPTO_CHUNK).len();
         for (number, chunk) in handshake_bytes.chunks(CRYPTO_CHUNK).enumerate() {
             let packet = HandshakePacket {
                 destination_id: client_id.clone(),
@@ -578,6 +652,25 @@ impl QuicServerListener {
             handshake_message(finished_crypto.contiguous(), 0)?.ok_or(QuicError::Truncated)?;
         tls.receive_client_finished(message)
             .map_err(|_| QuicError::Tls)?;
+        let mut handshake_ack_payload = Vector::new();
+        QuicFrame::Ack {
+            largest: finished.packet_number,
+            delay: 0,
+            first_range: 0,
+            ranges: Vector::new(),
+        }
+        .encode(&mut handshake_ack_payload)?;
+        let handshake_ack = HandshakePacket {
+            destination_id: client_id.clone(),
+            source_id: server_id.clone(),
+            packet_number: server_handshake_packets as u64,
+            payload: handshake_ack_payload,
+        }
+        .seal(&write_handshake)?;
+        state.authorize_datagram_send(handshake_ack.len())?;
+        self.socket
+            .send_to(&handshake_ack, peer)
+            .map_err(|_| QuicError::Io)?;
         let peer_parameters = QuicTransportParameters::decode(&flight.peer_transport_parameters)?;
         if peer_parameters.original_destination_connection_id.is_some()
             || peer_parameters.initial_source_connection_id != client_id
@@ -604,6 +697,7 @@ impl QuicServerListener {
             candidate_peer: None,
             peer_ack_delay_exponent: peer_parameters.ack_delay_exponent as u8,
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
+            pending_frames: Vector::new(),
         };
         connection.send_frames(&[QuicFrame::HandshakeDone])?;
         Ok(connection)

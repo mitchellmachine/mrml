@@ -213,6 +213,14 @@ pub fn finished_verify_data(traffic_secret: &[u8; 32], transcript_hash: &[u8; 32
     key.fill(0);
     result
 }
+
+fn update_application_traffic_secret(secret: &mut [u8; 32]) -> Result<(), TlsError> {
+    let current = *secret;
+    if !hkdf_expand_label(&current, b"traffic upd", &[], secret) {
+        return Err(TlsError::AuthenticationFailed);
+    }
+    Ok(())
+}
 impl Default for KeySchedule {
     fn default() -> Self {
         Self::new()
