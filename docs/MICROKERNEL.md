@@ -10469,14 +10469,22 @@ paths retain their scheduler owner without exposing a successor dispatch. Exact
 supervisor, service generation, task, state, and cleanup-ticket matching precede
 address-space erasure; backend uncertainty returns the unchanged owner for
 retry. Only the corresponding cleaned linear owner can request the runtime-bound
-successor dispatch. The Linux-host kernel suite passes all 717 tests and the
-release `MRML_NATIVE` build passes. This is scheduler, lifecycle, and controlled
-eraser evidence; no installed FAT32 process, active
+successor dispatch. After exact cleanup, a constructed service can now restart
+only through an unsafe typed-owner transition that exact-matches the retired
+service object, a fresh construction-pending task, restart budget, backoff, and
+the old service generation before atomically publishing the successor generation
+and waking the task. Cleanup-required, wrong-object, stale-generation, and
+restart-limit failures leave the fresh construction owner blocked and unchanged;
+the ordinary context-creating restart path continues to reject constructed
+services. The Linux-host kernel suite passes all 718 tests and the release
+`MRML_NATIVE` build passes. This is scheduler, lifecycle, and controlled eraser
+evidence; no installed FAT32 process, active
 page-table/TLB withdrawal, KVM/WHP, or physical storage execution was exercised.
 
 Patent review: `NOT_TRIGGERED` — supervisor-bound task retirement, fault and
-protocol-violation containment, exact cleanup, and delayed scheduler dispatch
-reuse conventional lifecycle mechanisms. See `docs/patents/REVIEW_LOG.md`.
+protocol-violation containment, exact cleanup, delayed scheduler dispatch, and
+generation-advancing restart reuse conventional lifecycle mechanisms. See
+`docs/patents/REVIEW_LOG.md`.
 
 Read-transfer construction now **PARTIALLY IMPLEMENTS IN SOURCE** a charged
 memory-resource root. The kernel reserves exactly one `Shared` page from an

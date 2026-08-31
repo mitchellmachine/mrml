@@ -1100,6 +1100,87 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         })
     }
 
+    /// Replaces one fully cleaned constructed-service generation with an exact
+    /// fresh construction target and makes it runnable atomically. Every
+    /// lifecycle, runtime, task, budget, backoff, and generation check finishes
+    /// before either supervisor state or scheduler state changes.
+    ///
+    /// # Safety
+    ///
+    /// `task` must be the fully constructed replacement owned by `runtime`, and
+    /// `object` must come from the same typed construction owner as the retired
+    /// service. The caller must retain that owner across all resource creation
+    /// and this transition; a name, task ID, or service token is insufficient.
+    pub unsafe fn restart_and_activate_constructed<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        service: ServiceId,
+        object: ObjectId,
+        task: TaskId,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        now: u64,
+    ) -> Result<SupervisedServiceTask, ServiceError> {
+        let slot = service.slot as usize;
+        let runtime_identity = runtime.identity();
+        let entry = self.slot(service)?;
+        if entry.launch_class != ServiceLaunchClass::Constructed {
+            return Err(ServiceError::InvalidService);
+        }
+        if entry.object != object {
+            return Err(ServiceError::InvalidObject);
+        }
+        if entry.state == ServiceState::Running || entry.task.is_some() {
+            return Err(ServiceError::StillRunning);
+        }
+        if entry.cleanup.is_some() {
+            return Err(ServiceError::CleanupRequired);
+        }
+        if entry.completed_restarts >= entry.restart_policy.maximum_restarts {
+            return Err(ServiceError::RestartLimit);
+        }
+        if now < entry.next_restart_tick {
+            return Err(ServiceError::RestartBackoff {
+                eligible_at: entry.next_restart_tick,
+            });
+        }
+        if self
+            .slots
+            .iter()
+            .any(|candidate| Self::task_binding_conflicts(candidate, task, Some(runtime_identity)))
+        {
+            return Err(ServiceError::TaskAlreadyRegistered);
+        }
+        let generation = entry
+            .generation
+            .checked_add(1)
+            .filter(|generation| *generation != 0)
+            .ok_or(ServiceError::GenerationExhausted)?;
+        let completed_restarts = entry
+            .completed_restarts
+            .checked_add(1)
+            .ok_or(ServiceError::RestartLimit)?;
+        let activation = runtime
+            .prepare_constructed_task_activation(task)
+            .map_err(ServiceError::Runtime)?;
+        let supervisor = self.ensure_identity()?;
+
+        let entry = &mut self.slots[slot];
+        entry.generation = generation;
+        entry.task = Some(task);
+        entry.runtime = Some(runtime_identity);
+        entry.state = ServiceState::Running;
+        entry.completed_restarts = completed_restarts;
+        entry.cleanup = None;
+        activation.commit();
+        Ok(SupervisedServiceTask {
+            supervisor,
+            service: ServiceId {
+                slot: slot as u32,
+                generation,
+            },
+            task,
+        })
+    }
+
     fn ensure_identity(&mut self) -> Result<u64, ServiceError> {
         if let Some(identity) = self.identity {
             return Ok(identity);
@@ -3264,6 +3345,145 @@ mod tests {
         );
         assert_eq!(runtime.load(), runnable);
         assert!(!supervisor.slots[1].occupied);
+    }
+
+    #[test]
+    fn constructed_restart_revalidates_cleanup_object_budget_and_fresh_task() {
+        let object = ObjectId(0x6a);
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create_for_construction(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let replacement = runtime
+            .create_for_construction(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let restart_policy = RestartPolicy::new(1, 10, 10).unwrap();
+        // SAFETY: both test targets retain complete, distinct construction
+        // owners and `object` is their exact lifecycle object.
+        let first_binding = unsafe {
+            supervisor.register_and_activate_constructed(
+                object,
+                first,
+                restart_policy,
+                &mut runtime,
+            )
+        }
+        .unwrap();
+        assert!(matches!(
+            runtime.start(),
+            ScheduleOutcome::Switch { to, .. } if to == first
+        ));
+        let retirement = supervisor
+            .retire_current_constructed_service(first_binding, &mut runtime)
+            .unwrap();
+        assert_eq!(
+            unsafe {
+                supervisor.restart_and_activate_constructed(
+                    first_binding.service(),
+                    object,
+                    replacement,
+                    &mut runtime,
+                    0,
+                )
+            },
+            Err(ServiceError::CleanupRequired)
+        );
+        assert_eq!(runtime.construction_pending(replacement), Ok(true));
+
+        let cleaned = supervisor
+            .complete_constructed_service_cleanup(retirement, &mut TestEraser::default())
+            .unwrap();
+        let dispatch = cleaned.dispatch(&mut runtime).unwrap();
+        assert!(dispatch.is_idle());
+        runtime.consume_idle_dispatch(dispatch).unwrap();
+        assert_eq!(
+            unsafe {
+                supervisor.restart_and_activate_constructed(
+                    first_binding.service(),
+                    object,
+                    replacement,
+                    &mut runtime,
+                    0,
+                )
+            },
+            Err(ServiceError::RestartBackoff { eligible_at: 10 })
+        );
+        assert_eq!(runtime.construction_pending(replacement), Ok(true));
+        assert_eq!(
+            unsafe {
+                supervisor.restart_and_activate_constructed(
+                    first_binding.service(),
+                    ObjectId(0x6b),
+                    replacement,
+                    &mut runtime,
+                    0,
+                )
+            },
+            Err(ServiceError::InvalidObject)
+        );
+        assert_eq!(runtime.construction_pending(replacement), Ok(true));
+
+        // SAFETY: the replacement and object are the exact owners retained by
+        // this fixture across the completed cleanup boundary.
+        let replacement_binding = unsafe {
+            supervisor.restart_and_activate_constructed(
+                first_binding.service(),
+                object,
+                replacement,
+                &mut runtime,
+                10,
+            )
+        }
+        .unwrap();
+        assert_ne!(replacement_binding.service(), first_binding.service());
+        assert_eq!(replacement_binding.task(), replacement);
+        assert_eq!(runtime.construction_pending(replacement), Ok(false));
+        assert_eq!(
+            supervisor.task(replacement_binding.service()),
+            Ok(Some(replacement))
+        );
+        assert_eq!(
+            unsafe {
+                supervisor.restart_and_activate_constructed(
+                    first_binding.service(),
+                    object,
+                    first,
+                    &mut runtime,
+                    0,
+                )
+            },
+            Err(ServiceError::InvalidService)
+        );
+
+        assert!(matches!(
+            runtime.start(),
+            ScheduleOutcome::Switch { to, .. } if to == replacement
+        ));
+        let retirement = supervisor
+            .retire_current_constructed_service(replacement_binding, &mut runtime)
+            .unwrap();
+        let cleaned = supervisor
+            .complete_constructed_service_cleanup(retirement, &mut TestEraser::default())
+            .unwrap();
+        let dispatch = cleaned.dispatch(&mut runtime).unwrap();
+        runtime.consume_idle_dispatch(dispatch).unwrap();
+        let exhausted_candidate = runtime
+            .create_for_construction(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        assert_eq!(
+            unsafe {
+                supervisor.restart_and_activate_constructed(
+                    replacement_binding.service(),
+                    object,
+                    exhausted_candidate,
+                    &mut runtime,
+                    0,
+                )
+            },
+            Err(ServiceError::RestartLimit)
+        );
+        assert_eq!(runtime.construction_pending(exhausted_candidate), Ok(true));
     }
 
     #[test]
