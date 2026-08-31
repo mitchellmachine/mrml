@@ -162,6 +162,11 @@ enum SignatureAlgorithm {
 }
 
 impl<'a> Certificate<'a> {
+    /// SHA-256 of the complete DER SubjectPublicKeyInfo, as used by CRLSets.
+    pub fn spki_sha256(&self) -> [u8; 32] {
+        mrml_crypto::Sha256::digest(self.spki)
+    }
+
     pub(crate) fn verify_tls_pss(
         &self,
         message: &[u8],
@@ -350,7 +355,8 @@ impl<'a> Certificate<'a> {
         self.subject == other.subject && self.spki == other.spki
     }
 
-    pub(crate) fn serial(&self) -> &'a [u8] {
+    /// The DER INTEGER contents of the certificate serial number.
+    pub fn serial(&self) -> &'a [u8] {
         self.serial
     }
 

@@ -4,19 +4,25 @@ use core::fmt;
 use mrml_runtime::{Text, Vector};
 use mrml_tls::TlsClientStream;
 
+mod crlset_update;
 mod http2;
 mod http3;
 mod huffman;
 mod quic;
 mod quic_connection;
 
+pub use crlset_update::{
+    CHROMIUM_COMPONENT_UPDATE_URL, CHROMIUM_CRLSET_COMPONENT_ID,
+    CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256, ChromiumCrlSetPackage, ChromiumCrlSetUpdater,
+};
 pub use http2::{
-    Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame, Http2FrameKind,
-    Http2Response, Http2Server, Http2ServerConnection, HTTP2_CLIENT_PREFACE,
+    HTTP2_CLIENT_PREFACE, Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame,
+    Http2FrameKind, Http2Response, Http2Server, Http2ServerConnection,
 };
 pub use http3::{
     Http3Client, Http3ClientConnection, Http3ConnectionState, Http3Frame, Http3FrameKind,
     Http3RequestStreamState, Http3Response, Http3Server, Http3ServerConnection, Http3StreamPhase,
+    Http3WorkerPool, PreparedHttp3Response,
 };
 pub use quic::{
     HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,
@@ -363,7 +369,19 @@ impl Client {
     }
     pub fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, HttpError> {
         let url = Url::parse(url)?;
-        self.request(&url, "GET", headers, true)
+        self.request(&url, "GET", headers, true, &[])
+    }
+    pub fn post(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<Response, HttpError> {
+        if body.len() > 16 * 1024 * 1024 {
+            return Err(HttpError::BodyTooLarge);
+        }
+        let url = Url::parse(url)?;
+        self.request(&url, "POST", headers, true, body)
     }
     pub fn get_follow(
         &self,
@@ -394,7 +412,8 @@ impl Client {
                 return Err(HttpError::InvalidUrl);
             }
             let same_origin = current.host == original_host && current.port == original_port;
-            let response = self.request_resolved(&current, address, "GET", headers, same_origin)?;
+            let response =
+                self.request_resolved(&current, address, "GET", headers, same_origin, &[])?;
             if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
                 let location = Text::from(
                     response
@@ -414,10 +433,11 @@ impl Client {
         method: &str,
         headers: &[(&str, &str)],
         allow_sensitive: bool,
+        body: &[u8],
     ) -> Result<Response, HttpError> {
         let address =
             mrml_runtime::TcpStream::resolve_host(&url.host).map_err(|_| HttpError::Tls)?;
-        self.request_resolved(url, address, method, headers, allow_sensitive)
+        self.request_resolved(url, address, method, headers, allow_sensitive, body)
     }
     fn request_resolved(
         &self,
@@ -426,6 +446,7 @@ impl Client {
         method: &str,
         headers: &[(&str, &str)],
         allow_sensitive: bool,
+        body: &[u8],
     ) -> Result<Response, HttpError> {
         if !valid_value(&self.user_agent) || self.user_agent.len() > 1024 {
             return Err(HttpError::InvalidUrl);
@@ -455,10 +476,18 @@ impl Client {
             request.push_str(value);
             request.push_str("\r\n")
         }
+        if !body.is_empty() {
+            request.push_str("Content-Length: ");
+            request.push_str(&mrml_runtime::mrml_format!("{}", body.len()));
+            request.push_str("\r\n");
+        }
         request.push_str("\r\n");
         stream
             .write_all(request.as_bytes())
             .map_err(|_| HttpError::Tls)?;
+        if !body.is_empty() {
+            stream.write_all(body).map_err(|_| HttpError::Tls)?;
+        }
         let mut received = Vector::new();
         let header_end = loop {
             if let Some(p) = received.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -627,9 +656,11 @@ mod tests {
             .get_follow(&url, &[("Range", "bytes=0-1023")], 8)
             .unwrap();
         assert_eq!(response.status, 206);
-        assert!(response
-            .header("content-range")
-            .is_some_and(|value| value.starts_with("bytes 0-1023/")));
+        assert!(
+            response
+                .header("content-range")
+                .is_some_and(|value| value.starts_with("bytes 0-1023/"))
+        );
         assert_eq!(response.read_to_end(2048).unwrap().len(), 1024);
     }
 }

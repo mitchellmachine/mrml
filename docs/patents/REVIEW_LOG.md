@@ -1,5 +1,29 @@
 # Patent review log
 
+# 2026-08-31 — Bounded HTTP/3 response workers — Canada
+
+Patent review: **TRIGGERED**, governed by the 2026-08-31 HTTP/3 and QUIC
+Canadian baseline below. This increment moves QPACK/static-literal response
+encoding and DATA-frame preparation to conventional bounded worker queues.
+Packet numbers, loss recovery, NewReno-like congestion state, path validation,
+and UDP I/O remain under one authoritative QUIC owner. It adds no multipath,
+packet striping, alternative congestion controller, retransmission scheme, FEC,
+or other excluded mechanism. The existing **CONDITIONAL_PROCEED** disposition
+and Canada-only limits remain unchanged. This technical screen is not legal
+advice or patent clearance.
+
+# 2026-08-31 — Chromium CRLSet import and URL discovery — Canada
+
+Patent review: **NOT_TRIGGERED**. This increment performs bounded parsing of a
+public revocation-list data format and conventional HTTPS JSON discovery of a
+signed component package. It adds no certificate-validation algorithm,
+compression method, delta encoding, distribution protocol, or novel
+cryptographic primitive. CRX3 signature and advertised package-hash validation
+remain mandatory outside the parser; `Unknown` never grants trust and existing
+issuer-signed stapled OCSP remains the default authority. Review is limited to
+Canadian patent rights under the repository policy. This technical screen is
+not legal advice or patent clearance.
+
 # 2026-08-29 — Cleanup-gated validated block-provider replacement
 
 Patent review: **NOT_TRIGGERED**. This increment composes MRML's existing module

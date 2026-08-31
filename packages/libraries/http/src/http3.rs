@@ -1,8 +1,8 @@
 use crate::{
-    valid_header, valid_value, Header, HttpError, QuicClientConnection, QuicConnection, QuicFrame,
-    QuicServerListener, QuicStreamAssembler, RequestHead, ResponseHead,
+    Header, HttpError, QuicClientConnection, QuicConnection, QuicFrame, QuicServerListener,
+    QuicStreamAssembler, RequestHead, ResponseHead, valid_header, valid_value,
 };
-use mrml_runtime::Vector;
+use mrml_runtime::{JoinHandle, Receiver, Sender, Vector};
 use mrml_tls::TlsServerConfig;
 const MAX_FRAME: usize = 1024 * 1024;
 const QPACK_STATIC: [(&str, &str); 99] = [
@@ -149,7 +149,7 @@ impl Http3RequestStreamState {
             (Http3StreamPhase::Trailers, Http3FrameKind::Headers | Http3FrameKind::Data)
             | (Http3StreamPhase::Finished, _) => return Err(HttpError::InvalidResponse),
             (_, Http3FrameKind::Settings | Http3FrameKind::GoAway) => {
-                return Err(HttpError::InvalidResponse)
+                return Err(HttpError::InvalidResponse);
             }
             (phase, Http3FrameKind::Unknown(_)) => phase,
             _ => return Err(HttpError::InvalidResponse),
@@ -227,7 +227,7 @@ impl Http3ConnectionState {
                 self.goaway = Some(id);
             }
             Http3FrameKind::Data | Http3FrameKind::Headers => {
-                return Err(HttpError::InvalidResponse)
+                return Err(HttpError::InvalidResponse);
             }
             Http3FrameKind::Unknown(_) => {}
         }
@@ -766,6 +766,177 @@ pub struct Http3ServerConnection {
     state: Http3ConnectionState,
 }
 
+/// A response encoded away from the authoritative QUIC connection owner.
+/// Packet numbers, recovery state, congestion control, and UDP I/O are not
+/// present here and therefore cannot be raced by workers.
+pub struct PreparedHttp3Response {
+    stream_id: u64,
+    frames: Vector<QuicFrame>,
+}
+
+struct Http3ResponseJob {
+    stream_id: u64,
+    status: u16,
+    headers: Vector<Header>,
+    body: Vector<u8>,
+}
+
+/// Bounded CPU worker pool for independent HTTP/3 response preparation.
+///
+/// The application may submit work from its request dispatcher. The single
+/// QUIC owner must call `receive` and then `respond_prepared`; bounded queues
+/// apply backpressure instead of allowing unbounded per-stream allocation.
+pub struct Http3WorkerPool {
+    jobs: Option<Sender<Http3ResponseJob>>,
+    completed: Option<Receiver<Result<PreparedHttp3Response, HttpError>>>,
+    workers: Vector<JoinHandle>,
+}
+
+impl Http3WorkerPool {
+    pub fn new(worker_count: usize, queue_capacity: usize) -> Result<Self, HttpError> {
+        if worker_count == 0 || worker_count > 64 || queue_capacity == 0 || queue_capacity > 4096 {
+            return Err(HttpError::InvalidUrl);
+        }
+        let (jobs, receiver) = mrml_runtime::blocking_channel(queue_capacity);
+        let (completed_sender, completed) = mrml_runtime::blocking_channel(queue_capacity);
+        let mut workers = Vector::new();
+        for _ in 0..worker_count {
+            let receiver = receiver.clone();
+            let completed_sender = completed_sender.clone();
+            let worker = mrml_runtime::spawn_joinable(move || {
+                while let Ok(job) = receiver.recv() {
+                    let result = prepare_response(job);
+                    if completed_sender.send(result).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|_| HttpError::Allocation)?;
+            workers
+                .try_push(worker)
+                .map_err(|_| HttpError::Allocation)?;
+        }
+        Ok(Self {
+            jobs: Some(jobs),
+            completed: Some(completed),
+            workers,
+        })
+    }
+
+    pub fn for_available_cpus(queue_capacity: usize) -> Result<Self, HttpError> {
+        Self::new(
+            mrml_runtime::available_parallelism().clamp(1, 64),
+            queue_capacity,
+        )
+    }
+
+    pub fn submit(
+        &self,
+        stream_id: u64,
+        status: u16,
+        headers: &[Header],
+        body: &[u8],
+    ) -> Result<(), HttpError> {
+        if stream_id & 3 != 0 || body.len() > 16 * 1024 * 1024 {
+            return Err(HttpError::BodyTooLarge);
+        }
+        let mut owned_headers = Vector::new();
+        for header in headers {
+            owned_headers
+                .try_push(header.clone())
+                .map_err(|_| HttpError::Allocation)?;
+        }
+        let mut owned_body = Vector::new();
+        owned_body
+            .try_extend_from_slice(body)
+            .map_err(|_| HttpError::Allocation)?;
+        self.jobs
+            .as_ref()
+            .ok_or(HttpError::Io)?
+            .send(Http3ResponseJob {
+                stream_id,
+                status,
+                headers: owned_headers,
+                body: owned_body,
+            })
+            .map_err(|_| HttpError::Io)
+    }
+
+    pub fn receive(&self) -> Result<PreparedHttp3Response, HttpError> {
+        self.completed
+            .as_ref()
+            .ok_or(HttpError::Io)?
+            .recv()
+            .map_err(|_| HttpError::Io)?
+    }
+}
+
+impl Drop for Http3WorkerPool {
+    fn drop(&mut self) {
+        self.jobs.take();
+        self.completed.take();
+        while let Some(worker) = self.workers.pop() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn prepare_response(job: Http3ResponseJob) -> Result<PreparedHttp3Response, HttpError> {
+    if !(100..=599).contains(&job.status) {
+        return Err(HttpError::InvalidUrl);
+    }
+    let status = mrml_runtime::mrml_format!("{}", job.status);
+    let mut fields: Vector<(&str, &str)> = Vector::new();
+    fields
+        .try_push((":status", status.as_str()))
+        .map_err(|_| HttpError::Allocation)?;
+    for header in &job.headers {
+        if !valid_header(&header.name) || !valid_value(&header.value) {
+            return Err(HttpError::InvalidUrl);
+        }
+        fields
+            .try_push((header.name.as_str(), header.value.as_str()))
+            .map_err(|_| HttpError::Allocation)?;
+    }
+    let headers = Http3Frame {
+        kind: Http3FrameKind::Headers,
+        payload: qblock(&fields)?,
+    }
+    .encode()?;
+    let mut frames = Vector::new();
+    frames
+        .try_push(stream_frame(
+            job.stream_id,
+            0,
+            job.body.is_empty(),
+            &headers,
+        )?)
+        .map_err(|_| HttpError::Allocation)?;
+    let mut offset = headers.len() as u64;
+    for (index, chunk) in job.body.chunks(800).enumerate() {
+        let mut payload = Vector::new();
+        payload
+            .try_extend_from_slice(chunk)
+            .map_err(|_| HttpError::Allocation)?;
+        let bytes = Http3Frame {
+            kind: Http3FrameKind::Data,
+            payload,
+        }
+        .encode()?;
+        let fin = (index + 1) * 800 >= job.body.len();
+        frames
+            .try_push(stream_frame(job.stream_id, offset, fin, &bytes)?)
+            .map_err(|_| HttpError::Allocation)?;
+        offset = offset
+            .checked_add(bytes.len() as u64)
+            .ok_or(HttpError::BodyTooLarge)?;
+    }
+    Ok(PreparedHttp3Response {
+        stream_id: job.stream_id,
+        frames,
+    })
+}
+
 struct IncomingHttp3Stream {
     id: u64,
     bytes: QuicStreamAssembler,
@@ -851,14 +1022,18 @@ impl Http3ServerConnection {
                             unidirectional.len() - 1
                         };
                         let stream = &mut unidirectional[index];
-                        stream.bytes.insert(offset, &data, fin).map_err(quic_error)?;
+                        stream
+                            .bytes
+                            .insert(offset, &data, fin)
+                            .map_err(quic_error)?;
                         if stream.stream_type.is_none() {
                             let Some((stream_type, used)) =
                                 complete_varint(stream.bytes.contiguous(), 0)?
                             else {
                                 continue;
                             };
-                            self.state.open_peer_unidirectional_stream(id, stream_type)?;
+                            self.state
+                                .open_peer_unidirectional_stream(id, stream_type)?;
                             stream.stream_type = Some(stream_type);
                             stream.parsed = used;
                         }
@@ -866,7 +1041,8 @@ impl Http3ServerConnection {
                             loop {
                                 let Some((control, used)) = complete_http3_frame(
                                     &stream.bytes.contiguous()[stream.parsed..],
-                                )? else {
+                                )?
+                                else {
                                     break;
                                 };
                                 self.state.receive_control_frame(&control)?;
@@ -899,16 +1075,19 @@ impl Http3ServerConnection {
                             requests.len() - 1
                         };
                         let stream = &mut requests[index];
-                        stream.bytes.insert(offset, &data, fin).map_err(quic_error)?;
+                        stream
+                            .bytes
+                            .insert(offset, &data, fin)
+                            .map_err(quic_error)?;
                         if !stream.bytes.is_finished() {
                             continue;
                         }
                         let mut request_state = Http3RequestStreamState::new();
                         let mut head = None;
                         while stream.parsed < stream.bytes.contiguous().len() {
-                            let Some((request_frame, used)) = complete_http3_frame(
-                                &stream.bytes.contiguous()[stream.parsed..],
-                            )? else {
+                            let Some((request_frame, used)) =
+                                complete_http3_frame(&stream.bytes.contiguous()[stream.parsed..])?
+                            else {
                                 return Err(HttpError::InvalidResponse);
                             };
                             stream.parsed += used;
@@ -960,6 +1139,20 @@ impl Http3ServerConnection {
         }
         Ok(())
     }
+
+    pub fn respond_prepared(&mut self, response: PreparedHttp3Response) -> Result<(), HttpError> {
+        if response.stream_id & 3 != 0
+            || response.frames.iter().any(
+                |frame| !matches!(frame, QuicFrame::Stream { id, .. } if *id == response.stream_id),
+            )
+        {
+            return Err(HttpError::InvalidResponse);
+        }
+        for frame in response.frames {
+            self.connection.send_frames(&[frame]).map_err(quic_error)?;
+        }
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -976,6 +1169,25 @@ mod tests {
         let wire = Http3Server::new().response(200, &[]).unwrap();
         let (f, _) = Http3Frame::decode(&wire).unwrap();
         assert_eq!(c.response(&f).unwrap().status, 200)
+    }
+    #[test]
+    fn bounded_workers_prepare_independent_streams() {
+        let pool = Http3WorkerPool::new(2, 2).unwrap();
+        pool.submit(0, 200, &[], b"first").unwrap();
+        pool.submit(4, 204, &[], b"").unwrap();
+        let first = pool.receive().unwrap();
+        let second = pool.receive().unwrap();
+        assert_ne!(first.stream_id, second.stream_id);
+        assert!([0, 4].contains(&first.stream_id));
+        assert!([0, 4].contains(&second.stream_id));
+        assert!(!first.frames.is_empty());
+        assert!(!second.frames.is_empty());
+    }
+    #[test]
+    fn worker_pool_drop_retires_workers_with_undrained_results() {
+        let pool = Http3WorkerPool::new(1, 1).unwrap();
+        pool.submit(0, 200, &[], b"queued").unwrap();
+        drop(pool);
     }
     #[test]
     fn varint_boundaries() {
@@ -1003,12 +1215,14 @@ mod tests {
         let mut connection = Http3ConnectionState::new();
         connection.open_peer_unidirectional_stream(3, 0).unwrap();
         assert!(connection.open_peer_unidirectional_stream(7, 0).is_err());
-        assert!(connection
-            .receive_control_frame(&Http3Frame {
-                kind: Http3FrameKind::GoAway,
-                payload: [0].into(),
-            })
-            .is_err());
+        assert!(
+            connection
+                .receive_control_frame(&Http3Frame {
+                    kind: Http3FrameKind::GoAway,
+                    payload: [0].into(),
+                })
+                .is_err()
+        );
         connection
             .receive_control_frame(&Http3Frame {
                 kind: Http3FrameKind::Settings,
@@ -1016,12 +1230,14 @@ mod tests {
             })
             .unwrap();
         assert!(connection.settings_received());
-        assert!(connection
-            .receive_control_frame(&Http3Frame {
-                kind: Http3FrameKind::Settings,
-                payload: Vector::new(),
-            })
-            .is_err());
+        assert!(
+            connection
+                .receive_control_frame(&Http3Frame {
+                    kind: Http3FrameKind::Settings,
+                    payload: Vector::new(),
+                })
+                .is_err()
+        );
         let headers = Http3Frame {
             kind: Http3FrameKind::Headers,
             payload: Vector::new(),
@@ -1058,8 +1274,7 @@ mod tests {
 
     #[test]
     fn authenticated_loopback_when_configured() {
-        let Some(certificate_path) =
-            mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_CERT")
+        let Some(certificate_path) = mrml_runtime::environment_variable("MRML_HTTP3_LOOPBACK_CERT")
         else {
             return;
         };
@@ -1122,7 +1337,9 @@ mod tests {
             assert_eq!(&output.stdout[..], b"http3 loopback");
         } else {
             let mut client = Http3ClientConnection::connect("localhost", port).unwrap();
-            let response = client.request("GET", "localhost", "/loopback", &[]).unwrap();
+            let response = client
+                .request("GET", "localhost", "/loopback", &[])
+                .unwrap();
             assert_eq!(response.status, 200);
             assert_eq!(&response.body[..], b"http3 loopback");
         }

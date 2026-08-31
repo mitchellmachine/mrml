@@ -16,6 +16,11 @@ and request-stream HEADERS/DATA frame envelopes. Their QPACK profile uses the
 RFC static table and Huffman code with dynamic capacity and blocked streams set
 to zero. Critical control/QPACK streams, SETTINGS-first ordering, descending
 GOAWAY identifiers, and request-stream frame ordering are checked.
+`Http3WorkerPool` prepares independent response streams on a bounded number of
+native workers with bounded queues and backpressure. The authoritative caller
+alone applies prepared frames to QUIC, so packet numbers, recovery, congestion
+control, path state, and UDP I/O remain single-owner. This accelerates QPACK and
+response framing without introducing multipath or shared mutable QUIC state.
 
 `QuicClientConnection` and `QuicServerListener` bind the protocol to bounded UDP
 I/O. They implement v1 Initial, Handshake, and 1-RTT packet protection; CRYPTO
@@ -31,6 +36,16 @@ response by default, so the policy applies equally to HTTP/1.1, HTTP/2, and
 HTTP/3. Servers can attach the staple through `TlsServerConfig`. Clients and
 servers try X25519MLKEM768 first and retain standard X25519 as the negotiated
 fallback.
+
+`CrlSet` provides a bounded supplementary hard-deny import for a CRX-verified
+Chromium CRLSet. It checks format/version, freshness, monotonic sequence,
+blocked SPKIs, issuer hashes, serials, and allocation ceilings. `Unknown` is
+never treated as approval and stapled OCSP remains mandatory. The opt-in
+`ChromiumCrlSetUpdater` POSTs an Omaha request to Chromium's official component
+endpoint and derives the current HTTPS CRX URL and advertised SHA-256 hash. It
+does not install an artifact: the updater service must verify the CRX3
+signature against the pinned CRLSet component key, verify the package hash,
+parse freshness/sequence, and atomically commit owner-approved state.
 
 The profile deliberately disables 0-RTT and excludes simultaneous multipath,
 packet striping, MASQUE, QUIC-aware proxying, CDN/cross-server migration,
