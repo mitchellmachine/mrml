@@ -1517,8 +1517,11 @@ CPU mappings in reverse order before ABAR. Tests cover authority,
 ABAR generation/geometry, runtime/root/target and resource substitution,
 exact install/verify/rollback, poison retention after mutation-before-error
 rollback, exact-generation permanent construction quarantine, cross-runtime
-quarantine denial, and the explicit limitation that PCI identity-only
-descriptor changes are not rechecked here. The mapping-set owner retains the
+quarantine denial, and PCI location/vendor/device substitution. Canonical AHCI
+launch record V2 expands from 384 to 400 bytes and binds the exact PCI identity
+alongside the existing configuration generation, ABAR geometry, and device
+object. Both concrete owners now exact-match the supplied descriptor against
+that retained launch evidence before mutation. The mapping-set owner retains the
 runtime-bound task identity without borrowing the runtime, so a poisoned owner
 can consume mutable access to that same runtime and permanently exclude its
 exact blocked construction generation from activation while retaining every
@@ -1528,13 +1531,15 @@ validation and the scheduler activation preparation now also reject a second
 live task domain with the same saved page-table root; the mapping-set verifier
 therefore fails before activation when another same-runtime generation collides
 with its CR3. This is an activation-time runtime-local uniqueness snapshot, not
-a retained active-root lease. Descriptor-identity/device-object correlation,
-full-lifetime root/PAT/alias ownership, effective-leaf revalidation, SMP TLB,
-IOMMU, installed CPL3, KVM/WHP, and physical evidence remain absent.
+a retained active-root lease. The trusted launcher must still establish the
+initial PCI-identity/device-object correlation; record bytes describe and bind
+that decision but do not authorize it. Full-lifetime root/PAT/alias ownership,
+effective-leaf revalidation, SMP TLB, IOMMU, installed CPL3, KVM/WHP, and
+physical evidence remain absent.
 
-Complexity impact: LOW
+Complexity impact: MEDIUM
 TCB impact: LOW
-New parser boundary: NO
+New parser boundary: YES — canonical AHCI launch record V2
 New authority model: NO
 New persistent state: NO
 External dependency: NO

@@ -5,13 +5,13 @@
 //! bytes nor reconstructs an active hardware owner.
 
 use crate::{
-    AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout, AHCI_ABAR_MINIMUM_BYTES,
-    AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_MAX_TRANSFER_BYTES,
-    AHCI_MMIO_PAGE_BYTES, AHCI_RECEIVED_FIS_BYTES,
+    AHCI_ABAR_MINIMUM_BYTES, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_BYTES_PER_SLOT,
+    AHCI_MAX_TRANSFER_BYTES, AHCI_MMIO_PAGE_BYTES, AHCI_RECEIVED_FIS_BYTES, AhciAbarDescriptor,
+    AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout,
 };
 use mrml_interface_storage_block_provider_v1::{
-    BlockProviderDevice, BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_READ_ONLY,
-    BLOCK_DEVICE_FLAG_RESET,
+    BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_READ_ONLY, BLOCK_DEVICE_FLAG_RESET,
+    BlockProviderDevice,
 };
 use mrml_kernel::{DeviceServiceLaunchAttachment, IsolationServiceSpec, Rights};
 
@@ -22,7 +22,7 @@ pub const AHCI_COMMAND_TABLES_AUTHORITY_INDEX: usize = 3;
 pub const AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX: usize = 4;
 pub const AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX: usize = 5;
 pub const AHCI_SERVICE_AUTHORITY_COUNT: usize = 6;
-pub const AHCI_SERVICE_LAUNCH_BYTES: usize = 384;
+pub const AHCI_SERVICE_LAUNCH_BYTES: usize = 400;
 
 const COMMAND_MEMORY_RIGHTS: Rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
 const DEVICE_WRITE_DATA_RIGHTS: Rights = Rights::PIN.union(Rights::MAP).union(Rights::WRITE);
@@ -34,6 +34,8 @@ const KNOWN_DEVICE_FLAGS: u32 =
 pub enum AhciServiceLaunchSpecError {
     AttachmentMismatch,
     InvalidDevice,
+    InvalidDescriptor,
+    DescriptorMismatch,
     InvalidMapping,
     InvalidLayout,
     LayoutMismatch,
@@ -47,6 +49,7 @@ pub struct AhciServiceLaunchSpec {
     service: IsolationServiceSpec,
     attachment: DeviceServiceLaunchAttachment<AHCI_SERVICE_AUTHORITY_COUNT>,
     device: BlockProviderDevice,
+    descriptor: AhciAbarDescriptor,
     mapping: AhciAbarMapping,
     layout: AhciPortDmaLayout,
     data: AhciDataDmaRegion,
@@ -57,6 +60,7 @@ impl AhciServiceLaunchSpec {
         service: IsolationServiceSpec,
         attachment: DeviceServiceLaunchAttachment<AHCI_SERVICE_AUTHORITY_COUNT>,
         device: BlockProviderDevice,
+        descriptor: AhciAbarDescriptor,
         mapping: AhciAbarMapping,
         layout: AhciPortDmaLayout,
         data: AhciDataDmaRegion,
@@ -67,6 +71,7 @@ impl AhciServiceLaunchSpec {
         if attachment.launch_data_bytes() as usize != AHCI_SERVICE_LAUNCH_BYTES {
             return Err(AhciServiceLaunchSpecError::AttachmentMismatch);
         }
+        validate_ahci_controller_binding(descriptor, mapping)?;
         validate_ahci_service_state(device, mapping, layout, data)?;
         let authorities = attachment.authorities();
         for (index, object, rights) in [
@@ -110,6 +115,7 @@ impl AhciServiceLaunchSpec {
             service,
             attachment,
             device,
+            descriptor,
             mapping,
             layout,
             data,
@@ -128,6 +134,10 @@ impl AhciServiceLaunchSpec {
         self.device
     }
 
+    pub const fn descriptor(self) -> AhciAbarDescriptor {
+        self.descriptor
+    }
+
     pub const fn mapping(self) -> AhciAbarMapping {
         self.mapping
     }
@@ -139,6 +149,25 @@ impl AhciServiceLaunchSpec {
     pub const fn data(self) -> AhciDataDmaRegion {
         self.data
     }
+}
+
+pub(crate) fn validate_ahci_controller_binding(
+    descriptor: AhciAbarDescriptor,
+    mapping: AhciAbarMapping,
+) -> Result<(), AhciServiceLaunchSpecError> {
+    if descriptor.configuration_generation == 0
+        || descriptor.vendor_id == 0
+        || descriptor.vendor_id == u16::MAX
+    {
+        return Err(AhciServiceLaunchSpecError::InvalidDescriptor);
+    }
+    if descriptor.configuration_generation != mapping.configuration_generation
+        || descriptor.physical_base != mapping.physical_base
+        || descriptor.bytes != mapping.bytes
+    {
+        return Err(AhciServiceLaunchSpecError::DescriptorMismatch);
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_ahci_service_state(
@@ -296,6 +325,17 @@ mod tests {
         }
     }
 
+    fn descriptor() -> AhciAbarDescriptor {
+        AhciAbarDescriptor {
+            location: crate::PciFunctionLocation::new(0, 0, 31, 2).unwrap(),
+            configuration_generation: 11,
+            vendor_id: 0x8086,
+            device_id: 0x7a62,
+            physical_base: 0x10_0000,
+            bytes: 0x2000,
+        }
+    }
+
     fn layout() -> AhciPortDmaLayout {
         AhciPortDmaLayout {
             device_object: ObjectId(10),
@@ -368,12 +408,14 @@ mod tests {
             service(),
             attachment(),
             device(),
+            descriptor(),
             mapping(),
             layout(),
             data(),
         )
         .unwrap();
         assert_eq!(spec.device(), device());
+        assert_eq!(spec.descriptor(), descriptor());
         assert_eq!(spec.mapping(), mapping());
         assert_eq!(spec.layout(), layout());
         assert_eq!(spec.data(), data());
@@ -381,8 +423,16 @@ mod tests {
 
     #[test]
     fn identity_geometry_and_dma_substitution_fail_before_binding() {
-        let create = |device, mapping, layout, data| {
-            AhciServiceLaunchSpec::new(service(), attachment(), device, mapping, layout, data)
+        let create = |device, descriptor, mapping, layout, data| {
+            AhciServiceLaunchSpec::new(
+                service(),
+                attachment(),
+                device,
+                descriptor,
+                mapping,
+                layout,
+                data,
+            )
         };
         assert_eq!(
             create(
@@ -390,6 +440,7 @@ mod tests {
                     logical_block_bytes: 4096,
                     ..device()
                 },
+                descriptor(),
                 mapping(),
                 layout(),
                 data(),
@@ -399,6 +450,7 @@ mod tests {
         assert_eq!(
             create(
                 device(),
+                descriptor(),
                 AhciAbarMapping {
                     virtual_base: 1,
                     ..mapping()
@@ -411,6 +463,7 @@ mod tests {
         assert_eq!(
             create(
                 device(),
+                descriptor(),
                 mapping(),
                 AhciPortDmaLayout {
                     mapping_generation: 13,
@@ -423,6 +476,7 @@ mod tests {
         assert_eq!(
             create(
                 device(),
+                descriptor(),
                 mapping(),
                 layout(),
                 AhciDataDmaRegion {
@@ -435,6 +489,7 @@ mod tests {
         assert_eq!(
             create(
                 device(),
+                descriptor(),
                 mapping(),
                 layout(),
                 AhciDataDmaRegion {
@@ -482,6 +537,7 @@ mod tests {
                 service(),
                 attachment,
                 device(),
+                descriptor(),
                 mapping(),
                 layout(),
                 data(),

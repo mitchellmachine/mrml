@@ -1376,8 +1376,11 @@ order before ABAR. Tests cover authority, generation/geometry,
 runtime/root/target and resource substitution, exact installation/
 verification/rollback, poison retention after mutation-before-error rollback
 uncertainty, exact-generation permanent construction quarantine, cross-runtime
-quarantine denial, and the explicit limitation that PCI identity-only
-descriptor changes are not rechecked. The mapping-set owner retains the
+quarantine denial, and PCI location/vendor/device substitution. Canonical AHCI
+launch record V2 expands from 384 to 400 bytes and retains that exact PCI
+identity beside configuration generation, ABAR geometry, and the device
+object. Both concrete owners exact-match the supplied descriptor against the
+bound launch before mutation. The mapping-set owner retains the
 runtime-bound task identity without borrowing the runtime; a retained poisoned
 owner can therefore consume mutable access to that exact runtime and
 permanently exclude its blocked construction generation while retaining the
@@ -1386,14 +1389,16 @@ The Linux AHCI suite passes 146 tests and the Linux kernel suite passes 713.
 Native-service validation and scheduler activation preparation now reject a
 second live runtime domain with the same saved page-table root, and mapping-set
 verification inherits that check. This is a bounded runtime-local uniqueness
-snapshot, not an activation seal or active mapping owner. Full-lifetime root
-ownership, descriptor-identity/device-object correlation, PAT3=UC and alias
-exclusion, activation-time effective-leaf revalidation, SMP TLB withdrawal,
-IOMMU binding, installed CPL3, KVM/WHP, and physical evidence remain absent.
+snapshot, not an activation seal or active mapping owner. The trusted launcher
+must still establish the initial descriptor/device-object correlation; the
+record binds data and grants no authority. Full-lifetime root ownership,
+PAT3=UC and alias exclusion, activation-time effective-leaf revalidation, SMP
+TLB withdrawal, IOMMU binding, installed CPL3, KVM/WHP, and physical evidence
+remain absent.
 
-Complexity impact: LOW
+Complexity impact: MEDIUM
 TCB impact: LOW
-New parser boundary: NO
+New parser boundary: YES — canonical AHCI launch record V2
 New authority model: NO
 New persistent state: NO
 External dependency: NO
@@ -1403,8 +1408,9 @@ Existing-object reuse: HIGH
 Patent review: **NOT_TRIGGERED**. Retaining task ownership while invoking the
 existing exact mapping and rollback lifecycle, including conventional exact
 x86-64 task/root/target page-table installation and one-way fail-closed
-construction quarantine, plus bounded duplicate-root rejection, is standard
-resource composition. See
+construction quarantine, bounded duplicate-root rejection, and canonical
+binding of already-discovered PCI identity fields is standard resource
+composition. See
 [the patent review log](../patents/REVIEW_LOG.md).
 
 Native device-service construction now has an explicit scheduler publication

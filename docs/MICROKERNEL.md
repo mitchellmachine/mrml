@@ -9987,8 +9987,9 @@ request requires a live `MAP | READ | WRITE` capability for the exact device
 object, nonzero configuration and mapping generations, and an aligned
 non-wrapping lower-half virtual range. `KernelAhciAbarPreactivationOwner`
 requires the exact live mapping and control capabilities plus a structurally
-valid descriptor whose configuration generation and ABAR geometry match the
-retained launch, then accepts only the launch-bound prepared task whose
+valid descriptor whose PCI location/vendor/device identity, configuration
+generation, and ABAR geometry match canonical launch record V2, then accepts
+only the launch-bound prepared task whose
 generation remains construction-pending in the exact borrowed `TaskRuntime`,
 whose saved CR3 root matches the exclusively owned inactive hierarchy, and whose
 service-domain target matches that backend. Its immutable runtime borrow
@@ -10000,7 +10001,7 @@ with the exact kernel memory-resource adapter and installs/verifies the
 `USER_MMIO_READ_WRITE` ABAR plus all four launch-named ordinary user RW/NX
 CPU mappings in the same inactive hierarchy, retaining reverse-removal progress
 and resource records. Wrong runtime, root, target, ABAR generation/geometry,
-resource identity, or capability fails before publication. Mutation-before-error
+descriptor identity, resource identity, or capability fails before publication. Mutation-before-error
 rollback uncertainty retains the owner and poisons the hierarchy. The Linux
 AHCI suite passes 146 tests and the Linux kernel suite passes 713. A retained
 mapping-set owner can now consume mutable access to its exact runtime and apply
@@ -10016,9 +10017,11 @@ active-root owner must retain exclusivity against subsequent context changes.
 This is controlled Linux-host, in-memory page-table evidence only. The unsafe
 caller must keep PAT index 3 UC on every CPU that may later execute the task,
 exclude cacheable aliases for the complete installed lifetime, and establish
-exclusive root ownership plus the trusted correlation between the descriptor's
-PCI location/vendor/device identity and the capability-bound device object;
-neither relation is retained in the launch record. The bounded runtime scan
+exclusive root ownership. Canonical launch record V2 retains the descriptor's
+PCI location/vendor/device identity alongside the capability-bound device
+object and both concrete owners exact-match it before mutation. The trusted
+launcher remains responsible for establishing that initial correlation; record
+data binds but does not authorize it. The bounded runtime scan
 does not retain uniqueness beyond validation. These owners deliberately do not implement the public
 generic mapping traits or create `MappedAhciNativeServiceTask`. Dropping them is
 not an activation seal: no later owner yet consumes and revalidates the exact

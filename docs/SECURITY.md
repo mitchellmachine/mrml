@@ -340,10 +340,13 @@ access. The security/acceptance gate is canonical in
   now combines this concrete inactive ABAR hierarchy with the four exact
   launch-named CPU mappings in one retained `MemoryPoolTable`/page-table
   adapter, verifies all five leaves and mapping records, and withdraws CPU
-  mappings in reverse order before ABAR. This is not an activation seal: root
-  uniqueness, descriptor-PCI-identity/device-object correlation, PAT3=UC, and
-  alias exclusion remain unsafe caller obligations for the complete installed
-  lifetime. A retained owner can now permanently quarantine its exact blocked
+  mappings in reverse order before ABAR. Canonical AHCI launch record V2 binds
+  PCI location/vendor/device identity beside the configuration generation,
+  ABAR geometry, and capability-bound device object; both concrete owners
+  reject descriptor substitution before mutation. The trusted launcher must
+  establish that initial correlation because record data cannot authorize it.
+  This is not an activation seal: full-lifetime root uniqueness, PAT3=UC, and
+  alias exclusion remain unsafe caller obligations. A retained owner can now permanently quarantine its exact blocked
   construction generation in the owning runtime; runtime substitution preserves
   the unchanged owner, and quarantine never converts mapping state into an
   activation token. Native-service validation and scheduler activation

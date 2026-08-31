@@ -233,6 +233,7 @@ pub fn install_prepared_ahci_service_mappings<
         spec.service().provider_generation(),
         spec.attachment().attachment_generation(),
         spec.device(),
+        spec.descriptor(),
         spec.mapping(),
         spec.layout(),
         spec.data(),
@@ -278,6 +279,7 @@ pub fn install_ahci_service_mappings<
     if descriptor.configuration_generation != mapping.configuration_generation
         || descriptor.physical_base != mapping.physical_base
         || descriptor.bytes != mapping.bytes
+        || !descriptor.identity_matches(record.descriptor())
     {
         return Err(AhciServiceMappingInstallError::DescriptorMismatch);
     }
@@ -798,6 +800,7 @@ mod tests {
                 logical_block_count: 100,
                 media_generation: 7,
             },
+            descriptor(),
             AhciAbarMapping {
                 device_object: ObjectId(10),
                 configuration_generation: 11,
@@ -1068,6 +1071,7 @@ mod tests {
                 logical_block_count: 100,
                 media_generation: 7,
             },
+            descriptor(),
             AhciAbarMapping {
                 device_object: ObjectId(10),
                 configuration_generation: 11,
@@ -1366,7 +1370,7 @@ mod tests {
     }
 
     #[test]
-    fn kernel_preactivation_mapping_set_rejects_target_and_memory_substitution() {
+    fn kernel_preactivation_mapping_set_rejects_descriptor_target_and_memory_substitution() {
         let mut fixture = resource_fixture();
         let wrong_target = fixture
             .authorities
@@ -1376,8 +1380,8 @@ mod tests {
         let mut tables = inactive_abar_tables(TABLE_BASE, ObjectId(1), &fault);
         // SAFETY: the modeled hierarchy remains inactive and unreachable; this
         // call is expected to fail before any page-table or resource mutation.
-        let failure = unsafe {
-            crate::KernelAhciPreactivationMappingSetOwner::install(
+        let (target_error, target_retained, identity_error, identity_retained) = unsafe {
+            let target_failure = crate::KernelAhciPreactivationMappingSetOwner::install(
                 fixture.prepared,
                 descriptor(),
                 fixture.abar_mapping_capability,
@@ -1390,16 +1394,52 @@ mod tests {
                 fixture.memory_objects,
                 wrong_target,
             )
-        }
-        .err()
-        .unwrap_or_else(|| panic!("substituted target must be denied"));
+            .err()
+            .unwrap_or_else(|| panic!("substituted target must be denied"));
+            let target_error = target_failure.error();
+            let target_retained = target_failure.retained().is_some();
+            drop(target_failure);
+            let mut substituted = descriptor();
+            substituted.location.bus += 1;
+            substituted.vendor_id ^= 0x0101;
+            substituted.device_id ^= 0x1010;
+            let identity_failure = crate::KernelAhciPreactivationMappingSetOwner::install(
+                fixture.prepared,
+                substituted,
+                fixture.abar_mapping_capability,
+                fixture.abar_control_capability,
+                fixture.mapping_capabilities,
+                &fixture.authorities,
+                &fixture.runtime,
+                &mut tables,
+                &mut fixture.memory,
+                fixture.memory_objects,
+                fixture.target_capability,
+            )
+            .err()
+            .unwrap_or_else(|| panic!("substituted descriptor identity must be denied"));
+            let identity_error = identity_failure.error();
+            let identity_retained = identity_failure.retained().is_some();
+            drop(identity_failure);
+            (
+                target_error,
+                target_retained,
+                identity_error,
+                identity_retained,
+            )
+        };
         assert_eq!(
-            failure.error(),
+            target_error,
             crate::KernelAhciPreactivationMappingSetError::CpuAdapter(
                 crate::KernelAhciServiceCpuMappingAdapterError::WrongServiceTarget
             )
         );
-        assert!(failure.retained().is_none());
+        assert!(!target_retained);
+        assert_eq!(
+            identity_error,
+            crate::KernelAhciPreactivationMappingSetError::DescriptorIdentityMismatch
+        );
+        assert!(!identity_retained);
         assert_eq!(
             fixture
                 .memory
@@ -1661,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn preactivation_owner_leaves_pci_identity_correlation_to_its_unsafe_caller() {
+    fn preactivation_owner_rejects_pci_identity_substitution() {
         let (runtime, _, prepared, _, _) = native_tasks();
         let target = prepared.launch().spec().service().domain();
         let fault = WriteFault::default();
@@ -1671,19 +1711,18 @@ mod tests {
         identity_substituted.location.bus += 1;
         identity_substituted.vendor_id ^= 0x0101;
         identity_substituted.device_id ^= 0x1010;
-        let owner = install_inactive_abar(
-            prepared,
-            identity_substituted,
-            map,
-            control,
-            &capabilities,
-            &runtime,
-            &mut tables,
-        )
-        .unwrap();
-        assert_eq!(owner.mapping(), record().mapping());
-        assert_eq!(owner.verify_exact(), Ok(()));
-        assert!(owner.rollback().is_ok());
+        assert!(matches!(
+            install_inactive_abar(
+                prepared,
+                identity_substituted,
+                map,
+                control,
+                &capabilities,
+                &runtime,
+                &mut tables,
+            ),
+            Err(crate::KernelAhciAbarPreactivationError::DescriptorIdentityMismatch)
+        ));
     }
 
     #[test]

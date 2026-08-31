@@ -30,6 +30,7 @@ pub enum KernelAhciPreactivationMappingSetError {
     WrongRoot,
     WrongTarget,
     AbarGenerationOrGeometryMismatch,
+    DescriptorIdentityMismatch,
     InvalidMapping,
     ControlCapability(CapabilityError),
     WrongControlObject,
@@ -481,8 +482,9 @@ impl<
     /// must remain unreachable from every CPU, VM, and resumable context. PAT
     /// index 3 must be UC on every eligible CPU and cacheable aliases must be
     /// excluded for the complete retained lifetime. The caller must establish
-    /// descriptor PCI-identity/device-object correlation and keep all exact
-    /// roots, leaves, and memory-resource records unchanged after this owner
+    /// ensure the launch-bound descriptor identity came from the trusted
+    /// PCI/device-object correlation path and keep all exact roots, leaves, and
+    /// memory-resource records unchanged after this owner
     /// is dropped or transferred. This remains preactivation-only.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn install(
@@ -537,6 +539,12 @@ impl<
         {
             return Err(clean_install_failure(
                 KernelAhciPreactivationMappingSetError::AbarGenerationOrGeometryMismatch,
+                prepared,
+            ));
+        }
+        if !descriptor.identity_matches(prepared.launch().spec().descriptor()) {
+            return Err(clean_install_failure(
+                KernelAhciPreactivationMappingSetError::DescriptorIdentityMismatch,
                 prepared,
             ));
         }
@@ -973,6 +981,7 @@ fn launch_record(
         spec.service().provider_generation(),
         spec.attachment().attachment_generation(),
         spec.device(),
+        spec.descriptor(),
         spec.mapping(),
         spec.layout(),
         spec.data(),

@@ -291,6 +291,14 @@ mod tests {
                 logical_block_count: 100,
                 media_generation: 7,
             },
+            crate::AhciAbarDescriptor {
+                location: crate::PciFunctionLocation::new(0, 0, 31, 2).unwrap(),
+                configuration_generation: 11,
+                vendor_id: 0x8086,
+                device_id: 0x7a62,
+                physical_base: 0x10_0000,
+                bytes: 0x2000,
+            },
             AhciAbarMapping {
                 device_object: ObjectId(10),
                 configuration_generation: 11,

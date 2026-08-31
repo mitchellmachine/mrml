@@ -19,6 +19,7 @@ pub enum KernelAhciAbarPreactivationError {
     WrongRoot,
     WrongTarget,
     AbarGenerationOrGeometryMismatch,
+    DescriptorIdentityMismatch,
     InvalidMapping,
     ControlCapability(CapabilityError),
     WrongControlObject,
@@ -98,9 +99,9 @@ impl<
     /// context may reference the root. IA32_PAT index 3 must be UC on every CPU
     /// that could later execute the task, and every cacheable physical alias
     /// must remain excluded for the complete installed lifetime. The caller
-    /// must also establish the trusted correlation between the descriptor's PCI
-    /// identity and `expected.device_object`; the retained launch can recheck
-    /// only configuration generation, physical base, and length. After this
+    /// must also establish that the descriptor identity bound into the launch
+    /// came from the trusted PCI/device-object correlation path. This owner
+    /// exact-matches that retained identity plus generation and geometry. After this
     /// borrowed owner is dropped or transferred, the exact root and leaves must
     /// remain inactive and unchanged until a later owner consumes and
     /// revalidates them. This operation is not an activation seal.
@@ -131,6 +132,9 @@ impl<
             || descriptor.bytes != expected.bytes
         {
             return Err(KernelAhciAbarPreactivationError::AbarGenerationOrGeometryMismatch);
+        }
+        if !descriptor.identity_matches(spec.descriptor()) {
+            return Err(KernelAhciAbarPreactivationError::DescriptorIdentityMismatch);
         }
         mapping_range(expected).ok_or(KernelAhciAbarPreactivationError::InvalidMapping)?;
         let control_object = authorities

@@ -79,6 +79,13 @@ pub enum AhciDiscoveryError {
 }
 
 impl AhciAbarDescriptor {
+    pub fn identity_matches(self, other: Self) -> bool {
+        self.location == other.location
+            && self.configuration_generation == other.configuration_generation
+            && self.vendor_id == other.vendor_id
+            && self.device_id == other.device_id
+    }
+
     pub fn validate(snapshot: AhciPciFunctionSnapshot) -> Result<Self, AhciDiscoveryError> {
         if snapshot.vendor_id == 0 || snapshot.vendor_id == u16::MAX {
             return Err(AhciDiscoveryError::AbsentFunction);

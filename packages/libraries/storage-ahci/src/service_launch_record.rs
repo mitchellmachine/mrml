@@ -1,22 +1,23 @@
 //! Canonical non-authorizing launch record for the installed AHCI service.
 
 use crate::{
-    service_launch::validate_ahci_service_state, AhciAbarMapping, AhciDataDmaRegion, AhciDmaRegion,
-    AhciPortDmaLayout, AhciServiceLaunchSpec, AhciServiceLaunchSpecError,
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,
     AHCI_DEVICE_AUTHORITY_INDEX, AHCI_DEVICE_READ_DATA_AUTHORITY_INDEX,
     AHCI_DEVICE_WRITE_DATA_AUTHORITY_INDEX, AHCI_RECEIVED_FIS_AUTHORITY_INDEX,
-    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES,
+    AHCI_SERVICE_AUTHORITY_COUNT, AHCI_SERVICE_LAUNCH_BYTES, AhciAbarDescriptor, AhciAbarMapping,
+    AhciDataDmaRegion, AhciDmaRegion, AhciPortDmaLayout, AhciServiceLaunchSpec,
+    AhciServiceLaunchSpecError, PciFunctionLocation,
+    service_launch::{validate_ahci_controller_binding, validate_ahci_service_state},
 };
 use mrml_interface_storage_block_provider_v1::{BlockProviderDevice, OpaqueHandle};
 use mrml_kernel::{
-    prepare_native_device_service_task, Capability, DeviceServiceLaunchAttachment,
-    IsolationServiceSpec, NativeDeviceServiceTask, NativeDeviceServiceTaskError, ObjectId, TaskId,
-    TaskRuntime,
+    Capability, DeviceServiceLaunchAttachment, IsolationServiceSpec, NativeDeviceServiceTask,
+    NativeDeviceServiceTaskError, ObjectId, TaskId, TaskRuntime,
+    prepare_native_device_service_task,
 };
 
-const MAGIC: [u8; 8] = *b"MRMLAHC1";
-const VERSION: u16 = 1;
+const MAGIC: [u8; 8] = *b"MRMLAHC2";
+const VERSION: u16 = 2;
 const HEADER_BYTES: u16 = 32;
 const PAGE_BYTES: u64 = 4096;
 const USER_CANONICAL_END: u64 = 0x0000_8000_0000_0000;
@@ -57,6 +58,7 @@ pub struct AhciServiceLaunchRecord {
     provider_generation: u64,
     attachment_generation: u64,
     device: BlockProviderDevice,
+    descriptor: AhciAbarDescriptor,
     mapping: AhciAbarMapping,
     layout: AhciPortDmaLayout,
     data: AhciDataDmaRegion,
@@ -246,6 +248,7 @@ impl AhciServiceLaunchRecord {
         provider_generation: u64,
         attachment_generation: u64,
         device: BlockProviderDevice,
+        descriptor: AhciAbarDescriptor,
         mapping: AhciAbarMapping,
         layout: AhciPortDmaLayout,
         data: AhciDataDmaRegion,
@@ -254,6 +257,8 @@ impl AhciServiceLaunchRecord {
         if system_generation == 0 || provider_generation == 0 || attachment_generation == 0 {
             return Err(AhciServiceLaunchRecordError::InvalidGeneration);
         }
+        validate_ahci_controller_binding(descriptor, mapping)
+            .map_err(AhciServiceLaunchRecordError::Launch)?;
         validate_ahci_service_state(device, mapping, layout, data)
             .map_err(AhciServiceLaunchRecordError::Launch)?;
         validate_cpu_mappings(mapping, layout, data, cpu_mappings)?;
@@ -262,6 +267,7 @@ impl AhciServiceLaunchRecord {
             provider_generation,
             attachment_generation,
             device,
+            descriptor,
             mapping,
             layout,
             data,
@@ -283,6 +289,10 @@ impl AhciServiceLaunchRecord {
 
     pub const fn device(self) -> BlockProviderDevice {
         self.device
+    }
+
+    pub const fn descriptor(self) -> AhciAbarDescriptor {
+        self.descriptor
     }
 
     pub const fn mapping(self) -> AhciAbarMapping {
@@ -317,6 +327,7 @@ impl AhciServiceLaunchRecord {
             service,
             attachment,
             self.device,
+            self.descriptor,
             self.mapping,
             self.layout,
             self.data,
@@ -359,6 +370,12 @@ impl AhciServiceLaunchRecord {
             put_u64(&mut output, offset, mapping.mapping_generation);
             put_u64(&mut output, offset + 8, mapping.virtual_base);
         }
+        put_u16(&mut output, 376, self.descriptor.location.segment);
+        output[378] = self.descriptor.location.bus;
+        output[379] = self.descriptor.location.device;
+        output[380] = self.descriptor.location.function;
+        put_u16(&mut output, 382, self.descriptor.vendor_id);
+        put_u16(&mut output, 384, self.descriptor.device_id);
         output
     }
 
@@ -376,7 +393,8 @@ impl AhciServiceLaunchRecord {
         if bytes[16..32].iter().any(|byte| *byte != 0)
             || bytes[56..64].iter().any(|byte| *byte != 0)
             || bytes[170..176].iter().any(|byte| *byte != 0)
-            || bytes[376..384].iter().any(|byte| *byte != 0)
+            || bytes[381] != 0
+            || bytes[386..400].iter().any(|byte| *byte != 0)
         {
             return Err(AhciServiceLaunchRecordError::NonzeroReserved);
         }
@@ -390,6 +408,19 @@ impl AhciServiceLaunchRecord {
             media_generation: read_u64(bytes, 88),
         };
         let mapping = read_mapping(bytes, 96);
+        let location =
+            PciFunctionLocation::new(read_u16(bytes, 376), bytes[378], bytes[379], bytes[380])
+                .ok_or(AhciServiceLaunchRecordError::Launch(
+                    AhciServiceLaunchSpecError::InvalidDescriptor,
+                ))?;
+        let descriptor = AhciAbarDescriptor {
+            location,
+            configuration_generation: mapping.configuration_generation,
+            vendor_id: read_u16(bytes, 382),
+            device_id: read_u16(bytes, 384),
+            physical_base: mapping.physical_base,
+            bytes: mapping.bytes,
+        };
         let layout = AhciPortDmaLayout {
             device_object: ObjectId(read_u64(bytes, 144)),
             configuration_generation: read_u64(bytes, 152),
@@ -417,6 +448,7 @@ impl AhciServiceLaunchRecord {
             read_u64(bytes, 40),
             read_u64(bytes, 48),
             device,
+            descriptor,
             mapping,
             layout,
             data,
@@ -564,9 +596,9 @@ mod tests {
         BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_RESET, FLUSH_RESPONSE_BYTES,
     };
     use mrml_kernel::{
-        arch::x86_64::UserContext, CapabilitySpace, ControlEvent, Endpoint, IsolationPlacement,
-        NativeDeviceServiceEntryError, PhysAddr, Priority, RestartPolicy, Rights,
-        ServiceSupervisor, SyscallRequest, TotalMicrovmClass,
+        CapabilitySpace, ControlEvent, Endpoint, IsolationPlacement, NativeDeviceServiceEntryError,
+        PhysAddr, Priority, RestartPolicy, Rights, ServiceSupervisor, SyscallRequest,
+        TotalMicrovmClass, arch::x86_64::UserContext,
     };
 
     fn service() -> IsolationServiceSpec {
@@ -592,6 +624,17 @@ mod tests {
         }
     }
 
+    fn descriptor() -> AhciAbarDescriptor {
+        AhciAbarDescriptor {
+            location: PciFunctionLocation::new(0, 0, 31, 2).unwrap(),
+            configuration_generation: 11,
+            vendor_id: 0x8086,
+            device_id: 0x7a62,
+            physical_base: 0x10_0000,
+            bytes: 0x2000,
+        }
+    }
+
     fn record() -> AhciServiceLaunchRecord {
         AhciServiceLaunchRecord::new(
             4,
@@ -604,6 +647,7 @@ mod tests {
                 logical_block_count: 1_000,
                 media_generation: 7,
             },
+            descriptor(),
             AhciAbarMapping {
                 device_object: ObjectId(10),
                 configuration_generation: 11,
@@ -1027,11 +1071,18 @@ mod tests {
         assert!(bytes[16..32].iter().all(|byte| *byte == 0));
         assert!(bytes[56..64].iter().all(|byte| *byte == 0));
         assert!(bytes[170..176].iter().all(|byte| *byte == 0));
-        assert!(bytes[376..384].iter().all(|byte| *byte == 0));
+        assert_eq!(read_u16(&bytes, 376), record.descriptor().location.segment);
+        assert_eq!(bytes[378], record.descriptor().location.bus);
+        assert_eq!(bytes[379], record.descriptor().location.device);
+        assert_eq!(bytes[380], record.descriptor().location.function);
+        assert_eq!(read_u16(&bytes, 382), record.descriptor().vendor_id);
+        assert_eq!(read_u16(&bytes, 384), record.descriptor().device_id);
+        assert!(bytes[386..400].iter().all(|byte| *byte == 0));
         let decoded = AhciServiceLaunchRecord::decode(&bytes).unwrap();
         assert_eq!(decoded, record);
         let bound = decoded.bind(service(), attachment()).unwrap();
         assert_eq!(bound.spec().device(), record.device());
+        assert_eq!(bound.spec().descriptor(), record.descriptor());
         assert_eq!(bound.cpu_mappings(), record.cpu_mappings());
     }
 
@@ -1049,7 +1100,7 @@ mod tests {
                 Err(AhciServiceLaunchRecordError::InvalidHeader)
             );
         }
-        for offset in [16, 56, 170, 376] {
+        for offset in [16, 56, 170, 381, 386] {
             let mut bytes = record().encode();
             bytes[offset] = 1;
             assert_eq!(
@@ -1063,6 +1114,22 @@ mod tests {
             AhciServiceLaunchRecord::decode(&bytes),
             Err(AhciServiceLaunchRecordError::InvalidHandle)
         );
+        let mut bytes = record().encode();
+        bytes[379] = 32;
+        assert_eq!(
+            AhciServiceLaunchRecord::decode(&bytes),
+            Err(AhciServiceLaunchRecordError::Launch(
+                AhciServiceLaunchSpecError::InvalidDescriptor
+            ))
+        );
+        let mut bytes = record().encode();
+        bytes[382..384].fill(0);
+        assert_eq!(
+            AhciServiceLaunchRecord::decode(&bytes),
+            Err(AhciServiceLaunchRecordError::Launch(
+                AhciServiceLaunchSpecError::InvalidDescriptor
+            ))
+        );
     }
 
     #[test]
@@ -1075,6 +1142,7 @@ mod tests {
                 3,
                 8,
                 record().device(),
+                record().descriptor(),
                 record().mapping(),
                 record().layout(),
                 record().data(),
