@@ -4,19 +4,20 @@ use crate::{
 };
 use mrml_kernel::arch::x86_64::TrapDisposition;
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, CleanedSupervisedConstructedServiceViolation,
-    ComponentServiceLaunchAttachment, ComponentServiceReadTransferAttachment,
-    ComponentServiceReadTransferCopyTaskBinding, ComponentServiceReadTransferMemoryRoot,
-    IsolationPlacement, IsolationServiceSpec, MemoryMappingRevocationBackend,
-    MemoryObjectBackingBackend, MemoryPoolTable,
+    Capability, CapabilityError, CapabilitySpace, CleanedSupervisedConstructedServiceFault,
+    CleanedSupervisedConstructedServiceViolation, ComponentServiceLaunchAttachment,
+    ComponentServiceReadTransferAttachment, ComponentServiceReadTransferCopyTaskBinding,
+    ComponentServiceReadTransferMemoryRoot, IsolationPlacement, IsolationServiceSpec,
+    MemoryMappingRevocationBackend, MemoryObjectBackingBackend, MemoryPoolTable,
     NativeComponentServiceCopyReadTransferActiveRetirementError,
     NativeComponentServiceCopyReadTransferError,
     NativeComponentServiceCopyReadTransferRetirementMappingError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
     NativeComponentServiceCopyReadTransferTeardownError, ObjectId, RestartPolicy, Rights,
     ServiceError, ServiceId, ServiceSupervisor, SupervisedConstructedServiceFault,
-    SupervisedConstructedServiceRetirement, SupervisedConstructedServiceViolation,
-    SupervisedConstructedServiceViolationCleanupFailure,
+    SupervisedConstructedServiceFaultCleanupFailure,
+    SupervisedConstructedServiceFaultDispatchFailure, SupervisedConstructedServiceRetirement,
+    SupervisedConstructedServiceViolation, SupervisedConstructedServiceViolationCleanupFailure,
     SupervisedConstructedServiceViolationDispatchFailure, SupervisedServiceTask, TaskId,
     TaskProtocolViolation, TaskRuntime, TaskRuntimeError, TaskTermination, TaskTerminationDispatch,
     TaskTerminationDispatchError,
@@ -449,6 +450,28 @@ pub struct FaultedNativeFilesystemProviderTeardownFailure<E> {
     error: E,
 }
 
+#[derive(Debug)]
+pub struct ResourceReleasedFaultedNativeFilesystemProvider {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    fault: SupervisedConstructedServiceFault,
+}
+
+impl ResourceReleasedFaultedNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.fault.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.fault.task()
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+}
+
 impl<E> FaultedNativeFilesystemProviderTeardownFailure<E> {
     pub const fn error(&self) -> &E {
         &self.error
@@ -463,7 +486,7 @@ pub fn teardown_faulted_native_filesystem_provider<B>(
     mut faulted: FaultedNativeFilesystemProvider,
     backend: &mut B,
 ) -> Result<
-    SupervisedConstructedServiceFault,
+    ResourceReleasedFaultedNativeFilesystemProvider,
     FaultedNativeFilesystemProviderTeardownFailure<B::TeardownError>,
 >
 where
@@ -481,8 +504,145 @@ where
         });
     }
     match backend.teardown(&mut faulted.receipt.instance) {
-        Ok(()) => Ok(faulted.fault),
+        Ok(()) => Ok(ResourceReleasedFaultedNativeFilesystemProvider {
+            receipt: faulted.receipt,
+            fault: faulted.fault,
+        }),
         Err(error) => Err(FaultedNativeFilesystemProviderTeardownFailure { faulted, error }),
+    }
+}
+
+#[derive(Debug)]
+pub struct ResourceReleasedNativeFilesystemProviderFaultCleanupFailure<E> {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    failure: SupervisedConstructedServiceFaultCleanupFailure<E>,
+}
+
+impl<E> ResourceReleasedNativeFilesystemProviderFaultCleanupFailure<E> {
+    pub fn error(&self) -> &mrml_kernel::ServiceCleanupError<E> {
+        self.failure.error()
+    }
+
+    pub fn into_released(self) -> ResourceReleasedFaultedNativeFilesystemProvider {
+        ResourceReleasedFaultedNativeFilesystemProvider {
+            receipt: self.receipt,
+            fault: self.failure.into_fault(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CleanedFaultedNativeFilesystemProvider {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    cleaned: CleanedSupervisedConstructedServiceFault,
+}
+
+impl CleanedFaultedNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.cleaned.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.cleaned.task()
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+}
+
+pub fn complete_resource_released_native_filesystem_provider_fault_cleanup<
+    E: mrml_kernel::ServiceAddressSpaceEraser,
+    const SERVICES: usize,
+>(
+    released: ResourceReleasedFaultedNativeFilesystemProvider,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    eraser: &mut E,
+) -> Result<
+    CleanedFaultedNativeFilesystemProvider,
+    ResourceReleasedNativeFilesystemProviderFaultCleanupFailure<E::Error>,
+> {
+    match supervisor.complete_constructed_service_fault_cleanup(released.fault, eraser) {
+        Ok(cleaned) => Ok(CleanedFaultedNativeFilesystemProvider {
+            receipt: released.receipt,
+            cleaned,
+        }),
+        Err(failure) => Err(
+            ResourceReleasedNativeFilesystemProviderFaultCleanupFailure {
+                receipt: released.receipt,
+                failure,
+            },
+        ),
+    }
+}
+
+#[derive(Debug)]
+pub struct DispatchedFaultedNativeFilesystemProvider {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    dispatch: TaskTerminationDispatch,
+}
+
+impl DispatchedFaultedNativeFilesystemProvider {
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+
+    pub const fn dispatch(&self) -> &TaskTerminationDispatch {
+        &self.dispatch
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+        TaskTerminationDispatch,
+    ) {
+        (self.receipt, self.dispatch)
+    }
+}
+
+#[derive(Debug)]
+pub struct CleanedNativeFilesystemProviderFaultDispatchFailure {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    failure: SupervisedConstructedServiceFaultDispatchFailure,
+}
+
+impl CleanedNativeFilesystemProviderFaultDispatchFailure {
+    pub const fn error(&self) -> TaskTerminationDispatchError {
+        self.failure.error()
+    }
+
+    pub fn into_cleaned(self) -> CleanedFaultedNativeFilesystemProvider {
+        CleanedFaultedNativeFilesystemProvider {
+            receipt: self.receipt,
+            cleaned: self.failure.into_cleaned(),
+        }
+    }
+}
+
+pub fn dispatch_cleaned_native_filesystem_provider_fault<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+>(
+    cleaned: CleanedFaultedNativeFilesystemProvider,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<
+    DispatchedFaultedNativeFilesystemProvider,
+    CleanedNativeFilesystemProviderFaultDispatchFailure,
+> {
+    match cleaned.cleaned.dispatch(runtime) {
+        Ok(dispatch) => Ok(DispatchedFaultedNativeFilesystemProvider {
+            receipt: cleaned.receipt,
+            dispatch,
+        }),
+        Err(failure) => Err(CleanedNativeFilesystemProviderFaultDispatchFailure {
+            receipt: cleaned.receipt,
+            failure,
+        }),
     }
 }
 
@@ -2101,7 +2261,7 @@ mod tests {
                     }
                 ));
                 assert!(failure.faulted.receipt().instance().teardown().is_some());
-                let fault = {
+                let released = {
                     let mut teardown = NativeFilesystemProviderTeardownBackend::new(
                         &mut runtime,
                         &mut memory,
@@ -2114,16 +2274,60 @@ mod tests {
                     )
                     .unwrap()
                 };
-                let mut eraser = AddressSpaceEraser::default();
-                let cleaned = supervisor
-                    .complete_constructed_service_fault_cleanup(fault, &mut eraser)
-                    .unwrap();
-                assert_eq!(eraser.erased, Some(target));
-                (
-                    cleaned.dispatch(&mut runtime).unwrap(),
-                    successor,
-                    successor_context,
+                assert_eq!(released.service(), service_id);
+                assert_eq!(released.task(), target);
+                assert_eq!(
+                    released.receipt().association_generation(),
+                    association.association_generation
+                );
+                let mut rejecting_eraser = RejectingAddressSpaceEraser;
+                let failure = complete_resource_released_native_filesystem_provider_fault_cleanup(
+                    released,
+                    &mut supervisor,
+                    &mut rejecting_eraser,
                 )
+                .unwrap_err();
+                assert_eq!(
+                    failure.error(),
+                    &mrml_kernel::ServiceCleanupError::Eraser("erase")
+                );
+                let released = failure.into_released();
+                assert_eq!(
+                    released.receipt().filesystem_provider_generation(),
+                    association.filesystem_binding.provider_generation
+                );
+                let mut eraser = AddressSpaceEraser::default();
+                let cleaned = complete_resource_released_native_filesystem_provider_fault_cleanup(
+                    released,
+                    &mut supervisor,
+                    &mut eraser,
+                )
+                .unwrap();
+                assert_eq!(eraser.erased, Some(target));
+                assert_eq!(cleaned.service(), service_id);
+                assert_eq!(cleaned.task(), target);
+                let mut wrong_runtime = TaskRuntime::<1, 1>::new(9_000, 1).unwrap();
+                let failure =
+                    dispatch_cleaned_native_filesystem_provider_fault(cleaned, &mut wrong_runtime)
+                        .unwrap_err();
+                assert_eq!(
+                    failure.error(),
+                    TaskTerminationDispatchError::RetirementRuntimeMismatch
+                );
+                let cleaned = failure.into_cleaned();
+                assert_eq!(
+                    cleaned.receipt().system_generation(),
+                    association.filesystem_binding.system_generation
+                );
+                let dispatched =
+                    dispatch_cleaned_native_filesystem_provider_fault(cleaned, &mut runtime)
+                        .unwrap();
+                assert_eq!(
+                    dispatched.receipt().block_provider_generation(),
+                    association.block_binding.provider_generation
+                );
+                let (_, dispatch) = dispatched.into_parts();
+                (dispatch, successor, successor_context)
             }
             SupervisedFailureKind::ProtocolViolation => {
                 let violating = violate_current_supervised_native_filesystem_provider(
