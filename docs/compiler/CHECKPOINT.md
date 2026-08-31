@@ -4672,6 +4672,16 @@ replacements, and 128/128 semantic tests; the release compiler-driver gate
 passes 17/17. All eight pinned std/TLS Wine modes reproduce their exact recorded
 sizes and SHA-256 hashes and return 42. Patent review: NOT_TRIGGERED.
 
+PE contextualization now projects a named relocation to exact COFF section
+identity only when every matching typed definition agrees. Conflicting typed
+object/section/offset targets remain unresolved even when a writable symbol has
+the same name, and a conventional global definition retains precedence. The
+adjacent Linux release core gate passes 844/844 units, 2/2 object evidence,
+10/10 conformance, 351/351 replacements, and 128/128 semantic tests; the changed
+release driver passes 17/17. All eight pinned std/TLS Wine modes reproduce their
+exact recorded sizes and SHA-256 hashes and return 42. Patent review:
+NOT_TRIGGERED.
+
 Read-only COMDAT relocation decoding now retains exact projected target-section
 identity for section-defined global symbols as well as static symbols. True
 section-zero externals remain name-based for archive resolution. Focused

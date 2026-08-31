@@ -1788,3 +1788,17 @@ tests; the release driver passes 17 tests. All eight pinned std/TLS Wine modes
 reproduce their exact recorded sizes and SHA-256 hashes and return 42. Patent
 review: NOT_TRIGGERED; this completes bounded conventional PE/COFF symbol and
 section resolution without introducing a new mechanism.
+
+PE relocation contextualization now requires one exact typed section target
+before replacing a section-zero named symbol with `CoffSection` identity. Two
+same-named definitions with different object/section/offset tuples remain
+unresolved and therefore fail later validation; they cannot fall through to an
+unrelated writable symbol of the same name. A conventional global definition
+also retains precedence over a typed projection. Focused driver coverage checks
+ordinary and image-relative unique targets, conflicting typed identities in the
+presence of a writable name, and global precedence. The adjacent Linux release
+compiler-core gate passes 844/844 units, 2/2 object evidence, 10/10 conformance,
+351/351 replacements, and 128/128 semantic tests; the changed release driver
+passes 17/17. All eight pinned std/TLS Wine modes reproduce their exact recorded
+sizes and SHA-256 hashes and return 42. Patent review: NOT_TRIGGERED; this is
+bounded conventional PE/COFF symbol resolution.

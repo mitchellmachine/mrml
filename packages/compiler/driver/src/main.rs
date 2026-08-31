@@ -2218,25 +2218,29 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
     let writable_target_defined =
         |symbol: &str| writable_data.iter().any(|data| data.symbol == symbol);
     let typed_section_target = |symbol: &str| {
-        inputs.iter().find_map(|input| {
+        let mut target = None;
+        for definition in inputs.iter().flat_map(|input| {
             core::iter::once(LinkDefinition {
                 symbol: input.symbol,
                 target: input.symbol_target,
             })
             .chain(input.additional_definitions.iter().copied())
-            .find_map(|definition| {
-                if definition.symbol != symbol {
-                    return None;
-                }
-                match definition.target {
-                    LinkDefinitionTarget::CoffTextSection { identity, offset }
-                    | LinkDefinitionTarget::CoffSection { identity, offset } => {
-                        Some((identity, offset))
-                    }
-                    _ => None,
-                }
-            })
-        })
+        }) {
+            if definition.symbol != symbol {
+                continue;
+            }
+            let candidate = match definition.target {
+                LinkDefinitionTarget::CoffTextSection { identity, offset }
+                | LinkDefinitionTarget::CoffSection { identity, offset } => (identity, offset),
+                _ => continue,
+            };
+            match target {
+                None => target = Some(candidate),
+                Some(previous) if previous == candidate => {}
+                Some(_) => return (None, true),
+            }
+        }
+        (target, false)
     };
     let import_target = |symbol: &str| {
         inputs.iter().find_map(|input| {
@@ -2273,7 +2277,12 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
         for (index, relocation) in input.relocations.iter().copied().enumerate() {
             arena[index] = match relocation.target {
                 LinkRelocationTarget::Symbol(symbol) => {
-                    if let Some((identity, offset)) = typed_section_target(symbol) {
+                    let (typed_target, typed_ambiguous) = typed_section_target(symbol);
+                    if typed_ambiguous {
+                        relocation
+                    } else if !link_target_defined(symbol)
+                        && let Some((identity, offset)) = typed_target
+                    {
                         LinkRelocation {
                             target: LinkRelocationTarget::CoffSection { identity, offset },
                             ..relocation
@@ -2298,7 +2307,12 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                         relocation.target,
                         LinkRelocationTarget::PeAbsoluteAddress(_)
                     );
-                    let target = if let Some((identity, offset)) = typed_section_target(symbol) {
+                    let (typed_target, typed_ambiguous) = typed_section_target(symbol);
+                    let target = if typed_ambiguous {
+                        PeImageRelativeTarget::Symbol(symbol)
+                    } else if !link_target_defined(symbol)
+                        && let Some((identity, offset)) = typed_target
+                    {
                         PeImageRelativeTarget::CoffSection { identity, offset }
                     } else if let Some((library, target)) = import_target(symbol) {
                         PeImageRelativeTarget::ImportAddress { library, target }
@@ -3284,6 +3298,95 @@ mod tests {
                 .unwrap();
         assert_eq!(
             defined_contextual[0].relocations[0].target,
+            LinkRelocationTarget::Symbol("marker")
+        );
+
+        let typed_identity = CoffSectionIdentity::new(7, 3).unwrap();
+        let typed_definition = [LinkDefinition {
+            symbol: "marker",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: typed_identity,
+                offset: 1,
+            },
+        }];
+        let typed = LinkInput {
+            additional_definitions: &typed_definition,
+            ..input
+        };
+        let mut typed_arenas = relocation_arenas(1).unwrap();
+        let typed_contextual =
+            contextualize_pe_writable_relocations(&[typed], &[], &mut typed_arenas).unwrap();
+        assert_eq!(
+            typed_contextual[0].relocations[0].target,
+            LinkRelocationTarget::CoffSection {
+                identity: typed_identity,
+                offset: 1,
+            }
+        );
+        let typed_image_relative = LinkInput {
+            additional_definitions: &typed_definition,
+            ..image_relative_input
+        };
+        let mut typed_image_arenas = relocation_arenas(1).unwrap();
+        let typed_image_contextual = contextualize_pe_writable_relocations(
+            &[typed_image_relative],
+            &[],
+            &mut typed_image_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            typed_image_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::CoffSection {
+                identity: typed_identity,
+                offset: 1,
+            })
+        );
+
+        let conflicting_identity = CoffSectionIdentity::new(8, 4).unwrap();
+        let conflicting_definition = [LinkDefinition {
+            symbol: "marker",
+            target: LinkDefinitionTarget::CoffTextSection {
+                identity: conflicting_identity,
+                offset: 0,
+            },
+        }];
+        let conflicting = LinkInput {
+            symbol: ".text$conflicting_marker",
+            symbol_target: LinkDefinitionTarget::CoffTextSection {
+                identity: conflicting_identity,
+                offset: 0,
+            },
+            additional_definitions: &conflicting_definition,
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let mut ambiguous_arenas = relocation_arenas(2).unwrap();
+        let ambiguous_contextual = contextualize_pe_writable_relocations(
+            &[typed, conflicting],
+            &writable,
+            &mut ambiguous_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            ambiguous_contextual[0].relocations[0].target,
+            LinkRelocationTarget::Symbol("marker")
+        );
+
+        let global_and_typed_definitions = [definition[0], typed_definition[0]];
+        let global_and_typed = LinkInput {
+            additional_definitions: &global_and_typed_definitions,
+            ..input
+        };
+        let mut global_and_typed_arenas = relocation_arenas(1).unwrap();
+        let global_and_typed_contextual = contextualize_pe_writable_relocations(
+            &[global_and_typed],
+            &[],
+            &mut global_and_typed_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            global_and_typed_contextual[0].relocations[0].target,
             LinkRelocationTarget::Symbol("marker")
         );
 
