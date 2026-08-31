@@ -14,8 +14,9 @@ use mrml_kernel::{
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
     NativeComponentServiceCopyReadTransferTeardownError, ObjectId, RestartPolicy, Rights,
     ServiceError, ServiceId, ServiceSupervisor, SupervisedConstructedServiceFault,
-    SupervisedConstructedServiceRetirement, SupervisedServiceTask, TaskId, TaskRuntime,
-    TaskRuntimeError, TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError,
+    SupervisedConstructedServiceRetirement, SupervisedConstructedServiceViolation,
+    SupervisedServiceTask, TaskId, TaskProtocolViolation, TaskRuntime, TaskRuntimeError,
+    TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError,
     prepare_native_component_service_task_from_copy_read_transfer_attachment,
     resume_native_component_service_copy_read_transfer_mapping_revocation,
     resume_native_component_service_copy_read_transfer_mapping_revocation_on_active_x86_64,
@@ -479,6 +480,107 @@ where
     match backend.teardown(&mut faulted.receipt.instance) {
         Ok(()) => Ok(faulted.fault),
         Err(error) => Err(FaultedNativeFilesystemProviderTeardownFailure { faulted, error }),
+    }
+}
+
+#[derive(Debug)]
+pub struct ViolatingNativeFilesystemProvider {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    violation: SupervisedConstructedServiceViolation,
+}
+
+impl ViolatingNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.violation.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.violation.task()
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+}
+
+#[derive(Debug)]
+pub struct NativeFilesystemProviderSupervisedViolationFailure {
+    active: ActiveNativeFilesystemProvider,
+    error: ServiceError,
+}
+
+impl NativeFilesystemProviderSupervisedViolationFailure {
+    pub const fn error(&self) -> ServiceError {
+        self.error
+    }
+
+    pub fn into_active(self) -> ActiveNativeFilesystemProvider {
+        self.active
+    }
+}
+
+pub fn violate_current_supervised_native_filesystem_provider<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+    const SERVICES: usize,
+>(
+    active: ActiveNativeFilesystemProvider,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+    violation: TaskProtocolViolation,
+) -> Result<ViolatingNativeFilesystemProvider, NativeFilesystemProviderSupervisedViolationFailure> {
+    match supervisor.violate_current_constructed_service(active.binding, runtime, violation) {
+        Ok(violation) => Ok(ViolatingNativeFilesystemProvider {
+            receipt: active.receipt,
+            violation,
+        }),
+        Err(error) => Err(NativeFilesystemProviderSupervisedViolationFailure { active, error }),
+    }
+}
+
+#[derive(Debug)]
+pub struct ViolatingNativeFilesystemProviderTeardownFailure<E> {
+    violating: ViolatingNativeFilesystemProvider,
+    error: E,
+}
+
+impl<E> ViolatingNativeFilesystemProviderTeardownFailure<E> {
+    pub const fn error(&self) -> &E {
+        &self.error
+    }
+
+    pub fn into_violating(self) -> ViolatingNativeFilesystemProvider {
+        self.violating
+    }
+}
+
+pub fn teardown_violating_native_filesystem_provider<B>(
+    mut violating: ViolatingNativeFilesystemProvider,
+    backend: &mut B,
+) -> Result<
+    SupervisedConstructedServiceViolation,
+    ViolatingNativeFilesystemProviderTeardownFailure<B::TeardownError>,
+>
+where
+    B: FilesystemProviderTeardownBackend<Instance = NativeFilesystemProviderInstance>,
+{
+    if let NativeFilesystemProviderInstance::Active(active) = violating.receipt.instance {
+        debug_assert_eq!(active.construction().task(), violating.violation.task());
+        // SAFETY: `violating.violation` was minted by the exact
+        // supervisor-bound protocol-violation transition for this active
+        // receipt and remains retained until resource teardown returns.
+        violating.receipt.instance = NativeFilesystemProviderInstance::Teardown(unsafe {
+            NativeComponentServiceCopyReadTransferTeardown::from_supervised_retirement(
+                active,
+                violating.violation.cleanup().context(),
+            )
+        });
+    }
+    match backend.teardown(&mut violating.receipt.instance) {
+        Ok(()) => Ok(violating.violation),
+        Err(error) => Err(ViolatingNativeFilesystemProviderTeardownFailure { violating, error }),
     }
 }
 
@@ -1557,8 +1659,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn native_launch_and_teardown_retain_one_exact_copy_task_lifecycle() {
+    #[derive(Clone, Copy)]
+    enum SupervisedFailureKind {
+        Fault,
+        ProtocolViolation,
+    }
+
+    fn native_launch_and_teardown_retain_one_exact_copy_task_lifecycle(
+        failure_kind: SupervisedFailureKind,
+    ) {
         let association = association();
         let mut page_tables = PageTableArena([0; 512 * 5]);
         let page_table_base =
@@ -1785,55 +1894,122 @@ mod tests {
         runtime.start();
         runtime.yield_current().unwrap();
         assert_eq!(runtime.current(), Some(target));
-        let faulted = fault_current_supervised_native_filesystem_provider(
-            failure.into_active(),
-            &mut supervisor,
-            &mut runtime,
-            TrapDisposition::TerminateUser {
-                vector: 14,
-                address: Some(0xfeed_0000),
-            },
-        )
-        .unwrap();
-        assert_eq!(faulted.service(), service_id);
-        assert_eq!(faulted.task(), target);
-        assert!(faulted.receipt().instance().active().is_some());
-        let mut rejecting = RejectingRevoker;
-        let failure = {
-            let mut teardown = NativeFilesystemProviderTeardownBackend::new(
-                &mut runtime,
-                &mut memory,
-                &mut rejecting,
-                &mut backing,
-            );
-            teardown_faulted_native_filesystem_provider(faulted, &mut teardown).unwrap_err()
-        };
-        assert!(matches!(
-            failure.error(),
-            NativeComponentServiceCopyReadTransferTeardownError::LocalMapping {
-                error: mrml_kernel::MemoryMappingOperationError::Backend("revoke"),
-                ..
+        let (dispatch, successor, successor_context) = match failure_kind {
+            SupervisedFailureKind::Fault => {
+                let faulted = fault_current_supervised_native_filesystem_provider(
+                    failure.into_active(),
+                    &mut supervisor,
+                    &mut runtime,
+                    TrapDisposition::TerminateUser {
+                        vector: 14,
+                        address: Some(0xfeed_0000),
+                    },
+                )
+                .unwrap();
+                assert_eq!(faulted.service(), service_id);
+                assert_eq!(faulted.task(), target);
+                assert!(faulted.receipt().instance().active().is_some());
+                let successor = runtime.current().unwrap();
+                let successor_context = *runtime.context(successor).unwrap();
+                let mut rejecting = RejectingRevoker;
+                let failure = {
+                    let mut teardown = NativeFilesystemProviderTeardownBackend::new(
+                        &mut runtime,
+                        &mut memory,
+                        &mut rejecting,
+                        &mut backing,
+                    );
+                    teardown_faulted_native_filesystem_provider(faulted, &mut teardown).unwrap_err()
+                };
+                assert!(matches!(
+                    failure.error(),
+                    NativeComponentServiceCopyReadTransferTeardownError::LocalMapping {
+                        error: mrml_kernel::MemoryMappingOperationError::Backend("revoke"),
+                        ..
+                    }
+                ));
+                assert!(failure.faulted.receipt().instance().teardown().is_some());
+                let fault = {
+                    let mut teardown = NativeFilesystemProviderTeardownBackend::new(
+                        &mut runtime,
+                        &mut memory,
+                        &mut local_mapping,
+                        &mut backing,
+                    );
+                    teardown_faulted_native_filesystem_provider(
+                        failure.into_faulted(),
+                        &mut teardown,
+                    )
+                    .unwrap()
+                };
+                let mut eraser = AddressSpaceEraser::default();
+                let cleaned = supervisor
+                    .complete_constructed_service_fault_cleanup(fault, &mut eraser)
+                    .unwrap();
+                assert_eq!(eraser.erased, Some(target));
+                (
+                    cleaned.dispatch(&mut runtime).unwrap(),
+                    successor,
+                    successor_context,
+                )
             }
-        ));
-        assert!(failure.faulted.receipt().instance().teardown().is_some());
-        let successor = runtime.current().unwrap();
-        let successor_context = *runtime.context(successor).unwrap();
-        let fault = {
-            let mut teardown = NativeFilesystemProviderTeardownBackend::new(
-                &mut runtime,
-                &mut memory,
-                &mut local_mapping,
-                &mut backing,
-            );
-            teardown_faulted_native_filesystem_provider(failure.into_faulted(), &mut teardown)
-                .unwrap()
+            SupervisedFailureKind::ProtocolViolation => {
+                let violating = violate_current_supervised_native_filesystem_provider(
+                    failure.into_active(),
+                    &mut supervisor,
+                    &mut runtime,
+                    TaskProtocolViolation::BufferedReceiveMappingDrift,
+                )
+                .unwrap();
+                assert_eq!(violating.service(), service_id);
+                assert_eq!(violating.task(), target);
+                assert!(violating.receipt().instance().active().is_some());
+                let successor = runtime.current().unwrap();
+                let successor_context = *runtime.context(successor).unwrap();
+                let mut rejecting = RejectingRevoker;
+                let failure = {
+                    let mut teardown = NativeFilesystemProviderTeardownBackend::new(
+                        &mut runtime,
+                        &mut memory,
+                        &mut rejecting,
+                        &mut backing,
+                    );
+                    teardown_violating_native_filesystem_provider(violating, &mut teardown)
+                        .unwrap_err()
+                };
+                assert!(matches!(
+                    failure.error(),
+                    NativeComponentServiceCopyReadTransferTeardownError::LocalMapping {
+                        error: mrml_kernel::MemoryMappingOperationError::Backend("revoke"),
+                        ..
+                    }
+                ));
+                assert!(failure.violating.receipt().instance().teardown().is_some());
+                let violation = {
+                    let mut teardown = NativeFilesystemProviderTeardownBackend::new(
+                        &mut runtime,
+                        &mut memory,
+                        &mut local_mapping,
+                        &mut backing,
+                    );
+                    teardown_violating_native_filesystem_provider(
+                        failure.into_violating(),
+                        &mut teardown,
+                    )
+                    .unwrap()
+                };
+                let mut eraser = AddressSpaceEraser::default();
+                let cleaned = supervisor
+                    .complete_constructed_service_violation_cleanup(violation, &mut eraser)
+                    .unwrap();
+                assert_eq!(eraser.erased, Some(target));
+                (
+                    cleaned.dispatch(&mut runtime).unwrap(),
+                    successor,
+                    successor_context,
+                )
+            }
         };
-        let mut eraser = AddressSpaceEraser::default();
-        let cleaned = supervisor
-            .complete_constructed_service_fault_cleanup(fault, &mut eraser)
-            .unwrap();
-        assert_eq!(eraser.erased, Some(target));
-        let dispatch = cleaned.dispatch(&mut runtime).unwrap();
         assert_eq!(dispatch.user(), Some((successor, successor_context)));
         let expected = Mapping::new(
             VirtAddr::new(0x300 * mrml_kernel::PAGE_SIZE).unwrap(),
@@ -1856,6 +2032,20 @@ mod tests {
                 .unwrap()
                 .object_pages(),
             0
+        );
+    }
+
+    #[test]
+    fn native_fault_teardown_retains_one_exact_copy_task_lifecycle() {
+        native_launch_and_teardown_retain_one_exact_copy_task_lifecycle(
+            SupervisedFailureKind::Fault,
+        );
+    }
+
+    #[test]
+    fn native_violation_teardown_retains_one_exact_copy_task_lifecycle() {
+        native_launch_and_teardown_retain_one_exact_copy_task_lifecycle(
+            SupervisedFailureKind::ProtocolViolation,
         );
     }
 

@@ -10241,16 +10241,18 @@ receipt, and publishes that task through the service supervisor's atomic
 register-and-activate transition. Supervisor-capacity failure returns the same
 unpublished receipt for explicit retry; it cannot leave a runnable,
 unsupervised provider. The active receipt now also composes with exact
-supervisor retirement and fault handling: a wrong-current attempt returns the
-live owner, while either successful stop retains its scheduler termination
-across capability revocation, local mapping withdrawal, backing scrub/release,
-memory-object release, and address-space erasure. A fault retains the exact trap
-disposition and launch receipt through the same resource teardown; an injected
-mapping-revocation failure returns the progressed fault owner for retry. Only
-complete resource and supervisor cleanup exposes successor dispatch. The
-Linux-host storage suite passes 163 tests, the kernel suite passes 717, and the
-storage service passes a release `MRML_NATIVE` build. Installed boot composition,
-hosted execution, and physical-device execution remain unverified.
+supervisor retirement, fault handling, and protocol-violation handling: a
+wrong-current attempt returns the live owner, while every successful stop
+retains its scheduler termination across capability revocation, local mapping
+withdrawal, backing scrub/release, memory-object release, and address-space
+erasure. Faults retain the exact trap disposition and protocol violations retain
+the exact typed violation alongside the launch receipt through the same resource
+teardown. Both paths exercise an injected mapping-revocation failure that returns
+the progressed owner for retry. Only complete resource and supervisor cleanup
+exposes successor dispatch. The Linux-host storage suite passes 164 tests, the
+kernel suite passes 717, and the storage service passes a release `MRML_NATIVE`
+build. Installed boot composition, hosted execution, and physical-device
+execution remain unverified.
 
 Patent review: `NOT_TRIGGERED` — this is conventional preflight validation,
 least-authority construction plumbing, atomic supervisor publication, and
