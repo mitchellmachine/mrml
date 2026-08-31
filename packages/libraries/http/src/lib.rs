@@ -8,6 +8,7 @@ mod http2;
 mod http3;
 mod huffman;
 mod quic;
+mod quic_connection;
 
 pub use http2::{
     Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame, Http2FrameKind,
@@ -22,6 +23,7 @@ pub use quic::{
     QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole, QuicStreamAssembler,
     QuicTransportParameters, SentPacket, ShortPacket,
 };
+pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
 
 const MAX_HEADER: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

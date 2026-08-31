@@ -21,6 +21,25 @@ pub enum QuicError {
     Limit,
     FlowControl,
     ProtocolViolation,
+    Io,
+    Tls,
+}
+
+pub fn initial_destination_id(input: &[u8]) -> Result<Vector<u8>, QuicError> {
+    if input.len() < 7 || input[0] & 0xc0 != 0xc0 {
+        return Err(QuicError::InvalidPacket);
+    }
+    if u32::from_be_bytes([input[1], input[2], input[3], input[4]]) != V1 {
+        return Err(QuicError::InvalidPacket);
+    }
+    let length = input[5] as usize;
+    if length > 20 || input.len() < 6 + length {
+        return Err(QuicError::Truncated);
+    }
+    let mut id = Vector::new();
+    id.try_extend_from_slice(&input[6..6 + length])
+        .map_err(|_| QuicError::Allocation)?;
+    Ok(id)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
