@@ -1722,3 +1722,15 @@ tests, 10 conformance tests, 351 replacement tests, and 128 semantic-execution
 tests; the release driver and all eight pinned std/TLS Wine modes pass with
 their exact recorded hashes and exit 42. Patent review: NOT_TRIGGERED; this is
 bounded validation and conventional PE/COFF relocation handling.
+
+Identified read-only COMDAT relocations now retain an exact target section for
+both static and global section-defined symbols whenever that section is present
+in the validated projection inventory. A global symbol with section zero
+remains a named external dependency, so cross-object archive resolution is not
+misrepresented as same-object identity. Focused coverage checks global code and
+read-only projected targets plus the section-zero boundary. The Linux release
+gate passes 843 unit tests, 2 object-evidence tests, 10 conformance tests, 351
+replacement tests, and 128 semantic-execution tests; the release driver and all
+eight pinned std/TLS Wine modes pass with exact recorded hashes and exit 42.
+Patent review: NOT_TRIGGERED; this is conventional bounded PE/COFF identity
+retention.
