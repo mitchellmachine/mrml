@@ -1575,6 +1575,18 @@ main-thread const TLS access, not destructor registration or execution,
 secondary-thread initialization, dynamic TLS, native Windows, general `std`,
 WHP, or physical hardware.
 
+The TLS execution probe's `lazy` mode uses an out-of-line non-const initializer
+and an ordinary atomic counter. The exact object combines `_tls_index` and two
+`SECREL` TLS references with a writable-counter reference and unwind-described
+initializer call. MRML emitted a distinct deterministic 3,584-byte PE with
+SHA-256
+`a7da230949f6e8615a2c71da9a5730cf3df01c42e0943927f0662fdaf560f2ff`;
+Wine 11.16 returned 42 only after initialization produced 40, mutation stored
+42, a second access observed 42, and the counter proved exactly one initializer
+call. The const mode remained byte-identical and also returned 42. This does not
+cover destructors, re-entrant or poisoned initialization, secondary-thread TLS,
+teardown, native Windows, general `std`, WHP, or physical hardware.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.

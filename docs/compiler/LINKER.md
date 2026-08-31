@@ -1532,3 +1532,15 @@ the thread-local access sequence, stored 42, read it back, and returned 42.
 This is one hosted main-thread const TLS access, not destructor registration or
 execution, secondary-thread initialization, dynamic TLS, native Windows,
 general `std`, WHP, or physical-hardware evidence.
+
+The same durable probe's `lazy` mode removes the const initializer, calls an
+out-of-line initializer that increments an ordinary atomic counter, and accesses
+the TLS value twice. Its exact object retains the `_tls_index` and `SECREL`
+sequence plus one writable-counter reference and an unwind-described initializer
+call. MRML emits a distinct deterministic 3,584-byte PE with SHA-256
+`a7da230949f6e8615a2c71da9a5730cf3df01c42e0943927f0662fdaf560f2ff`.
+Wine 11.16 returned 42 only after the first access initialized 40, mutation
+stored 42, the second access observed 42, and the counter proved exactly one
+initializer call. This is bounded main-thread lazy initialization without a
+destructor, not re-entrant or poisoned initialization, secondary-thread state,
+TLS teardown, native Windows, general `std`, WHP, or physical-hardware evidence.
