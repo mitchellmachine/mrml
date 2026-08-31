@@ -1800,6 +1800,25 @@ observes retained retry state and exact call counts, then advances once into
 the retained reacquired state and rejects replay. Quiescence and later teardown
 states are not yet retained by this manager, and no booted dispatcher was run.
 
+Manager ownership now continues through device quiescence. The first attempt
+consumes the retained reacquired owner internally; engine-stop, cleanup,
+sanitization, and DMA-withdrawal failures are stored with every frozen task,
+mapping, device, DMA, register, command-memory, and data-buffer owner. Retry
+operates directly on that retained state. Success destroys the borrowed device
+views, stores only the quiesced frozen mapping/task owner, and returns a
+descriptive receipt. Repeated quiescence after success and attempts from a
+quarantined or unacquired state fail closed. The controlled test injects a
+sanitization failure, observes no DMA removal, retries to one exact removal,
+checks task/service/root receipt identity, and rejects replay. Retirement and
+mapping withdrawal are still transferred to the existing typed path rather
+than retained by this manager; no booted dispatcher or hardware ran.
+
+Patent review: **NOT_TRIGGERED**. Retaining existing device-quiescence retry and
+success owners inside the bounded manager state is conventional fail-closed
+lifecycle composition. It adds no parser, controller command, DMA algorithm,
+persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining existing success, retry, and
 quarantine owners in a bounded state machine is conventional fail-closed
 lifecycle handling. It adds no parser, controller command, DMA behavior,

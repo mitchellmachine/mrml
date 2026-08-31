@@ -1784,23 +1784,30 @@ mod tests {
             teardown_manager.reacquire(),
             Err(crate::KernelAhciServiceManagerReacquisitionError::AlreadyReacquired)
         );
-        let (_exit_slot, reacquired) = teardown_manager
-            .into_reacquired_parts()
-            .unwrap_or_else(|_| panic!("manager must retain the exact reacquired owner"));
-        assert_eq!(reacquired.task(), target_task);
-        assert_eq!(reacquired.root(), PhysAddr::new(TABLE_BASE).unwrap());
         let mut dma_backend = DmaBackend::default();
-        let error = crate::quiesce_reacquired_kernel_ahci_service(reacquired, &mut dma_backend)
-            .err()
-            .unwrap_or_else(|| panic!("injected sanitization failure must retain the root"));
-        assert_eq!(error.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(
+            teardown_manager.quiesce(&mut dma_backend),
+            Err(crate::KernelAhciServiceManagerQuiesceError::DataSanitization)
+        );
         assert!(matches!(
-            error.failure(),
-            crate::KernelAhciServiceDeviceQuiesceFailure::DataSanitization(_)
+            teardown_manager.quiesce_failure(),
+            Some(crate::KernelAhciServiceDeviceQuiesceFailure::DataSanitization(_))
         ));
         assert_eq!(dma_backend.removals, 0);
-        let quiesced = crate::resume_frozen_kernel_ahci_service_quiescence(error, &mut dma_backend)
+        let quiesced_receipt = teardown_manager
+            .quiesce(&mut dma_backend)
             .unwrap_or_else(|_| panic!("exact concrete owner must quiesce after retry"));
+        assert_eq!(quiesced_receipt.task(), target_task);
+        assert_eq!(quiesced_receipt.service(), service_id);
+        assert_eq!(quiesced_receipt.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert!(teardown_manager.quiesced());
+        assert_eq!(
+            teardown_manager.quiesce(&mut dma_backend),
+            Err(crate::KernelAhciServiceManagerQuiesceError::AlreadyQuiesced)
+        );
+        let (_exit_slot, quiesced) = teardown_manager
+            .into_quiesced_parts()
+            .unwrap_or_else(|_| panic!("manager must retain the exact quiesced owner"));
         assert_eq!(quiesced.task(), target_task);
         assert_eq!(quiesced.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(dma_backend.removals, 1);

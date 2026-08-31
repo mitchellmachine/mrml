@@ -661,6 +661,33 @@ pub struct KernelAhciServiceTeardownManager<
         >,
     >,
     quarantine_error: Option<AhciServiceTaskBindingError>,
+    quiesce_error: Option<
+        FrozenKernelAhciServiceQuiesceError<
+            'resources,
+            S,
+            L::Registers,
+            L::CommandMemory,
+            L::DataIo,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
+    quiesced: Option<
+        QuiescedKernelAhciServiceTask<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    >,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -678,6 +705,39 @@ pub struct KernelAhciServiceReacquired {
     task: TaskId,
     service: ServiceId,
     root: mrml_kernel::PhysAddr,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceManagerQuiesceError {
+    NotReacquired,
+    AlreadyQuiesced,
+    Quarantined,
+    MappingMismatch,
+    Engine,
+    Cleanup,
+    DataSanitization,
+    DmaWithdrawal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceQuiesced {
+    task: TaskId,
+    service: ServiceId,
+    root: mrml_kernel::PhysAddr,
+}
+
+impl KernelAhciServiceQuiesced {
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn root(self) -> mrml_kernel::PhysAddr {
+        self.root
+    }
 }
 
 impl KernelAhciServiceReacquired {
@@ -1416,6 +1476,8 @@ impl<
             reacquired: None,
             quarantine: None,
             quarantine_error: None,
+            quiesce_error: None,
+            quiesced: None,
         })
     }
 
@@ -1429,6 +1491,16 @@ impl<
 
     pub const fn quarantined(&self) -> bool {
         self.quarantine.is_some()
+    }
+
+    pub const fn quiesced(&self) -> bool {
+        self.quiesced.is_some()
+    }
+
+    pub fn quiesce_failure(&self) -> Option<&KernelAhciServiceDeviceQuiesceFailure> {
+        self.quiesce_error
+            .as_ref()
+            .map(FrozenKernelAhciServiceQuiesceError::failure)
     }
 
     /// Attempts the one-use platform reacquisition while retaining every
@@ -1515,6 +1587,100 @@ impl<
     > {
         match self.reacquired.take() {
             Some(reacquired) => Ok((self.slot, reacquired)),
+            None => Err(self),
+        }
+    }
+
+    /// Advances either a freshly reacquired owner or a retained sanitization/
+    /// DMA-withdrawal retry while keeping every result inside this manager.
+    pub fn quiesce<B: AhciPortDmaBackend>(
+        &mut self,
+        dma_backend: &mut B,
+    ) -> Result<KernelAhciServiceQuiesced, KernelAhciServiceManagerQuiesceError>
+    where
+        L::Registers: AhciRegisterIo,
+        L::CommandMemory: AhciCommandMemoryIo,
+        L::DataIo: AhciDataBufferIo,
+    {
+        if self.quiesced.is_some() {
+            return Err(KernelAhciServiceManagerQuiesceError::AlreadyQuiesced);
+        }
+        if self.quarantine.is_some() {
+            return Err(KernelAhciServiceManagerQuiesceError::Quarantined);
+        }
+        let result = if let Some(error) = self.quiesce_error.take() {
+            resume_frozen_kernel_ahci_service_quiescence(error, dma_backend)
+        } else {
+            let reacquired = self
+                .reacquired
+                .take()
+                .ok_or(KernelAhciServiceManagerQuiesceError::NotReacquired)?;
+            quiesce_reacquired_kernel_ahci_service(reacquired, dma_backend)
+        };
+        match result {
+            Ok(quiesced) => {
+                let receipt = KernelAhciServiceQuiesced {
+                    task: quiesced.task(),
+                    service: quiesced.service(),
+                    root: quiesced.root(),
+                };
+                self.quiesced = Some(quiesced);
+                Ok(receipt)
+            }
+            Err(error) => {
+                let category = match error.failure() {
+                    KernelAhciServiceDeviceQuiesceFailure::MappingMismatch { .. } => {
+                        KernelAhciServiceManagerQuiesceError::MappingMismatch
+                    }
+                    KernelAhciServiceDeviceQuiesceFailure::Engine(_) => {
+                        KernelAhciServiceManagerQuiesceError::Engine
+                    }
+                    KernelAhciServiceDeviceQuiesceFailure::Cleanup(_) => {
+                        KernelAhciServiceManagerQuiesceError::Cleanup
+                    }
+                    KernelAhciServiceDeviceQuiesceFailure::DataSanitization(_) => {
+                        KernelAhciServiceManagerQuiesceError::DataSanitization
+                    }
+                    KernelAhciServiceDeviceQuiesceFailure::DmaWithdrawal(_) => {
+                        KernelAhciServiceManagerQuiesceError::DmaWithdrawal
+                    }
+                };
+                self.quiesce_error = Some(error);
+                Err(category)
+            }
+        }
+    }
+
+    pub fn into_quiesced_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            QuiescedKernelAhciServiceTask<
+                'resources,
+                S,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self.quiesced.take() {
+            Some(quiesced) => Ok((self.slot, quiesced)),
             None => Err(self),
         }
     }
