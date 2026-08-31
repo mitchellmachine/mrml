@@ -394,6 +394,68 @@ pub enum KernelAhciServiceExitFreezeError<
     },
 }
 
+/// Bounded controller-manager storage for one active AHCI service owner
+/// and its one-use teardown lease. The slot, rather than syscall arguments or
+/// user memory, carries teardown authority into the exit path.
+#[must_use = "the active AHCI service and teardown lease require explicit exit handling"]
+pub struct KernelAhciServiceExitSlot<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    entry: Option<(
+        crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        L,
+    )>,
+}
+
+pub struct KernelAhciServiceExitSlotInstallError<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    error: AhciServiceTeardownLeaseBindingError,
+    active: crate::ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    lease: L,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceExitSlotRouteError {
+    Empty,
+    LeaseBinding(AhciServiceTeardownLeaseBindingError),
+    Lifecycle(SupervisedNativeDeviceServiceRetirementError),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelAhciServiceExitRequest(());
 
@@ -416,6 +478,163 @@ impl KernelAhciServiceExitRequest {
             Ok(Self(()))
         } else {
             Err(KernelAhciServiceExitRequestError { request })
+        }
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciServiceExitSlotInstallError<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> AhciServiceTeardownLeaseBindingError {
+        self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        L,
+    ) {
+        (self.active, self.lease)
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> KernelAhciServiceExitSlot<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    /// Installs exactly one active owner and its stable manager lease before
+    /// service dispatch. A mismatch returns both unchanged owners.
+    pub fn install(
+        active: crate::ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        lease: L,
+    ) -> Result<
+        Self,
+        KernelAhciServiceExitSlotInstallError<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        let error = if lease.native_task() != active.native_task() {
+            Some(AhciServiceTeardownLeaseBindingError::NativeTaskMismatch)
+        } else if lease.launch() != active.launch() {
+            Some(AhciServiceTeardownLeaseBindingError::LaunchMismatch)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return Err(KernelAhciServiceExitSlotInstallError {
+                error,
+                active,
+                lease,
+            });
+        }
+        Ok(Self {
+            entry: Some((active, lease)),
+        })
+    }
+
+    pub const fn occupied(&self) -> bool {
+        self.entry.is_some()
+    }
+
+    pub fn task(&self) -> Option<TaskId> {
+        self.entry.as_ref().map(|(active, _)| active.task())
+    }
+
+    /// Consumes the installed pair only for an admitted exit request. Any
+    /// binding or lifecycle failure restores the same owners into the slot.
+    pub fn route<const SERVICES: usize>(
+        &mut self,
+        request: KernelAhciServiceExitRequest,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<
+        FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        KernelAhciServiceExitSlotRouteError,
+    > {
+        let (active, lease) = self
+            .entry
+            .take()
+            .ok_or(KernelAhciServiceExitSlotRouteError::Empty)?;
+        match route_active_kernel_ahci_service_exit(request, active, lease, supervisor, runtime) {
+            Ok(frozen) => Ok(frozen),
+            Err(failure) => {
+                let error = match &failure {
+                    KernelAhciServiceExitFreezeError::LeaseBinding { error, .. } => {
+                        KernelAhciServiceExitSlotRouteError::LeaseBinding(*error)
+                    }
+                    KernelAhciServiceExitFreezeError::Lifecycle { failure, .. } => {
+                        KernelAhciServiceExitSlotRouteError::Lifecycle(failure.error())
+                    }
+                };
+                let owners = failure.into_parts();
+                self.entry = Some(owners);
+                Err(error)
+            }
         }
     }
 }

@@ -1646,9 +1646,35 @@ the separate launch, request, capability-token, and transfer buffers, then
 retains that owner with destructor execution suppressed across the non-returning
 operation-3 syscall. Consequently the register, active-port, command-memory,
 data-buffer, and authorizer owners are no longer destroyed before the kernel
-freeze. This is source, unit-test, and `MRML_NATIVE` build evidence only; a
-fixed authenticated manager-readable handoff location, installed trap routing,
-and the production controller-manager lease remain the next dependency gate.
+freeze. This is source, unit-test, and `MRML_NATIVE` build evidence only; that
+service-side retention alone does not provide manager storage, installed trap
+routing, or the production controller-manager lease.
+
+The kernel-side controller-manager handoff now has a bounded one-service slot
+that is installed before dispatch with the concrete active mapping-set owner
+and the exact one-use teardown lease. Installation rejects a colliding runtime
+identity or substituted launch while returning both owners unchanged. A decoded
+exit consumes no user pointer, name, or token as authority: it can only consume
+the pair already held by the manager slot. Empty-slot requests fail closed, and
+binding or lifecycle failure restores the same pair for exact retry; successful
+freeze leaves the slot empty and transfers both owners into the existing frozen
+handoff. This closes the typed manager-storage gap in source, but the concrete
+controller-manager lease implementation and installed trap dispatcher remain
+unfinished.
+
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+
+Patent review: **NOT_TRIGGERED**. A fixed-capacity option slot that retains and
+atomically consumes existing linear Rust owners is conventional lifecycle
+composition and adds no parser, device, DMA, or authority mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
 
 Patent review: **NOT_TRIGGERED**. Linear ownership retention and destructor
 suppression across an existing non-returning stop syscall are conventional

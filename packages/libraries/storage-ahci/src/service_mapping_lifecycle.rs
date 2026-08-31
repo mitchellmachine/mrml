@@ -1461,17 +1461,28 @@ mod tests {
             mrml_kernel::SyscallRequest::decode(3, 0, 0, 0, 0, 0, 0).unwrap(),
         )
         .unwrap();
-        let failure = crate::route_active_kernel_ahci_service_exit(
-            exit_request,
-            active,
-            lease,
-            &supervisor,
-            &mut fixture.runtime,
-        )
-        .err()
-        .unwrap_or_else(|| panic!("non-current task must not freeze"));
-        let (active, lease) = failure.into_parts();
-        assert_eq!(active.task(), target_task);
+        let (_, _, _, wrong_native, _) = native_tasks();
+        lease.native = wrong_native;
+        let install_error = crate::KernelAhciServiceExitSlot::install(active, lease)
+            .err()
+            .unwrap_or_else(|| panic!("colliding runtime identity must not bind"));
+        assert_eq!(
+            install_error.error(),
+            crate::AhciServiceTeardownLeaseBindingError::NativeTaskMismatch
+        );
+        assert_eq!(calls.get(), 0);
+        let (active, mut lease) = install_error.into_parts();
+        lease.native = prepared.task();
+        let mut exit_slot = crate::KernelAhciServiceExitSlot::install(active, lease)
+            .unwrap_or_else(|_| panic!("exact active owner and manager lease must bind"));
+        assert!(exit_slot.occupied());
+        assert_eq!(exit_slot.task(), Some(target_task));
+        assert!(matches!(
+            exit_slot.route(exit_request, &supervisor, &mut fixture.runtime),
+            Err(crate::KernelAhciServiceExitSlotRouteError::Lifecycle(_))
+        ));
+        assert!(exit_slot.occupied());
+        assert_eq!(exit_slot.task(), Some(target_task));
         assert!(matches!(
             fixture.runtime.start(),
             mrml_kernel::ScheduleOutcome::Switch { .. }
@@ -1480,17 +1491,17 @@ mod tests {
             fixture.runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target_task
         ));
-        let frozen = crate::route_active_kernel_ahci_service_exit(
-            exit_request,
-            active,
-            lease,
-            &supervisor,
-            &mut fixture.runtime,
-        )
-        .unwrap_or_else(|failure| {
-            let _ = failure;
-            panic!("exact active owner and lease must freeze")
-        });
+        let frozen = exit_slot
+            .route(exit_request, &supervisor, &mut fixture.runtime)
+            .unwrap_or_else(|failure| {
+                let _ = failure;
+                panic!("exact active owner and lease must freeze")
+            });
+        assert!(!exit_slot.occupied());
+        assert!(matches!(
+            exit_slot.route(exit_request, &supervisor, &mut fixture.runtime),
+            Err(crate::KernelAhciServiceExitSlotRouteError::Empty)
+        ));
         assert_eq!(frozen.task(), target_task);
         assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(fixture.runtime.load().runnable(), 1);
