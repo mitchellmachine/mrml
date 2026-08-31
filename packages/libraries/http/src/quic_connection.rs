@@ -1,10 +1,10 @@
-use mrml_runtime::{SocketAddress, TcpStream, UdpSocket, Vector};
+use mrml_runtime::{Instant, SocketAddress, TcpStream, UdpSocket, Vector};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsServerConfig};
 
 use crate::quic::initial_destination_id;
 use crate::{
     HandshakePacket, InitialPacket, QuicConnectionState, QuicError, QuicFrame, QuicInitialKeys,
-    QuicRole, QuicStreamAssembler, QuicTransportParameters, ShortPacket,
+    QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, SentPacket, ShortPacket,
 };
 
 const CRYPTO_CHUNK: usize = 900;
@@ -70,6 +70,15 @@ pub struct QuicConnection {
     state: QuicConnectionState,
     next_packet_number: u64,
     expected_packet_number: u64,
+    recovery: QuicRecovery,
+    sent: Vector<PendingPacket>,
+    epoch: Instant,
+}
+
+struct PendingPacket {
+    metadata: SentPacket,
+    payload: Vector<u8>,
+    attempts: u8,
 }
 
 impl QuicConnection {
@@ -87,19 +96,37 @@ impl QuicConnection {
 
     pub fn send_frames(&mut self, frames: &[QuicFrame]) -> Result<(), QuicError> {
         let mut payload = Vector::new();
+        let mut ack_eliciting = false;
         for frame in frames {
             if let QuicFrame::Stream { data, .. } = frame {
                 self.state.authorize_stream_send(data.len())?;
             }
+            ack_eliciting |= !matches!(frame, QuicFrame::Padding | QuicFrame::Ack { .. });
             frame.encode(&mut payload)?;
         }
+        self.send_payload(payload, ack_eliciting, 0)
+    }
+
+    fn now_micros(&self) -> u64 {
+        self.epoch.elapsed().as_micros().min(u64::MAX as u128) as u64
+    }
+
+    fn send_payload(
+        &mut self,
+        payload: Vector<u8>,
+        ack_eliciting: bool,
+        attempts: u8,
+    ) -> Result<(), QuicError> {
         let packet = ShortPacket {
             destination_id: self.peer_id.clone(),
             packet_number: self.next_packet_number,
             key_phase: false,
-            payload,
+            payload: payload.clone(),
         }
         .seal(&self.write_keys)?;
+        if ack_eliciting && !self.recovery.can_send(packet.len() as u64) {
+            return Err(QuicError::FlowControl);
+        }
         self.state.authorize_datagram_send(packet.len())?;
         if self
             .socket
@@ -113,15 +140,42 @@ impl QuicConnection {
             .next_packet_number
             .checked_add(1)
             .ok_or(QuicError::Limit)?;
+        if ack_eliciting {
+            let metadata = SentPacket {
+                number: self.next_packet_number - 1,
+                sent_micros: self.now_micros(),
+                bytes: packet.len() as u64,
+                ack_eliciting: true,
+                in_flight: true,
+            };
+            self.recovery.on_sent(metadata)?;
+            self.sent
+                .try_push(PendingPacket {
+                    metadata,
+                    payload,
+                    attempts,
+                })
+                .map_err(|_| QuicError::Allocation)?;
+        }
         Ok(())
     }
 
     pub fn receive_frames(&mut self) -> Result<Vector<QuicFrame>, QuicError> {
         let mut datagram = [0; 65_527];
-        let (amount, peer) = self
-            .socket
-            .receive_from(&mut datagram)
-            .map_err(|_| QuicError::Io)?;
+        let (amount, peer) = loop {
+            match self.socket.receive_from(&mut datagram) {
+                Ok(value) => break value,
+                Err(_) => {
+                    let Some(index) = self.sent.iter().rposition(|packet| packet.attempts < 3)
+                    else {
+                        return Err(QuicError::Io);
+                    };
+                    let lost = self.sent.remove(index);
+                    self.recovery.on_loss(lost.metadata, self.now_micros());
+                    self.send_payload(lost.payload, true, lost.attempts + 1)?;
+                }
+            }
+        };
         if peer != self.peer {
             return Err(QuicError::ProtocolViolation);
         }
@@ -141,10 +195,33 @@ impl QuicConnection {
             .ok_or(QuicError::Limit)?;
         let mut frames = Vector::new();
         let mut at = 0;
+        let mut acknowledge = false;
         while at < packet.payload.len() {
-            frames
-                .try_push(QuicFrame::decode(&packet.payload, &mut at)?)
-                .map_err(|_| QuicError::Allocation)?;
+            let frame = QuicFrame::decode(&packet.payload, &mut at)?;
+            if let QuicFrame::Ack { largest, .. } = frame {
+                if let Some(index) = self
+                    .sent
+                    .iter()
+                    .position(|pending| pending.metadata.number == largest)
+                {
+                    let acknowledged = self.sent.remove(index);
+                    self.recovery
+                        .on_ack(acknowledged.metadata, self.now_micros(), 0)?;
+                }
+            } else if !matches!(frame, QuicFrame::Padding) {
+                acknowledge = true;
+            }
+            frames.try_push(frame).map_err(|_| QuicError::Allocation)?;
+        }
+        if acknowledge {
+            let mut acknowledgement = Vector::new();
+            QuicFrame::Ack {
+                largest: packet.packet_number,
+                delay: 0,
+                first_range: 0,
+            }
+            .encode(&mut acknowledgement)?;
+            self.send_payload(acknowledgement, false, 0)?;
         }
         Ok(frames)
     }
@@ -251,6 +328,7 @@ impl QuicClientConnection {
         .seal(&write_handshake)?;
         socket.send_to(&finished, peer).map_err(|_| QuicError::Io)?;
         let state = QuicConnectionState::new(QuicRole::Client, &peer_parameters);
+        let recovery = QuicRecovery::new(peer_parameters.max_udp_payload_size)?;
         let mut connection = QuicConnection {
             socket,
             peer,
@@ -261,6 +339,9 @@ impl QuicClientConnection {
             state,
             next_packet_number: 0,
             expected_packet_number: 0,
+            recovery,
+            sent: Vector::new(),
+            epoch: Instant::now(),
         };
         let frames = connection.receive_frames()?;
         if !frames
@@ -403,6 +484,7 @@ impl QuicServerListener {
         state = QuicConnectionState::new(QuicRole::Server, &peer_parameters);
         state.validate_address();
         state.activate()?;
+        let recovery = QuicRecovery::new(peer_parameters.max_udp_payload_size)?;
         let mut connection = QuicConnection {
             socket: self.socket,
             peer,
@@ -413,6 +495,9 @@ impl QuicServerListener {
             state,
             next_packet_number: 0,
             expected_packet_number: 0,
+            recovery,
+            sent: Vector::new(),
+            epoch: Instant::now(),
         };
         connection.send_frames(&[QuicFrame::HandshakeDone])?;
         Ok(connection)
