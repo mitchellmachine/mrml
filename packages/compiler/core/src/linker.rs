@@ -609,6 +609,7 @@ pub enum LinkRelocationTarget<'a> {
     /// loader-populated IAT slot but owns no text field to patch.
     PeImportMetadata {
         library: &'a str,
+        symbol: &'a str,
         target: PeImportTarget<'a>,
     },
     /// An exact selected COFF TLS section. PE TLS directory, template, index,
@@ -1131,7 +1132,7 @@ fn decode_x86_64_coff_short_import_header(
         _ => return Err(LinkerError::UnsupportedCoff),
     };
     let name_type = type_info >> 2;
-    if name_type > 1 {
+    if name_type > 3 {
         return Err(LinkerError::UnsupportedCoff);
     }
     let payload_size =
@@ -1165,16 +1166,35 @@ fn decode_x86_64_coff_short_import_header(
         .map_err(|_| LinkerError::InvalidCoff)?;
     validate_pe_import_library(library)?;
     let ordinal_or_hint = read_u16(object, 16)?;
-    let target = if name_type == 0 {
-        if ordinal_or_hint == 0 {
-            return Err(LinkerError::InvalidCoff);
-        }
-        PeImportTarget::Ordinal(ordinal_or_hint)
-    } else {
-        PeImportTarget::Name {
+    let target = match name_type {
+        0 if ordinal_or_hint != 0 => PeImportTarget::Ordinal(ordinal_or_hint),
+        0 => return Err(LinkerError::InvalidCoff),
+        1 => PeImportTarget::Name {
             symbol,
             hint: ordinal_or_hint,
+        },
+        2 | 3 => {
+            let without_prefix = if matches!(symbol.as_bytes().first(), Some(b'?' | b'@' | b'_')) {
+                &symbol[1..]
+            } else {
+                symbol
+            };
+            let imported = if name_type == 3 {
+                without_prefix
+                    .split_once('@')
+                    .map_or(without_prefix, |(name, _)| name)
+            } else {
+                without_prefix
+            };
+            if imported.is_empty() {
+                return Err(LinkerError::InvalidCoff);
+            }
+            PeImportTarget::Name {
+                symbol: imported,
+                hint: ordinal_or_hint,
+            }
         }
+        _ => return Err(LinkerError::UnsupportedCoff),
     };
     Ok(Some(CoffShortImport {
         symbol,
@@ -1233,6 +1253,7 @@ pub fn decode_x86_64_coff_short_import_with_alias<'data, 'relocations, 'definiti
             offset: 0,
             target: LinkRelocationTarget::PeImportMetadata {
                 library: import.library,
+                symbol: import.symbol,
                 target: import.target,
             },
             addend: 0,
@@ -8423,7 +8444,9 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         for relocation in input.relocations {
             let (library, target) = match relocation.target {
                 LinkRelocationTarget::PeImportAddress { library, target }
-                | LinkRelocationTarget::PeImportMetadata { library, target } => (library, target),
+                | LinkRelocationTarget::PeImportMetadata {
+                    library, target, ..
+                } => (library, target),
                 _ => continue,
             };
             validate_pe_import_library(library)?;
@@ -10401,17 +10424,15 @@ fn link_x86_64_static_aligned_into(
                     validate_pe_import_library(library)?;
                     validate_pe_import_target(target)?;
                 }
-                LinkRelocationTarget::PeImportMetadata { library, target } => {
+                LinkRelocationTarget::PeImportMetadata {
+                    library,
+                    symbol,
+                    target,
+                } => {
                     validate_pe_import_library(library)?;
+                    validate_symbol(symbol)?;
                     validate_pe_import_target(target)?;
-                    let alias_payload = input.symbol.strip_prefix("__imp_");
-                    let alias_matches = alias_payload.is_some_and(|payload| {
-                        !payload.is_empty()
-                            && match target {
-                                PeImportTarget::Name { symbol, .. } => payload == symbol,
-                                PeImportTarget::Ordinal(_) => true,
-                            }
-                    });
+                    let alias_matches = input.symbol.strip_prefix("__imp_") == Some(symbol);
                     if relocation.offset != 0
                         || relocation.addend != 0
                         || !input.text.is_empty()
@@ -12742,6 +12763,7 @@ mod tests {
                 offset: 0,
                 target: LinkRelocationTarget::PeImportMetadata {
                     library: "api-ms-win-core-synch-l1-2-0.dll",
+                    symbol: "WaitOnAddress",
                     target: PeImportTarget::Name {
                         symbol: "WaitOnAddress",
                         hint: 0,
@@ -12767,10 +12789,77 @@ mod tests {
                 .kind,
             CoffShortImportKind::Constant
         );
-        let mut transformed_name = object.clone();
-        transformed_name[18..20].copy_from_slice(&8u16.to_le_bytes());
+        let mut no_prefix = object.clone();
+        no_prefix.insert(20, b'_');
+        let no_prefix_payload_size = u32::try_from(no_prefix.len() - 20).unwrap();
+        no_prefix[12..16].copy_from_slice(&no_prefix_payload_size.to_le_bytes());
+        no_prefix[18..20].copy_from_slice(&8u16.to_le_bytes());
         assert_eq!(
-            x86_64_coff_short_import(&transformed_name),
+            x86_64_coff_short_import(&no_prefix)
+                .unwrap()
+                .unwrap()
+                .target,
+            PeImportTarget::Name {
+                symbol: "WaitOnAddress",
+                hint: 0,
+            }
+        );
+        let mut no_prefix_data = no_prefix.clone();
+        no_prefix_data[18..20].copy_from_slice(&9u16.to_le_bytes());
+        let mut no_prefix_data_relocations = relocations;
+        let no_prefix_data_input = decode_x86_64_coff_short_import_with_alias(
+            &no_prefix_data,
+            Some("__imp__WaitOnAddress"),
+            &mut no_prefix_data_relocations,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            no_prefix_data_input.relocations,
+            [LinkRelocation {
+                target: LinkRelocationTarget::PeImportMetadata {
+                    symbol: "_WaitOnAddress",
+                    target: PeImportTarget::Name {
+                        symbol: "WaitOnAddress",
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }]
+        ));
+        let entry = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let transformed_pe =
+            link_x86_64_pe::<2048, 8192>(&[entry, no_prefix_data_input], "entry").unwrap();
+        assert!(
+            transformed_pe
+                .bytes()
+                .windows(b"WaitOnAddress\0".len())
+                .any(|bytes| bytes == b"WaitOnAddress\0")
+        );
+        let mut undecorated = object.clone();
+        undecorated[20..33].copy_from_slice(b"_Wait@Address");
+        undecorated[18..20].copy_from_slice(&12u16.to_le_bytes());
+        let undecorated_import = x86_64_coff_short_import(&undecorated).unwrap().unwrap();
+        assert_eq!(undecorated_import.symbol, "_Wait@Address");
+        assert_eq!(
+            undecorated_import.target,
+            PeImportTarget::Name {
+                symbol: "Wait",
+                hint: 0,
+            }
+        );
+        let mut unsupported_name_type = object.clone();
+        unsupported_name_type[18..20].copy_from_slice(&16u16.to_le_bytes());
+        assert_eq!(
+            x86_64_coff_short_import(&unsupported_name_type),
             Err(LinkerError::UnsupportedCoff)
         );
         let mut hinted_import = object.clone();
@@ -15549,6 +15638,7 @@ mod tests {
             offset: 0,
             target: LinkRelocationTarget::PeImportMetadata {
                 library: "demo.dll",
+                symbol: "DATA",
                 target: PeImportTarget::Name {
                     symbol: "DATA",
                     hint: 7,

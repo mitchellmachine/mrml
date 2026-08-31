@@ -2204,9 +2204,9 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                     .iter()
                     .find_map(|relocation| match relocation.target {
                         LinkRelocationTarget::PeImportAddress { library, target }
-                        | LinkRelocationTarget::PeImportMetadata { library, target } => {
-                            Some((library, target))
-                        }
+                        | LinkRelocationTarget::PeImportMetadata {
+                            library, target, ..
+                        } => Some((library, target)),
                         _ => None,
                     })
             })?
@@ -3051,6 +3051,7 @@ mod tests {
             [LinkRelocation {
                 target: LinkRelocationTarget::PeImportMetadata {
                     library: "api-ms-win-core-synch-l1-2-0.dll",
+                    symbol: "WaitOnAddress",
                     target: PeImportTarget::Name {
                         symbol: "WaitOnAddress",
                         hint: 0,
@@ -3207,6 +3208,7 @@ mod tests {
             offset: 0,
             target: LinkRelocationTarget::PeImportMetadata {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
+                symbol: "DATA",
                 target: PeImportTarget::Name {
                     symbol: "DATA",
                     hint: 0,
@@ -3251,6 +3253,7 @@ mod tests {
         let ordinal_metadata = [LinkRelocation {
             target: LinkRelocationTarget::PeImportMetadata {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
+                symbol: "ORDINAL",
                 target: PeImportTarget::Ordinal(7),
             },
             ..data_metadata[0]
