@@ -4605,3 +4605,10 @@ and returns 42 under Wine 11.16. The original mode retains its exact
 `66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6`
 hash and exit 42 after the script refactor. This is hosted wall-clock path
 evidence only; no native Windows or physical clock claim is made.
+
+The additional `random` mode forces `RandomState::new` and therefore the pinned
+`bcryptprimitives.dll!ProcessPrng` short import. It links to 2,393,088 bytes with
+SHA-256
+`c3716a3dbddcb453b1bcd02f93940d1ccd2ae3093c532d34b6c3ead9dc0c65be`
+and returns 42 under Wine 11.16. This is one hosted import/link/load path, not a
+randomness-quality or physical entropy claim.

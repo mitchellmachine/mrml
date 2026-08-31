@@ -342,6 +342,15 @@ returned 42. This is a 2.73x median result for a small 32-object, import-free
 workload, not archive, large-program, debug-information, or general superiority
 evidence.
 
+The `random` std-probe mode forces `RandomState::new` through `black_box`,
+selecting the exact embedded `bcryptprimitives.dll` direct-name code import for
+`ProcessPrng`. MRML emits a deterministic 2,393,088-byte PE with SHA-256
+`c3716a3dbddcb453b1bcd02f93940d1ccd2ae3093c532d34b6c3ead9dc0c65be`;
+Wine 11.16 returned 42. This verifies that pinned archive selection, the typed
+short-import thunk/IAT identity, PE import serialization, and hosted loader
+resolution agree for this path. It is not a statistical randomness,
+cryptographic-quality, native Windows, or physical entropy-source claim.
+
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can
