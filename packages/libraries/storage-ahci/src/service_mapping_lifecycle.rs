@@ -1869,12 +1869,32 @@ mod tests {
             unsafe { teardown_manager.complete_cleanup(&mut supervisor, &mut eraser) },
             Err(crate::KernelAhciServiceManagerCleanupError::AlreadyComplete)
         ));
-        let (_exit_slot, cleaned) = teardown_manager
-            .into_cleanup_complete_parts()
-            .unwrap_or_else(|_| panic!("manager must retain the cleanup dispatch owner"));
-        assert_eq!(cleaned.service(), service_id);
         assert_eq!(eraser.erased.map(|(task, _)| task), Some(target_task));
         assert_eq!(supervisor.pending_cleanup(service_id), Ok(None));
+        let mut wrong_runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        assert!(matches!(
+            teardown_manager.dispatch(&mut wrong_runtime),
+            Err(crate::KernelAhciServiceManagerDispatchCompletionError::Runtime(_))
+        ));
+        assert!(teardown_manager.cleanup_complete());
+        let dispatch_receipt = teardown_manager
+            .dispatch(&mut fixture.runtime)
+            .unwrap_or_else(|_| panic!("cleaned concrete retirement must dispatch"));
+        assert_eq!(dispatch_receipt.service(), service_id);
+        assert_eq!(dispatch_receipt.next(), Some(prepared.task().source_task()));
+        assert!(teardown_manager.dispatched());
+        assert_eq!(
+            teardown_manager.dispatch(&mut fixture.runtime),
+            Err(crate::KernelAhciServiceManagerDispatchCompletionError::AlreadyDispatched)
+        );
+        let (_exit_slot, dispatched) = teardown_manager
+            .into_dispatched_parts()
+            .unwrap_or_else(|_| panic!("manager must retain the issued dispatch owner"));
+        assert_eq!(dispatched.service(), service_id);
+        assert_eq!(
+            dispatched.dispatch().user().map(|(task, _)| task),
+            Some(prepared.task().source_task())
+        );
         assert_eq!(
             fixture
                 .memory
@@ -1882,14 +1902,6 @@ mod tests {
                 .unwrap()
                 .active_mappings(),
             0
-        );
-        let dispatched =
-            crate::dispatch_retired_kernel_ahci_service_task(cleaned, &mut fixture.runtime)
-                .unwrap_or_else(|_| panic!("cleaned concrete retirement must dispatch"));
-        assert_eq!(dispatched.service(), service_id);
-        assert_eq!(
-            dispatched.dispatch().user().map(|(task, _)| task),
-            Some(prepared.task().source_task())
         );
     }
 

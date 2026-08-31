@@ -704,6 +704,7 @@ pub struct KernelAhciServiceTeardownManager<
         >,
     >,
     cleanup_complete: Option<RetiredKernelAhciServiceCleanupComplete>,
+    dispatched: Option<DispatchedAhciServiceTask>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -781,6 +782,29 @@ pub enum KernelAhciServiceManagerCleanupError<E> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelAhciServiceCleanupCompleted {
     service: ServiceId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciServiceManagerDispatchCompletionError {
+    NotCleaned,
+    AlreadyDispatched,
+    Runtime(TaskTerminationDispatchError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceDispatched {
+    service: ServiceId,
+    next: Option<TaskId>,
+}
+
+impl KernelAhciServiceDispatched {
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn next(self) -> Option<TaskId> {
+        self.next
+    }
 }
 
 impl KernelAhciServiceCleanupCompleted {
@@ -1572,6 +1596,7 @@ impl<
             retired: None,
             mappings_removed: None,
             cleanup_complete: None,
+            dispatched: None,
         })
     }
 
@@ -1601,6 +1626,10 @@ impl<
 
     pub const fn cleanup_complete(&self) -> bool {
         self.cleanup_complete.is_some()
+    }
+
+    pub const fn dispatched(&self) -> bool {
+        self.dispatched.is_some()
     }
 
     pub fn quiesce_failure(&self) -> Option<&KernelAhciServiceDeviceQuiesceFailure> {
@@ -1997,6 +2026,64 @@ impl<
     > {
         match self.cleanup_complete.take() {
             Some(cleaned) => Ok((self.slot, cleaned)),
+            None => Err(self),
+        }
+    }
+
+    /// Consumes the final cleanup-complete owner only through its exact
+    /// runtime. Runtime denial restores the same owner; success retains the
+    /// issued dispatch and returns only its descriptive successor identity.
+    pub fn dispatch(
+        &mut self,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<KernelAhciServiceDispatched, KernelAhciServiceManagerDispatchCompletionError> {
+        if self.dispatched.is_some() {
+            return Err(KernelAhciServiceManagerDispatchCompletionError::AlreadyDispatched);
+        }
+        let cleaned = self
+            .cleanup_complete
+            .take()
+            .ok_or(KernelAhciServiceManagerDispatchCompletionError::NotCleaned)?;
+        match dispatch_retired_kernel_ahci_service_task(cleaned, runtime) {
+            Ok(dispatched) => {
+                let receipt = KernelAhciServiceDispatched {
+                    service: dispatched.service(),
+                    next: dispatched.dispatch().user().map(|(task, _)| task),
+                };
+                self.dispatched = Some(dispatched);
+                Ok(receipt)
+            }
+            Err(error) => {
+                let diagnostic = error.error();
+                self.cleanup_complete = Some(error.into_owner());
+                Err(KernelAhciServiceManagerDispatchCompletionError::Runtime(
+                    diagnostic,
+                ))
+            }
+        }
+    }
+
+    pub fn into_dispatched_parts(
+        mut self,
+    ) -> Result<
+        (
+            KernelAhciServiceExitSlot<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                M,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+            DispatchedAhciServiceTask,
+        ),
+        Self,
+    > {
+        match self.dispatched.take() {
+            Some(dispatched) => Ok((self.slot, dispatched)),
             None => Err(self),
         }
     }

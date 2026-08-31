@@ -1848,6 +1848,22 @@ checks resource-ledger release, and transfers the retained final owner to the
 existing delayed-dispatch path. Dispatch itself is the remaining manager-state
 transition; no installed trap, SMP hardware, IOMMU, or physical AHCI ran.
 
+Delayed successor dispatch is now manager-owned. It consumes only the retained
+cleanup-complete owner through the exact task runtime. Runtime denial restores
+that complete owner for retry; success retains the opaque issued dispatch and
+returns only the service and selected next-task description, while replay is
+rejected. The controlled lifecycle test denies dispatch through a different
+runtime, retries through the exact runtime, and observes the source task as the
+selected successor. This completes source-level manager retention across the
+operation-3 lifecycle. Bootloader static retention and installed trap routing
+remain incomplete, and no hardware execution was exercised.
+
+Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
+success and error owners in a bounded manager state is conventional fail-closed
+lifecycle composition. It adds no parser, controller command, DMA behavior,
+persistent state, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Retaining existing cleanup success/error
 owners until exact erasure and supervisor acceptance is conventional
 fail-closed lifecycle composition. It adds no parser, controller command, DMA
