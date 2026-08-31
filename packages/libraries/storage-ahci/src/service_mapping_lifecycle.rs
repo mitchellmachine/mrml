@@ -1401,6 +1401,23 @@ mod tests {
 
     #[test]
     fn kernel_mapping_set_activation_revalidates_and_retains_exact_root() {
+        struct RejectActiveRoot {
+            calls: usize,
+        }
+        unsafe impl crate::AhciX86ActiveMappingVerifier for RejectActiveRoot {
+            type Error = u8;
+
+            unsafe fn verify(
+                &mut self,
+                _: mrml_kernel::NativeDeviceServiceTask<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+                _: crate::BoundAhciServiceLaunch,
+            ) -> Result<(), Self::Error> {
+                self.calls += 1;
+                Err(7)
+            }
+        }
+        struct Delay(u8);
+
         let mut fixture = resource_fixture();
         let prepared = fixture.prepared;
         let spec = prepared.launch().spec();
@@ -1413,16 +1430,50 @@ mod tests {
         )
         .unwrap_or_else(|| panic!("exact bound reacquisition parts must assemble"));
         assert_eq!(teardown.mapping(), spec.mapping());
+        let backend = unsafe {
+            crate::AhciX86TeardownReacquisition::new(RejectActiveRoot { calls: 0 }, Delay(9))
+        };
+        let (error, backend) = match unsafe {
+            <crate::AhciX86TeardownReacquisition<'_, RejectActiveRoot, Delay> as crate::KernelAhciTeardownReacquisitionBackend>::reacquire(
+                backend,
+                prepared.task(),
+                prepared.launch(),
+            )
+        } {
+            Ok(_) => panic!("active-root rejection must publish no teardown views"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            error,
+            crate::AhciX86TeardownReacquisitionError::Verification(7)
+        );
+        let (verifier, delay) = backend.into_parts();
+        assert_eq!(verifier.calls, 1);
+        assert_eq!(delay.0, 9);
         assert_eq!(teardown.data_region(), spec.data());
         let mut substituted_layout = spec.layout();
         substituted_layout.port = (substituted_layout.port + 1) % 32;
-        assert!(
-            crate::AhciCommandBackendTeardown::from_reacquired_parts(
+        let (returned_port, returned_registers, returned_memory, returned_data) =
+            crate::AhciCommandBackendTeardown::try_from_reacquired_parts(
                 prepared.launch(),
                 crate::ActiveAhciPort::from_layout(substituted_layout),
                 (),
                 (),
                 (),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("layout substitution must return every reacquired owner"));
+        assert_eq!(returned_port.layout(), substituted_layout);
+        assert_eq!(returned_registers, ());
+        assert_eq!(returned_memory, ());
+        assert_eq!(returned_data, ());
+        assert!(
+            crate::AhciCommandBackendTeardown::from_reacquired_parts(
+                prepared.launch(),
+                returned_port,
+                returned_registers,
+                returned_memory,
+                returned_data,
             )
             .is_none()
         );

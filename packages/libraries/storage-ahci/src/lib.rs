@@ -45,6 +45,8 @@ mod service_mapping_lifecycle;
 mod userspace_syscall_adapter;
 #[cfg(target_arch = "x86_64")]
 mod x86_coherent_data_sync;
+#[cfg(target_arch = "x86_64")]
+mod x86_teardown_reacquisition;
 
 use mrml_interface_storage_block_provider_v1::{
     BlockProviderDevice, BlockProviderTransport, ENUMERATE_REQUEST_BYTES, ENUMERATE_RESPONSE_BYTES,
@@ -247,6 +249,11 @@ pub use userspace_syscall_adapter::{
 };
 #[cfg(target_arch = "x86_64")]
 pub use x86_coherent_data_sync::AhciX86CoherentDataSync;
+#[cfg(target_arch = "x86_64")]
+pub use x86_teardown_reacquisition::{
+    AhciX86ActiveMappingVerifier, AhciX86TeardownReacquisition, AhciX86TeardownReacquisitionError,
+    CurrentAhciX86ActiveMappingVerifier,
+};
 
 pub struct AhciBlockProvider<'a> {
     devices: &'a [BlockProviderDevice],

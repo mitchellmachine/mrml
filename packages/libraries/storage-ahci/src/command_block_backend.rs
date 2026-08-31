@@ -82,13 +82,25 @@ impl<R, M, D> AhciCommandBackendTeardown<R, M, D> {
         command_memory: M,
         data_io: D,
     ) -> Option<Self> {
+        Self::try_from_reacquired_parts(launch, port, registers, command_memory, data_io).ok()
+    }
+
+    /// Assembles reacquired views while returning every linear input unchanged
+    /// when the active-port layout does not match the launch.
+    pub fn try_from_reacquired_parts(
+        launch: BoundAhciServiceLaunch,
+        port: ActiveAhciPort,
+        registers: R,
+        command_memory: M,
+        data_io: D,
+    ) -> Result<Self, (ActiveAhciPort, R, M, D)> {
         let spec = launch.spec();
         let mapping = spec.mapping();
         let data_region = spec.data();
         if port.layout() != spec.layout() {
-            return None;
+            return Err((port, registers, command_memory, data_io));
         }
-        Some(Self {
+        Ok(Self {
             mapping,
             port,
             data_region,

@@ -1720,6 +1720,26 @@ reacquisition backend; that concrete backend and installed trap connection
 remain incomplete. These Linux unit tests do not execute CR3 access or prove
 PAT contents, TLB state, IOMMU state, physical AHCI, or SMP exclusion.
 
+A concrete x86 controller-manager reacquisition backend now performs that
+current-root check before creating any raw view, then reconstructs the bounded
+volatile ABAR accessor, coherent command/data mapping views, stable idle active
+port, and one typed teardown owner. Mapping-verifier, view-construction,
+register-window, port-observation, and final-assembly failures publish no
+teardown owner; the verifier and monotonic-delay mechanisms are returned for
+exact retry, while temporary derived views are destroyed without hardware or
+mapping effects. The final assembler also returns every linear input on layout
+mismatch instead of discarding them. The controlled lifecycle test injects
+active-root rejection and proves the verifier call and exact delay-owner
+retention before any raw view is formed. Success remains source-composed rather
+than installed: no controller-manager instance or trap path mints this backend
+yet, and Linux tests do not exercise CR3, MMIO, DMA, IOMMU, PAT, or hardware.
+
+Patent review: **NOT_TRIGGERED**. Sequentially composing existing exact mapping
+verification and typed teardown-view constructors, with linear owner return on
+failure, is conventional lifecycle integration. It adds no controller command,
+DMA behavior, parser format, or authority model. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Exact comparison of existing page-table leaf
 attributes against an already authorized mapping is conventional validation.
 It adds no controller command, DMA behavior, parser format, or authority model.
