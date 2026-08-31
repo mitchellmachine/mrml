@@ -1,6 +1,15 @@
 #![no_std]
 #![no_main]
 
+#[cfg(all(feature = "ahci-service-manager-probe", not(feature = "service-probe")))]
+compile_error!("ahci-service-manager-probe requires service-probe");
+
+#[cfg(all(
+    feature = "ahci-service-manager-probe",
+    feature = "component-service-probe"
+))]
+compile_error!("ahci-service-manager-probe requires the direct TaskRuntime service probe");
+
 #[cfg(all(
     feature = "deadline-receive-cancel-denied-probe",
     feature = "deadline-receive-cancel-replay-probe"
@@ -57,7 +66,8 @@ use mrml_kernel::arch::x86_64::LocalApicController;
 use mrml_kernel::arch::x86_64::LocalApicTimer;
 #[cfg(any(
     feature = "application-probe",
-    feature = "uefi-service-preemption-probe"
+    feature = "uefi-service-preemption-probe",
+    feature = "ahci-service-manager-probe"
 ))]
 use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
 #[cfg(feature = "uefi-service-preemption-probe")]
@@ -546,6 +556,31 @@ static mut SERVICE_SYSCALL_CAPABILITIES: [u8; MAX_CAPABILITIES
     * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES] =
     [0; MAX_CAPABILITIES * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES];
 
+#[cfg(feature = "ahci-service-manager-probe")]
+type BootAhciTeardownLease = mrml_storage_ahci::KernelAhciManagerTeardownLease<
+    mrml_storage_ahci::AhciX86TeardownReacquisition<
+        'static,
+        mrml_storage_ahci::CurrentAhciX86ActiveMappingVerifier,
+        ApStartupTiming,
+    >,
+>;
+
+#[cfg(feature = "ahci-service-manager-probe")]
+type BootAhciServiceManager = mrml_storage_ahci::KernelAhciServiceTeardownManager<
+    'static,
+    PreallocatedPageTableStore,
+    BootAhciTeardownLease,
+    1,
+    4,
+    4,
+    SERVICE_TASK_CAPACITY,
+    SERVICE_CAPABILITY_CAPACITY,
+    { mrml_storage_ahci::AHCI_SERVICE_AUTHORITY_COUNT },
+>;
+
+#[cfg(feature = "ahci-service-manager-probe")]
+static mut AHCI_SERVICE_MANAGER: BootAhciServiceManager = BootAhciServiceManager::empty();
+
 #[cfg(feature = "service-probe")]
 struct HostedServiceEraser;
 
@@ -1018,6 +1053,30 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             .page_table();
         *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
             UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
+        #[cfg(feature = "ahci-service-manager-probe")]
+        if request == SyscallRequest::Exit {
+            let manager = core::ptr::addr_of_mut!(AHCI_SERVICE_MANAGER)
+                .as_mut()
+                .unwrap_or_else(|| halt());
+            if manager.active() && manager.task() == Some(current) {
+                let supervisor = (*core::ptr::addr_of!(SERVICE_SUPERVISOR))
+                    .as_ref()
+                    .unwrap_or_else(|| halt());
+                let routed = manager
+                    .route_frame(frame, supervisor, runtime)
+                    .unwrap_or_else(|_| halt());
+                if routed.task() != current || manager.task() != Some(current) {
+                    halt();
+                }
+                asm!(
+                    "out dx, eax",
+                    in("dx") SERVICE_PROBE_PORT,
+                    in("eax") 0x32u32,
+                    options(nomem, nostack)
+                );
+                halt();
+            }
+        }
         match request {
             SyscallRequest::ReceiveFor { timeout } => {
                 #[cfg(feature = "deadline-receive-probe")]

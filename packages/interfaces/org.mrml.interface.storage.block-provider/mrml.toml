@@ -27,6 +27,10 @@ environment = "linux"
 arch = "x86_64"
 environment = "mrml"
 
+[[target]]
+arch = "x86_64"
+environment = "uefi"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_interface_storage_block_provider_v1"

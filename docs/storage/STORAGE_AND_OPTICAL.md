@@ -1868,14 +1868,33 @@ controlled lifecycle test activates through the preallocated manager, rejects
 a hostile frame without owner movement, routes the exact frame, completes the
 full teardown, and confirms that even final dispatch does not reopen activation
 storage. This removes the type transition that prevented static controller-
-manager retention, but the bootloader has not yet instantiated or routed this
-state and no installed trap or hardware execution was exercised.
+manager retention. No installed trap or hardware execution was exercised.
 
 Patent review: **NOT_TRIGGERED**. Retaining existing active and teardown owners
 inside one preallocated bounded state value is conventional fail-closed state-
 machine composition. It adds no parser, controller command, DMA behavior,
 persistent storage, or authority model. See
 [the patent review log](../patents/REVIEW_LOG.md).
+
+The bootloader now has a dedicated UEFI feature profile that instantiates the
+exact bounded AHCI manager in static kernel storage. Its operation-3 handler
+gives the manager first refusal only when that storage is active and names the
+runtime's exact current task; every unrelated service exit continues through
+the existing generic supervisor path. A successful route retains the frozen
+owner in the static manager and stops at a probe fail-stop rather than skipping
+device quiescence or cleanup. The AHCI library and its versioned block-provider
+interface declare UEFI as a compile target so this static boot dependency is
+checked by the normal build graph. The `ahci_service_manager_probe` UEFI release
+build passes. Boot launch code does not yet construct and populate the active
+mapping owner, so the route is source- and compile-verified but was not reached
+in a booted guest; post-freeze device, DMA, mapping, cleanup, and dispatch
+execution also remain uninstalled.
+
+Patent review: **NOT_TRIGGERED**. Statically retaining the existing bounded
+manager and selecting it by its retained exact task before the existing generic
+exit path is conventional fail-closed dispatch composition. It adds no parser,
+controller command, DMA behavior, persistent storage format, or authority
+model. See [the patent review log](../patents/REVIEW_LOG.md).
 
 Patent review: **NOT_TRIGGERED**. Retaining the existing exact-runtime dispatch
 success and error owners in a bounded manager state is conventional fail-closed

@@ -20,6 +20,9 @@ name = "ap-startup-trace"
 name = "application-probe"
 
 [[feature]]
+name = "ahci-service-manager-probe"
+
+[[feature]]
 name = "block-guest-driver-probe"
 
 [[feature]]
@@ -139,6 +142,12 @@ compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_storage_ahci"
+compile_name = "mrml-storage-ahci"
+package = "org.mrml.library.storage.ahci"
+scope = "compile"
+
 [[binary]]
 crate_name = "mrml_kernel_pe"
 output = "mrml-kernel-pe"
@@ -167,6 +176,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe"]
 name = "service_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "ahci-service-manager-probe"]
+name = "ahci_service_manager_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

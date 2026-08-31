@@ -35,6 +35,10 @@ environment = "windows"
 arch = "x86_64"
 environment = "linux"
 
+[[target]]
+arch = "x86_64"
+environment = "uefi"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_storage_ahci"
