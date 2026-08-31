@@ -4652,6 +4652,16 @@ const TLS, lazy TLS, child-thread TLS, and destructor TLS Wine probes all
 reproduce their exact recorded PE sizes and SHA-256 hashes and return 42.
 Patent review: NOT_TRIGGERED.
 
+Typed CRT initializer and TLS callback slots now retain a zero-addend
+section-zero undefined global `ADDR64` target as a code-only named dependency.
+The decoder continues to reject the same external shape in ordinary writable
+data and rejects nonzero field addends rather than inferring an untyped address
+class. The Linux release gate passes 844/844 units, 2/2 object-evidence tests,
+10/10 conformance tests, 351/351 replacements, and 128/128 semantic tests; the
+release compiler-driver gate passes 17/17. All eight pinned std/TLS Wine modes
+reproduce their exact recorded sizes and SHA-256 hashes and return 42. Patent
+review: NOT_TRIGGERED.
+
 Read-only COMDAT relocation decoding now retains exact projected target-section
 identity for section-defined global symbols as well as static symbols. True
 section-zero externals remain name-based for archive resolution. Focused

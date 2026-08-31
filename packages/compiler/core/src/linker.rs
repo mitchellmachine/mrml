@@ -4653,118 +4653,108 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
         }
         let target = symbol_offset + target_index * 18;
         let target_section = read_i16(object, target + 12)?;
-        let target_section_index =
-            usize::try_from(target_section).map_err(|_| LinkerError::UnsupportedCoff)?;
-        let relocation_target = if readonly_sections.contains(target_section_index) {
-            let target_header = 20 + (target_section_index - 1) * 40;
-            let target_size = usize::try_from(read_u32(object, target_header + 16)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let target_value = usize::try_from(read_u32(object, target + 8)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let addend = read_u64_coff(bytes, field_offset)?;
-            let addend = usize::try_from(addend).map_err(|_| LinkerError::OffsetOverflow)?;
-            let target_section =
-                u16::try_from(target_section_index).map_err(|_| LinkerError::OffsetOverflow)?;
-            let projected = comdat_sections
-                .as_ref()
-                .is_some_and(|inventory| inventory.section(target_section).is_some());
-            if let Some(object_identity) = object_identity.filter(|_| projected) {
-                let offset = target_value
-                    .checked_add(addend)
-                    .filter(|offset| *offset <= target_size)
-                    .ok_or(LinkerError::InvalidRelocationOffset)?;
-                PeWritableRelocationTarget::CoffSection {
-                    identity: CoffSectionIdentity::new(object_identity, target_section)?,
-                    offset,
-                }
-            } else {
-                let target_raw = usize::try_from(read_u32(object, target_header + 20)?)
-                    .map_err(|_| LinkerError::OffsetOverflow)?;
-                let readonly_start = readonly_span.ok_or(LinkerError::UnsupportedCoff)?.0;
-                let offset = target_raw
-                    .checked_sub(readonly_start)
-                    .and_then(|offset| offset.checked_add(target_value))
-                    .and_then(|offset| offset.checked_add(addend))
-                    .ok_or(LinkerError::OffsetOverflow)?;
-                PeWritableRelocationTarget::Readonly {
-                    owner: readonly_owner,
-                    offset,
-                }
-            }
-        } else if text_sections.contains(target_section_index) {
+        let relocation_target = if target_section == 0 {
             let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
-            if (storage_class != 2 && storage_class != 3)
+            if !matches!(
+                data_kind,
+                PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+            ) || storage_class != 2
+                || read_u32(object, target + 8)? != 0
                 || read_u64_coff(bytes, field_offset)? != 0
             {
                 return Err(LinkerError::UnsupportedCoff);
             }
-            if let Some(object_identity) = object_identity {
+            PeWritableRelocationTarget::TextSymbol(coff_symbol_name(
+                object,
+                target,
+                symbols_end,
+                string_size,
+            )?)
+        } else {
+            let target_section_index =
+                usize::try_from(target_section).map_err(|_| LinkerError::UnsupportedCoff)?;
+            if readonly_sections.contains(target_section_index) {
                 let target_header = 20 + (target_section_index - 1) * 40;
                 let target_size = usize::try_from(read_u32(object, target_header + 16)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
                 let target_value = usize::try_from(read_u32(object, target + 8)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
-                if target_value > target_size {
-                    return Err(LinkerError::InvalidRelocationOffset);
+                let addend = read_u64_coff(bytes, field_offset)?;
+                let addend = usize::try_from(addend).map_err(|_| LinkerError::OffsetOverflow)?;
+                let target_section =
+                    u16::try_from(target_section_index).map_err(|_| LinkerError::OffsetOverflow)?;
+                let projected = comdat_sections
+                    .as_ref()
+                    .is_some_and(|inventory| inventory.section(target_section).is_some());
+                if let Some(object_identity) = object_identity.filter(|_| projected) {
+                    let offset = target_value
+                        .checked_add(addend)
+                        .filter(|offset| *offset <= target_size)
+                        .ok_or(LinkerError::InvalidRelocationOffset)?;
+                    PeWritableRelocationTarget::CoffSection {
+                        identity: CoffSectionIdentity::new(object_identity, target_section)?,
+                        offset,
+                    }
+                } else {
+                    let target_raw = usize::try_from(read_u32(object, target_header + 20)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let readonly_start = readonly_span.ok_or(LinkerError::UnsupportedCoff)?.0;
+                    let offset = target_raw
+                        .checked_sub(readonly_start)
+                        .and_then(|offset| offset.checked_add(target_value))
+                        .and_then(|offset| offset.checked_add(addend))
+                        .ok_or(LinkerError::OffsetOverflow)?;
+                    PeWritableRelocationTarget::Readonly {
+                        owner: readonly_owner,
+                        offset,
+                    }
                 }
-                PeWritableRelocationTarget::CoffSection {
-                    identity: CoffSectionIdentity::new(
-                        object_identity,
-                        u16::try_from(target_section_index)
-                            .map_err(|_| LinkerError::OffsetOverflow)?,
-                    )?,
-                    offset: target_value,
+            } else if text_sections.contains(target_section_index) {
+                let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
+                if (storage_class != 2 && storage_class != 3)
+                    || read_u64_coff(bytes, field_offset)? != 0
+                {
+                    return Err(LinkerError::UnsupportedCoff);
                 }
-            } else {
-                PeWritableRelocationTarget::TextSymbol(coff_symbol_name(
-                    object,
-                    target,
-                    symbols_end,
-                    string_size,
-                )?)
-            }
-        } else if tls_sections.contains(target_section_index) {
-            let object_identity = object_identity.ok_or(LinkerError::UnsupportedCoffTls)?;
-            let target_header = 20 + (target_section_index - 1) * 40;
-            let target_size = usize::try_from(read_u32(object, target_header + 16)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let target_value = usize::try_from(read_u32(object, target + 8)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let addend = usize::try_from(read_u64_coff(bytes, field_offset)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let offset = target_value
-                .checked_add(addend)
-                .filter(|offset| *offset <= target_size)
-                .ok_or(LinkerError::InvalidRelocationOffset)?;
-            PeWritableRelocationTarget::TlsSection {
-                identity: CoffSectionIdentity::new(
-                    object_identity,
-                    u16::try_from(target_section_index).map_err(|_| LinkerError::OffsetOverflow)?,
-                )?,
-                offset,
-            }
-        } else if writable_sections.contains(target_section_index) {
-            let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
-            if storage_class != 2 && storage_class != 3 {
-                return Err(LinkerError::UnsupportedCoff);
-            }
-            if let Some(object_identity) = object_identity {
+                if let Some(object_identity) = object_identity {
+                    let target_header = 20 + (target_section_index - 1) * 40;
+                    let target_size = usize::try_from(read_u32(object, target_header + 16)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let target_value = usize::try_from(read_u32(object, target + 8)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    if target_value > target_size {
+                        return Err(LinkerError::InvalidRelocationOffset);
+                    }
+                    PeWritableRelocationTarget::CoffSection {
+                        identity: CoffSectionIdentity::new(
+                            object_identity,
+                            u16::try_from(target_section_index)
+                                .map_err(|_| LinkerError::OffsetOverflow)?,
+                        )?,
+                        offset: target_value,
+                    }
+                } else {
+                    PeWritableRelocationTarget::TextSymbol(coff_symbol_name(
+                        object,
+                        target,
+                        symbols_end,
+                        string_size,
+                    )?)
+                }
+            } else if tls_sections.contains(target_section_index) {
+                let object_identity = object_identity.ok_or(LinkerError::UnsupportedCoffTls)?;
                 let target_header = 20 + (target_section_index - 1) * 40;
-                let initialized_size = usize::try_from(read_u32(object, target_header + 16)?)
+                let target_size = usize::try_from(read_u32(object, target_header + 16)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
-                let zeroed_size = usize::try_from(read_u32(object, target_header + 8)?)
-                    .map_err(|_| LinkerError::OffsetOverflow)?;
-                let target_size = initialized_size.max(zeroed_size);
                 let target_value = usize::try_from(read_u32(object, target + 8)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
-                let addend = i64::from_le_bytes(read_u64_coff(bytes, field_offset)?.to_le_bytes());
-                let offset = i128::try_from(target_value)
-                    .ok()
-                    .and_then(|value| value.checked_add(i128::from(addend)))
-                    .and_then(|offset| usize::try_from(offset).ok())
+                let addend = usize::try_from(read_u64_coff(bytes, field_offset)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let offset = target_value
+                    .checked_add(addend)
                     .filter(|offset| *offset <= target_size)
                     .ok_or(LinkerError::InvalidRelocationOffset)?;
-                PeWritableRelocationTarget::WritableSection {
+                PeWritableRelocationTarget::TlsSection {
                     identity: CoffSectionIdentity::new(
                         object_identity,
                         u16::try_from(target_section_index)
@@ -4772,19 +4762,52 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     )?,
                     offset,
                 }
-            } else {
-                if read_u32(object, target + 8)? != 0 || read_u64_coff(bytes, field_offset)? != 0 {
+            } else if writable_sections.contains(target_section_index) {
+                let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
+                if storage_class != 2 && storage_class != 3 {
                     return Err(LinkerError::UnsupportedCoff);
                 }
-                PeWritableRelocationTarget::WritableSymbol(coff_symbol_name(
-                    object,
-                    target,
-                    symbols_end,
-                    string_size,
-                )?)
+                if let Some(object_identity) = object_identity {
+                    let target_header = 20 + (target_section_index - 1) * 40;
+                    let initialized_size = usize::try_from(read_u32(object, target_header + 16)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let zeroed_size = usize::try_from(read_u32(object, target_header + 8)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let target_size = initialized_size.max(zeroed_size);
+                    let target_value = usize::try_from(read_u32(object, target + 8)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let addend =
+                        i64::from_le_bytes(read_u64_coff(bytes, field_offset)?.to_le_bytes());
+                    let offset = i128::try_from(target_value)
+                        .ok()
+                        .and_then(|value| value.checked_add(i128::from(addend)))
+                        .and_then(|offset| usize::try_from(offset).ok())
+                        .filter(|offset| *offset <= target_size)
+                        .ok_or(LinkerError::InvalidRelocationOffset)?;
+                    PeWritableRelocationTarget::WritableSection {
+                        identity: CoffSectionIdentity::new(
+                            object_identity,
+                            u16::try_from(target_section_index)
+                                .map_err(|_| LinkerError::OffsetOverflow)?,
+                        )?,
+                        offset,
+                    }
+                } else {
+                    if read_u32(object, target + 8)? != 0
+                        || read_u64_coff(bytes, field_offset)? != 0
+                    {
+                        return Err(LinkerError::UnsupportedCoff);
+                    }
+                    PeWritableRelocationTarget::WritableSymbol(coff_symbol_name(
+                        object,
+                        target,
+                        symbols_end,
+                        string_size,
+                    )?)
+                }
+            } else {
+                return Err(LinkerError::UnsupportedCoff);
             }
-        } else {
-            return Err(LinkerError::UnsupportedCoff);
         };
         *slot = PeWritableRelocation {
             offset: field_offset,
@@ -15017,6 +15040,53 @@ mod tests {
                     offset: 0,
                 },
             }]
+        );
+
+        let mut external = object.clone();
+        external[175..177].copy_from_slice(&0i16.to_le_bytes());
+        let mut external_storage = storage;
+        let external_callback = decode_x86_64_coff_writable_data_fragment_with_section_identities(
+            &external,
+            0,
+            "entry",
+            31,
+            &mut external_storage,
+        )
+        .unwrap();
+        assert_eq!(
+            external_callback.relocations,
+            &[PeWritableRelocation {
+                offset: 0,
+                target: PeWritableRelocationTarget::TextSymbol("entry"),
+            }]
+        );
+
+        let mut nonzero_addend = external.clone();
+        nonzero_addend[145..153].copy_from_slice(&1u64.to_le_bytes());
+        let mut nonzero_storage = storage;
+        assert_eq!(
+            decode_x86_64_coff_writable_data_fragment_with_section_identities(
+                &nonzero_addend,
+                0,
+                "entry",
+                31,
+                &mut nonzero_storage,
+            ),
+            Err(LinkerError::UnsupportedCoff)
+        );
+
+        let mut ordinary = coff_with_readonly_and_writable_data();
+        ordinary[157..161].copy_from_slice(&0u32.to_le_bytes());
+        ordinary[175..177].copy_from_slice(&0i16.to_le_bytes());
+        let mut ordinary_storage = storage;
+        assert_eq!(
+            decode_x86_64_coff_writable_data_fragment(
+                &ordinary,
+                0,
+                "entry",
+                &mut ordinary_storage,
+            ),
+            Err(LinkerError::UnsupportedCoff)
         );
     }
 

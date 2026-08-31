@@ -1760,3 +1760,17 @@ on a duplicate relocation appearing in code. The release compiler-driver gate
 passes 17/17. All eight pinned std/TLS Wine modes reproduce their exact recorded
 PE sizes and SHA-256 hashes and return 42. Patent review: NOT_TRIGGERED; this is
 bounded conventional archive reachability and COFF relocation handling.
+
+Writable COFF decoding now admits a section-zero external `ADDR64` target only
+when the containing slot is a typed CRT initializer or TLS callback. The symbol
+must be an undefined global with value zero and the field addend must be zero;
+it is retained as a code-only `TextSymbol` for archive selection and final PE
+validation. Ordinary writable data, nonzero symbol values, nonzero addends, and
+non-global externals remain unsupported rather than being guessed as code.
+Focused coverage checks the admitted callback and both ordinary-data and
+nonzero-addend rejection. The Linux release gate passes 844 unit tests, 2
+object-evidence tests, 10 conformance tests, 351 replacement tests, and 128
+semantic-execution tests; the release driver passes 17 tests. All eight pinned
+std/TLS Wine modes reproduce their exact recorded PE sizes and SHA-256 hashes
+and return 42. Patent review: NOT_TRIGGERED; this is bounded conventional
+PE/COFF relocation handling.
