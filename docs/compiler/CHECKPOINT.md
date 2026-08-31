@@ -1546,6 +1546,23 @@ its authored `entry`, this is deterministic hosted loading evidence, not proof
 of CRT initializer invocation, native Windows, general `std`, complete PE
 startup/TLS lifecycle, WHP, or physical hardware.
 
+The typed TLS layout checkpoint classifies exact `.tls`, `.tls$...`, and
+`.tls$ZZZ` sections as start, interior, and end identities. It stable-orders the
+categories so the start sentinel precedes all selected interiors and the end
+sentinel follows them even when archive selection presents the pinned `std` TLS
+interiors first. A present sentinel pair must contain exactly one relocation-free
+eight-byte zero fragment at each boundary; missing, duplicate, nonzero,
+relocated, and zero-length fragments fail closed. Interior TLS references remain
+bound to exact COFF section identities rather than ordinal layout. The combined
+Linux canonical gate passed 837/837 core units, 2/2 object-evidence tests, 10/10
+conformance tests, 351/351 replacements, and 128/128 semantic tests. The release
+driver build passed. The exact pinned `std` execution probe emitted 2,389,504
+bytes with SHA-256
+`4360294552160ee4365ce81c843872aa0bb039eb60d50cd07217d615e41b04a7`;
+Wine 11.16 loaded the image and returned 42. The direct authored entry does not
+prove TLS-variable access, destructor execution, native Windows, general `std`,
+complete PE startup/TLS lifecycle, WHP, or physical hardware.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.

@@ -9,7 +9,7 @@ self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
 expected_size=2389504
-expected_hash=f614d514b0781c4d144c9d0b9e0b4b86187fe2c89c7fb0ca5807b1802c3b1efa
+expected_hash=4360294552160ee4365ce81c843872aa0bb039eb60d50cd07217d615e41b04a7
 
 test -x "$driver" || {
     echo "missing release driver: run ./target/debug/mrml build org.mrml.compiler.driver --target linux --release" >&2

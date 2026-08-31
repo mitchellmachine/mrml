@@ -1491,7 +1491,7 @@ no usable allocator, so an unexpected heap path fails closed instead of
 silently broadening the fixture. On the normal 8 MiB Linux stack, MRML linked
 the exact pinned `std` dependency closure and self-contained MinGW import
 archives into a deterministic 2,389,504-byte PE with SHA-256
-`f614d514b0781c4d144c9d0b9e0b4b86187fe2c89c7fb0ca5807b1802c3b1efa`.
+`4360294552160ee4365ce81c843872aa0bb039eb60d50cd07217d615e41b04a7`.
 The image has separate RX, R/NX, and RW/NX sections plus import, exception,
 TLS, and IAT directories. Exact `.CRT$XLA` through `.CRT$XLZ` fragments retain
 a typed suffix order, form one stable contiguous callback table in RW/NX data,
@@ -1504,6 +1504,14 @@ in lexical family and suffix order. Each present family requires exactly one
 null `A` and `Z` sentinel; every interior slot requires one exact zero-offset
 `ADDR64` relocation to code in the referenced text input. Missing or duplicate
 sentinels, malformed slots, non-code targets, and one-past targets fail closed.
+Exact `.tls`, `.tls$...`, and `.tls$ZZZ` sections retain typed start, interior,
+and end identities. The serializer stable-orders those categories so the start
+sentinel precedes every selected interior and the end sentinel follows them,
+independently of archive selection order. When either sentinel is present, both
+must occur exactly once as relocation-free eight-byte zero fragments; missing,
+duplicate, nonzero, relocated, or zero-length TLS fragments fail closed. Interior
+relative references continue to resolve through exact section identity rather
+than layout rank.
 Wine 11.16 loaded the image containing the real pinned MinGW callback and CRT
 initializer tables and returned 42. The probe enters the independently authored
 `entry` symbol directly, so this proves deterministic loading rather than CRT

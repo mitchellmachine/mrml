@@ -2523,7 +2523,7 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     let tls_section_defined = |identity: CoffSectionIdentity| {
         writable_data
             .iter()
-            .any(|data| data.kind == PeDataKind::Tls && data.identity == Some(identity))
+            .any(|data| matches!(data.kind, PeDataKind::Tls(_)) && data.identity == Some(identity))
     };
     let named_target_defined =
         |symbol: &str| link_target_defined(symbol) || writable_target_defined(symbol);

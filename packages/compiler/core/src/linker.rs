@@ -763,6 +763,13 @@ impl PeTlsCallbackOrder {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PeTlsSectionOrder {
+    Start,
+    Interior,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PeCrtInitializerFamily {
     C,
     D,
@@ -806,9 +813,15 @@ impl PeCrtInitializerOrder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeDataKind {
     Writable,
-    Tls,
+    Tls(PeTlsSectionOrder),
     CrtInitializer(PeCrtInitializerOrder),
     TlsCallback(PeTlsCallbackOrder),
+}
+
+impl PeDataKind {
+    const fn is_tls(self) -> bool {
+        matches!(self, Self::Tls(_))
+    }
 }
 
 /// The bounded COFF duplicate-selection policy attached to one text section.
@@ -3565,6 +3578,16 @@ fn coff_is_tls_section(name: &str) -> bool {
     name == ".tls" || name.starts_with(".tls$")
 }
 
+fn coff_tls_section_order(name: &str) -> Result<Option<PeTlsSectionOrder>, LinkerError> {
+    match name {
+        ".tls" => Ok(Some(PeTlsSectionOrder::Start)),
+        ".tls$ZZZ" => Ok(Some(PeTlsSectionOrder::End)),
+        ".tls$" => Err(LinkerError::UnsupportedCoffTls),
+        _ if name.starts_with(".tls$") => Ok(Some(PeTlsSectionOrder::Interior)),
+        _ => Ok(None),
+    }
+}
+
 fn coff_is_pdata_section(name: &str) -> bool {
     name == ".pdata" || name.starts_with(".pdata$")
 }
@@ -4286,7 +4309,9 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     usize::from(read_u16(object, header + 32)?),
                     i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?,
                     name,
-                    PeDataKind::Tls,
+                    PeDataKind::Tls(
+                        coff_tls_section_order(name)?.ok_or(LinkerError::UnsupportedCoffTls)?,
+                    ),
                 ));
             }
             writable_ordinal = writable_ordinal
@@ -8607,10 +8632,76 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             LinkerError::UnsupportedCoffTls,
         )?;
     }
-    let has_tls = writable_data
-        .iter()
-        .enumerate()
-        .any(|(index, data)| writable_kept[index] && data.kind == PeDataKind::Tls);
+    let mut tls_indices = [0usize; MAX_LINK_INPUTS];
+    let mut tls_count = 0usize;
+    let mut tls_start_count = 0usize;
+    let mut tls_end_count = 0usize;
+    for (index, data) in writable_data.iter().enumerate() {
+        let PeDataKind::Tls(order) = data.kind else {
+            continue;
+        };
+        if !writable_kept[index] {
+            continue;
+        }
+        match order {
+            PeTlsSectionOrder::Start => {
+                tls_start_count = tls_start_count
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            PeTlsSectionOrder::End => {
+                tls_end_count = tls_end_count
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            PeTlsSectionOrder::Interior => {}
+        }
+        let slot = tls_indices
+            .get_mut(tls_count)
+            .ok_or(LinkerError::TooManyInputs)?;
+        *slot = index;
+        tls_count = tls_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if (tls_start_count != 0 || tls_end_count != 0) && (tls_start_count != 1 || tls_end_count != 1)
+    {
+        return Err(LinkerError::UnsupportedCoffTls);
+    }
+    for index in 1..tls_count {
+        let selected = tls_indices[index];
+        let PeDataKind::Tls(selected_order) = writable_data[selected].kind else {
+            unreachable!();
+        };
+        let mut position = index;
+        while position > 0 {
+            let previous = tls_indices[position - 1];
+            let PeDataKind::Tls(previous_order) = writable_data[previous].kind else {
+                unreachable!();
+            };
+            if previous_order <= selected_order {
+                break;
+            }
+            tls_indices[position] = previous;
+            position -= 1;
+        }
+        tls_indices[position] = selected;
+    }
+    for index in tls_indices[..tls_count].iter().copied() {
+        let data = &writable_data[index];
+        let PeDataKind::Tls(order) = data.kind else {
+            unreachable!();
+        };
+        if data.initialized.is_empty() || data.zeroed_size != 0 || !data.relocations.is_empty() {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+        if matches!(order, PeTlsSectionOrder::Start | PeTlsSectionOrder::End)
+            && (data.initialized.len() != 8 || data.initialized.iter().any(|byte| *byte != 0))
+        {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+    }
+    let has_tls = tls_count != 0;
     if tls_callback_count != 0 && !has_tls {
         return Err(LinkerError::UnsupportedCoffTls);
     }
@@ -8648,10 +8739,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if !writable_kept[index] {
             continue;
         }
-        if matches!(
-            data.kind,
-            PeDataKind::Tls | PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
-        ) {
+        if data.kind.is_tls()
+            || matches!(
+                data.kind,
+                PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+            )
+        {
             continue;
         }
         if data.initialized.is_empty() || data.zeroed_size != 0 {
@@ -8701,21 +8794,13 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         Some(start)
     };
     let tls_offset = align(writable_size, 8)?;
-    for (index, data) in writable_data.iter().enumerate() {
-        if !writable_kept[index] || data.kind != PeDataKind::Tls {
-            continue;
-        }
-        if data.initialized.is_empty() || data.zeroed_size != 0 {
-            return Err(LinkerError::UnsupportedCoffTls);
-        }
+    for index in tls_indices[..tls_count].iter().copied() {
+        let data = &writable_data[index];
         writable_size = align(writable_size, 8)?;
         writable_offsets[index] = writable_size;
         writable_size = writable_size
             .checked_add(data.initialized.len())
             .ok_or(LinkerError::OffsetOverflow)?;
-        if !data.relocations.is_empty() {
-            return Err(LinkerError::UnsupportedCoffTls);
-        }
     }
     let tls_file_size = writable_size
         .checked_sub(tls_offset)
@@ -8726,10 +8811,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if !writable_kept[index] {
             continue;
         }
-        if matches!(
-            data.kind,
-            PeDataKind::Tls | PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
-        ) {
+        if data.kind.is_tls()
+            || matches!(
+                data.kind,
+                PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+            )
+        {
             continue;
         }
         if !data.initialized.is_empty() {
@@ -9167,7 +9254,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                     .ok_or(LinkerError::OffsetOverflow)?,
                 PeWritableRelocationTarget::TlsSection { identity, offset } => {
                     let (target_index, target_offset) = writable_section(identity, offset)?;
-                    if writable_data[target_index].kind != PeDataKind::Tls {
+                    if !writable_data[target_index].kind.is_tls() {
                         return Err(LinkerError::UnsupportedCoffTls);
                     }
                     writable_rva
@@ -9341,7 +9428,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             } = relocation.target
             {
                 let (target_index, target_offset) = writable_section(identity, offset)?;
-                if writable_data[target_index].kind != PeDataKind::Tls {
+                if !writable_data[target_index].kind.is_tls() {
                     return Err(LinkerError::UnsupportedCoffTls);
                 }
                 let place = layout
@@ -13449,6 +13536,23 @@ mod tests {
         assert_eq!(x86_64_coff_writable_section_count(&base_data), Ok(1));
         assert!(coff_is_writable_section(".CRT$XLC"));
         assert!(coff_is_tls_section(".tls"));
+        assert_eq!(
+            coff_tls_section_order(".tls"),
+            Ok(Some(PeTlsSectionOrder::Start))
+        );
+        assert_eq!(
+            coff_tls_section_order(".tls$rust"),
+            Ok(Some(PeTlsSectionOrder::Interior))
+        );
+        assert_eq!(
+            coff_tls_section_order(".tls$ZZZ"),
+            Ok(Some(PeTlsSectionOrder::End))
+        );
+        assert_eq!(
+            coff_tls_section_order(".tls$"),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(coff_tls_section_order(".data"), Ok(None));
         let mut data_only = object.clone();
         data_only[36..40].copy_from_slice(&0u32.to_le_bytes());
         data_only[76..80].copy_from_slice(&0u32.to_le_bytes());
@@ -13542,7 +13646,10 @@ mod tests {
             &mut tls_fragment_storage,
         )
         .unwrap();
-        assert_eq!(tls_fragment.kind, PeDataKind::Tls);
+        assert_eq!(
+            tls_fragment.kind,
+            PeDataKind::Tls(PeTlsSectionOrder::Interior)
+        );
         assert_eq!(
             tls_fragment.identity,
             Some(CoffSectionIdentity::new(9, 2).unwrap())
@@ -14025,7 +14132,7 @@ mod tests {
         let tls = PeWritableData {
             symbol: ".tls$fixture",
             identity: Some(tls_identity),
-            kind: PeDataKind::Tls,
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
             selection: PeWritableComdatSelection::None,
             initialized: &[1, 2, 3, 4, 5, 6, 7, 8],
             zeroed_size: 0,
@@ -14051,6 +14158,102 @@ mod tests {
         assert_eq!(read_image_u64(0x428), 0);
         assert_eq!(read_i32(pe.bytes(), 0x200).unwrap(), 4);
         assert_eq!(&pe.bytes()[0x600..0x608], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn orders_typed_pe_tls_sentinels_around_stable_interiors() {
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let tls_index = PeWritableData {
+            symbol: "_tls_index",
+            identity: None,
+            kind: PeDataKind::Writable,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[],
+            zeroed_size: 4,
+            relocations: &[],
+        };
+        let tls_start = PeWritableData {
+            symbol: "_tls_start",
+            identity: Some(CoffSectionIdentity::new(81, 1).unwrap()),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Start),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let tls_end = PeWritableData {
+            symbol: "_tls_end",
+            identity: Some(CoffSectionIdentity::new(81, 2).unwrap()),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::End),
+            ..tls_start
+        };
+        let first_interior = PeWritableData {
+            symbol: "zeta_rank",
+            identity: Some(CoffSectionIdentity::new(81, 3).unwrap()),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
+            initialized: &[2; 8],
+            ..tls_start
+        };
+        let second_interior = PeWritableData {
+            symbol: "alpha_rank",
+            identity: Some(CoffSectionIdentity::new(81, 4).unwrap()),
+            initialized: &[1; 8],
+            ..first_interior
+        };
+        let pe = link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+            &[input],
+            "entry",
+            &[],
+            &[
+                tls_index,
+                tls_end,
+                first_interior,
+                tls_start,
+                second_interior,
+            ],
+        )
+        .unwrap();
+
+        let read_image_u64 =
+            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
+        assert_eq!(read_image_u64(0x400), 0x0000_0001_4000_3000);
+        assert_eq!(read_image_u64(0x408), 0x0000_0001_4000_3020);
+        assert_eq!(read_image_u64(0x410), 0x0000_0001_4000_3020);
+        assert_eq!(&pe.bytes()[0x600..0x608], &[0; 8]);
+        assert_eq!(&pe.bytes()[0x608..0x610], &[2; 8]);
+        assert_eq!(&pe.bytes()[0x610..0x618], &[1; 8]);
+        assert_eq!(&pe.bytes()[0x618..0x620], &[0; 8]);
+
+        let nonzero_start = PeWritableData {
+            symbol: "nonzero_start",
+            initialized: &[1, 0, 0, 0, 0, 0, 0, 0],
+            ..tls_start
+        };
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[tls_index, tls_start, first_interior],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[tls_index, nonzero_start, tls_end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
     }
 
     #[test]
@@ -14357,7 +14560,7 @@ mod tests {
         let tls = PeWritableData {
             symbol: ".tls$fixture",
             identity: Some(tls_identity),
-            kind: PeDataKind::Tls,
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
             selection: PeWritableComdatSelection::None,
             initialized: &[1, 2, 3, 4, 5, 6, 7, 8],
             zeroed_size: 0,
@@ -14506,7 +14709,7 @@ mod tests {
         let tls = PeWritableData {
             symbol: ".tls$fixture",
             identity: Some(CoffSectionIdentity::new(51, 2).unwrap()),
-            kind: PeDataKind::Tls,
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
             selection: PeWritableComdatSelection::None,
             initialized: &[1; 8],
             zeroed_size: 0,
