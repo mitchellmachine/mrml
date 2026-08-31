@@ -16,9 +16,10 @@ use mrml_rustc::{
     ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
     LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS,
     MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS,
-    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeDataKind, PeReadonlyAbsoluteRelocation,
-    PeRuntimeFunction, PeWritableData, PeWritableRelocation, PeWritableRelocationTarget,
-    TargetLayout, compile_source_function_with_options, decode_unix_archive,
+    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeDataKind, PeImageRelativeTarget,
+    PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
+    PeWritableRelocationTarget, TargetLayout, compile_source_function_with_options,
+    decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
     decode_x86_64_coff_runtime_functions_with_section_identities,
     decode_x86_64_coff_section_identity_readonly_fragment,
@@ -2244,6 +2245,21 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                         relocation
                     }
                 }
+                LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(symbol)) => {
+                    let target = if let Some((identity, offset)) = typed_section_target(symbol) {
+                        PeImageRelativeTarget::CoffSection { identity, offset }
+                    } else if let Some((library, target)) = import_target(symbol) {
+                        PeImageRelativeTarget::ImportAddress { library, target }
+                    } else if !link_target_defined(symbol) && writable_target_defined(symbol) {
+                        PeImageRelativeTarget::WritableSymbol(symbol)
+                    } else {
+                        PeImageRelativeTarget::Symbol(symbol)
+                    };
+                    LinkRelocation {
+                        target: LinkRelocationTarget::PeImageRelative(target),
+                        ..relocation
+                    }
+                }
                 _ => relocation,
             };
         }
@@ -3140,6 +3156,26 @@ mod tests {
             LinkRelocationTarget::PeWritableSymbol("marker")
         );
 
+        let image_relative_relocation = [LinkRelocation {
+            target: LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol("marker")),
+            ..relocation[0]
+        }];
+        let image_relative_input = LinkInput {
+            relocations: &image_relative_relocation,
+            ..input
+        };
+        let mut image_relative_arenas = relocation_arenas(1).unwrap();
+        let image_relative_contextual = contextualize_pe_writable_relocations(
+            &[image_relative_input],
+            &writable,
+            &mut image_relative_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            image_relative_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::WritableSymbol("marker",))
+        );
+
         let definition = [LinkDefinition {
             symbol: "marker",
             target: LinkDefinitionTarget::Text(0),
@@ -3202,6 +3238,34 @@ mod tests {
                     hint: 0,
                 },
             }
+        );
+
+        let image_relative_alias_relocation = [LinkRelocation {
+            target: LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(
+                "__imp_WaitOnAddress",
+            )),
+            ..alias_relocation[0]
+        }];
+        let image_relative_alias_user = LinkInput {
+            relocations: &image_relative_alias_relocation,
+            ..input
+        };
+        let mut image_relative_import_arenas = relocation_arenas(2).unwrap();
+        let image_relative_import_contextual = contextualize_pe_writable_relocations(
+            &[image_relative_alias_user, import],
+            &[],
+            &mut image_relative_import_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            image_relative_import_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::ImportAddress {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                target: PeImportTarget::Name {
+                    symbol: "WaitOnAddress",
+                    hint: 0,
+                },
+            })
         );
 
         let data_metadata = [LinkRelocation {

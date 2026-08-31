@@ -543,10 +543,11 @@ fn parse_archive_usize(digits: &[u8]) -> Result<usize, LinkerError> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkRelocation<'a> {
-    /// Offset of the four-byte x86-64 PC-relative field in this input's text.
+    /// Offset of the four-byte relocation field in this input's text.
     pub offset: usize,
     pub target: LinkRelocationTarget<'a>,
-    /// Explicit object-format addend. A call/jump rel32 normally uses `-4`.
+    /// Explicit object-format addend. Its interpretation is selected by the
+    /// typed target; a call/jump rel32 normally uses `-4`.
     pub addend: i64,
 }
 
@@ -619,11 +620,40 @@ pub enum LinkRelocationTarget<'a> {
         offset: usize,
         section_relative: bool,
     },
+    /// A four-byte PE image-relative address (`IMAGE_REL_AMD64_ADDR32NB`).
+    /// The nested target retains its exact object/section identity until the
+    /// final PE RVAs are frozen.
+    PeImageRelative(PeImageRelativeTarget<'a>),
     InputText(usize),
     ReadonlyData(usize),
     /// A validated `mov reg, [rip + GOT]` whose fixed-image target is local
     /// read-only data and can therefore become `lea reg, [rip + data]`.
     GotPcRelativeReadonlyData(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeImageRelativeTarget<'a> {
+    Symbol(&'a str),
+    LocalSymbol(&'a str),
+    CoffSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
+    InputText(usize),
+    ReadonlyData(usize),
+    WritableSymbol(&'a str),
+    WritableSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
+    TlsSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+    },
+    ImportAddress {
+        library: &'a str,
+        target: PeImportTarget<'a>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1221,6 +1251,39 @@ fn validate_pe_import_target(target: PeImportTarget<'_>) -> Result<(), LinkerErr
         PeImportTarget::Name { symbol, .. } => validate_symbol(symbol),
         PeImportTarget::Ordinal(0) => Err(LinkerError::InvalidCoff),
         PeImportTarget::Ordinal(_) => Ok(()),
+    }
+}
+
+fn validate_pe_image_relative_target(
+    input: &LinkInput<'_, '_, '_>,
+    target: PeImageRelativeTarget<'_>,
+) -> Result<(), LinkerError> {
+    match target {
+        PeImageRelativeTarget::Symbol(symbol)
+        | PeImageRelativeTarget::LocalSymbol(symbol)
+        | PeImageRelativeTarget::WritableSymbol(symbol) => validate_symbol(symbol),
+        PeImageRelativeTarget::CoffSection { identity, .. }
+        | PeImageRelativeTarget::WritableSection { identity, .. }
+        | PeImageRelativeTarget::TlsSection { identity, .. }
+            if identity.object == 0 || identity.section == 0 =>
+        {
+            Err(LinkerError::InvalidCoff)
+        }
+        PeImageRelativeTarget::CoffSection { .. }
+        | PeImageRelativeTarget::WritableSection { .. }
+        | PeImageRelativeTarget::TlsSection { .. } => Ok(()),
+        PeImageRelativeTarget::InputText(offset) if offset > input.text.len() => {
+            Err(LinkerError::InvalidRelocationOffset)
+        }
+        PeImageRelativeTarget::InputText(_) => Ok(()),
+        PeImageRelativeTarget::ReadonlyData(offset) if offset > input.readonly_data.len() => {
+            Err(LinkerError::InvalidRelocationOffset)
+        }
+        PeImageRelativeTarget::ReadonlyData(_) => Ok(()),
+        PeImageRelativeTarget::ImportAddress { library, target } => {
+            validate_pe_import_library(library)?;
+            validate_pe_import_target(target)
+        }
     }
 }
 
@@ -3365,7 +3428,12 @@ fn coff_section_is_referenced(
                     } | LinkRelocationTarget::PeTlsSection {
                         identity: target,
                         ..
-                    } if target == identity
+                    } | LinkRelocationTarget::PeImageRelative(
+                        PeImageRelativeTarget::CoffSection {
+                            identity: target,
+                            ..
+                        },
+                    ) if target == identity
                 )
             })
     })
@@ -3416,6 +3484,9 @@ fn symbol_is_referenced(
                     LinkRelocationTarget::Symbol(target)
                         | LinkRelocationTarget::GotPcRelativeSymbol(target)
                         | LinkRelocationTarget::RequiredSymbol(target)
+                        | LinkRelocationTarget::PeImageRelative(
+                            PeImageRelativeTarget::Symbol(target),
+                        )
                         if target == symbol
                 )
             })
@@ -5560,7 +5631,9 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
         // Windows TLS access sequence additionally uses IMAGE_REL_AMD64_SECREL
         // for the offset within the selected TLS template; retain that target
         // as typed PE TLS work rather than treating it as an unknown encoding.
+        let image_relative = relocation_type == 3;
         let trailing_bytes = match relocation_type {
+            3 => 0,
             relocation @ 4..=9 => {
                 u8::try_from(relocation - 4).map_err(|_| LinkerError::OffsetOverflow)?
             }
@@ -5774,6 +5847,39 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             )
         } else {
             return Err(LinkerError::UnsupportedCoffRelocationTarget);
+        };
+        let (target, addend) = if image_relative {
+            let target = match target {
+                LinkRelocationTarget::Symbol(symbol) => PeImageRelativeTarget::Symbol(symbol),
+                LinkRelocationTarget::LocalSymbol(symbol) => {
+                    PeImageRelativeTarget::LocalSymbol(symbol)
+                }
+                LinkRelocationTarget::CoffSection { identity, offset } => {
+                    PeImageRelativeTarget::CoffSection { identity, offset }
+                }
+                LinkRelocationTarget::InputText(offset) => PeImageRelativeTarget::InputText(offset),
+                LinkRelocationTarget::ReadonlyData(offset) => {
+                    PeImageRelativeTarget::ReadonlyData(offset)
+                }
+                LinkRelocationTarget::PeWritableSymbol(symbol) => {
+                    PeImageRelativeTarget::WritableSymbol(symbol)
+                }
+                LinkRelocationTarget::PeWritableSection { identity, offset } => {
+                    PeImageRelativeTarget::WritableSection { identity, offset }
+                }
+                LinkRelocationTarget::PeTlsSection {
+                    identity, offset, ..
+                } => PeImageRelativeTarget::TlsSection { identity, offset },
+                _ => return Err(LinkerError::UnsupportedCoffRelocationTarget),
+            };
+            (
+                LinkRelocationTarget::PeImageRelative(target),
+                addend
+                    .checked_add(relative_bias)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+        } else {
+            (target, addend)
         };
         relocation_storage[index] = LinkRelocation {
             offset: field_offset,
@@ -8457,7 +8563,11 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 LinkRelocationTarget::PeImportAddress { library, target }
                 | LinkRelocationTarget::PeImportMetadata {
                     library, target, ..
-                } => (library, target),
+                }
+                | LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::ImportAddress {
+                    library,
+                    target,
+                }) => (library, target),
                 _ => continue,
             };
             validate_pe_import_library(library)?;
@@ -9758,6 +9868,94 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 )?;
                 continue;
             }
+            if let LinkRelocationTarget::PeImageRelative(target) = relocation.target {
+                let target_rva = match target {
+                    PeImageRelativeTarget::Symbol(symbol)
+                    | PeImageRelativeTarget::LocalSymbol(symbol) => {
+                        let offset = resolve_symbol(inputs, &linked_layouts, symbol)?;
+                        if offset < linked.readonly_offset {
+                            TEXT_RVA
+                                .checked_add(offset)
+                                .ok_or(LinkerError::OffsetOverflow)?
+                        } else {
+                            readonly_rva
+                                .checked_add(offset - linked.readonly_offset)
+                                .ok_or(LinkerError::OffsetOverflow)?
+                        }
+                    }
+                    PeImageRelativeTarget::CoffSection { identity, offset } => {
+                        match resolve_coff_section(inputs, &linked_layouts, identity, offset) {
+                            Ok(target) if target < linked.readonly_offset => TEXT_RVA
+                                .checked_add(target)
+                                .ok_or(LinkerError::OffsetOverflow)?,
+                            Ok(target) => readonly_rva
+                                .checked_add(target - linked.readonly_offset)
+                                .ok_or(LinkerError::OffsetOverflow)?,
+                            Err(LinkerError::UndefinedSymbol) => {
+                                let (index, offset) = writable_section(identity, offset)?;
+                                writable_rva
+                                    .checked_add(writable_offsets[index])
+                                    .and_then(|target| target.checked_add(offset))
+                                    .ok_or(LinkerError::OffsetOverflow)?
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    PeImageRelativeTarget::InputText(offset) => TEXT_RVA
+                        .checked_add(layout.text)
+                        .and_then(|target| target.checked_add(offset))
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                    PeImageRelativeTarget::ReadonlyData(offset) => readonly_rva
+                        .checked_add(
+                            layout
+                                .readonly
+                                .checked_add(offset)
+                                .and_then(|target| target.checked_sub(linked.readonly_offset))
+                                .ok_or(LinkerError::OffsetOverflow)?,
+                        )
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                    PeImageRelativeTarget::WritableSymbol(symbol) => {
+                        let index = writable_index(symbol)?;
+                        writable_rva
+                            .checked_add(writable_offsets[index])
+                            .ok_or(LinkerError::OffsetOverflow)?
+                    }
+                    PeImageRelativeTarget::WritableSection { identity, offset }
+                    | PeImageRelativeTarget::TlsSection { identity, offset } => {
+                        let (index, offset) = writable_section(identity, offset)?;
+                        writable_rva
+                            .checked_add(writable_offsets[index])
+                            .and_then(|target| target.checked_add(offset))
+                            .ok_or(LinkerError::OffsetOverflow)?
+                    }
+                    PeImageRelativeTarget::ImportAddress { library, target } => {
+                        let index = imports[..import_count]
+                            .iter()
+                            .position(|import| *import == Some((library, target)))
+                            .ok_or(LinkerError::UndefinedSymbol)?;
+                        writable_rva
+                            .checked_add(import_address_offsets[index])
+                            .ok_or(LinkerError::OffsetOverflow)?
+                    }
+                };
+                let value = i128::try_from(target_rva)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    .checked_add(i128::from(relocation.addend))
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or(LinkerError::RelocationOverflow)?;
+                let place = layout
+                    .text
+                    .checked_add(relocation.offset)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                patch_u32(
+                    bytes,
+                    HEADERS
+                        .checked_add(place)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                    value,
+                )?;
+                continue;
+            }
             let (writable_index, target_offset) = match relocation.target {
                 LinkRelocationTarget::PeWritableSymbol(symbol) => (writable_index(symbol)?, 0),
                 LinkRelocationTarget::PeWritableSection { identity, offset } => {
@@ -10464,6 +10662,9 @@ fn link_x86_64_static_aligned_into(
                 }
                 LinkRelocationTarget::PeTlsSection { .. }
                 | LinkRelocationTarget::PeWritableSection { .. } => {}
+                LinkRelocationTarget::PeImageRelative(target) => {
+                    validate_pe_image_relative_target(input, target)?;
+                }
                 LinkRelocationTarget::InputText(offset) if offset > input.text.len() => {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
@@ -10550,7 +10751,8 @@ fn link_x86_64_static_aligned_into(
                 | LinkRelocationTarget::PeWritableSection { .. }
                 | LinkRelocationTarget::PeImportAddress { .. }
                 | LinkRelocationTarget::PeImportMetadata { .. }
-                | LinkRelocationTarget::PeTlsSection { .. } => continue,
+                | LinkRelocationTarget::PeTlsSection { .. }
+                | LinkRelocationTarget::PeImageRelative(_) => continue,
                 _ => {}
             }
             let place = layout
@@ -10569,6 +10771,7 @@ fn link_x86_64_static_aligned_into(
                 LinkRelocationTarget::PeImportAddress { .. } => unreachable!(),
                 LinkRelocationTarget::PeImportMetadata { .. } => unreachable!(),
                 LinkRelocationTarget::PeTlsSection { .. } => unreachable!(),
+                LinkRelocationTarget::PeImageRelative(_) => unreachable!(),
                 LinkRelocationTarget::InputText(offset) => layout
                     .text
                     .checked_add(offset)
@@ -13094,7 +13297,7 @@ mod tests {
         wrong_relocation[..object.len()].copy_from_slice(object.bytes());
         let relocation_offset = usize::try_from(read_u32(object.bytes(), 44).unwrap()).unwrap();
         wrong_relocation[relocation_offset + 8..relocation_offset + 10]
-            .copy_from_slice(&3u16.to_le_bytes());
+            .copy_from_slice(&10u16.to_le_bytes());
         let mut relocation_storage = empty_storage;
         assert_eq!(
             decode_x86_64_coff(&wrong_relocation[..object.len()], &mut relocation_storage),
@@ -13141,6 +13344,50 @@ mod tests {
                 i32::try_from(11 - trailing_bytes).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn decodes_and_emits_bounded_coff_text_image_relative_addresses() {
+        let caller_code =
+            MachineCode::<8>::from_bytes_for_test(&[0xb8, 0xfc, 0xff, 0xff, 0xff, 0xc3]);
+        let relocation = X86_64PcRelativeRelocation {
+            offset: 1,
+            symbol: "target",
+            kind: X86_64PcRelativeRelocationKind::Data,
+        };
+        let caller =
+            emit_x86_64_coff_with_relocation::<256, 8>("entry", &caller_code, relocation).unwrap();
+        let relocation_offset = usize::try_from(read_u32(caller.bytes(), 44).unwrap()).unwrap();
+        let mut image_relative = caller.bytes().to_vec();
+        image_relative[relocation_offset + 8..relocation_offset + 10]
+            .copy_from_slice(&3u16.to_le_bytes());
+        let mut caller_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let caller = decode_x86_64_coff(&image_relative, &mut caller_relocations).unwrap();
+        assert_eq!(
+            caller.relocations,
+            &[LinkRelocation {
+                offset: 1,
+                target: LinkRelocationTarget::PeImageRelative(PeImageRelativeTarget::Symbol(
+                    "target"
+                ),),
+                addend: -4,
+            }]
+        );
+
+        let target_code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let target = emit_x86_64_coff::<192, 8>("target", &target_code).unwrap();
+        let mut target_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let target = decode_x86_64_coff(target.bytes(), &mut target_relocations).unwrap();
+        let pe = link_x86_64_pe::<2048, 8192>(&[caller, target], "entry").unwrap();
+        assert_eq!(read_u32(pe.bytes(), 0x201).unwrap(), 0x100c);
     }
 
     #[test]
