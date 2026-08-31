@@ -745,10 +745,28 @@ pub enum PeWritableComdatSelection {
     Any,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PeTlsCallbackOrder(u8);
+
+impl PeTlsCallbackOrder {
+    pub const fn from_suffix(suffix: u8) -> Option<Self> {
+        if suffix >= b'A' && suffix <= b'Z' {
+            Some(Self(suffix))
+        } else {
+            None
+        }
+    }
+
+    pub const fn suffix(self) -> u8 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeDataKind {
     Writable,
     Tls,
+    TlsCallback(PeTlsCallbackOrder),
 }
 
 /// The bounded COFF duplicate-selection policy attached to one text section.
@@ -3465,6 +3483,19 @@ fn coff_is_writable_section(name: &str) -> bool {
         || name.starts_with(".CRT$")
 }
 
+fn coff_tls_callback_order(name: &str) -> Result<Option<PeTlsCallbackOrder>, LinkerError> {
+    let Some(suffix) = name.strip_prefix(".CRT$XL") else {
+        return Ok(None);
+    };
+    let suffix = suffix.as_bytes();
+    if suffix.len() != 1 {
+        return Err(LinkerError::UnsupportedCoffTls);
+    }
+    PeTlsCallbackOrder::from_suffix(suffix[0])
+        .map(Some)
+        .ok_or(LinkerError::UnsupportedCoffTls)
+}
+
 fn coff_is_zeroed_writable_section(name: &str) -> bool {
     name == ".bss" || name.starts_with(".bss$")
 }
@@ -4226,6 +4257,10 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             if characteristics & 0xe000_00e0 != expected {
                 return Err(LinkerError::UnsupportedCoff);
             }
+            let data_kind = match coff_tls_callback_order(name)? {
+                Some(order) => PeDataKind::TlsCallback(order),
+                None => PeDataKind::Writable,
+            };
             if writable_ordinal == fragment_index {
                 let bytes = if zeroed {
                     &object[0..0]
@@ -4244,7 +4279,7 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     usize::from(read_u16(object, header + 32)?),
                     i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?,
                     name,
-                    PeDataKind::Writable,
+                    data_kind,
                 ));
             }
             writable_ordinal = writable_ordinal
@@ -8322,14 +8357,96 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             writable_kept[index] = true;
         }
     }
+    let mut tls_callback_indices = [0usize; MAX_LINK_INPUTS];
+    let mut tls_callback_count = 0usize;
+    let mut tls_callback_start_count = 0usize;
+    let mut tls_callback_end_count = 0usize;
+    for (index, data) in writable_data.iter().enumerate() {
+        let PeDataKind::TlsCallback(order) = data.kind else {
+            continue;
+        };
+        if !writable_kept[index] {
+            continue;
+        }
+        match order.suffix() {
+            b'A' => {
+                tls_callback_start_count = tls_callback_start_count
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            b'Z' => {
+                tls_callback_end_count = tls_callback_end_count
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            _ => {}
+        }
+        let slot = tls_callback_indices
+            .get_mut(tls_callback_count)
+            .ok_or(LinkerError::TooManyInputs)?;
+        *slot = index;
+        tls_callback_count = tls_callback_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if tls_callback_count != 0 && (tls_callback_start_count != 1 || tls_callback_end_count != 1) {
+        return Err(LinkerError::UnsupportedCoffTls);
+    }
+    for index in 1..tls_callback_count {
+        let selected = tls_callback_indices[index];
+        let PeDataKind::TlsCallback(selected_order) = writable_data[selected].kind else {
+            unreachable!();
+        };
+        let mut position = index;
+        while position > 0 {
+            let previous = tls_callback_indices[position - 1];
+            let PeDataKind::TlsCallback(previous_order) = writable_data[previous].kind else {
+                unreachable!();
+            };
+            if previous_order <= selected_order {
+                break;
+            }
+            tls_callback_indices[position] = previous;
+            position -= 1;
+        }
+        tls_callback_indices[position] = selected;
+    }
+    for index in tls_callback_indices[..tls_callback_count].iter().copied() {
+        let data = &writable_data[index];
+        let PeDataKind::TlsCallback(order) = data.kind else {
+            unreachable!();
+        };
+        if data.initialized.len() != 8
+            || data.initialized.iter().any(|byte| *byte != 0)
+            || data.zeroed_size != 0
+        {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+        if matches!(order.suffix(), b'A' | b'Z') {
+            if !data.relocations.is_empty() {
+                return Err(LinkerError::UnsupportedCoffTls);
+            }
+            continue;
+        }
+        let [relocation] = data.relocations else {
+            return Err(LinkerError::UnsupportedCoffTls);
+        };
+        if relocation.offset != 0 {
+            return Err(LinkerError::UnsupportedCoffTls);
+        }
+        resolve_pe_tls_callback_target(inputs, &linked_layouts, relocation.target)?;
+    }
     let has_tls = writable_data
         .iter()
         .enumerate()
         .any(|(index, data)| writable_kept[index] && data.kind == PeDataKind::Tls);
+    if tls_callback_count != 0 && !has_tls {
+        return Err(LinkerError::UnsupportedCoffTls);
+    }
     let tls_directory_offset = align(readonly_size, 8)?;
     if has_tls {
         readonly_size = tls_directory_offset
-            .checked_add(48)
+            .checked_add(if tls_callback_count == 0 { 48 } else { 40 })
             .ok_or(LinkerError::OffsetOverflow)?;
     }
     let mut writable_offsets = [0usize; MAX_LINK_INPUTS];
@@ -8360,7 +8477,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if !writable_kept[index] {
             continue;
         }
-        if data.kind == PeDataKind::Tls {
+        if matches!(data.kind, PeDataKind::Tls | PeDataKind::TlsCallback(_)) {
             continue;
         }
         if data.initialized.is_empty() || data.zeroed_size != 0 {
@@ -8386,6 +8503,19 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
         }
     }
+    let tls_callback_start_offset = if tls_callback_count == 0 {
+        None
+    } else {
+        writable_size = align(writable_size, 8)?;
+        let start = writable_size;
+        for index in tls_callback_indices[..tls_callback_count].iter().copied() {
+            writable_offsets[index] = writable_size;
+            writable_size = writable_size
+                .checked_add(writable_data[index].initialized.len())
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+        Some(start)
+    };
     let tls_offset = align(writable_size, 8)?;
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] || data.kind != PeDataKind::Tls {
@@ -8412,7 +8542,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if !writable_kept[index] {
             continue;
         }
-        if data.kind == PeDataKind::Tls {
+        if matches!(data.kind, PeDataKind::Tls | PeDataKind::TlsCallback(_)) {
             continue;
         }
         if !data.initialized.is_empty() {
@@ -8782,10 +8912,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             .checked_add(writable_rva)
             .and_then(|address| address.checked_add(writable_offsets[index]))
             .ok_or(LinkerError::OffsetOverflow)?;
-        let callbacks_address = IMAGE_BASE
-            .checked_add(readonly_rva)
-            .and_then(|address| address.checked_add(tls_directory_offset + 40))
-            .ok_or(LinkerError::OffsetOverflow)?;
+        let callbacks_address = match tls_callback_start_offset {
+            Some(start) => IMAGE_BASE
+                .checked_add(writable_rva)
+                .and_then(|address| address.checked_add(start))
+                .and_then(|address| address.checked_add(8)),
+            None => IMAGE_BASE
+                .checked_add(readonly_rva)
+                .and_then(|address| address.checked_add(tls_directory_offset + 40)),
+        }
+        .ok_or(LinkerError::OffsetOverflow)?;
         patch_u64(
             bytes,
             directory,
@@ -10018,6 +10154,83 @@ fn resolve_symbol(
     Err(LinkerError::UndefinedSymbol)
 }
 
+fn resolve_pe_tls_callback_target(
+    inputs: &[LinkInput<'_, '_, '_>],
+    layouts: &[InputLayout; MAX_LINK_FRAGMENTS],
+    target: PeWritableRelocationTarget<'_>,
+) -> Result<usize, LinkerError> {
+    match target {
+        PeWritableRelocationTarget::TextSymbol(symbol) => {
+            for (input, layout) in inputs.iter().zip(layouts.iter()) {
+                let Some(definition) = input_definition_target(input, symbol) else {
+                    continue;
+                };
+                let LinkDefinitionTarget::Text(offset) = definition else {
+                    return Err(LinkerError::UnsupportedCoffTls);
+                };
+                if offset >= input.text.len() {
+                    return Err(LinkerError::UnsupportedCoffTls);
+                }
+                return layout
+                    .text
+                    .checked_add(offset)
+                    .ok_or(LinkerError::OffsetOverflow);
+            }
+            Err(LinkerError::UndefinedSymbol)
+        }
+        PeWritableRelocationTarget::CoffSection { identity, offset } => {
+            let mut found = false;
+            let mut resolved = None;
+            for (input, layout) in inputs.iter().zip(layouts.iter()) {
+                let definitions = core::iter::once(input.symbol_target).chain(
+                    input
+                        .additional_definitions
+                        .iter()
+                        .map(|definition| definition.target),
+                );
+                for definition in definitions {
+                    let (candidate, base, is_text) = match definition {
+                        LinkDefinitionTarget::CoffTextSection { identity, offset } => {
+                            (identity, offset, true)
+                        }
+                        LinkDefinitionTarget::CoffSection { identity, offset } => {
+                            (identity, offset, false)
+                        }
+                        _ => continue,
+                    };
+                    if candidate != identity {
+                        continue;
+                    }
+                    if found {
+                        return Err(LinkerError::InvalidRelocationOffset);
+                    }
+                    found = true;
+                    if !is_text {
+                        continue;
+                    }
+                    let final_offset = base
+                        .checked_add(offset)
+                        .ok_or(LinkerError::InvalidRelocationOffset)?;
+                    if final_offset >= input.text.len() {
+                        return Err(LinkerError::UnsupportedCoffTls);
+                    }
+                    resolved = Some(
+                        layout
+                            .text
+                            .checked_add(final_offset)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                    );
+                }
+            }
+            if !found {
+                return Err(LinkerError::UndefinedSymbol);
+            }
+            resolved.ok_or(LinkerError::UnsupportedCoffTls)
+        }
+        _ => Err(LinkerError::UnsupportedCoffTls),
+    }
+}
+
 fn resolve_coff_section(
     inputs: &[LinkInput<'_, '_, '_>],
     layouts: &[InputLayout; MAX_LINK_FRAGMENTS],
@@ -10674,6 +10887,23 @@ mod tests {
         object[193..195].copy_from_slice(&2i16.to_le_bytes());
         object[197] = 2;
         object[199..203].copy_from_slice(&4u32.to_le_bytes());
+        object
+    }
+
+    fn coff_with_tls_callback_data() -> std::vec::Vec<u8> {
+        let original = coff_with_readonly_and_writable_data();
+        let mut object = std::vec![0u8; original.len() + 18];
+        object[..199].copy_from_slice(&original[..199]);
+        object[217..].copy_from_slice(&original[199..]);
+        object[12..16].copy_from_slice(&3u32.to_le_bytes());
+        object[56..60].copy_from_slice(&0x6000_0020u32.to_le_bytes());
+        object[96..100].copy_from_slice(&0x4040_0040u32.to_le_bytes());
+        object[100..108].copy_from_slice(b".CRT$XLC");
+        object[136..140].copy_from_slice(&0xc040_0040u32.to_le_bytes());
+        object[157..161].copy_from_slice(&0u32.to_le_bytes());
+        object[199..205].copy_from_slice(b"__xl_c");
+        object[211..213].copy_from_slice(&3i16.to_le_bytes());
+        object[215] = 2;
         object
     }
 
@@ -13151,6 +13381,64 @@ mod tests {
     }
 
     #[test]
+    fn retains_typed_coff_tls_callback_order_independently_of_symbols() {
+        let order = PeTlsCallbackOrder::from_suffix(b'C').unwrap();
+        assert_eq!(coff_tls_callback_order(".CRT$XLC"), Ok(Some(order)));
+        assert_eq!(
+            coff_tls_callback_order(".CRT$XLA"),
+            Ok(Some(PeTlsCallbackOrder::from_suffix(b'A').unwrap()))
+        );
+        assert_eq!(coff_tls_callback_order(".CRT$XCA"), Ok(None));
+        assert_eq!(
+            coff_tls_callback_order(".CRT$XL"),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            coff_tls_callback_order(".CRT$XLAA"),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            coff_tls_callback_order(".CRT$XLc"),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+
+        let object = coff_with_tls_callback_data();
+        let mut storage = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::Readonly {
+                owner: "unused",
+                offset: 0,
+            },
+        }; MAX_LINK_RELOCATIONS];
+        let callback = decode_x86_64_coff_writable_data_fragment_with_section_identities(
+            &object,
+            0,
+            "entry",
+            31,
+            &mut storage,
+        )
+        .unwrap();
+        assert_eq!(callback.symbol, "__xl_c");
+        assert_eq!(callback.kind, PeDataKind::TlsCallback(order));
+        assert_eq!(
+            callback.identity,
+            Some(CoffSectionIdentity::new(31, 3).unwrap())
+        );
+        assert_eq!(callback.initialized, &[0; 8]);
+        assert_eq!(callback.zeroed_size, 0);
+        assert_eq!(
+            callback.relocations,
+            &[PeWritableRelocation {
+                offset: 0,
+                target: PeWritableRelocationTarget::CoffSection {
+                    identity: CoffSectionIdentity::new(31, 1).unwrap(),
+                    offset: 0,
+                },
+            }]
+        );
+    }
+
+    #[test]
     fn decodes_any_writable_comdat_and_rejects_unsupported_selection() {
         let object = coff_with_any_writable_comdat();
         let mut unsupported = object.clone();
@@ -13522,8 +13810,352 @@ mod tests {
         assert_eq!(read_image_u64(0x410), 0x0000_0001_4000_3008);
         assert_eq!(read_image_u64(0x418), 0x0000_0001_4000_2028);
         assert_eq!(read_image_u64(0x420), 0);
+        assert_eq!(read_image_u64(0x428), 0);
         assert_eq!(read_i32(pe.bytes(), 0x200).unwrap(), 4);
         assert_eq!(&pe.bytes()[0x600..0x608], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn orders_typed_pe_tls_callbacks_and_points_after_the_start_sentinel() {
+        let callback_b = CoffSectionIdentity::new(41, 2).unwrap();
+        let callback_c = CoffSectionIdentity::new(42, 3).unwrap();
+        let callback_d = CoffSectionIdentity::new(42, 4).unwrap();
+        let definitions = [
+            LinkDefinition {
+                symbol: "callback_b",
+                target: LinkDefinitionTarget::CoffTextSection {
+                    identity: callback_b,
+                    offset: 1,
+                },
+            },
+            LinkDefinition {
+                symbol: "callback_c",
+                target: LinkDefinitionTarget::CoffTextSection {
+                    identity: callback_c,
+                    offset: 2,
+                },
+            },
+            LinkDefinition {
+                symbol: "callback_d",
+                target: LinkDefinitionTarget::CoffTextSection {
+                    identity: callback_d,
+                    offset: 3,
+                },
+            },
+        ];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &definitions,
+            text: &[0xc3; 4],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let relocation_b = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity: callback_b,
+                offset: 0,
+            },
+        }];
+        let relocation_b2 = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("entry"),
+        }];
+        let relocation_c = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity: callback_c,
+                offset: 0,
+            },
+        }];
+        let relocation_d = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity: callback_d,
+                offset: 0,
+            },
+        }];
+        let tls_identity = CoffSectionIdentity::new(43, 5).unwrap();
+        let tls_index = PeWritableData {
+            symbol: "_tls_index",
+            identity: None,
+            kind: PeDataKind::Writable,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[],
+            zeroed_size: 4,
+            relocations: &[],
+        };
+        let tls = PeWritableData {
+            symbol: ".tls$fixture",
+            identity: Some(tls_identity),
+            kind: PeDataKind::Tls,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[1, 2, 3, 4, 5, 6, 7, 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let prefix = PeWritableData {
+            symbol: "prefix",
+            identity: None,
+            kind: PeDataKind::Writable,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[9, 8, 7],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let start = PeWritableData {
+            symbol: "sentinel_start",
+            identity: Some(CoffSectionIdentity::new(43, 6).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'A').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let end = PeWritableData {
+            symbol: "sentinel_end",
+            identity: Some(CoffSectionIdentity::new(43, 7).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'Z').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let callback_c_data = PeWritableData {
+            symbol: "beta_rank",
+            identity: Some(CoffSectionIdentity::new(42, 8).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'C').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &relocation_c,
+        };
+        let callback_d_data = PeWritableData {
+            symbol: "gamma_rank",
+            identity: Some(CoffSectionIdentity::new(42, 9).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'D').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &relocation_d,
+        };
+        let callback_b_data = PeWritableData {
+            symbol: "zeta_rank",
+            identity: Some(CoffSectionIdentity::new(41, 10).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'B').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &relocation_b,
+        };
+        let callback_b2_data = PeWritableData {
+            symbol: "alpha_rank",
+            identity: Some(CoffSectionIdentity::new(41, 11).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'B').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &relocation_b2,
+        };
+        let pe = link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+            &[input],
+            "entry",
+            &[],
+            &[
+                tls_index,
+                tls,
+                prefix,
+                start,
+                end,
+                callback_c_data,
+                callback_d_data,
+                callback_b_data,
+                callback_b2_data,
+            ],
+        )
+        .unwrap();
+
+        let read_image_u64 =
+            |offset| u64::from_le_bytes(pe.bytes()[offset..offset + 8].try_into().unwrap());
+        assert_eq!(read_u32(pe.bytes(), 0x150).unwrap(), 0x2000);
+        assert_eq!(read_u32(pe.bytes(), 0x154).unwrap(), 40);
+        assert_eq!(read_image_u64(0x400), 0x0000_0001_4000_3038);
+        assert_eq!(read_image_u64(0x408), 0x0000_0001_4000_3040);
+        assert_eq!(read_image_u64(0x410), 0x0000_0001_4000_3040);
+        assert_eq!(read_image_u64(0x418), 0x0000_0001_4000_3010);
+        assert_eq!(&pe.bytes()[0x600..0x603], &[9, 8, 7]);
+        assert_eq!(read_image_u64(0x608), 0);
+        assert_eq!(read_image_u64(0x610), 0x0000_0001_4000_1001);
+        assert_eq!(read_image_u64(0x618), 0x0000_0001_4000_1000);
+        assert_eq!(read_image_u64(0x620), 0x0000_0001_4000_1002);
+        assert_eq!(read_image_u64(0x628), 0x0000_0001_4000_1003);
+        assert_eq!(read_image_u64(0x630), 0);
+        assert_eq!(&pe.bytes()[0x638..0x640], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn rejects_malformed_typed_pe_tls_callback_tables() {
+        let one_past_text = CoffSectionIdentity::new(53, 1).unwrap();
+        let readonly_definition = [
+            LinkDefinition {
+                symbol: "not_text",
+                target: LinkDefinitionTarget::ReadonlyData(0),
+            },
+            LinkDefinition {
+                symbol: "one_past_text",
+                target: LinkDefinitionTarget::CoffTextSection {
+                    identity: one_past_text,
+                    offset: 0,
+                },
+            },
+        ];
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &readonly_definition,
+            text: &[0xc3; 16],
+            readonly_data: &[42],
+            relocations: &[],
+        };
+        let adjacent_input = LinkInput {
+            symbol: "adjacent",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xcc],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let tls_index = PeWritableData {
+            symbol: "_tls_index",
+            identity: None,
+            kind: PeDataKind::Writable,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[],
+            zeroed_size: 4,
+            relocations: &[],
+        };
+        let tls = PeWritableData {
+            symbol: ".tls$fixture",
+            identity: Some(CoffSectionIdentity::new(51, 2).unwrap()),
+            kind: PeDataKind::Tls,
+            selection: PeWritableComdatSelection::None,
+            initialized: &[1; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let start = PeWritableData {
+            symbol: "start",
+            identity: Some(CoffSectionIdentity::new(51, 3).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'A').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let end = PeWritableData {
+            symbol: "end",
+            identity: Some(CoffSectionIdentity::new(51, 4).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'Z').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let duplicate_start = PeWritableData {
+            symbol: "second_start",
+            identity: Some(CoffSectionIdentity::new(52, 3).unwrap()),
+            ..start
+        };
+        let nonzero_start = PeWritableData {
+            symbol: "nonzero_start",
+            initialized: &[1, 0, 0, 0, 0, 0, 0, 0],
+            ..start
+        };
+        let nontext_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("not_text"),
+        }];
+        let nontext_callback = PeWritableData {
+            symbol: "nontext_callback",
+            identity: Some(CoffSectionIdentity::new(51, 5).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'B').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &nontext_relocation,
+        };
+        let one_past_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::CoffSection {
+                identity: one_past_text,
+                offset: 16,
+            },
+        }];
+        let one_past_callback = PeWritableData {
+            symbol: "one_past_callback",
+            identity: Some(CoffSectionIdentity::new(53, 5).unwrap()),
+            kind: PeDataKind::TlsCallback(PeTlsCallbackOrder::from_suffix(b'B').unwrap()),
+            selection: PeWritableComdatSelection::None,
+            initialized: &[0; 8],
+            zeroed_size: 0,
+            relocations: &one_past_relocation,
+        };
+
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[start, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[tls_index, tls, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[tls_index, tls, start, duplicate_start, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[tls_index, tls, nonzero_start, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[tls_index, tls, start, nontext_callback, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[input, adjacent_input],
+                "entry",
+                &[],
+                &[tls_index, tls, start, one_past_callback, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
     }
 
     #[test]
