@@ -73,6 +73,9 @@ pub struct QuicConnection {
     recovery: QuicRecovery,
     sent: Vector<PendingPacket>,
     epoch: Instant,
+    candidate_peer: Option<SocketAddress>,
+    peer_ack_delay_exponent: u8,
+    peer_max_ack_delay_micros: u64,
 }
 
 struct PendingPacket {
@@ -160,6 +163,31 @@ impl QuicConnection {
         Ok(())
     }
 
+    fn send_path_frame(&mut self, peer: SocketAddress, frame: QuicFrame) -> Result<(), QuicError> {
+        let mut payload = Vector::new();
+        frame.encode(&mut payload)?;
+        let packet = ShortPacket {
+            destination_id: self.peer_id.clone(),
+            packet_number: self.next_packet_number,
+            key_phase: false,
+            payload,
+        }
+        .seal(&self.write_keys)?;
+        if self
+            .socket
+            .send_to(&packet, peer)
+            .map_err(|_| QuicError::Io)?
+            != packet.len()
+        {
+            return Err(QuicError::Io);
+        }
+        self.next_packet_number = self
+            .next_packet_number
+            .checked_add(1)
+            .ok_or(QuicError::Limit)?;
+        Ok(())
+    }
+
     pub fn receive_frames(&mut self) -> Result<Vector<QuicFrame>, QuicError> {
         let mut datagram = [0; 65_527];
         let (amount, peer) = loop {
@@ -176,9 +204,6 @@ impl QuicConnection {
                 }
             }
         };
-        if peer != self.peer {
-            return Err(QuicError::ProtocolViolation);
-        }
         self.state.on_datagram_received(amount)?;
         let packet = ShortPacket::open(
             &datagram[..amount],
@@ -198,20 +223,80 @@ impl QuicConnection {
         let mut acknowledge = false;
         while at < packet.payload.len() {
             let frame = QuicFrame::decode(&packet.payload, &mut at)?;
-            if let QuicFrame::Ack { largest, .. } = frame {
-                if let Some(index) = self
-                    .sent
-                    .iter()
-                    .position(|pending| pending.metadata.number == largest)
-                {
+            if let QuicFrame::Ack {
+                largest,
+                delay,
+                first_range,
+                ref ranges,
+                ..
+            } = frame
+            {
+                let mut intervals = Vector::new();
+                let mut smallest = largest - first_range;
+                intervals
+                    .try_push((smallest, largest))
+                    .map_err(|_| QuicError::Allocation)?;
+                for (gap, range) in ranges {
+                    let range_largest = smallest - gap - 2;
+                    smallest = range_largest - range;
+                    intervals
+                        .try_push((smallest, range_largest))
+                        .map_err(|_| QuicError::Allocation)?;
+                }
+                let mut acknowledged_indexes = Vector::new();
+                for (index, pending) in self.sent.iter().enumerate() {
+                    if intervals
+                        .iter()
+                        .any(|(start, end)| (*start..=*end).contains(&pending.metadata.number))
+                    {
+                        acknowledged_indexes
+                            .try_push(index)
+                            .map_err(|_| QuicError::Allocation)?;
+                    }
+                }
+                for index in acknowledged_indexes.into_iter().rev() {
                     let acknowledged = self.sent.remove(index);
+                    let ack_delay = delay
+                        .checked_shl(self.peer_ack_delay_exponent as u32)
+                        .unwrap_or(u64::MAX)
+                        .min(self.peer_max_ack_delay_micros);
                     self.recovery
-                        .on_ack(acknowledged.metadata, self.now_micros(), 0)?;
+                        .on_ack(acknowledged.metadata, self.now_micros(), ack_delay)?;
                 }
             } else if !matches!(frame, QuicFrame::Padding) {
                 acknowledge = true;
             }
             frames.try_push(frame).map_err(|_| QuicError::Allocation)?;
+        }
+        if peer != self.peer {
+            if self.candidate_peer != Some(peer) {
+                let mut challenge = [0; 8];
+                mrml_runtime::fill_random(&mut challenge).map_err(|_| QuicError::Crypto)?;
+                let frame = self.state.start_path_validation(challenge);
+                self.candidate_peer = Some(peer);
+                self.send_path_frame(peer, frame)?;
+                return Ok(Vector::new());
+            }
+            let response = frames.iter().find_map(|frame| match frame {
+                QuicFrame::PathResponse(value) => Some(*value),
+                _ => None,
+            });
+            self.state
+                .on_path_response(response.ok_or(QuicError::ProtocolViolation)?)?;
+            self.peer = peer;
+            self.candidate_peer = None;
+            while let Some(index) = frames
+                .iter()
+                .position(|frame| matches!(frame, QuicFrame::PathResponse(_)))
+            {
+                frames.remove(index);
+            }
+        }
+        if let Some(challenge) = frames.iter().find_map(|frame| match frame {
+            QuicFrame::PathChallenge(value) => Some(*value),
+            _ => None,
+        }) {
+            self.send_path_frame(peer, QuicFrame::PathResponse(challenge))?;
         }
         if acknowledge {
             let mut acknowledgement = Vector::new();
@@ -219,6 +304,7 @@ impl QuicConnection {
                 largest: packet.packet_number,
                 delay: 0,
                 first_range: 0,
+                ranges: Vector::new(),
             }
             .encode(&mut acknowledgement)?;
             self.send_payload(acknowledgement, false, 0)?;
@@ -243,7 +329,8 @@ impl QuicClientConnection {
             .map_err(|_| QuicError::Io)?;
         let destination_id = random_connection_id()?;
         let source_id = random_connection_id()?;
-        let local_parameters = QuicTransportParameters::default();
+        let mut local_parameters = QuicTransportParameters::default();
+        local_parameters.initial_source_connection_id = source_id.clone();
         let encoded_parameters = local_parameters.encode()?;
         let (mut tls, client_hello) =
             QuicTlsClientHandshake::new(host, &encoded_parameters).map_err(|_| QuicError::Tls)?;
@@ -319,6 +406,11 @@ impl QuicClientConnection {
         let peer_parameters =
             QuicTransportParameters::decode(&application.peer_transport_parameters)?;
         let peer_id = server_id.ok_or(QuicError::ProtocolViolation)?;
+        if peer_parameters.original_destination_connection_id.as_ref() != Some(&destination_id)
+            || peer_parameters.initial_source_connection_id != peer_id
+        {
+            return Err(QuicError::ProtocolViolation);
+        }
         let finished = HandshakePacket {
             destination_id: peer_id.clone(),
             source_id: source_id.clone(),
@@ -342,6 +434,9 @@ impl QuicClientConnection {
             recovery,
             sent: Vector::new(),
             epoch: Instant::now(),
+            candidate_peer: None,
+            peer_ack_delay_exponent: peer_parameters.ack_delay_exponent as u8,
+            peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
         };
         let frames = connection.receive_frames()?;
         if !frames
@@ -425,7 +520,10 @@ impl QuicServerListener {
         let original_destination_id =
             original_destination_id.ok_or(QuicError::ProtocolViolation)?;
         let server_id = random_connection_id()?;
-        let encoded_parameters = self.parameters.encode()?;
+        let mut local_parameters = self.parameters.clone();
+        local_parameters.original_destination_connection_id = Some(original_destination_id.clone());
+        local_parameters.initial_source_connection_id = server_id.clone();
+        let encoded_parameters = local_parameters.encode()?;
         let (mut tls, flight) =
             QuicTlsServerHandshake::accept(&client_hello, &encoded_parameters, config)
                 .map_err(|_| QuicError::Tls)?;
@@ -481,6 +579,11 @@ impl QuicServerListener {
         tls.receive_client_finished(message)
             .map_err(|_| QuicError::Tls)?;
         let peer_parameters = QuicTransportParameters::decode(&flight.peer_transport_parameters)?;
+        if peer_parameters.original_destination_connection_id.is_some()
+            || peer_parameters.initial_source_connection_id != client_id
+        {
+            return Err(QuicError::ProtocolViolation);
+        }
         state = QuicConnectionState::new(QuicRole::Server, &peer_parameters);
         state.validate_address();
         state.activate()?;
@@ -498,6 +601,9 @@ impl QuicServerListener {
             recovery,
             sent: Vector::new(),
             epoch: Instant::now(),
+            candidate_peer: None,
+            peer_ack_delay_exponent: peer_parameters.ack_delay_exponent as u8,
+            peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
         };
         connection.send_frames(&[QuicFrame::HandshakeDone])?;
         Ok(connection)

@@ -25,6 +25,7 @@ pub const TLS_AES_128_GCM_SHA256: u16 = 0x1301;
 pub const X25519_MLKEM768: u16 = 0x11ec;
 const MAX_PLAINTEXT: usize = 1 << 14;
 
+#[cfg(test)]
 pub(crate) fn experimental_feature_enabled(name: &str) -> bool {
     mrml_runtime::environment_variable(name).as_deref() == Some("1")
 }

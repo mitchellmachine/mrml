@@ -194,6 +194,8 @@ impl QuicConnectionState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuicTransportParameters {
+    pub original_destination_connection_id: Option<Vector<u8>>,
+    pub initial_source_connection_id: Vector<u8>,
     pub max_idle_timeout_ms: u64,
     pub max_udp_payload_size: u64,
     pub initial_max_data: u64,
@@ -202,6 +204,8 @@ pub struct QuicTransportParameters {
     pub initial_max_stream_data_uni: u64,
     pub initial_max_streams_bidi: u64,
     pub initial_max_streams_uni: u64,
+    pub ack_delay_exponent: u64,
+    pub max_ack_delay_ms: u64,
     pub active_connection_id_limit: u64,
     pub disable_active_migration: bool,
 }
@@ -209,6 +213,8 @@ pub struct QuicTransportParameters {
 impl Default for QuicTransportParameters {
     fn default() -> Self {
         Self {
+            original_destination_connection_id: None,
+            initial_source_connection_id: Vector::new(),
             max_idle_timeout_ms: 30_000,
             max_udp_payload_size: 1200,
             initial_max_data: 1 << 20,
@@ -217,6 +223,8 @@ impl Default for QuicTransportParameters {
             initial_max_stream_data_uni: 256 << 10,
             initial_max_streams_bidi: 32,
             initial_max_streams_uni: 8,
+            ack_delay_exponent: 3,
+            max_ack_delay_ms: 25,
             active_connection_id_limit: 2,
             disable_active_migration: false,
         }
@@ -226,10 +234,23 @@ impl QuicTransportParameters {
     pub fn encode(&self) -> Result<Vector<u8>, QuicError> {
         if !(1200..=65527).contains(&self.max_udp_payload_size)
             || self.active_connection_id_limit < 2
+            || self.ack_delay_exponent > 20
+            || self.max_ack_delay_ms >= (1 << 14)
+            || self.initial_source_connection_id.len() > 20
+            || self
+                .original_destination_connection_id
+                .as_ref()
+                .is_some_and(|id| id.len() > 20)
         {
             return Err(QuicError::Limit);
         }
         let mut out = Vector::new();
+        if let Some(id) = &self.original_destination_connection_id {
+            put_varint(&mut out, 0)?;
+            put_varint(&mut out, id.len() as u64)?;
+            out.try_extend_from_slice(id)
+                .map_err(|_| QuicError::Allocation)?;
+        }
         for (id, value) in [
             (1, self.max_idle_timeout_ms),
             (3, self.max_udp_payload_size),
@@ -239,6 +260,8 @@ impl QuicTransportParameters {
             (7, self.initial_max_stream_data_uni),
             (8, self.initial_max_streams_bidi),
             (9, self.initial_max_streams_uni),
+            (10, self.ack_delay_exponent),
+            (11, self.max_ack_delay_ms),
             (14, self.active_connection_id_limit),
         ] {
             let mut encoded = Vector::new();
@@ -252,6 +275,10 @@ impl QuicTransportParameters {
             put_varint(&mut out, 12)?;
             put_varint(&mut out, 0)?
         }
+        put_varint(&mut out, 15)?;
+        put_varint(&mut out, self.initial_source_connection_id.len() as u64)?;
+        out.try_extend_from_slice(&self.initial_source_connection_id)
+            .map_err(|_| QuicError::Allocation)?;
         Ok(out)
     }
     pub fn decode(input: &[u8]) -> Result<Self, QuicError> {
@@ -266,6 +293,7 @@ impl QuicTransportParameters {
                 return Err(QuicError::Truncated);
             }
             let bit = match id {
+                0 => Some(10),
                 1 => Some(0),
                 3 => Some(1),
                 4 => Some(2),
@@ -276,6 +304,9 @@ impl QuicTransportParameters {
                 9 => Some(7),
                 12 => Some(8),
                 14 => Some(9),
+                10 => Some(11),
+                11 => Some(12),
+                15 => Some(13),
                 _ => None,
             };
             if let Some(bit) = bit {
@@ -285,6 +316,22 @@ impl QuicTransportParameters {
                 seen |= 1 << bit;
             }
             let mut field_at = at;
+            if matches!(id, 0 | 15) {
+                if n > 20 {
+                    return Err(QuicError::Limit);
+                }
+                let mut connection_id = Vector::new();
+                connection_id
+                    .try_extend_from_slice(&input[at..end])
+                    .map_err(|_| QuicError::Allocation)?;
+                if id == 0 {
+                    result.original_destination_connection_id = Some(connection_id);
+                } else {
+                    result.initial_source_connection_id = connection_id;
+                }
+                at = end;
+                continue;
+            }
             let value = if id == 12 {
                 if n != 0 {
                     return Err(QuicError::InvalidPacket);
@@ -306,6 +353,8 @@ impl QuicTransportParameters {
                 7 => result.initial_max_stream_data_uni = value,
                 8 => result.initial_max_streams_bidi = value,
                 9 => result.initial_max_streams_uni = value,
+                10 => result.ack_delay_exponent = value,
+                11 => result.max_ack_delay_ms = value,
                 12 => result.disable_active_migration = true,
                 14 => result.active_connection_id_limit = value,
                 _ => {}
@@ -314,6 +363,8 @@ impl QuicTransportParameters {
         }
         if !(1200..=65527).contains(&result.max_udp_payload_size)
             || result.active_connection_id_limit < 2
+            || result.ack_delay_exponent > 20
+            || result.max_ack_delay_ms >= (1 << 14)
         {
             return Err(QuicError::Limit);
         }
@@ -451,6 +502,7 @@ pub enum QuicFrame {
         largest: u64,
         delay: u64,
         first_range: u64,
+        ranges: Vector<(u64, u64)>,
     },
     Crypto {
         offset: u64,
@@ -518,12 +570,18 @@ impl QuicFrame {
                 largest,
                 delay,
                 first_range,
+                ranges,
             } => {
                 put_varint(out, 2)?;
                 put_varint(out, *largest)?;
                 put_varint(out, *delay)?;
-                put_varint(out, 0)?;
-                put_varint(out, *first_range)
+                put_varint(out, ranges.len() as u64)?;
+                put_varint(out, *first_range)?;
+                for (gap, range) in ranges {
+                    put_varint(out, *gap)?;
+                    put_varint(out, *range)?;
+                }
+                Ok(())
             }
             Self::Crypto { offset, data } => {
                 put_varint(out, 6)?;
@@ -602,13 +660,32 @@ impl QuicFrame {
             2 => {
                 let largest = take_varint(input, at)?;
                 let delay = take_varint(input, at)?;
-                if take_varint(input, at)? != 0 {
+                let range_count = take_varint(input, at)?;
+                if range_count > 256 {
                     return Err(QuicError::InvalidFrame);
+                }
+                let first_range = take_varint(input, at)?;
+                if first_range > largest {
+                    return Err(QuicError::InvalidFrame);
+                }
+                let mut ranges = Vector::new();
+                let mut smallest = largest - first_range;
+                for _ in 0..range_count {
+                    let gap = take_varint(input, at)?;
+                    let range = take_varint(input, at)?;
+                    smallest = smallest
+                        .checked_sub(gap.checked_add(2).ok_or(QuicError::Limit)?)
+                        .and_then(|value| value.checked_sub(range))
+                        .ok_or(QuicError::InvalidFrame)?;
+                    ranges
+                        .try_push((gap, range))
+                        .map_err(|_| QuicError::Allocation)?;
                 }
                 Ok(Self::Ack {
                     largest,
                     delay,
-                    first_range: take_varint(input, at)?,
+                    first_range,
+                    ranges,
                 })
             }
             6 => {
@@ -1317,6 +1394,12 @@ mod tests {
     fn frames_round_trip_and_reject_truncation() {
         let frames = [
             QuicFrame::Ping,
+            QuicFrame::Ack {
+                largest: 20,
+                delay: 3,
+                first_range: 2,
+                ranges: [(1, 3)].into(),
+            },
             QuicFrame::Crypto {
                 offset: 4,
                 data: [b't', b'l', b's'].into(),
