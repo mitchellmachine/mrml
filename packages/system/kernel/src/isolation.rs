@@ -1332,6 +1332,30 @@ impl NativeComponentServiceCopyReadTransferTeardown {
             backing_released: false,
         }
     }
+    /// Starts component-resource teardown after an external supervisor has
+    /// already retired the exact constructed task and retained its scheduler
+    /// termination owner for delayed dispatch.
+    ///
+    /// # Safety
+    ///
+    /// `retired_context` must come from supervisor-bound retirement of
+    /// `active.construction().task()` in the same runtime. The external
+    /// retirement owner must remain retained until this teardown and exact
+    /// address-space cleanup both complete.
+    pub const unsafe fn from_supervised_retirement(
+        active: NativeComponentServiceCopyReadTransferTask,
+        retired_context: UserContext,
+    ) -> Self {
+        Self {
+            active,
+            termination: None,
+            retired_context: Some(retired_context),
+            authority_revoked: false,
+            mapping_removed: false,
+            dispatch_issued: false,
+            backing_released: false,
+        }
+    }
     pub const fn active(self) -> NativeComponentServiceCopyReadTransferTask {
         self.active
     }

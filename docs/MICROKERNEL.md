@@ -10240,13 +10240,20 @@ target, retains the exact filesystem provider object in the linear launch
 receipt, and publishes that task through the service supervisor's atomic
 register-and-activate transition. Supervisor-capacity failure returns the same
 unpublished receipt for explicit retry; it cannot leave a runnable,
-unsupervised provider. The Linux-host storage suite passes 163 tests and the
-storage service passes a release `MRML_NATIVE` build. Installed boot composition,
-hosted execution, and physical-device execution remain unverified.
+unsupervised provider. The active receipt now also composes with exact
+supervisor retirement: a wrong-current attempt returns the live owner, while a
+successful stop retains the scheduler termination across capability revocation,
+local mapping withdrawal, backing scrub/release, memory-object release, and
+address-space erasure. Every teardown failure returns the progressed owner for
+retry, and only complete cleanup exposes successor dispatch. The Linux-host
+storage suite passes 163 tests, the kernel suite passes 715, and the storage
+service passes a release `MRML_NATIVE` build. Installed boot composition, hosted
+execution, and physical-device execution remain unverified.
 
 Patent review: `NOT_TRIGGERED` — this is conventional preflight validation,
-least-authority construction plumbing, and atomic supervisor publication for
-the existing service launch path. See `docs/patents/REVIEW_LOG.md`.
+least-authority construction plumbing, atomic supervisor publication, and
+ordered teardown for the existing service launch path. See
+`docs/patents/REVIEW_LOG.md`.
 
 Kernel task construction now **PARTIALLY IMPLEMENTS IN SOURCE** tracked
 same-domain attenuation for launch resources. One delegable memory root can be
