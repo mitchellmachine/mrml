@@ -15090,6 +15090,16 @@ mod tests {
             zeroed_size: 0,
             relocations: &one_past_relocation,
         };
+        let one_past_symbol_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("one_past_symbol"),
+        }];
+        let one_past_symbol_callback = PeWritableData {
+            symbol: "one_past_symbol_callback",
+            identity: Some(CoffSectionIdentity::new(53, 6).unwrap()),
+            relocations: &one_past_symbol_relocation,
+            ..one_past_callback
+        };
 
         assert_eq!(
             link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
@@ -15168,6 +15178,23 @@ mod tests {
                 "entry",
                 &[],
                 &[tls_index, tls, start, one_past_callback, end],
+            ),
+            Err(LinkerError::UnsupportedCoffTls)
+        );
+        let one_past_symbol_definition = [LinkDefinition {
+            symbol: "one_past_symbol",
+            target: LinkDefinitionTarget::Text(16),
+        }];
+        let symbol_input = LinkInput {
+            additional_definitions: &one_past_symbol_definition,
+            ..input
+        };
+        assert_eq!(
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                &[symbol_input, adjacent_input],
+                "entry",
+                &[],
+                &[tls_index, tls, start, one_past_symbol_callback, end],
             ),
             Err(LinkerError::UnsupportedCoffTls)
         );
