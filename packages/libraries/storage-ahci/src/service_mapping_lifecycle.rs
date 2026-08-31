@@ -380,16 +380,43 @@ mod tests {
     };
     use mrml_kernel::arch::x86_64::{
         InactivePageTableMappingBackend, InactivePageTableMappingError, Mapping, PagePermissions,
-        PageTableBuildError, PageTableBuilder, PageTableStore, UserContext,
+        PageTableBuildError, PageTableBuilder, PageTableStore, USER_CODE_SELECTOR,
+        USER_DATA_SELECTOR, UserContext,
     };
     use mrml_kernel::{
         Capability, DeviceServiceLaunchAttachment, IsolationPlacement, IsolationServiceSpec,
         MemoryBackingBackendRequest, MemoryBackingKind, MemoryObjectBackingBackend, MemoryObjectId,
         MemoryPhysicalBacking, MemoryPoolId, MemoryPoolTable, ObjectId, PAGE_SIZE, PhysAddr,
-        Priority, Rights, TaskRuntime, TotalMicrovmClass, prepare_native_device_service_task,
+        Priority, Rights, TaskRuntime, TotalMicrovmClass, UserCallDecodeError, UserCallFrame,
+        UserReturnError, prepare_native_device_service_task,
     };
 
     const TABLE_BASE: u64 = 0x60_0000;
+
+    fn user_call_frame(operation: u64) -> UserCallFrame {
+        UserCallFrame {
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            r11: 0,
+            r10: 0,
+            r9: 0,
+            r8: 0,
+            rdi: 0,
+            rsi: 0,
+            rbp: 0,
+            rbx: 0,
+            rdx: 0,
+            rcx: 0,
+            rax: operation,
+            rip: 0x40_1000,
+            cs: u64::from(USER_CODE_SELECTOR),
+            rflags: 0x202,
+            rsp: 0x7000_0000,
+            ss: u64::from(USER_DATA_SELECTOR),
+        }
+    }
 
     #[derive(Default)]
     struct WriteFault {
@@ -1657,12 +1684,17 @@ mod tests {
             fixture.runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target_task
         ));
+        let mut hostile_frame = user_call_frame(3);
+        hostile_frame.cs = 0;
+        assert!(matches!(
+            exit_slot.route_frame(&hostile_frame, &supervisor, &mut fixture.runtime),
+            Err(crate::KernelAhciServiceExitDispatchError::Decode(
+                UserCallDecodeError::Return(UserReturnError::InvalidPrivilege)
+            ))
+        ));
+        assert!(exit_slot.occupied());
         let frozen = exit_slot
-            .route_decoded(
-                mrml_kernel::SyscallRequest::Exit,
-                &supervisor,
-                &mut fixture.runtime,
-            )
+            .route_frame(&user_call_frame(3), &supervisor, &mut fixture.runtime)
             .unwrap_or_else(|failure| {
                 let _ = failure;
                 panic!("exact active owner and lease must freeze")

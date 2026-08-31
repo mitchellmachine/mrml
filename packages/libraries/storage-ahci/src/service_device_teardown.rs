@@ -15,6 +15,7 @@ use mrml_kernel::{
     SupervisedNativeDeviceServiceDispatch, SupervisedNativeDeviceServiceFreeze,
     SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError,
     SyscallRequest, TaskId, TaskRuntime, TaskTerminationDispatch, TaskTerminationDispatchError,
+    UserCallDecodeError, UserCallFrame,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -590,6 +591,7 @@ pub enum KernelAhciServiceExitSlotRouteError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelAhciServiceExitDispatchError {
+    Decode(UserCallDecodeError),
     Unmanaged { request: SyscallRequest },
     NoCurrentTask,
     Route(KernelAhciServiceExitSlotRouteError),
@@ -599,7 +601,7 @@ impl KernelAhciServiceExitDispatchError {
     pub const fn unmanaged_request(self) -> Option<SyscallRequest> {
         match self {
             Self::Unmanaged { request } => Some(request),
-            Self::NoCurrentTask | Self::Route(_) => None,
+            Self::Decode(_) | Self::NoCurrentTask | Self::Route(_) => None,
         }
     }
 }
@@ -842,6 +844,34 @@ impl<
         }
         self.route(exit, supervisor, runtime)
             .map_err(KernelAhciServiceExitDispatchError::Route)
+    }
+
+    /// Validates and decodes the canonical x86 user-call frame before applying
+    /// the same exact-task dispatch gate as `route_decoded`. Hostile return
+    /// state or request words cannot consume the installed manager owners.
+    pub fn route_frame<const SERVICES: usize>(
+        &mut self,
+        frame: &UserCallFrame,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<
+        FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        KernelAhciServiceExitDispatchError,
+    > {
+        let request = frame
+            .decode_request()
+            .map_err(KernelAhciServiceExitDispatchError::Decode)?;
+        self.route_decoded(request, supervisor, runtime)
     }
 }
 
