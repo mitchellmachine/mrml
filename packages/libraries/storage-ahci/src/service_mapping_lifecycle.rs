@@ -1429,6 +1429,7 @@ mod tests {
             )
         }
         .unwrap_or_else(|failure| panic!("exact activation must succeed: {:?}", failure.error()));
+        let service_id = active.service();
         assert_eq!(active.task(), target_task);
         assert_eq!(active.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(active.target(), target);
@@ -1512,6 +1513,35 @@ mod tests {
         assert_eq!(quiesced.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(dma_backend.removals, 1);
         assert_eq!(calls.get(), 2);
+        // SAFETY: the controlled register/data/DMA models above truthfully
+        // completed quiescence and retain the exact frozen owner.
+        let retired = unsafe {
+            crate::retire_quiesced_kernel_ahci_service_task(
+                quiesced,
+                &mut supervisor,
+                &mut fixture.runtime,
+            )
+        }
+        .unwrap_or_else(|_| panic!("exact concrete frozen task must retire"));
+        assert_eq!(retired.service(), service_id);
+        assert_eq!(retired.task(), target_task);
+        assert_eq!(retired.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(supervisor.task(service_id), Ok(None));
+        assert_eq!(
+            supervisor.state(service_id),
+            Ok(mrml_kernel::ServiceState::Exited)
+        );
+        assert!(supervisor.pending_cleanup(service_id).unwrap().is_some());
+        assert_eq!(fixture.runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
+        // SAFETY: the inactive-page-table model exact-matches all five leaves;
+        // each successful write is its modeled translation-withdrawal proof.
+        let removed = unsafe { crate::remove_retired_kernel_ahci_service_mappings(retired) }
+            .unwrap_or_else(|_| panic!("retired concrete mappings must withdraw"));
+        assert_eq!(removed.service(), service_id);
+        assert_eq!(removed.task(), target_task);
+        assert_eq!(removed.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert!(removed.mappings_complete());
+        assert_eq!(fixture.runtime.start(), mrml_kernel::ScheduleOutcome::Idle);
     }
 
     #[test]

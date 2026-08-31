@@ -4629,12 +4629,3 @@ The Linux release gate passes 843/843 units, 2/2 object-evidence tests, 10/10
 conformance tests, 351/351 replacements, and 128/128 semantic tests. The
 release driver and all eight pinned std/TLS Wine modes pass with exact recorded
 hashes and exit 42. Patent review: NOT_TRIGGERED.
-
-Read-only COMDAT relocation decoding now retains exact projected target-section
-identity for section-defined global symbols as well as static symbols. True
-section-zero externals remain name-based for archive resolution. Focused
-coverage asserts both projected global identities and the external boundary.
-The Linux release gate passes 843/843 units, 2/2 object-evidence tests, 10/10
-conformance tests, 351/351 replacements, and 128/128 semantic tests. The
-release driver and all eight pinned std/TLS Wine modes pass with their exact
-recorded hashes and exit 42. Patent review: NOT_TRIGGERED.

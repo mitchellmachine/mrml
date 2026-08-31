@@ -1320,6 +1320,359 @@ pub fn resume_frozen_kernel_ahci_service_quiescence<
     Ok(QuiescedKernelAhciServiceTask { frozen })
 }
 
+pub struct RetiredKernelAhciServiceTask<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    owner: crate::KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> RetiredKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn service(&self) -> ServiceId {
+        self.retirement.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.owner.task()
+    }
+
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.owner.root()
+    }
+}
+
+pub struct KernelAhciServiceTaskRetirementError<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    error: SupervisedNativeDeviceServiceRetirementError,
+    owner: QuiescedKernelAhciServiceTask<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciServiceTaskRetirementError<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> SupervisedNativeDeviceServiceRetirementError {
+        self.error
+    }
+
+    pub fn into_owner(
+        self,
+    ) -> QuiescedKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+    {
+        self.owner
+    }
+}
+
+/// Retires the exact frozen concrete service only after all device views are
+/// gone and DMA has been withdrawn. The page-table/resource owner remains
+/// paired with the supervisor retirement and successor dispatch stays blocked.
+///
+/// # Safety
+///
+/// The backends which created `owner` must truthfully have enforced device
+/// quiescence, data sanitization, and DMA withdrawal.
+pub unsafe fn retire_quiesced_kernel_ahci_service_task<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+    const SERVICES: usize,
+>(
+    owner: QuiescedKernelAhciServiceTask<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+) -> Result<
+    RetiredKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    KernelAhciServiceTaskRetirementError<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let QuiescedKernelAhciServiceTask { frozen } = owner;
+    let (mapping_owner, lifecycle) = frozen.into_parts();
+    // SAFETY: the caller supplies the device/DMA truthfulness proof while the
+    // consuming lifecycle token proves the exact task remains frozen.
+    match unsafe { supervisor.retire_frozen_native_device_service(lifecycle, runtime) } {
+        Ok(retirement) => Ok(RetiredKernelAhciServiceTask {
+            owner: mapping_owner,
+            retirement,
+        }),
+        Err(error) => {
+            let retirement_error = error.error();
+            Err(KernelAhciServiceTaskRetirementError {
+                error: retirement_error,
+                owner: QuiescedKernelAhciServiceTask {
+                    frozen: crate::FrozenKernelAhciMappingSetOwner::from_parts(
+                        mapping_owner,
+                        error.into_frozen(),
+                    ),
+                },
+            })
+        }
+    }
+}
+
+pub struct RetiredKernelAhciServiceMappingsRemoved<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    owner: crate::KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    RetiredKernelAhciServiceMappingsRemoved<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn service(&self) -> ServiceId {
+        self.retirement.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.owner.task()
+    }
+
+    pub const fn root(&self) -> mrml_kernel::PhysAddr {
+        self.owner.root()
+    }
+
+    pub fn mappings_complete(&self) -> bool {
+        self.owner.abar_mapping().is_none() && self.owner.cpu_mappings().complete()
+    }
+}
+
+pub struct KernelAhciRetiredMappingRemovalError<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> {
+    failure: crate::KernelAhciPreactivationMappingSetRollbackFailure<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    retirement: SupervisedNativeDeviceServiceRetirement<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciRetiredMappingRemovalError<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> crate::KernelAhciPreactivationMappingSetError {
+        self.failure.error()
+    }
+
+    pub fn into_owner(
+        self,
+    ) -> RetiredKernelAhciServiceTask<'resources, S, P, O, MM, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+    {
+        RetiredKernelAhciServiceTask {
+            owner: self.failure.into_owner(),
+            retirement: self.retirement,
+        }
+    }
+}
+
+/// Removes the four CPU/DMA leaves and then the ABAR from the exact retired
+/// hierarchy. Success retains the empty concrete root through later cleanup.
+///
+/// # Safety
+///
+/// The concrete backend must truthfully remove each mapping and complete every
+/// required SMP translation invalidation. Successor dispatch must remain
+/// withheld through subsequent address-space cleanup.
+pub unsafe fn remove_retired_kernel_ahci_service_mappings<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const MM: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>(
+    retired: RetiredKernelAhciServiceTask<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+) -> Result<
+    RetiredKernelAhciServiceMappingsRemoved<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    KernelAhciRetiredMappingRemovalError<
+        'resources,
+        S,
+        P,
+        O,
+        MM,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    let RetiredKernelAhciServiceTask { owner, retirement } = retired;
+    // SAFETY: this function preserves the caller's quiescence, invalidation,
+    // and dispatch-withholding proof in the paired retirement owner.
+    match unsafe { owner.withdraw_retired_mappings() } {
+        Ok(owner) => Ok(RetiredKernelAhciServiceMappingsRemoved { owner, retirement }),
+        Err(failure) => Err(KernelAhciRetiredMappingRemovalError {
+            failure,
+            retirement,
+        }),
+    }
+}
+
 impl<L, E, R, M, D> AhciServiceTeardownReacquisitionError<L, E, R, M, D> {
     pub const fn lease_error(&self) -> Option<&E> {
         match self {

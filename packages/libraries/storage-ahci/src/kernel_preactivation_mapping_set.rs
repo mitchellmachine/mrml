@@ -689,6 +689,40 @@ impl<
     pub(crate) const fn abar_mapping(&self) -> Option<AhciAbarMapping> {
         self.owner.abar_mapping()
     }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        KernelAhciPreactivationMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    ) {
+        (self.owner, self.frozen)
+    }
+
+    pub(crate) fn from_parts(
+        owner: KernelAhciPreactivationMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        frozen: SupervisedNativeDeviceServiceFreeze<{ crate::AHCI_SERVICE_AUTHORITY_COUNT }>,
+    ) -> Self {
+        Self { owner, frozen }
+    }
 }
 
 impl<
@@ -1197,10 +1231,57 @@ impl<
             AUTHORITIES,
         >,
     > {
-        let mut owner = self;
+        let owner = self;
         if let Err(error) = owner.validate_bound_state(runtime) {
             return Err(KernelAhciPreactivationMappingSetRollbackFailure { error, owner });
         }
+        owner.withdraw_all_mappings().map(|owner| owner.prepared)
+    }
+
+    /// Withdraws every mapping from an already quiesced and retired concrete
+    /// service hierarchy while retaining its root and memory-resource owner.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the matching consuming supervisor retirement,
+    /// prove device quiescence and complete DMA withdrawal, and keep successor
+    /// dispatch withheld. The retained backend must truthfully perform every
+    /// required SMP translation invalidation before reporting success. The
+    /// returned owner must remain held through exact address-space cleanup.
+    pub unsafe fn withdraw_retired_mappings(
+        self,
+    ) -> Result<
+        Self,
+        KernelAhciPreactivationMappingSetRollbackFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        self.withdraw_all_mappings()
+    }
+
+    fn withdraw_all_mappings(
+        self,
+    ) -> Result<
+        Self,
+        KernelAhciPreactivationMappingSetRollbackFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        let mut owner = self;
         if owner.adapter.backend().is_poisoned() {
             return Err(KernelAhciPreactivationMappingSetRollbackFailure {
                 error: KernelAhciPreactivationMappingSetError::Poisoned,
@@ -1239,7 +1320,7 @@ impl<
                 }
             }
         }
-        Ok(owner.prepared)
+        Ok(owner)
     }
 
     /// Permanently excludes this owner's exact construction generation from

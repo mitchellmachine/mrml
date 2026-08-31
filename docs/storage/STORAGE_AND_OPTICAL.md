@@ -1607,19 +1607,25 @@ returned mapping/port/data identity is independently exact-matched, the device
 is stopped, data is sanitized, DMA is withdrawn, and all borrowed views are
 destroyed. Retryable acquisition, sanitization, and DMA failures keep that
 exact frozen root; substitution produces a quarantine which also retains it.
-Retirement plus concrete SMP translation and mapping withdrawal is the next
-dependency gate.
+After successful quiescence, the exact supervisor freeze and concrete root now
+advance together into retirement. The retained backend removes all four
+CPU/DMA leaves in reverse order and then the ABAR, with backend success carrying
+the required translation-withdrawal contract; failure retains the retirement
+and incomplete concrete owner. Success keeps the empty page-table/resource
+owner paired with the retirement while successor dispatch remains withheld.
+Exact supervisor address-space cleanup and release of that final concrete owner
+is the next dependency gate.
 
 The focused Linux AHCI suite passes all 147 tests. Coverage includes equal task
 tokens from different runtimes, pre-freeze current-task and supervisor denial
 without reacquisition, retry after lease-reacquisition failure, substituted
 state quarantine, concrete-root retention across acquisition and sanitization
-retry, frozen mutation denial, quiescence retry, and the existing generic
-retirement/unmap/cleanup/dispatch chain. This is typed API, controlled backend,
-and unit-test evidence only. The repository has no production controller-manager
-lease implementation or installed operation-3 routing, and no installed
-CPL3/`INT 0x80`, active page-table/TLB/IOMMU, KVM/WHP, or physical AHCI execution
-was exercised.
+retry, exact concrete retirement and five-leaf withdrawal, frozen mutation
+denial, quiescence retry, and the existing generic cleanup/dispatch chain. This
+is typed API, controlled backend, and unit-test evidence only. The repository
+has no production controller-manager lease implementation or installed
+operation-3 routing, and no installed CPL3/`INT 0x80`, active page-table/TLB or
+IOMMU invalidation, KVM/WHP, or physical AHCI execution was exercised.
 
 Complexity impact: MEDIUM
 TCB impact: LOW
