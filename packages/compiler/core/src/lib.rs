@@ -62,7 +62,7 @@ pub use linker::{
     MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
     MAX_LINK_TOTAL_RELOCATIONS, MAX_PE_BASE_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS,
     MAX_PE_RUNTIME_FUNCTIONS, PeCrtInitializerFamily, PeCrtInitializerOrder, PeDataKind, PeImage,
-    PeReadonlyAbsoluteRelocation, PeReadonlyAbsoluteRelocations, PeRuntimeFunction,
+    PeImportTarget, PeReadonlyAbsoluteRelocation, PeReadonlyAbsoluteRelocations, PeRuntimeFunction,
     PeTlsCallbackOrder, PeTlsSectionOrder, PeWritableComdatSelection, PeWritableData,
     PeWritableRelocation, PeWritableRelocationTarget, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocation,

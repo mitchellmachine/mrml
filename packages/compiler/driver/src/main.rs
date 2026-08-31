@@ -8,6 +8,8 @@ use mrml_error::{Result, anyhow};
 use mrml_runtime::{
     MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
+#[cfg(test)]
+use mrml_rustc::PeImportTarget;
 use mrml_rustc::{
     CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffShortImportKind,
     CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
@@ -2201,16 +2203,10 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                     .relocations
                     .iter()
                     .find_map(|relocation| match relocation.target {
-                        LinkRelocationTarget::PeImportAddress {
-                            library,
-                            symbol,
-                            hint,
+                        LinkRelocationTarget::PeImportAddress { library, target }
+                        | LinkRelocationTarget::PeImportMetadata { library, target } => {
+                            Some((library, target))
                         }
-                        | LinkRelocationTarget::PeImportMetadata {
-                            library,
-                            symbol,
-                            hint,
-                        } => Some((library, symbol, hint)),
                         _ => None,
                     })
             })?
@@ -2234,13 +2230,9 @@ fn contextualize_pe_writable_relocations<'data, 'definitions, 'relocations>(
                             target: LinkRelocationTarget::CoffSection { identity, offset },
                             ..relocation
                         }
-                    } else if let Some((library, import, hint)) = import_target(symbol) {
+                    } else if let Some((library, target)) = import_target(symbol) {
                         LinkRelocation {
-                            target: LinkRelocationTarget::PeImportAddress {
-                                library,
-                                symbol: import,
-                                hint,
-                            },
+                            target: LinkRelocationTarget::PeImportAddress { library, target },
                             ..relocation
                         }
                     } else if !link_target_defined(symbol) && writable_target_defined(symbol) {
@@ -3059,8 +3051,10 @@ mod tests {
             [LinkRelocation {
                 target: LinkRelocationTarget::PeImportMetadata {
                     library: "api-ms-win-core-synch-l1-2-0.dll",
-                    symbol: "WaitOnAddress",
-                    hint: 0,
+                    target: PeImportTarget::Name {
+                        symbol: "WaitOnAddress",
+                        hint: 0,
+                    },
                 },
                 ..
             }]
@@ -3170,8 +3164,10 @@ mod tests {
             offset: 2,
             target: LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
-                symbol: "WaitOnAddress",
-                hint: 0,
+                target: PeImportTarget::Name {
+                    symbol: "WaitOnAddress",
+                    hint: 0,
+                },
             },
             addend: -4,
         }];
@@ -3200,8 +3196,10 @@ mod tests {
             import_contextual[0].relocations[0].target,
             LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
-                symbol: "WaitOnAddress",
-                hint: 0,
+                target: PeImportTarget::Name {
+                    symbol: "WaitOnAddress",
+                    hint: 0,
+                },
             }
         );
 
@@ -3209,8 +3207,10 @@ mod tests {
             offset: 0,
             target: LinkRelocationTarget::PeImportMetadata {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
-                symbol: "DATA",
-                hint: 0,
+                target: PeImportTarget::Name {
+                    symbol: "DATA",
+                    hint: 0,
+                },
             },
             addend: 0,
         }];
@@ -3242,8 +3242,44 @@ mod tests {
             data_import_contextual[0].relocations[0].target,
             LinkRelocationTarget::PeImportAddress {
                 library: "api-ms-win-core-synch-l1-2-0.dll",
-                symbol: "DATA",
-                hint: 0,
+                target: PeImportTarget::Name {
+                    symbol: "DATA",
+                    hint: 0,
+                },
+            }
+        );
+        let ordinal_metadata = [LinkRelocation {
+            target: LinkRelocationTarget::PeImportMetadata {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                target: PeImportTarget::Ordinal(7),
+            },
+            ..data_metadata[0]
+        }];
+        let ordinal_import = LinkInput {
+            symbol: "__imp_ORDINAL",
+            relocations: &ordinal_metadata,
+            ..data_import
+        };
+        let ordinal_alias_relocation = [LinkRelocation {
+            target: LinkRelocationTarget::Symbol("__imp_ORDINAL"),
+            ..data_alias_relocation[0]
+        }];
+        let ordinal_alias_user = LinkInput {
+            relocations: &ordinal_alias_relocation,
+            ..input
+        };
+        let mut ordinal_import_arenas = relocation_arenas(2).unwrap();
+        let ordinal_contextual = contextualize_pe_writable_relocations(
+            &[ordinal_alias_user, ordinal_import],
+            &[],
+            &mut ordinal_import_arenas,
+        )
+        .unwrap();
+        assert_eq!(
+            ordinal_contextual[0].relocations[0].target,
+            LinkRelocationTarget::PeImportAddress {
+                library: "api-ms-win-core-synch-l1-2-0.dll",
+                target: PeImportTarget::Ordinal(7),
             }
         );
 
