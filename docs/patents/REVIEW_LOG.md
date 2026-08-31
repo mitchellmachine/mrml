@@ -11041,3 +11041,21 @@ do not exist.
 Patent review: **TRIGGERED**, disposition **CONDITIONAL_PROCEED** for the exact
 bounded Canadian profile above. This is technical risk screening, not legal
 advice or patent clearance.
+
+### Implementation record
+
+The bounded profile is implemented in
+`packages/libraries/{runtime,tls,http}`. The implementation contains IPv4 UDP
+socket deadlines; QUIC v1 Initial, Handshake, and 1-RTT protection; standard
+TLS 1.3 QUIC secrets and `h3` ALPN; X25519MLKEM768-first negotiation with
+X25519 fallback; mandatory client-side stapled-OCSP checking; transport
+parameters; anti-amplification, flow-control, ACK, NewReno-like recovery,
+bounded retransmission, stream reassembly, and path validation; HTTP/2 with
+static/zero-capacity HPACK; and HTTP/3 with static/zero-capacity QPACK.
+
+The implementation keeps 0-RTT and every mechanism in the excluded list above
+out of scope. Unit and loopback tests are implementation evidence only; no
+external-peer, Windows-native, physical-network, public-release, or commercial
+release evidence is claimed. Patent review remains **TRIGGERED** with
+**CONDITIONAL_PROCEED**, jurisdiction **CA**, confidence **MEDIUM**, and no
+clearance conclusion.

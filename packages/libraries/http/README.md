@@ -1,26 +1,41 @@
 # MRML HTTP library
 
-**Status: PARTIALLY IMPLEMENTED.** The library provides the existing HTTPS/1.1
-client plus bounded, transport-independent HTTP/2 and HTTP/3 client/server
-protocol engines.
+**Status: IMPLEMENTED for the bounded Canadian baseline; not production-ready.**
+The library provides HTTPS/1.1, authenticated HTTP/2 client/server connections,
+and single-path QUIC v1 plus HTTP/3 client/server connections.
 
 `Http2Client` and `Http2Server` encode and decode the HTTP/2 connection preface,
 SETTINGS, HEADERS, DATA, PING, GOAWAY, and WINDOW_UPDATE frame envelopes. Their
-HPACK profile emits and accepts non-Huffman literal fields without dynamic-table
-state. Unsupported HPACK representations fail closed.
+HPACK profile uses the RFC static table, accepts the RFC Huffman code, advertises
+a zero dynamic-table capacity, validates SETTINGS and flow-control fields, and
+enforces continuation sequencing. `Http2ClientConnection` and
+`Http2ServerConnection` require TLS 1.3 `h2` ALPN.
 
 `Http3Client` and `Http3Server` encode and decode HTTP/3 control-stream SETTINGS
-and request-stream HEADERS/DATA frame envelopes. Their QPACK profile uses a zero
-required-insert-count literal field section, avoiding a dynamic table and its
-blocking state. Unsupported QPACK representations fail closed.
+and request-stream HEADERS/DATA frame envelopes. Their QPACK profile uses the
+RFC static table and Huffman code with dynamic capacity and blocked streams set
+to zero. Critical control/QPACK streams, SETTINGS-first ordering, descending
+GOAWAY identifiers, and request-stream frame ordering are checked.
 
-These are protocol-stream APIs, not socket APIs. The repository does not yet
-provide UDP, QUIC, TLS ALPN, QUIC loss recovery, congestion control, connection
-migration, or HTTP/3 datagrams. Consequently this milestone does not claim
-end-to-end interoperability with arbitrary HTTP/2 or HTTP/3 peers. A caller must
-supply the authenticated transport, stream identities, flow control, and
-lifecycle rules appropriate to the protocol. The existing `Client` continues to
-use HTTPS/1.1 over the current TLS/TCP implementation.
+`QuicClientConnection` and `QuicServerListener` bind the protocol to bounded UDP
+I/O. They implement v1 Initial, Handshake, and 1-RTT packet protection; CRYPTO
+and STREAM reassembly; TLS 1.3 `h3` ALPN and transport parameters; the
+anti-amplification limit; ACK processing; NewReno-like congestion accounting;
+bounded timeout retransmission; flow control; server HANDSHAKE_DONE; and
+PATH_CHALLENGE/PATH_RESPONSE validation before accepting a rebound address.
+Initial datagrams are padded to at least 1200 bytes, and the hybrid TLS
+ClientHello is fragmented across CRYPTO frames when needed.
+
+All TLS clients request and require a current issuer-signed stapled OCSP
+response by default, so the policy applies equally to HTTP/1.1, HTTP/2, and
+HTTP/3. Servers can attach the staple through `TlsServerConfig`. Clients and
+servers try X25519MLKEM768 first and retain standard X25519 as the negotiated
+fallback.
+
+The profile deliberately disables 0-RTT and excludes simultaneous multipath,
+packet striping, MASQUE, QUIC-aware proxying, CDN/cross-server migration,
+policy-encoded connection IDs, DATAGRAM retransmission, FEC, alternative
+congestion controllers, bespoke TLS identity extensions, and hardware offload.
 
 The focused Linux test is:
 
@@ -29,9 +44,11 @@ The focused Linux test is:
 ```
 
 Live HTTP/1.1 URL and range tests remain opt-in through their existing
-environment variables. No external HTTP/2 or QUIC peer, Windows-native host, or
-physical network device is exercised by the unit tests.
+environment variables. The focused tests exercise codecs, RFC vectors,
+adversarial bounds, state machines, packet protection, and loopback UDP. They do
+not establish external HTTP/2/HTTP/3 interoperability, Windows-native, physical
+network, Internet-loss, or production evidence.
 
-Patent review: **TRIGGERED** — implementing HTTP/2 HPACK and HTTP/3 QPACK wire
-mechanisms requires the protocol and IETF declaration screening recorded in
+Patent review: **TRIGGERED**, disposition **CONDITIONAL_PROCEED** for the exact
+Canada-only bounded profile recorded in
 [`../../../docs/patents/REVIEW_LOG.md`](../../../docs/patents/REVIEW_LOG.md).
