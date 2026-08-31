@@ -844,6 +844,49 @@ pub struct PeCrtInitializerOrder {
     suffix: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PeProfileDataFamily {
+    Data,
+    Counters,
+    Bitmap,
+    ValueNodes,
+}
+
+impl PeProfileDataFamily {
+    const fn index(self) -> usize {
+        match self {
+            Self::Data => 0,
+            Self::Counters => 1,
+            Self::Bitmap => 2,
+            Self::ValueNodes => 3,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PeProfileDataOrder {
+    family: PeProfileDataFamily,
+    suffix: u8,
+}
+
+impl PeProfileDataOrder {
+    pub const fn new(family: PeProfileDataFamily, suffix: u8) -> Option<Self> {
+        if matches!(suffix, b'A' | b'M' | b'Z') {
+            Some(Self { family, suffix })
+        } else {
+            None
+        }
+    }
+
+    pub const fn family(self) -> PeProfileDataFamily {
+        self.family
+    }
+
+    pub const fn suffix(self) -> u8 {
+        self.suffix
+    }
+}
+
 impl PeCrtInitializerOrder {
     pub const fn new(family: PeCrtInitializerFamily, suffix: u8) -> Option<Self> {
         if suffix >= b'A' && suffix <= b'Z' {
@@ -865,6 +908,7 @@ impl PeCrtInitializerOrder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeDataKind {
     Writable,
+    Profile(PeProfileDataOrder),
     Tls(PeTlsSectionOrder),
     CrtInitializer(PeCrtInitializerOrder),
     TlsCallback(PeTlsCallbackOrder),
@@ -3771,9 +3815,38 @@ pub fn x86_64_coff_writable_section_count(object: &[u8]) -> Result<usize, Linker
 fn coff_is_writable_section(name: &str) -> bool {
     name == ".data"
         || name == ".bss"
+        || name == ".ctors"
+        || coff_profile_writable_order(name).is_some()
         || name.starts_with(".data$")
         || name.starts_with(".bss$")
         || name.starts_with(".CRT$")
+}
+
+fn coff_profile_writable_order(name: &str) -> Option<PeProfileDataOrder> {
+    let (family, suffix) = if let Some(suffix) = name.strip_prefix(".lprfd$") {
+        (PeProfileDataFamily::Data, suffix)
+    } else if let Some(suffix) = name.strip_prefix(".lprfc$") {
+        (PeProfileDataFamily::Counters, suffix)
+    } else if let Some(suffix) = name.strip_prefix(".lprfb$") {
+        (PeProfileDataFamily::Bitmap, suffix)
+    } else if let Some(suffix) = name.strip_prefix(".lprfnd$") {
+        (PeProfileDataFamily::ValueNodes, suffix)
+    } else {
+        return None;
+    };
+    let [suffix] = suffix.as_bytes() else {
+        return None;
+    };
+    PeProfileDataOrder::new(family, *suffix)
+}
+
+fn coff_profile_writable_sentinel_size(name: &str) -> Option<usize> {
+    match name {
+        ".lprfd$A" | ".lprfd$Z" => Some(72),
+        ".lprfc$A" | ".lprfc$Z" | ".lprfb$A" | ".lprfb$Z" => Some(1),
+        ".lprfnd$A" | ".lprfnd$Z" => Some(24),
+        _ => None,
+    }
 }
 
 fn coff_tls_callback_order(name: &str) -> Result<Option<PeTlsCallbackOrder>, LinkerError> {
@@ -3790,6 +3863,11 @@ fn coff_tls_callback_order(name: &str) -> Result<Option<PeTlsCallbackOrder>, Lin
 }
 
 fn coff_crt_initializer_order(name: &str) -> Result<Option<PeCrtInitializerOrder>, LinkerError> {
+    if name == ".ctors" {
+        return PeCrtInitializerOrder::new(PeCrtInitializerFamily::C, b'U')
+            .map(Some)
+            .ok_or(LinkerError::UnsupportedCoff);
+    }
     let Some(suffix) = name.strip_prefix(".CRT$X") else {
         return Ok(None);
     };
@@ -3835,7 +3913,10 @@ fn coff_is_xdata_section(name: &str) -> bool {
 }
 
 fn coff_is_readonly_data_section(name: &str) -> bool {
-    name == ".rdata" || name.starts_with(".rdata$") || name == ".00cfg"
+    name == ".rdata"
+        || name.starts_with(".rdata$")
+        || name == ".00cfg"
+        || matches!(name, ".lprfn$A" | ".lprfn$Z")
 }
 
 pub fn x86_64_coff_readonly_absolute_relocation_count(object: &[u8]) -> Result<usize, LinkerError> {
@@ -4581,12 +4662,29 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             if characteristics & 0xe000_00e0 != expected {
                 return Err(LinkerError::UnsupportedCoff);
             }
-            let data_kind = match coff_tls_callback_order(name)? {
-                Some(order) => PeDataKind::TlsCallback(order),
-                None => match coff_crt_initializer_order(name)? {
-                    Some(order) => PeDataKind::CrtInitializer(order),
-                    None => PeDataKind::Writable,
-                },
+            if let Some(expected_size) = coff_profile_writable_sentinel_size(name) {
+                let raw = usize::try_from(read_u32(object, header + 20)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let contents = object
+                    .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
+                    .ok_or(LinkerError::InvalidCoff)?;
+                if size != expected_size
+                    || read_u16(object, header + 32)? != 0
+                    || contents.iter().any(|byte| *byte != 0)
+                {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+            }
+            let data_kind = if let Some(order) = coff_profile_writable_order(name) {
+                PeDataKind::Profile(order)
+            } else {
+                match coff_tls_callback_order(name)? {
+                    Some(order) => PeDataKind::TlsCallback(order),
+                    None => match coff_crt_initializer_order(name)? {
+                        Some(order) => PeDataKind::CrtInitializer(order),
+                        None => PeDataKind::Writable,
+                    },
+                }
             };
             if writable_ordinal == fragment_index {
                 let bytes = if zeroed {
@@ -8845,6 +8943,87 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             writable_kept[index] = true;
         }
     }
+    let mut profile_indices = [0usize; MAX_LINK_INPUTS];
+    let mut profile_count = 0usize;
+    let mut profile_start_counts = [0usize; 4];
+    let mut profile_end_counts = [0usize; 4];
+    for (index, data) in writable_data.iter().enumerate() {
+        let PeDataKind::Profile(order) = data.kind else {
+            continue;
+        };
+        if !writable_kept[index] {
+            continue;
+        }
+        let family = order.family().index();
+        match order.suffix() {
+            b'A' => {
+                profile_start_counts[family] = profile_start_counts[family]
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            b'Z' => {
+                profile_end_counts[family] = profile_end_counts[family]
+                    .checked_add(1)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+            _ => {}
+        }
+        let slot = profile_indices
+            .get_mut(profile_count)
+            .ok_or(LinkerError::TooManyInputs)?;
+        *slot = index;
+        profile_count = profile_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    for family in 0..4 {
+        let present = profile_indices[..profile_count]
+            .iter()
+            .copied()
+            .any(|index| {
+                matches!(
+                    writable_data[index].kind,
+                    PeDataKind::Profile(order) if order.family().index() == family
+                )
+            });
+        if present && (profile_start_counts[family] != 1 || profile_end_counts[family] != 1) {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+    }
+    for index in 1..profile_count {
+        let selected = profile_indices[index];
+        let PeDataKind::Profile(selected_order) = writable_data[selected].kind else {
+            unreachable!();
+        };
+        let mut position = index;
+        while position > 0 {
+            let previous = profile_indices[position - 1];
+            let PeDataKind::Profile(previous_order) = writable_data[previous].kind else {
+                unreachable!();
+            };
+            if previous_order <= selected_order {
+                break;
+            }
+            profile_indices[position] = previous;
+            position -= 1;
+        }
+        profile_indices[position] = selected;
+    }
+    for index in profile_indices[..profile_count].iter().copied() {
+        let data = &writable_data[index];
+        let PeDataKind::Profile(order) = data.kind else {
+            unreachable!();
+        };
+        if data.initialized.is_empty() || data.zeroed_size != 0 {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        if matches!(order.suffix(), b'A' | b'Z')
+            && (!data.relocations.is_empty() || data.initialized.iter().any(|byte| *byte != 0))
+        {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+    }
+
     let mut crt_initializer_indices = [0usize; MAX_LINK_INPUTS];
     let mut crt_initializer_count = 0usize;
     let mut crt_initializer_start_counts = [0usize; 3];
@@ -9141,7 +9320,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if data.kind.is_tls()
             || matches!(
                 data.kind,
-                PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+                PeDataKind::Profile(_) | PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
             )
         {
             continue;
@@ -9169,6 +9348,13 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 .filter(|end| *end <= data.initialized.len())
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
         }
+    }
+    for index in profile_indices[..profile_count].iter().copied() {
+        writable_size = align(writable_size, 8)?;
+        writable_offsets[index] = writable_size;
+        writable_size = writable_size
+            .checked_add(writable_data[index].initialized.len())
+            .ok_or(LinkerError::OffsetOverflow)?;
     }
     for index in crt_initializer_indices[..crt_initializer_count]
         .iter()
@@ -9214,7 +9400,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if data.kind.is_tls()
             || matches!(
                 data.kind,
-                PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
+                PeDataKind::Profile(_) | PeDataKind::CrtInitializer(_) | PeDataKind::TlsCallback(_)
             )
         {
             continue;
@@ -15039,6 +15225,14 @@ mod tests {
         let mut base_data = object.clone();
         base_data[100..108].copy_from_slice(b".data\0\0\0");
         assert_eq!(x86_64_coff_writable_section_count(&base_data), Ok(1));
+        assert!(coff_is_writable_section(".ctors"));
+        assert!(!coff_is_writable_section(".ctors$U"));
+        let profile_a = PeProfileDataOrder::new(PeProfileDataFamily::ValueNodes, b'A').unwrap();
+        let profile_m = PeProfileDataOrder::new(PeProfileDataFamily::ValueNodes, b'M').unwrap();
+        assert_eq!(coff_profile_writable_order(".lprfnd$A"), Some(profile_a));
+        assert_eq!(coff_profile_writable_order(".lprfnd$M"), Some(profile_m));
+        assert_eq!(coff_profile_writable_order(".lprfnd$Q"), None);
+        assert_eq!(coff_profile_writable_order(".lprfnd$MM"), None);
         assert!(coff_is_writable_section(".CRT$XLC"));
         assert!(coff_is_tls_section(".tls"));
         assert_eq!(
@@ -15345,6 +15539,9 @@ mod tests {
     fn retains_typed_coff_crt_initializer_order_independently_of_symbols() {
         let order = PeCrtInitializerOrder::new(PeCrtInitializerFamily::I, b'C').unwrap();
         assert_eq!(coff_crt_initializer_order(".CRT$XIC"), Ok(Some(order)));
+        let legacy_order = PeCrtInitializerOrder::new(PeCrtInitializerFamily::C, b'U').unwrap();
+        assert_eq!(coff_crt_initializer_order(".ctors"), Ok(Some(legacy_order)));
+        assert_eq!(coff_crt_initializer_order(".ctors$U"), Ok(None));
         assert_eq!(
             coff_crt_initializer_order(".CRT$XCA"),
             Ok(Some(
@@ -15389,6 +15586,28 @@ mod tests {
         );
         assert_eq!(initializer.initialized, &[0; 8]);
         assert_eq!(initializer.relocations.len(), 1);
+
+        let mut legacy_object = coff_with_tls_callback_data();
+        legacy_object[100..108].copy_from_slice(b".ctors\0\0");
+        let mut legacy_storage = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::Readonly {
+                owner: "unused",
+                offset: 0,
+            },
+        }; MAX_LINK_RELOCATIONS];
+        let legacy_initializer = decode_x86_64_coff_writable_data_fragment_with_section_identities(
+            &legacy_object,
+            0,
+            "entry",
+            32,
+            &mut legacy_storage,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy_initializer.kind,
+            PeDataKind::CrtInitializer(legacy_order)
+        );
     }
 
     #[test]
@@ -16088,6 +16307,54 @@ mod tests {
             ),
             Err(LinkerError::UnsupportedCoff)
         );
+    }
+
+    #[test]
+    fn orders_bounded_pe_profile_value_node_sections() {
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let profile = |symbol, suffix, initialized| PeWritableData {
+            symbol,
+            identity: None,
+            kind: PeDataKind::Profile(
+                PeProfileDataOrder::new(PeProfileDataFamily::ValueNodes, suffix).unwrap(),
+            ),
+            selection: PeWritableComdatSelection::None,
+            initialized,
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let writable = [
+            profile("vnodes_end", b'Z', &[0; 24]),
+            PeWritableData {
+                symbol: "prefix",
+                identity: None,
+                kind: PeDataKind::Writable,
+                selection: PeWritableComdatSelection::None,
+                initialized: &[9],
+                zeroed_size: 0,
+                relocations: &[],
+            },
+            profile("vnodes", b'M', &[0x4d; 16]),
+            profile("vnodes_start", b'A', &[0; 24]),
+        ];
+        let pe =
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], &writable)
+                .unwrap();
+        let writable_raw = usize::try_from(read_u32(pe.bytes(), 0x1b0 + 20).unwrap()).unwrap();
+        assert_eq!(pe.bytes()[writable_raw], 9);
+        assert_eq!(&pe.bytes()[writable_raw + 8..writable_raw + 32], &[0; 24]);
+        assert_eq!(
+            &pe.bytes()[writable_raw + 32..writable_raw + 48],
+            &[0x4d; 16]
+        );
+        assert_eq!(&pe.bytes()[writable_raw + 48..writable_raw + 72], &[0; 24]);
     }
 
     #[test]
