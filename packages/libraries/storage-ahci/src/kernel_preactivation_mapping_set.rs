@@ -16,8 +16,8 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, MemoryPoolTable,
-    NativeDeviceServiceActivationError, ObjectId, PAGE_SIZE, PhysAddr, TaskId, TaskRuntime,
-    TaskRuntimeError,
+    NativeDeviceServiceActivationError, ObjectId, PAGE_SIZE, PhysAddr, RestartPolicy, ServiceError,
+    ServiceId, ServiceSupervisor, SupervisedServiceTask, TaskId, TaskRuntime, TaskRuntimeError,
 };
 
 type CpuOperationError = KernelAhciServiceCpuMappingOperationError<InactivePageTableMappingError>;
@@ -53,6 +53,12 @@ pub enum KernelAhciPreactivationMappingSetError {
 pub enum KernelAhciPreactivationMappingSetQuarantineError {
     WrongRuntime,
     Runtime(TaskRuntimeError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciMappingSetActivationError {
+    Verification(KernelAhciPreactivationMappingSetError),
+    Service(ServiceError),
 }
 
 /// The outcome of a failed complete-set installation. A clean failure returns
@@ -265,6 +271,59 @@ pub struct KernelAhciQuarantinedMappingSetOwner<
     >,
 }
 
+/// Retains the exact active task binding, page-table hierarchy, and all five
+/// launch-bound mapping/resource records after scheduler publication.
+#[must_use = "dropping this owner does not retire the active service or its mappings"]
+pub struct ActiveKernelAhciMappingSetOwner<
+    'resources,
+    S,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> where
+    S: PageTableStore,
+{
+    owner: KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    binding: SupervisedServiceTask,
+}
+
+pub struct KernelAhciMappingSetActivationFailure<
+    'resources,
+    S,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> where
+    S: PageTableStore,
+{
+    error: KernelAhciMappingSetActivationError,
+    owner: KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
 pub struct KernelAhciPreactivationMappingSetQuarantineFailure<
     'resources,
     S,
@@ -433,6 +492,98 @@ impl<
 
     pub fn page_tables_poisoned(&self) -> bool {
         self.owner.page_tables_poisoned()
+    }
+
+    pub fn into_owner(
+        self,
+    ) -> KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        self.owner
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> ActiveKernelAhciMappingSetOwner<'resources, S, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>
+{
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.binding.task()
+    }
+
+    pub const fn root(&self) -> PhysAddr {
+        self.owner.root()
+    }
+
+    pub const fn target(&self) -> ObjectId {
+        self.owner.target()
+    }
+
+    pub const fn abar_mapping(&self) -> Option<AhciAbarMapping> {
+        self.owner.abar_mapping()
+    }
+
+    pub const fn cpu_mappings(&self) -> AhciInstalledCpuMappings {
+        self.owner.cpu_mappings()
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciMappingSetActivationFailure<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> KernelAhciMappingSetActivationError {
+        self.error
+    }
+
+    pub fn owner(
+        &self,
+    ) -> &KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        &self.owner
     }
 
     pub fn into_owner(
@@ -781,6 +932,75 @@ impl<
                 .map_err(|_| KernelAhciPreactivationMappingSetError::Verification)?;
         }
         Ok(())
+    }
+
+    /// Revalidates the complete effective five-leaf mapping set and publishes
+    /// its exact task generation to the scheduler and service supervisor as one
+    /// linear ownership transition.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep PAT index 3 UC on every eligible CPU, exclude all
+    /// cacheable aliases of the ABAR for the complete active lifetime, and
+    /// ensure the retained hierarchy is the exact root installed for `task`.
+    /// This transition does not prove SMP TLB withdrawal, IOMMU revocation, or
+    /// active-service teardown; those remain required before later retirement.
+    pub unsafe fn activate<const SERVICES: usize>(
+        self,
+        restart_policy: RestartPolicy,
+        supervisor: &mut ServiceSupervisor<SERVICES>,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<
+        ActiveKernelAhciMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        KernelAhciMappingSetActivationFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        let owner = self;
+        if let Err(error) = owner.verify_exact(runtime) {
+            return Err(KernelAhciMappingSetActivationFailure {
+                error: KernelAhciMappingSetActivationError::Verification(error),
+                owner,
+            });
+        }
+        let task = owner.task();
+        // SAFETY: `owner` retains the exact constructed task, root, launch,
+        // leaves, and resource records revalidated immediately above. The
+        // lifecycle object is taken from that bound launch rather than caller
+        // input, and the supervisor transition is transactional on failure.
+        match unsafe {
+            supervisor.register_and_activate_constructed(
+                owner.target(),
+                task,
+                restart_policy,
+                runtime,
+            )
+        } {
+            Ok(binding) => {
+                debug_assert_eq!(binding.task(), task);
+                Ok(ActiveKernelAhciMappingSetOwner { owner, binding })
+            }
+            Err(error) => Err(KernelAhciMappingSetActivationFailure {
+                error: KernelAhciMappingSetActivationError::Service(error),
+                owner,
+            }),
+        }
     }
 
     /// Withdraws CPU mappings in reverse order, then the ABAR, returning the

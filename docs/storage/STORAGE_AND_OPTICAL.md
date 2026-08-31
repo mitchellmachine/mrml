@@ -1385,16 +1385,21 @@ runtime-bound task identity without borrowing the runtime; a retained poisoned
 owner can therefore consume mutable access to that exact runtime and
 permanently exclude its blocked construction generation while retaining the
 mapping resources. Neither owner can create the existing mapped-task token.
-The Linux AHCI suite passes 146 tests and the Linux kernel suite passes 713.
+The Linux AHCI suite passes 147 tests and the Linux kernel suite passes 713.
 Native-service validation and scheduler activation preparation now reject a
 second live runtime domain with the same saved page-table root, and mapping-set
-verification inherits that check. This is a bounded runtime-local uniqueness
-snapshot, not an activation seal or active mapping owner. The trusted launcher
-must still establish the initial descriptor/device-object correlation; the
-record binds data and grants no authority. Full-lifetime root ownership,
-PAT3=UC and alias exclusion, activation-time effective-leaf revalidation, SMP
-TLB withdrawal, IOMMU binding, installed CPL3, KVM/WHP, and physical evidence
-remain absent.
+verification inherits that check. Its consuming activation transition
+revalidates all five effective leaves and the four memory-resource records
+immediately before transactional supervisor/scheduler publication. Failure
+retains the unchanged concrete owner for retry or quarantine; success retains
+the exact active service/task/root/target and mapping-set owner behind an API
+that exposes no inactive mutation or rollback operation. Controlled tests prove
+a full supervisor leaves construction pending and a later exact activation
+makes only the bound task runnable. The trusted launcher must still establish
+the initial descriptor/device-object correlation; the record binds data and
+grants no authority. Full-lifetime PAT3=UC and cacheable-alias proof, active
+freeze/quiescence and mapping withdrawal, SMP TLB withdrawal, IOMMU binding,
+installed CPL3, KVM/WHP, and physical evidence remain absent.
 
 Complexity impact: MEDIUM
 TCB impact: LOW

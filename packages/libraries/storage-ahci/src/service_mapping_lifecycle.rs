@@ -1370,6 +1370,76 @@ mod tests {
     }
 
     #[test]
+    fn kernel_mapping_set_activation_revalidates_and_retains_exact_root() {
+        let mut fixture = resource_fixture();
+        let prepared = fixture.prepared;
+        let target_task = prepared.task().task();
+        let target = prepared.launch().spec().service().domain();
+        let fault = WriteFault::default();
+        let mut tables = inactive_abar_tables(TABLE_BASE, target, &fault);
+        // SAFETY: this controlled model keeps the hierarchy unreachable until
+        // activation, models PAT3 as UC with no aliases, and retains every
+        // resource owner through the returned active owner.
+        let owner = unsafe {
+            crate::KernelAhciPreactivationMappingSetOwner::install(
+                prepared,
+                descriptor(),
+                fixture.abar_mapping_capability,
+                fixture.abar_control_capability,
+                fixture.mapping_capabilities,
+                &fixture.authorities,
+                &fixture.runtime,
+                &mut tables,
+                &mut fixture.memory,
+                fixture.memory_objects,
+                fixture.target_capability,
+            )
+        }
+        .unwrap_or_else(|failure| panic!("mapping set must install: {:?}", failure.error()));
+
+        let mut full = ServiceSupervisor::<0>::new();
+        // SAFETY: the same modeled lifecycle requirements documented above
+        // remain true; this attempt fails transactionally before publication.
+        let failure = unsafe {
+            owner.activate(
+                RestartPolicy::ONCE_IMMEDIATE,
+                &mut full,
+                &mut fixture.runtime,
+            )
+        }
+        .err()
+        .unwrap_or_else(|| panic!("zero-capacity supervisor must reject publication"));
+        assert_eq!(
+            failure.error(),
+            crate::KernelAhciMappingSetActivationError::Service(ServiceError::Full)
+        );
+        assert_eq!(fixture.runtime.construction_pending(target_task), Ok(true));
+        assert_eq!(fixture.runtime.load().runnable(), 1);
+        assert_eq!(failure.owner().root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert!(failure.owner().cpu_mappings().fully_installed());
+
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        // SAFETY: this consumes the retained exact owner under the same modeled
+        // PAT, alias-exclusion, and inactive-root assumptions.
+        let active = unsafe {
+            failure.into_owner().activate(
+                RestartPolicy::ONCE_IMMEDIATE,
+                &mut supervisor,
+                &mut fixture.runtime,
+            )
+        }
+        .unwrap_or_else(|failure| panic!("exact activation must succeed: {:?}", failure.error()));
+        assert_eq!(active.task(), target_task);
+        assert_eq!(active.root(), PhysAddr::new(TABLE_BASE).unwrap());
+        assert_eq!(active.target(), target);
+        assert!(active.abar_mapping().is_some());
+        assert!(active.cpu_mappings().fully_installed());
+        assert_eq!(supervisor.task(active.service()), Ok(Some(target_task)));
+        assert_eq!(fixture.runtime.construction_pending(target_task), Ok(false));
+        assert_eq!(fixture.runtime.load().runnable(), 2);
+    }
+
+    #[test]
     fn kernel_preactivation_mapping_set_rejects_descriptor_target_and_memory_substitution() {
         let mut fixture = resource_fixture();
         let wrong_target = fixture

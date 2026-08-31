@@ -713,8 +713,10 @@ impl<S: PageTableStore> PageTableBuilder<S> {
 /// page-table hierarchy.
 ///
 /// This adapter deliberately performs no TLB invalidation: its hierarchy must
-/// remain unreachable by every CPU while the adapter exists. Activation and
-/// active/SMP retirement require a separate lifecycle boundary.
+/// remain unreachable by every CPU while any adapter operation can occur. A
+/// higher-level activation owner may retain the adapter only after exact final
+/// verification and must make every inactive mutation entry unreachable.
+/// Active/SMP retirement requires a separate lifecycle boundary.
 pub struct InactivePageTableMappingBackend<S> {
     builder: PageTableBuilder<S>,
     target: ObjectId,
@@ -727,12 +729,15 @@ impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
     /// # Safety
     ///
     /// The caller must exclusively own the complete hierarchy and keep its
-    /// root unreachable from every CPU, VM, and resumable context until this
-    /// adapter is consumed. `target` must be the exact address-space object
-    /// represented by that root; it identifies the bound target but does not
-    /// itself grant mapping authority. No concurrent page-table access or
-    /// mutation is permitted. If the adapter reports `Poisoned`, the hierarchy
-    /// must never become reachable.
+    /// root unreachable from every CPU, VM, and resumable context while any
+    /// method on this adapter can be called. A consuming higher-level owner may
+    /// activate the root only after final exact verification if it retains this
+    /// adapter privately and exposes none of its inactive mutation operations.
+    /// `target` must be the exact address-space object represented by that root;
+    /// it identifies the bound target but does not itself grant mapping
+    /// authority. No concurrent page-table access or mutation is permitted. If
+    /// the adapter reports `Poisoned`, the hierarchy must never become
+    /// reachable.
     pub unsafe fn new(builder: PageTableBuilder<S>, target: ObjectId) -> Self {
         Self {
             builder,

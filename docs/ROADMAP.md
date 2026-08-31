@@ -1526,16 +1526,23 @@ runtime-bound task identity without borrowing the runtime, so a poisoned owner
 can consume mutable access to that same runtime and permanently exclude its
 exact blocked construction generation from activation while retaining every
 mapping resource. It cannot produce the existing mapped-task token. The Linux
-AHCI suite passes 146 tests and the Linux kernel suite passes 713. Native task
+AHCI suite passes 147 tests and the Linux kernel suite passes 713. Native task
 validation and the scheduler activation preparation now also reject a second
 live task domain with the same saved page-table root; the mapping-set verifier
 therefore fails before activation when another same-runtime generation collides
-with its CR3. This is an activation-time runtime-local uniqueness snapshot, not
-a retained active-root lease. The trusted launcher must still establish the
-initial PCI-identity/device-object correlation; record bytes describe and bind
-that decision but do not authorize it. Full-lifetime root/PAT/alias ownership,
-effective-leaf revalidation, SMP TLB, IOMMU, installed CPL3, KVM/WHP, and
-physical evidence remain absent.
+with its CR3. The mapping-set owner now has one consuming activation transition
+that revalidates the ABAR and all four CPU leaves plus their retained resource
+records immediately before transactional supervisor/scheduler publication.
+Failure returns the unchanged concrete owner; success returns a non-copy active
+owner retaining the exact service binding, task/root/target, inactive-builder
+storage, and all five mapping records while exposing no inactive mutation or
+rollback operation. A zero-capacity-supervisor test proves failure leaves the
+task construction-pending and retryable before successful exact activation.
+The trusted launcher must still establish the initial PCI-identity/device-object
+correlation; record bytes describe and bind that decision but do not authorize
+it. Full-lifetime PAT3=UC and cacheable-alias proof, active freeze/quiescence and
+mapping withdrawal, SMP TLB, IOMMU, installed CPL3, KVM/WHP, and physical
+evidence remain absent.
 
 Complexity impact: MEDIUM
 TCB impact: LOW
