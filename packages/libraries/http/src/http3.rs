@@ -119,6 +119,143 @@ pub enum Http3FrameKind {
     GoAway,
     Unknown(u64),
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Http3StreamPhase {
+    ExpectHeaders,
+    Body,
+    Trailers,
+    Finished,
+}
+
+pub struct Http3RequestStreamState {
+    phase: Http3StreamPhase,
+}
+impl Http3RequestStreamState {
+    pub const fn new() -> Self {
+        Self {
+            phase: Http3StreamPhase::ExpectHeaders,
+        }
+    }
+    pub fn receive(&mut self, frame: &Http3Frame, finished: bool) -> Result<(), HttpError> {
+        self.phase = match (self.phase, frame.kind) {
+            (Http3StreamPhase::ExpectHeaders, Http3FrameKind::Headers) => Http3StreamPhase::Body,
+            (Http3StreamPhase::Body, Http3FrameKind::Data) => Http3StreamPhase::Body,
+            (Http3StreamPhase::Body, Http3FrameKind::Headers) => Http3StreamPhase::Trailers,
+            (Http3StreamPhase::Trailers, Http3FrameKind::Headers | Http3FrameKind::Data)
+            | (Http3StreamPhase::Finished, _) => return Err(HttpError::InvalidResponse),
+            (_, Http3FrameKind::Settings | Http3FrameKind::GoAway) => {
+                return Err(HttpError::InvalidResponse)
+            }
+            (phase, Http3FrameKind::Unknown(_)) => phase,
+            _ => return Err(HttpError::InvalidResponse),
+        };
+        if finished {
+            if self.phase == Http3StreamPhase::ExpectHeaders {
+                return Err(HttpError::InvalidResponse);
+            }
+            self.phase = Http3StreamPhase::Finished;
+        }
+        Ok(())
+    }
+    pub fn phase(&self) -> Http3StreamPhase {
+        self.phase
+    }
+}
+impl Default for Http3RequestStreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct Http3ConnectionState {
+    control_stream: Option<u64>,
+    encoder_stream: Option<u64>,
+    decoder_stream: Option<u64>,
+    settings_received: bool,
+    goaway: Option<u64>,
+}
+impl Http3ConnectionState {
+    pub const fn new() -> Self {
+        Self {
+            control_stream: None,
+            encoder_stream: None,
+            decoder_stream: None,
+            settings_received: false,
+            goaway: None,
+        }
+    }
+    pub fn open_peer_unidirectional_stream(
+        &mut self,
+        stream_id: u64,
+        stream_type: u64,
+    ) -> Result<(), HttpError> {
+        let slot = match stream_type {
+            0 => &mut self.control_stream,
+            2 => &mut self.encoder_stream,
+            3 => &mut self.decoder_stream,
+            1 => return Err(HttpError::InvalidResponse),
+            _ => return Ok(()),
+        };
+        if slot.replace(stream_id).is_some() {
+            return Err(HttpError::InvalidResponse);
+        }
+        Ok(())
+    }
+    pub fn receive_control_frame(&mut self, frame: &Http3Frame) -> Result<(), HttpError> {
+        if !self.settings_received && frame.kind != Http3FrameKind::Settings {
+            return Err(HttpError::InvalidResponse);
+        }
+        match frame.kind {
+            Http3FrameKind::Settings => {
+                if self.settings_received {
+                    return Err(HttpError::InvalidResponse);
+                }
+                validate_settings(&frame.payload)?;
+                self.settings_received = true;
+            }
+            Http3FrameKind::GoAway => {
+                let mut at = 0;
+                let id = read_varint(&frame.payload, &mut at)?;
+                if at != frame.payload.len() || self.goaway.is_some_and(|previous| id > previous) {
+                    return Err(HttpError::InvalidResponse);
+                }
+                self.goaway = Some(id);
+            }
+            Http3FrameKind::Data | Http3FrameKind::Headers => {
+                return Err(HttpError::InvalidResponse)
+            }
+            Http3FrameKind::Unknown(_) => {}
+        }
+        Ok(())
+    }
+    pub fn settings_received(&self) -> bool {
+        self.settings_received
+    }
+}
+impl Default for Http3ConnectionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn validate_settings(payload: &[u8]) -> Result<(), HttpError> {
+    let mut at = 0;
+    let mut seen = Vector::new();
+    while at < payload.len() {
+        let identifier = read_varint(payload, &mut at)?;
+        let value = read_varint(payload, &mut at)?;
+        if seen.contains(&identifier) || matches!(identifier, 2..=5) {
+            return Err(HttpError::InvalidResponse);
+        }
+        seen.try_push(identifier)
+            .map_err(|_| HttpError::Allocation)?;
+        if matches!(identifier, 1 | 7) && value != 0 {
+            return Err(HttpError::InvalidResponse);
+        }
+    }
+    Ok(())
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Http3Frame {
     pub kind: Http3FrameKind,
@@ -389,6 +526,9 @@ impl Http3Client {
         .map_err(|_| HttpError::Allocation)?;
         Ok(o)
     }
+    pub fn critical_streams(&self) -> Result<[Vector<u8>; 3], HttpError> {
+        Ok([self.control_stream()?, [2].into(), [3].into()])
+    }
     pub fn request(
         &self,
         method: &str,
@@ -521,5 +661,44 @@ mod tests {
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].name, ":path");
         assert_eq!(fields[0].value, "/index.html");
+    }
+    #[test]
+    fn enforces_critical_streams_settings_and_request_order() {
+        let mut connection = Http3ConnectionState::new();
+        connection.open_peer_unidirectional_stream(3, 0).unwrap();
+        assert!(connection.open_peer_unidirectional_stream(7, 0).is_err());
+        assert!(connection
+            .receive_control_frame(&Http3Frame {
+                kind: Http3FrameKind::GoAway,
+                payload: [0].into(),
+            })
+            .is_err());
+        connection
+            .receive_control_frame(&Http3Frame {
+                kind: Http3FrameKind::Settings,
+                payload: [1, 0, 7, 0].into(),
+            })
+            .unwrap();
+        assert!(connection.settings_received());
+        assert!(connection
+            .receive_control_frame(&Http3Frame {
+                kind: Http3FrameKind::Settings,
+                payload: Vector::new(),
+            })
+            .is_err());
+        let headers = Http3Frame {
+            kind: Http3FrameKind::Headers,
+            payload: Vector::new(),
+        };
+        let data = Http3Frame {
+            kind: Http3FrameKind::Data,
+            payload: Vector::new(),
+        };
+        let mut request = Http3RequestStreamState::new();
+        assert!(request.receive(&data, false).is_err());
+        request.receive(&headers, false).unwrap();
+        request.receive(&data, true).unwrap();
+        assert_eq!(request.phase(), Http3StreamPhase::Finished);
+        assert!(request.receive(&data, false).is_err());
     }
 }
