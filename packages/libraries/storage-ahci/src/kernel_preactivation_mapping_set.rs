@@ -17,6 +17,7 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, MemoryPoolTable,
     NativeDeviceServiceActivationError, ObjectId, PAGE_SIZE, PhysAddr, TaskId, TaskRuntime,
+    TaskRuntimeError,
 };
 
 type CpuOperationError = KernelAhciServiceCpuMappingOperationError<InactivePageTableMappingError>;
@@ -47,12 +48,17 @@ pub enum KernelAhciPreactivationMappingSetError {
     Poisoned,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelAhciPreactivationMappingSetQuarantineError {
+    WrongRuntime,
+    Runtime(TaskRuntimeError),
+}
+
 /// The outcome of a failed complete-set installation. A clean failure returns
 /// the prepared task for retry. Every retained outcome keeps the sole page
 /// table and memory-resource owners so callers cannot activate or discard an
 /// uncertain hierarchy.
 pub enum KernelAhciPreactivationMappingSetInstallState<
-    'runtime,
     'resources,
     S,
     const P: usize,
@@ -67,7 +73,6 @@ pub enum KernelAhciPreactivationMappingSetInstallState<
     Clean(PreparedAhciNativeServiceTask),
     Retained(
         KernelAhciPreactivationMappingSetOwner<
-            'runtime,
             'resources,
             S,
             P,
@@ -81,7 +86,6 @@ pub enum KernelAhciPreactivationMappingSetInstallState<
 }
 
 pub struct KernelAhciPreactivationMappingSetInstallFailure<
-    'runtime,
     'resources,
     S,
     const P: usize,
@@ -95,7 +99,6 @@ pub struct KernelAhciPreactivationMappingSetInstallFailure<
 {
     error: KernelAhciPreactivationMappingSetError,
     state: KernelAhciPreactivationMappingSetInstallState<
-        'runtime,
         'resources,
         S,
         P,
@@ -108,7 +111,6 @@ pub struct KernelAhciPreactivationMappingSetInstallFailure<
 }
 
 impl<
-    'runtime,
     'resources,
     S: PageTableStore,
     const P: usize,
@@ -119,7 +121,6 @@ impl<
     const AUTHORITIES: usize,
 >
     KernelAhciPreactivationMappingSetInstallFailure<
-        'runtime,
         'resources,
         S,
         P,
@@ -145,7 +146,6 @@ impl<
         &self,
     ) -> Option<
         &KernelAhciPreactivationMappingSetOwner<
-            'runtime,
             'resources,
             S,
             P,
@@ -167,7 +167,6 @@ impl<
     ) -> (
         KernelAhciPreactivationMappingSetError,
         KernelAhciPreactivationMappingSetInstallState<
-            'runtime,
             'resources,
             S,
             P,
@@ -186,7 +185,6 @@ impl<
 /// inactive x86 hierarchy. This is deliberately not an activation token and
 /// cannot be converted to [`crate::MappedAhciNativeServiceTask`].
 pub struct KernelAhciPreactivationMappingSetOwner<
-    'runtime,
     'resources,
     S,
     const P: usize,
@@ -199,7 +197,6 @@ pub struct KernelAhciPreactivationMappingSetOwner<
     S: PageTableStore,
 {
     prepared: PreparedAhciNativeServiceTask,
-    runtime: &'runtime TaskRuntime<TASKS, TASK_CAPABILITIES>,
     adapter: KernelAhciServiceCpuMappingAdapter<
         'resources,
         InactivePageTableMappingBackend<S>,
@@ -217,7 +214,6 @@ pub struct KernelAhciPreactivationMappingSetOwner<
 }
 
 pub struct KernelAhciPreactivationMappingSetRollbackFailure<
-    'runtime,
     'resources,
     S,
     const P: usize,
@@ -231,7 +227,57 @@ pub struct KernelAhciPreactivationMappingSetRollbackFailure<
 {
     error: KernelAhciPreactivationMappingSetError,
     owner: KernelAhciPreactivationMappingSetOwner<
-        'runtime,
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
+/// Retains the complete inactive mapping set after permanently excluding its
+/// exact construction generation from activation.
+pub struct KernelAhciQuarantinedMappingSetOwner<
+    'resources,
+    S,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> where
+    S: PageTableStore,
+{
+    owner: KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+}
+
+pub struct KernelAhciPreactivationMappingSetQuarantineFailure<
+    'resources,
+    S,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+> where
+    S: PageTableStore,
+{
+    error: KernelAhciPreactivationMappingSetQuarantineError,
+    owner: KernelAhciPreactivationMappingSetOwner<
         'resources,
         S,
         P,
@@ -244,7 +290,6 @@ pub struct KernelAhciPreactivationMappingSetRollbackFailure<
 }
 
 impl<
-    'runtime,
     'resources,
     S: PageTableStore,
     const P: usize,
@@ -255,7 +300,6 @@ impl<
     const AUTHORITIES: usize,
 >
     KernelAhciPreactivationMappingSetRollbackFailure<
-        'runtime,
         'resources,
         S,
         P,
@@ -273,7 +317,6 @@ impl<
     pub fn owner(
         &self,
     ) -> &KernelAhciPreactivationMappingSetOwner<
-        'runtime,
         'resources,
         S,
         P,
@@ -289,7 +332,6 @@ impl<
     pub fn into_owner(
         self,
     ) -> KernelAhciPreactivationMappingSetOwner<
-        'runtime,
         'resources,
         S,
         P,
@@ -304,7 +346,111 @@ impl<
 }
 
 impl<
-    'runtime,
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciPreactivationMappingSetQuarantineFailure<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn error(&self) -> KernelAhciPreactivationMappingSetQuarantineError {
+        self.error
+    }
+
+    pub fn owner(
+        &self,
+    ) -> &KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        &self.owner
+    }
+
+    pub fn into_owner(
+        self,
+    ) -> KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        self.owner
+    }
+}
+
+impl<
+    'resources,
+    S: PageTableStore,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+>
+    KernelAhciQuarantinedMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >
+{
+    pub const fn task(&self) -> TaskId {
+        self.owner.task()
+    }
+
+    pub const fn root(&self) -> PhysAddr {
+        self.owner.root()
+    }
+
+    pub fn page_tables_poisoned(&self) -> bool {
+        self.owner.page_tables_poisoned()
+    }
+
+    pub fn into_owner(
+        self,
+    ) -> KernelAhciPreactivationMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    > {
+        self.owner
+    }
+}
+
+impl<
     'resources,
     S: PageTableStore,
     const P: usize,
@@ -315,7 +461,6 @@ impl<
     const AUTHORITIES: usize,
 >
     KernelAhciPreactivationMappingSetOwner<
-        'runtime,
         'resources,
         S,
         P,
@@ -347,7 +492,7 @@ impl<
         abar_control_capability: Capability,
         cpu_mapping_capabilities: [Capability; 4],
         authorities: &'resources CapabilitySpace<AUTHORITIES>,
-        runtime: &'runtime TaskRuntime<TASKS, TASK_CAPABILITIES>,
+        runtime: &TaskRuntime<TASKS, TASK_CAPABILITIES>,
         tables: &'resources mut InactivePageTableMappingBackend<S>,
         memory: &'resources mut MemoryPoolTable<P, O, M>,
         memory_objects: [mrml_kernel::MemoryObjectId; 4],
@@ -355,7 +500,6 @@ impl<
     ) -> Result<
         Self,
         KernelAhciPreactivationMappingSetInstallFailure<
-            'runtime,
             'resources,
             S,
             P,
@@ -461,7 +605,6 @@ impl<
                 Err(error) => {
                     let owner = Self {
                         prepared,
-                        runtime,
                         adapter,
                         authorities,
                         control: abar_control_capability,
@@ -491,7 +634,6 @@ impl<
         ) {
             Ok(cpu) => Ok(Self {
                 prepared,
-                runtime,
                 adapter,
                 authorities,
                 control: abar_control_capability,
@@ -504,7 +646,6 @@ impl<
                 let retained_cpu = error.retained().unwrap_or(cpu_progress);
                 let owner = Self {
                     prepared,
-                    runtime,
                     adapter,
                     authorities,
                     control: abar_control_capability,
@@ -581,8 +722,11 @@ impl<
     /// Verifies all five launch ranges and the four retained memory-resource
     /// records in the same inactive hierarchy without creating an activation
     /// proof.
-    pub fn verify_exact(&self) -> Result<(), KernelAhciPreactivationMappingSetError> {
-        self.validate_bound_state()?;
+    pub fn verify_exact(
+        &self,
+        runtime: &TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<(), KernelAhciPreactivationMappingSetError> {
+        self.validate_bound_state(runtime)?;
         if self.adapter.backend().is_poisoned() {
             return Err(KernelAhciPreactivationMappingSetError::Poisoned);
         }
@@ -635,10 +779,10 @@ impl<
     /// prepared task only after all five mappings and ledger records are gone.
     pub fn rollback(
         self,
+        runtime: &TaskRuntime<TASKS, TASK_CAPABILITIES>,
     ) -> Result<
         PreparedAhciNativeServiceTask,
         KernelAhciPreactivationMappingSetRollbackFailure<
-            'runtime,
             'resources,
             S,
             P,
@@ -650,7 +794,7 @@ impl<
         >,
     > {
         let mut owner = self;
-        if let Err(error) = owner.validate_bound_state() {
+        if let Err(error) = owner.validate_bound_state(runtime) {
             return Err(KernelAhciPreactivationMappingSetRollbackFailure { error, owner });
         }
         if owner.adapter.backend().is_poisoned() {
@@ -694,10 +838,56 @@ impl<
         Ok(owner.prepared)
     }
 
-    fn validate_bound_state(&self) -> Result<(), KernelAhciPreactivationMappingSetError> {
+    /// Permanently excludes this owner's exact construction generation from
+    /// activation while retaining every inactive mapping resource.
+    pub fn quarantine(
+        self,
+        runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<
+        KernelAhciQuarantinedMappingSetOwner<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+        KernelAhciPreactivationMappingSetQuarantineFailure<
+            'resources,
+            S,
+            P,
+            O,
+            M,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    > {
+        let owner = self;
+        if !owner.prepared.task().belongs_to_runtime(runtime) {
+            return Err(KernelAhciPreactivationMappingSetQuarantineFailure {
+                error: KernelAhciPreactivationMappingSetQuarantineError::WrongRuntime,
+                owner,
+            });
+        }
+        if let Err(error) = runtime.quarantine_construction_target(owner.task()) {
+            return Err(KernelAhciPreactivationMappingSetQuarantineFailure {
+                error: KernelAhciPreactivationMappingSetQuarantineError::Runtime(error),
+                owner,
+            });
+        }
+        Ok(KernelAhciQuarantinedMappingSetOwner { owner })
+    }
+
+    fn validate_bound_state(
+        &self,
+        runtime: &TaskRuntime<TASKS, TASK_CAPABILITIES>,
+    ) -> Result<(), KernelAhciPreactivationMappingSetError> {
         self.prepared
             .task()
-            .validate_activation_state(self.runtime)
+            .validate_activation_state(runtime)
             .map_err(KernelAhciPreactivationMappingSetError::Activation)?;
         if self.prepared.task().page_table_root() != self.adapter.backend().root() {
             return Err(KernelAhciPreactivationMappingSetError::WrongRoot);
@@ -710,7 +900,6 @@ impl<
 }
 
 fn clean_install_failure<
-    'runtime,
     'resources,
     S: PageTableStore,
     const P: usize,
@@ -723,7 +912,6 @@ fn clean_install_failure<
     error: KernelAhciPreactivationMappingSetError,
     prepared: PreparedAhciNativeServiceTask,
 ) -> KernelAhciPreactivationMappingSetInstallFailure<
-    'runtime,
     'resources,
     S,
     P,
@@ -740,7 +928,6 @@ fn clean_install_failure<
 }
 
 fn retained_install_failure<
-    'runtime,
     'resources,
     S: PageTableStore,
     const P: usize,
@@ -752,7 +939,6 @@ fn retained_install_failure<
 >(
     error: KernelAhciPreactivationMappingSetError,
     owner: KernelAhciPreactivationMappingSetOwner<
-        'runtime,
         'resources,
         S,
         P,
@@ -763,7 +949,6 @@ fn retained_install_failure<
         AUTHORITIES,
     >,
 ) -> KernelAhciPreactivationMappingSetInstallFailure<
-    'runtime,
     'resources,
     S,
     P,

@@ -1322,8 +1322,8 @@ mod tests {
         assert_eq!(owner.target(), target);
         assert!(owner.abar_mapping().is_some());
         assert!(owner.cpu_mappings().fully_installed());
-        assert_eq!(owner.verify_exact(), Ok(()));
-        let returned = match owner.rollback() {
+        assert_eq!(owner.verify_exact(&fixture.runtime), Ok(()));
+        let returned = match owner.rollback(&fixture.runtime) {
             Ok(returned) => returned,
             Err(_) => panic!("exact preactivation rollback must succeed"),
         };
@@ -1477,9 +1477,26 @@ mod tests {
                 failure.error()
             )
         });
+        let mut substituted_runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let failure = owner
+            .quarantine(&mut substituted_runtime)
+            .err()
+            .unwrap_or_else(|| panic!("runtime substitution must be denied"));
+        assert_eq!(
+            failure.error(),
+            crate::KernelAhciPreactivationMappingSetQuarantineError::WrongRuntime
+        );
+        assert_eq!(failure.owner().task(), fixture.prepared.task().task());
+        assert_eq!(
+            fixture
+                .runtime
+                .construction_quarantined(fixture.prepared.task().task()),
+            Ok(false)
+        );
+        let owner = failure.into_owner();
         fault.fail_next();
         fault.arm(1);
-        let failure = match owner.rollback() {
+        let failure = match owner.rollback(&fixture.runtime) {
             Ok(_) => panic!("uncertain ABAR withdrawal must retain the owner"),
             Err(failure) => failure,
         };
@@ -1488,7 +1505,31 @@ mod tests {
             crate::KernelAhciPreactivationMappingSetError::CpuRemoval(_)
         ));
         assert!(failure.owner().page_tables_poisoned());
-        drop(failure.into_owner());
+        let quarantined = failure
+            .into_owner()
+            .quarantine(&mut fixture.runtime)
+            .unwrap_or_else(|failure| {
+                panic!(
+                    "poisoned owner must quarantine its exact construction generation: {:?}",
+                    failure.error()
+                )
+            });
+        assert_eq!(quarantined.task(), fixture.prepared.task().task());
+        assert!(quarantined.page_tables_poisoned());
+        assert_eq!(
+            fixture
+                .runtime
+                .construction_quarantined(fixture.prepared.task().task()),
+            Ok(true)
+        );
+        assert_eq!(
+            fixture
+                .prepared
+                .task()
+                .validate_activation_state(&fixture.runtime),
+            Err(mrml_kernel::NativeDeviceServiceActivationError::ConstructionQuarantined)
+        );
+        drop(quarantined);
     }
 
     #[test]

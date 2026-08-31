@@ -1516,13 +1516,17 @@ all mapping progress, verifies every leaf and resource record, and withdraws
 CPU mappings in reverse order before ABAR. Tests cover authority,
 ABAR generation/geometry, runtime/root/target and resource substitution,
 exact install/verify/rollback, poison retention after mutation-before-error
-rollback, and the explicit limitation that PCI identity-only descriptor
-changes are not rechecked here. Neither owner intentionally produces the
-existing mapped-task token. The Linux AHCI suite passes 146 tests and the Linux
-kernel suite passes 709. Root uniqueness, descriptor-identity/device-object
+rollback, exact-generation permanent construction quarantine, cross-runtime
+quarantine denial, and the explicit limitation that PCI identity-only
+descriptor changes are not rechecked here. The mapping-set owner retains the
+runtime-bound task identity without borrowing the runtime, so a poisoned owner
+can consume mutable access to that same runtime and permanently exclude its
+exact blocked construction generation from activation while retaining every
+mapping resource. It cannot produce the existing mapped-task token. The Linux
+AHCI suite passes 146 tests and the Linux kernel suite passes 711. Root
+uniqueness, descriptor-identity/device-object
 correlation, PAT/alias lifetime, activation-time effective-leaf revalidation,
-permanent task quarantine or activation exclusion on poison, SMP TLB, IOMMU,
-installed CPL3, KVM/WHP, and physical evidence remain absent.
+SMP TLB, IOMMU, installed CPL3, KVM/WHP, and physical evidence remain absent.
 
 Complexity impact: LOW
 TCB impact: LOW

@@ -9992,15 +9992,21 @@ retained launch, then accepts only the launch-bound prepared task whose
 generation remains construction-pending in the exact borrowed `TaskRuntime`,
 whose saved CR3 root matches the exclusively owned inactive hierarchy, and whose
 service-domain target matches that backend. Its immutable runtime borrow
-prevents safe activation or context mutation while the owner exists. A separate
-non-copy `KernelAhciPreactivationMappingSetOwner` composes that private backend
+prevents safe activation or context mutation while that narrower owner exists.
+A separate non-copy `KernelAhciPreactivationMappingSetOwner` retains the same
+runtime-bound task identity without borrowing the runtime and composes that
+private backend
 with the exact kernel memory-resource adapter and installs/verifies the
 `USER_MMIO_READ_WRITE` ABAR plus all four launch-named ordinary user RW/NX
 CPU mappings in the same inactive hierarchy, retaining reverse-removal progress
 and resource records. Wrong runtime, root, target, ABAR generation/geometry,
 resource identity, or capability fails before publication. Mutation-before-error
 rollback uncertainty retains the owner and poisons the hierarchy. The Linux
-AHCI suite passes 146 tests and the Linux kernel suite passes 709.
+AHCI suite passes 146 tests and the Linux kernel suite passes 711. A retained
+mapping-set owner can now consume mutable access to its exact runtime and apply
+a one-way quarantine to the exact blocked construction generation. Wrong-runtime
+substitution returns the unchanged owner, and the quarantined generation cannot
+pass native-service activation validation.
 
 This is controlled Linux-host, in-memory page-table evidence only. The unsafe
 caller must keep PAT index 3 UC on every CPU that may later execute the task,
@@ -10011,7 +10017,8 @@ neither relation is retained in the launch record. Runtime/root equality does
 not prove uniqueness. These owners deliberately do not implement the public
 generic mapping traits or create `MappedAhciNativeServiceTask`. Dropping them is
 not an activation seal: no later owner yet consumes and revalidates the exact
-root and effective leaves or converts poison into permanent task quarantine.
+root and effective leaves. Permanent construction quarantine excludes a
+poisoned exact task generation but does not prove a hierarchy safe to activate.
 There is no active-root lifetime/removal owner, local or SMP TLB withdrawal,
 IOMMU binding, installed CPL3/INT80 entry, live KVM/WHP run, volatile AHCI
 register access, or physical-device evidence. The mapping record itself remains

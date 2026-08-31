@@ -137,11 +137,13 @@ pub use kernel_abar_page_table::{
     KernelAhciAbarRollbackFailure,
 };
 pub use kernel_preactivation_mapping_set::{
-    KernelAhciPreactivationMappingSetError,
+    KernelAhciPreactivationMappingSetError, KernelAhciPreactivationMappingSetQuarantineError,
+    KernelAhciPreactivationMappingSetQuarantineFailure,
     KernelAhciPreactivationMappingSetInstallFailure,
     KernelAhciPreactivationMappingSetInstallState,
     KernelAhciPreactivationMappingSetOwner,
     KernelAhciPreactivationMappingSetRollbackFailure,
+    KernelAhciQuarantinedMappingSetOwner,
 };
 pub use kernel_service_cpu_mapping::{
     KernelAhciServiceCpuMappingAdapter, KernelAhciServiceCpuMappingAdapterError,

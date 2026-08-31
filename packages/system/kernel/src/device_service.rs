@@ -327,6 +327,7 @@ pub enum NativeDeviceServiceActivationError {
     WrongRuntime,
     Runtime(TaskRuntimeError),
     NotConstructionTarget,
+    ConstructionQuarantined,
     ContextMismatch,
     SourceAuthorityMismatch,
     TargetAuthorityMismatch,
@@ -387,6 +388,12 @@ impl<const N: usize> NativeDeviceServiceTask<N> {
             .map_err(NativeDeviceServiceActivationError::Runtime)?
         {
             return Err(NativeDeviceServiceActivationError::NotConstructionTarget);
+        }
+        if runtime
+            .construction_quarantined(self.task)
+            .map_err(NativeDeviceServiceActivationError::Runtime)?
+        {
+            return Err(NativeDeviceServiceActivationError::ConstructionQuarantined);
         }
         if *runtime
             .context(self.task)
@@ -894,6 +901,33 @@ mod tests {
         assert_eq!(
             task.validate_activation_state(&runtime),
             Err(NativeDeviceServiceActivationError::TargetAuthorityMismatch)
+        );
+    }
+
+    #[test]
+    fn activation_snapshot_rejects_permanently_quarantined_construction() {
+        let (mut runtime, source, target) = runtime();
+        let endpoint = endpoint(&mut runtime, source);
+        let (attachment, _, _) = attachment(&mut runtime, source, [Rights::CONTROL]);
+        let task = prepare_native_device_service_task(
+            &mut runtime,
+            source,
+            target,
+            spec(IsolationPlacement::NativeService),
+            attachment,
+            ObjectId(0xa0),
+            endpoint,
+            source,
+            ObjectId(0xa2),
+        )
+        .unwrap();
+        assert_eq!(task.validate_activation_state(&runtime), Ok(()));
+
+        runtime.quarantine_construction_target(target).unwrap();
+        assert_eq!(runtime.construction_quarantined(target), Ok(true));
+        assert_eq!(
+            task.validate_activation_state(&runtime),
+            Err(NativeDeviceServiceActivationError::ConstructionQuarantined)
         );
     }
 

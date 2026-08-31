@@ -1375,14 +1375,18 @@ per-mapping progress and resource records and withdraws CPU mappings in reverse
 order before ABAR. Tests cover authority, generation/geometry,
 runtime/root/target and resource substitution, exact installation/
 verification/rollback, poison retention after mutation-before-error rollback
-uncertainty, and the explicit limitation that PCI identity-only descriptor
-changes are not rechecked. Neither owner can create the existing mapped-task
-token. The Linux AHCI suite passes 146 tests and the Linux kernel suite passes
-709. This is not an activation seal or active mapping owner. Root uniqueness,
+uncertainty, exact-generation permanent construction quarantine, cross-runtime
+quarantine denial, and the explicit limitation that PCI identity-only
+descriptor changes are not rechecked. The mapping-set owner retains the
+runtime-bound task identity without borrowing the runtime; a retained poisoned
+owner can therefore consume mutable access to that exact runtime and
+permanently exclude its blocked construction generation while retaining the
+mapping resources. Neither owner can create the existing mapped-task token.
+The Linux AHCI suite passes 146 tests and the Linux kernel suite passes 711.
+This is not an activation seal or active mapping owner. Root uniqueness,
 descriptor-identity/device-object correlation, full-lifetime PAT3=UC and alias
-exclusion, activation-time effective-leaf revalidation, permanent task
-quarantine or activation exclusion on poison, SMP TLB withdrawal, IOMMU
-binding, installed CPL3, KVM/WHP, and physical evidence remain absent.
+exclusion, activation-time effective-leaf revalidation, SMP TLB withdrawal,
+IOMMU binding, installed CPL3, KVM/WHP, and physical evidence remain absent.
 
 Complexity impact: LOW
 TCB impact: LOW
@@ -1395,8 +1399,9 @@ Existing-object reuse: HIGH
 
 Patent review: **NOT_TRIGGERED**. Retaining task ownership while invoking the
 existing exact mapping and rollback lifecycle, including conventional exact
-x86-64 task/root/target page-table installation, is standard resource
-composition. See [the patent review log](../patents/REVIEW_LOG.md).
+x86-64 task/root/target page-table installation and one-way fail-closed
+construction quarantine, is standard resource composition. See
+[the patent review log](../patents/REVIEW_LOG.md).
 
 Native device-service construction now has an explicit scheduler publication
 gate **IMPLEMENTED IN SOURCE**. `TaskRuntime` can create a complete but blocked

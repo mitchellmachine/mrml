@@ -43,6 +43,7 @@ pub enum TaskRuntimeError {
     DelegationTableFull,
     ConstructionTargetNotPristine,
     ConstructionPending,
+    ConstructionQuarantined,
     NotConstructionTarget,
     RetirementDispatchPending,
     RuntimeIdentityExhausted,
@@ -352,6 +353,7 @@ struct TaskDomain<const CAPS: usize> {
     inbox_count: u8,
     blocked_receive: Option<BlockedReceiveIdentity>,
     construction_pending: bool,
+    construction_quarantined: bool,
     next_receive_wait_generation: u64,
     peers: [Option<TaskId>; TASK_CONTROL_PEERS],
     peer_deaths: [Option<PeerDeath>; TASK_CONTROL_PEERS],
@@ -829,6 +831,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             inbox_count: 0,
             blocked_receive: None,
             construction_pending,
+            construction_quarantined: false,
             next_receive_wait_generation: 1,
             peers: [None; TASK_CONTROL_PEERS],
             peer_deaths: [None; TASK_CONTROL_PEERS],
@@ -844,6 +847,42 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
+    /// Permanently excludes one exact construction-pending task generation
+    /// from scheduler activation. This is a one-way quarantine for privileged
+    /// construction owners that can no longer prove a safe runnable image.
+    pub fn quarantine_construction_target(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
+        self.ensure_scheduler_mutable()?;
+        let slot = self.domain_slot(task)?;
+        let domain = self.domains[slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if !domain.construction_pending {
+            return Err(TaskRuntimeError::NotConstructionTarget);
+        }
+        if domain.blocked_receive.is_some()
+            || self
+                .scheduler
+                .state(task)
+                .map_err(TaskRuntimeError::Scheduler)?
+                != TaskState::Blocked
+        {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        self.domains[slot]
+            .as_mut()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .construction_quarantined = true;
+        Ok(())
+    }
+
+    pub fn construction_quarantined(&self, task: TaskId) -> Result<bool, TaskRuntimeError> {
+        let slot = self.domain_slot(task)?;
+        self.domains[slot]
+            .as_ref()
+            .map(|domain| domain.construction_quarantined)
+            .ok_or(TaskRuntimeError::IntegrityFailure)
+    }
+
     pub(crate) fn prepare_constructed_task_activation(
         &mut self,
         task: TaskId,
@@ -855,6 +894,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         if !domain.construction_pending {
             return Err(TaskRuntimeError::NotConstructionTarget);
+        }
+        if domain.construction_quarantined {
+            return Err(TaskRuntimeError::ConstructionQuarantined);
         }
         if domain.blocked_receive.is_some() {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -3611,6 +3653,37 @@ mod tests {
         ));
         assert_eq!(runtime.construction_pending(task), Ok(true));
         assert_eq!(runtime.load(), before);
+    }
+
+    #[test]
+    fn construction_quarantine_is_exact_permanent_and_never_wakes() {
+        let mut runtime = TaskRuntime::<2, 0>::new(1_000, 1).unwrap();
+        let quarantined = runtime
+            .create_for_construction(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let other = runtime
+            .create_for_construction(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let before = runtime.load();
+
+        assert_eq!(runtime.quarantine_construction_target(quarantined), Ok(()));
+        assert_eq!(runtime.quarantine_construction_target(quarantined), Ok(()));
+        assert_eq!(runtime.construction_pending(quarantined), Ok(true));
+        assert_eq!(runtime.construction_quarantined(quarantined), Ok(true));
+        assert_eq!(runtime.construction_quarantined(other), Ok(false));
+        assert!(matches!(
+            runtime.prepare_constructed_task_activation(quarantined),
+            Err(TaskRuntimeError::ConstructionQuarantined)
+        ));
+        assert_eq!(runtime.load(), before);
+
+        let stale = TaskId::from_token(quarantined.token() ^ (1_u64 << 32));
+        assert_eq!(
+            runtime.quarantine_construction_target(stale),
+            Err(TaskRuntimeError::MissingTask)
+        );
+        assert_eq!(runtime.construction_quarantined(other), Ok(false));
+        assert!(runtime.prepare_constructed_task_activation(other).is_ok());
     }
 
     #[test]

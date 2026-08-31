@@ -343,9 +343,11 @@ access. The security/acceptance gate is canonical in
   mappings in reverse order before ABAR. This is not an activation seal: root
   uniqueness, descriptor-PCI-identity/device-object correlation, PAT3=UC, and
   alias exclusion remain unsafe caller obligations for the complete installed
-  lifetime; activation-time effective-leaf revalidation, permanent task
-  quarantine or activation exclusion on poison, active-root ownership, SMP
-  TLB withdrawal, and IOMMU teardown remain required.
+  lifetime. A retained owner can now permanently quarantine its exact blocked
+  construction generation in the owning runtime; runtime substitution preserves
+  the unchanged owner, and quarantine never converts mapping state into an
+  activation token. Activation-time effective-leaf revalidation, active-root
+  ownership, SMP TLB withdrawal, and IOMMU teardown remain required.
   Generic syscall/user-buffer copies reject device-selector leaves so
   non-volatile byte-copy machinery cannot access registers.
 - Restart commit publishes and returns the exact service/task generations as
