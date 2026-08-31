@@ -1698,6 +1698,22 @@ geometry, overlap, length, and adapter tests cover the shared unsafe boundary.
 These are prerequisites for an active-root platform backend; they do not by
 themselves verify that the current CR3 leaves match the bound physical ranges.
 
+Frozen manager reacquisition now revalidates the retained ABAR leaf, all four
+CPU/DMA leaves, and their memory-resource records immediately before consuming
+the manager lease. Verification failure never calls the platform backend and
+returns the exact frozen mapping owner and lease for retry. The controlled Linux
+test injects a page-table read failure after freeze, observes zero backend
+acquisition calls, restores observation, and completes the existing retry path.
+This is retained-model source and unit-test evidence only: it does not verify a
+hardware current CR3, SMP TLB invalidation, IOMMU state, an installed trap, or
+physical AHCI execution.
+
+Patent review: **NOT_TRIGGERED**. Repeating exact validation of existing mapping
+descriptors before reconstructing unsafe bounded views is conventional
+fail-closed lifecycle validation. It adds no controller command, DMA behavior,
+parser format, or authority mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Patent review: **NOT_TRIGGERED**. Reusing an already authenticated launch to
 derive the same bounded mapping descriptors and assembling existing typed
 owners is conventional lifecycle refactoring. It adds no controller command,

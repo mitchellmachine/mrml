@@ -1262,6 +1262,20 @@ pub enum KernelAhciServiceTeardownReacquisitionError<
     const TASK_CAPABILITIES: usize,
     const AUTHORITIES: usize,
 > {
+    Verification {
+        error: crate::KernelAhciPreactivationMappingSetError,
+        frozen: FrozenKernelAhciServiceExit<
+            'resources,
+            S,
+            L,
+            P,
+            O,
+            MM,
+            TASKS,
+            TASK_CAPABILITIES,
+            AUTHORITIES,
+        >,
+    },
     Lease {
         error: L::Error,
         frozen: FrozenKernelAhciServiceExit<
@@ -1320,13 +1334,22 @@ impl<
     pub const fn lease_error(&self) -> Option<&L::Error> {
         match self {
             Self::Lease { error, .. } => Some(error),
-            Self::Binding { .. } => None,
+            Self::Verification { .. } | Self::Binding { .. } => None,
+        }
+    }
+
+    pub const fn verification_error(
+        &self,
+    ) -> Option<crate::KernelAhciPreactivationMappingSetError> {
+        match self {
+            Self::Verification { error, .. } => Some(*error),
+            Self::Lease { .. } | Self::Binding { .. } => None,
         }
     }
 
     pub const fn binding_error(&self) -> Option<AhciServiceTaskBindingError> {
         match self {
-            Self::Lease { .. } => None,
+            Self::Verification { .. } | Self::Lease { .. } => None,
             Self::Binding { error, .. } => Some(*error),
         }
     }
@@ -1352,6 +1375,31 @@ impl<
     > {
         match self {
             Self::Lease { error, frozen } => Ok((error, frozen)),
+            other => Err(other),
+        }
+    }
+
+    pub fn into_verification_retry(
+        self,
+    ) -> Result<
+        (
+            crate::KernelAhciPreactivationMappingSetError,
+            FrozenKernelAhciServiceExit<
+                'resources,
+                S,
+                L,
+                P,
+                O,
+                MM,
+                TASKS,
+                TASK_CAPABILITIES,
+                AUTHORITIES,
+            >,
+        ),
+        Self,
+    > {
+        match self {
+            Self::Verification { error, frozen } => Ok((error, frozen)),
             other => Err(other),
         }
     }
@@ -1433,6 +1481,12 @@ pub fn reacquire_frozen_kernel_ahci_service_teardown<
     >,
 > {
     let FrozenKernelAhciServiceExit { frozen, lease } = exit;
+    if let Err(error) = frozen.verify_retained_mappings() {
+        return Err(KernelAhciServiceTeardownReacquisitionError::Verification {
+            error,
+            frozen: FrozenKernelAhciServiceExit { frozen, lease },
+        });
+    }
     // SAFETY: begin_active_kernel_ahci_service_exit matched this consuming
     // lease to the exact opaque native-task identity and launch before it
     // created the retained freeze. No safe API can resume that task here.

@@ -396,6 +396,7 @@ mod tests {
         remaining: Cell<usize>,
         calls: Cell<usize>,
         fail_at: Cell<Option<usize>>,
+        reject_reads: Cell<bool>,
     }
 
     impl WriteFault {
@@ -405,6 +406,10 @@ mod tests {
 
         fn fail_next(&self) {
             self.fail_at.set(Some(self.calls.get()));
+        }
+
+        fn reject_reads(&self, reject: bool) {
+            self.reject_reads.set(reject);
         }
     }
 
@@ -461,6 +466,9 @@ mod tests {
         }
 
         fn read(&self, table: PhysAddr, index: usize) -> Result<u64, PageTableBuildError> {
+            if self.fault.reject_reads.get() {
+                return Err(PageTableBuildError::Storage);
+            }
             self.pages
                 .get(self.slot(table)?)
                 .and_then(|page| page.get(index))
@@ -1596,6 +1604,19 @@ mod tests {
         assert_eq!(frozen.root(), PhysAddr::new(TABLE_BASE).unwrap());
         assert_eq!(fixture.runtime.load().runnable(), 1);
         assert_eq!(calls.get(), 0);
+        fault.reject_reads(true);
+        let error = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
+            .err()
+            .unwrap_or_else(|| panic!("unverifiable frozen mappings must block reacquisition"));
+        assert_eq!(
+            error.verification_error(),
+            Some(crate::KernelAhciPreactivationMappingSetError::Verification)
+        );
+        assert_eq!(calls.get(), 0);
+        let (_, frozen) = error
+            .into_verification_retry()
+            .unwrap_or_else(|_| panic!("verification failure must retain the complete handoff"));
+        fault.reject_reads(false);
         let error = crate::reacquire_frozen_kernel_ahci_service_teardown(frozen)
             .err()
             .unwrap_or_else(|| panic!("injected manager reacquisition failure must retain root"));

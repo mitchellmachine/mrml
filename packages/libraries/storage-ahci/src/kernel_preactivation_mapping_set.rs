@@ -682,6 +682,14 @@ impl<
         self.owner.cpu_mappings()
     }
 
+    /// Revalidates the retained ABAR leaf, all four CPU/DMA leaves, and their
+    /// exact memory-resource records after execution has been frozen.
+    pub(crate) fn verify_retained_mappings(
+        &self,
+    ) -> Result<(), KernelAhciPreactivationMappingSetError> {
+        self.owner.verify_retained_mappings()
+    }
+
     pub(crate) const fn launch(&self) -> crate::BoundAhciServiceLaunch {
         self.owner.prepared.launch()
     }
@@ -1096,6 +1104,10 @@ impl<
         runtime: &TaskRuntime<TASKS, TASK_CAPABILITIES>,
     ) -> Result<(), KernelAhciPreactivationMappingSetError> {
         self.validate_bound_state(runtime)?;
+        self.verify_retained_mappings()
+    }
+
+    fn verify_retained_mappings(&self) -> Result<(), KernelAhciPreactivationMappingSetError> {
         if self.adapter.backend().is_poisoned() {
             return Err(KernelAhciPreactivationMappingSetError::Poisoned);
         }
