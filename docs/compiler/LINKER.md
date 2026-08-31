@@ -1681,3 +1681,14 @@ SHA-256
 This confirms the new relocation admission does not alter those selected
 closures. It remains hosted Wine evidence under the limitations already stated
 for each probe.
+
+The durable std probe now has a second independently authored `time` mode. It
+calls `SystemTime::now`, checks a conservative post-2023 Unix timestamp, and
+therefore selects the pinned Windows wall-clock path rather than only the
+parallelism path. MRML links the exact ORACLE-0003 closure into a deterministic
+2,393,088-byte PE with SHA-256
+`8dd3b4e85476af2be38b6ced952980f4e8d29f103d25d0efa0f9cda90b973d10`;
+Wine 11.16 returned 42. The refactored original mode reproduced its existing
+size, hash, and exit 42. This adds one hosted wall-clock linkage/execution path,
+not clock-precision, monotonic-time, native Windows, WHP, or physical-hardware
+evidence.

@@ -4596,3 +4596,12 @@ docs/compiler/probes/check_pinned_std_execution.sh` and the four
 `check_pinned_std_tls_execution.sh` modes (`const`, `lazy`, `thread`, and
 `destructor`). This is hosted Wine regression evidence, not native Windows,
 WHP, or physical-hardware verification.
+
+The durable std script now accepts explicit `parallelism` and `time` modes. The
+new independently authored `SystemTime::now` consumer links to 2,393,088 bytes
+with SHA-256
+`8dd3b4e85476af2be38b6ced952980f4e8d29f103d25d0efa0f9cda90b973d10`
+and returns 42 under Wine 11.16. The original mode retains its exact
+`66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6`
+hash and exit 42 after the script refactor. This is hosted wall-clock path
+evidence only; no native Windows or physical clock claim is made.

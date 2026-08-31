@@ -8,8 +8,28 @@ library_root="$sysroot/lib/rustlib/x86_64-pc-windows-gnullvm/lib"
 self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
-expected_size=2393088
-expected_hash=66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6
+test "$#" -le 1 || {
+    echo "usage: $0 [parallelism|time]" >&2
+    exit 1
+}
+case ${1:-parallelism} in
+    parallelism)
+        probe_name=pinned_std_execution
+        probe_source=docs/compiler/probes/pinned_std_execution.rs
+        expected_size=2393088
+        expected_hash=66492a766c27125d824fd63dbcdc47c0804a37da1b79979b812a06a692a9abc6
+        ;;
+    time)
+        probe_name=pinned_std_time_execution
+        probe_source=docs/compiler/probes/pinned_std_time_execution.rs
+        expected_size=2393088
+        expected_hash=8dd3b4e85476af2be38b6ced952980f4e8d29f103d25d0efa0f9cda90b973d10
+        ;;
+    *)
+        echo "usage: $0 [parallelism|time]" >&2
+        exit 1
+        ;;
+esac
 
 test -x "$driver" || {
     echo "missing release driver: run ./target/debug/mrml build org.mrml.compiler.driver --target linux --release" >&2
@@ -83,7 +103,7 @@ mingwex=$(require_archive "$self_contained/libmingwex.a")
 msvcrt=$(require_archive "$self_contained/libmsvcrt.a")
 user32=$(require_archive "$self_contained/libuser32.a")
 
-probe=$(mktemp -d "${TMPDIR:-/tmp}/mrml-pinned-std-execution.XXXXXX")
+probe=$(mktemp -d "${TMPDIR:-/tmp}/mrml-$probe_name.XXXXXX")
 cleanup() {
     rm -rf "$probe"
 }
@@ -92,10 +112,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-wine "$rustc" --edition=2024 --crate-name pinned_std_execution \
+wine "$rustc" --edition=2024 --crate-name "$probe_name" \
     --crate-type=lib --emit=obj -C panic=abort -C embed-bitcode=no \
     -C opt-level=3 --target x86_64-pc-windows-gnullvm \
-    docs/compiler/probes/pinned_std_execution.rs \
+    "$probe_source" \
     -o "$probe/consumer.obj"
 clang --target=x86_64-pc-windows-msvc -c \
     docs/compiler/probes/pinned_std_execution_stubs.s \
@@ -131,4 +151,4 @@ test "$execution_status" -eq 42 || {
     exit 1
 }
 
-echo "pinned-std-execution size=$actual_size sha256=$actual_hash exit=42 result=PASS"
+echo "$probe_name size=$actual_size sha256=$actual_hash exit=42 result=PASS"
