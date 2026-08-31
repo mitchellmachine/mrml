@@ -10256,7 +10256,10 @@ returns the combined owner unchanged for retry; a wrong-runtime dispatch failure
 likewise returns the cleaned association owner. An installed restart coordinator
 therefore need not reconstruct association identity from names or task IDs. Only
 complete resource and supervisor cleanup exposes successor dispatch. The
-Linux-host storage suite passes 165 tests, the kernel suite passes 717, and the
+normal-retirement dispatch result can then split into the one-use runtime dispatch
+and a separate typed restart owner retaining the exact retired service generation,
+task, and association receipt; neither token reconstructs the other. The
+Linux-host storage suite passes 165 tests, the kernel suite passes 718, and the
 storage service passes
 a release `MRML_NATIVE` build. Installed boot composition, hosted execution, and
 physical-device execution remain unverified.

@@ -483,10 +483,20 @@ pub fn complete_resource_released_native_filesystem_provider_retirement_cleanup<
 #[derive(Debug)]
 pub struct DispatchedRetiredNativeFilesystemProvider {
     receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    service: ServiceId,
+    task: TaskId,
     dispatch: TaskTerminationDispatch,
 }
 
 impl DispatchedRetiredNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.task
+    }
+
     pub const fn receipt(
         &self,
     ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
@@ -504,6 +514,49 @@ impl DispatchedRetiredNativeFilesystemProvider {
         TaskTerminationDispatch,
     ) {
         (self.receipt, self.dispatch)
+    }
+
+    pub fn into_restart_parts(
+        self,
+    ) -> (
+        RestartableRetiredNativeFilesystemProvider,
+        TaskTerminationDispatch,
+    ) {
+        (
+            RestartableRetiredNativeFilesystemProvider {
+                receipt: self.receipt,
+                service: self.service,
+                task: self.task,
+            },
+            self.dispatch,
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct RestartableRetiredNativeFilesystemProvider {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    service: ServiceId,
+    task: TaskId,
+}
+
+impl RestartableRetiredNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.task
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+
+    pub fn into_receipt(self) -> FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        self.receipt
     }
 }
 
@@ -536,9 +589,13 @@ pub fn dispatch_cleaned_native_filesystem_provider_retirement<
     DispatchedRetiredNativeFilesystemProvider,
     CleanedNativeFilesystemProviderRetirementDispatchFailure,
 > {
+    let service = cleaned.service();
+    let task = cleaned.task();
     match cleaned.cleaned.dispatch(runtime) {
         Ok(dispatch) => Ok(DispatchedRetiredNativeFilesystemProvider {
             receipt: cleaned.receipt,
+            service,
+            task,
             dispatch,
         }),
         Err(failure) => Err(CleanedNativeFilesystemProviderRetirementDispatchFailure {
@@ -2488,7 +2545,15 @@ mod tests {
                     dispatched.receipt().block_provider_generation(),
                     association.block_binding.provider_generation
                 );
-                let (_, dispatch) = dispatched.into_parts();
+                assert_eq!(dispatched.service(), service_id);
+                assert_eq!(dispatched.task(), target);
+                let (restartable, dispatch) = dispatched.into_restart_parts();
+                assert_eq!(restartable.service(), service_id);
+                assert_eq!(restartable.task(), target);
+                assert_eq!(
+                    restartable.receipt().association_generation(),
+                    association.association_generation
+                );
                 (dispatch, successor, successor_context)
             }
             SupervisedFailureKind::Fault => {
