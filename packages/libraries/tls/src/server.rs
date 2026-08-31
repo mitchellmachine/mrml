@@ -3,7 +3,7 @@ use crate::{
     finished_verify_data, hybrid_server_share,
 };
 use mrml_crypto::rsa_pss_sha256_sign;
-use mrml_runtime::{TcpStream, Vector};
+use mrml_runtime::{TcpStream, Text, Vector};
 
 fn u16_push(out: &mut Vector<u8>, n: usize) -> Result<(), TlsError> {
     if n > u16::MAX as usize {
@@ -180,6 +180,7 @@ pub struct TlsServerConfig {
     certificates: Vector<Vector<u8>>,
     modulus: Vector<u8>,
     private_exponent: Vector<u8>,
+    protocols: Vector<Text>,
 }
 impl Drop for TlsServerConfig {
     fn drop(&mut self) {
@@ -234,7 +235,19 @@ impl TlsServerConfig {
             certificates,
             modulus: n,
             private_exponent: d,
+            protocols: Vector::new(),
         })
+    }
+    pub fn with_protocols(mut self, protocols: &[&str]) -> Result<Self, TlsError> {
+        for protocol in protocols {
+            if protocol.is_empty() || protocol.len() > u8::MAX as usize || !protocol.is_ascii() {
+                return Err(TlsError::Handshake);
+            }
+            self.protocols
+                .try_push(Text::try_from_str(protocol).map_err(|_| TlsError::AllocationFailed)?)
+                .map_err(|_| TlsError::AllocationFailed)?;
+        }
+        Ok(self)
     }
 }
 
@@ -261,7 +274,7 @@ fn send_plain(stream: &mut TcpStream, msg: &[u8]) -> Result<(), TlsError> {
     stream.write_all(&h).map_err(|_| TlsError::Io)?;
     stream.write_all(msg).map_err(|_| TlsError::Io)
 }
-fn client_share(msg: &[u8]) -> Result<(&[u8], &[u8]), TlsError> {
+fn client_offer(msg: &[u8]) -> Result<(&[u8], &[u8], Vector<Text>), TlsError> {
     let mut c = Cursor::new(msg);
     if c.byte()? != 1 || c.u24()? != msg.len() - 4 || c.take(2)? != [3, 3] {
         return Err(TlsError::Handshake);
@@ -284,6 +297,8 @@ fn client_share(msg: &[u8]) -> Result<(&[u8], &[u8]), TlsError> {
     if !c.done() {
         return Err(TlsError::Handshake);
     }
+    let mut selected_share = None;
+    let mut protocols = Vector::new();
     while !e.done() {
         let kind = e.u16()?;
         let n = e.u16()? as usize;
@@ -297,12 +312,31 @@ fn client_share(msg: &[u8]) -> Result<(&[u8], &[u8]), TlsError> {
                 let len = shares.u16()? as usize;
                 let share = shares.take(len)?;
                 if group == X25519_MLKEM768 && len == 1216 {
-                    return Ok((session, share));
+                    selected_share = Some(share);
                 }
+            }
+        } else if kind == 16 {
+            let mut list = Cursor::new(value);
+            let total = list.u16()? as usize;
+            let mut names = Cursor::new(list.take(total)?);
+            if !list.done() {
+                return Err(TlsError::Handshake);
+            }
+            while !names.done() {
+                let length = names.byte()? as usize;
+                let bytes = names.take(length)?;
+                let protocol = core::str::from_utf8(bytes).map_err(|_| TlsError::Handshake)?;
+                protocols
+                    .try_push(Text::try_from_str(protocol).map_err(|_| TlsError::AllocationFailed)?)
+                    .map_err(|_| TlsError::AllocationFailed)?;
             }
         }
     }
-    Err(TlsError::Handshake)
+    Ok((
+        session,
+        selected_share.ok_or(TlsError::Handshake)?,
+        protocols,
+    ))
 }
 
 pub struct TlsServerStream {
@@ -311,6 +345,7 @@ pub struct TlsServerStream {
     write_keys: RecordKeys,
     pending: Vector<u8>,
     at: usize,
+    negotiated_protocol: Option<Text>,
 }
 impl TlsServerStream {
     pub fn accept(mut stream: TcpStream, config: &TlsServerConfig) -> Result<Self, TlsError> {
@@ -330,7 +365,18 @@ impl TlsServerStream {
             return Err(TlsError::Handshake);
         }
         let client_hello = &first[5..];
-        let (session, share) = client_share(client_hello)?;
+        let (session, share, offered_protocols) = client_offer(client_hello)?;
+        let negotiated_protocol = if config.protocols.is_empty() {
+            None
+        } else {
+            config
+                .protocols
+                .iter()
+                .find(|wanted| offered_protocols.iter().any(|offered| offered == *wanted))
+                .cloned()
+                .ok_or(TlsError::Handshake)?
+                .into()
+        };
         let (server_share, mut shared) = hybrid_server_share(share)?;
         let mut random = [0; 32];
         mrml_runtime::fill_random(&mut random).map_err(|_| TlsError::AuthenticationFailed)?;
@@ -371,7 +417,28 @@ impl TlsServerStream {
         let server_hs = schedule.traffic_secret(true, &transcript.hash());
         let mut read_hs = RecordKeys::from_traffic_secret(&client_hs);
         let mut write_hs = RecordKeys::from_traffic_secret(&server_hs);
-        let extensions = handshake(8, &[0, 0])?;
+        let mut extension_body = Vector::new();
+        if let Some(protocol) = &negotiated_protocol {
+            let mut value = Vector::new();
+            u16_push(&mut value, protocol.len() + 1)?;
+            value
+                .try_push(protocol.len() as u8)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            value
+                .try_extend_from_slice(protocol.as_bytes())
+                .map_err(|_| TlsError::AllocationFailed)?;
+            u16_push(&mut extension_body, 16)?;
+            u16_push(&mut extension_body, value.len())?;
+            extension_body
+                .try_extend_from_slice(&value)
+                .map_err(|_| TlsError::AllocationFailed)?;
+        }
+        let mut extension_message = Vector::new();
+        u16_push(&mut extension_message, extension_body.len())?;
+        extension_message
+            .try_extend_from_slice(&extension_body)
+            .map_err(|_| TlsError::AllocationFailed)?;
+        let extensions = handshake(8, &extension_message)?;
         transcript.update(&extensions);
         let mut cert_body = Vector::new();
         cert_body
@@ -462,7 +529,11 @@ impl TlsServerStream {
             ),
             pending: Vector::new(),
             at: 0,
+            negotiated_protocol,
         })
+    }
+    pub fn negotiated_protocol(&self) -> Option<&str> {
+        self.negotiated_protocol.as_deref()
     }
     pub fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
         for chunk in data.chunks(1 << 14) {
