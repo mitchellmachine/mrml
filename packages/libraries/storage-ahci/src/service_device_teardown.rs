@@ -13,8 +13,8 @@ use mrml_kernel::{
     Capability, CapabilitySpace, NativeDeviceServiceTask, ServiceAddressSpaceEraser,
     ServiceCleanupError, ServiceCleanupTicket, ServiceId, ServiceSupervisor,
     SupervisedNativeDeviceServiceDispatch, SupervisedNativeDeviceServiceFreeze,
-    SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError, TaskId,
-    TaskRuntime, TaskTerminationDispatch, TaskTerminationDispatchError,
+    SupervisedNativeDeviceServiceRetirement, SupervisedNativeDeviceServiceRetirementError,
+    SyscallRequest, TaskId, TaskRuntime, TaskTerminationDispatch, TaskTerminationDispatchError,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -394,6 +394,32 @@ pub enum KernelAhciServiceExitFreezeError<
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceExitRequest(());
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelAhciServiceExitRequestError {
+    request: SyscallRequest,
+}
+
+impl KernelAhciServiceExitRequestError {
+    pub const fn request(self) -> SyscallRequest {
+        self.request
+    }
+}
+
+impl KernelAhciServiceExitRequest {
+    /// Admits only the canonical decoded operation-3 request. This token is
+    /// descriptive and carries no task, service, mapping, or device authority.
+    pub const fn admit(request: SyscallRequest) -> Result<Self, KernelAhciServiceExitRequestError> {
+        if matches!(request, SyscallRequest::Exit) {
+            Ok(Self(()))
+        } else {
+            Err(KernelAhciServiceExitRequestError { request })
+        }
+    }
+}
+
 impl<
     'resources,
     S: PageTableStore,
@@ -498,6 +524,53 @@ pub fn begin_active_kernel_ahci_service_exit<
         Ok(frozen) => Ok(FrozenKernelAhciServiceExit { frozen, lease }),
         Err(failure) => Err(KernelAhciServiceExitFreezeError::Lifecycle { failure, lease }),
     }
+}
+
+/// Routes one already decoded operation-3 request into the exact concrete
+/// freeze-first manager handoff. The request token identifies the requested
+/// transition but grants nothing; the consuming active owner and matched lease
+/// remain the only teardown authority.
+pub fn route_active_kernel_ahci_service_exit<
+    'resources,
+    S: PageTableStore,
+    L: AhciServiceTeardownLease,
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const TASKS: usize,
+    const TASK_CAPABILITIES: usize,
+    const AUTHORITIES: usize,
+    const SERVICES: usize,
+>(
+    _request: KernelAhciServiceExitRequest,
+    active: crate::ActiveKernelAhciMappingSetOwner<
+        'resources,
+        S,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+    lease: L,
+    supervisor: &ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPABILITIES>,
+) -> Result<
+    FrozenKernelAhciServiceExit<'resources, S, L, P, O, M, TASKS, TASK_CAPABILITIES, AUTHORITIES>,
+    KernelAhciServiceExitFreezeError<
+        'resources,
+        S,
+        L,
+        P,
+        O,
+        M,
+        TASKS,
+        TASK_CAPABILITIES,
+        AUTHORITIES,
+    >,
+> {
+    begin_active_kernel_ahci_service_exit(active, lease, supervisor, runtime)
 }
 
 impl<L> AhciServiceExitFreezeError<L> {

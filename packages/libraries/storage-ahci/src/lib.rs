@@ -184,7 +184,8 @@ pub use service_device_teardown::{
     FrozenKernelAhciServiceExit, FrozenKernelAhciServiceQuiesceError,
     KernelAhciRetiredMappingRemovalError, KernelAhciRetiredServiceCleanupError,
     KernelAhciServiceDeviceQuiesceFailure, KernelAhciServiceDispatchError,
-    KernelAhciServiceExitFreezeError, KernelAhciServiceTaskRetirementError,
+    KernelAhciServiceExitFreezeError, KernelAhciServiceExitRequest,
+    KernelAhciServiceExitRequestError, KernelAhciServiceTaskRetirementError,
     KernelAhciServiceTeardownReacquisitionError, PendingAhciServiceDeviceTeardown,
     QuarantinedAhciServiceTeardown, QuarantinedKernelAhciServiceTeardown,
     QuiescedAhciCommandBackend, QuiescedAhciServiceMappings, QuiescedAhciServiceTask,
@@ -203,6 +204,7 @@ pub use service_device_teardown::{
     resume_ahci_command_backend_teardown, resume_ahci_service_device_teardown,
     resume_frozen_ahci_service_quiescence, resume_frozen_kernel_ahci_service_quiescence,
     retire_quiesced_ahci_service_task, retire_quiesced_kernel_ahci_service_task,
+    route_active_kernel_ahci_service_exit,
 };
 pub use service_launch::{
     AHCI_COMMAND_LIST_AUTHORITY_INDEX, AHCI_COMMAND_TABLES_AUTHORITY_INDEX,

@@ -1452,7 +1452,17 @@ mod tests {
         );
         lease.failures = 1;
         lease.sanitize_failures = 1;
-        let failure = crate::begin_active_kernel_ahci_service_exit(
+        let request_error =
+            crate::KernelAhciServiceExitRequest::admit(mrml_kernel::SyscallRequest::Yield)
+                .unwrap_err();
+        assert_eq!(request_error.request(), mrml_kernel::SyscallRequest::Yield);
+        assert_eq!(calls.get(), 0);
+        let exit_request = crate::KernelAhciServiceExitRequest::admit(
+            mrml_kernel::SyscallRequest::decode(3, 0, 0, 0, 0, 0, 0).unwrap(),
+        )
+        .unwrap();
+        let failure = crate::route_active_kernel_ahci_service_exit(
+            exit_request,
             active,
             lease,
             &supervisor,
@@ -1470,7 +1480,8 @@ mod tests {
             fixture.runtime.yield_current(),
             Ok(mrml_kernel::ScheduleOutcome::Switch { to, .. }) if to == target_task
         ));
-        let frozen = crate::begin_active_kernel_ahci_service_exit(
+        let frozen = crate::route_active_kernel_ahci_service_exit(
+            exit_request,
             active,
             lease,
             &supervisor,

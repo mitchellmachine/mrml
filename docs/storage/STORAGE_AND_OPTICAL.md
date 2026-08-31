@@ -1631,6 +1631,20 @@ lease implementation or installed operation-3 routing, and no installed
 CPL3/`INT 0x80`, active page-table/TLB or IOMMU invalidation, KVM/WHP, or
 physical AHCI execution was exercised.
 
+The canonical decoded operation-3 `SyscallRequest::Exit` now admits one typed
+AHCI exit-request token and routes it into the concrete freeze-first handoff.
+Any other decoded request is returned unchanged before lease access, freezing,
+MMIO, DMA, or mapping mutation. The token is descriptive only: it cannot name
+or obtain a service, and the non-copy active owner plus exact one-shot manager
+lease remain mandatory authority inputs. This connects the shared syscall
+decoder to the manager API in source, but the installed trap dispatcher and a
+production controller-manager lease remain unimplemented.
+
+Patent review: **NOT_TRIGGERED**. Admitting an existing decoded enum variant
+into a non-authorizing typed routing token is conventional fail-closed API
+composition and adds no parser, device, DMA, or authority mechanism. See
+[the patent review log](../patents/REVIEW_LOG.md).
+
 Complexity impact: MEDIUM
 TCB impact: LOW
 New parser boundary: NO
