@@ -14743,10 +14743,29 @@ mod tests {
             initialized: &[1, 0, 0, 0, 0, 0, 0, 0],
             ..start
         };
+        let short_start = PeWritableData {
+            symbol: "short_start",
+            initialized: &[0; 7],
+            ..start
+        };
+        let zero_filled_start = PeWritableData {
+            symbol: "zero_filled_start",
+            zeroed_size: 8,
+            ..start
+        };
         let nontext_relocation = [PeWritableRelocation {
             offset: 0,
             target: PeWritableRelocationTarget::TextSymbol("not_text"),
         }];
+        let sentinel_relocation = [PeWritableRelocation {
+            offset: 0,
+            target: PeWritableRelocationTarget::TextSymbol("entry"),
+        }];
+        let relocated_start = PeWritableData {
+            symbol: "relocated_start",
+            relocations: &sentinel_relocation,
+            ..start
+        };
         let nontext_callback = PeWritableData {
             symbol: "nontext_callback",
             identity: Some(CoffSectionIdentity::new(51, 5).unwrap()),
@@ -14755,6 +14774,26 @@ mod tests {
             initialized: &[0; 8],
             zeroed_size: 0,
             relocations: &nontext_relocation,
+        };
+        let missing_relocation_callback = PeWritableData {
+            symbol: "missing_relocation_callback",
+            relocations: &[],
+            ..nontext_callback
+        };
+        let duplicate_relocations = [sentinel_relocation[0]; 2];
+        let duplicate_relocation_callback = PeWritableData {
+            symbol: "duplicate_relocation_callback",
+            relocations: &duplicate_relocations,
+            ..nontext_callback
+        };
+        let nonzero_offset_relocation = [PeWritableRelocation {
+            offset: 1,
+            target: PeWritableRelocationTarget::TextSymbol("entry"),
+        }];
+        let nonzero_offset_callback = PeWritableData {
+            symbol: "nonzero_offset_callback",
+            relocations: &nonzero_offset_relocation,
+            ..nontext_callback
         };
         let one_past_relocation = [PeWritableRelocation {
             offset: 0,
@@ -14782,6 +14821,32 @@ mod tests {
             ),
             Err(LinkerError::UnsupportedCoffTls)
         );
+        for malformed in [short_start, zero_filled_start, relocated_start] {
+            assert_eq!(
+                link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                    &[input],
+                    "entry",
+                    &[],
+                    &[tls_index, tls, malformed, end],
+                ),
+                Err(LinkerError::UnsupportedCoffTls)
+            );
+        }
+        for malformed in [
+            missing_relocation_callback,
+            duplicate_relocation_callback,
+            nonzero_offset_callback,
+        ] {
+            assert_eq!(
+                link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+                    &[input],
+                    "entry",
+                    &[],
+                    &[tls_index, tls, start, malformed, end],
+                ),
+                Err(LinkerError::UnsupportedCoffTls)
+            );
+        }
         assert_eq!(
             link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
                 &[input],
