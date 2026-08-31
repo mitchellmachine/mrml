@@ -12,7 +12,7 @@ pub use http2::{HTTP2_CLIENT_PREFACE, Http2Client, Http2Frame, Http2FrameKind, H
 pub use http3::{Http3Client, Http3Frame, Http3FrameKind, Http3Server};
 pub use quic::{
     InitialPacket, QuicError, QuicFrame, QuicInitialKeys, QuicRecovery, QuicRole,
-    QuicTransportParameters, SentPacket,
+    QuicStreamAssembler, QuicTransportParameters, SentPacket, ShortPacket,
 };
 
 const MAX_HEADER: usize = 64 * 1024;

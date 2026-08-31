@@ -533,6 +533,221 @@ impl QuicInitialKeys {
         }
         n
     }
+
+    pub fn from_traffic_secret(secret: &[u8; 32]) -> Result<Self, QuicError> {
+        let mut key = [0; 16];
+        let mut iv = [0; 12];
+        let mut header = [0; 16];
+        if !hkdf_expand_label(secret, b"quic key", &[], &mut key)
+            || !hkdf_expand_label(secret, b"quic iv", &[], &mut iv)
+            || !hkdf_expand_label(secret, b"quic hp", &[], &mut header)
+        {
+            return Err(QuicError::Crypto);
+        }
+        Ok(Self { key, iv, header })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShortPacket {
+    pub destination_id: Vector<u8>,
+    pub packet_number: u64,
+    pub key_phase: bool,
+    pub payload: Vector<u8>,
+}
+
+impl ShortPacket {
+    pub fn seal(&self, keys: &QuicInitialKeys) -> Result<Vector<u8>, QuicError> {
+        if self.destination_id.len() > 20 || self.payload.len() > MAX_DATAGRAM {
+            return Err(QuicError::Limit);
+        }
+        let packet_number_length = 4usize;
+        let mut out = Vector::new();
+        out.try_push(0x40 | (u8::from(self.key_phase) << 2) | 3)
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_extend_from_slice(&self.destination_id)
+            .map_err(|_| QuicError::Allocation)?;
+        let packet_number_offset = out.len();
+        out.try_extend_from_slice(&(self.packet_number as u32).to_be_bytes())
+            .map_err(|_| QuicError::Allocation)?;
+        let mut encrypted = Vector::new();
+        encrypted
+            .try_resize(self.payload.len(), 0)
+            .map_err(|_| QuicError::Allocation)?;
+        let mut tag = [0; 16];
+        if !aes128_gcm_seal(
+            &keys.key,
+            &keys.nonce(self.packet_number),
+            &out,
+            &self.payload,
+            &mut encrypted,
+            &mut tag,
+        ) {
+            return Err(QuicError::Crypto);
+        }
+        out.try_extend_from_slice(&encrypted)
+            .map_err(|_| QuicError::Allocation)?;
+        out.try_extend_from_slice(&tag)
+            .map_err(|_| QuicError::Allocation)?;
+        if out.len() < packet_number_offset + 4 + 16 {
+            return Err(QuicError::InvalidPacket);
+        }
+        let mut sample = [0; 16];
+        sample.copy_from_slice(&out[packet_number_offset + 4..packet_number_offset + 20]);
+        let mask = aes128_encrypt_block(&keys.header, &sample);
+        out[0] ^= mask[0] & 0x1f;
+        for index in 0..packet_number_length {
+            out[packet_number_offset + index] ^= mask[index + 1];
+        }
+        Ok(out)
+    }
+
+    pub fn open(
+        input: &[u8],
+        destination_id_length: usize,
+        keys: &QuicInitialKeys,
+        expected_packet_number: u64,
+    ) -> Result<Self, QuicError> {
+        if destination_id_length > 20
+            || input.len() < 1 + destination_id_length + 4 + 16
+            || input[0] & 0x80 != 0
+        {
+            return Err(QuicError::InvalidPacket);
+        }
+        let packet_number_offset = 1 + destination_id_length;
+        let mut sample = [0; 16];
+        sample.copy_from_slice(
+            input
+                .get(packet_number_offset + 4..packet_number_offset + 20)
+                .ok_or(QuicError::Truncated)?,
+        );
+        let mask = aes128_encrypt_block(&keys.header, &sample);
+        let first = input[0] ^ (mask[0] & 0x1f);
+        if first & 0x40 == 0 || first & 0x18 != 0 {
+            return Err(QuicError::InvalidPacket);
+        }
+        let packet_number_length = (first as usize & 3) + 1;
+        let mut truncated = 0u64;
+        let mut packet_number_bytes = [0; 4];
+        for index in 0..packet_number_length {
+            let byte = input[packet_number_offset + index] ^ mask[index + 1];
+            packet_number_bytes[4 - packet_number_length + index] = byte;
+            truncated = (truncated << 8) | byte as u64;
+        }
+        let packet_number =
+            reconstruct_packet_number(truncated, packet_number_length, expected_packet_number)?;
+        let aad_end = packet_number_offset + packet_number_length;
+        if input.len() < aad_end + 16 {
+            return Err(QuicError::Truncated);
+        }
+        let mut aad = Vector::new();
+        aad.try_extend_from_slice(&input[..aad_end])
+            .map_err(|_| QuicError::Allocation)?;
+        aad[0] = first;
+        aad[packet_number_offset..aad_end]
+            .copy_from_slice(&packet_number_bytes[4 - packet_number_length..]);
+        let encrypted_end = input.len() - 16;
+        let mut tag = [0; 16];
+        tag.copy_from_slice(&input[encrypted_end..]);
+        let mut payload = Vector::new();
+        payload
+            .try_resize(encrypted_end - aad_end, 0)
+            .map_err(|_| QuicError::Allocation)?;
+        if !aes128_gcm_open(
+            &keys.key,
+            &keys.nonce(packet_number),
+            &aad,
+            &input[aad_end..encrypted_end],
+            &tag,
+            &mut payload,
+        ) {
+            return Err(QuicError::Crypto);
+        }
+        let mut destination_id = Vector::new();
+        destination_id
+            .try_extend_from_slice(&input[1..packet_number_offset])
+            .map_err(|_| QuicError::Allocation)?;
+        Ok(Self {
+            destination_id,
+            packet_number,
+            key_phase: first & 4 != 0,
+            payload,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuicStreamAssembler {
+    bytes: Vector<u8>,
+    present: Vector<u8>,
+    contiguous: usize,
+    final_size: Option<usize>,
+    limit: usize,
+}
+impl QuicStreamAssembler {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vector::new(),
+            present: Vector::new(),
+            contiguous: 0,
+            final_size: None,
+            limit,
+        }
+    }
+    pub fn insert(&mut self, offset: u64, data: &[u8], fin: bool) -> Result<(), QuicError> {
+        let offset = usize::try_from(offset).map_err(|_| QuicError::Limit)?;
+        let end = offset.checked_add(data.len()).ok_or(QuicError::Limit)?;
+        if end > self.limit || self.final_size.is_some_and(|size| end > size) {
+            return Err(QuicError::Limit);
+        }
+        if fin {
+            if self.final_size.is_some_and(|size| size != end) {
+                return Err(QuicError::InvalidFrame);
+            }
+            self.final_size = Some(end)
+        }
+        if self.bytes.len() < end {
+            self.bytes
+                .try_resize(end, 0)
+                .map_err(|_| QuicError::Allocation)?;
+            self.present
+                .try_resize(end, 0)
+                .map_err(|_| QuicError::Allocation)?
+        }
+        for (index, value) in data.iter().enumerate() {
+            let position = offset + index;
+            if self.present[position] != 0 && self.bytes[position] != *value {
+                return Err(QuicError::InvalidFrame);
+            }
+            self.bytes[position] = *value;
+            self.present[position] = 1
+        }
+        while self.contiguous < self.present.len() && self.present[self.contiguous] != 0 {
+            self.contiguous += 1
+        }
+        Ok(())
+    }
+    pub fn contiguous(&self) -> &[u8] {
+        &self.bytes[..self.contiguous]
+    }
+    pub fn is_finished(&self) -> bool {
+        self.final_size == Some(self.contiguous)
+    }
+    pub fn consume(&mut self, amount: usize) -> Result<(), QuicError> {
+        if amount > self.contiguous {
+            return Err(QuicError::InvalidFrame);
+        }
+        let remaining = self.bytes.len() - amount;
+        self.bytes.copy_within(amount.., 0);
+        self.bytes.truncate(remaining);
+        self.present.copy_within(amount.., 0);
+        self.present.truncate(remaining);
+        self.contiguous -= amount;
+        if let Some(size) = &mut self.final_size {
+            *size -= amount
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -827,5 +1042,33 @@ mod tests {
         recovery.on_loss(packet, 300_000);
         assert!(recovery.congestion_window >= 2400);
         assert_eq!(recovery.slow_start_threshold, recovery.congestion_window)
+    }
+    #[test]
+    fn short_packets_authenticate_and_streams_reassemble() {
+        let keys = QuicInitialKeys::from_traffic_secret(&[7; 32]).unwrap();
+        let packet = ShortPacket {
+            destination_id: [1, 2, 3, 4].into(),
+            packet_number: 55,
+            key_phase: false,
+            payload: [9, 8, 7, 6, 5].into(),
+        };
+        let wire = packet.seal(&keys).unwrap();
+        assert_eq!(ShortPacket::open(&wire, 4, &keys, 55).unwrap(), packet);
+        let mut bad = wire.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        assert_eq!(
+            ShortPacket::open(&bad, 4, &keys, 55),
+            Err(QuicError::Crypto)
+        );
+        let mut stream = QuicStreamAssembler::new(16);
+        stream.insert(3, b"lo", true).unwrap();
+        assert_eq!(stream.contiguous(), b"");
+        stream.insert(0, b"hel", false).unwrap();
+        assert_eq!(stream.contiguous(), b"hello");
+        assert!(stream.is_finished());
+        assert_eq!(stream.insert(1, b"X", false), Err(QuicError::InvalidFrame));
+        stream.consume(2).unwrap();
+        assert_eq!(stream.contiguous(), b"llo");
     }
 }
