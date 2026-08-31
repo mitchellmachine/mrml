@@ -1513,6 +1513,22 @@ Windows exit 42. The scoped no-data benchmark measured MRML at 9.577 ms median
 versus rust-lld at 26.952 ms; both outputs returned 42. This is one hosted
 static-data shape and narrow performance evidence only.
 
+Commit `47008ce5` retains exact `.CRT$XLA` through `.CRT$XLZ` fragments as typed
+PE TLS callback identities, stable-orders them by suffix independently of
+symbol names, lays them out contiguously in RW/NX data, and points the TLS
+directory after the null start sentinel. Interior slots require one exact
+zero-offset `ADDR64` relocation into the referenced text input; malformed
+sentinels, slots, one-past targets, and callback tables without TLS fail closed.
+The combined Linux canonical gate passed 833/833 core units, 2/2 object-evidence
+tests, 10/10 conformance tests, 351/351 replacements, and 128/128 semantic
+tests. The release driver build passed. The exact ORACLE-0003 pinned `std`
+execution probe emitted 2,389,504 bytes with SHA-256
+`4ee4ffa9f957e3765beebc0a6d65f2aba55917000c5239045ba8cf18116fdc92`;
+Wine 11.16 loaded the image containing the real MinGW callback table and
+returned 42. This is one hosted Wine path, not native Windows, general `std`,
+complete PE startup/TLS
+lifecycle, WHP, or physical-hardware evidence.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.

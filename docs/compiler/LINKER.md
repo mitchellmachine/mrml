@@ -1491,9 +1491,16 @@ no usable allocator, so an unexpected heap path fails closed instead of
 silently broadening the fixture. On the normal 8 MiB Linux stack, MRML linked
 the exact pinned `std` dependency closure and self-contained MinGW import
 archives into a deterministic 2,389,504-byte PE with SHA-256
-`a6b5bf79c127c2cb7f754a60df0a14e22f8aae22ef1985679d838a429a4e53f6`.
+`4ee4ffa9f957e3765beebc0a6d65f2aba55917000c5239045ba8cf18116fdc92`.
 The image has separate RX, R/NX, and RW/NX sections plus import, exception,
-TLS, and IAT directories. Wine 11.16 returned 42. This is one hosted Wine
-execution path through `std`, not native Windows evidence, general `std`
-conformance, production runtime closure, complete PE startup/TLS-callback
-lifecycle, WHP evidence, or physical-hardware evidence.
+TLS, and IAT directories. Exact `.CRT$XLA` through `.CRT$XLZ` fragments retain
+a typed suffix order, form one stable contiguous callback table in RW/NX data,
+and publish the callback address after the null start sentinel. Interior slots
+must contain one exact zero-offset `ADDR64` relocation to code in the referenced
+text input; sentinels, malformed slots, one-past targets, and tables without TLS
+fail closed. Wine 11.16 loaded the image containing the real pinned MinGW
+callback table and returned 42. This is one hosted Wine execution path through
+`std`, not native Windows
+evidence, general `std` conformance, production runtime closure, complete PE
+startup/TLS lifecycle beyond this exact callback shape, WHP evidence, or
+physical-hardware evidence.
