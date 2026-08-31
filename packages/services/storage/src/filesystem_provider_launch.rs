@@ -11,7 +11,8 @@ use mrml_kernel::{
     NativeComponentServiceCopyReadTransferError,
     NativeComponentServiceCopyReadTransferRetirementMappingError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
-    NativeComponentServiceCopyReadTransferTeardownError, ObjectId, Rights, TaskId, TaskRuntime,
+    NativeComponentServiceCopyReadTransferTeardownError, ObjectId, RestartPolicy, Rights,
+    ServiceError, ServiceId, ServiceSupervisor, SupervisedServiceTask, TaskId, TaskRuntime,
     TaskRuntimeError, TaskTermination, TaskTerminationDispatch, TaskTerminationDispatchError,
     prepare_native_component_service_task_from_copy_read_transfer_attachment,
     resume_native_component_service_copy_read_transfer_mapping_revocation,
@@ -23,6 +24,7 @@ use mrml_kernel::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesystemProviderLaunchReceipt<I> {
+    provider_object: ObjectId,
     association_generation: u64,
     filesystem_provider_generation: u64,
     block_provider_generation: u64,
@@ -31,6 +33,10 @@ pub struct FilesystemProviderLaunchReceipt<I> {
 }
 
 impl<I> FilesystemProviderLaunchReceipt<I> {
+    pub const fn provider_object(&self) -> ObjectId {
+        self.provider_object
+    }
+
     pub const fn association_generation(&self) -> u64 {
         self.association_generation
     }
@@ -142,6 +148,7 @@ impl NativeFilesystemProviderLaunchSpec {
 pub enum NativeFilesystemProviderLaunchPreflightError {
     Source(TaskRuntimeError),
     Target(TaskRuntimeError),
+    TargetNotConstructionPending,
     Capability(CapabilityError),
     WrongEndpointAuthority,
     WrongTransferAuthority,
@@ -179,6 +186,97 @@ impl NativeFilesystemProviderInstance {
             Self::Active(_) => None,
             Self::Teardown(state) => Some(state),
         }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ActiveNativeFilesystemProvider {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    binding: SupervisedServiceTask,
+}
+
+impl ActiveNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.binding.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.binding.task()
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+
+    pub fn into_receipt(self) -> FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        self.receipt
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderActivationError {
+    TeardownProgressed,
+    Service(ServiceError),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct NativeFilesystemProviderActivationFailure {
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    error: NativeFilesystemProviderActivationError,
+}
+
+impl NativeFilesystemProviderActivationFailure {
+    pub const fn error(&self) -> NativeFilesystemProviderActivationError {
+        self.error
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        &self.receipt
+    }
+
+    pub fn into_receipt(self) -> FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        self.receipt
+    }
+}
+
+pub fn activate_native_filesystem_provider<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+    const SERVICES: usize,
+>(
+    receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
+    restart_policy: RestartPolicy,
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
+) -> Result<ActiveNativeFilesystemProvider, NativeFilesystemProviderActivationFailure> {
+    let Some(active) = receipt.instance.active() else {
+        return Err(NativeFilesystemProviderActivationFailure {
+            receipt,
+            error: NativeFilesystemProviderActivationError::TeardownProgressed,
+        });
+    };
+    let task = active.construction().task();
+    // The receipt retains the provider object from the same validated
+    // filesystem association that constructed `task`; it is not caller input.
+    // SAFETY: the typed construction owner remains inside `receipt` and the
+    // kernel validates both the pending task and runtime before publication.
+    match unsafe {
+        supervisor.register_and_activate_constructed(
+            receipt.provider_object,
+            task,
+            restart_policy,
+            runtime,
+        )
+    } {
+        Ok(binding) => Ok(ActiveNativeFilesystemProvider { receipt, binding }),
+        Err(error) => Err(NativeFilesystemProviderActivationFailure {
+            receipt,
+            error: NativeFilesystemProviderActivationError::Service(error),
+        }),
     }
 }
 
@@ -509,6 +607,25 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
             ));
         }
     };
+    match runtime.construction_pending(target_task) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(reject_native_filesystem_provider_preflight(
+                runtime,
+                source_task,
+                transfer,
+                NativeFilesystemProviderLaunchPreflightError::TargetNotConstructionPending,
+            ));
+        }
+        Err(error) => {
+            return Err(reject_native_filesystem_provider_preflight(
+                runtime,
+                source_task,
+                transfer,
+                NativeFilesystemProviderLaunchPreflightError::Target(error),
+            ));
+        }
+    }
     if target_context.page_table() != local_page_table_root {
         return Err(reject_native_filesystem_provider_preflight(
             runtime,
@@ -578,6 +695,7 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
     )
     .map_err(NativeFilesystemProviderLaunchError::Construction)?;
     Ok(receipt(
+        association.filesystem_binding.provider_object,
         association.handoff(),
         NativeFilesystemProviderInstance::Active(active),
     ))
@@ -726,14 +844,20 @@ pub fn launch_filesystem_provider<B: FilesystemProviderLaunchBackend, const CAPA
         .launch(association, &encoded, block_endpoint_capability, transfer)
         .map_err(FilesystemProviderLaunchError::Backend);
     encoded.fill(0);
-    Ok(receipt(handoff, launched?))
+    Ok(receipt(
+        association.filesystem_binding.provider_object,
+        handoff,
+        launched?,
+    ))
 }
 
 fn receipt<I>(
+    provider_object: ObjectId,
     handoff: FilesystemBlockAssociationHandoff,
     instance: I,
 ) -> FilesystemProviderLaunchReceipt<I> {
     FilesystemProviderLaunchReceipt {
+        provider_object,
         association_generation: handoff.association_generation(),
         filesystem_provider_generation: handoff.filesystem_provider_generation(),
         block_provider_generation: handoff.block_provider_generation(),
@@ -1239,7 +1363,7 @@ mod tests {
             )
             .unwrap();
         let target = runtime
-            .create(
+            .create_for_construction(
                 mrml_kernel::Priority::NORMAL,
                 context(page_table_base.get(), 0x50_0000, 0x7100_0000),
             )
@@ -1385,7 +1509,7 @@ mod tests {
             root.root(),
         )
         .unwrap();
-        let mut receipt = launch_native_filesystem_provider(
+        let receipt = launch_native_filesystem_provider(
             &mut runtime,
             source,
             target,
@@ -1408,6 +1532,33 @@ mod tests {
             receipt.instance().active().unwrap().construction().task(),
             target
         );
+        let mut full_supervisor = ServiceSupervisor::<0>::new();
+        let failure = activate_native_filesystem_provider(
+            receipt,
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut full_supervisor,
+            &mut runtime,
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.error(),
+            NativeFilesystemProviderActivationError::Service(ServiceError::Full)
+        );
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let active = activate_native_filesystem_provider(
+            failure.into_receipt(),
+            RestartPolicy::ONCE_IMMEDIATE,
+            &mut supervisor,
+            &mut runtime,
+        )
+        .unwrap();
+        assert_eq!(active.task(), target);
+        assert_eq!(
+            active.receipt().provider_object(),
+            association.filesystem_binding.provider_object
+        );
+        assert_eq!(supervisor.task(active.service()), Ok(Some(target)));
+        let mut receipt = active.into_receipt();
         assert!(matches!(
             unsafe {
                 resume_native_component_service_copy_read_transfer_mapping_revocation_on_active_x86_64(
@@ -1610,7 +1761,12 @@ mod tests {
             teardown_calls: 0,
             observed: [0; FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES],
         };
-        let receipt = receipt(association().handoff(), 40);
+        let association = association();
+        let receipt = receipt(
+            association.filesystem_binding.provider_object,
+            association.handoff(),
+            40,
+        );
         let failure = teardown_filesystem_provider(receipt, &mut backend).unwrap_err();
         assert_eq!(backend.teardown_calls, 1);
         assert_eq!(*failure.receipt().instance(), 41);
