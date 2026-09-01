@@ -6,7 +6,7 @@ use mrml_acme::{
     MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
     ProtectedKey, ReplayNonce, account_contacts_digest, dns01_txt_digest,
     execute_prepared_account_create, execute_prepared_order_create, fetch_authorization,
-    fetch_directory, prepare_order_creation, recover_uncertain_account_creation,
+    fetch_directory, poll_order, prepare_order_creation, recover_uncertain_account_creation,
     trigger_propagated_dns01_challenge, write_key_authorization,
 };
 use mrml_acmed::{
@@ -193,24 +193,34 @@ fn serve(
         &mut state,
         &mut state_authenticator,
     )?;
-    let (mut order, authorization_resources) = establish_order(
+    let (mut order, authorization_resources, mut order_durable_generation) = establish_order(
         &config,
         &account,
         &mut envelope_writer,
-        &mut state,
-        &mut state_authenticator,
-    )?;
-    publish_dns_challenges(
-        &config,
-        &account,
-        &mut order,
-        &authorization_resources,
-        &mut envelope_writer,
-        &mut provider,
         &mut state,
         &mut state_authenticator,
     )?;
     loop {
+        publish_dns_challenges(
+            &config,
+            &account,
+            &mut order,
+            &authorization_resources,
+            &mut envelope_writer,
+            &mut provider,
+            &mut state,
+            &mut state_authenticator,
+        )?;
+        order_durable_generation = poll_and_persist_order(
+            &config,
+            &account,
+            &mut order,
+            &authorization_resources,
+            &mut envelope_writer,
+            &mut state,
+            &mut state_authenticator,
+            order_durable_generation,
+        )?;
         if envelope_writer.next_request_id > reservation.last {
             return Err("certd channel request ID reservation exhausted");
         }
@@ -627,6 +637,7 @@ fn establish_order(
     (
         OrderLifecycle,
         [Option<AuthorizationResource>; MAX_AUTHORIZATIONS],
+        u64,
     ),
     &'static str,
 > {
@@ -662,7 +673,7 @@ fn establish_order(
                 .map_err(|_| "stale ACME order policy")?;
             Err("ACME order response is uncertain; duplicate order creation refused")
         }
-        Some((record, _)) if record.phase == AcmedOrderPhase::Created => {
+        Some((record, durable_generation)) if record.phase == AcmedOrderPhase::Created => {
             record
                 .require_policy(config)
                 .map_err(|_| "stale ACME order policy")?;
@@ -721,7 +732,7 @@ fn establish_order(
                     .map_err(|_| "invalid restored authorization resource")?,
                 );
             }
-            Ok((order, resources))
+            Ok((order, resources, durable_generation))
         }
         Some(_) => Err("unsupported ACME order durable phase"),
         None => {
@@ -804,10 +815,87 @@ fn establish_order(
                 authorization_urls,
                 authorization_count: count as u8,
             };
-            persist_order_record(config, state, authenticator, pending_generation, &created)?;
-            Ok((order, resources))
+            let created_generation =
+                persist_order_record(config, state, authenticator, pending_generation, &created)?;
+            Ok((order, resources, created_generation))
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn poll_and_persist_order(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    order: &mut OrderLifecycle,
+    resources: &[Option<AuthorizationResource>; MAX_AUTHORIZATIONS],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    durable_generation: u64,
+) -> Result<u64, &'static str> {
+    if matches!(
+        order.state,
+        mrml_acme::OrderState::Ready
+            | mrml_acme::OrderState::Valid
+            | mrml_acme::OrderState::Invalid
+    ) {
+        return Ok(durable_generation);
+    }
+    let count = usize::from(config.identifier_count);
+    let mut identifiers =
+        [AcmeIdentifier::Dns(config.identifiers[0].ok_or("missing configured identifier")?);
+            MAX_CSR_IDENTIFIERS];
+    let mut bound_resources =
+        [resources[0].ok_or("missing ACME authorization resource")?; MAX_AUTHORIZATIONS];
+    for index in 0..count {
+        identifiers[index] =
+            AcmeIdentifier::Dns(config.identifiers[index].ok_or("missing configured identifier")?);
+        bound_resources[index] = resources[index].ok_or("missing ACME authorization resource")?;
+    }
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for order poll")?;
+    signer.operation = AcmeJwsOperation::Order;
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let response_generation = order
+        .generation
+        .checked_add(1)
+        .ok_or("ACME order generation exhausted")?;
+    poll_order(
+        response_generation,
+        unix_time()?,
+        &identifiers[..count],
+        &bound_resources[..count],
+        &directory,
+        account,
+        order,
+        &mut exchange,
+        &mut transport,
+        signer,
+        &mut response,
+        &mut jws,
+    )
+    .map_err(|_| "ACME order poll failed")?;
+    let (existing, persisted) = load_order_record(config, state, authenticator)?
+        .ok_or("missing durable ACME order during poll")?;
+    if persisted != durable_generation {
+        return Err("ACME order durable generation changed during poll");
+    }
+    let updated = AcmedOrderRecord {
+        state: Some(order.state),
+        certificate_url: order.certificate_url,
+        ..existing
+    };
+    persist_order_record(config, state, authenticator, durable_generation, &updated)
 }
 
 fn load_order_record(
