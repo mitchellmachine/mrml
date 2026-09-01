@@ -22,6 +22,7 @@ mod challenge_service;
 mod challenge_tls_alpn_hosted;
 mod deployment_journal;
 mod dns_propagation;
+mod dns01_provider;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod dns_propagation_hosted;
 mod durable;
@@ -133,6 +134,12 @@ pub use dns_propagation::{
     DnsObservationClass, DnsObservationRoute, DnsPropagationError, DnsPropagationObserver,
     DnsPropagationPolicy, DnsPropagationQuery, DnsPropagationReceipt, DnsTxtObservationReceipt,
     DnsTxtObservationRequest, MAX_PROPAGATION_ATTEMPTS,
+};
+pub use dns01_provider::{
+    DNS01_TXT_VALUE_BYTES, Dns01Provider, Dns01ProviderError, Dns01PublicationReceipt,
+    Dns01PublicationRequest, Dns01RecordName, Dns01TxtValue,
+    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, MAX_DNS01_RECORD_NAME_BYTES,
+    dns01_publication_binding,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use dns_propagation_hosted::{
