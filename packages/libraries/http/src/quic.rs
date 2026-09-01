@@ -145,6 +145,108 @@ pub enum QuicPacketSpace {
     Application,
 }
 
+const RECEIVE_PACKET_WINDOW: u64 = 4096;
+const MAX_RECEIVE_RANGES: usize = 128;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReceivedPacket {
+    New,
+    Duplicate,
+    TooOld,
+}
+
+/// Bounded authenticated packet-number history for one QUIC number space.
+///
+/// Callers must invoke `record` only after header protection and AEAD
+/// authentication succeed. Ranges are inclusive, sorted, and coalesced; sparse
+/// attacker-selected packet numbers therefore cannot create unbounded state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PacketReceiveState {
+    largest: Option<u64>,
+    ranges: Vector<(u64, u64)>,
+}
+
+impl PacketReceiveState {
+    pub(crate) fn new() -> Self {
+        Self {
+            largest: None,
+            ranges: Vector::new(),
+        }
+    }
+
+    pub(crate) fn expected(&self) -> u64 {
+        self.largest
+            .and_then(|value| value.checked_add(1))
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn record(&mut self, number: u64) -> Result<ReceivedPacket, QuicError> {
+        if number >= (1 << 62) {
+            return Err(QuicError::InvalidPacket);
+        }
+        if self
+            .largest
+            .is_some_and(|largest| number.saturating_add(RECEIVE_PACKET_WINDOW) < largest)
+        {
+            return Ok(ReceivedPacket::TooOld);
+        }
+        if self
+            .ranges
+            .iter()
+            .any(|(start, end)| (*start..=*end).contains(&number))
+        {
+            return Ok(ReceivedPacket::Duplicate);
+        }
+
+        let mut insertion = 0;
+        while insertion < self.ranges.len() && self.ranges[insertion].1 < number {
+            insertion += 1;
+        }
+        self.ranges
+            .try_insert(insertion, (number, number))
+            .map_err(|_| QuicError::Allocation)?;
+        if insertion > 0
+            && self.ranges[insertion - 1].1.checked_add(1) == Some(self.ranges[insertion].0)
+        {
+            let end = self.ranges.remove(insertion).1;
+            insertion -= 1;
+            self.ranges[insertion].1 = end;
+        }
+        if insertion + 1 < self.ranges.len()
+            && self.ranges[insertion].1.checked_add(1) == Some(self.ranges[insertion + 1].0)
+        {
+            let end = self.ranges.remove(insertion + 1).1;
+            self.ranges[insertion].1 = end;
+        }
+        self.largest = Some(self.largest.map_or(number, |largest| largest.max(number)));
+        let floor = self.largest.unwrap().saturating_sub(RECEIVE_PACKET_WINDOW);
+        while self.ranges.first().is_some_and(|(_, end)| *end < floor) {
+            self.ranges.remove(0);
+        }
+        while self.ranges.len() > MAX_RECEIVE_RANGES {
+            self.ranges.remove(0);
+        }
+        Ok(ReceivedPacket::New)
+    }
+
+    pub(crate) fn ack_frame(&self) -> Option<QuicFrame> {
+        let &(first_start, largest) = self.ranges.last()?;
+        let mut encoded = Vector::new();
+        let mut next_start = first_start;
+        for &(start, end) in self.ranges[..self.ranges.len() - 1].iter().rev() {
+            let gap = next_start.checked_sub(end)?.checked_sub(2)?;
+            encoded.try_push((gap, end - start)).ok()?;
+            next_start = start;
+        }
+        Some(QuicFrame::Ack {
+            largest,
+            delay: 0,
+            first_range: largest - first_start,
+            ranges: encoded,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuicConnectionPhase {
     Handshaking,
@@ -1150,17 +1252,24 @@ impl ShortPacket {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuicStreamAssembler {
     bytes: Vector<u8>,
-    present: Vector<u8>,
-    contiguous: usize,
+    chunks: Vector<StreamChunk>,
     final_size: Option<usize>,
     limit: usize,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StreamChunk {
+    offset: usize,
+    bytes: Vector<u8>,
+}
+
+const MAX_STREAM_CHUNKS: usize = 256;
+const MAX_STREAM_GAP: usize = 1024 * 1024;
 impl QuicStreamAssembler {
     pub fn new(limit: usize) -> Self {
         Self {
             bytes: Vector::new(),
-            present: Vector::new(),
-            contiguous: 0,
+            chunks: Vector::new(),
             final_size: None,
             limit,
         }
@@ -1168,7 +1277,10 @@ impl QuicStreamAssembler {
     pub fn insert(&mut self, offset: u64, data: &[u8], fin: bool) -> Result<(), QuicError> {
         let offset = usize::try_from(offset).map_err(|_| QuicError::Limit)?;
         let end = offset.checked_add(data.len()).ok_or(QuicError::Limit)?;
-        if end > self.limit || self.final_size.is_some_and(|size| end > size) {
+        if end > self.limit
+            || offset.saturating_sub(self.bytes.len()) > MAX_STREAM_GAP
+            || self.final_size.is_some_and(|size| end > size)
+        {
             return Err(QuicError::Limit);
         }
         if fin {
@@ -1177,43 +1289,99 @@ impl QuicStreamAssembler {
             }
             self.final_size = Some(end)
         }
-        if self.bytes.len() < end {
-            self.bytes
-                .try_resize(end, 0)
-                .map_err(|_| QuicError::Allocation)?;
-            self.present
-                .try_resize(end, 0)
-                .map_err(|_| QuicError::Allocation)?
+        let prefix_overlap = end.min(self.bytes.len()).saturating_sub(offset);
+        if prefix_overlap != 0
+            && self.bytes[offset..offset + prefix_overlap] != data[..prefix_overlap]
+        {
+            return Err(QuicError::InvalidFrame);
         }
-        for (index, value) in data.iter().enumerate() {
-            let position = offset + index;
-            if self.present[position] != 0 && self.bytes[position] != *value {
+        for chunk in &self.chunks {
+            let chunk_end = chunk.offset + chunk.bytes.len();
+            let overlap_start = offset.max(chunk.offset);
+            let overlap_end = end.min(chunk_end);
+            if overlap_start < overlap_end
+                && data[overlap_start - offset..overlap_end - offset]
+                    != chunk.bytes[overlap_start - chunk.offset..overlap_end - chunk.offset]
+            {
                 return Err(QuicError::InvalidFrame);
             }
-            self.bytes[position] = *value;
-            self.present[position] = 1
         }
-        while self.contiguous < self.present.len() && self.present[self.contiguous] != 0 {
-            self.contiguous += 1
+
+        let mut cursor = offset.max(self.bytes.len());
+        while cursor < end {
+            if let Some(chunk) = self
+                .chunks
+                .iter()
+                .find(|chunk| chunk.offset <= cursor && cursor < chunk.offset + chunk.bytes.len())
+            {
+                cursor = (chunk.offset + chunk.bytes.len()).min(end);
+                continue;
+            }
+            let next = self
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.offset > cursor)
+                .map(|chunk| chunk.offset)
+                .min()
+                .unwrap_or(end)
+                .min(end);
+            let mut owned = Vector::new();
+            owned
+                .try_extend_from_slice(&data[cursor - offset..next - offset])
+                .map_err(|_| QuicError::Allocation)?;
+            let insertion = self
+                .chunks
+                .iter()
+                .position(|chunk| chunk.offset > cursor)
+                .unwrap_or(self.chunks.len());
+            self.chunks
+                .try_insert(
+                    insertion,
+                    StreamChunk {
+                        offset: cursor,
+                        bytes: owned,
+                    },
+                )
+                .map_err(|_| QuicError::Allocation)?;
+            if self.chunks.len() > MAX_STREAM_CHUNKS {
+                return Err(QuicError::Limit);
+            }
+            cursor = next;
+        }
+        while self
+            .chunks
+            .first()
+            .is_some_and(|chunk| chunk.offset <= self.bytes.len())
+        {
+            let chunk = self.chunks.remove(0);
+            let already = self.bytes.len().saturating_sub(chunk.offset);
+            if already < chunk.bytes.len() {
+                self.bytes
+                    .try_extend_from_slice(&chunk.bytes[already..])
+                    .map_err(|_| QuicError::Allocation)?;
+            }
         }
         Ok(())
     }
     pub fn contiguous(&self) -> &[u8] {
-        &self.bytes[..self.contiguous]
+        &self.bytes
     }
     pub fn is_finished(&self) -> bool {
-        self.final_size == Some(self.contiguous)
+        self.final_size == Some(self.bytes.len())
     }
     pub fn consume(&mut self, amount: usize) -> Result<(), QuicError> {
-        if amount > self.contiguous {
+        if amount > self.bytes.len() {
             return Err(QuicError::InvalidFrame);
         }
         let remaining = self.bytes.len() - amount;
         self.bytes.copy_within(amount.., 0);
         self.bytes.truncate(remaining);
-        self.present.copy_within(amount.., 0);
-        self.present.truncate(remaining);
-        self.contiguous -= amount;
+        for chunk in &mut self.chunks {
+            chunk.offset = chunk
+                .offset
+                .checked_sub(amount)
+                .ok_or(QuicError::InvalidFrame)?;
+        }
         if let Some(size) = &mut self.final_size {
             *size -= amount
         }
@@ -1652,6 +1820,40 @@ mod tests {
         assert_eq!(&k.header[..], &hex("9f50449e04a0e810283a1e9933adedd2")[..])
     }
     #[test]
+    fn authenticated_packet_history_rejects_replay_and_bounds_sparse_ranges() {
+        let mut state = PacketReceiveState::new();
+        assert_eq!(state.record(7), Ok(ReceivedPacket::New));
+        assert_eq!(state.expected(), 8);
+        assert_eq!(state.record(7), Ok(ReceivedPacket::Duplicate));
+        assert_eq!(state.record(5), Ok(ReceivedPacket::New));
+        assert_eq!(state.expected(), 8);
+        assert_eq!(state.record(6), Ok(ReceivedPacket::New));
+        assert_eq!(&state.ranges[..], &[(5, 7)]);
+        assert_eq!(state.record(5000), Ok(ReceivedPacket::New));
+        assert_eq!(state.record(1), Ok(ReceivedPacket::TooOld));
+        for number in (5002..5500).step_by(2) {
+            assert_eq!(state.record(number), Ok(ReceivedPacket::New));
+        }
+        assert!(state.ranges.len() <= MAX_RECEIVE_RANGES);
+        assert_eq!(state.expected(), 5499);
+    }
+    #[test]
+    fn packet_ack_ranges_cover_authenticated_reordering() {
+        let mut state = PacketReceiveState::new();
+        for number in [10, 8, 7, 4] {
+            assert_eq!(state.record(number), Ok(ReceivedPacket::New));
+        }
+        assert_eq!(
+            state.ack_frame(),
+            Some(QuicFrame::Ack {
+                largest: 10,
+                delay: 0,
+                first_range: 0,
+                ranges: [(0, 1), (1, 0)].into(),
+            })
+        );
+    }
+    #[test]
     fn rfc9369_v2_initial_secrets_and_packet_types() {
         let destination = hex("8394c8f03e515708");
         let client =
@@ -1823,6 +2025,25 @@ mod tests {
         assert_eq!(stream.insert(1, b"X", false), Err(QuicError::InvalidFrame));
         stream.consume(2).unwrap();
         assert_eq!(stream.contiguous(), b"llo");
+    }
+    #[test]
+    fn stream_assembler_does_not_allocate_to_sparse_high_offset() {
+        let mut stream = QuicStreamAssembler::new(16 * 1024 * 1024 + 1);
+        assert_eq!(
+            stream.insert(16 * 1024 * 1024, &[1], false),
+            Err(QuicError::Limit)
+        );
+        assert!(stream.bytes.is_empty());
+        assert!(stream.chunks.is_empty());
+
+        stream.insert(1024, &[3], false).unwrap();
+        assert!(stream.bytes.is_empty());
+        assert_eq!(stream.chunks.len(), 1);
+        assert_eq!(&stream.chunks[0].bytes[..], &[3]);
+        let prefix = [9; 1024];
+        stream.insert(0, &prefix, false).unwrap();
+        assert_eq!(stream.contiguous().len(), 1025);
+        assert_eq!(stream.contiguous()[1024], 3);
     }
     #[test]
     fn handshake_packets_and_minimum_initial_datagrams() {
