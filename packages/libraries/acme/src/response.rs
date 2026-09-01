@@ -1,9 +1,10 @@
 use crate::directory::{Parser, Token};
 use crate::{
-    AcmeOrigin, AcmeUrl, ChallengeKind, ChallengeState, DirectoryError, DnsIdentifier, OrderState,
+    AcmeOrigin, AcmeUrl, ChallengeKind, ChallengeState, DirectoryError, DnsIdentifier,
     MAX_AUTHORIZATIONS, MAX_CHALLENGES_PER_AUTHORIZATION, MAX_DIRECTORY_BYTES,
-    MAX_ORDER_IDENTIFIERS,
+    MAX_ORDER_IDENTIFIERS, OrderState,
 };
+use mrml_crypto::Sha256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResponseError {
@@ -65,6 +66,140 @@ impl ParsedAuthorizationResponse {
             .iter()
             .flatten()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParsedAccountStatus {
+    Valid,
+    Deactivated,
+    Revoked,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AccountContact {
+    bytes: [u8; crate::MAX_ACCOUNT_CONTACT_BYTES],
+    len: u16,
+}
+
+impl AccountContact {
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or("")
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ParsedAccountResponse {
+    pub status: ParsedAccountStatus,
+    pub orders: Option<AcmeUrl>,
+    pub contacts_digest: [u8; 32],
+    contacts: [Option<AccountContact>; crate::MAX_ACCOUNT_CONTACTS],
+    contact_count: u8,
+}
+
+impl ParsedAccountResponse {
+    pub fn contacts(&self) -> impl Iterator<Item = &AccountContact> {
+        self.contacts[..usize::from(self.contact_count)]
+            .iter()
+            .flatten()
+    }
+}
+
+pub fn parse_account_response(
+    source: &str,
+    origin: AcmeOrigin<'_>,
+) -> Result<ParsedAccountResponse, ResponseError> {
+    if source.len() > MAX_DIRECTORY_BYTES {
+        return Err(ResponseError::TooLarge);
+    }
+    let mut parser = Parser::new(source);
+    parser.expect(Token::ObjectStart)?;
+    let mut seen = 0u8;
+    let mut status = None;
+    let mut orders = None;
+    let mut contacts: [Option<AccountContact>; crate::MAX_ACCOUNT_CONTACTS] =
+        [None; crate::MAX_ACCOUNT_CONTACTS];
+    let mut contact_count = 0u8;
+    parser.object_fields(|parser, name| {
+        let bit = match name {
+            "status" => 1,
+            "contact" => 2,
+            "orders" => 4,
+            _ => 0,
+        };
+        if bit != 0 && seen & bit != 0 {
+            return Err(DirectoryError::DuplicateField);
+        }
+        seen |= bit;
+        match name {
+            "status" => {
+                status = Some(match parser.string()? {
+                    "valid" => ParsedAccountStatus::Valid,
+                    "deactivated" => ParsedAccountStatus::Deactivated,
+                    "revoked" => ParsedAccountStatus::Revoked,
+                    _ => return Err(DirectoryError::Malformed),
+                })
+            }
+            "orders" => orders = Some(parse_endpoint(parser, origin)?),
+            "contact" => {
+                parser.expect(Token::ArrayStart)?;
+                match parser.next()? {
+                    Some(Token::ArrayEnd) => {}
+                    Some(token) => {
+                        parser.put_back(token);
+                        loop {
+                            if usize::from(contact_count) >= crate::MAX_ACCOUNT_CONTACTS {
+                                return Err(DirectoryError::TooManyProfiles);
+                            }
+                            let value = parser.string()?;
+                            if value.is_empty()
+                                || value.len() > crate::MAX_ACCOUNT_CONTACT_BYTES
+                                || value.contains(['"', '\\'])
+                                || value.bytes().any(|byte| byte < 0x20 || !byte.is_ascii())
+                            {
+                                return Err(DirectoryError::Malformed);
+                            }
+                            if contacts[..usize::from(contact_count)]
+                                .iter()
+                                .flatten()
+                                .any(|existing| existing.as_str() == value)
+                            {
+                                return Err(DirectoryError::DuplicateField);
+                            }
+                            let mut bytes = [0; crate::MAX_ACCOUNT_CONTACT_BYTES];
+                            bytes[..value.len()].copy_from_slice(value.as_bytes());
+                            contacts[usize::from(contact_count)] = Some(AccountContact {
+                                bytes,
+                                len: value.len() as u16,
+                            });
+                            contact_count += 1;
+                            match parser.next()? {
+                                Some(Token::Comma) => {}
+                                Some(Token::ArrayEnd) => break,
+                                _ => return Err(DirectoryError::Malformed),
+                            }
+                        }
+                    }
+                    None => return Err(DirectoryError::Malformed),
+                }
+            }
+            _ => parser.skip_value(1)?,
+        }
+        Ok(())
+    })?;
+    parser.finish()?;
+    let mut digest = Sha256::new();
+    digest.update(b"mrml-acme-account-contacts-v1\0");
+    for contact in contacts[..usize::from(contact_count)].iter().flatten() {
+        digest.update(&(contact.as_str().len() as u16).to_be_bytes());
+        digest.update(contact.as_str().as_bytes());
+    }
+    Ok(ParsedAccountResponse {
+        status: status.ok_or(ResponseError::MissingField)?,
+        orders,
+        contacts_digest: digest.finalize(),
+        contacts,
+        contact_count,
+    })
 }
 
 pub fn parse_order_response(
@@ -142,7 +277,7 @@ pub fn parse_order_response(
             "finalize" => finalize = Some(parse_endpoint(parser, origin)?),
             "certificate" => certificate = Some(parse_endpoint(parser, origin)?),
             "profile" if parser.string()? != expected_profile => {
-                return Err(DirectoryError::InvalidProfile)
+                return Err(DirectoryError::InvalidProfile);
             }
             "profile" => {}
             _ => parser.skip_value(1)?,
@@ -433,6 +568,36 @@ fn parse_order_status(value: &str) -> Result<OrderState, DirectoryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_response_is_bounded_and_origin_bound() {
+        let directory = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let parsed = parse_account_response(
+            r#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#,
+            directory.origin(),
+        )
+        .unwrap();
+        assert_eq!(parsed.status, ParsedAccountStatus::Valid);
+        assert_eq!(
+            parsed.contacts().next().unwrap().as_str(),
+            "mailto:owner@example.com"
+        );
+        assert_ne!(parsed.contacts_digest, [0; 32]);
+        assert!(
+            parse_account_response(
+                r#"{"status":"valid","orders":"https://other.example/orders/1"}"#,
+                directory.origin(),
+            )
+            .is_err()
+        );
+        assert!(
+            parse_account_response(
+                r#"{"status":"valid","status":"deactivated"}"#,
+                directory.origin(),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn order_response_binds_exact_names_profile_and_origin() {

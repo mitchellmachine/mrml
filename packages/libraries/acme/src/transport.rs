@@ -133,7 +133,7 @@ impl AcmeExchange {
         if response.body_length > output.len() || response.body_length > MAX_ACME_RESPONSE_BODY {
             return Err(TransportError::ResponseTooLarge);
         }
-        if response.effective_url != expected_url || response.location.is_some() {
+        if response.effective_url != expected_url || (300..=399).contains(&response.status) {
             return Err(TransportError::RedirectForbidden);
         }
         if !(100..=599).contains(&response.status) {
@@ -151,10 +151,20 @@ impl AcmeExchange {
                 .insert(self.directory_generation, nonce)
                 .map_err(TransportError::Nonce)?;
         }
+        let location = response
+            .location
+            .map(|value| {
+                let url = AcmeUrl::parse(value, true).map_err(TransportError::Url)?;
+                url.require_origin(self.origin_url.origin())
+                    .map_err(TransportError::Url)?;
+                Ok(url)
+            })
+            .transpose()?;
         Ok(AcmeResponseMetadata {
             status: response.status,
             body_length: response.body_length,
             has_retry_after: response.retry_after.is_some(),
+            location,
         })
     }
 
@@ -186,11 +196,12 @@ impl AcmeExchange {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AcmeResponseMetadata {
     pub status: u16,
     pub body_length: usize,
     pub has_retry_after: bool,
+    pub location: Option<AcmeUrl>,
 }
 
 pub struct BadNonceRetry {
@@ -231,6 +242,7 @@ mod tests {
         effective_url: &'a str,
         nonce: Option<&'a str>,
         location: Option<&'a str>,
+        status: u16,
         calls: usize,
     }
 
@@ -247,7 +259,7 @@ mod tests {
                 body[0] = b'{'
             }
             Ok(AcmeTransportResponse {
-                status: 200,
+                status: self.status,
                 effective_url: self.effective_url,
                 replay_nonce: self.nonce,
                 retry_after: None,
@@ -267,6 +279,7 @@ mod tests {
             nonce: Some("nonce_1"),
             location: None,
             calls: 0,
+            status: 200,
         };
         assert_eq!(
             state
@@ -290,6 +303,7 @@ mod tests {
             nonce: None,
             location: Some("https://other.example/x"),
             calls: 0,
+            status: 302,
         };
         let mut body = [0; 8];
         assert!(matches!(
@@ -319,6 +333,51 @@ mod tests {
             Err(TransportError::Url(UrlError::OriginMismatch))
         ));
         assert_eq!(redirected.calls, 1);
+    }
+
+    #[test]
+    fn accepts_same_origin_resource_location_but_rejects_scheme_change() {
+        let directory = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let endpoint = AcmeUrl::parse("https://ca.example/new-account", false).unwrap();
+        let mut state = AcmeExchange::new(1, directory);
+        let mut created = Adapter {
+            effective_url: endpoint.as_str(),
+            nonce: Some("next"),
+            location: Some("https://ca.example/account/1"),
+            calls: 0,
+            status: 201,
+        };
+        let mut body = [0; 8];
+        let metadata = state
+            .execute(
+                &mut created,
+                AcmeTransportRequest {
+                    method: AcmeHttpMethod::Get,
+                    url: &endpoint,
+                    content_type: AcmeContentType::Empty,
+                    body: &[],
+                },
+                &mut body,
+            )
+            .unwrap();
+        assert_eq!(
+            metadata.location.unwrap().as_str(),
+            "https://ca.example/account/1"
+        );
+        created.location = Some("http://ca.example:443/account/2");
+        assert!(matches!(
+            state.execute(
+                &mut created,
+                AcmeTransportRequest {
+                    method: AcmeHttpMethod::Get,
+                    url: &endpoint,
+                    content_type: AcmeContentType::Empty,
+                    body: &[],
+                },
+                &mut body,
+            ),
+            Err(TransportError::Url(UrlError::OriginMismatch))
+        ));
     }
 
     #[test]

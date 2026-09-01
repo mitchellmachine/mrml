@@ -19,12 +19,20 @@ pub struct AcmeUrl {
     host_start: u16,
     host_end: u16,
     port: u16,
+    scheme: AcmeScheme,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcmeScheme {
+    Https,
+    TestHttp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcmeOrigin<'a> {
     pub host: &'a str,
     pub port: u16,
+    pub scheme: AcmeScheme,
 }
 
 impl AcmeUrl {
@@ -38,10 +46,10 @@ impl AcmeUrl {
         if input.contains('#') {
             return Err(UrlError::FragmentForbidden);
         }
-        let authority_start = if input.starts_with("https://") {
-            8
+        let (authority_start, scheme) = if input.starts_with("https://") {
+            (8, AcmeScheme::Https)
         } else if allow_test_http && input.starts_with("http://") {
-            7
+            (7, AcmeScheme::TestHttp)
         } else {
             return Err(UrlError::HttpsRequired);
         };
@@ -81,6 +89,7 @@ impl AcmeUrl {
             host_start: authority_start as u16,
             host_end: (authority_start + host.len()) as u16,
             port,
+            scheme,
         })
     }
     pub fn as_str(&self) -> &str {
@@ -93,11 +102,15 @@ impl AcmeUrl {
             )
             .unwrap_or(""),
             port: self.port,
+            scheme: self.scheme,
         }
     }
     pub fn require_origin(&self, expected: AcmeOrigin<'_>) -> Result<(), UrlError> {
         let actual = self.origin();
-        if actual.port == expected.port && actual.host.eq_ignore_ascii_case(expected.host) {
+        if actual.scheme == expected.scheme
+            && actual.port == expected.port
+            && actual.host.eq_ignore_ascii_case(expected.host)
+        {
             Ok(())
         } else {
             Err(UrlError::OriginMismatch)
@@ -115,16 +128,19 @@ mod tests {
             Err(UrlError::HttpsRequired)
         ));
         let u = AcmeUrl::parse("https://ca.example/acme/new-order", false).unwrap();
-        assert!(u
-            .require_origin(AcmeOrigin {
+        assert!(
+            u.require_origin(AcmeOrigin {
                 host: "CA.EXAMPLE",
-                port: 443
+                port: 443,
+                scheme: AcmeScheme::Https,
             })
-            .is_ok());
+            .is_ok()
+        );
         assert_eq!(
             u.require_origin(AcmeOrigin {
                 host: "other.example",
-                port: 443
+                port: 443,
+                scheme: AcmeScheme::Https,
             }),
             Err(UrlError::OriginMismatch)
         );

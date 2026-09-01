@@ -11408,3 +11408,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 acquisition, JWS construction, authenticated POST, problem parsing, response
 nonce capture, and bounded `badNonce` replay. It adds no recorded re-review
 trigger.
+
+# 2026-09-01 — Scheme-bound ACME account resource responses
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment parses ordinary bounded RFC
+8555 account objects and accepts a successful resource `Location` only when its
+scheme, host, and port exactly match the configured directory origin. Redirect
+statuses remain forbidden. It adds no recorded re-review-trigger mechanism.
