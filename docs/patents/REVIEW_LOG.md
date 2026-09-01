@@ -11921,3 +11921,11 @@ from exact authenticated record bindings after a process restart. It is a
 fail-closed persistence/recovery mechanism and adds no certificate protocol,
 validation topology, MultiTLS multiplexing, public CA operation, or other
 recorded re-review trigger.
+
+# 2026-09-01 — Immutable hosted certificate-state generations
+
+Patent review: **NOT_TRIGGERED**. This increment implements ordinary local
+authenticated-record persistence using bounded immutable generation files,
+file synchronization, atomic rename publication, and authoritative reread. It
+adds no certificate protocol, validation topology, MultiTLS multiplexing,
+public CA operation, or other recorded re-review trigger.

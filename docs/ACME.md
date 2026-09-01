@@ -209,8 +209,18 @@ reconstructs the active identity, exact tested or activation-uncertain
 candidate, renewal schedule, lease, and pending replacement one generation at
 a time from independently authenticated certificate, deployment, and renewal
 records; it then resolves an injected complete process restart without
-reissuance or key retirement. A concrete host/MRML startup adapter that
-enumerates those records from persistent storage remains required.
+reissuance or key retirement. The hosted Linux/Windows adapter stores
+authenticated records as immutable generation-named files. Preparation writes
+and synchronizes one exact bounded record, commit publishes it with one rename,
+and startup selects the greatest structurally valid generation through a
+bounded directory scan before the journal layer authenticates its complete
+bytes. It refuses skipped generations, non-directory roots, symlink record
+entries, contradictory prepared files, and oversized or malformed records.
+Linux also synchronizes the containing directory. The Windows target
+synchronizes record contents and exercises close, reopen, selection, and
+authentication under Wine; that is not native Windows storage-durability or
+power-loss evidence. An MRML startup adapter that enumerates the same records
+through capability-backed storage remains required.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact

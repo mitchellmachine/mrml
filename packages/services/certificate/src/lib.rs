@@ -16,6 +16,8 @@ mod deployment_journal;
 mod dns_propagation;
 mod durable;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
+mod durable_hosted;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod hot_reload;
 mod identity;
 mod identity_service;
@@ -85,6 +87,8 @@ pub use durable::{
     DurableTransaction, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
     SecretHandle, TransactionState,
 };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use durable_hosted::HostedDurableStateStore;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use hot_reload::{
     HostedCandidateHandshakeTester, HostedSigningRouteResolver, HostedTlsIdentityDeploymentTarget,
