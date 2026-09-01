@@ -1,6 +1,7 @@
 #![no_std]
 
 mod backup;
+mod backup_transfer;
 mod caa;
 mod catalog_lifecycle_provider;
 mod certificate;
@@ -45,6 +46,9 @@ pub use backup::{
     MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES, SealedKeyProvider, create_backup,
     create_recoverable_backup, prepare_sealed_key_record, restore_backup,
     restore_sealed_key_record, verify_backup,
+};
+pub use backup_transfer::{
+    BackupTransferError, BackupUploadSession, MAX_BACKUP_TRANSFER_CHUNK,
 };
 pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 pub use catalog_lifecycle_provider::{

@@ -12018,3 +12018,11 @@ lifecycle framing with an ordinary one-use random bearer ticket and exposes the
 existing typed status query through that admitted stream. It adds no signing
 mechanism, certificate protocol, validation topology, MultiTLS multiplexing,
 certificate authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Bounded chunked certificate-backup restore
+
+Patent review: **NOT_TRIGGERED**. This increment sequentially assembles the
+existing authenticated backup container across bounded lifecycle-sized chunks,
+then invokes the existing verify and clean-target transactional restore paths.
+It adds no certificate protocol, signing mechanism, validation topology,
+certificate authority operation, or recorded re-review trigger.

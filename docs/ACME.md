@@ -190,6 +190,17 @@ with abort on failure. The format carries opaque sealed-provider handles, never
 raw private keys. A provider-specific separately protected sealed-key export and
 the `mrml cert backup` frontend wiring remain required before operational
 disaster recovery is complete.
+Because a complete container may exceed the lifecycle ABI's 4 KiB request
+window, restore input is assembled by a bounded sequential transfer state
+machine rather than by raising that ABI bound. Each upload binds a nonzero
+transfer generation, exact policy generation, total length, and expected
+SHA-256 digest; accepts at most 4096 bytes at the exact next offset; and rejects
+replay, reordering, truncation, overflow, and digest substitution. Verification
+uses the existing durable authenticator over the completed container. Restore
+is available only after successful verification, still requires an empty
+transactional target, and clears the 269492-byte bounded assembly buffer after
+a successful commit or explicit cancellation. Lifecycle request codecs and the
+hosted CLI/provider wiring for these transfer steps remain required.
 RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
 and DER serial contents, including a required leading zero, and are carried in
 the verified-chain receipt. RenewalInfo parsing bounds and validates the exact
