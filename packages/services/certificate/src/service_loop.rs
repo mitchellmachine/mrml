@@ -1,3 +1,8 @@
+use crate::{
+    CertificateChallengeProvider, CertificateIdentityProvider, CertificateLifecycleAuthorizer,
+    CertificateLifecycleProvider, dispatch_challenge_call, dispatch_identity_call,
+    dispatch_lifecycle_call,
+};
 use mrml_interface_certificate_signing_v1 as abi;
 use mrml_kernel::{Capability, ControlEvent, Endpoint, TaskId, TaskRuntime, TaskRuntimeError};
 
@@ -114,6 +119,103 @@ pub fn serve_native_signing_once<
     provider: &mut P,
     shared_memory: &mut [u8],
 ) -> Result<(), CertificateSigningServiceError> {
+    serve_native_once(
+        runtime,
+        caller,
+        service,
+        reply_endpoint,
+        reply_capability,
+        shared_memory,
+        |frame, memory| dispatch_signing_call(provider, frame, memory).map_err(|_| ()),
+    )
+}
+
+pub fn serve_native_identity_once<
+    P: CertificateIdentityProvider,
+    const TASKS: usize,
+    const CAPS: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPS>,
+    caller: TaskId,
+    service: TaskId,
+    reply_endpoint: &mut Endpoint,
+    reply_capability: Capability,
+    provider: &mut P,
+    shared_memory: &mut [u8],
+) -> Result<(), CertificateSigningServiceError> {
+    serve_native_once(
+        runtime,
+        caller,
+        service,
+        reply_endpoint,
+        reply_capability,
+        shared_memory,
+        |frame, memory| dispatch_identity_call(provider, frame, memory).map_err(|_| ()),
+    )
+}
+pub fn serve_native_challenge_once<
+    P: CertificateChallengeProvider,
+    const TASKS: usize,
+    const CAPS: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPS>,
+    caller: TaskId,
+    service: TaskId,
+    reply_endpoint: &mut Endpoint,
+    reply_capability: Capability,
+    provider: &mut P,
+    shared_memory: &mut [u8],
+) -> Result<(), CertificateSigningServiceError> {
+    serve_native_once(
+        runtime,
+        caller,
+        service,
+        reply_endpoint,
+        reply_capability,
+        shared_memory,
+        |frame, memory| dispatch_challenge_call(provider, frame, memory).map_err(|_| ()),
+    )
+}
+pub fn serve_native_lifecycle_once<
+    A: CertificateLifecycleAuthorizer,
+    P: CertificateLifecycleProvider,
+    const TASKS: usize,
+    const CAPS: usize,
+>(
+    runtime: &mut TaskRuntime<TASKS, CAPS>,
+    caller: TaskId,
+    service: TaskId,
+    reply_endpoint: &mut Endpoint,
+    reply_capability: Capability,
+    authorizer: &A,
+    provider: &mut P,
+    shared_memory: &mut [u8],
+) -> Result<(), CertificateSigningServiceError> {
+    serve_native_once(
+        runtime,
+        caller,
+        service,
+        reply_endpoint,
+        reply_capability,
+        shared_memory,
+        |frame, memory| {
+            dispatch_lifecycle_call(authorizer, provider, frame, memory).map_err(|_| ())
+        },
+    )
+}
+
+fn serve_native_once<F, const TASKS: usize, const CAPS: usize>(
+    runtime: &mut TaskRuntime<TASKS, CAPS>,
+    caller: TaskId,
+    service: TaskId,
+    reply_endpoint: &mut Endpoint,
+    reply_capability: Capability,
+    shared_memory: &mut [u8],
+    dispatch: F,
+) -> Result<(), CertificateSigningServiceError>
+where
+    F: FnOnce(&[u8], &mut [u8]) -> Result<[u8; abi::RESPONSE_BYTES], ()>,
+{
     let received = match runtime
         .receive_control(service)
         .map_err(CertificateSigningServiceError::Runtime)?
@@ -128,7 +230,8 @@ pub fn serve_native_signing_once<
     message
         .authorize_no_capabilities()
         .map_err(|_| CertificateSigningServiceError::CapabilityShape)?;
-    let response = dispatch_signing_call(provider, message.payload(), shared_memory)?;
+    let response = dispatch(message.payload(), shared_memory)
+        .map_err(|_| CertificateSigningServiceError::InvalidFrame)?;
     runtime
         .deliver_ipc(
             service,

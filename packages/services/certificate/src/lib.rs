@@ -92,6 +92,7 @@ pub use scheduler::{
 };
 pub use service_loop::{
     CertificateSigningProvider, CertificateSigningServiceError, dispatch_signing_call,
+    serve_native_challenge_once, serve_native_identity_once, serve_native_lifecycle_once,
     serve_native_signing_once,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]

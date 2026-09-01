@@ -11639,3 +11639,11 @@ certificate lifecycle authorization from execution and binds each decision to
 the exact operation, policy generation, object identity, and copied request.
 It adds no certificate brokerage, public-CA operation, or other recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Unified native certificate service transport
+
+Patent review: **NOT_TRIGGERED**. This increment carries signing, identity,
+challenge, and lifecycle calls through MRML's conventional capability-checked
+task runtime with exact peer selection, no capability transfer, bounded shared
+memory, and a fixed response frame. It adds no new certificate or validation
+mechanism and no recorded re-review trigger.
