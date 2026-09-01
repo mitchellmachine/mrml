@@ -27,3 +27,17 @@ physical hardware, production load, or independent audit evidence.
 `READY.md` is intentionally absent. Persistent endpoint, full TLS/OCSP gates,
 production Zstandard/L2, Smart Git adapter, Linux deployment, load/fuzz matrix,
 Windows evidence, and independent review remain open.
+
+Additional hosted Linux gates on 2026-09-01:
+
+- `mrml test org.mrml.library.crypto --target linux`: 42 passed;
+- `mrml test org.mrml.zstd --target linux`: 29 passed;
+- `mrml test org.mrml.library.tls --target linux`: 26 passed.
+
+The first TLS invocation ran concurrently with other packages sharing the same
+build directory and failed while reading a transient zero-length runtime object.
+The sequential rerun rebuilt the dependency and passed; only the sequential
+result is test evidence. `mrml test org.mrml.library.http --target windows`
+stopped before compilation with `ToolchainUnavailable` because the pinned
+Windows cross-host toolchain is not installed. This is a blocker, not Windows
+test evidence.
