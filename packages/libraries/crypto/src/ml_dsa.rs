@@ -1175,10 +1175,18 @@ mod tests {
     fn nist_acvp_fips204_siggen_case_41() {
         // NIST ACVP-Server internal projection, pinned at
         // 975de31eb83d87039ec88934fdc47d8c312b892d, ML-DSA-65 tcId 41.
-        let secret = fixture_hex::<ML_DSA_65_SECRET_KEY_BYTES>(include_str!("testdata/nist-acvp-fips204-siggen-41-secret.hex"));
-        let context = fixture_hex::<11>(include_str!("testdata/nist-acvp-fips204-siggen-41-context.hex"));
-        let message = fixture_hex::<1>(include_str!("testdata/nist-acvp-fips204-siggen-41-message.hex"));
-        let expected = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!("testdata/nist-acvp-fips204-siggen-41-signature.hex"));
+        let secret = fixture_hex::<ML_DSA_65_SECRET_KEY_BYTES>(include_str!(
+            "testdata/nist-acvp-fips204-siggen-41-secret.hex"
+        ));
+        let context = fixture_hex::<11>(include_str!(
+            "testdata/nist-acvp-fips204-siggen-41-context.hex"
+        ));
+        let message = fixture_hex::<1>(include_str!(
+            "testdata/nist-acvp-fips204-siggen-41-message.hex"
+        ));
+        let expected = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!(
+            "testdata/nist-acvp-fips204-siggen-41-signature.hex"
+        ));
         assert_eq!(secret.len(), ML_DSA_65_SECRET_KEY_BYTES);
         assert_eq!(expected.len(), ML_DSA_65_SIGNATURE_BYTES);
         let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
@@ -1189,17 +1197,49 @@ mod tests {
     #[test]
     fn nist_acvp_fips204_sigver_cases() {
         // Same pinned NIST projection: tcId 33 is valid and tcId 31 is invalid.
-        let valid_public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-33-public.hex"));
-        let valid_context = fixture_hex::<142>(include_str!("testdata/nist-acvp-fips204-sigver-33-context.hex"));
-        let valid_message = fixture_hex::<1481>(include_str!("testdata/nist-acvp-fips204-sigver-33-message.hex"));
-        let valid_signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-33-signature.hex"));
-        assert_eq!(ml_dsa_65_verify(&valid_public, &valid_context, &valid_message, &valid_signature), Ok(()));
+        let valid_public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-33-public.hex"
+        ));
+        let valid_context = fixture_hex::<142>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-33-context.hex"
+        ));
+        let valid_message = fixture_hex::<1481>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-33-message.hex"
+        ));
+        let valid_signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-33-signature.hex"
+        ));
+        assert_eq!(
+            ml_dsa_65_verify(
+                &valid_public,
+                &valid_context,
+                &valid_message,
+                &valid_signature
+            ),
+            Ok(())
+        );
 
-        let invalid_public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-31-public.hex"));
-        let invalid_context = fixture_hex::<13>(include_str!("testdata/nist-acvp-fips204-sigver-31-context.hex"));
-        let invalid_message = fixture_hex::<3468>(include_str!("testdata/nist-acvp-fips204-sigver-31-message.hex"));
-        let invalid_signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-31-signature.hex"));
-        assert_eq!(ml_dsa_65_verify(&invalid_public, &invalid_context, &invalid_message, &invalid_signature), Err(MlDsaError::InvalidSignature));
+        let invalid_public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-31-public.hex"
+        ));
+        let invalid_context = fixture_hex::<13>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-31-context.hex"
+        ));
+        let invalid_message = fixture_hex::<3468>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-31-message.hex"
+        ));
+        let invalid_signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!(
+            "testdata/nist-acvp-fips204-sigver-31-signature.hex"
+        ));
+        assert_eq!(
+            ml_dsa_65_verify(
+                &invalid_public,
+                &invalid_context,
+                &invalid_message,
+                &invalid_signature
+            ),
+            Err(MlDsaError::InvalidSignature)
+        );
     }
 
     #[test]
@@ -1214,10 +1254,7 @@ mod tests {
             "testdata/openssl-3.6.4-mldsa65-signature.hex"
         ));
         let message = b"MRML OpenSSL 3.6.4 ML-DSA-65 differential oracle\n";
-        assert_eq!(
-            ml_dsa_65_verify(&public, b"", message, &signature),
-            Ok(())
-        );
+        assert_eq!(ml_dsa_65_verify(&public, b"", message, &signature), Ok(()));
     }
 
     #[test]
