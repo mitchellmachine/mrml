@@ -10,6 +10,7 @@ mod caa;
 mod catalog_lifecycle_provider;
 mod certificate;
 mod certd_channel;
+mod constrained_acme_signing;
 #[cfg(target_os = "linux")]
 mod certd_channel_unix;
 mod challenge_dns;
@@ -107,6 +108,10 @@ pub use certd_channel::{
     CertdChannelError, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
     CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     decode_certd_channel_request, encode_certd_channel_request,
+};
+pub use constrained_acme_signing::{
+    AcmeJwsOperation, ConstrainedAcmeJwsError, ConstrainedAcmeJwsPolicy,
+    ConstrainedAcmeJwsRequest, write_constrained_acme_jws,
 };
 #[cfg(target_os = "linux")]
 pub use certd_channel_unix::{
