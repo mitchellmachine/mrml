@@ -9,7 +9,7 @@ self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
 test "$#" -le 1 || {
-    echo "usage: $0 [execute|write|temporal]" >&2
+    echo "usage: $0 [execute|write|temporal|sampled]" >&2
     exit 1
 }
 case ${1:-execute} in
@@ -19,7 +19,9 @@ case ${1:-execute} in
         expected_hash=5aef132dd500c0e849e4736f4dcddef28f3ae939b639df6df840d12823e3d27b
         profile_size=
         profile_hash=
+        profile_file=
         instrumentation=coverage
+        probe_source=docs/compiler/probes/pinned_instrumented_profile.rs
         ;;
     write)
         entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
@@ -27,7 +29,9 @@ case ${1:-execute} in
         expected_hash=a5949787946712c2d9c66a3a6e8c30986aec6ea639c6dc99f2e45ff884534c91
         profile_size=288
         profile_hash=437f3ffa93254a22de0098ab99e84cfd52148f7a7d8a92aafa3a91c80581da50
+        profile_file=profile.profraw
         instrumentation=coverage
+        probe_source=docs/compiler/probes/pinned_instrumented_profile.rs
         ;;
     temporal)
         entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
@@ -35,10 +39,22 @@ case ${1:-execute} in
         expected_hash=79b17c85389aa2804f7d807d352e7444bfd3cd653577058df1c3d02cdcab83cd
         profile_size=296
         profile_hash=98a815c829e47f187341fe363c4a0b506e0ba30cb2ab796142fe14858eb1f933
+        profile_file=profile.profraw
         instrumentation=temporal
+        probe_source=docs/compiler/probes/pinned_instrumented_profile.rs
+        ;;
+    sampled)
+        entry_source=docs/compiler/probes/pinned_sampled_profile_entry.s
+        expected_size=61952
+        expected_hash=a942a7294e9099d8ad27e5fdfb3982a8a3f7996c6296de004a5606f45acb28dc
+        profile_size=304
+        profile_hash=1bdd1251554c070163a9ccc14098da66d085fc2df5bbdc8cafe70b5b0dfce219
+        profile_file=sampled.profraw
+        instrumentation=sampled
+        probe_source=docs/compiler/probes/pinned_sampled_profile.rs
         ;;
     *)
-        echo "usage: $0 [execute|write|temporal]" >&2
+        echo "usage: $0 [execute|write|temporal|sampled]" >&2
         exit 1
         ;;
 esac
@@ -100,12 +116,20 @@ if test "$instrumentation" = temporal; then
     "$rustc" --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
         -C profile-generate -C llvm-args=-pgo-temporal-instrumentation \
         --target x86_64-pc-windows-gnullvm \
-        docs/compiler/probes/pinned_instrumented_profile.rs \
+        "$probe_source" \
         -o "$probe/profiled.obj"
+elif test "$instrumentation" = sampled; then
+    "$rustc" --edition=2024 --crate-type=lib --emit=obj -C opt-level=3 \
+        -C panic=abort -C profile-generate \
+        -C llvm-args=-enable-sampled-instrumentation \
+        -C llvm-args=-sampled-instr-period=17 \
+        -C llvm-args=-sampled-instr-burst-duration=3 \
+        --target x86_64-pc-windows-gnullvm \
+        "$probe_source" -o "$probe/profiled.obj"
 else
     "$rustc" --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
         -C instrument-coverage --target x86_64-pc-windows-gnullvm \
-        docs/compiler/probes/pinned_instrumented_profile.rs \
+        "$probe_source" \
         -o "$probe/profiled.obj"
 fi
 clang --target=x86_64-pc-windows-msvc -c \
@@ -140,12 +164,12 @@ test "$execution_status" -eq 42 || {
 }
 
 if test -n "$profile_size"; then
-    test -f "$probe/profile.profraw" || {
-        echo "profile runtime did not emit profile.profraw" >&2
+    test -f "$probe/$profile_file" || {
+        echo "profile runtime did not emit $profile_file" >&2
         exit 1
     }
-    actual_profile_size=$(wc -c < "$probe/profile.profraw" | tr -d ' ')
-    actual_profile_hash=$(sha256sum "$probe/profile.profraw" | awk '{print $1}')
+    actual_profile_size=$(wc -c < "$probe/$profile_file" | tr -d ' ')
+    actual_profile_hash=$(sha256sum "$probe/$profile_file" | awk '{print $1}')
     test "$actual_profile_size" = "$profile_size" || {
         echo "unexpected raw profile size/hash: $actual_profile_size $actual_profile_hash" >&2
         exit 1
