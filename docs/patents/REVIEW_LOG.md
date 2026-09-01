@@ -11804,3 +11804,10 @@ Patent review: **NOT_TRIGGERED**. This increment exposes the already reviewed
 typed CAA recommendation and observation checks through stable human and
 machine-readable `mrml cert caa` commands. It introduces no new mechanism or
 recorded re-review trigger.
+
+# 2026-09-01 — Owner-selected ACME alternate-chain retrieval
+
+Patent review: **NOT_TRIGGERED**. This increment parses bounded standard
+`rel="alternate"` certificate links, enforces the configured CA origin,
+validates every fetched chain, and selects only an exact owner-approved chain
+digest. It introduces no recorded re-review trigger.

@@ -218,11 +218,18 @@ through capability-bound services.
 
 General JOSE response parsing, MRML HTTPS capability adapters, hosted DNS query
 adapters, lifecycle-specific state codecs and recovery wiring,
-alternate-chain link retrieval, renewal execution, revocation transport,
+renewal execution, revocation transport,
 sealed-key backup/restore adapters, CLI administration, interface dispatch/service loop, concrete
 gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
+
+Certificate retrieval captures at most eight bounded standard
+`rel="alternate"` links from the authenticated primary response, rejects
+malformed, duplicate, overflow, primary-self, or cross-origin targets, fetches
+each candidate with the current account and one-use nonce machinery, validates
+every candidate chain, and selects only the lowest-index exact chain digest in
+owner policy. Response order never selects trust compatibility.
 Future platform adapters belong inside these logical packages and must not fork
 their public semantics.
 

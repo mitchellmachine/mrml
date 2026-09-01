@@ -240,6 +240,108 @@ pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVeri
     Ok(RetrievedCertificate { chain, receipt })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn retrieve_and_select_certificate_chain<T: AcmeTransport, V: CertificateChainVerifier>(
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    policy: &CertificateValidationPolicy,
+    alternate_policy: &AlternateChainPolicy,
+    exchange: &mut AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    verifier: &mut V,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<RetrievedCertificate, CertificateRetrievalError<T::Error>> {
+    let primary = retrieve_and_verify_certificate(
+        directory,
+        account,
+        order,
+        policy,
+        exchange,
+        transport,
+        signer,
+        verifier,
+        response_body,
+        jws_scratch,
+    )?;
+    let mut alternate_urls = [None; MAX_ALTERNATE_CHAINS];
+    for index in 0..alternate_urls.len() {
+        let Some(link) = transport.response_alternate_link(index) else {
+            break;
+        };
+        let url = mrml_acme::AcmeUrl::parse(link, true)
+            .map_err(|_| CertificateRetrievalError::ResourceMismatch)?;
+        url.require_origin(directory.new_nonce.origin())
+            .map_err(|_| CertificateRetrievalError::ResourceMismatch)?;
+        if url == *order.certificate_url.as_ref().unwrap()
+            || alternate_urls[..index]
+                .iter()
+                .any(|seen| *seen == Some(url))
+        {
+            return Err(CertificateRetrievalError::ResourceMismatch);
+        }
+        alternate_urls[index] = Some(url);
+    }
+    if transport
+        .response_alternate_link(MAX_ALTERNATE_CHAINS)
+        .is_some()
+    {
+        return Err(CertificateRetrievalError::ResourceMismatch);
+    }
+
+    let mut selected = preference_index(alternate_policy, primary.receipt.chain_digest)
+        .map(|preference| (preference, primary));
+    for url in alternate_urls.into_iter().flatten() {
+        let account_url = account
+            .account_url
+            .as_ref()
+            .ok_or(CertificateRetrievalError::ResourceMismatch)?;
+        let result = post_jws(
+            exchange,
+            transport,
+            &directory.new_nonce,
+            &url,
+            ProtectedKey::Kid(account_url),
+            b"",
+            account.generation,
+            signer,
+            response_body,
+            jws_scratch,
+        )
+        .map_err(CertificateRetrievalError::Post)?;
+        if let Some(problem) = result.problem {
+            return Err(CertificateRetrievalError::Server(problem));
+        }
+        if result.metadata.status != 200 {
+            return Err(CertificateRetrievalError::UnexpectedStatus);
+        }
+        if result.metadata.response_type != AcmeResponseType::PemCertificateChain {
+            return Err(CertificateRetrievalError::UnexpectedContentType);
+        }
+        let chain = PemCertificateChain::parse(&response_body[..result.metadata.body_length])
+            .map_err(CertificateRetrievalError::Validation)?;
+        let receipt = verifier
+            .verify(&chain, policy)
+            .map_err(CertificateRetrievalError::Validation)?;
+        let Some(preference) = preference_index(alternate_policy, receipt.chain_digest) else {
+            continue;
+        };
+        if selected
+            .as_ref()
+            .is_none_or(|(current, _)| preference < *current)
+        {
+            selected = Some((preference, RetrievedCertificate { chain, receipt }));
+        }
+    }
+    selected
+        .map(|(_, certificate)| certificate)
+        .ok_or(CertificateRetrievalError::Validation(
+            CertificateValidationError::AlternateChainNotApproved,
+        ))
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AlternateChainPolicy {
     /// Exact chain digests in descending owner preference. Empty policy means
@@ -292,6 +394,14 @@ pub fn select_alternate_chain<V: CertificateChainVerifier>(
         }
     }
     selected.ok_or(CertificateValidationError::AlternateChainNotApproved)
+}
+
+fn preference_index(policy: &AlternateChainPolicy, digest: [u8; 32]) -> Option<u8> {
+    policy
+        .preferred_chain_digests
+        .iter()
+        .position(|approved| *approved == Some(digest))
+        .map(|index| index as u8)
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -523,7 +633,9 @@ mod tests {
         }
     }
 
-    struct CertificateTransport;
+    struct CertificateTransport {
+        alternate_links_current: bool,
+    }
     impl AcmeTransport for CertificateTransport {
         type Error = ();
         fn exchange(
@@ -531,6 +643,7 @@ mod tests {
             request: AcmeTransportRequest<'_>,
             output: &mut [u8],
         ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            self.alternate_links_current = false;
             if request.method == AcmeHttpMethod::Head {
                 return Ok(AcmeTransportResponse {
                     status: 200,
@@ -542,17 +655,31 @@ mod tests {
                     body_length: 0,
                 });
             }
-            let pem = b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+            let alternate = request.url.as_str() == "https://ca.example/certificate/1/alternate";
+            let pem = if alternate {
+                b"-----BEGIN CERTIFICATE-----\nBAUG\n-----END CERTIFICATE-----\n".as_slice()
+            } else {
+                self.alternate_links_current = true;
+                b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n".as_slice()
+            };
             output[..pem.len()].copy_from_slice(pem);
             Ok(AcmeTransportResponse {
                 status: 200,
-                effective_url: "https://ca.example/certificate/1",
+                effective_url: if alternate {
+                    "https://ca.example/certificate/1/alternate"
+                } else {
+                    "https://ca.example/certificate/1"
+                },
                 replay_nonce: Some("certificate-nonce-2"),
                 retry_after: None,
                 location: None,
                 content_type: Some("application/pem-certificate-chain"),
                 body_length: pem.len(),
             })
+        }
+        fn response_alternate_link(&self, index: usize) -> Option<&str> {
+            (self.alternate_links_current && index == 0)
+                .then_some("https://ca.example/certificate/1/alternate")
         }
     }
 
@@ -646,7 +773,9 @@ mod tests {
             trust_store_digest: [8; 32],
         };
         let mut exchange = AcmeExchange::new(directory.generation, directory_url);
-        let mut transport = CertificateTransport;
+        let mut transport = CertificateTransport {
+            alternate_links_current: false,
+        };
         let mut signer = Signer;
         let mut verifier = ReceiptVerifier;
         let mut response = [0; 2048];
@@ -672,6 +801,38 @@ mod tests {
             retrieved.receipt.chain_digest,
             retrieved.chain.chain_digest()
         );
+
+        let alternate = PemCertificateChain::parse(
+            b"-----BEGIN CERTIFICATE-----\nBAUG\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        let mut preferred_chain_digests = [None; MAX_ALTERNATE_CHAINS];
+        preferred_chain_digests[0] = Some(alternate.chain_digest());
+        preferred_chain_digests[1] = Some(retrieved.chain.chain_digest());
+        let mut exchange = AcmeExchange::new(directory.generation, directory_url);
+        let mut transport = CertificateTransport {
+            alternate_links_current: false,
+        };
+        let selected = retrieve_and_select_certificate_chain(
+            &directory,
+            &account,
+            &order,
+            &policy,
+            &AlternateChainPolicy {
+                preferred_chain_digests,
+            },
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut verifier,
+            &mut response,
+            &mut jws,
+        );
+        let selected = match selected {
+            Ok(selected) => selected,
+            Err(_) => panic!("alternate certificate retrieval failed"),
+        };
+        assert_eq!(selected.chain.certificate(0), Some(&[4, 5, 6][..]));
     }
 
     #[test]

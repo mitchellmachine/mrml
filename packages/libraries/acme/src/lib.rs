@@ -115,7 +115,7 @@ pub use transaction::{AcmePostError, AcmePostResponse, MAX_JWS_REQUEST_BYTES, po
 pub use transport::{
     AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeResponseMetadata, AcmeResponseType,
     AcmeTransport, AcmeTransportRequest, AcmeTransportResponse, BadNonceRetry,
-    MAX_ACME_RESPONSE_BODY, MAX_BAD_NONCE_RETRIES, MAX_CONTENT_TYPE_BYTES, MAX_RETRY_AFTER_BYTES,
-    TransportError,
+    MAX_ACME_RESPONSE_BODY, MAX_ALTERNATE_LINK_BYTES, MAX_ALTERNATE_LINKS, MAX_BAD_NONCE_RETRIES,
+    MAX_CONTENT_TYPE_BYTES, MAX_RETRY_AFTER_BYTES, TransportError,
 };
 pub use url::{AcmeOrigin, AcmeScheme, AcmeUrl, MAX_URL_BYTES, UrlError};

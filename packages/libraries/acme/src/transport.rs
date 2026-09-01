@@ -3,6 +3,8 @@ use crate::{AcmeUrl, NonceError, NoncePool, ReplayNonce, UrlError};
 pub const MAX_ACME_RESPONSE_BODY: usize = 64 * 1024;
 pub const MAX_RETRY_AFTER_BYTES: usize = 64;
 pub const MAX_CONTENT_TYPE_BYTES: usize = 128;
+pub const MAX_ALTERNATE_LINK_BYTES: usize = 2048;
+pub const MAX_ALTERNATE_LINKS: usize = 8;
 pub const MAX_BAD_NONCE_RETRIES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +65,12 @@ pub trait AcmeTransport {
         request: AcmeTransportRequest<'_>,
         body: &mut [u8],
     ) -> Result<AcmeTransportResponse<'_>, Self::Error>;
+
+    /// Returns bounded `rel="alternate"` targets from the immediately
+    /// preceding response. A subsequent exchange invalidates this view.
+    fn response_alternate_link(&self, _index: usize) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

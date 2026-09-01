@@ -13,6 +13,8 @@ pub const LOCAL_AUTHORIZATION_URL: &str = "https://local-ca.invalid/acme/authz/1
 pub const LOCAL_CHALLENGE_URL: &str = "https://local-ca.invalid/acme/challenge/1";
 pub const LOCAL_FINALIZE_URL: &str = "https://local-ca.invalid/acme/order/1/finalize";
 pub const LOCAL_CERTIFICATE_URL: &str = "https://local-ca.invalid/acme/certificate/1";
+pub const LOCAL_ALTERNATE_CERTIFICATE_URL: &str =
+    "https://local-ca.invalid/acme/certificate/1/alternate";
 pub const LOCAL_REVOKE_URL: &str = "https://local-ca.invalid/acme/revoke-cert";
 pub const LOCAL_RENEWAL_INFO_URL: &str = "https://local-ca.invalid/acme/renewal-info";
 pub const LOCAL_RENEWAL_INFO_CERTIFICATE_URL: &str =
@@ -121,6 +123,8 @@ pub struct DeterministicAcmeAuthority<V> {
     fault: LocalAuthorityFault,
     fault_used: bool,
     certificate: &'static str,
+    alternate_certificate: Option<&'static str>,
+    alternate_links_current: bool,
     require_eab: bool,
     challenge: LocalAuthorityChallenge,
 }
@@ -135,6 +139,8 @@ impl<V> DeterministicAcmeAuthority<V> {
             fault: LocalAuthorityFault::None,
             fault_used: false,
             certificate: SYNTHETIC_CERTIFICATE,
+            alternate_certificate: None,
+            alternate_links_current: false,
             require_eab: false,
             challenge: LocalAuthorityChallenge::Http01,
         }
@@ -151,6 +157,10 @@ impl<V> DeterministicAcmeAuthority<V> {
     }
     pub fn with_certificate(mut self, pem_chain: &'static str) -> Self {
         self.certificate = pem_chain;
+        self
+    }
+    pub fn with_alternate_certificate(mut self, pem_chain: &'static str) -> Self {
+        self.alternate_certificate = Some(pem_chain);
         self
     }
     pub fn require_external_account_binding(mut self) -> Self {
@@ -174,6 +184,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
         r: AcmeTransportRequest<'_>,
         out: &mut [u8],
     ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+        self.alternate_links_current = false;
         let url = r.url.as_str();
         if r.method == AcmeHttpMethod::Get && url == LOCAL_DIRECTORY_URL {
             let directory = if self.fault == LocalAuthorityFault::ProfileAdvertisementChanges {
@@ -502,6 +513,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 } else {
                     self.certificate
                 };
+                self.alternate_links_current = self.alternate_certificate.is_some();
                 reply(
                     out,
                     200,
@@ -510,6 +522,21 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     None,
                     Some("application/pem-certificate-chain"),
                     certificate,
+                )
+            }
+            LOCAL_ALTERNATE_CERTIFICATE_URL => {
+                if self.state != LocalAuthorityState::OrderValid || !payload.is_empty() {
+                    return Err(LocalAuthorityError::InvalidState);
+                }
+                reply(
+                    out,
+                    200,
+                    effective,
+                    next,
+                    None,
+                    Some("application/pem-certificate-chain"),
+                    self.alternate_certificate
+                        .ok_or(LocalAuthorityError::InvalidState)?,
                 )
             }
             LOCAL_REVOKE_URL => {
@@ -523,6 +550,10 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
             }
             _ => Err(LocalAuthorityError::WrongEndpoint),
         }
+    }
+
+    fn response_alternate_link(&self, index: usize) -> Option<&str> {
+        (self.alternate_links_current && index == 0).then_some(LOCAL_ALTERNATE_CERTIFICATE_URL)
     }
 }
 fn validate_jws(
@@ -614,6 +645,7 @@ fn canonical_endpoint(value: &str) -> Option<&'static str> {
         LOCAL_CHALLENGE_URL => LOCAL_CHALLENGE_URL,
         LOCAL_FINALIZE_URL => LOCAL_FINALIZE_URL,
         LOCAL_CERTIFICATE_URL => LOCAL_CERTIFICATE_URL,
+        LOCAL_ALTERNATE_CERTIFICATE_URL => LOCAL_ALTERNATE_CERTIFICATE_URL,
         LOCAL_REVOKE_URL => LOCAL_REVOKE_URL,
         LOCAL_KEY_CHANGE_URL => LOCAL_KEY_CHANGE_URL,
         _ => return None,

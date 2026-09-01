@@ -43,7 +43,8 @@ pub use certificate::{
     CertificateValidationError, CertificateValidationPolicy, MAX_ALTERNATE_CHAINS,
     MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATE_DER_BYTES, MAX_CERTIFICATES, MAX_IDENTITY_NAMES,
     PemCertificateChain, RetrievedCertificate, SelectedCertificateChain,
-    VerifiedCertificateReceipt, retrieve_and_verify_certificate, select_alternate_chain,
+    VerifiedCertificateReceipt, retrieve_and_select_certificate_chain,
+    retrieve_and_verify_certificate, select_alternate_chain,
 };
 pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
