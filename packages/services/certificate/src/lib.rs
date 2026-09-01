@@ -15,6 +15,7 @@ mod durable;
 mod identity;
 mod revocation;
 mod scheduler;
+mod service_loop;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod tls_signing_adapter;
 
@@ -77,6 +78,10 @@ pub use revocation::{
 pub use scheduler::{
     ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,
     ReplacementBinding, SchedulerError,
+};
+pub use service_loop::{
+    CertificateSigningProvider, CertificateSigningServiceError, dispatch_signing_call,
+    serve_native_signing_once,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use tls_signing_adapter::IdentityTlsSigningAdapter;

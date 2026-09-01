@@ -11580,3 +11580,12 @@ views, strict generation fields, reserved-byte validation, and exact typed
 responses for the already reviewed use-only certificate signing route. It adds
 no signing algorithm, smart-card precomputation machinery, or other recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Capability-carried certificate signing dispatch
+
+Patent review: **NOT_TRIGGERED**. This increment carries the existing use-only
+certificate signing interface through MRML's conventional capability-checked
+task runtime. It copies bounded identities and approved digests before granting
+the provider a disjoint output slice, transfers no capabilities in the call,
+and clears output after provider failure. It adds no cryptographic mechanism or
+recorded re-review trigger.
