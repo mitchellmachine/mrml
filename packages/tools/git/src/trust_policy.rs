@@ -54,6 +54,7 @@ pub enum HybridPolicyError {
     MissingNewAuthorization,
     CutoverRollback,
     EmergencyPolicyChanged,
+    KeyOutsideValidity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -716,6 +717,39 @@ impl TrustPolicyState {
             .is_some_and(|status| status.authorizes_at(time))
     }
 
+    /// Selects the exact current pair policy consumed by cryptographic
+    /// verification. A recorded historical identity is not sufficient: the
+    /// pair must still be active, unrevoked, and inside its half-open interval
+    /// at the caller's trusted validation time.
+    pub fn active_verification_policy_at(
+        &self,
+        pair: AuthorizedHybridPair,
+        validation_time: u64,
+        enforce_signature_expiration: bool,
+    ) -> Result<HybridTrustPolicy, HybridPolicyError> {
+        let status = self
+            .pair_statuses
+            .iter()
+            .find(|status| status.pair == pair)
+            .ok_or(HybridPolicyError::KeyOutsideValidity)?;
+        if !self.active_pairs.contains(&pair)
+            || !status.authorizes_at(validation_time)
+            || self.revoked_openpgp.contains(&pair.openpgp_fingerprint)
+            || self.revoked_ml_dsa.contains(&pair.ml_dsa_key_digest)
+        {
+            return Err(HybridPolicyError::KeyOutsideValidity);
+        }
+        let not_after = status.retired_at.unwrap_or(status.valid_until);
+        Ok(HybridTrustPolicy {
+            trust_generation: self.generation,
+            revocation_generation: self.revocation_generation,
+            authorized_pair: pair,
+            validation_time: Some(validation_time),
+            openpgp_not_after: Some(not_after),
+            enforce_signature_expiration,
+        })
+    }
+
     fn from_candidate(candidate: TrustPolicyCandidate) -> Self {
         let allowed_object_formats = candidate.allowed_format_mask();
         Self {
@@ -1229,6 +1263,24 @@ mod tests {
             revoked_ml_dsa: Vector::new(),
         })
         .unwrap();
+        assert_eq!(
+            initial.active_verification_policy_at(old_pair, 99, true),
+            Err(HybridPolicyError::KeyOutsideValidity)
+        );
+        let at_start = initial
+            .active_verification_policy_at(old_pair, 100, true)
+            .unwrap();
+        assert_eq!(at_start.validation_time, Some(100));
+        assert_eq!(at_start.openpgp_not_after, Some(300));
+        assert!(
+            initial
+                .active_verification_policy_at(old_pair, 299, true)
+                .is_ok()
+        );
+        assert_eq!(
+            initial.active_verification_policy_at(old_pair, 300, true),
+            Err(HybridPolicyError::KeyOutsideValidity)
+        );
         let encoded = encode_trust_policy(&initial).unwrap();
         assert_eq!(parse_trust_policy(&encoded), Ok(initial.clone()));
         for length in 0..encoded.len() {

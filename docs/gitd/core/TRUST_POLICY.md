@@ -34,6 +34,12 @@ list must exactly equal the ordered non-retired status subset; retired records
 remain present for bounded historical verification. `pair_authorized_at`
 accepts only times in the half-open validity interval and, after retirement,
 only times strictly before the retirement instant.
+`active_verification_policy_at` is the fail-closed bridge from that canonical
+ledger to cryptographic verification: it requires the complete pair to be in
+the active subset, unrevoked, and authorized at the trusted validation time,
+then binds the exact trust/revocation generations and effective exclusive end
+to the `HybridTrustPolicy`. Merely retaining a retired identity for historical
+description cannot mint current signing authority.
 
 Normal transitions cannot remove an existing status, move its start, widen its
 end, undo retirement, or delay a recorded retirement. They may narrow the end
