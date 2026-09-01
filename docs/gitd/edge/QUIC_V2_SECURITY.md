@@ -11,6 +11,9 @@ single-use within bounded replay storage, and limited to 256 bytes. Half-open
 admission is bounded globally, per IPv4 address, by memory, and by lifetime.
 
 Application traffic closes before conservative packet or byte limits and on an
-unsupported key-phase change. Full key update, reordered old-phase handling, a
-persistent endpoint, connection-ID lifecycle tables, and IPv6 `/64` admission
-are **PLANNED**. The runtime address ABI is currently IPv4-only.
+unsupported key-phase change. `QuicServerEndpoint` persistently owns UDP and
+bounds handshake, established, and retired DCID routing state. It ignores
+malformed, unknown, and retired IDs before connection decryption and preserves
+the authenticated peer while labeling a different source a candidate path.
+Full reactor-owned protocol state, key update, reordered old-phase handling, and
+IPv6 `/64` admission are **PLANNED**. The runtime address ABI is IPv4-only.

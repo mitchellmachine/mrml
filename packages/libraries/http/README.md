@@ -49,10 +49,12 @@ not yet connected to `QuicServerListener`. Tokens bind the exact IPv4 endpoint,
 original destination connection ID, issue time, purpose, and rotating key
 generation, with bounded replay state. Admission is bounded by global count,
 IPv4 source, memory, and lifetime and can require Retry under pressure. IPv6
-`/64` policy awaits an IPv6-capable runtime address ABI. The one-shot listener
-remains non-production until a persistent connection-ID demultiplexer owns the
-socket. Application traffic closes before conservative per-key packet/byte
-limits; full QUIC key update is not implemented.
+`/64` policy awaits an IPv6-capable runtime address ABI. `QuicServerEndpoint`
+persistently owns UDP and bounds handshake, established, and retired connection
+ID routing before decryption. The one-shot listener remains non-production until
+handshake and established protocol state move into that endpoint reactor.
+Application traffic closes before conservative per-key packet/byte limits; full
+QUIC key update is not implemented.
 
 All TLS clients request and require a current issuer-signed stapled OCSP
 response by default, so the policy applies equally to HTTP/1.1, HTTP/2, and

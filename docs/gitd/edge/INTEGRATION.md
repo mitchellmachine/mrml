@@ -43,6 +43,7 @@ pinned Windows cross-host toolchain was not installed.
 
 After installing the Wine-local pinned toolchain, commit
 `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`, the following Windows-target suites
-passed under Wine 11.16: HTTP 45, TLS 25, crypto 42, and Zstandard 29. This is
-Windows toolchain and Wine runtime coverage. It is not native Windows, WHP,
+passed under Wine 11.16: HTTP 47 after endpoint routing integration, TLS 25,
+crypto 42, and Zstandard 29. The matching hosted Linux HTTP suite passed 47.
+This is Windows toolchain and Wine runtime coverage. It is not native Windows, WHP,
 physical-network, or production evidence.
