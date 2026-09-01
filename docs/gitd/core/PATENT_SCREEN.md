@@ -30,3 +30,10 @@ their own mechanism-level Canadian search and CIPO verification before
 implementation. The shared review log must be updated during integration;
 Agent A's file boundary does not authorize editing it here. Follow
 `docs/patents/README.md`.
+
+The OFS/REF validation path only decodes Git's standard copy/insert form,
+follows exact offsets or full object IDs, and enforces work and depth limits. It
+does not search for similar objects, select bases, or construct deltas. Patent
+review: NOT_TRIGGERED for this bounded interoperability resolver. Delta
+selection and cross-pack recomputation retain the separate `REMAINS_OPEN`
+trigger above.

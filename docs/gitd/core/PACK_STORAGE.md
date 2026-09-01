@@ -39,10 +39,19 @@ well: it parses headers bytewise, decodes zlib through a one-byte reader boundar
 with an exact configured output ceiling, retains at most one object, charges
 compressed and expanded bytes as work, hashes the canonical loose-object form,
 and emits exact CRC/offset/index metadata. Installed-directory verification uses
-the same path instead of reloading the pack. OFS and REF delta entries currently
-fail closed with `MissingBase`; scratch-backed base/result storage, depth-50
-resolution, and streaming delta instructions remain required before receive may
-accept or advertise delta/thin packs.
+the same path instead of reloading the pack. The validator now defers OFS and
+REF deltas as bounded metadata and resolves them deterministically through exact
+scratch-object identities. OFS bases must name an earlier exact pack offset.
+REF bases may appear later or come from a caller-supplied exact-generation view;
+external bases are re-hashed by full object ID and copied into the transaction's
+private scratch set so reopen verification does not depend on mutable ambient
+state. Missing, forged, cyclic/no-progress, and depth-greater-than-50 chains
+fail closed.
+
+Delta programs, bases, and results are each capped by the individual-object
+limit. Aggregate reconstructed bytes, instructions, and copied output consume
+explicit limits. The whole pack is never allocated, although one base, one
+delta program, and one result may be resident during a resolution step.
 
 Each authenticated direct object is now written as a new, fsynced scratch object
 under the transaction-derived quarantine directory using its recomputed full ID

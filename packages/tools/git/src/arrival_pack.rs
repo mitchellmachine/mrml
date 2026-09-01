@@ -5,12 +5,12 @@ use mrml_runtime::{
     rename_file,
 };
 
-use crate::pack_file::{validate_direct_pack_file, validate_direct_pack_file_with_sink};
+use crate::pack_file::validate_pack_file_with_bases;
 use crate::sha1::GitObjectHasher;
 use crate::{
     BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
     DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
-    QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2,
+    PackError, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2,
     parse_pack_with_index,
 };
 
@@ -81,6 +81,21 @@ impl ArrivalPackStore {
         transaction: &mut QuarantineTransaction,
         required_tips: &[ObjectId],
     ) -> Result<(), GitdCoreError> {
+        self.validate_received_pack_with_bases(transaction, required_tips, |_, _| Ok(None))
+    }
+
+    /// Completes thin REF deltas only from an exact authenticated object view.
+    /// The callback receives a full object ID and the configured object limit;
+    /// returned bytes are independently re-hashed by the pack validator.
+    pub(crate) fn validate_received_pack_with_bases<B>(
+        &self,
+        transaction: &mut QuarantineTransaction,
+        required_tips: &[ObjectId],
+        mut external_base: B,
+    ) -> Result<(), GitdCoreError>
+    where
+        B: FnMut(ObjectId, u64) -> Result<Option<(crate::ObjectKind, Vector<u8>)>, PackError>,
+    {
         let directory = self.quarantine_path(transaction.id());
         let incoming = join_path(&directory, "incoming.pack");
         let scratch = join_path(&directory, "objects");
@@ -90,7 +105,7 @@ impl ArrivalPackStore {
             .checked_mul(2)
             .and_then(|value| value.checked_add(transaction.reservation().expanded_object_bytes()))
             .ok_or(GitdCoreError::Resource)?;
-        let validated = validate_direct_pack_file_with_sink(
+        let validated = validate_pack_file_with_bases(
             &incoming,
             self.format,
             transaction.reservation().incoming_pack_bytes(),
@@ -98,9 +113,27 @@ impl ArrivalPackStore {
             transaction.reservation().expanded_object_bytes(),
             transaction.reservation().individual_object_bytes(),
             max_work,
-            |id, kind, contents| {
+            &mut |id, kind, contents| {
                 write_scratch_object(&scratch, id, kind, contents)
                     .map_err(|_| crate::PackError::TooLarge)
+            },
+            |id, limit| match read_scratch_object(&scratch, id, limit)? {
+                Some(object) => Ok(Some(object)),
+                None => {
+                    let Some((kind, contents)) = external_base(id, limit)? else {
+                        return Ok(None);
+                    };
+                    let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
+                    let mut hash = GitObjectHasher::new(self.format);
+                    hash.update(header.as_bytes());
+                    hash.update(&contents);
+                    if hash.finalize() != id {
+                        return Err(PackError::ObjectId);
+                    }
+                    write_scratch_object(&scratch, id, kind, &contents)
+                        .map_err(|_| PackError::MissingBase)?;
+                    Ok(Some((kind, contents)))
+                }
             },
         )
         .map_err(|_| GitdCoreError::ObjectValidation)?;
@@ -275,7 +308,8 @@ impl ArrivalPackStore {
             .checked_mul(2)
             .and_then(|value| value.checked_add(DEFAULT_MAX_EXPANDED_OBJECT_BYTES))
             .ok_or(DurableFailure::DiskFull)?;
-        let validated = validate_direct_pack_file(
+        let scratch = join_path(directory, "objects");
+        let validated = validate_pack_file_with_bases(
             &join_path(directory, "objects.pack"),
             self.format,
             self.max_pack_bytes,
@@ -283,6 +317,8 @@ impl ArrivalPackStore {
             DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
             DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
             max_work,
+            &mut |_, _, _| Ok(()),
+            |id, limit| read_scratch_object(&scratch, id, limit),
         )
         .map_err(|_| DurableFailure::VerifierCrash)?;
         let per_object = u64::try_from(self.format.hash_len())
@@ -323,6 +359,35 @@ impl ArrivalPackStore {
     fn arrival_path(&self, transaction: QuarantineTransactionId) -> Text {
         join_path(&self.arrivals, &transaction_name(transaction))
     }
+}
+
+fn read_scratch_object(
+    directory: &str,
+    id: ObjectId,
+    max_bytes: u64,
+) -> Result<Option<(crate::ObjectKind, Vector<u8>)>, PackError> {
+    let path = join_path(directory, &id.to_hex());
+    if !path_exists(&path) {
+        return Ok(None);
+    }
+    let encoded = read_regular_bounded(
+        &path,
+        max_bytes.checked_add(1).ok_or(PackError::TooLarge)?,
+    )
+    .map_err(|_| PackError::MissingBase)?;
+    let (&kind, contents) = encoded.split_first().ok_or(PackError::MissingBase)?;
+    let kind = match kind {
+        1 => crate::ObjectKind::Commit,
+        2 => crate::ObjectKind::Tree,
+        3 => crate::ObjectKind::Blob,
+        4 => crate::ObjectKind::Tag,
+        _ => return Err(PackError::ObjectType),
+    };
+    let mut copied = Vector::new();
+    copied
+        .try_extend_from_slice(contents)
+        .map_err(|_| PackError::TooLarge)?;
+    Ok(Some((kind, copied)))
 }
 
 fn write_new_synced(path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
