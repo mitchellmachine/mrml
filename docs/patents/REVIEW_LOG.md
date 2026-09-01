@@ -11416,3 +11416,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 8555 account objects and accepts a successful resource `Location` only when its
 scheme, host, and port exactly match the configured directory origin. Redirect
 statuses remain forbidden. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Prepared ACME account-creation operation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment composes the already reviewed
+account receipt, deterministic payload, exact prepared JWK, signed POST,
+same-origin resource response, and confirmed/uncertain lifecycle transitions.
+It adds no recorded re-review-trigger mechanism.

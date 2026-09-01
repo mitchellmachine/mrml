@@ -254,6 +254,13 @@ impl AccountLifecycle {
         Ok(())
     }
 
+    pub fn abort_prepared(&mut self, receipt: PreparedAccountAction) -> Result<(), AccountError> {
+        self.require_prepared(receipt, receipt.action)?;
+        self.operation = AccountOperation::None;
+        self.prepared = None;
+        Ok(())
+    }
+
     pub fn resolve_authoritative(
         &mut self,
         authoritative_generation: u64,

@@ -1,6 +1,7 @@
 use crate::{
-    encode_base64url, CertificateProfile, DnsIdentifier, MAX_CSR_BYTES, MAX_ORDER_IDENTIFIERS,
+    CertificateProfile, DnsIdentifier, MAX_CSR_BYTES, MAX_ORDER_IDENTIFIERS, encode_base64url,
 };
+use mrml_crypto::Sha256;
 
 pub const MAX_ACCOUNT_CONTACTS: usize = 8;
 pub const MAX_ACCOUNT_CONTACT_BYTES: usize = 512;
@@ -70,6 +71,10 @@ pub fn write_new_account_payload<'a>(
     if contacts
         .iter()
         .any(|contact| !safe_json_string(contact, MAX_ACCOUNT_CONTACT_BYTES))
+        || contacts
+            .iter()
+            .enumerate()
+            .any(|(index, contact)| contacts[..index].contains(contact))
     {
         return Err(PayloadError::InvalidContact);
     }
@@ -102,6 +107,27 @@ pub fn write_new_account_payload<'a>(
     }
     writer.push(b"}")?;
     Ok(writer.finish())
+}
+
+pub fn account_contacts_digest(contacts: &[&str]) -> Result<[u8; 32], PayloadError> {
+    if contacts.len() > MAX_ACCOUNT_CONTACTS
+        || contacts
+            .iter()
+            .any(|contact| !safe_json_string(contact, MAX_ACCOUNT_CONTACT_BYTES))
+        || contacts
+            .iter()
+            .enumerate()
+            .any(|(index, contact)| contacts[..index].contains(contact))
+    {
+        return Err(PayloadError::InvalidContact);
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"mrml-acme-account-contacts-v1\0");
+    for contact in contacts {
+        digest.update(&(contact.len() as u16).to_be_bytes());
+        digest.update(contact.as_bytes());
+    }
+    Ok(digest.finalize())
 }
 
 pub fn write_account_status_payload(active: bool, output: &mut [u8]) -> Result<&str, PayloadError> {

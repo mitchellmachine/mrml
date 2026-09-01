@@ -11,6 +11,7 @@ mod directory;
 mod identifier;
 mod jose;
 mod nonce;
+mod operation;
 mod order;
 mod payload;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -59,6 +60,7 @@ pub use jose::{
     write_flattened_jws,
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
+pub use operation::{AccountCreateBuffers, CreateAccountError, execute_prepared_account_create};
 pub use order::{
     AuthorizationBinding, AuthorizationState, ChallengeKind, ChallengeState, MAX_AUTHORIZATIONS,
     MAX_CHALLENGES_PER_AUTHORIZATION, MAX_ORDER_IDENTIFIERS, OrderError, OrderLifecycle,
@@ -66,8 +68,8 @@ pub use order::{
 };
 pub use payload::{
     MAX_ACCOUNT_CONTACT_BYTES, MAX_ACCOUNT_CONTACTS, MAX_ACME_PAYLOAD_BYTES, PayloadError,
-    write_account_status_payload, write_finalize_payload, write_new_account_payload,
-    write_new_order_payload, write_revocation_payload,
+    account_contacts_digest, write_account_status_payload, write_finalize_payload,
+    write_new_account_payload, write_new_order_payload, write_revocation_payload,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use platform::{HostedAcmeTransport, HostedTransportError};
