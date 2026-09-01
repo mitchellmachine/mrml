@@ -544,7 +544,7 @@ impl QuicClientConnection {
                 .map_err(|_| QuicError::SocketWrite)?;
         }
         let mut server_initial_crypto = QuicStreamAssembler::new(64 * 1024);
-        let mut expected_initial = 0;
+        let mut server_initial_packets = PacketReceiveState::new();
         let mut server_id = None;
         let handshake_secrets = loop {
             let mut datagram = [0; 65_527];
@@ -558,12 +558,14 @@ impl QuicClientConnection {
                 version,
                 &datagram[..amount],
                 &server_initial,
-                expected_initial,
+                server_initial_packets.expected(),
             )?;
             if packet.destination_id != source_id {
                 return Err(QuicError::InvalidPacket);
             }
-            expected_initial = packet.packet_number + 1;
+            if server_initial_packets.record(packet.packet_number)? != ReceivedPacket::New {
+                continue;
+            }
             if server_id.is_none() {
                 server_id = Some(packet.source_id.clone());
             } else if server_id.as_ref() != Some(&packet.source_id) {
@@ -580,7 +582,7 @@ impl QuicClientConnection {
             QuicInitialKeys::from_traffic_secret_for(version, &handshake_secrets.client)?;
         let mut handshake_crypto = QuicStreamAssembler::new(1024 * 1024);
         let mut handshake_at = 0;
-        let mut expected_handshake = 0;
+        let mut server_handshake_packets = PacketReceiveState::new();
         let application = 'application: loop {
             let mut datagram = [0; 65_527];
             let (amount, from) = socket
@@ -593,9 +595,11 @@ impl QuicClientConnection {
                 version,
                 &datagram[..amount],
                 &read_handshake,
-                expected_handshake,
+                server_handshake_packets.expected(),
             )?;
-            expected_handshake = packet.packet_number + 1;
+            if server_handshake_packets.record(packet.packet_number)? != ReceivedPacket::New {
+                continue;
+            }
             insert_crypto_frames(&packet.payload, &mut handshake_crypto)?;
             while let Some(message) =
                 handshake_message(handshake_crypto.contiguous(), handshake_at)?
@@ -617,13 +621,10 @@ impl QuicClientConnection {
             return Err(QuicError::TransportParameter);
         }
         let mut finished_payload = crypto_payload(0, &application.client_finished)?;
-        QuicFrame::Ack {
-            largest: expected_handshake.saturating_sub(1),
-            delay: 0,
-            first_range: expected_handshake.saturating_sub(1),
-            ranges: Vector::new(),
-        }
-        .encode(&mut finished_payload)?;
+        server_handshake_packets
+            .ack_frame()
+            .ok_or(QuicError::HandshakeConfirmation)?
+            .encode(&mut finished_payload)?;
         let finished = HandshakePacket {
             destination_id: peer_id.clone(),
             source_id: source_id.clone(),
@@ -645,8 +646,11 @@ impl QuicClientConnection {
             version,
             &datagram[..amount],
             &read_handshake,
-            expected_handshake,
+            server_handshake_packets.expected(),
         )?;
+        if server_handshake_packets.record(handshake_ack.packet_number)? != ReceivedPacket::New {
+            return Err(QuicError::HandshakeConfirmation);
+        }
         let mut at = 0;
         let mut finished_acknowledged = false;
         while at < handshake_ack.payload.len() {
@@ -747,7 +751,7 @@ impl QuicServerListener {
         let mut original_destination_id = None;
         let mut client_id = None;
         let mut peer = None;
-        let mut expected_initial = 0;
+        let mut client_initial_packets = PacketReceiveState::new();
         let mut version = None;
         let mut state = QuicConnectionState::new(QuicRole::Server, &self.parameters);
         let client_hello = loop {
@@ -775,9 +779,11 @@ impl QuicServerListener {
                 version.ok_or(QuicError::InvalidPacket)?,
                 &datagram[..amount],
                 initial_keys.as_ref().ok_or(QuicError::Crypto)?,
-                expected_initial,
+                client_initial_packets.expected(),
             )?;
-            expected_initial = packet.packet_number + 1;
+            if client_initial_packets.record(packet.packet_number)? != ReceivedPacket::New {
+                continue;
+            }
             if client_id.is_none() {
                 client_id = Some(packet.source_id.clone());
             } else if client_id.as_ref() != Some(&packet.source_id) {
@@ -813,13 +819,10 @@ impl QuicServerListener {
         for (number, chunk) in flight.server_hello.chunks(CRYPTO_CHUNK).enumerate() {
             let mut payload = crypto_payload(number * CRYPTO_CHUNK, chunk)?;
             if number == 0 {
-                QuicFrame::Ack {
-                    largest: expected_initial.saturating_sub(1),
-                    delay: 0,
-                    first_range: expected_initial.saturating_sub(1),
-                    ranges: Vector::new(),
-                }
-                .encode(&mut payload)?;
+                client_initial_packets
+                    .ack_frame()
+                    .ok_or(QuicError::ProtocolViolation)?
+                    .encode(&mut payload)?;
             }
             let packet = InitialPacket {
                 destination_id: client_id.clone(),
@@ -858,7 +861,7 @@ impl QuicServerListener {
                 .map_err(|_| QuicError::Io)?;
         }
         let mut finished_crypto = QuicStreamAssembler::new(64);
-        let mut expected_client_handshake = 0;
+        let mut client_handshake_packets = PacketReceiveState::new();
         let (finished, message) = 'packets: loop {
             let (amount, from) = self
                 .socket
@@ -869,12 +872,13 @@ impl QuicServerListener {
             }
             state.on_datagram_received(amount)?;
             let mut cursor = 0;
-            if let Ok((_, used)) = InitialPacket::open_for(
+            if let Ok((initial, used)) = InitialPacket::open_for(
                 version,
                 &datagram[..amount],
                 initial_keys.as_ref().ok_or(QuicError::Crypto)?,
-                expected_initial,
+                client_initial_packets.expected(),
             ) {
+                let _ = client_initial_packets.record(initial.packet_number)?;
                 cursor = used;
             }
             while cursor < amount {
@@ -882,14 +886,16 @@ impl QuicServerListener {
                     version,
                     &datagram[cursor..amount],
                     &read_handshake,
-                    expected_client_handshake,
+                    client_handshake_packets.expected(),
                 ) {
                     Ok(packet) => packet,
                     Err(error @ (QuicError::Allocation | QuicError::Limit)) => return Err(error),
                     Err(_) => continue 'packets,
                 };
                 cursor += used;
-                expected_client_handshake = packet.packet_number + 1;
+                if client_handshake_packets.record(packet.packet_number)? != ReceivedPacket::New {
+                    continue;
+                }
                 insert_crypto_frames(&packet.payload, &mut finished_crypto)?;
                 if let Some(message) = handshake_message(finished_crypto.contiguous(), 0)? {
                     break 'packets (packet, message);

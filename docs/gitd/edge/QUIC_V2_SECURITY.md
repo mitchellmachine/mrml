@@ -5,6 +5,14 @@ information, bounded packet history, receive flow control, sparse reassembly,
 anti-amplification, and path validation are **IMPLEMENTED** with focused hosted
 tests. Gitd must select v2 explicitly; no silent v1 downgrade is allowed.
 
+Client and server handshake paths now maintain distinct bounded authenticated
+packet histories for Initial and Handshake, while established connections keep
+their independent Application history. Truncated packet numbers reconstruct
+from the matching space. A packet enters a history only after header protection
+and AEAD succeed; duplicate or too-old packets are discarded before CRYPTO
+assembly or TLS effects. ACKs are generated from authenticated ranges rather
+than scalar last-seen counters, preserving legitimate reordering.
+
 Retry tokens bind the exact IPv4 address and port, original destination ID,
 issuance time, purpose, and rotating key generation. Tokens are AEAD protected,
 single-use within bounded replay storage, and limited to 256 bytes. Half-open

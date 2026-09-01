@@ -113,3 +113,10 @@ ACK recovery now independently uses checked interval construction. The focused
 HTTP suite covers first-range, gap-addition, gap-subtraction, and range
 underflow plus a valid discontiguous interval; malformed authenticated ACK data
 cannot reach subtraction with wrapping or panic semantics.
+
+The client and server handshake implementations now use separate bounded
+`PacketReceiveState` instances for Initial and Handshake spaces instead of
+scalar expected counters. Authentication precedes recording, and only `New`
+packets reach CRYPTO/TLS assembly; ACK frames derive from the authenticated
+ranges. Application-space state remains independently owned by the established
+connection.
