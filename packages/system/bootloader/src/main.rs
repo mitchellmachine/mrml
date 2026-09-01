@@ -3591,6 +3591,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
         .unwrap_or_else(|_| halt());
+    #[cfg(feature = "certificate-service-probe")]
+    let _ = &early;
     #[cfg(feature = "pci-configuration-probe")]
     unsafe {
         run_pci_configuration_probe()
@@ -3736,8 +3738,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 TaskRuntime::<3, 9>::new(1_000, 1).unwrap_or_else(|_| halt()),
             ));
             let runtime = (*runtime_pointer).as_mut().unwrap_or_else(|| halt());
+            let receiver_priority = if cfg!(feature = "certificate-service-probe") {
+                Priority::RESPONSIVE
+            } else {
+                Priority::NORMAL
+            };
             let receiver = runtime
-                .create(Priority::NORMAL, context_a)
+                .create(receiver_priority, context_a)
                 .unwrap_or_else(|_| halt());
             #[cfg(any(
                 feature = "service-restart-request-probe",
@@ -3816,6 +3823,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
+            #[cfg(not(feature = "certificate-service-probe"))]
             let recovery_capability = early.recovery_state().map(|_| {
                 let object = ObjectId(0xa3);
                 let capability = runtime
@@ -3837,7 +3845,17 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             #[cfg(feature = "component-service-probe")]
             let (resource_capabilities, _) =
                 provision_service_resource(runtime, receiver, Some(sender));
-            #[cfg(not(any(feature = "block-service-probe", feature = "component-service-probe")))]
+            #[cfg(feature = "certificate-service-probe")]
+            let (resource_capabilities, certificate_sender_resources) =
+                provision_service_resource(runtime, receiver, Some(sender));
+            #[cfg(feature = "certificate-service-probe")]
+            let [certificate_sender_write, certificate_sender_read, _] =
+                certificate_sender_resources.unwrap_or_else(|| halt());
+            #[cfg(not(any(
+                feature = "block-service-probe",
+                feature = "component-service-probe",
+                feature = "certificate-service-probe"
+            )))]
             let (resource_capabilities, _) = provision_service_resource(runtime, receiver, None);
             #[cfg(feature = "block-service-probe")]
             let [sender_write, sender_read, sender_transfer] =
@@ -3947,17 +3965,31 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
             receiver_context.r13 = receiver_capability.token();
             receiver_context.r14 = sender.token();
-            receiver_context.r15 = resource_capabilities[0].token();
-            #[cfg(feature = "component-service-probe")]
+            #[cfg(feature = "certificate-service-probe")]
             {
-                receiver_context.r12 = 1;
-                receiver_context.rbx = resource_transfer.token();
+                receiver_context.r12 = resource_capabilities[0].token();
+                receiver_context.r11 = resource_capabilities[1].token();
+                receiver_context.r15 = mrml_kernel::PAGE_SIZE as u64;
+                receiver_context.rbx = 2;
+                receiver_context.rbp = 1;
             }
-            #[cfg(not(feature = "component-service-probe"))]
+            #[cfg(not(feature = "certificate-service-probe"))]
             {
-                receiver_context.rbx = resource_capabilities[1].token();
+                receiver_context.r15 = resource_capabilities[0].token();
+                #[cfg(feature = "component-service-probe")]
+                {
+                    receiver_context.r12 = 1;
+                    receiver_context.rbx = resource_transfer.token();
+                }
+                #[cfg(not(feature = "component-service-probe"))]
+                {
+                    receiver_context.rbx = resource_capabilities[1].token();
+                }
             }
-            receiver_context.r11 = recovery_capability.map_or(0, Capability::token);
+            #[cfg(not(feature = "certificate-service-probe"))]
+            {
+                receiver_context.r11 = recovery_capability.map_or(0, Capability::token);
+            }
             #[cfg(feature = "service-restart-request-probe")]
             {
                 receiver_context.rbp = manager.token();
@@ -3976,9 +4008,18 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             {
                 sender_context.r12 = 1;
             }
-            #[cfg(not(feature = "block-service-probe"))]
+            #[cfg(not(any(
+                feature = "block-service-probe",
+                feature = "certificate-service-probe"
+            )))]
             {
                 sender_context.r15 = root_capability.token();
+            }
+            #[cfg(feature = "certificate-service-probe")]
+            {
+                let _ = root_capability;
+                sender_context.r15 = certificate_sender_write.token();
+                sender_context.r11 = certificate_sender_read.token();
             }
             #[cfg(feature = "block-service-probe")]
             {

@@ -58,7 +58,8 @@ pub struct CertificateUserspaceSyscalls<R> {
     raw: R,
     endpoint: u64,
     caller: u64,
-    shared: u64,
+    shared_read: u64,
+    shared_write: u64,
     shared_len: usize,
     route: CertificateNativeRoute,
 }
@@ -67,7 +68,8 @@ impl<R> CertificateUserspaceSyscalls<R> {
         raw: R,
         endpoint: u64,
         caller: u64,
-        shared: u64,
+        shared_read: u64,
+        shared_write: u64,
         shared_len: usize,
         route: u64,
         provider_generation: u64,
@@ -81,7 +83,9 @@ impl<R> CertificateUserspaceSyscalls<R> {
         };
         if endpoint == 0
             || caller == 0
-            || shared == 0
+            || shared_read == 0
+            || shared_write == 0
+            || shared_read == shared_write
             || shared_len == 0
             || shared_len > MAX_CERTIFICATE_SHARED_BYTES
             || provider_generation == 0
@@ -92,7 +96,8 @@ impl<R> CertificateUserspaceSyscalls<R> {
             raw,
             endpoint,
             caller,
-            shared,
+            shared_read,
+            shared_write,
             shared_len,
             route,
         })
@@ -107,12 +112,11 @@ impl<R: CertificateRawSyscall> CertificateNativeSyscalls for CertificateUserspac
         &mut self,
         payload: &mut [u8; MAX_CERTIFICATE_CALL_BYTES],
     ) -> Result<ReceivedCertificateCall, Self::Error> {
-        let mut capability = 0u64;
         let mut f = CertificateSyscallFrame {
             rax: 5,
             rdi: payload.as_mut_ptr() as u64,
             rsi: payload.len() as u64,
-            rdx: core::ptr::addr_of_mut!(capability) as u64,
+            rdx: 0,
             r10: 0,
             r8: 0,
             r9: 0,
@@ -138,7 +142,7 @@ impl<R: CertificateRawSyscall> CertificateNativeSyscalls for CertificateUserspac
         shared_call(
             &mut self.raw,
             7,
-            self.shared,
+            self.shared_read,
             0,
             &mut output[..self.shared_len],
         )?;
@@ -157,7 +161,7 @@ impl<R: CertificateRawSyscall> CertificateNativeSyscalls for CertificateUserspac
         }
         let mut f = CertificateSyscallFrame {
             rax: 8,
-            rdi: self.shared,
+            rdi: self.shared_write,
             rsi: offset as u64,
             rdx: input.as_ptr() as u64,
             r10: input.len() as u64,
@@ -598,7 +602,7 @@ mod tests {
             response: [0; RESPONSE_BYTES],
         };
         assert!(matches!(
-            CertificateUserspaceSyscalls::new(raw, 1, 2, 3, 64, 99, 1),
+            CertificateUserspaceSyscalls::new(raw, 1, 2, 3, 4, 64, 99, 1),
             Err(CertificateUserspaceSyscallError::InvalidLaunch)
         ));
         let raw = Raw {
@@ -607,7 +611,7 @@ mod tests {
             shared: [3; 64],
             response: [0; RESPONSE_BYTES],
         };
-        let mut sys = CertificateUserspaceSyscalls::new(raw, 1, 2, 3, 64, 2, 9).unwrap();
+        let mut sys = CertificateUserspaceSyscalls::new(raw, 1, 2, 3, 4, 64, 2, 9).unwrap();
         let mut payload = [0; MAX_CERTIFICATE_CALL_BYTES];
         assert_eq!(
             sys.receive(&mut payload),

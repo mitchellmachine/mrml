@@ -80,6 +80,9 @@ name = "service-preemption-probe"
 name = "service-probe"
 
 [[feature]]
+name = "certificate-service-probe"
+
+[[feature]]
 name = "service-restart-request-probe"
 
 [[feature]]
@@ -176,6 +179,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe"]
 name = "service_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "certificate-service-probe"]
+name = "certificate_service_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

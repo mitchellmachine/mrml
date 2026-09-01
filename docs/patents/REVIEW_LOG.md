@@ -11937,3 +11937,13 @@ authenticated generational record protocol through an attenuated MRML storage
 capability and validates exact prepare, commit, reread, and byte-load receipts.
 It adds no certificate protocol, validation topology, MultiTLS multiplexing,
 public CA operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Exact-capability MRML certificate KVM lane
+
+Patent review: **NOT_TRIGGERED**. This increment executes the existing local
+authenticated-record round-trip and generated certificate identity interface
+through ordinary CPL3 IPC and distinct attenuated shared-buffer read/write
+capabilities under KVM. It adds test orchestration and corrects capability and
+zero-capacity syscall argument binding; it adds no ACME protocol, validation
+topology, MultiTLS multiplexing, public CA operation, or other recorded
+re-review trigger.

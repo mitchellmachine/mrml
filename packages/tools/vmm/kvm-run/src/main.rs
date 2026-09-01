@@ -1041,6 +1041,7 @@ enum LaunchMode {
     PreemptionProbe,
     UserProbe,
     ServiceProbe,
+    CertificateServiceProbe,
     DeadlineReceiveProbe,
     DeadlineReceiveMessageProbe,
     DeadlineReceiveCancelProbe,
@@ -1076,6 +1077,7 @@ impl LaunchMode {
             "preemption-probe" => Ok(Self::PreemptionProbe),
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
+            "certificate-service-probe" => Ok(Self::CertificateServiceProbe),
             "deadline-receive-probe" => Ok(Self::DeadlineReceiveProbe),
             "deadline-receive-message-probe" => Ok(Self::DeadlineReceiveMessageProbe),
             "deadline-receive-cancel-probe" => Ok(Self::DeadlineReceiveCancelProbe),
@@ -1098,7 +1100,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, deadline-receive-cancel-replay-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, certificate-service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, deadline-receive-cancel-replay-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -2316,6 +2318,7 @@ fn application_main() -> Result<()> {
     let total_service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::CertificateServiceProbe
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
@@ -2338,6 +2341,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::GuiApplicationProbe
             | LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
+            | LaunchMode::CertificateServiceProbe
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
@@ -2380,6 +2384,7 @@ fn application_main() -> Result<()> {
     let service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::CertificateServiceProbe
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
             | LaunchMode::DeadlineReceiveCancelProbe
@@ -3281,6 +3286,7 @@ fn application_main() -> Result<()> {
             system.prepare_smp_kernel_guest::<16>(&executable, handoff.as_slice(), layout)
         }
         LaunchMode::ServiceProbe
+        | LaunchMode::CertificateServiceProbe
         | LaunchMode::InvalidReturnProbe
         | LaunchMode::BufferDriftProbe
         | LaunchMode::ComponentServiceProbe
@@ -3379,10 +3385,10 @@ fn application_main() -> Result<()> {
         None
     };
     if service_mode {
-        let isolated_stack_pages = if mode == LaunchMode::BlockServiceProbe {
-            256
-        } else {
-            8
+        let isolated_stack_pages = match mode {
+            LaunchMode::BlockServiceProbe => 256,
+            LaunchMode::CertificateServiceProbe => 64,
+            _ => 8,
         };
         let local_apic = component_smp_mode
             || matches!(
@@ -4356,14 +4362,17 @@ fn application_main() -> Result<()> {
         exit = VmExit::Halted;
     } else if matches!(
         mode,
-        LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
+        LaunchMode::ServiceProbe
+            | LaunchMode::CertificateServiceProbe
+            | LaunchMode::ServiceRestartRequestProbe
     ) {
+        let initial_call = 1;
         if exit
             != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
                 size: 4,
                 write: true,
-                value: 1,
+                value: initial_call,
             })
         {
             let state = guest.snapshot().map_err(|error| {
@@ -4374,7 +4383,7 @@ fn application_main() -> Result<()> {
                 )
             })?;
             return Err(anyhow!(
-                "isolated receiver did not block: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
+                "isolated service initial IPC stage mismatch: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
                 exit,
                 state.instruction_pointer(),
                 state.stack_pointer(),
@@ -4415,6 +4424,124 @@ fn application_main() -> Result<()> {
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!("KVM execution entering sender cleanup failed: {:?}", error)
         })?;
+        if mode == LaunchMode::CertificateServiceProbe {
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1,
+                })
+            {
+                return Err(anyhow!(
+                    "certificate probe response receive mismatch: {:?}",
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM certificate service response failed: {:?}", error))?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 2,
+                })
+            {
+                return Err(anyhow!("certificate probe response mismatch: {:?}", exit));
+            }
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!("KVM certificate service completion failed: {:?}", error)
+            })?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x20,
+                })
+            {
+                return Err(anyhow!(
+                    "certificate service cleanup request mismatch: {:?}",
+                    exit
+                ));
+            }
+            complete_kvm_service_cleanup(
+                &mut guest,
+                0,
+                SERVICE_STACK_PHYSICAL,
+                SERVICE_TABLE_PHYSICAL,
+                &executable,
+                service_executable
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing verified certificate service executable"))?,
+            )?;
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!("KVM certificate probe peer completion failed: {:?}", error)
+            })?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x22,
+                })
+            {
+                return Err(anyhow!(
+                    "certificate probe peer-death stage mismatch: {:?}",
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!(
+                    "KVM certificate probe peer finalization failed: {:?}",
+                    error
+                )
+            })?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 3,
+                })
+            {
+                return Err(anyhow!(
+                    "certificate probe response completion mismatch: {:?}",
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM certificate probe exit failed: {:?}", error))?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x21,
+                })
+            {
+                return Err(anyhow!("certificate peer cleanup mismatch: {:?}", exit));
+            }
+            complete_kvm_service_cleanup(
+                &mut guest,
+                1,
+                SERVICE_B_STACK_PHYSICAL,
+                SERVICE_B_TABLE_PHYSICAL,
+                &executable,
+                service_executable
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing verified certificate service executable"))?,
+            )?;
+            println!(
+                "verified signed CPL3 certificate persistence and exact identity IPC under KVM: verify={}us prepare={}us execute={}us total={}us",
+                verification_micros,
+                preparation_micros,
+                execution_started.elapsed().as_micros(),
+                total_started.elapsed().as_micros()
+            );
+            return Ok(());
+        }
         let configuration_stages: &[u32] = &[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 3];
         for &stage in configuration_stages {
             if exit
@@ -4894,6 +5021,7 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("user probe unexpectedly modified the framebuffer"));
         }
         LaunchMode::ServiceProbe
+        | LaunchMode::CertificateServiceProbe
         | LaunchMode::DeadlineReceiveProbe
         | LaunchMode::DeadlineReceiveMessageProbe
         | LaunchMode::DeadlineReceiveCancelProbe

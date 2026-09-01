@@ -225,8 +225,33 @@ prepare, commit, authoritative-reread, and record-read receipts before use. The
 MRML-native certificate probe now prepares, commits, reloads, and authenticates
 its deployment generation through this adapter before serving any interface
 call. The deterministic backend proves the MRML service boundary and recovery
-contract; persistence through the full native storage service and reboot still
-requires the KVM lifecycle lane.
+contract. A dedicated signed KVM lane now launches that exact service image in
+CPL3 under strict Total MicroVM policy with separate exact `MAP|READ` and
+`MAP|READ|WRITE` shared-buffer capabilities. A separately scheduled CPL3 peer
+writes `probe.identity` through the write capability, sends the generated
+generation-1 identity ABI request, receives the bounded response, and reads
+`MRMLCERTPROBE1` through the read capability. The runner verifies both task
+cleanup boundaries. The 2026-09-01 run reported `verify=18058us`,
+`prepare=2347us`, `execute=406us`, and `total=40295us`. This is controlled KVM
+evidence for signed service launch, authenticated in-service durable-record
+round-trip, capability-mediated shared buffers, and exact identity IPC; it is
+not persistence through the native storage service across a reboot, bare-metal
+evidence, WHP evidence, or native-Windows evidence.
+
+The exact commands were:
+
+```text
+mrml build org.mrml.service.certificate --target native --release
+mrml build org.mrml.system.bootloader --target uefi-x86_64 --release --feature-profile certificate_service_probe
+mrml build org.mrml.tool.vmm-kvm-run --target linux --release
+mrml-sign keygen kernel.private kernel.public
+mrml-sign keygen service.private service.public
+mrml-sign keygen package.private package.public
+mrml-sign sign-bundle kernel 1 mrml-kernel-pe.efi kernel.private kernel.signed
+mrml-sign sign-bundle service 1 mrml-certd-native-probe.efi service.private service.signed
+mrml package create org.mrml.system.kernel kernel 1 x86_64 kernel kernel.signed kernel.mrp --private-key package.private
+mrml-kvm-run kernel.mrp package.public kernel.public 1 certificate-service-probe service.signed service.public 1
+```
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact
@@ -291,11 +316,9 @@ not inherit hosted sockets and continues to use the same transport contract
 through capability-bound services.
 
 General JOSE response parsing, MRML HTTPS capability adapters, hosted DNS query
-adapters, lifecycle-specific state codecs and recovery wiring,
-durable renewal-executor reconstruction, revocation transport,
-sealed-key backup/restore adapters, CLI administration, interface dispatch/service loop, concrete
-gitd hot reload, and the MRML
-certificate service remain **PLANNED**. The shared state machine must
+adapters, revocation transport, sealed-key backup/restore adapters, CLI
+administration, concrete gitd process wiring, and full native-storage/reboot
+recovery remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 
 Certificate retrieval captures at most eight bounded standard

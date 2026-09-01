@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use core::arch::{asm, naked_asm};
+use core::arch::{asm, global_asm};
 use mrml_certificate::*;
 use mrml_crypto::Sha256;
 use mrml_interface_certificate_challenge_v1 as challenge_abi;
@@ -9,22 +9,36 @@ use mrml_interface_certificate_lifecycle_v1 as lifecycle_abi;
 use mrml_interface_certificate_signing_v1 as signing_abi;
 
 static mut LOOP: CertificateNativeServiceLoop = CertificateNativeServiceLoop::new();
-#[unsafe(naked)]
-#[unsafe(no_mangle)]
-#[unsafe(link_section = ".text$a")]
-extern "C" fn efi_main() -> ! {
-    naked_asm!(
-        "mov rdi, r13",
-        "mov rsi, r14",
-        "mov rdx, r12",
-        "mov rcx, r15",
-        "mov r8, rbx",
-        "mov r9, rbp",
-        "sub rsp, 16",
-        "call mrml_certd_probe",
-        "ud2"
-    )
-}
+global_asm!(
+    r#"
+        .section .text$a,"xr"
+        .global efi_main
+    efi_main:
+        and rsp, -16
+        sub rsp, 16
+        mov [rsp], rbp
+        mov rdi, r13
+        mov rsi, r14
+        mov rdx, r11
+        mov rcx, r12
+        mov r8, r15
+        mov r9, rbx
+        call mrml_certd_probe
+        ud2
+
+        .org efi_main + 512, 0xcc
+        .global mrml_certd_probe_sender_entry
+    mrml_certd_probe_sender_entry:
+        and rsp, -16
+        mov rdi, r13
+        mov rsi, r14
+        mov rdx, r12
+        mov rcx, r15
+        mov r8, r11
+        call mrml_certd_probe_sender
+        ud2
+    "#
+);
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     halt()
@@ -296,7 +310,8 @@ impl CertificateLifecycleProvider for Providers {
 unsafe extern "sysv64" fn mrml_certd_probe(
     endpoint: u64,
     caller: u64,
-    shared: u64,
+    shared_read: u64,
+    shared_write: u64,
     shared_len: u64,
     route: u64,
     provider_generation: u64,
@@ -330,7 +345,8 @@ unsafe extern "sysv64" fn mrml_certd_probe(
         Interrupt80,
         endpoint,
         caller,
-        shared,
+        shared_read,
+        shared_write,
         shared_len,
         route,
         provider_generation,
@@ -351,7 +367,6 @@ unsafe extern "sysv64" fn mrml_certd_probe(
     let mut lifecycle = Providers {
         generation: restored.generation,
     };
-    send_ready(endpoint, caller, provider_generation);
     let loop_state = unsafe { &mut *core::ptr::addr_of_mut!(LOOP) };
     loop_state
         .serve_once(
@@ -366,16 +381,109 @@ unsafe extern "sysv64" fn mrml_certd_probe(
     loop_state.erase();
     terminate()
 }
-fn send_ready(endpoint: u64, caller: u64, generation: u64) {
-    let bytes = generation.to_le_bytes();
-    let mut status = 4u64;
+
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_certd_probe_sender(
+    endpoint: u64,
+    receiver: u64,
+    provider_generation: u64,
+    shared_write: u64,
+    shared_read: u64,
+) -> ! {
+    const IDENTITY_OFFSET: usize = 0;
+    const OUTPUT_OFFSET: usize = 32;
+    const OUTPUT_LENGTH: usize = 64;
+    write_shared(shared_write, IDENTITY_OFFSET, b"probe.identity");
+    let identity = identity_abi::BorrowedReadView::within(IDENTITY_OFFSET as u64, 14, 4096)
+        .unwrap_or_else(|| halt());
+    let output =
+        identity_abi::BorrowedWriteView::within(OUTPUT_OFFSET as u64, OUTPUT_LENGTH as u64, 4096)
+            .unwrap_or_else(|| halt());
+    let request = identity_abi::encode_describe_request(identity_abi::DescribeRequest {
+        identity,
+        observed_generation: 0,
+        output,
+    })
+    .unwrap_or_else(|_| halt());
+    send_call(endpoint, receiver, &request);
+    let mut response = [0u8; identity_abi::RESPONSE_BYTES];
+    receive_exact(&mut response);
+    let receipt = identity_abi::decode_describe_response(&response, OUTPUT_LENGTH as u64)
+        .unwrap_or_else(|_| halt())
+        .unwrap_or_else(|_| halt());
+    if receipt.written != 14 || receipt.current_generation != provider_generation {
+        halt()
+    }
+    let mut described = [0u8; 14];
+    read_shared(shared_read, OUTPUT_OFFSET, &mut described);
+    if described != *b"MRMLCERTPROBE1" {
+        halt()
+    }
+    terminate()
+}
+
+fn write_shared(capability: u64, offset: usize, input: &[u8]) {
+    let mut status = 8u64;
     unsafe {
-        asm!("int 0x80",inlateout("rax")status,in("rdi")endpoint,in("rsi")caller,inlateout("rdx")bytes.as_ptr() as u64=>_,in("r10")8u64,in("r8")0u64,in("r9")0u64,options(nostack))
+        asm!("int 0x80",inlateout("rax")status,in("rdi")capability,in("rsi")offset as u64,inlateout("rdx")input.as_ptr() as u64=>_,in("r10")input.len() as u64,in("r8")0u64,in("r9")0u64,options(nostack))
     }
     if status != 0 {
         halt()
     }
 }
+
+fn read_shared(capability: u64, offset: usize, output: &mut [u8]) {
+    let mut status = 7u64;
+    unsafe {
+        asm!("int 0x80",inlateout("rax")status,in("rdi")capability,in("rsi")offset as u64,inlateout("rdx")output.as_mut_ptr() as u64=>_,in("r10")output.len() as u64,in("r8")0u64,in("r9")0u64,options(nostack))
+    }
+    if status != 0 {
+        halt()
+    }
+}
+
+fn send_call(endpoint: u64, receiver: u64, request: &[u8]) {
+    let mut status = 4u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") endpoint,
+            in("rsi") receiver,
+            inlateout("rdx") request.as_ptr() as u64 => _,
+            in("r10") request.len() as u64,
+            in("r8") 0u64,
+            in("r9") 0u64,
+            options(nostack)
+        )
+    }
+    if status != 0 {
+        halt()
+    }
+}
+
+fn receive_exact(response: &mut [u8]) {
+    let mut status = 5u64;
+    let length: u64;
+    let capability_count: u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") response.as_mut_ptr() as u64,
+            in("rsi") response.len() as u64,
+            inlateout("rdx") 0u64 => length,
+            inlateout("r10") 0u64 => capability_count,
+            inlateout("r8") 0u64 => _,
+            inlateout("r9") 0u64 => _,
+            options(nostack)
+        )
+    }
+    if status != 0 || length != response.len() as u64 || capability_count != 0 {
+        halt()
+    }
+}
+
 fn terminate() -> ! {
     unsafe {
         asm!("int 0x80",in("rax")3u64,in("rdi")0u64,in("rsi")0u64,in("rdx")0u64,in("r10")0u64,in("r8")0u64,in("r9")0u64,options(noreturn,nostack))
