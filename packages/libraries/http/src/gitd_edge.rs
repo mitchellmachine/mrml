@@ -426,10 +426,10 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         }
         let target = request.target.split('?').next().unwrap_or("");
         if target == "/" {
-            return self.html_page("MRML", "Independent systems research", "<h1>MRML</h1><p>Experimental operating-system, compiler, and application-platform research.</p>", true, "home-v1");
+            return self.html_page(request, "MRML", "Independent systems research", "<h1>MRML</h1><p>Experimental operating-system, compiler, and application-platform research.</p>", true, "home-v1");
         }
         if target == "/projects" {
-            return self.html_page("Public projects", "Public MRML source repositories", "<h1>Public projects</h1><p><a href=\"/mitchellrenouf/mrml\">mitchellrenouf/mrml</a></p>", true, "projects-v1");
+            return self.html_page(request, "Public projects", "Public MRML source repositories", "<h1>Public projects</h1><p><a href=\"/mitchellrenouf/mrml\">mitchellrenouf/mrml</a></p>", true, "projects-v1");
         }
         if target == "/robots.txt" {
             return self.text(200, "text/plain; charset=utf-8", b"User-agent: *\nDisallow: /api/\nDisallow: /*.git/\nSitemap: https://mrml.ca/sitemap.xml\n", false);
@@ -611,6 +611,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
     }
     fn html_page(
         &mut self,
+        request: &RequestHead,
         title: &str,
         description: &str,
         content: &str,
@@ -628,7 +629,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
                 .insert(key, CachedRepresentation::prepare(page.as_bytes())?)?;
         }
         Ok(representation_response(
-            &empty_request(),
+            request,
             self.cache.get(key).ok_or(BackendError::Storage)?,
             index,
         ))
@@ -672,23 +673,30 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
     }
 }
 
-fn empty_request() -> RequestHead {
-    RequestHead {
-        method: "GET".into(),
-        scheme: "https".into(),
-        authority: "mrml.ca".into(),
-        target: "/".into(),
-        headers: Vector::new(),
-    }
-}
-
 fn accepts_zstd(request: &RequestHead) -> bool {
     request.headers.iter().any(|header| {
         header.name.eq_ignore_ascii_case("accept-encoding")
+            && header.value.split(',').any(|encoding| {
+                let mut parameters = encoding.split(';');
+                if parameters.next().map(str::trim) != Some("zstd") {
+                    return false;
+                }
+                !parameters.any(|parameter| {
+                    let mut pair = parameter.trim().splitn(2, '=');
+                    pair.next().map(str::trim) == Some("q")
+                        && pair.next().map(str::trim) == Some("0")
+                })
+            })
+    })
+}
+
+fn header_contains_etag(request: &RequestHead, etag: &str) -> bool {
+    request.headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("if-none-match")
             && header
                 .value
                 .split(',')
-                .any(|encoding| encoding.trim() == "zstd")
+                .any(|candidate| candidate.trim() == etag)
     })
 }
 
@@ -698,7 +706,15 @@ fn representation_response(
     index: bool,
 ) -> GitdHttpResponse {
     let zstd = accepts_zstd(request);
-    let body = if zstd {
+    let selected_etag = if zstd {
+        representation.etag_zstd.as_str()
+    } else {
+        representation.etag_identity.as_str()
+    };
+    let not_modified = header_contains_etag(request, selected_etag);
+    let body = if not_modified {
+        Vector::new()
+    } else if zstd {
         representation.zstd.clone()
     } else {
         representation.identity.clone()
@@ -711,20 +727,12 @@ fn representation_response(
         &mrml_runtime::mrml_format!("{}", body.len()),
     );
     let _ = set_header(&mut headers, "vary", "accept-encoding");
-    let _ = set_header(
-        &mut headers,
-        "etag",
-        if zstd {
-            representation.etag_zstd.as_str()
-        } else {
-            representation.etag_identity.as_str()
-        },
-    );
+    let _ = set_header(&mut headers, "etag", selected_etag);
     if zstd {
         let _ = set_header(&mut headers, "content-encoding", "zstd");
     }
     GitdHttpResponse {
-        status: 200,
+        status: if not_modified { 304 } else { 200 },
         headers,
         body,
     }
@@ -1213,6 +1221,42 @@ mod tests {
             &mrml_zstd::decode(&compressed.body).unwrap()[..],
             &plain.body[..]
         );
+
+        let home = server.handle(&request("GET", "/", true));
+        assert!(
+            home.headers
+                .iter()
+                .any(|header| { header.name == "content-encoding" && header.value == "zstd" })
+        );
+
+        let mut no_zstd = request("GET", "/", false);
+        no_zstd.headers.push(Header {
+            name: "accept-encoding".into(),
+            value: "zstd;q=0, gzip".into(),
+        });
+        let identity = server.handle(&no_zstd);
+        assert!(
+            !identity
+                .headers
+                .iter()
+                .any(|header| header.name == "content-encoding")
+        );
+
+        let etag = home
+            .headers
+            .iter()
+            .find(|header| header.name == "etag")
+            .unwrap()
+            .value
+            .clone();
+        let mut conditional = request("GET", "/", true);
+        conditional.headers.push(Header {
+            name: "if-none-match".into(),
+            value: etag,
+        });
+        let not_modified = server.handle(&conditional);
+        assert_eq!(not_modified.status, 304);
+        assert!(not_modified.body.is_empty());
     }
 
     #[test]
