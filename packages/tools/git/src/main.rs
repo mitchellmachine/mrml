@@ -1616,6 +1616,43 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
+        "cat-file" if tail.len() == 2 => {
+            let repo = native_repository(repository)?;
+            let id = repo
+                .resolve_revision(&tail[1])
+                .map_err(|error| anyhow!("{}", error))?;
+            let object = repo.read_object(id).map_err(|error| anyhow!("{}", error))?;
+            match tail[0].as_str() {
+                "-t" => println!("{}", object.kind.name()),
+                "-s" => println!("{}", object.contents.len()),
+                "-p" => match object.kind {
+                    mrml_git::ObjectKind::Tree => {
+                        for entry in parse_tree_with_format(&object.contents, repo.object_format())
+                            .map_err(|error| anyhow!("{}", error))?
+                        {
+                            let kind = repo
+                                .read_object(entry.id)
+                                .map_err(|error| anyhow!("{}", error))?
+                                .kind;
+                            println!(
+                                "{:06o} {} {}\t{}",
+                                entry.mode,
+                                kind.name(),
+                                entry.id,
+                                entry.name
+                            );
+                        }
+                    }
+                    _ => {
+                        let text = core::str::from_utf8(&object.contents)
+                            .map_err(|_| anyhow!("cat-file -p cannot emit a binary object"))?;
+                        mrml_runtime::mrml_print!("{}", text);
+                    }
+                },
+                option => return Err(anyhow!("unsupported cat-file option '{}'", option)),
+            }
+            Ok(())
+        }
         "show-ref" if tail.is_empty() => {
             let repo = native_repository(repository)?;
             for (name, id) in repo.branches().map_err(|error| anyhow!("{}", error))? {
@@ -1733,6 +1770,9 @@ mod tests {
             ("stash", &["list"][..]),
             ("rev-parse", &["HEAD"][..]),
             ("ls-tree", &["HEAD"][..]),
+            ("cat-file", &["-t", "HEAD"][..]),
+            ("cat-file", &["-s", "HEAD"][..]),
+            ("cat-file", &["-p", "HEAD"][..]),
             ("show-ref", &[][..]),
             ("fsck", &[][..]),
         ] {

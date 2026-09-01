@@ -23,6 +23,12 @@ Destructive reset modes, detached checkout, pathspec-rich forms, unreachable
 object enumeration, and the remaining explicitly listed command gaps stay fail
 closed until their native semantics are implemented and tested.
 
+`git cat-file -t`, `-s`, and `-p` are native. Type and size work for every
+authenticated object kind. Pretty mode emits parsed tree entries or exact UTF-8
+commit, tag, and blob contents; binary pretty-printing fails explicitly because
+the current runtime output interface is text-only. It never performs lossy
+conversion or invokes an external Git process.
+
 The detached-signing service interface currently enumerates SHA-256, SHA-384,
 and SHA-512 only. Adding policy-controlled OpenPGP SHA3-512 requires a separate
 interface-generation change outside this branch's allowed files before the Git
