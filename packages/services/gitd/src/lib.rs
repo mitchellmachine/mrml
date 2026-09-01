@@ -5,6 +5,7 @@ mod catalog;
 mod certd_rpc;
 mod config;
 mod identity;
+mod listener;
 mod startup;
 mod tls_identity;
 
@@ -22,6 +23,7 @@ pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,
     validate_identity_snapshot,
 };
+pub use listener::{GitdBoundListeners, GitdListenerError};
 pub use startup::{
     AdmittedRepository, RepositoryAdmissionError, RepositoryRecoveryError,
     RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,
