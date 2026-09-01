@@ -89,8 +89,12 @@ activation, appends and fsyncs a bounded typed receipt, then persists
 completion. A stale re-read never calls activation. Activation, post-activation
 journal, receipt, and final-journal failures are retained as uncertain rather
 than reported as retry-safe. Focused mock-backend tests prove ordering, stale
-old-ID rejection, one-call atomic activation, receipt sequencing, and uncertain
-activation failure. These tests prove coordinator behavior only; they are not
+old-ID rejection, one-call atomic activation, receipt sequencing, and explicit
+failure injection at the initial journal, arrival install, post-install
+journal, authority reread, activation, post-activation journal, receipt, and
+final-journal boundaries. Pre-install failures are aborted; every failure after
+durable installation remains uncertain and no failure is reported as success.
+These tests prove coordinator behavior only; they are not process-kill,
 filesystem, power-loss, or physical-storage evidence.
 
 The coordinator journal callback now receives both the lifecycle record and

@@ -565,6 +565,9 @@ mod tests {
         install_count: u8,
         activation_count: u8,
         receipt_count: u8,
+        journal_failure_at: Option<QuarantinePhase>,
+        install_failure: Option<DurableFailure>,
+        snapshot_failure: Option<DurableFailure>,
         activation_failure: Option<DurableFailure>,
         receipt_failure: Option<DurableFailure>,
     }
@@ -576,7 +579,11 @@ mod tests {
             _: &VerifiedRefTransaction,
         ) -> Result<(), DurableFailure> {
             self.phases.push(transaction.phase());
-            Ok(())
+            if self.journal_failure_at == Some(transaction.phase()) {
+                Err(DurableFailure::Fsync)
+            } else {
+                Ok(())
+            }
         }
 
         fn install_arrival_pack_and_fsync(
@@ -584,14 +591,15 @@ mod tests {
             _: QuarantineTransactionId,
         ) -> Result<(), DurableFailure> {
             self.install_count += 1;
-            Ok(())
+            self.install_failure.map_or(Ok(()), Err)
         }
 
         fn reread_activation_snapshot(
             &mut self,
             _: &VerifiedRefTransaction,
         ) -> Result<ActivationSnapshot, DurableFailure> {
-            Ok(self.snapshot.clone())
+            self.snapshot_failure
+                .map_or_else(|| Ok(self.snapshot.clone()), Err)
         }
 
         fn activate_refs_atomically_and_fsync(
@@ -815,6 +823,9 @@ mod tests {
             install_count: 0,
             activation_count: 0,
             receipt_count: 0,
+            journal_failure_at: None,
+            install_failure: None,
+            snapshot_failure: None,
             activation_failure: None,
             receipt_failure: None,
         }
@@ -873,5 +884,69 @@ mod tests {
         );
         assert_eq!(receipt_failure.activation_count, 1);
         assert_eq!(transaction.phase(), QuarantinePhase::Uncertain);
+    }
+
+    #[test]
+    fn every_durable_boundary_failure_is_classified_without_false_success() {
+        let cases = [
+            (
+                Some(QuarantinePhase::RefUpdatesPrepared),
+                None,
+                None,
+                DurableReceiveError::Aborted(DurableFailure::Fsync),
+                0,
+            ),
+            (
+                None,
+                Some(DurableFailure::DiskFull),
+                None,
+                DurableReceiveError::Aborted(DurableFailure::DiskFull),
+                0,
+            ),
+            (
+                Some(QuarantinePhase::ObjectsDurablyInstalled),
+                None,
+                None,
+                DurableReceiveError::Uncertain(DurableFailure::Fsync),
+                0,
+            ),
+            (
+                None,
+                None,
+                Some(DurableFailure::VerifierCrash),
+                DurableReceiveError::Uncertain(DurableFailure::VerifierCrash),
+                0,
+            ),
+            (
+                Some(QuarantinePhase::RefsAtomicallyActivated),
+                None,
+                None,
+                DurableReceiveError::Uncertain(DurableFailure::Fsync),
+                1,
+            ),
+            (
+                Some(QuarantinePhase::AuditReceiptAppended),
+                None,
+                None,
+                DurableReceiveError::Uncertain(DurableFailure::Fsync),
+                1,
+            ),
+        ];
+        for (journal_failure_at, install_failure, snapshot_failure, expected, activations) in cases {
+            let (mut transaction, verified, old) = ready_receive();
+            let mut store = store_for(&verified, old);
+            store.journal_failure_at = journal_failure_at;
+            store.install_failure = install_failure;
+            store.snapshot_failure = snapshot_failure;
+            assert_eq!(
+                durably_activate_verified_receive(&mut transaction, &verified, &mut store),
+                Err(expected)
+            );
+            assert_eq!(store.activation_count, activations);
+            assert!(matches!(
+                transaction.phase(),
+                QuarantinePhase::Aborted | QuarantinePhase::Uncertain
+            ));
+        }
     }
 }
