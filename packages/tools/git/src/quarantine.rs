@@ -67,6 +67,10 @@ impl PushDiskReservation {
     pub const fn incoming_pack_bytes(self) -> u64 {
         self.incoming_pack_bytes
     }
+
+    pub const fn object_count(self) -> u32 {
+        self.object_count
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -261,6 +265,10 @@ impl QuarantineTransaction {
 
     pub const fn revocation_generation(&self) -> RevocationGeneration {
         self.revocation_generation
+    }
+
+    pub const fn reservation(&self) -> PushDiskReservation {
+        self.reservation
     }
 
     pub const fn failure(&self) -> Option<DurableFailure> {

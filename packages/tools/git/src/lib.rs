@@ -2,6 +2,7 @@
 
 use mrml_runtime::{Text, Vector};
 
+mod arrival_pack;
 mod deflate;
 mod diff;
 mod gitd_core;
@@ -25,6 +26,7 @@ mod transport;
 mod trust_policy;
 mod verification;
 
+pub use arrival_pack::ArrivalPackStore;
 pub use diff::FileDiff;
 pub use gitd_core::{
     BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, CommitPage,

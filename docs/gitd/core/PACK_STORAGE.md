@@ -40,6 +40,17 @@ pack trailer needed by the first-party v2 index builder without a second
 untrusted parse. A SHA-256 two-object test builds and reparses the index and
 resolves both IDs. Independent `git index-pack` byte comparison remains open.
 
-Thin-pack completion, disk reservation, arrival packs, generation switching,
-caching, and compaction are not implemented by this change. No outer
+Hosted Linux now has an isolated `ArrivalPackStore`. It exact-matches the
+transaction's reserved incoming byte/object counts, authenticates and expands
+the pack, derives and reparses its v2 index, writes both as new regular files,
+fsyncs each file and the staging directory, and then installs the pair with one
+transaction-directory rename followed by fsync of both arrival and quarantine
+parents. Post-stage and post-install verification reopens regular files without
+following final symlinks, revalidates pack checksum/object IDs and every index
+ID/CRC/offset/trailer binding, and rejects re-use of a transaction ID. The
+arrival directory is outside normal active reads until ref generation
+activation. Windows remains fail-closed pending directory flush support.
+
+Thin-pack completion, pack-generation switching, clone/fetch caching, dynamic
+Huffman level-9 encoding, delta selection, and compaction remain open. No outer
 Zstandard layer belongs in Git pack storage.

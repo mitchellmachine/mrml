@@ -1,0 +1,266 @@
+//! Isolated, immutable arrival-pack staging and durable installation.
+
+use mrml_runtime::{
+    File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
+    rename_file,
+};
+
+use crate::{
+    DEFAULT_MAX_INCOMING_PACK_BYTES, DurableFailure, ObjectFormat, ObjectId, QuarantineTransaction,
+    QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2, parse_pack_with_index,
+};
+
+pub struct ArrivalPackStore {
+    quarantine: Text,
+    arrivals: Text,
+    format: ObjectFormat,
+    max_pack_bytes: u64,
+}
+
+impl ArrivalPackStore {
+    pub fn open(
+        root: &str,
+        format: ObjectFormat,
+        max_pack_bytes: u64,
+    ) -> Result<Self, DurableFailure> {
+        if max_pack_bytes == 0 || max_pack_bytes > DEFAULT_MAX_INCOMING_PACK_BYTES {
+            return Err(DurableFailure::DiskFull);
+        }
+        create_dir_all(root).map_err(|_| DurableFailure::DiskFull)?;
+        let root = canonical_path(root).map_err(|_| DurableFailure::Rename)?;
+        if !path_is_directory(&root) {
+            return Err(DurableFailure::Rename);
+        }
+        let quarantine = join_path(&root, "quarantine");
+        let arrivals = join_path(&root, "arrivals");
+        create_dir_all(&quarantine).map_err(|_| DurableFailure::DiskFull)?;
+        create_dir_all(&arrivals).map_err(|_| DurableFailure::DiskFull)?;
+        Ok(Self {
+            quarantine,
+            arrivals,
+            format,
+            max_pack_bytes,
+        })
+    }
+
+    pub fn stage(
+        &self,
+        transaction: &QuarantineTransaction,
+        pack: &[u8],
+    ) -> Result<(), DurableFailure> {
+        if u64::try_from(pack.len()).map_err(|_| DurableFailure::DiskFull)?
+            != transaction.reservation().incoming_pack_bytes()
+            || u64::try_from(pack.len()).map_err(|_| DurableFailure::DiskFull)?
+                > self.max_pack_bytes
+        {
+            return Err(DurableFailure::DiskFull);
+        }
+        let (objects, entries) =
+            parse_pack_with_index(pack, self.format).map_err(|_| DurableFailure::VerifierCrash)?;
+        if objects.len()
+            != usize::try_from(transaction.reservation().object_count())
+                .map_err(|_| DurableFailure::VerifierCrash)?
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let trailer =
+            ObjectId::from_bytes(self.format, &pack[pack.len() - self.format.hash_len()..])
+                .ok_or(DurableFailure::VerifierCrash)?;
+        let index = build_pack_index_v2(self.format, &entries, trailer)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+
+        let directory = self.quarantine_path(transaction.id());
+        if path_exists(&directory) || path_exists(&self.arrival_path(transaction.id())) {
+            return Err(DurableFailure::StaleLock);
+        }
+        create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
+        write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
+        write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
+        sync_pack_directory(&directory)?;
+        sync_pack_directory(&self.quarantine)?;
+        self.verify_directory(&directory, transaction.reservation().object_count())?;
+        Ok(())
+    }
+
+    pub fn install(
+        &self,
+        transaction: QuarantineTransactionId,
+        object_count: u32,
+    ) -> Result<(), DurableFailure> {
+        let staged = self.quarantine_path(transaction);
+        let installed = self.arrival_path(transaction);
+        if path_exists(&installed) {
+            return Err(DurableFailure::StaleLock);
+        }
+        self.verify_directory(&staged, object_count)?;
+        rename_file(&staged, &installed).map_err(|_| DurableFailure::Rename)?;
+        sync_pack_directory(&self.arrivals)?;
+        sync_pack_directory(&self.quarantine)?;
+        self.verify_directory(&installed, object_count)
+    }
+
+    pub fn verify_installed(
+        &self,
+        transaction: QuarantineTransactionId,
+        object_count: u32,
+    ) -> Result<(), DurableFailure> {
+        self.verify_directory(&self.arrival_path(transaction), object_count)
+    }
+
+    fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
+        let pack =
+            read_regular_bounded(&join_path(directory, "objects.pack"), self.max_pack_bytes)?;
+        let per_object = u64::try_from(self.format.hash_len())
+            .map_err(|_| DurableFailure::DiskFull)?
+            .checked_add(16)
+            .ok_or(DurableFailure::DiskFull)?;
+        let index_limit = 8u64
+            .checked_add(256 * 4)
+            .and_then(|value| value.checked_add(u64::from(object_count).checked_mul(per_object)?))
+            .and_then(|value| value.checked_add((self.format.hash_len() * 2) as u64))
+            .ok_or(DurableFailure::DiskFull)?;
+        let index = read_regular_bounded(&join_path(directory, "objects.idx"), index_limit)?;
+        let (objects, entries) =
+            parse_pack_with_index(&pack, self.format).map_err(|_| DurableFailure::VerifierCrash)?;
+        if objects.len()
+            != usize::try_from(object_count).map_err(|_| DurableFailure::VerifierCrash)?
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let parsed = parse_pack_index_v2(self.format, &index, object_count)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        if parsed.entries().len() != entries.len()
+            || entries.iter().any(|expected| {
+                parsed
+                    .find(expected.id)
+                    .is_none_or(|actual| actual != expected)
+            })
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let trailer =
+            ObjectId::from_bytes(self.format, &pack[pack.len() - self.format.hash_len()..])
+                .ok_or(DurableFailure::VerifierCrash)?;
+        if parsed.pack_checksum() != trailer {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        Ok(())
+    }
+
+    fn quarantine_path(&self, transaction: QuarantineTransactionId) -> Text {
+        join_path(&self.quarantine, &transaction_name(transaction))
+    }
+    fn arrival_path(&self, transaction: QuarantineTransactionId) -> Text {
+        join_path(&self.arrivals, &transaction_name(transaction))
+    }
+}
+
+fn write_new_synced(path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
+    let mut file = File::create_new(path).map_err(|_| DurableFailure::StaleLock)?;
+    file.write_all(bytes)
+        .map_err(|_| DurableFailure::ShortWrite)?;
+    file.sync().map_err(|_| DurableFailure::Fsync)
+}
+
+fn read_regular_bounded(path: &str, limit: u64) -> Result<Vector<u8>, DurableFailure> {
+    let mut file = File::open_regular(path).map_err(|_| DurableFailure::VerifierCrash)?;
+    let length = file.len().map_err(|_| DurableFailure::VerifierCrash)?;
+    if length > limit {
+        return Err(DurableFailure::DiskFull);
+    }
+    let length = usize::try_from(length).map_err(|_| DurableFailure::DiskFull)?;
+    let mut bytes = Vector::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| DurableFailure::DiskFull)?;
+    bytes.resize(length, 0);
+    file.read_exact(&mut bytes)
+        .map_err(|_| DurableFailure::ShortWrite)?;
+    Ok(bytes)
+}
+
+fn transaction_name(transaction: QuarantineTransactionId) -> Text {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = Text::new();
+    for byte in transaction.0 {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 15) as usize] as char);
+    }
+    output
+}
+
+#[cfg(unix)]
+fn sync_pack_directory(path: &str) -> Result<(), DurableFailure> {
+    mrml_runtime::sync_directory(path).map_err(|_| DurableFailure::Fsync)
+}
+#[cfg(not(unix))]
+fn sync_pack_directory(_: &str) -> Result<(), DurableFailure> {
+    Err(DurableFailure::Fsync)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::{
+        PackObject, PushStorageForecast, QuarantineLimits, RepositoryGeneration,
+        RepositoryIdentity, RevocationGeneration, TrustGeneration, encode_pack_with_format,
+        reserve_push_disk,
+    };
+
+    fn root() -> Text {
+        join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-arrival-{}", mrml_runtime::process_id()),
+        )
+    }
+
+    #[test]
+    fn linux_arrival_pack_is_validated_indexed_and_installed_as_one_directory() {
+        let root = root();
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let object = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"arrival"),
+            kind: crate::ObjectKind::Blob,
+            contents: Vector::from(*b"arrival"),
+        };
+        let pack = encode_pack_with_format(&[object], ObjectFormat::Sha256).unwrap();
+        let reservation = reserve_push_disk(
+            QuarantineLimits {
+                minimum_free_space_bytes: 0,
+                ..QuarantineLimits::default()
+            },
+            PushStorageForecast {
+                incoming_pack_bytes: pack.len() as u64,
+                expanded_object_bytes: 7,
+                largest_object_bytes: 7,
+                object_count: 1,
+                ref_count: 1,
+                arrival_index_bytes: 4096,
+                staging_metadata_bytes: 4096,
+                audit_receipt_bytes: 4096,
+                ordinary_free_bytes: 1_000_000,
+            },
+        )
+        .unwrap();
+        let transaction = QuarantineTransaction::begin(
+            QuarantineTransactionId([12u8; 16]),
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            RepositoryGeneration(1),
+            TrustGeneration(1),
+            RevocationGeneration(1),
+            reservation,
+        )
+        .unwrap();
+        let store = ArrivalPackStore::open(&root, ObjectFormat::Sha256, 1024 * 1024).unwrap();
+        store.stage(&transaction, &pack).unwrap();
+        assert!(!path_exists(&store.arrival_path(transaction.id())));
+        store.install(transaction.id(), 1).unwrap();
+        store.verify_installed(transaction.id(), 1).unwrap();
+        assert!(!path_exists(&store.quarantine_path(transaction.id())));
+        assert_eq!(
+            store.stage(&transaction, &pack),
+            Err(DurableFailure::StaleLock)
+        );
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+}
