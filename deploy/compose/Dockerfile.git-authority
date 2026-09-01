@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1.7
+FROM docker.io/library/debian@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867 AS verify
+COPY target/mrml-native/linux/release/mrml-git-authority /payload/mrml-git-authority
+RUN test -x /payload/mrml-git-authority && ! ldd /payload/mrml-git-authority | grep -q 'not found'
+
+FROM gcr.io/distroless/cc-debian12@sha256:777e96cf322c46bc32aca926c263624c4dc8d7cf37e2fa65ba2c7e697318ebbb
+COPY --from=verify --chown=21002:21002 /payload/mrml-git-authority /usr/bin/mrml-git-authority
+USER 21002:21002
+ENTRYPOINT ["/usr/bin/mrml-git-authority"]
