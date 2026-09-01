@@ -943,6 +943,12 @@ impl Http2ServerConnection {
             }
         }
     }
+    pub fn request_body_complete(&self, stream_id: u32) -> Result<bool, HttpError> {
+        if self.request_stream != Some(stream_id) {
+            return Err(HttpError::InvalidResponse);
+        }
+        Ok(self.request_ended && self.pending_request_offset == self.pending_request_data.len())
+    }
     fn copy_pending_request_data(
         &mut self,
         stream_id: u32,

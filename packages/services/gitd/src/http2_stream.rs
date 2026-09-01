@@ -141,6 +141,73 @@ pub fn serve_smart_git_http2<B: GitdBackend>(
     }
 }
 
+/// Serve requests sequentially on one authenticated HTTP/2 connection. The
+/// listener owns connection concurrency; this function owns exact per-stream
+/// routing and closes the connection on any ambiguous stream state.
+pub fn serve_gitd_http2_connection<B: GitdBackend>(
+    edge: &mut GitdHttp3Server<B>,
+    connection: &mut Http2ServerConnection,
+    maximum_body_bytes: u64,
+) -> Result<(), GitdHttp2StreamError> {
+    loop {
+        let (stream_id, request) = connection
+            .next_request()
+            .map_err(|_| GitdHttp2StreamError::Transport)?;
+        if is_smart_git_target(&request.target) {
+            match serve_smart_git_http2(edge, connection, stream_id, &request, maximum_body_bytes) {
+                Ok(()) => continue,
+                Err(GitdHttp2StreamError::Prepare(error)) => {
+                    let status = prepare_error_status(error);
+                    connection
+                        .respond(stream_id, status, &[("content-length", "0")], b"")
+                        .map_err(|_| GitdHttp2StreamError::Transport)?;
+                    return Err(GitdHttp2StreamError::Prepare(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        if !connection
+            .request_body_complete(stream_id)
+            .map_err(|_| GitdHttp2StreamError::Transport)?
+        {
+            connection
+                .respond(stream_id, 405, &[("content-length", "0")], b"")
+                .map_err(|_| GitdHttp2StreamError::Transport)?;
+            return Err(GitdHttp2StreamError::Prepare(BackendError::Unsupported));
+        }
+
+        let response = edge.handle(&request);
+        let mut headers = Vec::new();
+        headers
+            .try_reserve_exact(response.headers.len())
+            .map_err(|_| GitdHttp2StreamError::Transport)?;
+        for header in &response.headers {
+            headers.push((header.name.as_str(), header.value.as_str()));
+        }
+        connection
+            .respond(stream_id, response.status, &headers, &response.body)
+            .map_err(|_| GitdHttp2StreamError::Transport)?;
+    }
+}
+
+fn is_smart_git_target(target: &str) -> bool {
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    path.split('/').any(|component| component.ends_with(".git"))
+}
+
+fn prepare_error_status(error: BackendError) -> u16 {
+    match error {
+        BackendError::NotFound
+        | BackendError::MalformedIdentifier
+        | BackendError::MalformedPath
+        | BackendError::MalformedRevision
+        | BackendError::Private => 404,
+        BackendError::ResourceLimit => 429,
+        _ => 503,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +263,20 @@ mod tests {
         drop(input);
         drop(output);
         assert_eq!(&transport.borrow().output, b"abc");
+    }
+
+    #[test]
+    fn connection_routing_and_prepare_errors_fail_closed() {
+        assert!(is_smart_git_target(
+            "/mitchellrenouf/mrml.git/git-upload-pack"
+        ));
+        assert!(is_smart_git_target(
+            "/mitchellrenouf/mrml.git/info/refs?service=git-upload-pack"
+        ));
+        assert!(!is_smart_git_target("/mitchellrenouf/mrml"));
+        assert!(!is_smart_git_target("/mrml.git.example/path"));
+        assert_eq!(prepare_error_status(BackendError::Private), 404);
+        assert_eq!(prepare_error_status(BackendError::ResourceLimit), 429);
+        assert_eq!(prepare_error_status(BackendError::Storage), 503);
     }
 }
