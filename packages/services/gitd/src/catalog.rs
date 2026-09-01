@@ -4,7 +4,10 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use mrml_crypto::Sha256;
-use mrml_git::{RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration};
+use mrml_git::{
+    FilesystemRepositoryView, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+    TrustGeneration,
+};
 
 use crate::GitdConfig;
 
@@ -55,6 +58,25 @@ pub enum DeploymentCatalogError {
     Duplicate,
     UnknownProfile,
     InvalidValue,
+}
+
+pub fn verify_repository_admission(
+    entry: &DeploymentRepository,
+    view: &FilesystemRepositoryView,
+) -> Result<(), DeploymentCatalogError> {
+    let generations = view
+        .authority_generations()
+        .map_err(|_| DeploymentCatalogError::InvalidValue)?;
+    if generations
+        != (
+            entry.repository_generation,
+            entry.trust_generation,
+            entry.revocation_generation,
+        )
+    {
+        return Err(DeploymentCatalogError::InvalidValue);
+    }
+    Ok(())
 }
 
 pub fn load_deployment_catalog(
@@ -289,6 +311,10 @@ fn canonical_number(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_git::{
+        ActiveRefFile, ActiveRefState, FullRefName, ObjectFormat, ObjectKind, PackGeneration,
+        Repository,
+    };
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
@@ -370,6 +396,51 @@ mod tests {
         assert_eq!(
             read_authenticated(&catalog, uid, Sha256::digest(PROFILES)),
             Err(DeploymentCatalogError::Permissions)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn catalog_generations_exact_match_reopened_sha256_repository_state() {
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-catalog-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let objects_path = root.join("objects");
+        let refs_path = root.join("refs");
+        let repository =
+            Repository::init_with_format(objects_path.to_str().unwrap(), ObjectFormat::Sha256)
+                .unwrap();
+        let tip = repository.write_object(ObjectKind::Blob, b"tip").unwrap();
+        let identity = RepositoryIdentity::parse("owner/project").unwrap();
+        ActiveRefFile::initialize(
+            refs_path.to_str().unwrap(),
+            &ActiveRefState {
+                repository: identity.clone(),
+                repository_generation: RepositoryGeneration(4),
+                trust_generation: TrustGeneration(6),
+                revocation_generation: RevocationGeneration(8),
+                pack_generation: PackGeneration(1),
+                pack_set_digest: [1; 32],
+                object_format: ObjectFormat::Sha256,
+                default_branch: FullRefName::parse("refs/heads/main").unwrap(),
+                refs: [(FullRefName::parse("refs/heads/main").unwrap(), tip)].into(),
+            },
+        )
+        .unwrap();
+        let view = FilesystemRepositoryView::open(
+            identity,
+            objects_path.to_str().unwrap(),
+            refs_path.to_str().unwrap(),
+        )
+        .unwrap();
+        let catalog = parse_deployment_catalog(PROFILES, REPOSITORIES).unwrap();
+        assert_eq!(
+            verify_repository_admission(&catalog.repositories[1], &view),
+            Ok(())
+        );
+        assert_eq!(
+            verify_repository_admission(&catalog.repositories[0], &view),
+            Err(DeploymentCatalogError::InvalidValue)
         );
         fs::remove_dir_all(root).unwrap();
     }

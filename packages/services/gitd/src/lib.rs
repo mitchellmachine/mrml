@@ -10,6 +10,7 @@ pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use catalog::{
     DeploymentCatalog, DeploymentCatalogError, DeploymentProfile, DeploymentRepository,
     DeploymentRepositoryProfile, load_deployment_catalog, parse_deployment_catalog,
+    verify_repository_admission,
 };
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};

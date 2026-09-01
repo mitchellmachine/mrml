@@ -2,7 +2,7 @@
 
 Status: **PARTIALLY IMPLEMENTED**. Canonical authenticated catalog loading is
 implemented and is a native startup gate. Repository backend construction and
-durable token-record loading remain to be composed.
+listener composition remain to be completed.
 
 Gitd accepts two distinct bounded version-1 catalogs. The profile catalog maps
 a canonical deployment-owned profile name to `public-read`, `private`, or
@@ -25,15 +25,17 @@ The filesystem repository backend exposes the exact active
 repository/trust/revocation generation tuple only after reopening authenticated
 active state, and refuses this startup view unless its object format is
 SHA-256. Gitd uses this narrow projection to compare catalog generations; it
-does not infer security state from storage paths or repository labels.
+admits the repository only when all three generations exactly match the
+authenticated catalog entry, and does not infer security state from storage
+paths or repository labels.
 
 Focused hosted Linux evidence:
 
-- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 9 tests pass,
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 11 tests pass,
   covering canonical resolution, generation binding, ordering, duplicate and
   unknown-profile rejection, malformed identities, digest substitution,
-  symlink refusal, and insecure mode refusal, plus real authority/certd Unix
-  exchanges.
+  symlink refusal, insecure mode refusal, exact reopened repository-state
+  admission, and real authority/certd Unix exchanges.
 - `./target/debug/mrml test org.mrml.tool.git --target linux`: 194 library and 3
   CLI tests passed, including exact SHA-256 authority-generation projection from
   a reopened filesystem repository view.
