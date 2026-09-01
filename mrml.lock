@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 185
+compile_edges = 186
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 165
+package_edges = 166
 system_release_edges = 3
 
 [[package]]
@@ -615,9 +615,9 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "microvm"
 isolation_supported = ["native-service", "microvm"]
-compile_dependencies = ["org.mrml.interface.certificate.challenge", "org.mrml.interface.certificate.identity", "org.mrml.interface.certificate.lifecycle", "org.mrml.interface.certificate.signing", "org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.library.tls"]
+compile_dependencies = ["org.mrml.interface.certificate.challenge", "org.mrml.interface.certificate.identity", "org.mrml.interface.certificate.lifecycle", "org.mrml.interface.certificate.signing", "org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.library.tls", "org.mrml.system.kernel"]
 
-static_runtime = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.library.tls"]
+static_runtime = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.library.tls", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
 
