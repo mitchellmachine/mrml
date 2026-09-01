@@ -462,6 +462,7 @@ impl NativeConfigurationEndpoint {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeConfigurationLaunchError<E> {
     AlreadyRunning,
+    BindingMismatch,
     NonEmptyRuntime,
     WrongEndpoint,
     Service(ServiceError),
@@ -483,6 +484,7 @@ pub struct SupervisedNativeConfigurationLauncher<
     eraser: E,
     priority: Priority,
     context: UserContext,
+    expected: IsolationServiceSpec,
     active: Option<NativeConfigurationEndpoint>,
 }
 
@@ -500,12 +502,14 @@ impl<
         eraser: E,
         priority: Priority,
         context: UserContext,
+        expected: IsolationServiceSpec,
     ) -> Self {
         Self {
             substrate,
             eraser,
             priority,
             context,
+            expected,
             active: None,
         }
     }
@@ -522,6 +526,10 @@ impl<
 
     pub const fn eraser(&self) -> &E {
         &self.eraser
+    }
+
+    pub const fn expected(&self) -> IsolationServiceSpec {
+        self.expected
     }
 }
 
@@ -546,6 +554,12 @@ impl<
             return Err((
                 IsolationUnavailableReason::NativeServiceResource,
                 NativeConfigurationLaunchError::AlreadyRunning,
+            ));
+        }
+        if spec != self.expected || spec.placement() != IsolationPlacement::NativeService {
+            return Err((
+                IsolationUnavailableReason::InterfaceTransport,
+                NativeConfigurationLaunchError::BindingMismatch,
             ));
         }
         if self.substrate.runtime.load().occupied() != 0 {

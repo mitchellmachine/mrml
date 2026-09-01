@@ -893,6 +893,7 @@ mod tests {
             0x7000_0000,
         )
         .unwrap();
+        let expected = configuration_service_spec(IsolationPlacement::NativeService);
         let native = SupervisedNativeConfigurationLauncher::new(
             substrate,
             NativeAddressSpaceEraser {
@@ -901,16 +902,28 @@ mod tests {
             },
             Priority::NORMAL,
             context,
+            expected,
         );
         let mut backend =
             ConfigurationPlacementBackend::new(native, MicrovmPlacementProbe::default());
+        assert_eq!(backend.native.expected(), expected);
+        for substituted in endpoint_binding_substitutions(expected) {
+            assert_eq!(
+                backend.native.launch_native(substituted),
+                Err((
+                    IsolationUnavailableReason::InterfaceTransport,
+                    NativeConfigurationLaunchError::BindingMismatch,
+                ))
+            );
+        }
+        assert_eq!(backend.native.substrate().runtime().load().occupied(), 0);
         let mut admission =
             IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 5)
                 .unwrap();
         let routed = route_isolation_service(
             &mut admission,
             &mut backend,
-            configuration_service_spec(IsolationPlacement::NativeService),
+            expected,
         )
         .unwrap();
         let endpoint = match routed.endpoint() {
