@@ -16,7 +16,7 @@ case ${1:-execute} in
     execute)
         entry_source=docs/compiler/probes/pinned_instrumented_profile_entry.s
         expected_size=60416
-        expected_hash=5aef132dd500c0e849e4736f4dcddef28f3ae939b639df6df840d12823e3d27b
+        expected_hash=3fdbcf0a6ae57ac72c3d8603a782b6da064333161215670515cb7b57006233e8
         profile_size=
         profile_hash=
         profile_file=
@@ -26,7 +26,7 @@ case ${1:-execute} in
     write)
         entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
         expected_size=60416
-        expected_hash=a5949787946712c2d9c66a3a6e8c30986aec6ea639c6dc99f2e45ff884534c91
+        expected_hash=644259b9f43675fdb375715226770dd640898db53bddef9ea1d6efd51de8850d
         profile_size=288
         profile_hash=437f3ffa93254a22de0098ab99e84cfd52148f7a7d8a92aafa3a91c80581da50
         profile_file=profile.profraw
@@ -36,7 +36,7 @@ case ${1:-execute} in
     temporal)
         entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
         expected_size=60416
-        expected_hash=79b17c85389aa2804f7d807d352e7444bfd3cd653577058df1c3d02cdcab83cd
+        expected_hash=3c307b30868a26f2f8640d9276bac88ad89a799acce4c7eba1de4c2465f9fe99
         profile_size=296
         profile_hash=98a815c829e47f187341fe363c4a0b506e0ba30cb2ab796142fe14858eb1f933
         profile_file=profile.profraw
@@ -46,7 +46,7 @@ case ${1:-execute} in
     sampled)
         entry_source=docs/compiler/probes/pinned_sampled_profile_entry.s
         expected_size=61952
-        expected_hash=a942a7294e9099d8ad27e5fdfb3982a8a3f7996c6296de004a5606f45acb28dc
+        expected_hash=9907311bade1a8f16e05af8033474adb46295d1596350e17e457dcce77029e0a
         profile_size=304
         profile_hash=1bdd1251554c070163a9ccc14098da66d085fc2df5bbdc8cafe70b5b0dfce219
         profile_file=sampled.profraw

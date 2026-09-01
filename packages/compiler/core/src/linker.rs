@@ -941,6 +941,7 @@ impl PeCrtInitializerOrder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeDataKind<'a> {
     Writable,
+    WritableSubsection(&'a str),
     Profile(PeProfileDataOrder),
     Tls(PeTlsSectionOrder<'a>),
     CrtInitializer(PeCrtInitializerOrder),
@@ -950,6 +951,22 @@ pub enum PeDataKind<'a> {
 impl PeDataKind<'_> {
     const fn is_tls(self) -> bool {
         matches!(self, Self::Tls(_))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum PeWritableDataOrder<'a> {
+    Base,
+    Subsection(&'a str),
+}
+
+fn pe_writable_data_order(kind: PeDataKind<'_>) -> Option<PeWritableDataOrder<'_>> {
+    match kind {
+        PeDataKind::Writable => Some(PeWritableDataOrder::Base),
+        PeDataKind::WritableSubsection(suffix) => {
+            Some(PeWritableDataOrder::Subsection(suffix))
+        }
+        _ => None,
     }
 }
 
@@ -4744,7 +4761,14 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     Some(order) => PeDataKind::TlsCallback(order),
                     None => match coff_crt_initializer_order(name)? {
                         Some(order) => PeDataKind::CrtInitializer(order),
-                        None => PeDataKind::Writable,
+                        None => match name
+                            .strip_prefix(".data$")
+                            .or_else(|| name.strip_prefix(".bss$"))
+                        {
+                            Some("") => return Err(LinkerError::UnsupportedCoff),
+                            Some(suffix) => PeDataKind::WritableSubsection(suffix),
+                            None => PeDataKind::Writable,
+                        },
                     },
                 }
             };
@@ -9455,6 +9479,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         }
     }
     let import_address_size = writable_size;
+    let mut initialized_writable_indices = [0usize; MAX_LINK_INPUTS];
+    let mut initialized_writable_count = 0usize;
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] {
             continue;
@@ -9470,6 +9496,36 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if data.initialized.is_empty() || data.zeroed_size != 0 {
             continue;
         }
+        let slot = initialized_writable_indices
+            .get_mut(initialized_writable_count)
+            .ok_or(LinkerError::TooManyInputs)?;
+        *slot = index;
+        initialized_writable_count = initialized_writable_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    for index in 1..initialized_writable_count {
+        let selected = initialized_writable_indices[index];
+        let selected_order = pe_writable_data_order(writable_data[selected].kind)
+            .ok_or(LinkerError::InvalidCoff)?;
+        let mut position = index;
+        while position > 0 {
+            let previous = initialized_writable_indices[position - 1];
+            let previous_order = pe_writable_data_order(writable_data[previous].kind)
+                .ok_or(LinkerError::InvalidCoff)?;
+            if previous_order <= selected_order {
+                break;
+            }
+            initialized_writable_indices[position] = previous;
+            position -= 1;
+        }
+        initialized_writable_indices[position] = selected;
+    }
+    for index in initialized_writable_indices[..initialized_writable_count]
+        .iter()
+        .copied()
+    {
+        let data = &writable_data[index];
         writable_size = align(writable_size, 8)?;
         writable_offsets[index] = writable_size;
         writable_size = writable_size
@@ -9540,6 +9596,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         .ok_or(LinkerError::OffsetOverflow)?;
     let writable_file_size = writable_size;
     let mut zeroed_total = 0usize;
+    let mut zeroed_writable_indices = [0usize; MAX_LINK_INPUTS];
+    let mut zeroed_writable_count = 0usize;
     for (index, data) in writable_data.iter().enumerate() {
         if !writable_kept[index] {
             continue;
@@ -9558,6 +9616,36 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         if data.zeroed_size == 0 || !data.relocations.is_empty() {
             return Err(LinkerError::InvalidCoff);
         }
+        let slot = zeroed_writable_indices
+            .get_mut(zeroed_writable_count)
+            .ok_or(LinkerError::TooManyInputs)?;
+        *slot = index;
+        zeroed_writable_count = zeroed_writable_count
+            .checked_add(1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    for index in 1..zeroed_writable_count {
+        let selected = zeroed_writable_indices[index];
+        let selected_order = pe_writable_data_order(writable_data[selected].kind)
+            .ok_or(LinkerError::InvalidCoff)?;
+        let mut position = index;
+        while position > 0 {
+            let previous = zeroed_writable_indices[position - 1];
+            let previous_order = pe_writable_data_order(writable_data[previous].kind)
+                .ok_or(LinkerError::InvalidCoff)?;
+            if previous_order <= selected_order {
+                break;
+            }
+            zeroed_writable_indices[position] = previous;
+            position -= 1;
+        }
+        zeroed_writable_indices[position] = selected;
+    }
+    for index in zeroed_writable_indices[..zeroed_writable_count]
+        .iter()
+        .copied()
+    {
+        let data = &writable_data[index];
         writable_size = align(writable_size, 8)?;
         writable_offsets[index] = writable_size;
         writable_size = writable_size
@@ -15560,7 +15648,7 @@ mod tests {
             tls_writable.identity,
             Some(CoffSectionIdentity::new(9, 3).unwrap())
         );
-        assert_eq!(tls_writable.kind, PeDataKind::Writable);
+        assert_eq!(tls_writable.kind, PeDataKind::WritableSubsection("a"));
         assert_eq!(
             tls_writable.relocations,
             &[PeWritableRelocation {
@@ -16542,6 +16630,58 @@ mod tests {
                 &writable,
             ),
             Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn orders_bounded_pe_writable_subsections_lexically() {
+        let input = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let subsection = |symbol, suffix, byte| PeWritableData {
+            symbol,
+            identity: None,
+            kind: PeDataKind::WritableSubsection(suffix),
+            selection: PeWritableComdatSelection::None,
+            initialized: byte,
+            zeroed_size: 0,
+            relocations: &[],
+        };
+        let writable = [
+            subsection("zeta", "Z", &[0x5a; 8]),
+            PeWritableData {
+                symbol: "base",
+                identity: None,
+                kind: PeDataKind::Writable,
+                selection: PeWritableComdatSelection::None,
+                initialized: &[0x42; 8],
+                zeroed_size: 0,
+                relocations: &[],
+            },
+            subsection("alpha", "A", &[0x41; 8]),
+            subsection("middle", "M", &[0x4d; 8]),
+        ];
+        let pe =
+            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], &writable)
+                .unwrap();
+        let writable_raw = usize::try_from(read_u32(pe.bytes(), 0x1b0 + 20).unwrap()).unwrap();
+        assert_eq!(&pe.bytes()[writable_raw..writable_raw + 8], &[0x42; 8]);
+        assert_eq!(
+            &pe.bytes()[writable_raw + 8..writable_raw + 16],
+            &[0x41; 8]
+        );
+        assert_eq!(
+            &pe.bytes()[writable_raw + 16..writable_raw + 24],
+            &[0x4d; 8]
+        );
+        assert_eq!(
+            &pe.bytes()[writable_raw + 24..writable_raw + 32],
+            &[0x5a; 8]
         );
     }
 
