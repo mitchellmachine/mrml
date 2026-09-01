@@ -49,6 +49,82 @@ impl DurableAuthenticator for Auth {
         Ok(self.authenticate(record)? == *tag)
     }
 }
+struct ProbeStorage {
+    bytes: [u8; MAX_DURABLE_RECORD_BYTES],
+    length: usize,
+    prepared: Option<PreparedStoreReceipt>,
+    committed: Option<CommittedStoreReceipt>,
+}
+impl ProbeStorage {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; MAX_DURABLE_RECORD_BYTES],
+            length: 0,
+            prepared: None,
+            committed: None,
+        }
+    }
+}
+impl CertificateDurableStorageCapability for ProbeStorage {
+    type Error = ();
+    fn prepare_record(
+        &mut self,
+        record: &[u8],
+        expected: PreparedStoreReceipt,
+    ) -> Result<PreparedStoreReceipt, Self::Error> {
+        if record.is_empty() || record.len() > self.bytes.len() || self.prepared.is_some() {
+            return Err(());
+        }
+        self.bytes[..record.len()].copy_from_slice(record);
+        self.length = record.len();
+        self.prepared = Some(expected);
+        Ok(expected)
+    }
+    fn commit_record(
+        &mut self,
+        prepared: PreparedStoreReceipt,
+    ) -> Result<CommittedStoreReceipt, Self::Error> {
+        if self.prepared != Some(prepared) {
+            return Err(());
+        }
+        let receipt = CommittedStoreReceipt {
+            namespace: prepared.namespace,
+            object: prepared.object,
+            generation: prepared.generation,
+            payload_digest: prepared.payload_digest,
+            store_generation: prepared.store_generation,
+        };
+        self.committed = Some(receipt);
+        Ok(receipt)
+    }
+    fn authoritative_receipt(
+        &mut self,
+        namespace: DurableNamespace,
+        object: DurableObjectId,
+    ) -> Result<Option<CommittedStoreReceipt>, Self::Error> {
+        Ok(self
+            .committed
+            .filter(|receipt| receipt.namespace == namespace && receipt.object == object))
+    }
+    fn read_authoritative_record(
+        &mut self,
+        namespace: DurableNamespace,
+        object: DurableObjectId,
+        output: &mut [u8],
+    ) -> Result<Option<(CommittedStoreReceipt, usize)>, Self::Error> {
+        let Some(receipt) = self
+            .committed
+            .filter(|receipt| receipt.namespace == namespace && receipt.object == object)
+        else {
+            return Ok(None);
+        };
+        if output.len() < self.length {
+            return Err(());
+        }
+        output[..self.length].copy_from_slice(&self.bytes[..self.length]);
+        Ok(Some((receipt, self.length)))
+    }
+}
 struct Providers {
     generation: u64,
 }
@@ -236,8 +312,15 @@ unsafe extern "sysv64" fn mrml_certd_probe(
         &mut auth,
     )
     .unwrap_or_else(|_| halt());
+    let mut store = CapabilityDurableStateStore::new(ProbeStorage::new());
+    let mut transaction =
+        DurableTransaction::prepare(&record, &mut store).unwrap_or_else(|_| halt());
+    transaction.commit(&mut store).unwrap_or_else(|_| halt());
     let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
-    let len = record.encode(&mut encoded).unwrap_or_else(|_| halt());
+    let (_, len) = store
+        .load_authoritative(DurableNamespace::PublicState, record.object, &mut encoded)
+        .unwrap_or_else(|_| halt())
+        .unwrap_or_else(|| halt());
     let restored = DurableRecord::decode(&encoded[..len], &mut auth).unwrap_or_else(|_| halt());
     if restored.payload() != b"restored-active" || restored.generation != provider_generation {
         halt()

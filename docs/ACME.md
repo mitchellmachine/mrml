@@ -219,8 +219,14 @@ entries, contradictory prepared files, and oversized or malformed records.
 Linux also synchronizes the containing directory. The Windows target
 synchronizes record contents and exercises close, reopen, selection, and
 authentication under Wine; that is not native Windows storage-durability or
-power-loss evidence. An MRML startup adapter that enumerates the same records
-through capability-backed storage remains required.
+power-loss evidence. The shared no-allocation capability adapter sends exact
+authenticated record bytes to an attenuated storage capability and validates
+prepare, commit, authoritative-reread, and record-read receipts before use. The
+MRML-native certificate probe now prepares, commits, reloads, and authenticates
+its deployment generation through this adapter before serving any interface
+call. The deterministic backend proves the MRML service boundary and recovery
+contract; persistence through the full native storage service and reboot still
+requires the KVM lifecycle lane.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact

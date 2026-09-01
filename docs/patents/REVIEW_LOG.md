@@ -11929,3 +11929,11 @@ authenticated-record persistence using bounded immutable generation files,
 file synchronization, atomic rename publication, and authoritative reread. It
 adds no certificate protocol, validation topology, MultiTLS multiplexing,
 public CA operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Capability-backed MRML certificate persistence adapter
+
+Patent review: **NOT_TRIGGERED**. This increment projects the existing
+authenticated generational record protocol through an attenuated MRML storage
+capability and validates exact prepare, commit, reread, and byte-load receipts.
+It adds no certificate protocol, validation topology, MultiTLS multiplexing,
+public CA operation, or other recorded re-review trigger.

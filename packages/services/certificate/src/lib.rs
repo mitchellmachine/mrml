@@ -15,6 +15,7 @@ mod challenge_tls_alpn_hosted;
 mod deployment_journal;
 mod dns_propagation;
 mod durable;
+mod durable_capability;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod durable_hosted;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -87,6 +88,7 @@ pub use durable::{
     DurableTransaction, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
     SecretHandle, TransactionState,
 };
+pub use durable_capability::{CapabilityDurableStateStore, CertificateDurableStorageCapability};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use durable_hosted::HostedDurableStateStore;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
