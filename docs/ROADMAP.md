@@ -1538,7 +1538,11 @@ owner retaining the exact service binding, task/root/target, inactive-builder
 storage, and all five mapping records while exposing no inactive mutation or
 rollback operation. A zero-capacity-supervisor test proves failure leaves the
 task construction-pending and retryable before successful exact activation.
-The trusted launcher must still establish the initial PCI-identity/device-object
+The concrete active owner can now consume an exact-current-task freeze while
+retaining its service, root/target, and all mapping resources. A non-current
+failure returns the unchanged active owner; success removes the task from
+runnable load without performing MMIO, DMA, unmapping, or retirement. The
+trusted launcher must still establish the initial PCI-identity/device-object
 correlation; record bytes describe and bind that decision but do not authorize
 it. Full-lifetime PAT3=UC and cacheable-alias proof, active freeze/quiescence and
 mapping withdrawal, SMP TLB, IOMMU, installed CPL3, KVM/WHP, and physical
@@ -3286,7 +3290,7 @@ now resolve there without changing compiler semantics.
 The compiler driver now resides at `packages/compiler/driver`; its core/error/runtime
 edges resolve to semantic homes without changing command behavior.
 
-`mrml-git` now resides at `packages/tools/git`; all four dependency edges already
+`mrml-git` now resides at `packages/tools/git`; all declared dependency edges
 resolve to semantic packages without changing Git or SSH behavior.
 
 `mrml-tools` now resides at `packages/tools/host`; all eight dependency edges resolve
