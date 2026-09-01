@@ -40,9 +40,10 @@ pub use lamport::{
 };
 pub use ml_dsa::{
     ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES, MlDsaError,
-    ml_dsa_65_keygen, ml_dsa_65_keygen_random, ml_dsa_65_sign, ml_dsa_65_sign_randomized,
-    ml_dsa_65_verify,
+    ml_dsa_65_keygen, ml_dsa_65_sign, ml_dsa_65_verify,
 };
+#[cfg(feature = "runtime")]
+pub use ml_dsa::{ml_dsa_65_keygen_random, ml_dsa_65_sign_randomized};
 #[cfg(feature = "runtime")]
 pub use ml_kem::{
     MlKem768Ciphertext, MlKem768DecapsulationKey, MlKem768EncapsulationKey, MlKemError,

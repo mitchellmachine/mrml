@@ -52,6 +52,7 @@ pub enum MlDsaError {
 /// Generate an ML-DSA-65 key pair from an independent runtime entropy draw.
 /// The deterministic seed API remains available for KATs and must not share a
 /// caller-provided seed with another signature algorithm.
+#[cfg(feature = "runtime")]
 pub fn ml_dsa_65_keygen_random(
     public_key: &mut [u8],
     secret_key: &mut [u8],
@@ -69,6 +70,7 @@ pub fn ml_dsa_65_keygen_random(
 }
 
 /// Sign with a fresh independent 256-bit randomizer supplied by the runtime.
+#[cfg(feature = "runtime")]
 pub fn ml_dsa_65_sign_randomized(
     secret_key: &[u8],
     context: &[u8],
@@ -1390,6 +1392,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "runtime")]
     #[test]
     fn runtime_entropy_wrappers_generate_distinct_self_verified_results() {
         let mut public_a = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
