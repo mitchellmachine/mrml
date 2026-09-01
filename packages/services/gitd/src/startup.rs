@@ -252,6 +252,7 @@ mod tests {
         Repository, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
         TrustGeneration,
     };
+    use mrml_http::GitdBackend;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
     struct TestReceiptAuthority;
@@ -410,6 +411,23 @@ mod tests {
         assert_eq!(
             recover_admitted_repository(&config, &entry, &admitted, &mut TestReceiptAuthority),
             Ok(RepositoryRecoverySummary::default())
+        );
+        let mut repositories = crate::GitdRepositorySet::new();
+        repositories.add(&entry, admitted).unwrap();
+        assert_eq!(repositories.len(), 1);
+        assert_eq!(
+            repositories
+                .repository_generation(
+                    &mrml_http::RepositoryIdentity::parse("owner/project").unwrap()
+                )
+                .unwrap(),
+            mrml_http::RepositoryGeneration(4)
+        );
+        assert_eq!(
+            repositories.repository_generation(
+                &mrml_http::RepositoryIdentity::parse("owner/absent").unwrap()
+            ),
+            Err(mrml_http::BackendError::NotFound)
         );
         let mut stale = entry.clone();
         stale.revocation_generation = RevocationGeneration(9);

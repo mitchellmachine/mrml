@@ -38,14 +38,20 @@ mode before the SHA-256 repository view is opened. The admitted object contains
 only these derived paths and the generation-matched view; the catalog never
 supplies an ambient filesystem path.
 
+The sorted admitted views are consumed by one catalog-backed repository set.
+Exact typed identities select the corresponding SHA-256 adapter by bounded
+binary search; missing identities fail as absent and there is no filesystem or
+default-repository fallback.
+
 Focused hosted Linux evidence:
 
-- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 12 tests pass,
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 15 tests pass,
   covering canonical resolution, generation binding, ordering, duplicate and
   unknown-profile rejection, malformed identities, digest substitution,
   symlink refusal, insecure mode refusal, exact reopened repository-state
   admission, five-root path derivation/validation, stale-revocation refusal, and
-  real authority/certd Unix exchanges.
+  exact present/absent multi-repository selection, and real authority/certd Unix
+  exchanges.
 - `./target/debug/mrml test org.mrml.tool.git --target linux`: 194 library and 3
   CLI tests passed, including exact SHA-256 authority-generation projection from
   a reopened filesystem repository view.
