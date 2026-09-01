@@ -12,6 +12,7 @@ mod identifier;
 mod jose;
 mod nonce;
 mod order;
+mod payload;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod platform;
 mod problem;
@@ -60,6 +61,11 @@ pub use order::{
     AuthorizationBinding, AuthorizationState, ChallengeKind, ChallengeState, OrderError,
     OrderLifecycle, PreparedFinalization, MAX_AUTHORIZATIONS, MAX_CHALLENGES_PER_AUTHORIZATION,
     MAX_ORDER_IDENTIFIERS,
+};
+pub use payload::{
+    write_account_status_payload, write_finalize_payload, write_new_account_payload,
+    write_new_order_payload, write_revocation_payload, PayloadError, MAX_ACCOUNT_CONTACTS,
+    MAX_ACCOUNT_CONTACT_BYTES, MAX_ACME_PAYLOAD_BYTES,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use platform::{HostedAcmeTransport, HostedTransportError};

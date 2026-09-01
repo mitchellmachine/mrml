@@ -11377,3 +11377,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary exact SNI parsing
 and fail-closed admission for a configured TLS identity. It selects no alternate
 identity and does not implement the recorded MultiTLS multiplexing trigger.
+
+# 2026-09-01 — Canonical ACME mutation payloads
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds deterministic bounded JSON
+payload generation for ordinary RFC 8555 account, order, finalization, and
+revocation requests plus current profile/replacement fields. It adds no
+recorded re-review-trigger mechanism.

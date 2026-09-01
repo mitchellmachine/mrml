@@ -29,6 +29,12 @@ one-use CSR-digest receipt.
 Typed ACME problem documents and bounded subproblems are parsed with duplicate
 singleton rejection, bounded body/token/depth/text limits, strict HTTP status
 ranges, trailing-data rejection, and explicit `badNonce` classification.
+Canonical mutation payload writers now cover account creation/lookup and
+deactivation, exact sorted DNS order identifiers with discovered profile and
+optional RFC 9773 replacement identity, PKCS#10 finalization, and certificate
+revocation with the permitted RFC reason values. JSON order is deterministic,
+strings use a deliberately narrow injection-safe subset, all collections and
+bodies are bounded, and binary values use strict unpadded Base64url.
 Challenge publication now has a shared capability-oriented contract binding the
 exact order URL digest, authorization URL digest, identifier, challenge kind,
 token, key-authorization digest, policy generation, activation window, and
