@@ -1,4 +1,100 @@
 use crate::{Error, Result};
+use mrml_runtime::Vector;
+
+#[allow(dead_code)] // Consumed by normalized-count and entropy encoders as they are staged.
+pub(crate) struct ForwardBitWriter {
+    bytes: Vector<u8>,
+    position: usize,
+    maximum_bits: usize,
+}
+
+#[allow(dead_code)]
+impl ForwardBitWriter {
+    pub(crate) fn new(maximum_bits: usize) -> Self {
+        Self {
+            bytes: Vector::new(),
+            position: 0,
+            maximum_bits,
+        }
+    }
+
+    pub(crate) fn write(&mut self, value: u32, count: u8) -> Result<()> {
+        if count > 24
+            || self
+                .position
+                .checked_add(count as usize)
+                .is_none_or(|end| end > self.maximum_bits)
+        {
+            return Err(Error::BlockTooLarge);
+        }
+        let end = self.position + count as usize;
+        self.bytes
+            .try_resize(end.div_ceil(8), 0)
+            .map_err(|_| Error::Allocation)?;
+        for bit in 0..count as usize {
+            if value & (1 << bit) != 0 {
+                let target = self.position + bit;
+                self.bytes[target / 8] |= 1 << (target & 7);
+            }
+        }
+        self.position = end;
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Vector<u8> {
+        self.bytes
+    }
+}
+
+#[allow(dead_code)] // Consumed by the staged FSE/Huffman encoder in the next gate.
+pub(crate) struct ReverseBitWriter {
+    read_order: Vector<u8>,
+    maximum_bits: usize,
+}
+
+#[allow(dead_code)]
+impl ReverseBitWriter {
+    pub(crate) fn new(maximum_bits: usize) -> Self {
+        Self {
+            read_order: Vector::new(),
+            maximum_bits,
+        }
+    }
+
+    pub(crate) fn write(&mut self, value: u32, count: u8) -> Result<()> {
+        if count > 24
+            || self
+                .read_order
+                .len()
+                .checked_add(count as usize)
+                .is_none_or(|end| end > self.maximum_bits)
+        {
+            return Err(Error::BlockTooLarge);
+        }
+        for shift in (0..count).rev() {
+            self.read_order
+                .try_push(((value >> shift) & 1) as u8)
+                .map_err(|_| Error::Allocation)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Result<Vector<u8>> {
+        let payload_bits = self.read_order.len();
+        let mut bytes = Vector::new();
+        bytes
+            .try_resize((payload_bits + 1).div_ceil(8), 0)
+            .map_err(|_| Error::Allocation)?;
+        for (index, bit) in self.read_order.into_iter().enumerate() {
+            if bit != 0 {
+                let target = payload_bits - 1 - index;
+                bytes[target / 8] |= 1 << (target & 7);
+            }
+        }
+        bytes[payload_bits / 8] |= 1 << (payload_bits & 7);
+        Ok(bytes)
+    }
+}
 
 pub(crate) struct ForwardBits<'a> {
     bytes: &'a [u8],
@@ -101,5 +197,29 @@ mod tests {
         let mut bits = ForwardBits::new(&[0b1011_0100, 0b10]);
         assert_eq!(bits.read(4).unwrap(), 4);
         assert_eq!(bits.read(6).unwrap(), 0b10_1011);
+    }
+
+    #[test]
+    fn forward_writer_round_trips_and_enforces_budget() {
+        let mut writer = ForwardBitWriter::new(10);
+        writer.write(4, 4).unwrap();
+        writer.write(0b10_1011, 6).unwrap();
+        assert_eq!(&writer.finish()[..], &[0b1011_0100, 0b10]);
+        let mut bounded = ForwardBitWriter::new(3);
+        assert_eq!(bounded.write(0, 4), Err(Error::BlockTooLarge));
+    }
+
+    #[test]
+    fn reverse_writer_round_trips_mixed_width_values() {
+        let mut writer = ReverseBitWriter::new(24);
+        writer.write(0x0a, 4).unwrap();
+        writer.write(0x0b, 4).unwrap();
+        writer.write(0x12, 5).unwrap();
+        let bytes = writer.finish().unwrap();
+        let mut reader = ReverseBits::new(&bytes).unwrap();
+        assert_eq!(reader.read(4).unwrap(), 0x0a);
+        assert_eq!(reader.read(4).unwrap(), 0x0b);
+        assert_eq!(reader.read(5).unwrap(), 0x12);
+        assert_eq!(reader.remaining(), 0);
     }
 }

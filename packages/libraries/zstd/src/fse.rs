@@ -1,4 +1,4 @@
-use crate::bits::{ForwardBits, ReverseBits};
+use crate::bits::{ForwardBitWriter, ForwardBits, ReverseBits};
 use crate::{Error, Result};
 use mrml_runtime::Vector;
 
@@ -161,6 +161,100 @@ pub(crate) fn parse_table(
     }
     let table = Table::from_probabilities(&probabilities, accuracy)?;
     Ok((table, bits.consumed_bytes()))
+}
+
+#[allow(dead_code)] // Wired into compressed sequence mode after CTable encoding lands.
+pub(crate) fn serialize_probabilities(probabilities: &[i16], accuracy: u8) -> Result<Vector<u8>> {
+    if !(5..=9).contains(&accuracy) || probabilities.is_empty() {
+        return Err(Error::InvalidFseTable);
+    }
+    let mut remaining = (1i32 << accuracy) + 1;
+    let mut writer = ForwardBitWriter::new(probabilities.len().saturating_mul(16).max(32));
+    writer.write((accuracy - 5) as u32, 4)?;
+    let mut symbol = 0usize;
+    while remaining > 1 {
+        let probability = *probabilities.get(symbol).ok_or(Error::InvalidFseTable)?;
+        if probability < -1 {
+            return Err(Error::InvalidFseTable);
+        }
+        let value = (probability as i32 + 1) as u32;
+        let rem = remaining as u32;
+        let width = (32 - rem.leading_zeros()) as u8;
+        let threshold = (1u32 << width) - 1 - rem;
+        if value < threshold {
+            writer.write(value, width - 1)?;
+        } else {
+            writer.write(
+                value.checked_add(threshold).ok_or(Error::InvalidFseTable)?,
+                width,
+            )?;
+        }
+        symbol += 1;
+        if probability == 0 {
+            let mut additional = 0usize;
+            while probabilities.get(symbol + additional) == Some(&0) {
+                additional += 1;
+            }
+            while additional >= 3 {
+                writer.write(3, 2)?;
+                additional -= 3;
+                symbol += 3;
+            }
+            writer.write(additional as u32, 2)?;
+            symbol += additional;
+        } else {
+            remaining -= if probability == -1 {
+                1
+            } else {
+                probability as i32
+            };
+            if remaining < 1 {
+                return Err(Error::InvalidFseTable);
+            }
+        }
+    }
+    let table = Table::from_probabilities(&probabilities[..symbol], accuracy)?;
+    if table.entries.len() != 1usize << accuracy {
+        return Err(Error::InvalidFseTable);
+    }
+    Ok(writer.finish())
+}
+
+#[cfg(test)]
+mod encode_tests {
+    use super::*;
+
+    #[test]
+    fn normalized_counts_serialize_and_parse_exactly() {
+        for probabilities in [
+            &[18, 9, 5][..],
+            &[16, 0, 0, 0, 0, 8, 4, 4][..],
+            &[15, -1, 8, 4, 4][..],
+        ] {
+            let bytes = serialize_probabilities(probabilities, 5).unwrap();
+            let (table, used) = parse_table(&bytes, 9, 255).unwrap();
+            assert_eq!(used, bytes.len());
+            assert_eq!(table.entries.len(), 32);
+            let expected = Table::from_probabilities(probabilities, 5).unwrap();
+            assert_eq!(table.entries, expected.entries);
+        }
+    }
+
+    #[test]
+    fn normalized_counts_reject_invalid_totals_and_bounds() {
+        assert_eq!(
+            serialize_probabilities(&[31], 4),
+            Err(Error::InvalidFseTable)
+        );
+        assert_eq!(
+            serialize_probabilities(&[31], 5),
+            Err(Error::InvalidFseTable)
+        );
+        assert_eq!(
+            serialize_probabilities(&[-2, 34], 5),
+            Err(Error::InvalidFseTable)
+        );
+    }
 }
 
 pub(crate) struct State {

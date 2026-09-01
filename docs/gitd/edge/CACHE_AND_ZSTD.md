@@ -35,7 +35,12 @@ Focused tests exercise round trips, quota eviction, interrupted-write cleanup,
 root deletion/recreation, and absence of leftover temporary files. Filesystem
 crash injection and production-disk exhaustion have not been exercised.
 
-The encoder is a deterministic bounded raw/RLE Zstandard profile, not level 22.
+The encoder is currently a deterministic bounded raw/RLE Zstandard profile,
+not level 22. Encoder-side bounded forward and RFC-reverse bit writers and RFC
+normalized-count serialization are implemented and round-trip against the
+existing independent decoders, including zero runs and low-probability `-1`
+symbols. CTable/state emission, compressed sequence blocks, and Huffman payloads
+remain the next production gates; these helpers are not yet selected by HTTP.
 General compressed blocks and Huffman/FSE encoding remain production blockers.
 Git pack bodies must remain identity encoded at HTTP representation level unless
 an explicit measured policy says otherwise.
