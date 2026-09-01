@@ -10,7 +10,7 @@ Baseline commit:
 `cf1f75755e6961737d6c1972959aac9a8dcea061ec26b7f7e43b20ab261868c2`.
 
 Final core implementation commit before this evidence record:
-`59b98bf29f44f78f2ca0e5039fb53bef3bb4df9cd4a20f1e377c45d7dc95a33f`.
+`a38535b52c530163705849a04f62af52a3cd028e3bce1252c41e1da0ae4827b8`.
 
 Executed on 2026-09-01:
 
@@ -43,6 +43,7 @@ Explicit blockers (`REMAINS_OPEN`):
 - Dynamic-Huffman level-9 canonical encoding, bounded delta selection, cross-pack recomputation, pack caching, and compaction await the required mechanism-level Canadian patent review and CIPO verification recorded in `PATENT_SCREEN.md`; they were not bypassed.
 - The normal installed-as-`git` commit/tag paths do not yet use the complete protected detached-proof transaction end to end. Pull now authenticates and fully traverses its isolated candidate before installation and accepts the exact `--ff-only` spelling, but production trust-policy proof retrieval remains open.
 - Production durable detached-proof storage/key-service integration, active pack-generation reads, canonical compaction generation switching, and concurrent thin receive tests remain open.
+- The trust-policy wire schema does not yet preserve explicit retired-pair identities and immutable validity intervals. Adding these coherently requires a new canonical schema/digest generation, monotonic retirement rules, and verification-time authorization lookup; timestamps were not bolted onto the existing active-pair list because that would create competing authority sources.
 - Itemized FIPS 204 errata mapping, constant-time timing evidence, and independent cryptographic/security review remain open. The checked-in mandatory NIST ACVP and independent OpenSSL interoperability fixtures pass on Linux and the Wine-hosted Windows target.
 - Native Windows directory durability, process-kill fault injection at every durable boundary, power-loss/physical-storage evidence, coverage-guided sanitizer/fuzz campaigns beyond the deterministic mutation corpus, multiprocess/distributed concurrency and peak-memory benchmarks, and production performance measurements remain open. Exact functional history-limit cases and process-local thread concurrency are covered, but do not satisfy those broader evidence requirements.
 - Rich repository views, complete standard command coverage, complete upload-pack negotiation/caching, and production receive-pack edge composition remain partial. Unsupported capability paths remain fail closed and are not advertised.
