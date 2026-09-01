@@ -102,3 +102,9 @@ renderer unit fixtures, not assistive-hardware evidence.
 
 Bounded semantic pipe-table rendering and the 64-column rejection case are also
 covered by that hosted Linux HTTP regression.
+
+Cache-key construction now binds every renderer and verification input as
+separate length-delimited fields before a domain-labeled SHA-256 digest. The
+hosted Linux HTTP regression covers the previous trust/revocation XOR collision
+and distinct route/path contexts. Static `/projects` also now emits its own
+canonical URL instead of incorrectly canonicalizing to `/`.

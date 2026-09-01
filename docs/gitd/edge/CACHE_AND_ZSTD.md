@@ -13,6 +13,16 @@ ready-to-send compressed bytes rather than recompressing.
 active generations, elects one generator per exact cache key, suppresses
 duplicate work, and rejects stale or repeated completion permits.
 
+Representation lookup keys are length-delimited, versioned, then reduced to a
+domain-labeled SHA-256 digest. They independently bind repository identity,
+object format, repository generation, page kind, complete route/path and
+revision context, exact object ID, Markdown/renderer/template/theme/sanitizer/
+highlighter/encoding versions, trust generation, revocation generation,
+verifier version, and hybrid-profile version. Trust and revocation are never
+combined arithmetically; the regression covers the former XOR-collision pair
+`(1,2)` and `(2,1)`. Static pages use the same versioned renderer/template/theme/
+encoding namespace.
+
 On Linux, `LinuxFilesystemCacheStore` provides the concrete L2 adapter. It uses
 content-addressed names, refuses final-component symlinks when reading, bounds
 records before allocation, writes through exclusive temporary files, syncs the
