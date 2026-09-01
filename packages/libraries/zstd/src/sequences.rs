@@ -1,5 +1,5 @@
-use crate::bits::ReverseBits;
-use crate::fse::{Entry, State as FseState, Table, parse_table};
+use crate::bits::{ReverseBitWriter, ReverseBits};
+use crate::fse::{CompressionPath, Entry, State as FseState, Table, parse_table};
 use crate::{Error, Result};
 use mrml_runtime::Vector;
 
@@ -8,6 +8,17 @@ pub(crate) struct Sequence {
     literals: u32,
     length: u32,
     offset: u32,
+}
+
+impl Sequence {
+    #[allow(dead_code)] // Used by the block match finder after this staged codec gate.
+    pub(crate) const fn new(literals: u32, length: u32, offset: u32) -> Self {
+        Self {
+            literals,
+            length,
+            offset,
+        }
+    }
 }
 
 pub(crate) struct State {
@@ -209,6 +220,120 @@ fn predefined(kind: Kind) -> Result<Table> {
     }
 }
 
+#[allow(dead_code)] // Selected by the compressed-block encoder once match finding lands.
+pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
+    if sequences.is_empty() {
+        let mut output = Vector::new();
+        output.try_push(0).map_err(|_| Error::Allocation)?;
+        return Ok(output);
+    }
+    let mut output = Vector::new();
+    write_sequence_count(sequences.len(), &mut output)?;
+    output.try_push(0).map_err(|_| Error::Allocation)?;
+
+    let mut literal_symbols =
+        Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
+    let mut offset_symbols =
+        Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
+    let mut match_symbols =
+        Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
+    let mut literal_extras =
+        Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
+    let mut offset_extras =
+        Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
+    let mut match_extras = Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
+    for sequence in sequences {
+        let (literal_symbol, literal_extra) = encode_length(sequence.literals, &LITERAL_LENGTHS)?;
+        let (match_symbol, match_extra) = encode_length(sequence.length, &MATCH_LENGTHS)?;
+        if sequence.offset == 0 {
+            return Err(Error::InvalidOffset);
+        }
+        // Values above three are explicit offsets and therefore do not depend
+        // on the repeat-offset history at a block boundary.
+        let offset_value = sequence.offset.checked_add(3).ok_or(Error::InvalidOffset)?;
+        let offset_symbol = (31 - offset_value.leading_zeros()) as u16;
+        if offset_symbol >= 29 {
+            return Err(Error::InvalidOffset);
+        }
+        literal_symbols.push(literal_symbol);
+        offset_symbols.push(offset_symbol);
+        match_symbols.push(match_symbol);
+        literal_extras.push(literal_extra);
+        offset_extras.push(offset_value - (1u32 << offset_symbol));
+        match_extras.push(match_extra);
+    }
+
+    let literal_table = predefined(Kind::Literals)?;
+    let offset_table = predefined(Kind::Offset)?;
+    let match_table = predefined(Kind::Match)?;
+    let literal_path = CompressionPath::for_symbols(&literal_table, &literal_symbols)?;
+    let offset_path = CompressionPath::for_symbols(&offset_table, &offset_symbols)?;
+    let match_path = CompressionPath::for_symbols(&match_table, &match_symbols)?;
+    let maximum_bits = sequences
+        .len()
+        .checked_mul(80)
+        .and_then(|bits| bits.checked_add(32))
+        .ok_or(Error::BlockTooLarge)?;
+    let mut writer = ReverseBitWriter::new(maximum_bits);
+    writer.write(literal_path.initial() as u32, literal_table.accuracy)?;
+    writer.write(offset_path.initial() as u32, offset_table.accuracy)?;
+    writer.write(match_path.initial() as u32, match_table.accuracy)?;
+    for index in 0..sequences.len() {
+        writer.write(offset_extras[index], offset_symbols[index] as u8)?;
+        let match_entry = MATCH_LENGTHS[match_symbols[index] as usize];
+        writer.write(match_extras[index], match_entry.1)?;
+        let literal_entry = LITERAL_LENGTHS[literal_symbols[index] as usize];
+        writer.write(literal_extras[index], literal_entry.1)?;
+        if index + 1 != sequences.len() {
+            for (path, table) in [
+                (&literal_path, &literal_table),
+                (&match_path, &match_table),
+                (&offset_path, &offset_table),
+            ] {
+                let (value, bits) = path.transition(table, index)?;
+                writer.write(value, bits)?;
+            }
+        }
+    }
+    output
+        .try_extend_from_slice(&writer.finish()?)
+        .map_err(|_| Error::Allocation)?;
+    Ok(output)
+}
+
+fn encode_length(value: u32, table: &[(u32, u8)]) -> Result<(u16, u32)> {
+    for (symbol, (base, bits)) in table.iter().enumerate().rev() {
+        if value >= *base {
+            let extra = value - *base;
+            if extra < 1u32 << bits {
+                return Ok((symbol as u16, extra));
+            }
+            break;
+        }
+    }
+    Err(Error::InvalidSequencesSection)
+}
+
+fn write_sequence_count(count: usize, output: &mut Vector<u8>) -> Result<()> {
+    if count < 128 {
+        output
+            .try_push(count as u8)
+            .map_err(|_| Error::Allocation)?;
+    } else if count < 0x7f00 {
+        output
+            .try_extend_from_slice(&[((count >> 8) as u8) + 128, count as u8])
+            .map_err(|_| Error::Allocation)?;
+    } else if count <= 0x17eff {
+        let adjusted = count - 0x7f00;
+        output
+            .try_extend_from_slice(&[255, adjusted as u8, (adjusted >> 8) as u8])
+            .map_err(|_| Error::Allocation)?;
+    } else {
+        return Err(Error::BlockTooLarge);
+    }
+    Ok(())
+}
+
 fn resolve_offset(value: u32, literals: u32, previous: &mut [u32; 3]) -> Result<u32> {
     let offset;
     if value > 3 {
@@ -393,3 +518,36 @@ const MATCH_LENGTHS: [(u32, u8); 53] = [
     (32771, 15),
     (65539, 16),
 ];
+
+#[cfg(test)]
+mod encode_tests {
+    use super::*;
+
+    #[test]
+    fn predefined_sequence_section_round_trips_and_executes() {
+        let expected = [Sequence::new(3, 3, 3), Sequence::new(0, 3, 6)];
+        let encoded = encode_predefined(&expected).unwrap();
+        let decoded = decode(&encoded, &mut State::new()).unwrap();
+        assert_eq!(decoded.len(), expected.len());
+        for (actual, expected) in decoded.iter().zip(expected) {
+            assert_eq!(actual.literals, expected.literals);
+            assert_eq!(actual.length, expected.length);
+            assert_eq!(actual.offset, expected.offset);
+        }
+        let mut output = Vector::new();
+        execute(&decoded, b"abc", &mut output).unwrap();
+        assert_eq!(&output[..], b"abcabcabc");
+    }
+
+    #[test]
+    fn predefined_sequence_section_rejects_invalid_values() {
+        assert!(matches!(
+            encode_predefined(&[Sequence::new(0, 2, 1)]),
+            Err(Error::InvalidSequencesSection)
+        ));
+        assert!(matches!(
+            encode_predefined(&[Sequence::new(0, 3, 0)]),
+            Err(Error::InvalidOffset)
+        ));
+    }
+}
