@@ -8,8 +8,8 @@ use mrml_config::{
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
     PreparedMicrovmConfigurationLauncher, PreparedTotalServiceSet,
-    RecoveredDeploymentTotalControlPlane,
-    RecoveredDeploymentTotalRuntime, SettingId, TotalServicePreparationBinding,
+    RecoveredDeploymentTotalControlPlane, RecoveredDeploymentTotalRuntime, SettingId,
+    TotalServicePreparationBinding,
     hosted_recovery_probe::{HOSTED_TOTAL_COMPONENT_DOMAIN, recover_total_control_plane},
 };
 #[cfg(target_os = "linux")]
@@ -632,28 +632,34 @@ fn configured_total_service_policy(
         ],
     )
     .map_err(|error| anyhow!("KVM policy configuration failed: {:?}", error))?;
-    let mut capabilities = CapabilitySpace::<3>::new();
+    let mut capabilities = CapabilitySpace::<5>::new();
     let root = capabilities
         .insert(root_object, Rights::CONTROL)
         .map_err(|error| anyhow!("KVM policy root capability failed: {:?}", error))?;
-    let component_access = capabilities
-        .insert(component_object, Rights::READ.union(Rights::WRITE))
-        .map_err(|error| anyhow!("KVM component capability failed: {:?}", error))?;
-    let system_access = capabilities
-        .insert(system_object, Rights::READ.union(Rights::WRITE))
-        .map_err(|error| anyhow!("KVM system capability failed: {:?}", error))?;
+    let component_write = capabilities
+        .insert(component_object, Rights::WRITE)
+        .map_err(|error| anyhow!("KVM component write capability failed: {:?}", error))?;
+    let component_read = capabilities
+        .insert(component_object, Rights::READ)
+        .map_err(|error| anyhow!("KVM component read capability failed: {:?}", error))?;
+    let system_write = capabilities
+        .insert(system_object, Rights::WRITE)
+        .map_err(|error| anyhow!("KVM system write capability failed: {:?}", error))?;
+    let system_read = capabilities
+        .insert(system_object, Rights::READ)
+        .map_err(|error| anyhow!("KVM system read capability failed: {:?}", error))?;
     let mut transaction = ConfigTransaction::<2>::new(0);
     component
         .stage(
             &mut transaction,
-            component_access,
+            component_write,
             OwnerIsolationSelection::Native,
         )
         .map_err(|error| anyhow!("KVM component policy staging failed: {:?}", error))?;
     system
         .stage(
             &mut transaction,
-            system_access,
+            system_write,
             OwnerIsolationSelection::Balanced,
         )
         .map_err(|error| anyhow!("KVM system policy staging failed: {:?}", error))?;
@@ -664,9 +670,9 @@ fn configured_total_service_policy(
         &configuration,
         &capabilities,
         system,
-        system_access,
+        system_read,
         component,
-        component_access,
+        component_read,
     )
     .map_err(|error| anyhow!("KVM policy load failed: {:?}", error))?;
     let recovery = handoff
@@ -3373,7 +3379,11 @@ fn application_main() -> Result<()> {
         None
     };
     if service_mode {
-        let isolated_stack_pages = if mode == LaunchMode::BlockServiceProbe { 256 } else { 8 };
+        let isolated_stack_pages = if mode == LaunchMode::BlockServiceProbe {
+            256
+        } else {
+            8
+        };
         let local_apic = component_smp_mode
             || matches!(
                 mode,
@@ -3711,12 +3721,18 @@ fn application_main() -> Result<()> {
                     .ok_or("KVM component endpoint was constructed more than once")
             })
             .map_err(|failure| {
-                anyhow!("KVM complete component construction failed: {:?}", failure.error())
+                anyhow!(
+                    "KVM complete component construction failed: {:?}",
+                    failure.error()
+                )
             })?;
         let routed = prepared
             .commit_complete(total.admission_mut(), endpoints)
             .map_err(|failure| {
-                anyhow!("KVM complete component publication failed: {:?}", failure.error())
+                anyhow!(
+                    "KVM complete component publication failed: {:?}",
+                    failure.error()
+                )
             })?;
         let mut endpoints = routed.into_endpoints().into_iter().flatten();
         let admitted_guest = endpoints
@@ -3725,7 +3741,9 @@ fn application_main() -> Result<()> {
             .ok_or_else(|| anyhow!("KVM complete publication omitted component endpoint"))?
             .into_endpoint();
         if endpoints.next().is_some() {
-            return Err(anyhow!("KVM complete publication returned an excess endpoint"));
+            return Err(anyhow!(
+                "KVM complete publication returned an excess endpoint"
+            ));
         }
         let runtime = match isolation_admission.take() {
             Some(KvmTotalAdmission::Recovered(total)) => {
