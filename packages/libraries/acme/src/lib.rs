@@ -8,6 +8,7 @@ mod directory;
 mod identifier;
 mod jose;
 mod nonce;
+mod order;
 mod profile;
 mod state;
 mod url;
@@ -32,6 +33,11 @@ pub use jose::{
     write_flattened_jws,
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
+pub use order::{
+    AuthorizationBinding, AuthorizationState, ChallengeKind, ChallengeState, MAX_AUTHORIZATIONS,
+    MAX_CHALLENGES_PER_AUTHORIZATION, MAX_ORDER_IDENTIFIERS, OrderError, OrderLifecycle,
+    PreparedFinalization,
+};
 pub use profile::{CertificateProfile, MAX_PROFILE_NAME, ProfileError};
 pub use state::{AccountState, OrderState, StateError};
 pub use url::{AcmeOrigin, AcmeUrl, MAX_URL_BYTES, UrlError};

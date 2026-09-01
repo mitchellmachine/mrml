@@ -11209,3 +11209,11 @@ provider, and generation-bound account creation, contact update, key rollover,
 deactivation, and uncertain-result reconciliation. It does not implement any
 listed re-review trigger, public CA operation, challenge proxy, multi-vantage
 selection, MultiTLS multiplexing, or smart-card precomputation machinery.
+
+# 2026-09-01 — ACME order and authorization lifecycle increment
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds bounded conventional ACME
+order/authorization state, exact URL and identifier binding, polling budgets,
+wildcard-to-DNS-01 enforcement, and prepare/commit finalization receipts. It
+does not add a listed re-review-trigger mechanism.
