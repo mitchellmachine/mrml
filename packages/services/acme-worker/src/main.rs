@@ -5,15 +5,16 @@ use mrml_acme::{
     MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES,
     MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
     ProtectedKey, ReplayNonce, account_contacts_digest, dns01_txt_digest,
-    execute_prepared_account_create, execute_prepared_order_create, fetch_authorization,
-    fetch_directory, poll_order, prepare_order_creation, recover_uncertain_account_creation,
-    trigger_propagated_dns01_challenge, write_key_authorization,
+    execute_prepared_account_create, execute_prepared_finalize, execute_prepared_order_create,
+    fetch_authorization, fetch_directory, poll_order, prepare_order_creation,
+    recover_uncertain_account_creation, trigger_propagated_dns01_challenge,
+    write_key_authorization,
 };
 use mrml_acmed::{
     AcmeDirectoryClass, AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase,
-    AcmedChallengeRecord, AcmedChannelRequestCounter, AcmedConfig, AcmedOrderPhase,
-    AcmedOrderRecord, AcmedRequestIdReservation, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
-    parse_acmed_config,
+    AcmedChallengeRecord, AcmedChannelRequestCounter, AcmedConfig, AcmedFinalizationPhase,
+    AcmedFinalizationRecord, AcmedOrderPhase, AcmedOrderRecord, AcmedRequestIdReservation,
+    MAX_ACMED_CONFIG_BYTES, challenge_object_id, finalization_object_id, parse_acmed_config,
 };
 use mrml_certificate::{
     AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
@@ -178,7 +179,7 @@ fn serve(
     let bootstrap = bootstrap_certd(&config, &capability, reservation.next)?;
     let _account_public_key = bootstrap.account_public_key;
     let _tls_public_key = bootstrap.tls_public_key;
-    let _csr = &bootstrap.csr[..bootstrap.csr_length];
+    let csr = &bootstrap.csr[..bootstrap.csr_length];
     let mut envelope_writer = CertdEnvelopeWriter {
         capability: &capability,
         account_identity: config.account_identity,
@@ -221,6 +222,18 @@ fn serve(
             &mut state_authenticator,
             order_durable_generation,
         )?;
+        if order.state == mrml_acme::OrderState::Ready {
+            order_durable_generation = finalize_ready_order(
+                &config,
+                &account,
+                &mut order,
+                csr,
+                &mut envelope_writer,
+                &mut state,
+                &mut state_authenticator,
+                order_durable_generation,
+            )?;
+        }
         if envelope_writer.next_request_id > reservation.last {
             return Err("certd channel request ID reservation exhausted");
         }
@@ -896,6 +909,193 @@ fn poll_and_persist_order(
         ..existing
     };
     persist_order_record(config, state, authenticator, durable_generation, &updated)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_ready_order(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    order: &mut OrderLifecycle,
+    csr: &[u8],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    order_durable_generation: u64,
+) -> Result<u64, &'static str> {
+    let expected = AcmedFinalizationRecord {
+        phase: AcmedFinalizationPhase::RequestMayHaveBeenSent,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        policy_generation: config.policy_generation,
+        identity: config.identity,
+        order_url_digest: mrml_crypto::Sha256::digest(order.order_url.as_str().as_bytes()),
+        csr_digest: mrml_crypto::Sha256::digest(csr),
+        key_generation: config.key_generation,
+    };
+    let finalization_generation = match load_finalization_record(config, state, authenticator)? {
+        Some((record, generation)) => {
+            if record.order_url_digest != expected.order_url_digest
+                || record.csr_digest != expected.csr_digest
+                || record.key_generation != expected.key_generation
+            {
+                return Err("ACME finalization durable binding mismatch");
+            }
+            if record.phase == AcmedFinalizationPhase::ResponseAuthenticated {
+                let receipt = order
+                    .prepare_finalize(csr)
+                    .map_err(|_| "cannot reconstruct authenticated ACME finalization")?;
+                order
+                    .commit_finalize(receipt)
+                    .map_err(|_| "cannot commit reconstructed ACME finalization")?;
+                let (existing, persisted) = load_order_record(config, state, authenticator)?
+                    .ok_or("missing durable ACME order after finalization")?;
+                if persisted != order_durable_generation {
+                    return Err("ACME order durable generation changed during finalization");
+                }
+                return persist_order_record(
+                    config,
+                    state,
+                    authenticator,
+                    order_durable_generation,
+                    &AcmedOrderRecord {
+                        state: Some(order.state),
+                        ..existing
+                    },
+                );
+            }
+            generation
+        }
+        None => persist_finalization_record(config, state, authenticator, 0, &expected)?,
+    };
+    let receipt = order
+        .prepare_finalize(csr)
+        .map_err(|_| "cannot prepare ACME finalization")?;
+    let count = usize::from(config.identifier_count);
+    let first = config.identifiers[0].ok_or("missing configured identifier")?;
+    let mut identifiers = [AcmeIdentifier::Dns(first); MAX_CSR_IDENTIFIERS];
+    for (index, identifier) in identifiers.iter_mut().enumerate().take(count) {
+        *identifier =
+            AcmeIdentifier::Dns(config.identifiers[index].ok_or("missing configured identifier")?);
+    }
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for finalization")?;
+    signer.operation = AcmeJwsOperation::Finalize;
+    let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    execute_prepared_finalize(
+        receipt,
+        csr,
+        &identifiers[..count],
+        unix_time()?,
+        &directory,
+        account,
+        order,
+        &mut exchange,
+        &mut transport,
+        signer,
+        AccountCreateBuffers {
+            payload: &mut payload,
+            response: &mut response,
+            jws: &mut jws,
+        },
+    )
+    .map_err(|_| "ACME finalization response uncertain")?;
+    persist_finalization_record(
+        config,
+        state,
+        authenticator,
+        finalization_generation,
+        &AcmedFinalizationRecord {
+            phase: AcmedFinalizationPhase::ResponseAuthenticated,
+            ..expected
+        },
+    )?;
+    let (existing, persisted) = load_order_record(config, state, authenticator)?
+        .ok_or("missing durable ACME order after finalization")?;
+    if persisted != order_durable_generation {
+        return Err("ACME order durable generation changed during finalization");
+    }
+    persist_order_record(
+        config,
+        state,
+        authenticator,
+        order_durable_generation,
+        &AcmedOrderRecord {
+            state: Some(order.state),
+            ..existing
+        },
+    )
+}
+
+fn load_finalization_record(
+    config: &AcmedConfig,
+    state: &HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<(AcmedFinalizationRecord, u64)>, &'static str> {
+    let object = DurableObjectId(finalization_object_id(config.identity));
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let Some(length) = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load ACME finalization state")?
+    else {
+        return Ok(None);
+    };
+    let durable = DurableRecord::decode(&encoded[..length], authenticator)
+        .map_err(|_| "cannot authenticate ACME finalization state")?;
+    if durable.namespace != DurableNamespace::PublicState
+        || durable.kind != DurableRecordKind::AcmeOperation
+        || durable.object != object
+    {
+        return Err("wrong ACME finalization durable record type");
+    }
+    let record = AcmedFinalizationRecord::decode(durable.payload())
+        .map_err(|_| "cannot decode ACME finalization state")?;
+    record
+        .require_policy(config)
+        .map_err(|_| "stale ACME finalization policy")?;
+    Ok(Some((record, durable.generation)))
+}
+
+fn persist_finalization_record(
+    config: &AcmedConfig,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    previous_generation: u64,
+    record: &AcmedFinalizationRecord,
+) -> Result<u64, &'static str> {
+    record
+        .require_policy(config)
+        .map_err(|_| "stale ACME finalization policy")?;
+    let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
+    let length = record
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode ACME finalization state")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::AcmeOperation,
+        DurableObjectId(record.object_id()),
+        previous_generation,
+        &payload[..length],
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate ACME finalization state")?;
+    let prepared = state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare ACME finalization state")?;
+    state
+        .commit(prepared)
+        .map_err(|_| "ACME finalization state commit uncertain")
+        .map(|receipt| receipt.generation)
 }
 
 fn load_order_record(
