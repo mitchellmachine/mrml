@@ -1,6 +1,8 @@
 use mrml_runtime::{SocketAddress, UdpSocket, Vector};
 
-use crate::quic::{initial_token, initial_version_and_destination_id};
+use crate::quic::{
+    PacketReceiveState, ReceivedPacket, initial_token, initial_version_and_destination_id,
+};
 use crate::quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryPurpose, QuicRetryTokenManager,
 };
@@ -8,6 +10,7 @@ use crate::{QuicError, QuicVersion};
 
 const MAX_DATAGRAM: usize = 65_527;
 const MAX_CONNECTION_ID: usize = 20;
+const MAX_IDS_PER_CONNECTION: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuicConnectionHandle(pub u64);
@@ -46,6 +49,13 @@ pub enum QuicInitialAdmission {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuicEndpointPacketDisposition {
+    New,
+    Duplicate,
+    TooOld,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EndpointConnectionPhase {
     Handshake,
     Established,
@@ -54,8 +64,15 @@ enum EndpointConnectionPhase {
 struct ConnectionIdEntry {
     id: Vector<u8>,
     connection: QuicConnectionHandle,
+}
+
+struct EndpointConnection {
+    handle: QuicConnectionHandle,
     phase: EndpointConnectionPhase,
     validated_peer: SocketAddress,
+    initial_packets: PacketReceiveState,
+    handshake_packets: PacketReceiveState,
+    application_packets: PacketReceiveState,
 }
 
 struct RetiredConnectionId {
@@ -70,6 +87,7 @@ struct RetiredConnectionId {
 /// existing authenticated PATH_CHALLENGE/PATH_RESPONSE state machine.
 pub struct QuicServerEndpoint {
     socket: Option<UdpSocket>,
+    connections: Vector<EndpointConnection>,
     connection_ids: Vector<ConnectionIdEntry>,
     retired_ids: Vector<RetiredConnectionId>,
     maximum_connections: usize,
@@ -103,6 +121,7 @@ impl QuicServerEndpoint {
         }
         Ok(Self {
             socket: Some(socket),
+            connections: Vector::new(),
             connection_ids: Vector::new(),
             retired_ids: Vector::new(),
             maximum_connections,
@@ -201,18 +220,13 @@ impl QuicServerEndpoint {
     }
 
     pub fn mark_established(&mut self, connection: QuicConnectionHandle) -> Result<(), QuicError> {
-        let mut found = false;
-        for entry in &mut self.connection_ids {
-            if entry.connection == connection {
-                entry.phase = EndpointConnectionPhase::Established;
-                found = true;
-            }
-        }
-        if found {
-            Ok(())
-        } else {
-            Err(QuicError::ConnectionId)
-        }
+        let entry = self
+            .connections
+            .iter_mut()
+            .find(|entry| entry.handle == connection)
+            .ok_or(QuicError::ConnectionId)?;
+        entry.phase = EndpointConnectionPhase::Established;
+        Ok(())
     }
 
     pub fn register_connection_id(
@@ -236,10 +250,7 @@ impl QuicServerEndpoint {
         validated_peer: SocketAddress,
         phase: EndpointConnectionPhase,
     ) -> Result<(), QuicError> {
-        if id.is_empty()
-            || id.len() > MAX_CONNECTION_ID
-            || self.connection_ids.len() >= self.maximum_connections
-        {
+        if id.is_empty() || id.len() > MAX_CONNECTION_ID {
             return Err(QuicError::Limit);
         }
         if self
@@ -254,14 +265,115 @@ impl QuicServerEndpoint {
         owned
             .try_extend_from_slice(id)
             .map_err(|_| QuicError::Allocation)?;
-        self.connection_ids
+        let connection_index = self
+            .connections
+            .iter()
+            .position(|entry| entry.handle == connection);
+        if let Some(index) = connection_index {
+            let entry = &self.connections[index];
+            if entry.validated_peer != validated_peer || entry.phase != phase {
+                return Err(QuicError::ProtocolViolation);
+            }
+            if self
+                .connection_ids
+                .iter()
+                .filter(|entry| entry.connection == connection)
+                .count()
+                >= MAX_IDS_PER_CONNECTION
+            {
+                return Err(QuicError::Limit);
+            }
+        } else {
+            if self.connections.len() >= self.maximum_connections {
+                return Err(QuicError::Limit);
+            }
+            self.connections
+                .try_push(EndpointConnection {
+                    handle: connection,
+                    phase,
+                    validated_peer,
+                    initial_packets: PacketReceiveState::new(),
+                    handshake_packets: PacketReceiveState::new(),
+                    application_packets: PacketReceiveState::new(),
+                })
+                .map_err(|_| QuicError::Allocation)?;
+        }
+        if self
+            .connection_ids
             .try_push(ConnectionIdEntry {
                 id: owned,
                 connection,
-                phase,
-                validated_peer,
             })
-            .map_err(|_| QuicError::Allocation)
+            .is_err()
+        {
+            if connection_index.is_none() {
+                self.connections.pop();
+            }
+            return Err(QuicError::Allocation);
+        }
+        Ok(())
+    }
+
+    /// Records a packet only after header protection and AEAD authentication.
+    /// Each connection owns independent bounded histories for all three QUIC
+    /// packet-number spaces, so replay in one space cannot perturb another.
+    pub fn record_authenticated_packet(
+        &mut self,
+        connection: QuicConnectionHandle,
+        space: crate::QuicPacketSpace,
+        packet_number: u64,
+    ) -> Result<QuicEndpointPacketDisposition, QuicError> {
+        let entry = self
+            .connections
+            .iter_mut()
+            .find(|entry| entry.handle == connection)
+            .ok_or(QuicError::ConnectionId)?;
+        let history = match space {
+            crate::QuicPacketSpace::Initial => &mut entry.initial_packets,
+            crate::QuicPacketSpace::Handshake => &mut entry.handshake_packets,
+            crate::QuicPacketSpace::Application => &mut entry.application_packets,
+        };
+        Ok(match history.record(packet_number)? {
+            ReceivedPacket::New => QuicEndpointPacketDisposition::New,
+            ReceivedPacket::Duplicate => QuicEndpointPacketDisposition::Duplicate,
+            ReceivedPacket::TooOld => QuicEndpointPacketDisposition::TooOld,
+        })
+    }
+
+    pub fn update_validated_peer(
+        &mut self,
+        connection: QuicConnectionHandle,
+        peer: SocketAddress,
+    ) -> Result<(), QuicError> {
+        let entry = self
+            .connections
+            .iter_mut()
+            .find(|entry| entry.handle == connection)
+            .ok_or(QuicError::ConnectionId)?;
+        entry.validated_peer = peer;
+        Ok(())
+    }
+
+    pub fn remove_connection(&mut self, connection: QuicConnectionHandle) -> Result<(), QuicError> {
+        let index = self
+            .connections
+            .iter()
+            .position(|entry| entry.handle == connection)
+            .ok_or(QuicError::ConnectionId)?;
+        self.connections.remove(index);
+        let mut id_index = 0;
+        while id_index < self.connection_ids.len() {
+            if self.connection_ids[id_index].connection == connection {
+                self.connection_ids.remove(id_index);
+            } else {
+                id_index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn connection_count(&self) -> usize {
+        self.connections.len()
     }
 
     pub fn retire_connection_id(&mut self, id: &[u8], expires_at: u64) -> Result<(), QuicError> {
@@ -326,7 +438,7 @@ impl QuicServerEndpoint {
                 .connection_ids
                 .iter()
                 .find(|entry| input[1..].starts_with(&entry.id))?;
-            return Some(self.route_entry(entry, peer));
+            return self.route_entry(entry, peer);
         }
         let destination = destination_connection_id(input)?;
         if self.retired_ids.iter().any(|entry| entry.id == destination) {
@@ -337,7 +449,7 @@ impl QuicServerEndpoint {
             .iter()
             .find(|entry| entry.id == destination)
         {
-            return Some(self.route_entry(entry, peer));
+            return self.route_entry(entry, peer);
         }
         if input.len() < 1200 {
             return None;
@@ -349,18 +461,26 @@ impl QuicServerEndpoint {
         })
     }
 
-    fn route_entry(&self, entry: &ConnectionIdEntry, peer: SocketAddress) -> QuicEndpointRoute {
-        match entry.phase {
+    fn route_entry(
+        &self,
+        entry: &ConnectionIdEntry,
+        peer: SocketAddress,
+    ) -> Option<QuicEndpointRoute> {
+        let connection = self
+            .connections
+            .iter()
+            .find(|connection| connection.handle == entry.connection)?;
+        Some(match connection.phase {
             EndpointConnectionPhase::Handshake => QuicEndpointRoute::Handshake(entry.connection),
             EndpointConnectionPhase::Established => QuicEndpointRoute::Established {
                 connection: entry.connection,
-                path: if peer == entry.validated_peer {
+                path: if peer == connection.validated_peer {
                     QuicPathClassification::Validated
                 } else {
                     QuicPathClassification::Candidate
                 },
             },
-        }
+        })
     }
 }
 
@@ -394,6 +514,7 @@ mod tests {
     fn endpoint(maximum_connections: usize, maximum_retired_ids: usize) -> QuicServerEndpoint {
         QuicServerEndpoint {
             socket: None,
+            connections: Vector::new(),
             connection_ids: Vector::new(),
             retired_ids: Vector::new(),
             maximum_connections,
@@ -501,5 +622,55 @@ mod tests {
             QuicInitialAdmission::Reject
         );
         endpoint.release_handshake_permit(1).unwrap();
+    }
+
+    #[test]
+    fn endpoint_owns_bounded_connection_lifecycle_and_packet_spaces() {
+        let mut endpoint = endpoint(1, 8);
+        let connection = QuicConnectionHandle(7);
+        endpoint
+            .register_handshake(&[1, 2, 3, 4], connection, peer(443))
+            .unwrap();
+        assert_eq!(endpoint.connection_count(), 1);
+        assert_eq!(
+            endpoint.record_authenticated_packet(connection, crate::QuicPacketSpace::Initial, 9),
+            Ok(QuicEndpointPacketDisposition::New)
+        );
+        assert_eq!(
+            endpoint.record_authenticated_packet(connection, crate::QuicPacketSpace::Initial, 9),
+            Ok(QuicEndpointPacketDisposition::Duplicate)
+        );
+        assert_eq!(
+            endpoint.record_authenticated_packet(connection, crate::QuicPacketSpace::Handshake, 9),
+            Ok(QuicEndpointPacketDisposition::New)
+        );
+        assert_eq!(
+            endpoint.record_authenticated_packet(
+                connection,
+                crate::QuicPacketSpace::Application,
+                9
+            ),
+            Ok(QuicEndpointPacketDisposition::New)
+        );
+
+        assert_eq!(
+            endpoint.register_handshake(&[5, 6, 7, 8], QuicConnectionHandle(8), peer(444)),
+            Err(QuicError::Limit)
+        );
+        endpoint.mark_established(connection).unwrap();
+        endpoint
+            .update_validated_peer(connection, peer(444))
+            .unwrap();
+        let packet = [0x40, 1, 2, 3, 4, 0xaa];
+        assert_eq!(
+            endpoint.route(&packet, peer(444)),
+            Some(QuicEndpointRoute::Established {
+                connection,
+                path: QuicPathClassification::Validated
+            })
+        );
+        endpoint.remove_connection(connection).unwrap();
+        assert_eq!(endpoint.connection_count(), 0);
+        assert_eq!(endpoint.route(&packet, peer(444)), None);
     }
 }
