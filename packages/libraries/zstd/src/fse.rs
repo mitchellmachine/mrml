@@ -88,6 +88,94 @@ impl Table {
     }
 }
 
+/// A deterministic inverse walk through an FSE decoding table.
+///
+/// `states[0]` is the state serialized at the head of the reverse bitstream.
+/// Each following state is reached by serializing the corresponding transition
+/// returned by [`CompressionPath::transition`].
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Consumed by the staged sequence encoder after code selection lands.
+pub(crate) struct CompressionPath {
+    states: Vector<u16>,
+}
+
+#[allow(dead_code)]
+impl CompressionPath {
+    pub(crate) fn for_symbols(table: &Table, symbols: &[u16]) -> Result<Self> {
+        let size = table.entries.len();
+        if symbols.is_empty() || size != 1usize << table.accuracy {
+            return Err(Error::InvalidFseState);
+        }
+        let maximum_symbol = table
+            .entries
+            .iter()
+            .map(|entry| entry.symbol as usize)
+            .max()
+            .ok_or(Error::InvalidFseState)?;
+        let inverse_len = (maximum_symbol + 1)
+            .checked_mul(size)
+            .ok_or(Error::Allocation)?;
+        let mut inverse = Vector::with_capacity(inverse_len).map_err(|_| Error::Allocation)?;
+        inverse.resize(inverse_len, u16::MAX);
+
+        for (state, entry) in table.entries.iter().enumerate() {
+            let width = 1usize << entry.bits;
+            let end = (entry.baseline as usize)
+                .checked_add(width)
+                .ok_or(Error::InvalidFseTable)?;
+            if end > size {
+                return Err(Error::InvalidFseTable);
+            }
+            let row = entry.symbol as usize * size;
+            for next in entry.baseline as usize..end {
+                let slot = row + next;
+                if inverse[slot] != u16::MAX {
+                    return Err(Error::InvalidFseTable);
+                }
+                inverse[slot] = state as u16;
+            }
+        }
+
+        let mut states = Vector::with_capacity(symbols.len()).map_err(|_| Error::Allocation)?;
+        states.resize(symbols.len(), 0);
+        let last_symbol = *symbols.last().ok_or(Error::InvalidFseState)? as usize;
+        states[symbols.len() - 1] = table
+            .entries
+            .iter()
+            .position(|entry| entry.symbol as usize == last_symbol)
+            .ok_or(Error::InvalidFseState)? as u16;
+        for index in (0..symbols.len() - 1).rev() {
+            let symbol = symbols[index] as usize;
+            if symbol > maximum_symbol {
+                return Err(Error::InvalidFseState);
+            }
+            let state = inverse[symbol * size + states[index + 1] as usize];
+            if state == u16::MAX {
+                return Err(Error::InvalidFseState);
+            }
+            states[index] = state;
+        }
+        Ok(Self { states })
+    }
+
+    pub(crate) fn initial(&self) -> u16 {
+        self.states[0]
+    }
+
+    pub(crate) fn transition(&self, table: &Table, index: usize) -> Result<(u32, u8)> {
+        let current = *self.states.get(index).ok_or(Error::InvalidFseState)? as usize;
+        let next = *self.states.get(index + 1).ok_or(Error::InvalidFseState)? as u32;
+        let entry = *table.entries.get(current).ok_or(Error::InvalidFseState)?;
+        let value = next
+            .checked_sub(entry.baseline as u32)
+            .ok_or(Error::InvalidFseState)?;
+        if value >= 1u32 << entry.bits {
+            return Err(Error::InvalidFseState);
+        }
+        Ok((value, entry.bits))
+    }
+}
+
 pub(crate) fn parse_table(
     bytes: &[u8],
     maximum_accuracy: u8,
@@ -223,6 +311,7 @@ pub(crate) fn serialize_probabilities(probabilities: &[i16], accuracy: u8) -> Re
 #[cfg(test)]
 mod encode_tests {
     use super::*;
+    use crate::bits::{ReverseBitWriter, ReverseBits};
 
     #[test]
     fn normalized_counts_serialize_and_parse_exactly() {
@@ -254,6 +343,42 @@ mod encode_tests {
             serialize_probabilities(&[-2, 34], 5),
             Err(Error::InvalidFseTable)
         );
+    }
+
+    #[test]
+    fn compression_path_round_trips_through_decoder_state_machine() {
+        let table = Table::from_probabilities(&[18, 9, 5], 5).unwrap();
+        let symbols = [0, 1, 0, 2, 1, 0, 0, 2];
+        let path = CompressionPath::for_symbols(&table, &symbols).unwrap();
+        let mut writer = ReverseBitWriter::new(128);
+        writer.write(path.initial() as u32, table.accuracy).unwrap();
+        for index in 0..symbols.len() - 1 {
+            let (value, bits) = path.transition(&table, index).unwrap();
+            writer.write(value, bits).unwrap();
+        }
+        let bytes = writer.finish().unwrap();
+        let mut bits = ReverseBits::new(&bytes).unwrap();
+        let mut state = State::new(&table, &mut bits).unwrap();
+        for (index, expected) in symbols.iter().enumerate() {
+            assert_eq!(state.symbol(&table), *expected);
+            if index + 1 != symbols.len() {
+                state.advance(&table, &mut bits).unwrap();
+            }
+        }
+        assert_eq!(bits.remaining(), 0);
+    }
+
+    #[test]
+    fn compression_path_rejects_empty_and_absent_symbols() {
+        let table = Table::from_probabilities(&[24, 8], 5).unwrap();
+        assert!(matches!(
+            CompressionPath::for_symbols(&table, &[]),
+            Err(Error::InvalidFseState)
+        ));
+        assert!(matches!(
+            CompressionPath::for_symbols(&table, &[2]),
+            Err(Error::InvalidFseState)
+        ));
     }
 }
 
