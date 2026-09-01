@@ -15,6 +15,7 @@ mod pack_index;
 mod quarantine;
 mod receive_journal;
 mod receive_journal_file;
+mod ref_state;
 mod remote;
 mod repository;
 mod sha1;
@@ -26,8 +27,8 @@ mod verification;
 pub use diff::FileDiff;
 pub use gitd_core::{
     BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, CommitPage,
-    FullRefName, GitdCoreBackend, GitdCoreError, MAX_REFS_PER_TRANSACTION, QueryLimits,
-    RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
+    FullRefName, GitdCoreBackend, GitdCoreError, MAX_REFS_PER_TRANSACTION, PackGeneration,
+    QueryLimits, RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
     RevocationGeneration, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
     TreePage, TrustGeneration, VerificationSummary, VerifiedRefTransaction, VerifiedRefUpdate,
     WorkBudget, build_verified_fast_forward_transaction,
@@ -68,6 +69,10 @@ pub use receive_journal::{
     RecoveryAction, classify_receive_recovery, encode_receive_journal, parse_receive_journal,
 };
 pub use receive_journal_file::ReceiveJournalDirectory;
+pub use ref_state::{
+    ActiveRefState, ActiveRefStateError, MAX_ACTIVE_REF_STATE_BYTES, MAX_ACTIVE_REFS,
+    apply_verified_ref_transaction, encode_active_ref_state, parse_active_ref_state,
+};
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
     push_ssh,

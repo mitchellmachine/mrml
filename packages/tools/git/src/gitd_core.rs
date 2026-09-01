@@ -24,6 +24,9 @@ pub struct TrustGeneration(pub u64);
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RevocationGeneration(pub u64);
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PackGeneration(pub u64);
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepositoryIdentity(Text);
 

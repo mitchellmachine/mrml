@@ -34,6 +34,11 @@ Concrete filesystem durability and recovery, server-side Smart Git, canonical
 compaction, and repository-view implementations remain open and must fail
 closed until implemented.
 
+Repository state now also has a canonical single-record active-ref model with
+distinct repository, trust, revocation, and pack generations. The pure update
+boundary consumes only verified ref typestate and produces one next generation;
+durable filesystem activation of that record remains partially implemented.
+
 Complexity score for the eventual subsystem: high security sensitivity, high
 failure-recovery cost, and multiple independently useful components. The split
 above is therefore required; it is not permission to place these mechanisms in

@@ -90,3 +90,17 @@ not yet expose Windows directory-handle flush; Wine proves compilation and
 fail-closed availability, not Windows crash durability. Arrival-pack install,
 atomic ref-generation persistence, audit-receipt storage, process-kill fault
 injection, real power-loss testing, and physical media evidence remain open.
+
+`MRREFS01` is the canonical bounded active-ref generation record used to make
+multi-ref activation a single replacement rather than a sequence of loose-ref
+writes. It binds repository identity, repository/trust/revocation/pack
+generations, object format, default branch, and up to 65,536 strictly sorted
+full refs with exact nonzero object IDs, followed by a SHA-256 integrity
+checksum. Its parser rejects unknown formats, invalid identities, unsorted or
+duplicate refs, width/format mismatches, truncation, trailing data, and
+corruption. `apply_verified_ref_transaction` accepts only the private verified
+typestate, rechecks all generations and every old ID, applies the complete set
+to a clone, and advances repository generation exactly once. It never exposes
+a raw protected-ref mutation API. Durable filesystem replacement and reader
+integration for this record are the next open step; the codec/update tests do
+not yet prove crash-atomic activation.
