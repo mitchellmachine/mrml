@@ -5,6 +5,7 @@ use mrml_runtime::{Text, Vector};
 use mrml_tls::TlsClientStream;
 
 mod crlset_update;
+mod gitd_core_adapter;
 mod gitd_edge;
 mod gitd_resource;
 mod http2;
@@ -19,6 +20,7 @@ pub use crlset_update::{
     CHROMIUM_COMPONENT_UPDATE_URL, CHROMIUM_CRLSET_COMPONENT_ID,
     CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256, ChromiumCrlSetPackage, ChromiumCrlSetUpdater,
 };
+pub use gitd_core_adapter::GitdCoreAdapter;
 pub use gitd_edge::*;
 pub use gitd_resource::*;
 pub use http2::{

@@ -143,3 +143,44 @@ writers and normalized-count table-description serialization. The hosted Linux
 Zstandard suite passes 33 tests, including exact writer/reader round trips,
 zero-run and `-1` normalized counts, invalid totals, and bit-budget rejection.
 This is encoder-foundation evidence only; HTTP still selects raw/RLE V1.
+
+## Core/edge integration status (2026-09-01)
+
+`GitdCoreAdapter<B: mrml_git::GitdCoreBackend>` now provides the explicit
+conversion boundary from the HTTP edge contract to the Git core contract. It
+preserves repository, trust, revocation, and response generations; converts
+bounded query and Smart Git work budgets; and bridges bounded input/output
+without adding repository authority. SHA-1 core repositories fail closed as
+unsupported because the edge ABI carries exact 32-byte SHA-256 object IDs; no
+identifier truncation or widening is performed. Core authorization, ancestry,
+signature, and policy failures remain private at the public edge.
+
+The integration dependency is declared for Linux and Windows and is captured
+in the canonical lockfile. The combined mainline contains both the edge and
+core histories. Focused integration evidence:
+
+- `mrml manifest check`: 61 components and 175 dependencies passed;
+- `mrml manifest lock --check`: 61 packages and 5 interfaces passed;
+- `mrml test mrml-git --target linux`: 188 library and 2 CLI tests passed;
+- `mrml test org.mrml.library.http --target linux`: 59 tests passed;
+- `mrml test org.mrml.library.tls --target linux`: 28 tests passed;
+- `mrml test org.mrml.library.crypto --target linux`: 50 tests passed;
+- `MRML_ZSTD_ORACLE_1_5_7=/usr/bin/zstd mrml test org.mrml.zstd --target linux`:
+  50 tests passed;
+- the Windows-target HTTP suite passed 57 tests under Wine using the pinned
+  Windows toolchain. This is Wine compatibility evidence, not native Windows.
+
+This adapter does not complete production deployment. Smart Git discovery is
+not represented by the core trait and therefore returns `Unsupported`; service
+discovery remains edge-owned. A deployment-owned composite still must bind the
+filesystem repository view and receive-pack core to an authority-custody
+implementation before receive-pack can be enabled. The core verification
+summary currently exposes authorization booleans but not the public key
+fingerprints/digests expected by the edge summary, so those display fields are
+empty rather than fabricated. `READY.md` therefore remains absent.
+
+Repository-wide `mrml assurance check` remains blocked by the pre-existing
+unadmitted boundary `docs/compiler/probes/pinned_std_thread_tls_execution.rs`.
+No independent security-review or patent-clearance claim is made. Patent
+review: TRIGGERED and implementation gate satisfied for the bounded RFC 8878
+software profile; see `docs/patents/REVIEW_LOG.md`.
