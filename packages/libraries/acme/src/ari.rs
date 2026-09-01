@@ -1,5 +1,5 @@
 use crate::directory::{Token, Tokens};
-use crate::{Base64UrlError, encode_base64url};
+use crate::{encode_base64url, Base64UrlError};
 
 pub const MAX_ARI_CERTIFICATE_ID: usize = 114;
 pub const MAX_ARI_RESPONSE_BYTES: usize = 8192;

@@ -1,4 +1,4 @@
-use crate::{AcmeUrl, ChallengeKind, DnsIdentifier, JwkThumbprint, encode_base64url};
+use crate::{encode_base64url, AcmeUrl, ChallengeKind, DnsIdentifier, JwkThumbprint};
 use mrml_crypto::Sha256;
 
 pub const MAX_CHALLENGE_TOKEN: usize = 128;

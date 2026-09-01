@@ -115,13 +115,12 @@ mod tests {
             Err(UrlError::HttpsRequired)
         ));
         let u = AcmeUrl::parse("https://ca.example/acme/new-order", false).unwrap();
-        assert!(
-            u.require_origin(AcmeOrigin {
+        assert!(u
+            .require_origin(AcmeOrigin {
                 host: "CA.EXAMPLE",
                 port: 443
             })
-            .is_ok()
-        );
+            .is_ok());
         assert_eq!(
             u.require_origin(AcmeOrigin {
                 host: "other.example",

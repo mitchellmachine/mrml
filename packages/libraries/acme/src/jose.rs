@@ -1,5 +1,5 @@
-use crate::{AcmeUrl, ReplayNonce, encode_base64url};
-use mrml_crypto::{Sha256, p256_public_key_is_valid};
+use crate::{encode_base64url, AcmeUrl, ReplayNonce};
+use mrml_crypto::{p256_public_key_is_valid, Sha256};
 
 pub const MAX_JWS_PAYLOAD: usize = 16 * 1024;
 const MAX_PROTECTED_JSON: usize = 2300;

@@ -1,5 +1,5 @@
 use crate::{DnsIdentifier, Es256Signature, P256Jwk};
-use mrml_crypto::{Sha256, encode_der_signature};
+use mrml_crypto::{encode_der_signature, Sha256};
 
 pub const MAX_CSR_BYTES: usize = 4096;
 pub const MAX_CSR_IDENTIFIERS: usize = 16;
@@ -260,14 +260,12 @@ mod tests {
         let csr =
             write_pkcs10_csr(&generator(), &names, false, 4, 9, &mut Signer, &mut output).unwrap();
         assert_eq!(csr[0], 0x30);
-        assert!(
-            csr.windows(b"git.mrml.ca".len())
-                .any(|window| window == b"git.mrml.ca")
-        );
-        assert!(
-            csr.windows(b"raw.mrml.ca".len())
-                .any(|window| window == b"raw.mrml.ca")
-        );
+        assert!(csr
+            .windows(b"git.mrml.ca".len())
+            .any(|window| window == b"git.mrml.ca"));
+        assert!(csr
+            .windows(b"raw.mrml.ca".len())
+            .any(|window| window == b"raw.mrml.ca"));
     }
 
     #[test]

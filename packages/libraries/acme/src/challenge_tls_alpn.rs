@@ -1,5 +1,5 @@
 use crate::{DnsIdentifier, Es256Signature, P256Jwk};
-use mrml_crypto::{Sha256, encode_der_signature};
+use mrml_crypto::{encode_der_signature, Sha256};
 
 pub const MAX_TLS_ALPN_CERTIFICATE: usize = 4096;
 pub const ACME_TLS_ALPN_PROTOCOL: &[u8] = b"acme-tls/1";
@@ -291,20 +291,17 @@ mod tests {
             &mut output,
         )
         .unwrap();
-        assert!(
-            cert.windows(OID_ACME_IDENTIFIER.len())
-                .any(|w| w == OID_ACME_IDENTIFIER)
-        );
-        assert!(
-            cert.windows(b"git.example".len())
-                .any(|w| w == b"git.example")
-        );
+        assert!(cert
+            .windows(OID_ACME_IDENTIFIER.len())
+            .any(|w| w == OID_ACME_IDENTIFIER));
+        assert!(cert
+            .windows(b"git.example".len())
+            .any(|w| w == b"git.example"));
         let mut encoded_digest = [7u8; 34];
         encoded_digest[..2].copy_from_slice(&[0x04, 0x20]);
-        assert!(
-            cert.windows(encoded_digest.len())
-                .any(|w| w == encoded_digest)
-        );
+        assert!(cert
+            .windows(encoded_digest.len())
+            .any(|w| w == encoded_digest));
         assert!(cert.windows(3).filter(|w| *w == [0x01, 0x01, 0xff]).count() >= 2);
     }
     #[test]

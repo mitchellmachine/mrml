@@ -122,11 +122,9 @@ mod tests {
     }
     #[test]
     fn wildcard_is_explicit() {
-        assert!(
-            DnsIdentifier::parse("*.example", true)
-                .unwrap()
-                .is_wildcard()
-        );
+        assert!(DnsIdentifier::parse("*.example", true)
+            .unwrap()
+            .is_wildcard());
         assert!(matches!(
             DnsIdentifier::parse("*", true),
             Err(IdentifierError::WildcardNotAllowed)
