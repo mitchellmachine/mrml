@@ -40,6 +40,24 @@ pub struct AriCertificateId {
     len: u8,
 }
 impl AriCertificateId {
+    pub fn parse(source: &str) -> Result<Self, AriError> {
+        let (authority, serial) = source.split_once('.').ok_or(AriError::Malformed)?;
+        if authority.is_empty() || serial.is_empty() || serial.contains('.') {
+            return Err(AriError::Malformed);
+        }
+        let mut authority_bytes = [0; 64];
+        let authority_bytes = crate::decode_base64url(authority, &mut authority_bytes)
+            .map_err(|_| AriError::Malformed)?;
+        let mut serial_bytes = [0; 20];
+        let serial_bytes =
+            crate::decode_base64url(serial, &mut serial_bytes).map_err(|_| AriError::Malformed)?;
+        let parsed = Self::derive(authority_bytes, serial_bytes)?;
+        if parsed.as_str() != source {
+            return Err(AriError::Malformed);
+        }
+        Ok(parsed)
+    }
+
     pub fn derive(
         authority_key_identifier: &[u8],
         der_serial_contents: &[u8],
@@ -426,6 +444,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(id.as_str(), "aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE");
+    }
+
+    #[test]
+    fn certificate_identifier_round_trips_only_canonical_components() {
+        let identifier = AriCertificateId::derive(&[1, 2, 3], &[0, 0x80]).unwrap();
+        assert!(AriCertificateId::parse(identifier.as_str()).unwrap() == identifier);
+        for malformed in ["", ".", "AQ..Ag", "AQ.Ag==", "AR.Ag"] {
+            assert!(matches!(
+                AriCertificateId::parse(malformed),
+                Err(AriError::Malformed)
+            ));
+        }
     }
     #[test]
     fn parses_suggested_window_and_rejects_duplicates() {

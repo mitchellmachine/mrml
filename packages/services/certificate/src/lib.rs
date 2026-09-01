@@ -24,6 +24,7 @@ mod manager;
 mod native_service;
 mod p256_signer;
 mod renewal_executor;
+mod renewal_journal;
 mod revocation;
 mod scheduler;
 mod service_loop;
@@ -115,6 +116,10 @@ pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
 pub use renewal_executor::{
     IssuedRenewalCandidate, RenewalExecutionError, RenewalIssuer, RenewalRecoveryError,
     execute_due_renewal, resolve_uncertain_renewal,
+};
+pub use renewal_journal::{
+    DurableRenewalStage, RENEWAL_PAYLOAD_VERSION, RenewalJournal, RenewalJournalError,
+    commit_or_resolve_renewal,
 };
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,

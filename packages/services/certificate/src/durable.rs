@@ -45,6 +45,7 @@ pub enum DurableRecordKind {
     AuditEvent = 12,
     AccountSealedKey = 13,
     CertificateSealedKey = 14,
+    RenewalTransaction = 15,
 }
 
 impl DurableRecordKind {
@@ -76,6 +77,7 @@ impl DurableRecordKind {
             12 => Self::AuditEvent,
             13 => Self::AccountSealedKey,
             14 => Self::CertificateSealedKey,
+            15 => Self::RenewalTransaction,
             _ => return None,
         })
     }

@@ -11886,3 +11886,12 @@ candidate handshake testing, generation activation, retry scheduling, and
 authoritative uncertain-result resolution mechanisms. It introduces no
 MultiTLS multiplexing, route-selected multi-vantage validation, challenge
 proxying, public CA operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Authenticated renewal transaction journal
+
+Patent review: **NOT_TRIGGERED**. This increment encodes and authenticates the
+existing lease, replacement schedule, activation uncertainty, and active
+renewal boundaries in the existing generational durable-record mechanism. It
+also strictly reconstructs canonical RFC 9773 certificate identifiers. It
+introduces no new certificate protocol, validation topology, or recorded
+re-review trigger.

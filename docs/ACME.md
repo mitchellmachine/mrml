@@ -189,8 +189,14 @@ schedule remain unchanged. Activation uncertainty retains the lease and staged
 schedule, re-reads the authoritative target, and either commits the observed
 new generation or retries the already-tested candidate after proving the old
 generation remained active. A new renewal cannot displace that unresolved
-state. Durable encoding and restart reconstruction of the complete renewal
-coordinator remain required.
+state. A bounded authenticated renewal-transaction journal now round-trips the
+lease-acquired, replacement-staged, activation-uncertain, and active boundaries,
+including both exact canonical RFC 9773 certificate identifiers and complete
+schedules. Mutated records, skipped stages, wrong objects, and contradictory
+replacement generations fail closed; uncertain store commits advance the
+journal generation only after authoritative re-read. Wiring each executor
+boundary to this journal and reconstructing the in-memory manager plus identity
+candidate after a process restart remain required.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact
