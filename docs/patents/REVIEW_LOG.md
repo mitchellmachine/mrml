@@ -11647,3 +11647,11 @@ challenge, and lifecycle calls through MRML's conventional capability-checked
 task runtime with exact peer selection, no capability transfer, bounded shared
 memory, and a fixed response frame. It adds no new certificate or validation
 mechanism and no recorded re-review trigger.
+
+# 2026-09-01 — Bounded certificate userspace syscall loop
+
+Patent review: **NOT_TRIGGERED**. This increment adds a conventional fixed-
+budget native service loop over launch-installed route and shared-memory
+capabilities. It accepts no transferred capability, snapshots inputs before
+dispatch, writes back only the changed output span, and erases scratch state.
+It adds no certificate protocol mechanism or recorded re-review trigger.

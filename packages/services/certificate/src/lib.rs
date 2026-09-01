@@ -16,6 +16,7 @@ mod durable;
 mod identity;
 mod identity_service;
 mod lifecycle_service;
+mod native_service;
 mod revocation;
 mod scheduler;
 mod service_loop;
@@ -79,6 +80,11 @@ pub use identity_service::{CertificateIdentityProvider, dispatch_identity_call};
 pub use lifecycle_service::{
     CertificateLifecycleAuthorizer, CertificateLifecycleProvider, LifecycleDispatchError,
     dispatch_lifecycle_call,
+};
+pub use native_service::{
+    CertificateNativeRoute, CertificateNativeServiceError, CertificateNativeServiceLoop,
+    CertificateNativeSyscalls, MAX_CERTIFICATE_CALL_BYTES, MAX_CERTIFICATE_SHARED_BYTES,
+    ReceivedCertificateCall,
 };
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
