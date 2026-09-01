@@ -35,17 +35,25 @@ Focused tests exercise round trips, quota eviction, interrupted-write cleanup,
 root deletion/recreation, and absence of leftover temporary files. Filesystem
 crash injection and production-disk exhaustion have not been exercised.
 
-The encoder is currently a deterministic bounded raw/RLE Zstandard profile,
-not level 22. Encoder-side bounded forward and RFC-reverse bit writers and RFC
-normalized-count serialization are implemented and round-trip against the
-existing independent decoders, including zero runs and low-probability `-1`
-symbols. CTable/state emission, compressed sequence blocks, and Huffman payloads
-remain the next production gates; these helpers are not yet selected by HTTP.
-General compressed blocks and Huffman/FSE encoding remain production blockers.
-Git pack bodies must remain identity encoded at HTTP representation level unless
-an explicit measured policy says otherwise.
+HTTP selects the versioned deterministic `BoundedRfc8878V2` software profile,
+not a level-22-equivalence profile. It constructs bounded forward and RFC
+reverse bitstreams, serializes RFC normalized counts, inverts FSE decode tables
+into deterministic compression paths, encodes three interleaved predefined FSE
+sequence states, and uses a fixed-memory match finder. Each block chooses raw,
+RLE, or the predefined-FSE compressed candidate by exact encoded payload size.
+The persistent-record magic and compressed-representation ETag domain are
+versioned with that selection. Linux and Windows/Wine focused suites exercise
+determinism, compressed selection, decode round trips, cache hits, and all HTTP
+routes.
 
-Patent review: **NOT_TRIGGERED**. This increment applies conventional bounded
-file I/O, atomic rename, directory synchronization, and quota deletion; it adds
-no new substantial compression or cache-replacement mechanism. See
+RLE, FSE-compressed, and repeat sequence-table selection, canonical Huffman
+construction, direct and FSE-compressed Huffman weights, an external pinned
+RFC interoperability oracle, and measured maximum-compression corpus evidence
+remain open gates. Git pack bodies remain identity encoded at HTTP
+representation level unless an explicit measured policy says otherwise.
+
+Patent review: **TRIGGERED**, **REVIEW_COMPLETED**, **CONDITIONAL_PROCEED**, and
+**IMPLEMENTATION_GATE_SATISFIED** for the bounded software-only RFC 8878 profile.
+This is technical screening, not patent clearance or a freedom-to-operate
+conclusion. The independent external security-review gate remains open. See
 [`docs/patents/REVIEW_LOG.md`](../../patents/REVIEW_LOG.md).
