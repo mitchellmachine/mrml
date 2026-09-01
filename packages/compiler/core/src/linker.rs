@@ -823,9 +823,9 @@ impl PeTlsCallbackOrder {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum PeTlsSectionOrder {
+pub enum PeTlsSectionOrder<'a> {
     Start,
-    Interior,
+    Interior(&'a str),
     End,
 }
 
@@ -939,15 +939,15 @@ impl PeCrtInitializerOrder {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PeDataKind {
+pub enum PeDataKind<'a> {
     Writable,
     Profile(PeProfileDataOrder),
-    Tls(PeTlsSectionOrder),
+    Tls(PeTlsSectionOrder<'a>),
     CrtInitializer(PeCrtInitializerOrder),
     TlsCallback(PeTlsCallbackOrder),
 }
 
-impl PeDataKind {
+impl PeDataKind<'_> {
     const fn is_tls(self) -> bool {
         matches!(self, Self::Tls(_))
     }
@@ -1089,7 +1089,7 @@ impl ExactSizeIterator for CoffComdatSectionIter<'_, '_> {}
 pub struct PeWritableData<'a, 'relocations> {
     pub symbol: &'a str,
     pub identity: Option<CoffSectionIdentity>,
-    pub kind: PeDataKind,
+    pub kind: PeDataKind<'a>,
     pub selection: PeWritableComdatSelection,
     pub initialized: &'a [u8],
     pub zeroed_size: usize,
@@ -3938,12 +3938,14 @@ fn coff_is_tls_section(name: &str) -> bool {
     name == ".tls" || name.starts_with(".tls$")
 }
 
-fn coff_tls_section_order(name: &str) -> Result<Option<PeTlsSectionOrder>, LinkerError> {
+fn coff_tls_section_order(name: &str) -> Result<Option<PeTlsSectionOrder<'_>>, LinkerError> {
     match name {
         ".tls" => Ok(Some(PeTlsSectionOrder::Start)),
         ".tls$ZZZ" => Ok(Some(PeTlsSectionOrder::End)),
         ".tls$" => Err(LinkerError::UnsupportedCoffTls),
-        _ if name.starts_with(".tls$") => Ok(Some(PeTlsSectionOrder::Interior)),
+        _ if name.starts_with(".tls$") => Ok(name
+            .strip_prefix(".tls$")
+            .map(PeTlsSectionOrder::Interior)),
         _ => Ok(None),
     }
 }
@@ -9372,7 +9374,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                     .checked_add(1)
                     .ok_or(LinkerError::OffsetOverflow)?;
             }
-            PeTlsSectionOrder::Interior => {}
+            PeTlsSectionOrder::Interior(_) => {}
         }
         let slot = tls_indices
             .get_mut(tls_count)
@@ -15464,7 +15466,17 @@ mod tests {
         );
         assert_eq!(
             coff_tls_section_order(".tls$rust"),
-            Ok(Some(PeTlsSectionOrder::Interior))
+            Ok(Some(PeTlsSectionOrder::Interior("rust")))
+        );
+        assert_eq!(
+            coff_tls_section_order(".tls$$__llvm_profile_sampling"),
+            Ok(Some(PeTlsSectionOrder::Interior(
+                "$__llvm_profile_sampling"
+            )))
+        );
+        assert!(
+            PeTlsSectionOrder::Interior("$__llvm_profile_sampling")
+                < PeTlsSectionOrder::Interior("rust")
         );
         assert_eq!(
             coff_tls_section_order(".tls$ZZZ"),
@@ -15631,7 +15643,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             tls_fragment.kind,
-            PeDataKind::Tls(PeTlsSectionOrder::Interior)
+            PeDataKind::Tls(PeTlsSectionOrder::Interior("a"))
         );
         assert_eq!(
             tls_fragment.identity,
@@ -16232,7 +16244,7 @@ mod tests {
         let tls = PeWritableData {
             symbol: ".tls$fixture",
             identity: Some(tls_identity),
-            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior("fixture")),
             selection: PeWritableComdatSelection::None,
             initialized: &[1, 2, 3, 4, 5, 6, 7, 8],
             zeroed_size: 0,
@@ -16297,13 +16309,14 @@ mod tests {
         let first_interior = PeWritableData {
             symbol: "zeta_rank",
             identity: Some(CoffSectionIdentity::new(81, 3).unwrap()),
-            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior("zeta")),
             initialized: &[2; 8],
             ..tls_start
         };
         let second_interior = PeWritableData {
             symbol: "alpha_rank",
             identity: Some(CoffSectionIdentity::new(81, 4).unwrap()),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior("alpha")),
             initialized: &[1; 8],
             ..first_interior
         };
@@ -16327,8 +16340,8 @@ mod tests {
         assert_eq!(read_image_u64(0x408), 0x0000_0001_4000_3020);
         assert_eq!(read_image_u64(0x410), 0x0000_0001_4000_3020);
         assert_eq!(&pe.bytes()[0x600..0x608], &[0; 8]);
-        assert_eq!(&pe.bytes()[0x608..0x610], &[2; 8]);
-        assert_eq!(&pe.bytes()[0x610..0x618], &[1; 8]);
+        assert_eq!(&pe.bytes()[0x608..0x610], &[1; 8]);
+        assert_eq!(&pe.bytes()[0x610..0x618], &[2; 8]);
         assert_eq!(&pe.bytes()[0x618..0x620], &[0; 8]);
 
         let nonzero_start = PeWritableData {
@@ -16763,7 +16776,7 @@ mod tests {
         let tls = PeWritableData {
             symbol: ".tls$fixture",
             identity: Some(tls_identity),
-            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior("fixture")),
             selection: PeWritableComdatSelection::None,
             initialized: &[1, 2, 3, 4, 5, 6, 7, 8],
             zeroed_size: 0,
@@ -16912,7 +16925,7 @@ mod tests {
         let tls = PeWritableData {
             symbol: ".tls$fixture",
             identity: Some(CoffSectionIdentity::new(51, 2).unwrap()),
-            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior),
+            kind: PeDataKind::Tls(PeTlsSectionOrder::Interior("fixture")),
             selection: PeWritableComdatSelection::None,
             initialized: &[1; 8],
             zeroed_size: 0,
