@@ -20,6 +20,10 @@ const HIGHLIGHTER_VERSION: &str = "language-labels-v1";
 const ENCODING_PROFILE_VERSION: &str = "zstd-bounded-raw-rle-v1";
 const VERIFIER_VERSION: &str = "gitd-verifier-view-v1";
 const HYBRID_PROFILE_VERSION: &str = "mrml-hybrid-v1";
+const SMART_GIT_INPUT_LIMIT: u64 = 1024 * 1024 * 1024;
+const SMART_GIT_OUTPUT_LIMIT: u64 = 1024 * 1024 * 1024;
+const SMART_GIT_MEMORY_LIMIT: u64 = 64 * 1024 * 1024;
+const SMART_GIT_WORK_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepositoryIdentity(Text);
@@ -804,6 +808,42 @@ pub struct GitdHttpResponse {
     pub body: Vector<u8>,
 }
 
+struct EmptySmartGitInput;
+impl BoundedRead for EmptySmartGitInput {
+    fn remaining(&self) -> u64 {
+        0
+    }
+    fn read(&mut self, _output: &mut [u8]) -> Result<usize, BackendError> {
+        Ok(0)
+    }
+}
+
+struct BufferedSmartGitOutput {
+    bytes: Vector<u8>,
+    limit: usize,
+}
+impl BufferedSmartGitOutput {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vector::new(),
+            limit,
+        }
+    }
+}
+impl BoundedWrite for BufferedSmartGitOutput {
+    fn remaining(&self) -> u64 {
+        self.limit.saturating_sub(self.bytes.len()) as u64
+    }
+    fn write(&mut self, input: &[u8]) -> Result<(), BackendError> {
+        if input.len() > self.limit.saturating_sub(self.bytes.len()) {
+            return Err(BackendError::ResourceLimit);
+        }
+        self.bytes
+            .try_extend_from_slice(input)
+            .map_err(|_| BackendError::ResourceLimit)
+    }
+}
+
 pub struct GitdHttp3Server<B: GitdBackend> {
     backend: B,
     cache: MemoryRepresentationCache,
@@ -844,6 +884,111 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             Err(BackendError::StaleGeneration) => self.error(503, "Repository changed; retry"),
             Err(_) => self.error(503, "Service unavailable"),
         }
+    }
+
+    /// Execute one Smart Git request against caller-owned bounded streams.
+    /// HTTP/2 and HTTP/3 listeners use this same entry point so DATA frames are
+    /// backpressured by the transport rather than collected into a whole pack.
+    pub fn handle_smart_git(
+        &mut self,
+        request: &RequestHead,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+    ) -> GitdHttpResponse {
+        match self.handle_smart_git_inner(request, input, output) {
+            Ok(response) => response,
+            Err(
+                BackendError::NotFound
+                | BackendError::MalformedIdentifier
+                | BackendError::MalformedPath
+                | BackendError::MalformedRevision
+                | BackendError::Private,
+            ) => self.error(404, "Not found"),
+            Err(BackendError::ResourceLimit) => self.error(429, "Request limit reached"),
+            Err(BackendError::StaleGeneration) => self.error(503, "Repository changed"),
+            Err(_) => self.error(503, "Service unavailable"),
+        }
+    }
+
+    fn handle_smart_git_inner(
+        &mut self,
+        request: &RequestHead,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+    ) -> Result<GitdHttpResponse, BackendError> {
+        if request.scheme != "https" || single_header(request, "git-protocol")? != Some("version=2")
+        {
+            return Err(BackendError::Unsupported);
+        }
+        let (path, query) = match request.target.split_once('?') {
+            Some((path, query)) => (path, Some(query)),
+            None => (request.target.as_str(), None),
+        };
+        let relative = path.strip_prefix('/').ok_or(BackendError::NotFound)?;
+        let pieces: Vector<&str> = relative.split('/').collect();
+        if pieces.len() < 3 || pieces.len() > 4 || !pieces[1].ends_with(".git") {
+            return Err(BackendError::NotFound);
+        }
+        let name = pieces[1]
+            .strip_suffix(".git")
+            .ok_or(BackendError::NotFound)?;
+        let repository =
+            RepositoryIdentity::parse(&mrml_runtime::mrml_format!("{}/{}", pieces[0], name))?;
+        let (operation, response_type) = match (request.method.as_str(), &pieces[2..], query) {
+            ("GET", ["info", "refs"], Some("service=git-upload-pack")) => (
+                SmartGitOperation::Discovery,
+                "application/x-git-upload-pack-advertisement",
+            ),
+            ("POST", ["git-upload-pack"], None) => {
+                require_content_type(request, "application/x-git-upload-pack-request")?;
+                (
+                    SmartGitOperation::UploadPack,
+                    "application/x-git-upload-pack-result",
+                )
+            }
+            ("POST", ["git-receive-pack"], None) => {
+                require_content_type(request, "application/x-git-receive-pack-request")?;
+                (
+                    SmartGitOperation::ReceivePack,
+                    "application/x-git-receive-pack-result",
+                )
+            }
+            _ => return Err(BackendError::NotFound),
+        };
+        let generation = self.backend.repository_generation(&repository)?;
+        let max_input_bytes = SMART_GIT_INPUT_LIMIT.min(input.remaining());
+        let max_output_bytes = SMART_GIT_OUTPUT_LIMIT.min(output.remaining());
+        let result = self.backend.smart_git(
+            SmartGitRequest {
+                repository,
+                generation,
+                operation,
+            },
+            input,
+            output,
+            WorkBudget {
+                max_input_bytes,
+                max_output_bytes,
+                max_memory_bytes: SMART_GIT_MEMORY_LIMIT,
+                max_work_units: SMART_GIT_WORK_LIMIT,
+            },
+        )?;
+        if result.generation != generation
+            || (operation != SmartGitOperation::ReceivePack && result.refs_activated)
+        {
+            return Err(BackendError::StaleGeneration);
+        }
+        let mut response = self.text(200, response_type, b"", true)?;
+        if let Some(index) = response
+            .headers
+            .iter()
+            .position(|header| header.name.eq_ignore_ascii_case("content-length"))
+        {
+            response.headers.remove(index);
+        }
+        set_header(&mut response.headers, "cache-control", "no-store")?;
+        set_header(&mut response.headers, "pragma", "no-cache")?;
+        Ok(response)
     }
     fn handle_inner(&mut self, request: &RequestHead) -> Result<GitdHttpResponse, BackendError> {
         if request.method != "GET" && request.method != "POST" {
@@ -1029,19 +1174,20 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
     }
     fn git_route(
         &mut self,
-        _request: &RequestHead,
+        request: &RequestHead,
         _repository: RepositoryIdentity,
         _generation: RepositoryGeneration,
-        pieces: &[&str],
+        _pieces: &[&str],
     ) -> Result<GitdHttpResponse, BackendError> {
-        let content_type = match pieces {
-            ["info", "refs"] => "application/x-git-upload-pack-advertisement",
-            ["git-upload-pack"] => "application/x-git-upload-pack-result",
-            ["git-receive-pack"] => "application/x-git-receive-pack-result",
-            _ => return Err(BackendError::NotFound),
-        };
-        let mut response = self.text(503, content_type, b"", true)?;
-        set_header(&mut response.headers, "x-robots-tag", "noindex, nofollow")?;
+        let mut input = EmptySmartGitInput;
+        let mut output = BufferedSmartGitOutput::new(SMART_GIT_MEMORY_LIMIT as usize);
+        let mut response = self.handle_smart_git_inner(request, &mut input, &mut output)?;
+        response.body = output.bytes;
+        set_header(
+            &mut response.headers,
+            "content-length",
+            &mrml_runtime::mrml_format!("{}", response.body.len()),
+        )?;
         Ok(response)
     }
     fn html_page(
@@ -1280,6 +1426,28 @@ fn set_header(headers: &mut Vector<Header>, name: &str, value: &str) -> Result<(
             value: value.into(),
         })
         .map_err(|_| BackendError::ResourceLimit)
+}
+
+fn single_header<'a>(
+    request: &'a RequestHead,
+    name: &str,
+) -> Result<Option<&'a str>, BackendError> {
+    let mut values = request
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(name));
+    let value = values.next().map(|header| header.value.as_str());
+    if values.next().is_some() {
+        return Err(BackendError::MalformedIdentifier);
+    }
+    Ok(value)
+}
+
+fn require_content_type(request: &RequestHead, expected: &str) -> Result<(), BackendError> {
+    match single_header(request, "content-type")? {
+        Some(value) if value == expected => Ok(()),
+        _ => Err(BackendError::Unsupported),
+    }
 }
 
 fn validate_revision(revision: &str) -> Result<(), BackendError> {
@@ -1953,12 +2121,23 @@ mod tests {
         }
         fn smart_git(
             &mut self,
-            _request: SmartGitRequest,
+            request: SmartGitRequest,
             _input: &mut dyn BoundedRead,
-            _output: &mut dyn BoundedWrite,
+            output: &mut dyn BoundedWrite,
             _budget: WorkBudget,
         ) -> Result<SmartGitResponse, BackendError> {
-            Err(BackendError::Unsupported)
+            let bytes = match request.operation {
+                SmartGitOperation::Discovery => b"000eversion 2\n0000".as_slice(),
+                SmartGitOperation::UploadPack => b"000dpackfile\n0000".as_slice(),
+                SmartGitOperation::ReceivePack => b"000eunpack ok\n0000".as_slice(),
+            };
+            output.write(bytes)?;
+            Ok(SmartGitResponse {
+                generation: request.generation,
+                bytes_read: 0,
+                bytes_written: bytes.len() as u64,
+                refs_activated: request.operation == SmartGitOperation::ReceivePack,
+            })
         }
     }
 
@@ -1976,6 +2155,108 @@ mod tests {
             authority: "mrml.ca".into(),
             target: target.into(),
             headers,
+        }
+    }
+
+    fn smart_request(method: &str, target: &str, content_type: Option<&str>) -> RequestHead {
+        let mut request = request(method, target, false);
+        request.headers.push(Header {
+            name: "git-protocol".into(),
+            value: "version=2".into(),
+        });
+        if let Some(content_type) = content_type {
+            request.headers.push(Header {
+                name: "content-type".into(),
+                value: content_type.into(),
+            });
+        }
+        request
+    }
+
+    #[test]
+    fn smart_git_routes_share_one_bounded_backend_and_validate_exact_http_metadata() {
+        let mut server = GitdHttp3Server::new(
+            MockBackend {
+                generation: RepositoryGeneration(7),
+            },
+            4 * 1024 * 1024,
+        )
+        .unwrap();
+        for (method, target, request_type, response_type) in [
+            (
+                "GET",
+                "/mitchellrenouf/mrml.git/info/refs?service=git-upload-pack",
+                None,
+                "application/x-git-upload-pack-advertisement",
+            ),
+            (
+                "POST",
+                "/mitchellrenouf/mrml.git/git-upload-pack",
+                Some("application/x-git-upload-pack-request"),
+                "application/x-git-upload-pack-result",
+            ),
+            (
+                "POST",
+                "/mitchellrenouf/mrml.git/git-receive-pack",
+                Some("application/x-git-receive-pack-request"),
+                "application/x-git-receive-pack-result",
+            ),
+        ] {
+            let request = smart_request(method, target, request_type);
+            let mut input = EmptySmartGitInput;
+            let mut output = BufferedSmartGitOutput::new(1024);
+            let response = server.handle_smart_git(&request, &mut input, &mut output);
+            assert_eq!(response.status, 200, "route {target}");
+            assert!(!output.bytes.is_empty());
+            assert!(
+                response.headers.iter().any(|header| {
+                    header.name == "content-type" && header.value == response_type
+                })
+            );
+            assert!(
+                response
+                    .headers
+                    .iter()
+                    .any(|header| { header.name == "cache-control" && header.value == "no-store" })
+            );
+            assert!(
+                !response
+                    .headers
+                    .iter()
+                    .any(|header| header.name == "content-length")
+            );
+        }
+
+        for mut invalid in [
+            smart_request(
+                "GET",
+                "/mitchellrenouf/mrml.git/info/refs?service=git-upload-pack&x=1",
+                None,
+            ),
+            smart_request(
+                "POST",
+                "/mitchellrenouf/mrml.git/git-upload-pack",
+                Some("application/octet-stream"),
+            ),
+        ] {
+            let mut input = EmptySmartGitInput;
+            let mut output = BufferedSmartGitOutput::new(1024);
+            assert_ne!(
+                server
+                    .handle_smart_git(&invalid, &mut input, &mut output)
+                    .status,
+                200
+            );
+            invalid.headers.push(Header {
+                name: "Git-Protocol".into(),
+                value: "version=2".into(),
+            });
+            assert_ne!(
+                server
+                    .handle_smart_git(&invalid, &mut input, &mut output)
+                    .status,
+                200
+            );
         }
     }
 

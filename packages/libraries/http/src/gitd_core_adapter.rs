@@ -292,7 +292,44 @@ impl<B: GitdCoreBackend> GitdBackend for GitdCoreAdapter<B> {
         budget: WorkBudget,
     ) -> Result<SmartGitResponse, BackendError> {
         let operation = match request.operation {
-            SmartGitOperation::Discovery => return Err(BackendError::Unsupported),
+            SmartGitOperation::Discovery => {
+                let repository = core_repository(&request.repository)?;
+                let summary = self
+                    .core
+                    .repository_summary(
+                        &repository,
+                        mrml_git::QueryLimits {
+                            max_entries: 1,
+                            max_bytes: 4096,
+                        },
+                    )
+                    .map_err(map_error)?;
+                if summary.repository_generation.0 != request.generation.0 {
+                    return Err(BackendError::StaleGeneration);
+                }
+                if summary.object_format != ObjectFormat::Sha256 {
+                    return Err(BackendError::Unsupported);
+                }
+                let output_limit = budget.max_output_bytes;
+                let mut protocol = mrml_git::ProtocolBudget::new(mrml_git::WorkBudget {
+                    max_input_bytes: budget.max_input_bytes,
+                    max_output_bytes: budget.max_output_bytes,
+                    max_memory_bytes: budget.max_memory_bytes,
+                    max_work_units: budget.max_work_units,
+                });
+                mrml_git::write_v2_capability_advertisement(
+                    &mut WriteBridge(output),
+                    ObjectFormat::Sha256,
+                    &mut protocol,
+                )
+                .map_err(map_error)?;
+                return Ok(SmartGitResponse {
+                    generation: request.generation,
+                    bytes_read: 0,
+                    bytes_written: output_limit - protocol.output_remaining(),
+                    refs_activated: false,
+                });
+            }
             SmartGitOperation::UploadPack => mrml_git::SmartGitOperation::UploadPack,
             SmartGitOperation::ReceivePack => mrml_git::SmartGitOperation::ReceivePack,
         };

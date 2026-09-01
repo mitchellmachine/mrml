@@ -171,8 +171,11 @@ core histories. Focused integration evidence:
   Windows toolchain. This is Wine compatibility evidence, not native Windows.
 
 This adapter does not complete production deployment. Smart Git discovery is
-not represented by the core trait and therefore returns `Unsupported`; service
-discovery remains edge-owned. A deployment-owned composite still must bind the
+edge-owned and now emits the core's exact bounded protocol-v2 SHA-256
+advertisement after independently rechecking repository format and generation.
+The shared streaming edge entry exact-checks HTTP metadata and delegates
+upload-pack and receive-pack through caller-owned bounded streams. A
+deployment-owned composite still must bind the
 filesystem repository view and receive-pack core to an authority-custody
 implementation before receive-pack can be enabled. The core verification
 summary currently exposes authorization booleans but not the public key
