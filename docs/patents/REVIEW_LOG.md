@@ -11631,3 +11631,11 @@ challenge binding before lending a disjoint output slice to the selected typed
 publisher, and validates every returned generation and publication state. It
 adds no challenge proxy, MultiTLS multiplexing, or other recorded re-review
 trigger.
+
+# 2026-09-01 — Owner-authorized certificate lifecycle dispatch
+
+Patent review: **NOT_TRIGGERED**. This increment separates conventional
+certificate lifecycle authorization from execution and binds each decision to
+the exact operation, policy generation, object identity, and copied request.
+It adds no certificate brokerage, public-CA operation, or other recorded
+re-review-trigger mechanism.
