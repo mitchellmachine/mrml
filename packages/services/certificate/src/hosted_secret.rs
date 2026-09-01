@@ -1,6 +1,6 @@
 extern crate std;
 
-use crate::{HmacSha256DurableAuthenticator, DURABLE_AUTHENTICATION_KEY_BYTES};
+use crate::{DURABLE_AUTHENTICATION_KEY_BYTES, HmacSha256DurableAuthenticator};
 use mrml_crypto::erase_secret_bytes;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -167,7 +167,7 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     fn root(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(std::format!(

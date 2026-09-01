@@ -405,9 +405,11 @@ mod tests {
             identity_calls: 0,
         });
         let mut output = [0u8; 8];
-        assert!(provider
-            .account_operation(abi::ACCOUNT_UPDATE, 7, &account[..account_len], &mut output)
-            .is_ok());
+        assert!(
+            provider
+                .account_operation(abi::ACCOUNT_UPDATE, 7, &account[..account_len], &mut output)
+                .is_ok()
+        );
         assert_eq!(
             provider.account_operation(
                 abi::ACCOUNT_CREATE,
@@ -417,15 +419,17 @@ mod tests {
             ),
             Err(abi::AccountOperationError::InvalidRequest)
         );
-        assert!(provider
-            .identity_operation(
-                abi::IDENTITY_RENEW,
-                &[9; 16],
-                7,
-                &identity[..identity_len],
-                &mut output
-            )
-            .is_ok());
+        assert!(
+            provider
+                .identity_operation(
+                    abi::IDENTITY_RENEW,
+                    &[9; 16],
+                    7,
+                    &identity[..identity_len],
+                    &mut output
+                )
+                .is_ok()
+        );
         assert_eq!(
             provider.identity_operation(
                 abi::IDENTITY_RENEW,

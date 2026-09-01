@@ -1,7 +1,7 @@
 extern crate std;
 
 use crate::{
-    CertdChannelError, CertdChannelPolicy, CertdPeerIdentity, CERTD_CHANNEL_HEADER_BYTES,
+    CERTD_CHANNEL_HEADER_BYTES, CertdChannelError, CertdChannelPolicy, CertdPeerIdentity,
     MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
 };
 use std::fs;
@@ -45,7 +45,7 @@ impl UnixCertdListener {
         match fs::symlink_metadata(path) {
             Ok(_) => return Err(UnixCertdChannelError::ExistingPath),
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                return Err(UnixCertdChannelError::BindFailed)
+                return Err(UnixCertdChannelError::BindFailed);
             }
             Err(_) => {}
         }
@@ -194,8 +194,8 @@ fn validate_socket_path(path: &Path) -> Result<(), UnixCertdChannelError> {
 mod tests {
     use super::*;
     use crate::{
-        decode_certd_channel_request, encode_certd_channel_request, CertdChannelCapability,
-        CertdChannelOperation, CertdChannelRequest, CertdChannelRole, CertdReplayWindow,
+        CertdChannelCapability, CertdChannelOperation, CertdChannelRequest, CertdChannelRole,
+        CertdReplayWindow, decode_certd_channel_request, encode_certd_channel_request,
     };
     use std::os::unix::fs::MetadataExt;
 

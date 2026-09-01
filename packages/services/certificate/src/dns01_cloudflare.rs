@@ -1,9 +1,9 @@
 extern crate std;
 
 use crate::{
-    dns01_publication_binding, Dns01Provider, Dns01ProviderError, Dns01PublicationReceipt,
-    Dns01PublicationRequest, Dns01RecordName, Dns01TxtValue, HostedSecret,
-    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, PRODUCTION_SECRET_MODE,
+    Dns01Provider, Dns01ProviderError, Dns01PublicationReceipt, Dns01PublicationRequest,
+    Dns01RecordName, Dns01TxtValue, HostedSecret, MAX_DNS01_PROVIDER_RECORD_ID_BYTES,
+    PRODUCTION_SECRET_MODE, dns01_publication_binding,
 };
 use mrml_acme::DnsIdentifier;
 use mrml_crypto::erase_secret_bytes;
