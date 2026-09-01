@@ -835,12 +835,20 @@ pub fn render_markdown(
     let mut output = Text::new();
     let mut in_code = false;
     let mut list = false;
+    let mut heading_ids: Vector<Text> = Vector::new();
     for line in source.lines() {
         if line.starts_with("```") {
             if in_code {
                 output.push_str("</code></pre>");
             } else {
-                output.push_str("<pre tabindex=\"0\"><code>");
+                let language = line[3..].trim();
+                output.push_str("<pre tabindex=\"0\"><code");
+                if let Some(language) = markdown_language(language) {
+                    output.push_str(" class=\"language-");
+                    output.push_str(language);
+                    output.push('"');
+                }
+                output.push('>');
             }
             in_code = !in_code;
             continue;
@@ -856,10 +864,12 @@ pub fn render_markdown(
                 output.push_str("</ul>");
                 list = false;
             }
-            let text = escape(&line[hashes + 1..]);
+            let raw_text = &line[hashes + 1..];
+            let text = inline_markdown(raw_text, repository, object)?;
+            let heading_id = unique_heading_id(slug(raw_text), &mut heading_ids)?;
             output.push_str(&mrml_runtime::mrml_format!(
                 "<h{hashes} id=\"{}\">{}</h{hashes}>",
-                slug(text.as_str()),
+                heading_id,
                 text
             ));
         } else if let Some(item) = line.strip_prefix("- ") {
@@ -905,6 +915,16 @@ fn inline_markdown(
     let mut output = Text::new();
     let mut at = 0;
     while at < input.len() {
+        if input.as_bytes()[at] == b'`'
+            && let Some(end) = input[at + 1..].find('`')
+        {
+            let end = at + 1 + end;
+            output.push_str("<code>");
+            output.push_str(&escape(&input[at + 1..end]));
+            output.push_str("</code>");
+            at = end + 1;
+            continue;
+        }
         if input.as_bytes()[at] == b'['
             && let Some(close) = input[at + 1..].find(']')
             && input.as_bytes().get(at + close + 2) == Some(&b'(')
@@ -923,12 +943,52 @@ fn inline_markdown(
             at = url_end + 1;
             continue;
         }
-        let next = input[at..].find('[').map(|v| at + v).unwrap_or(input.len());
+        let next_link = input[at..].find('[').map(|v| at + v);
+        let next_code = input[at..].find('`').map(|v| at + v);
+        let next = match (next_link, next_code) {
+            (Some(link), Some(code)) => core::cmp::min(link, code),
+            (Some(link), None) => link,
+            (None, Some(code)) => code,
+            (None, None) => input.len(),
+        };
         let end = if next == at { at + 1 } else { next };
         output.push_str(&escape(&input[at..end]));
         at = end;
     }
     Ok(output)
+}
+
+fn markdown_language(language: &str) -> Option<&'static str> {
+    match language {
+        "rust" | "rs" => Some("rust"),
+        "toml" => Some("toml"),
+        "sh" | "bash" => Some("sh"),
+        "text" | "console" => Some("text"),
+        "json" => Some("json"),
+        "html" => Some("html"),
+        "css" => Some("css"),
+        "javascript" | "js" => Some("javascript"),
+        "typescript" | "ts" => Some("typescript"),
+        "c" => Some("c"),
+        "cpp" | "c++" => Some("cpp"),
+        _ => None,
+    }
+}
+
+fn unique_heading_id(base: Text, headings: &mut Vector<Text>) -> Result<Text, BackendError> {
+    if headings.len() >= MAX_MARKDOWN_LINES {
+        return Err(BackendError::ResourceLimit);
+    }
+    let mut candidate = base.clone();
+    let mut suffix = 0usize;
+    while headings.iter().any(|heading| heading == &candidate) {
+        suffix = suffix.checked_add(1).ok_or(BackendError::ResourceLimit)?;
+        candidate = mrml_runtime::mrml_format!("{base}-{suffix}");
+    }
+    headings
+        .try_push(candidate.clone())
+        .map_err(|_| BackendError::ResourceLimit)?;
+    Ok(candidate)
 }
 
 fn safe_link(
@@ -1271,6 +1331,18 @@ mod tests {
         assert!(rendered.contains("&lt;script&gt;"));
         assert!(!rendered.contains("<script>"));
         assert!(rendered.contains("/mitchellrenouf/mrml/blob/"));
+        let structured = render_markdown(
+            b"# Repeat\n# Repeat\n\nUse `<tag>`.\n\n```rust\nfn main() { <unsafe> }\n```\n```unknown\n<script>\n```",
+            &repository,
+            &oid(1),
+        )
+        .unwrap();
+        assert!(structured.contains("id=\"repeat\""));
+        assert!(structured.contains("id=\"repeat-1\""));
+        assert!(structured.contains("<code>&lt;tag&gt;</code>"));
+        assert!(structured.contains("<code class=\"language-rust\">"));
+        assert!(!structured.contains("language-unknown"));
+        assert!(!structured.contains("<script>"));
         for unsafe_url in [
             "javascript:alert(1)",
             "data:text/html,x",
