@@ -35,8 +35,8 @@ pub use quic::{
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
 pub use quic_endpoint::{
-    QuicConnectionHandle, QuicEndpointDatagram, QuicEndpointRoute, QuicPathClassification,
-    QuicServerEndpoint,
+    QuicConnectionHandle, QuicEndpointDatagram, QuicEndpointRoute, QuicInitialAdmission,
+    QuicPathClassification, QuicServerEndpoint,
 };
 pub use quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryKey, QuicRetryPurpose,
