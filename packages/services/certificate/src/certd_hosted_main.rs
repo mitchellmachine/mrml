@@ -1,13 +1,15 @@
 use mrml_certificate::{
-    CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
-    CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
-    HmacSha256DurableAuthenticator, HostedP256KeyStore, HostedSecret,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PRODUCTION_SECRET_MODE, UnixCertdListener,
-    decode_certd_channel_request, encode_certd_channel_request,
+    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability,
+    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdConfig,
+    CertdPeerIdentity, CertdReplayWindow, CertificateP256SigningKey,
+    HmacSha256DurableAuthenticator, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
+    HostedP256KeyStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES,
+    PRODUCTION_SECRET_MODE, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute, UnixCertdListener,
+    decode_certd_channel_request, encode_certd_channel_request, parse_certd_config,
 };
-use mrml_crypto::{erase_secret_bytes, hmac_sha256};
+use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const CERTD_UID: u32 = 21003;
 const GITD_PEER: CertdPeerIdentity = CertdPeerIdentity {
@@ -26,9 +28,16 @@ const GITD_SOCKET: &str = "/run/mrml/certd-gitd/certd.sock";
 const ACMED_SOCKET: &str = "/run/mrml/certd-acmed/certd.sock";
 const UNLOCK_SECRET: &str = "/run/secrets/certd-unlock.key";
 const KEY_STORE_ROOT: &str = "/var/lib/mrml/certd/keys";
+const CONFIG_PATH: &str = "/etc/mrml/certd/config.json";
 const GITD_CAPABILITY: &str = "/run/secrets/certd-gitd.cap";
 const ACMED_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
+
+struct CertdHostedState {
+    config: CertdConfig,
+    account_key: Mutex<AccountP256SigningKey>,
+    certificate_key: Mutex<CertificateP256SigningKey>,
+}
 
 fn main() {
     if let Err(error) = application_main() {
@@ -39,6 +48,7 @@ fn main() {
 
 fn application_main() -> Result<(), &'static str> {
     let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
+    let config = load_config()?;
     match command.as_str() {
         "check-config" => {
             let (_authenticator, _key_store) = load_certd_storage()?;
@@ -47,14 +57,14 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-certd configuration valid");
             Ok(())
         }
-        "serve" => serve(),
+        "serve" => serve(config),
         _ => Err("usage: mrml-certd [serve|check-config]"),
     }
 }
 
-fn serve() -> Result<(), &'static str> {
+fn serve(config: CertdConfig) -> Result<(), &'static str> {
     let (_durable_authenticator, key_store) = load_certd_storage()?;
-    let key_store = Arc::new(key_store);
+    let state = Arc::new(load_or_create_keys(config, &key_store)?);
     let gitd_capability = load_channel_capability(GITD_CAPABILITY)?;
     let acmed_capability = load_channel_capability(ACMED_CAPABILITY)?;
     let gitd = UnixCertdListener::bind(
@@ -77,14 +87,14 @@ fn serve() -> Result<(), &'static str> {
     .map_err(|_| "cannot bind ACME channel")?;
 
     std::thread::scope(|scope| {
-        let gitd_key_store = Arc::clone(&key_store);
+        let gitd_state = Arc::clone(&state);
         scope.spawn(move || {
             serve_channel(
                 gitd,
                 gitd_capability,
                 CertdChannelRole::Gitd,
                 GITD_PEER,
-                gitd_key_store,
+                gitd_state,
             )
         });
         scope.spawn(move || {
@@ -93,7 +103,7 @@ fn serve() -> Result<(), &'static str> {
                 acmed_capability,
                 CertdChannelRole::Acmed,
                 ACMED_PEER,
-                key_store,
+                state,
             )
         });
     });
@@ -105,7 +115,7 @@ fn serve_channel(
     capability: CertdChannelCapability,
     role: CertdChannelRole,
     expected_peer: CertdPeerIdentity,
-    _key_store: Arc<HostedP256KeyStore>,
+    state: Arc<CertdHostedState>,
 ) {
     let mut replay = CertdReplayWindow::new();
     loop {
@@ -131,6 +141,12 @@ fn serve_channel(
         if request.operation != CertdChannelOperation::Health || !request.payload.is_empty() {
             continue;
         }
+        if state.config.identity == [0; 16]
+            || state.account_key.is_poisoned()
+            || state.certificate_key.is_poisoned()
+        {
+            continue;
+        }
         let response = CertdChannelRequest {
             role,
             operation: CertdChannelOperation::Health,
@@ -143,6 +159,96 @@ fn serve_channel(
         };
         let _ = session.write_frame(&frame[..written]);
     }
+}
+
+fn load_or_create_keys(
+    config: CertdConfig,
+    key_store: &HostedP256KeyStore,
+) -> Result<CertdHostedState, &'static str> {
+    let account_descriptor = HostedP256KeyDescriptor {
+        role: HostedP256KeyRole::AcmeAccount,
+        object_id: config.account_identity,
+        key_generation: config.account_generation,
+        binding_generation: config.directory_generation,
+        binding_digest: directory_binding(config),
+    };
+    let account_key = match key_store.load_account(account_descriptor) {
+        Ok(key) => key,
+        Err(HostedP256KeyError::NotFound) => key_store
+            .create_account(account_descriptor, fill_entropy)
+            .or_else(|error| {
+                if error == HostedP256KeyError::AlreadyExists {
+                    key_store.load_account(account_descriptor)
+                } else {
+                    Err(error)
+                }
+            })
+            .map_err(|_| "cannot create ACME account key")?,
+        Err(_) => return Err("cannot load ACME account key"),
+    };
+    let certificate_descriptor = HostedP256KeyDescriptor {
+        role: HostedP256KeyRole::TlsIdentity,
+        object_id: config.identity,
+        key_generation: config.key_generation,
+        binding_generation: config.policy_generation,
+        binding_digest: config.identifier_set_digest,
+    };
+    let route = TlsSigningRoute {
+        identity: TlsIdentityId(config.identity),
+        identity_generation: config.key_generation,
+        key_identity: TlsKeyIdentity([0; 32]),
+        route_generation: config.policy_generation,
+        capability_id: route_capability(config),
+    };
+    let certificate_key = match key_store.load_certificate(certificate_descriptor, route) {
+        Ok(key) => key,
+        Err(HostedP256KeyError::NotFound) => key_store
+            .create_certificate(certificate_descriptor, route, fill_entropy)
+            .or_else(|error| {
+                if error == HostedP256KeyError::AlreadyExists {
+                    key_store.load_certificate(certificate_descriptor, route)
+                } else {
+                    Err(error)
+                }
+            })
+            .map_err(|_| "cannot create TLS certificate key")?,
+        Err(_) => return Err("cannot load TLS certificate key"),
+    };
+    Ok(CertdHostedState {
+        config,
+        account_key: Mutex::new(account_key),
+        certificate_key: Mutex::new(certificate_key),
+    })
+}
+
+fn fill_entropy(output: &mut [u8]) -> Result<(), mrml_crypto::P256Error> {
+    mrml_runtime::fill_random(output).map_err(|_| mrml_crypto::P256Error::EntropyUnavailable)
+}
+
+fn directory_binding(config: CertdConfig) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"mrml-certd-account-directory-binding-v1\0");
+    digest.update(&config.directory_generation.to_be_bytes());
+    digest.update(config.directory_url.as_str().as_bytes());
+    digest.finalize()
+}
+
+fn route_capability(config: CertdConfig) -> [u8; 16] {
+    let mut digest = Sha256::new();
+    digest.update(b"mrml-certd-tls-route-capability-v1\0");
+    digest.update(&config.identity);
+    digest.update(&config.key_generation.to_be_bytes());
+    digest.update(&config.policy_generation.to_be_bytes());
+    digest.update(&config.identifier_set_digest);
+    let digest = digest.finalize();
+    digest[..16].try_into().unwrap_or([0; 16])
+}
+
+fn load_config() -> Result<CertdConfig, &'static str> {
+    let config = HostedSecret::open(Path::new(CONFIG_PATH), 0, 0o444, MAX_CERTD_CONFIG_BYTES)
+        .map_err(|_| "unsafe certd config")?;
+    let source = core::str::from_utf8(config.expose()).map_err(|_| "certd config is not UTF-8")?;
+    parse_certd_config(source).map_err(|_| "invalid certd config")
 }
 
 fn load_certd_storage() -> Result<(HmacSha256DurableAuthenticator, HostedP256KeyStore), &'static str>
