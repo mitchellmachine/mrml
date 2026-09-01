@@ -1,4 +1,5 @@
 pub const MAX_NONCES: usize = 8;
+pub const MAX_SEEN_NONCES: usize = 64;
 pub const MAX_NONCE_BYTES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9,6 +10,7 @@ pub enum NonceError {
     PoolFull,
     Unavailable,
     WrongDirectoryGeneration,
+    ReplayDetected,
 }
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ReplayNonce {
@@ -43,31 +45,40 @@ impl ReplayNonce {
 pub struct NoncePool {
     generation: u64,
     entries: [Option<ReplayNonce>; MAX_NONCES],
+    seen: [Option<ReplayNonce>; MAX_SEEN_NONCES],
 }
 impl NoncePool {
     pub const fn new(generation: u64) -> Self {
         Self {
             generation,
             entries: [None; MAX_NONCES],
+            seen: [None; MAX_SEEN_NONCES],
         }
     }
     pub fn replace_generation(&mut self, generation: u64) {
         self.generation = generation;
-        self.entries = [None; MAX_NONCES]
+        self.entries = [None; MAX_NONCES];
+        self.seen = [None; MAX_SEEN_NONCES];
     }
     pub fn insert(&mut self, generation: u64, nonce: ReplayNonce) -> Result<(), NonceError> {
         if generation != self.generation {
             return Err(NonceError::WrongDirectoryGeneration);
         }
-        if self.entries.iter().flatten().any(|n| n == &nonce) {
-            return Ok(());
+        if self.seen.iter().flatten().any(|seen| seen == &nonce) {
+            return Err(NonceError::ReplayDetected);
         }
         let slot = self
             .entries
             .iter_mut()
             .find(|n| n.is_none())
             .ok_or(NonceError::PoolFull)?;
+        let seen = self
+            .seen
+            .iter_mut()
+            .find(|entry| entry.is_none())
+            .ok_or(NonceError::PoolFull)?;
         *slot = Some(nonce);
+        *seen = Some(nonce);
         Ok(())
     }
     pub fn consume(&mut self, generation: u64) -> Result<ReplayNonce, NonceError> {
@@ -104,5 +115,16 @@ mod tests {
             p.consume(2),
             Err(NonceError::WrongDirectoryGeneration)
         ));
+    }
+
+    #[test]
+    fn consumed_nonce_cannot_be_reintroduced_in_same_directory_generation() {
+        let mut pool = NoncePool::new(4);
+        let nonce = ReplayNonce::parse("single-use").unwrap();
+        pool.insert(4, nonce).unwrap();
+        assert_eq!(pool.consume(4).unwrap().as_str(), "single-use");
+        assert_eq!(pool.insert(4, nonce), Err(NonceError::ReplayDetected));
+        pool.replace_generation(5);
+        assert_eq!(pool.insert(5, nonce), Ok(()));
     }
 }

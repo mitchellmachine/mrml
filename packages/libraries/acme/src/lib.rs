@@ -71,7 +71,7 @@ pub use local_authority::{
     LOCAL_RENEWAL_INFO_URL, LOCAL_REVOKE_URL, LocalAuthorityChallenge, LocalAuthorityError,
     LocalAuthorityFault, LocalAuthorityState, LocalJwsVerifier,
 };
-pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
+pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, MAX_SEEN_NONCES, NonceError, NoncePool, ReplayNonce};
 pub use operation::{
     AccountActionResolutionError, AccountCreateBuffers, AccountRecoveryError, AccountRolloverError,
     AccountRolloverFailure, AccountUpdateError, AccountUpdateFailure, AuthorizationFetchError,

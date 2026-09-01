@@ -670,7 +670,11 @@ mod tests {
                 } else {
                     "https://ca.example/certificate/1"
                 },
-                replay_nonce: Some("certificate-nonce-2"),
+                replay_nonce: Some(if alternate {
+                    "certificate-nonce-3"
+                } else {
+                    "certificate-nonce-2"
+                }),
                 retry_after: None,
                 location: None,
                 content_type: Some("application/pem-certificate-chain"),

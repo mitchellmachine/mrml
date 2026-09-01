@@ -2205,7 +2205,11 @@ mod tests {
                 return Ok(AcmeTransportResponse {
                     status: 200,
                     effective_url: "https://ca.example/new-nonce",
-                    replay_nonce: Some("terms-nonce-1"),
+                    replay_nonce: Some(if self.fail_post {
+                        "terms-nonce-1"
+                    } else {
+                        "terms-nonce-3"
+                    }),
                     retry_after: None,
                     location: None,
                     content_type: None,

@@ -87,6 +87,7 @@ pub enum LocalAuthorityFault {
     ContradictoryOrderOnce,
     MalformedCertificateOnce,
     ProfileAdvertisementChanges,
+    ReplayNonceOnce,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityError {
@@ -282,7 +283,14 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 r#"{"type":"urn:ietf:params:acme:error:badNonce","status":400}"#,
             );
         }
-        let next = Some(self.issue_nonce());
+        let consumed_nonce = NONCES[self.nonce];
+        let issued_nonce = self.issue_nonce();
+        let next = if self.fault == LocalAuthorityFault::ReplayNonceOnce && !self.fault_used {
+            self.fault_used = true;
+            Some(consumed_nonce)
+        } else {
+            Some(issued_nonce)
+        };
         match url {
             LOCAL_NEW_ACCOUNT_URL => {
                 if self.state == LocalAuthorityState::AccountValid
@@ -1382,6 +1390,25 @@ mod tests {
         .unwrap();
         let body = core::str::from_utf8(&response[..stale.metadata.body_length]).unwrap();
         assert!(body.contains("\"status\":\"pending\""));
+
+        authority.inject(LocalAuthorityFault::ReplayNonceOnce);
+        assert!(matches!(
+            post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &url(LOCAL_AUTHORIZATION_URL),
+                ProtectedKey::Kid(&account),
+                b"",
+                1,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            ),
+            Err(crate::AcmePostError::Transport(
+                crate::TransportError::Nonce(crate::NonceError::ReplayDetected)
+            ))
+        ));
 
         authority.state = LocalAuthorityState::OrderValid;
         authority.inject(LocalAuthorityFault::ContradictoryOrderOnce);

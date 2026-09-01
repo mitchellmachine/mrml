@@ -164,12 +164,6 @@ impl AcmeExchange {
         {
             return Err(TransportError::RetryAfterTooLong);
         }
-        if let Some(value) = response.replay_nonce {
-            let nonce = ReplayNonce::parse(value).map_err(TransportError::Nonce)?;
-            self.nonces
-                .insert(self.directory_generation, nonce)
-                .map_err(TransportError::Nonce)?;
-        }
         let location = response
             .location
             .map(|value| {
@@ -180,6 +174,12 @@ impl AcmeExchange {
             })
             .transpose()?;
         let response_type = classify_response_type(response.content_type)?;
+        if let Some(value) = response.replay_nonce {
+            let nonce = ReplayNonce::parse(value).map_err(TransportError::Nonce)?;
+            self.nonces
+                .insert(self.directory_generation, nonce)
+                .map_err(TransportError::Nonce)?;
+        }
         Ok(AcmeResponseMetadata {
             status: response.status,
             body_length: response.body_length,

@@ -11811,3 +11811,10 @@ Patent review: **NOT_TRIGGERED**. This increment parses bounded standard
 `rel="alternate"` certificate links, enforces the configured CA origin,
 validates every fetched chain, and selects only an exact owner-approved chain
 digest. It introduces no recorded re-review trigger.
+
+# 2026-09-01 — Directory-generation nonce replay memory
+
+Patent review: **NOT_TRIGGERED**. This increment retains a bounded set of all
+accepted response nonces for the current directory generation and rejects a
+server response that reintroduces a consumed nonce. Bound exhaustion fails
+closed. It introduces no recorded re-review trigger.

@@ -201,8 +201,11 @@ The shared ACME transport contract now admits only exact current-directory
 same-origin endpoints, requires authenticated adapters to report the effective
 URL, forbids redirects, bounds response bodies and Retry-After metadata,
 captures validated replay nonces into the exact directory generation, consumes
-each nonce once, and caps typed `badNonce` retries. Platform HTTPS socket/TLS
-adapters remain separate from this semantic state.
+each nonce once, remembers up to 64 accepted values for that generation, rejects
+any value the authority repeats after consumption, and fails closed when that
+bounded replay memory is exhausted. Refreshing the authenticated directory
+generation resets both the available and consumed-nonce sets. Platform HTTPS
+socket/TLS adapters remain separate from this semantic state.
 The signed POST transaction composes that contract with JOSE. It acquires or
 consumes one nonce, constructs and signs the exact URL/account/directory-bound
 flattened JWS, performs one authenticated POST, captures the response nonce,
