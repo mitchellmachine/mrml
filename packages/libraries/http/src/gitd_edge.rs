@@ -298,12 +298,14 @@ impl LinuxFilesystemCacheStore {
         }
         mrml_runtime::create_dir_all(root).map_err(|_| BackendError::Storage)?;
         mrml_runtime::sync_directory(root).map_err(|_| BackendError::Storage)?;
-        Ok(Self {
+        let mut store = Self {
             root: root.into(),
             maximum_entries,
             maximum_bytes,
             next_temporary: 1,
-        })
+        };
+        store.cleanup_interrupted_writes()?;
+        Ok(store)
     }
 
     fn filename(key: &[u8]) -> Result<Text, BackendError> {
@@ -362,6 +364,28 @@ impl LinuxFilesystemCacheStore {
         }
         mrml_runtime::sync_directory(self.root.as_str()).map_err(|_| BackendError::Storage)
     }
+
+    fn ensure_root(&self) -> Result<(), BackendError> {
+        mrml_runtime::create_dir_all(self.root.as_str()).map_err(|_| BackendError::Storage)
+    }
+
+    fn cleanup_interrupted_writes(&mut self) -> Result<(), BackendError> {
+        let entries =
+            mrml_runtime::read_directory(self.root.as_str()).map_err(|_| BackendError::Storage)?;
+        let mut changed = false;
+        for entry in entries {
+            if entry.is_directory || entry.is_symlink || !entry.name.starts_with(".tmp-") {
+                continue;
+            }
+            let path = mrml_runtime::join_path(self.root.as_str(), entry.name.as_str());
+            mrml_runtime::remove_file(path.as_str()).map_err(|_| BackendError::Storage)?;
+            changed = true;
+        }
+        if changed {
+            mrml_runtime::sync_directory(self.root.as_str()).map_err(|_| BackendError::Storage)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -394,6 +418,7 @@ impl CacheStore for LinuxFilesystemCacheStore {
         if value.len() > MAX_CACHE_RECORD || value.len() as u64 > self.maximum_bytes {
             return Err(BackendError::ResourceLimit);
         }
+        self.ensure_root()?;
         let target = self.path(key)?;
         let temporary_name = mrml_runtime::mrml_format!(
             ".tmp-{}-{}",
@@ -423,6 +448,7 @@ impl CacheStore for LinuxFilesystemCacheStore {
     }
 
     fn remove_corrupt(&mut self, key: &[u8]) -> Result<(), BackendError> {
+        self.ensure_root()?;
         let path = self.path(key)?;
         let _ = mrml_runtime::remove_file(path.as_str());
         mrml_runtime::sync_directory(self.root.as_str()).map_err(|_| BackendError::Storage)
@@ -1798,6 +1824,31 @@ mod tests {
                 .iter()
                 .all(|entry| !entry.name.starts_with(".tmp-"))
         );
+        mrml_runtime::remove_dir_all(root.as_str()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_cache_store_recovers_interrupted_writes_and_deleted_root() {
+        let root = mrml_runtime::join_path(
+            mrml_runtime::temporary_directory().as_str(),
+            mrml_runtime::mrml_format!("mrml-gitd-cache-recovery-{}", mrml_runtime::process_id())
+                .as_str(),
+        );
+        let _ = mrml_runtime::remove_dir_all(root.as_str());
+        mrml_runtime::create_dir_all(root.as_str()).unwrap();
+        let stale = mrml_runtime::join_path(root.as_str(), ".tmp-7-9");
+        let mut file = mrml_runtime::File::create_new(stale.as_str()).unwrap();
+        file.write_all(b"partial").unwrap();
+        file.sync().unwrap();
+        drop(file);
+        let store = LinuxFilesystemCacheStore::new(root.as_str(), 4, 1024 * 1024).unwrap();
+        assert!(!mrml_runtime::path_exists(stale.as_str()));
+        mrml_runtime::remove_dir_all(root.as_str()).unwrap();
+        let mut cache = PersistentRepresentationCache::new(store);
+        let value = CachedRepresentation::prepare(b"recreated root").unwrap();
+        cache.store("after-delete", &value).unwrap();
+        assert_eq!(cache.load("after-delete").unwrap(), Some(value));
         mrml_runtime::remove_dir_all(root.as_str()).unwrap();
     }
 

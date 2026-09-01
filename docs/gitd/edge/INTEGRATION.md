@@ -82,3 +82,9 @@ exercise IPv4 identity, IPv6 `/64` aggregation, fixed source-table exhaustion,
 render concurrency exhaustion, the 40 GiB reserve, SIEGE restrictions, and
 three-observation recovery. Reactor integration and production load evidence
 remain open.
+
+The Linux L2 recovery regression subsequently raised hosted Linux HTTP coverage
+to 54 tests. It creates and syncs a partial temporary record, verifies bounded
+startup cleanup, deletes the exact cache root, then verifies a later atomic store
+recreates it and round-trips the representation. This is controlled filesystem
+testing, not power-loss or physical-media crash evidence.
