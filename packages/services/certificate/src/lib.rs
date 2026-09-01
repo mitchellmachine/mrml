@@ -29,6 +29,8 @@ mod durable_hosted;
 mod hot_reload;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod hosted_daemon;
+#[cfg(target_os = "linux")]
+mod hosted_secret;
 mod identity;
 mod identity_service;
 mod keyed_authenticator;
@@ -144,6 +146,11 @@ pub use hosted_daemon::{
     HostedLifecycleDaemonError, HostedLifecycleSessionService, HostedLifecycleSupervisor,
     HostedLifecycleSupervisorEvent, MAX_HOSTED_LIFECYCLE_SESSIONS_PER_RUN,
     ReconstructingLifecycleService, run_hosted_lifecycle_daemon,
+};
+#[cfg(target_os = "linux")]
+pub use hosted_secret::{
+    HostedSecret, HostedSecretError, MAX_HOSTED_SECRET_BYTES, PRODUCTION_SECRET_MODE,
+    load_durable_authenticator,
 };
 pub use identity::{
     ActivationReceipt, ApprovedTls13CertificateVerify, CandidateDeploymentRetirementReceipt,
