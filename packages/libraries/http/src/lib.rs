@@ -5,6 +5,7 @@ use mrml_runtime::{Text, Vector};
 use mrml_tls::TlsClientStream;
 
 mod crlset_update;
+mod gitd_auth;
 mod gitd_core_adapter;
 mod gitd_edge;
 mod gitd_resource;
@@ -17,15 +18,16 @@ mod quic_endpoint;
 mod quic_retry;
 
 pub use crlset_update::{
-    ChromiumCrlSetPackage, ChromiumCrlSetUpdater, CHROMIUM_COMPONENT_UPDATE_URL,
-    CHROMIUM_CRLSET_COMPONENT_ID, CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256,
+    CHROMIUM_COMPONENT_UPDATE_URL, CHROMIUM_CRLSET_COMPONENT_ID,
+    CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256, ChromiumCrlSetPackage, ChromiumCrlSetUpdater,
 };
+pub use gitd_auth::*;
 pub use gitd_core_adapter::GitdCoreAdapter;
 pub use gitd_edge::*;
 pub use gitd_resource::*;
 pub use http2::{
-    Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame, Http2FrameKind,
-    Http2Response, Http2Server, Http2ServerConnection, HTTP2_CLIENT_PREFACE,
+    HTTP2_CLIENT_PREFACE, Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame,
+    Http2FrameKind, Http2Response, Http2Server, Http2ServerConnection,
 };
 pub use http3::{
     Http3Client, Http3ClientConnection, Http3ConnectionState, Http3Frame, Http3FrameKind,
@@ -33,9 +35,9 @@ pub use http3::{
     Http3WorkerPool, PreparedHttp3Response,
 };
 pub use quic::{
-    initial_token, HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState,
-    QuicError, QuicFrame, QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole,
-    QuicStreamAssembler, QuicTransportParameters, QuicVersion, SentPacket, ShortPacket,
+    HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,
+    QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole, QuicStreamAssembler,
+    QuicTransportParameters, QuicVersion, SentPacket, ShortPacket, initial_token,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
 pub use quic_endpoint::{
@@ -680,9 +682,11 @@ mod tests {
             .get_follow(&url, &[("Range", "bytes=0-1023")], 8)
             .unwrap();
         assert_eq!(response.status, 206);
-        assert!(response
-            .header("content-range")
-            .is_some_and(|value| value.starts_with("bytes 0-1023/")));
+        assert!(
+            response
+                .header("content-range")
+                .is_some_and(|value| value.starts_with("bytes 0-1023/"))
+        );
         assert_eq!(response.read_to_end(2048).unwrap().len(), 1024);
     }
 }

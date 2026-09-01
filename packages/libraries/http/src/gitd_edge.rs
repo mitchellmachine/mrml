@@ -2,7 +2,7 @@ use mrml_crypto::Sha256;
 use mrml_runtime::{Text, Vector};
 use mrml_zstd::{HttpEncodingProfile, encode_http};
 
-use crate::{Header, RequestHead};
+use crate::{GitdAuthentication, Header, RepositoryAction, RequestHead};
 
 const MAX_IDENTITY: usize = 257;
 const MAX_PATH: usize = 4096;
@@ -850,6 +850,7 @@ pub struct GitdHttp3Server<B: GitdBackend> {
     flights: RepresentationSingleFlight,
     trust: TrustGeneration,
     revocations: RevocationGeneration,
+    authentication: Option<GitdAuthentication>,
 }
 
 impl<B: GitdBackend> GitdHttp3Server<B> {
@@ -860,7 +861,11 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             flights: RepresentationSingleFlight::new(256)?,
             trust: TrustGeneration(0),
             revocations: RevocationGeneration(0),
+            authentication: None,
         })
+    }
+    pub fn configure_authentication(&mut self, authentication: GitdAuthentication) {
+        self.authentication = Some(authentication);
     }
     pub fn set_verification_generations(
         &mut self,
@@ -955,6 +960,17 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             }
             _ => return Err(BackendError::NotFound),
         };
+        let action = if operation == SmartGitOperation::ReceivePack {
+            RepositoryAction::Write
+        } else {
+            RepositoryAction::Read
+        };
+        let now = mrml_runtime::unix_time_seconds().ok_or(BackendError::Storage)?;
+        self.authentication
+            .as_ref()
+            .ok_or(BackendError::Private)?
+            .authorize(&request.headers, &repository, action, now)
+            .map_err(|_| BackendError::Private)?;
         let generation = self.backend.repository_generation(&repository)?;
         let max_input_bytes = SMART_GIT_INPUT_LIMIT.min(input.remaining());
         let max_output_bytes = SMART_GIT_OUTPUT_LIMIT.min(output.remaining());
@@ -1983,6 +1999,7 @@ fn verification_html(summary: &VerificationSummary) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AccessScopes, RepositoryAccessPolicy, RepositoryProfile, TokenAuthority};
 
     #[derive(Default)]
     struct MockCacheStore {
@@ -2182,6 +2199,32 @@ mod tests {
             4 * 1024 * 1024,
         )
         .unwrap();
+        let token_authority = TokenAuthority::new([7; 32]).unwrap();
+        let repository = RepositoryIdentity::parse("mitchellrenouf/mrml").unwrap();
+        let (mut token, record) = token_authority
+            .issue(
+                repository.clone(),
+                AccessScopes::WRITE,
+                1,
+                u64::MAX,
+                1,
+                "route test",
+            )
+            .unwrap();
+        let token = token.reveal_once().unwrap();
+        server.configure_authentication(
+            GitdAuthentication::new(
+                token_authority,
+                [RepositoryAccessPolicy {
+                    repository,
+                    profile: RepositoryProfile::PublicRead,
+                    revocation_generation: 1,
+                }]
+                .into(),
+                [record].into(),
+            )
+            .unwrap(),
+        );
         for (method, target, request_type, response_type) in [
             (
                 "GET",
@@ -2202,7 +2245,13 @@ mod tests {
                 "application/x-git-receive-pack-result",
             ),
         ] {
-            let request = smart_request(method, target, request_type);
+            let mut request = smart_request(method, target, request_type);
+            if target.ends_with("git-receive-pack") {
+                request.headers.push(Header {
+                    name: "authorization".into(),
+                    value: mrml_runtime::mrml_format!("Bearer {token}"),
+                });
+            }
             let mut input = EmptySmartGitInput;
             let mut output = BufferedSmartGitOutput::new(1024);
             let response = server.handle_smart_git(&request, &mut input, &mut output);
@@ -2258,6 +2307,44 @@ mod tests {
                 200
             );
         }
+    }
+
+    #[test]
+    fn receive_authentication_precedes_body_consumption() {
+        struct CountingInput {
+            reads: usize,
+        }
+        impl BoundedRead for CountingInput {
+            fn remaining(&self) -> u64 {
+                1024
+            }
+            fn read(&mut self, _output: &mut [u8]) -> Result<usize, BackendError> {
+                self.reads += 1;
+                Ok(0)
+            }
+        }
+        let mut server = GitdHttp3Server::new(
+            MockBackend {
+                generation: RepositoryGeneration(7),
+            },
+            4096,
+        )
+        .unwrap();
+        let request = smart_request(
+            "POST",
+            "/mitchellrenouf/mrml.git/git-receive-pack",
+            Some("application/x-git-receive-pack-request"),
+        );
+        let mut input = CountingInput { reads: 0 };
+        let mut output = BufferedSmartGitOutput::new(1024);
+        assert_eq!(
+            server
+                .handle_smart_git(&request, &mut input, &mut output)
+                .status,
+            404
+        );
+        assert_eq!(input.reads, 0);
+        assert!(output.bytes.is_empty());
     }
 
     #[test]

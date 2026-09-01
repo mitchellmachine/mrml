@@ -1,0 +1,500 @@
+use core::fmt;
+
+use mrml_crypto::hmac_sha256;
+use mrml_runtime::{Text, Vector};
+
+use crate::{Header, RepositoryIdentity};
+
+const TOKEN_BYTES: usize = 32;
+const TOKEN_TEXT_BYTES: usize = TOKEN_BYTES * 2;
+const MAX_LABEL_BYTES: usize = 96;
+const RECORD_VERSION: u8 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepositoryProfile {
+    PublicRead,
+    Private,
+    Protected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepositoryAction {
+    Read,
+    Write,
+    Administer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccessScopes(u8);
+
+impl AccessScopes {
+    pub const READ: Self = Self(1);
+    pub const WRITE: Self = Self(2);
+    pub const ADMINISTER: Self = Self(4);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn allows(self, action: RepositoryAction) -> bool {
+        let required = match action {
+            RepositoryAction::Read => Self::READ.0,
+            RepositoryAction::Write => Self::WRITE.0,
+            RepositoryAction::Administer => Self::ADMINISTER.0,
+        };
+        self.0 & required == required
+    }
+}
+
+pub struct OneTimeAccessToken {
+    bytes: [u8; TOKEN_TEXT_BYTES],
+    available: bool,
+}
+
+impl OneTimeAccessToken {
+    pub fn reveal_once(&mut self) -> Option<Text> {
+        if !self.available {
+            return None;
+        }
+        let text = core::str::from_utf8(&self.bytes).ok().map(Text::from);
+        self.available = false;
+        erase(&mut self.bytes);
+        text
+    }
+}
+
+impl fmt::Debug for OneTimeAccessToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OneTimeAccessToken(<redacted>)")
+    }
+}
+
+impl Drop for OneTimeAccessToken {
+    fn drop(&mut self) {
+        erase(&mut self.bytes);
+    }
+}
+
+pub struct TokenRecord {
+    repository: RepositoryIdentity,
+    scopes: AccessScopes,
+    valid_from: u64,
+    expires_at: u64,
+    revocation_generation: u64,
+    label: Text,
+    verifier: [u8; 32],
+    integrity: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryAccessPolicy {
+    pub repository: RepositoryIdentity,
+    pub profile: RepositoryProfile,
+    pub revocation_generation: u64,
+}
+
+pub struct GitdAuthentication {
+    authority: TokenAuthority,
+    policies: Vector<RepositoryAccessPolicy>,
+    records: Vector<TokenRecord>,
+}
+
+impl GitdAuthentication {
+    pub fn new(
+        authority: TokenAuthority,
+        policies: Vector<RepositoryAccessPolicy>,
+        records: Vector<TokenRecord>,
+    ) -> Result<Self, AuthenticationError> {
+        if policies.is_empty()
+            || policies.len() > 100_000
+            || records.len() > 1_000_000
+            || policies
+                .iter()
+                .any(|policy| policy.revocation_generation == 0)
+        {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        for (index, policy) in policies.iter().enumerate() {
+            if policies[index + 1..]
+                .iter()
+                .any(|other| other.repository == policy.repository)
+            {
+                return Err(AuthenticationError::InvalidConfiguration);
+            }
+        }
+        Ok(Self {
+            authority,
+            policies,
+            records,
+        })
+    }
+
+    pub fn authorize(
+        &self,
+        headers: &[Header],
+        repository: &RepositoryIdentity,
+        action: RepositoryAction,
+        now: u64,
+    ) -> Result<AuthenticatedAccess, AuthenticationError> {
+        let policy = self
+            .policies
+            .iter()
+            .find(|policy| &policy.repository == repository)
+            .ok_or(AuthenticationError::Denied)?;
+        self.authority.authorize(
+            headers,
+            repository,
+            action,
+            policy.profile,
+            now,
+            policy.revocation_generation,
+            &self.records,
+        )
+    }
+}
+
+impl fmt::Debug for TokenRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TokenRecord")
+            .field("repository", &self.repository)
+            .field("scopes", &self.scopes)
+            .field("valid_from", &self.valid_from)
+            .field("expires_at", &self.expires_at)
+            .field("revocation_generation", &self.revocation_generation)
+            .field("label", &self.label)
+            .field("verifier", &"<redacted>")
+            .field("integrity", &"<redacted>")
+            .finish()
+    }
+}
+
+pub struct TokenAuthority {
+    pepper: [u8; 32],
+}
+
+impl TokenAuthority {
+    pub fn new(pepper: [u8; 32]) -> Result<Self, AuthenticationError> {
+        if pepper.iter().all(|byte| *byte == 0) {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        Ok(Self { pepper })
+    }
+
+    pub fn issue(
+        &self,
+        repository: RepositoryIdentity,
+        scopes: AccessScopes,
+        valid_from: u64,
+        expires_at: u64,
+        revocation_generation: u64,
+        label: &str,
+    ) -> Result<(OneTimeAccessToken, TokenRecord), AuthenticationError> {
+        if scopes.0 == 0
+            || scopes.0 & !7 != 0
+            || valid_from >= expires_at
+            || revocation_generation == 0
+            || label.is_empty()
+            || label.len() > MAX_LABEL_BYTES
+            || label.bytes().any(|byte| !(b' '..=b'~').contains(&byte))
+        {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        let mut raw = [0u8; TOKEN_BYTES];
+        mrml_runtime::fill_random(&mut raw).map_err(|_| AuthenticationError::Entropy)?;
+        let verifier = hmac_sha256(&self.pepper, &[b"mrml-git-token-v1", &raw]);
+        let mut encoded = [0u8; TOKEN_TEXT_BYTES];
+        encode_hex(&raw, &mut encoded);
+        erase(&mut raw);
+        let mut record = TokenRecord {
+            repository,
+            scopes,
+            valid_from,
+            expires_at,
+            revocation_generation,
+            label: label.into(),
+            verifier,
+            integrity: [0; 32],
+        };
+        record.integrity = self.record_integrity(&record)?;
+        Ok((
+            OneTimeAccessToken {
+                bytes: encoded,
+                available: true,
+            },
+            record,
+        ))
+    }
+
+    pub fn authorize(
+        &self,
+        headers: &[Header],
+        repository: &RepositoryIdentity,
+        action: RepositoryAction,
+        profile: RepositoryProfile,
+        now: u64,
+        current_revocation_generation: u64,
+        records: &[TokenRecord],
+    ) -> Result<AuthenticatedAccess, AuthenticationError> {
+        let authorization = single_authorization(headers)?;
+        if authorization.is_none()
+            && profile == RepositoryProfile::PublicRead
+            && action == RepositoryAction::Read
+        {
+            return Ok(AuthenticatedAccess::AnonymousRead);
+        }
+        let encoded = authorization
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or(AuthenticationError::Denied)?;
+        let mut raw = decode_token(encoded)?;
+        let actual = hmac_sha256(&self.pepper, &[b"mrml-git-token-v1", &raw]);
+        erase(&mut raw);
+        let mut selected = None;
+        for record in records {
+            let integrity = self.record_integrity(record)?;
+            let valid = constant_time_equal(&integrity, &record.integrity)
+                & constant_time_equal(&actual, &record.verifier);
+            if valid {
+                if selected.is_some() {
+                    return Err(AuthenticationError::Denied);
+                }
+                selected = Some(record);
+            }
+        }
+        let record = selected.ok_or(AuthenticationError::Denied)?;
+        if &record.repository != repository
+            || !record.scopes.allows(action)
+            || now < record.valid_from
+            || now >= record.expires_at
+            || record.revocation_generation != current_revocation_generation
+        {
+            return Err(AuthenticationError::Denied);
+        }
+        Ok(AuthenticatedAccess::Token)
+    }
+
+    fn record_integrity(&self, record: &TokenRecord) -> Result<[u8; 32], AuthenticationError> {
+        let mut canonical = Vector::new();
+        canonical.push(RECORD_VERSION);
+        append_field(&mut canonical, record.repository.as_str().as_bytes())?;
+        canonical.push(record.scopes.0);
+        canonical.extend(record.valid_from.to_be_bytes());
+        canonical.extend(record.expires_at.to_be_bytes());
+        canonical.extend(record.revocation_generation.to_be_bytes());
+        append_field(&mut canonical, record.label.as_bytes())?;
+        canonical.extend(record.verifier);
+        Ok(hmac_sha256(
+            &self.pepper,
+            &[b"mrml-git-token-record-v1", &canonical],
+        ))
+    }
+}
+
+impl fmt::Debug for TokenAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TokenAuthority(<redacted>)")
+    }
+}
+
+impl Drop for TokenAuthority {
+    fn drop(&mut self) {
+        erase(&mut self.pepper);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthenticatedAccess {
+    AnonymousRead,
+    Token,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthenticationError {
+    InvalidConfiguration,
+    Entropy,
+    Denied,
+    Resource,
+}
+
+fn single_authorization(headers: &[Header]) -> Result<Option<&str>, AuthenticationError> {
+    let mut values = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("authorization"));
+    let value = values.next().map(|header| header.value.as_str());
+    if values.next().is_some() {
+        return Err(AuthenticationError::Denied);
+    }
+    Ok(value)
+}
+
+fn append_field(output: &mut Vector<u8>, value: &[u8]) -> Result<(), AuthenticationError> {
+    let length = u16::try_from(value.len()).map_err(|_| AuthenticationError::Resource)?;
+    output.extend(length.to_be_bytes());
+    output
+        .try_extend_from_slice(value)
+        .map_err(|_| AuthenticationError::Resource)
+}
+
+fn decode_token(value: &str) -> Result<[u8; TOKEN_BYTES], AuthenticationError> {
+    if value.len() != TOKEN_TEXT_BYTES {
+        return Err(AuthenticationError::Denied);
+    }
+    let mut output = [0u8; TOKEN_BYTES];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        output[index] = (hex(pair[0])? << 4) | hex(pair[1])?;
+    }
+    Ok(output)
+}
+
+fn hex(value: u8) -> Result<u8, AuthenticationError> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        _ => Err(AuthenticationError::Denied),
+    }
+}
+
+fn encode_hex(input: &[u8; TOKEN_BYTES], output: &mut [u8; TOKEN_TEXT_BYTES]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (index, byte) in input.iter().enumerate() {
+        output[index * 2] = HEX[(byte >> 4) as usize];
+        output[index * 2 + 1] = HEX[(byte & 15) as usize];
+    }
+}
+
+fn constant_time_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    let mut difference = 0u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
+#[inline(never)]
+fn erase(bytes: &mut [u8]) {
+    for byte in bytes {
+        unsafe { core::ptr::write_volatile(byte, 0) };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn authorization(token: &str) -> Vector<Header> {
+        [Header {
+            name: "authorization".into(),
+            value: mrml_runtime::mrml_format!("Bearer {token}"),
+        }]
+        .into()
+    }
+
+    #[test]
+    fn tokens_are_one_time_scoped_expiring_and_revocable() {
+        let authority = TokenAuthority::new([7; 32]).unwrap();
+        let repository = RepositoryIdentity::parse("owner/private").unwrap();
+        let (mut token, record) = authority
+            .issue(
+                repository.clone(),
+                AccessScopes::READ.union(AccessScopes::WRITE),
+                100,
+                200,
+                9,
+                "deployment token",
+            )
+            .unwrap();
+        assert_eq!(
+            mrml_runtime::mrml_format!("{:?}", token),
+            "OneTimeAccessToken(<redacted>)"
+        );
+        assert!(mrml_runtime::mrml_format!("{:?}", record).contains("<redacted>"));
+        let revealed = token.reveal_once().unwrap();
+        assert_eq!(revealed.len(), 64);
+        assert!(token.reveal_once().is_none());
+        let headers = authorization(&revealed);
+        assert_eq!(
+            authority.authorize(
+                &headers,
+                &repository,
+                RepositoryAction::Write,
+                RepositoryProfile::Private,
+                150,
+                9,
+                core::slice::from_ref(&record),
+            ),
+            Ok(AuthenticatedAccess::Token)
+        );
+        for (candidate, action, now, generation) in [
+            (
+                RepositoryIdentity::parse("owner/other").unwrap(),
+                RepositoryAction::Read,
+                150,
+                9,
+            ),
+            (repository.clone(), RepositoryAction::Administer, 150, 9),
+            (repository.clone(), RepositoryAction::Read, 200, 9),
+            (repository.clone(), RepositoryAction::Read, 150, 10),
+        ] {
+            assert_eq!(
+                authority.authorize(
+                    &headers,
+                    &candidate,
+                    action,
+                    RepositoryProfile::Private,
+                    now,
+                    generation,
+                    core::slice::from_ref(&record),
+                ),
+                Err(AuthenticationError::Denied)
+            );
+        }
+    }
+
+    #[test]
+    fn profiles_and_duplicate_headers_fail_closed() {
+        let authority = TokenAuthority::new([9; 32]).unwrap();
+        let repository = RepositoryIdentity::parse("owner/repo").unwrap();
+        assert_eq!(
+            authority.authorize(
+                &[],
+                &repository,
+                RepositoryAction::Read,
+                RepositoryProfile::PublicRead,
+                1,
+                1,
+                &[],
+            ),
+            Ok(AuthenticatedAccess::AnonymousRead)
+        );
+        for profile in [RepositoryProfile::Private, RepositoryProfile::Protected] {
+            assert_eq!(
+                authority.authorize(&[], &repository, RepositoryAction::Read, profile, 1, 1, &[],),
+                Err(AuthenticationError::Denied)
+            );
+        }
+        let duplicate: Vector<Header> = [
+            Header {
+                name: "Authorization".into(),
+                value: "Bearer 00".into(),
+            },
+            Header {
+                name: "authorization".into(),
+                value: "Bearer 00".into(),
+            },
+        ]
+        .into();
+        assert_eq!(
+            authority.authorize(
+                &duplicate,
+                &repository,
+                RepositoryAction::Read,
+                RepositoryProfile::PublicRead,
+                1,
+                1,
+                &[],
+            ),
+            Err(AuthenticationError::Denied)
+        );
+    }
+}
