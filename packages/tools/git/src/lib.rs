@@ -74,6 +74,7 @@ pub use quarantine::{
     DurableReceiveError, DurableReceiveStore, PushDiskReservation, PushStorageForecast,
     QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
     QuarantineTransactionId, durably_activate_verified_receive, reserve_push_disk,
+    reserve_push_disk_before_body,
 };
 pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,

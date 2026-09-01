@@ -168,7 +168,12 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
         transaction: &QuarantineTransaction,
         verified: &VerifiedRefTransaction,
     ) -> Result<(), DurableFailure> {
-        let identity = (transaction.id(), transaction.reservation().object_count());
+        let identity = (
+            transaction.id(),
+            transaction
+                .validated_object_count()
+                .ok_or(DurableFailure::VerifierCrash)?,
+        );
         if self.pending.is_some_and(|pending| pending != identity) {
             return Err(DurableFailure::StaleLock);
         }

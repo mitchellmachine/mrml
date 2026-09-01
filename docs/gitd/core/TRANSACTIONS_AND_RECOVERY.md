@@ -1,8 +1,9 @@
 # Transactions and recovery
 
 Status: **PARTIALLY IMPLEMENTED** as a storage-neutral admission, lifecycle,
-and ordered durable-receive coordinator. A concrete filesystem backend is not
-implemented.
+ordered durable-receive coordinator, and hosted-Linux filesystem composition.
+The protected Smart Git receive backend and signed receipt authority remain
+unimplemented.
 
 The required state sequence is candidate received, objects quarantined,
 objects validated, history verified, ref updates prepared, objects durably
@@ -10,8 +11,13 @@ installed, refs atomically activated, and audit receipt appended. The state
 machine never permits a phase to be skipped or replayed. Quarantine must remain
 invisible to ordinary reads when the storage backend is added.
 
-`reserve_push_disk` performs conservative admission before consuming a request
-body. The default limits are 2 GiB incoming pack, 8 GiB expanded objects,
+`reserve_push_disk_before_body` performs conservative admission before
+consuming a request body. Because standard receive-pack does not declare the
+expanded size or object count before its pack header, it reserves the configured
+maxima and the later validation phase binds the exact nonzero object count and
+expanded bytes without increasing authority. `reserve_push_disk` remains the
+lower-level exact-forecast operation. The default limits are 2 GiB incoming
+pack, 8 GiB expanded objects,
 128 MiB individual objects, one million objects, 32 refs, and a retained
 40 GiB ordinary free-space reserve. Checked arithmetic reserves quarantine
 bytes, expanded validation material, a second immutable arrival-pack extent,

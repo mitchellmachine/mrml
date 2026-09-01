@@ -1,7 +1,7 @@
 //! Storage-neutral quarantine admission and ordered receive lifecycle.
 
 use crate::{
-    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+    ObjectFormat, RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
     VerifiedRefTransaction,
 };
 
@@ -204,6 +204,42 @@ pub fn reserve_push_disk(
     })
 }
 
+/// Reserves a conservative receive envelope before any pack-body byte is
+/// consumed. Git's wire protocol does not declare expanded size or object
+/// count ahead of the pack header, so this uses the configured maxima; the
+/// later validation phase binds the actual nonzero count and expanded bytes.
+pub fn reserve_push_disk_before_body(
+    limits: QuarantineLimits,
+    format: ObjectFormat,
+    incoming_pack_bytes: u64,
+    ref_count: u16,
+    ordinary_free_bytes: u64,
+) -> Result<PushDiskReservation, QuarantineError> {
+    let per_object_index = u64::try_from(format.hash_len())
+        .map_err(|_| QuarantineError::ArithmeticOverflow)?
+        .checked_add(16)
+        .ok_or(QuarantineError::ArithmeticOverflow)?;
+    let arrival_index_bytes = 8u64
+        .checked_add(256 * 4)
+        .and_then(|value| value.checked_add(u64::from(limits.max_objects) * per_object_index))
+        .and_then(|value| value.checked_add((format.hash_len() * 2) as u64))
+        .ok_or(QuarantineError::ArithmeticOverflow)?;
+    reserve_push_disk(
+        limits,
+        PushStorageForecast {
+            incoming_pack_bytes,
+            expanded_object_bytes: limits.max_expanded_object_bytes,
+            largest_object_bytes: limits.max_individual_object_bytes,
+            object_count: limits.max_objects,
+            ref_count,
+            arrival_index_bytes,
+            staging_metadata_bytes: 1024 * 1024,
+            audit_receipt_bytes: 64 * 1024,
+            ordinary_free_bytes,
+        },
+    )
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuarantineTransaction {
     id: QuarantineTransactionId,
@@ -212,6 +248,7 @@ pub struct QuarantineTransaction {
     trust_generation: TrustGeneration,
     revocation_generation: RevocationGeneration,
     reservation: PushDiskReservation,
+    validated_object_count: Option<u32>,
     phase: QuarantinePhase,
     failure: Option<DurableFailure>,
 }
@@ -239,6 +276,7 @@ impl QuarantineTransaction {
             trust_generation,
             revocation_generation,
             reservation,
+            validated_object_count: None,
             phase: QuarantinePhase::CandidateReceived,
             failure: None,
         })
@@ -272,6 +310,10 @@ impl QuarantineTransaction {
         self.reservation
     }
 
+    pub const fn validated_object_count(&self) -> Option<u32> {
+        self.validated_object_count
+    }
+
     pub const fn failure(&self) -> Option<DurableFailure> {
         self.failure
     }
@@ -292,14 +334,17 @@ impl QuarantineTransaction {
         object_count: u32,
     ) -> Result<(), QuarantineError> {
         if expanded_bytes > self.reservation.expanded_object_bytes
-            || object_count != self.reservation.object_count
+            || object_count == 0
+            || object_count > self.reservation.object_count
         {
             return Err(QuarantineError::CountMismatch);
         }
         self.advance(
             QuarantinePhase::ObjectsQuarantined,
             QuarantinePhase::ObjectsValidated,
-        )
+        )?;
+        self.validated_object_count = Some(object_count);
+        Ok(())
     }
 
     pub fn history_verified(
@@ -595,6 +640,36 @@ mod tests {
             reserve_push_disk(QuarantineLimits::default(), forecast),
             Err(QuarantineError::InsufficientSpace)
         );
+
+        let limits = QuarantineLimits {
+            max_incoming_pack_bytes: 4096,
+            max_expanded_object_bytes: 8192,
+            max_individual_object_bytes: 2048,
+            max_objects: 16,
+            minimum_free_space_bytes: 0,
+            ..QuarantineLimits::default()
+        };
+        let prebody =
+            reserve_push_disk_before_body(limits, ObjectFormat::Sha256, 1024, 2, 10_000_000)
+                .unwrap();
+        assert_eq!(prebody.incoming_pack_bytes(), 1024);
+        assert_eq!(prebody.object_count(), 16);
+    }
+
+    #[test]
+    fn validated_pack_binds_actual_count_within_prebody_reservation() {
+        let mut transaction = QuarantineTransaction::begin(
+            QuarantineTransactionId([21u8; 16]),
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            RepositoryGeneration(1),
+            TrustGeneration(1),
+            RevocationGeneration(1),
+            reservation(1),
+        )
+        .unwrap();
+        transaction.objects_quarantined(1024).unwrap();
+        transaction.objects_validated(2048, 1).unwrap();
+        assert_eq!(transaction.validated_object_count(), Some(1));
     }
 
     #[test]

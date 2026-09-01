@@ -59,8 +59,12 @@ impl ArrivalPackStore {
         let (objects, entries) =
             parse_pack_with_index(pack, self.format).map_err(|_| DurableFailure::VerifierCrash)?;
         if objects.len()
-            != usize::try_from(transaction.reservation().object_count())
-                .map_err(|_| DurableFailure::VerifierCrash)?
+            != usize::try_from(
+                transaction
+                    .validated_object_count()
+                    .ok_or(DurableFailure::VerifierCrash)?,
+            )
+            .map_err(|_| DurableFailure::VerifierCrash)?
         {
             return Err(DurableFailure::VerifierCrash);
         }
@@ -251,7 +255,7 @@ mod tests {
             },
         )
         .unwrap();
-        let transaction = QuarantineTransaction::begin(
+        let mut transaction = QuarantineTransaction::begin(
             QuarantineTransactionId([12u8; 16]),
             RepositoryIdentity::parse("owner/repository").unwrap(),
             RepositoryGeneration(1),
@@ -260,6 +264,8 @@ mod tests {
             reservation,
         )
         .unwrap();
+        transaction.objects_quarantined(pack.len() as u64).unwrap();
+        transaction.objects_validated(7, 1).unwrap();
         let store = ArrivalPackStore::open(&root, ObjectFormat::Sha256, 1024 * 1024).unwrap();
         store.stage(&transaction, &[object_id], &pack).unwrap();
         assert!(!path_exists(&store.arrival_path(transaction.id())));
