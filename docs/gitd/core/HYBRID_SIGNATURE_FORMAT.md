@@ -109,6 +109,18 @@ JSON files have SHA-256 digests
 `43e81ad820e495dbcad086fe27c1008393a8c32100bbbff77c558c3f06dcefef`
 and `361f47ca19d592adcc66ff2cb591686ad785fea157b295648738bed6921a68df`.
 The byte-exact source seed and SHA3-256 digests of the expected 1952-byte public
-and 4032-byte private outputs are checked in the unit test. Official sigGen and
-sigVer cases, including the ACVP suite's documented zero-hint and z-bound
-coverage gaps, remain open.
+and 4032-byte private outputs are checked in the unit test.
+
+The environment-gated official signing case is external-interface,
+deterministic ML-DSA-65 sigGen group 3, case 41 from the same pinned commit. It
+has an 11-byte context and one-byte message and requires byte-exact agreement
+with the 3309-byte NIST result. The source sigGen prompt and results JSON
+SHA-256 digests are `447749d72817b211160d243311ce32302f3023e59c355b0f70be2bd3e9e7830d`
+and `228d011bbe274aeb93e22eea1e0d57b78f43795cf6a64fb5ef1e626485a0bedb`.
+The extracted private key, context, message, and signature fixture digests are
+respectively `1777657b3fd18f02b5e781690f61680f1914c8b9f49698a3b65fb0a7b833d050`,
+`d7770ef2edf94daf1aa5be608d785a716d64f5c611e7bea2fb55d39457f18c74`,
+`8a331fdde7032f33a71e1b2e257d80166e348e00fcb17914f48bdb57a1c63007`,
+and `f85739f53adb1cf03dacd390cddb586c3c8ba80067113ac4a4f055c58222239e`.
+Official sigVer cases, including the ACVP suite's documented zero-hint and
+z-bound coverage gaps, remain open.

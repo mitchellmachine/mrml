@@ -1005,6 +1005,25 @@ mod tests {
     }
 
     #[test]
+    fn nist_acvp_fips204_siggen_case_41_when_configured() {
+        let Some(directory) = mrml_runtime::environment_variable("MRML_ACVP_MLDSA65_SIGGEN") else {
+            return;
+        };
+        let read = |name: &str| {
+            mrml_runtime::read_file(&mrml_runtime::join_path(&directory, name)).unwrap()
+        };
+        let secret = read("secret.raw");
+        let context = read("context.bin");
+        let message = read("message.bin");
+        let expected = read("signature.bin");
+        assert_eq!(secret.len(), ML_DSA_65_SECRET_KEY_BYTES);
+        assert_eq!(expected.len(), ML_DSA_65_SIGNATURE_BYTES);
+        let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(&secret, &context, &message, &[0u8; 32], &mut signature).unwrap();
+        assert_eq!(&signature, &expected[..]);
+    }
+
+    #[test]
     fn independently_generated_openssl_vector_when_configured() {
         let Some(directory) = mrml_runtime::environment_variable("MRML_ML_DSA_65_OPENSSL") else {
             return;
