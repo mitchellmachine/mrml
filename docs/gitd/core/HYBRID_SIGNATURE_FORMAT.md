@@ -64,6 +64,17 @@ generation 4, and payload `payload` is 223 bytes and has SHA3-512 digest
 The verifier independently recomputes both public-key digests, requires the
 exact authorized pair, checks exact trust and revocation generations, verifies
 the salted OpenPGP v6 signature, then verifies ML-DSA-65. Its success typestate
-has private fields. Complete generational policy parsing, rotation/revocation,
-range verification, independent interoperability evidence, and final FIPS 204
-ML-DSA-65 evidence remain open, so the status cannot be promoted.
+has private fields. Canonical generational policy parsing, normal two-pair
+rotation constraints, and complete introduced-history range verification are
+implemented. Canonical revocation/emergency execution, independent
+interoperability evidence, and final FIPS 204 ML-DSA-65 evidence remain open,
+so the status cannot be promoted.
+
+ML-DSA-65 signing reconstructs the public key from decoded secret polynomials,
+checks the stored public-key transcript hash, and verifies every generated
+signature before returning it. The caller's signature buffer is
+volatile-zeroed before work and on every error path; decoded long-lived secret
+arrays are volatile-zeroed before return. This is source-level output-hygiene
+evidence only. Official final FIPS 204/correction vectors, a pinned independent
+oracle, complete intermediate-zeroization review, timing evidence, and
+independent cryptographic review remain open.

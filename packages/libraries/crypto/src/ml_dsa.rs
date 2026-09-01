@@ -4,7 +4,7 @@
 //! per-signature randomizer. Callers that need hedged signing must fill that
 //! randomizer from an approved source. Context strings are bounded by FIPS 204.
 
-use crate::{Shake128, Shake256};
+use crate::{Shake128, Shake256, zeroize::volatile_zero};
 
 pub const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1952;
 pub const ML_DSA_65_SECRET_KEY_BYTES: usize = 4032;
@@ -511,6 +511,61 @@ fn decode_secret(
     true
 }
 
+fn public_from_secret_polynomials(
+    rho: &[u8; 32],
+    s1: &VecL,
+    s2: &VecK,
+    public_key: &mut [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
+) {
+    let mut s1_ntt = *s1;
+    for poly in &mut s1_ntt {
+        ntt(poly);
+    }
+    public_key[..32].copy_from_slice(rho);
+    for row in 0..K {
+        let matrix = matrix_row(rho, row);
+        let mut value = pointwise_accumulate(&matrix, &s1_ntt);
+        inverse_ntt(&mut value);
+        let mut t1 = [0i32; N];
+        for index in 0..N {
+            (t1[index], _) = power2round(freeze(value[index] + s2[row][index]));
+        }
+        encode_t1(
+            &t1,
+            &mut public_key[32 + row * POLYT1_BYTES..32 + (row + 1) * POLYT1_BYTES],
+        );
+        volatile_zero(&mut value);
+        volatile_zero(&mut t1);
+    }
+    for poly in &mut s1_ntt {
+        volatile_zero(poly);
+    }
+}
+
+fn wipe_signing_state(
+    rho: &mut [u8; 32],
+    key: &mut [u8; 32],
+    tr: &mut [u8; 64],
+    rho_prime: &mut [u8; 64],
+    s1: &mut VecL,
+    s2: &mut VecK,
+    t0: &mut VecK,
+) {
+    volatile_zero(rho);
+    volatile_zero(key);
+    volatile_zero(tr);
+    volatile_zero(rho_prime);
+    for poly in s1 {
+        volatile_zero(poly);
+    }
+    for poly in s2 {
+        volatile_zero(poly);
+    }
+    for poly in t0 {
+        volatile_zero(poly);
+    }
+}
+
 pub fn ml_dsa_65_sign(
     secret_key: &[u8],
     context: &[u8],
@@ -518,6 +573,7 @@ pub fn ml_dsa_65_sign(
     randomizer: &[u8; 32],
     signature: &mut [u8],
 ) -> Result<(), MlDsaError> {
+    volatile_zero(signature);
     if signature.len() != ML_DSA_65_SIGNATURE_BYTES {
         return Err(MlDsaError::BufferLength);
     }
@@ -530,9 +586,38 @@ pub fn ml_dsa_65_sign(
     if !decode_secret(
         secret_key, &mut rho, &mut key, &mut tr, &mut s1, &mut s2, &mut t0,
     ) {
+        let mut empty = [0u8; 64];
+        wipe_signing_state(
+            &mut rho, &mut key, &mut tr, &mut empty, &mut s1, &mut s2, &mut t0,
+        );
         return Err(MlDsaError::InvalidKey);
     }
-    let mu = message_representative(&tr, context, message)?;
+    let mut public_key = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+    public_from_secret_polynomials(&rho, &s1, &s2, &mut public_key);
+    let mut expected_tr = [0u8; TR_BYTES];
+    Shake256::digest(&public_key, &mut expected_tr);
+    let mut tr_difference = 0u8;
+    for index in 0..TR_BYTES {
+        tr_difference |= tr[index] ^ expected_tr[index];
+    }
+    volatile_zero(&mut expected_tr);
+    if tr_difference != 0 {
+        let mut empty = [0u8; 64];
+        wipe_signing_state(
+            &mut rho, &mut key, &mut tr, &mut empty, &mut s1, &mut s2, &mut t0,
+        );
+        return Err(MlDsaError::InvalidKey);
+    }
+    let mu = match message_representative(&tr, context, message) {
+        Ok(mu) => mu,
+        Err(error) => {
+            let mut empty = [0u8; 64];
+            wipe_signing_state(
+                &mut rho, &mut key, &mut tr, &mut empty, &mut s1, &mut s2, &mut t0,
+            );
+            return Err(error);
+        }
+    };
     let mut rho_prime = [0u8; 64];
     shake256(&[&key, randomizer, &mu], &mut rho_prime);
     for poly in &mut s1 {
@@ -639,14 +724,35 @@ pub fn ml_dsa_65_sign(
             }
         }
         if rejected {
+            volatile_zero(signature);
             continue;
         }
-        key.fill(0);
-        rho_prime.fill(0);
-        return Ok(());
+        let verified = ml_dsa_65_verify(&public_key, context, message, signature).is_ok();
+        wipe_signing_state(
+            &mut rho,
+            &mut key,
+            &mut tr,
+            &mut rho_prime,
+            &mut s1,
+            &mut s2,
+            &mut t0,
+        );
+        if verified {
+            return Ok(());
+        }
+        volatile_zero(signature);
+        return Err(MlDsaError::InvalidSignature);
     }
-    key.fill(0);
-    rho_prime.fill(0);
+    wipe_signing_state(
+        &mut rho,
+        &mut key,
+        &mut tr,
+        &mut rho_prime,
+        &mut s1,
+        &mut s2,
+        &mut t0,
+    );
+    volatile_zero(signature);
     Err(MlDsaError::RejectionLimit)
 }
 
@@ -784,5 +890,33 @@ mod tests {
             ml_dsa_65_verify(&public, b"git", b"commit payload", &signature),
             Err(MlDsaError::InvalidSignature)
         );
+
+        let mut corrupt_secret = secret;
+        corrupt_secret[64] ^= 1;
+        signature.fill(0xa5);
+        assert_eq!(
+            ml_dsa_65_sign(
+                &corrupt_secret,
+                b"git",
+                b"commit payload",
+                &randomizer,
+                &mut signature,
+            ),
+            Err(MlDsaError::InvalidKey)
+        );
+        assert!(signature.iter().all(|byte| *byte == 0));
+
+        let mut short_output = [0xa5u8; 17];
+        assert_eq!(
+            ml_dsa_65_sign(
+                &secret,
+                b"git",
+                b"commit payload",
+                &randomizer,
+                &mut short_output,
+            ),
+            Err(MlDsaError::BufferLength)
+        );
+        assert_eq!(short_output, [0u8; 17]);
     }
 }
