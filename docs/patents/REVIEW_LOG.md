@@ -11912,3 +11912,12 @@ prepared-identity, publication-generation, and successful handshake-test
 bindings, and records an aborted boundary before destructive candidate cleanup.
 It adds no certificate protocol, validation topology, MultiTLS multiplexing,
 public CA operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Authenticated renewal restart reconstruction
+
+Patent review: **NOT_TRIGGERED**. This increment reconstructs existing local
+certificate identity, deployment, lease, replacement, and activation state
+from exact authenticated record bindings after a process restart. It is a
+fail-closed persistence/recovery mechanism and adds no certificate protocol,
+validation topology, MultiTLS multiplexing, public CA operation, or other
+recorded re-review trigger.

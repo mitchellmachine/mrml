@@ -95,8 +95,8 @@ pub use identity::{
     CandidateDeploymentRetirementTarget, CandidateKeyRetirementReceipt,
     CandidateKeyRetirementTarget, DeploymentState, IdentityConsumerCapability,
     IdentityDeploymentTarget, IdentityError, IdentityManager, PreparedIdentityReceipt,
-    TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
-    TlsKeyIdentity, TlsSigningRoute,
+    RecoveredIdentityMaterial, TestedIdentityReceipt, TlsCertificateSigningKey,
+    TlsIdentityDescriptor, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
 };
 pub use identity_service::{CertificateIdentityProvider, dispatch_identity_call};
 pub use lifecycle_service::{
@@ -115,11 +115,13 @@ pub use native_service::{
 pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
 pub use renewal_executor::{
     IssuedRenewalCandidate, RenewalExecutionError, RenewalIssuer, RenewalRecoveryError,
-    execute_due_renewal, resolve_uncertain_renewal,
+    RenewalRecoveryMaterialRole, execute_due_renewal, resolve_uncertain_renewal,
+    validate_recovered_renewal_material,
 };
 pub use renewal_journal::{
     DurableRenewalCheckpointSink, DurableRenewalStage, RENEWAL_PAYLOAD_VERSION,
-    RenewalCheckpointSink, RenewalJournal, RenewalJournalError, commit_or_resolve_renewal,
+    RenewalCandidateBinding, RenewalCheckpointSink, RenewalJournal, RenewalJournalError,
+    commit_or_resolve_renewal,
 };
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,

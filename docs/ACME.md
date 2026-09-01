@@ -204,9 +204,13 @@ active boundary before committing the manager schedule. Definitive failures
 write an aborted terminal record before exact candidate cleanup. Injected store
 failures before publication preserve the old identity and retire the candidate;
 failures after activation are recovered by confirming the already-active
-generation without reissuance or key retirement. Reconstructing the in-memory
-manager and candidate deployment from their authoritative durable records after
-a complete process restart remains required.
+generation without reissuance or key retirement. The shared recovery path now
+reconstructs the active identity, exact tested or activation-uncertain
+candidate, renewal schedule, lease, and pending replacement one generation at
+a time from independently authenticated certificate, deployment, and renewal
+records; it then resolves an injected complete process restart without
+reissuance or key retirement. A concrete host/MRML startup adapter that
+enumerates those records from persistent storage remains required.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact

@@ -2,9 +2,9 @@ use crate::{
     ActivationReceipt, CandidateDeploymentRetirementTarget, CandidateKeyRetirementReceipt,
     CandidateKeyRetirementTarget, CertificateManager, CertificateManagerError,
     IdentityDeploymentTarget, IdentityError, MAX_IDENTITY_NAMES, PemCertificateChain,
-    RenewalCheckpointSink, RenewalEntropy, RenewalJournal, RenewalJournalError, RenewalLease,
-    RenewalPolicy, RenewalSchedule, ReplacementBinding, TlsIdentityId, TlsSigningRoute,
-    VerifiedCertificateReceipt,
+    RecoveredIdentityMaterial, RenewalCheckpointSink, RenewalEntropy, RenewalJournal,
+    RenewalJournalError, RenewalLease, RenewalPolicy, RenewalSchedule, ReplacementBinding,
+    TlsIdentityId, TlsSigningRoute, VerifiedCertificateReceipt,
 };
 use mrml_acme::AcmeIdentifier;
 
@@ -51,6 +51,82 @@ pub enum RenewalRecoveryError {
     ReplacementMismatch,
     Journal(RenewalJournalError),
     PostActivationJournal(RenewalJournalError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenewalRecoveryMaterialRole {
+    Active,
+    Candidate,
+}
+
+pub fn validate_recovered_renewal_material(
+    journal: &RenewalJournal,
+    material: &RecoveredIdentityMaterial,
+    role: RenewalRecoveryMaterialRole,
+) -> Result<(), RenewalRecoveryError> {
+    let expected_candidate = journal.candidate;
+    let active_is_replacement = journal.stage == crate::DurableRenewalStage::Active;
+    let valid = match role {
+        RenewalRecoveryMaterialRole::Active => {
+            let expected_generation = if active_is_replacement {
+                journal
+                    .replacement
+                    .ok_or(RenewalRecoveryError::ReplacementMismatch)?
+                    .identity_generation
+            } else {
+                journal.previous.identity_generation
+            };
+            material.deployment.stage == crate::DurableDeploymentStage::Active
+                && material.deployment.identity == journal.lease.identity
+                && material.deployment.identity_generation == expected_generation
+                && (!active_is_replacement
+                    || expected_candidate.is_some_and(|binding| {
+                        material_matches_candidate(
+                            material,
+                            binding,
+                            crate::DurableDeploymentStage::Active,
+                        )
+                    }))
+        }
+        RenewalRecoveryMaterialRole::Candidate => {
+            let expected_stage = match journal.stage {
+                crate::DurableRenewalStage::ReplacementStaged => {
+                    Some(crate::DurableDeploymentStage::CandidatePrepared)
+                }
+                crate::DurableRenewalStage::Published => {
+                    Some(crate::DurableDeploymentStage::Published)
+                }
+                crate::DurableRenewalStage::Tested => Some(crate::DurableDeploymentStage::Tested),
+                crate::DurableRenewalStage::ActivationUncertain => {
+                    Some(crate::DurableDeploymentStage::ActivationUncertain)
+                }
+                _ => None,
+            };
+            expected_stage.is_some_and(|stage| {
+                expected_candidate
+                    .is_some_and(|binding| material_matches_candidate(material, binding, stage))
+            })
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(RenewalRecoveryError::ReplacementMismatch)
+    }
+}
+
+fn material_matches_candidate(
+    material: &RecoveredIdentityMaterial,
+    binding: crate::RenewalCandidateBinding,
+    stage: crate::DurableDeploymentStage,
+) -> bool {
+    material.route == binding.route
+        && material.deployment.stage == stage
+        && material.deployment.identity == binding.prepared.identity
+        && material.deployment.identity_generation == binding.prepared.generation
+        && material.deployment.descriptor_digest == binding.prepared.descriptor_digest
+        && material.deployment.chain_digest == binding.prepared.chain_digest
+        && material.deployment.target_generation == binding.target_generation
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -695,6 +771,69 @@ mod tests {
         }
     }
 
+    fn recovered_material(
+        identity: TlsIdentityId,
+        generation: u64,
+        stage: crate::DurableDeploymentStage,
+        target_generation: u64,
+    ) -> RecoveredIdentityMaterial {
+        let chain = chain();
+        let certificate_id = if generation == 1 {
+            AriCertificateId::derive(&[1], &[1]).unwrap()
+        } else {
+            AriCertificateId::derive(&[9], &[9]).unwrap()
+        };
+        let verified = receipt(
+            if generation == 1 { 1_000 } else { 2_000 },
+            certificate_id,
+            chain.chain_digest(),
+            if generation == 1 { [1; 32] } else { [9; 32] },
+        );
+        let mut identifiers = [None; MAX_IDENTITY_NAMES];
+        identifiers[0] = Some(AcmeIdentifier::Dns(
+            DnsIdentifier::parse("git.example", false).unwrap(),
+        ));
+        let route = TlsSigningRoute {
+            identity,
+            identity_generation: generation,
+            key_identity: TlsKeyIdentity([if generation == 1 { 5 } else { 8 }; 32]),
+            route_generation: generation,
+            capability_id: [if generation == 1 { 6 } else { 7 }; 16],
+        };
+        let descriptor = TlsIdentityDescriptor {
+            identity,
+            generation,
+            policy_generation: 1,
+            identifiers,
+            identifier_count: 1,
+            chain_digest: verified.chain_digest,
+            leaf_spki_digest: verified.leaf_spki_digest,
+            key_identity: route.key_identity,
+            not_before: verified.not_before,
+            not_after: verified.not_after,
+            profile: verified.profile,
+        };
+        RecoveredIdentityMaterial {
+            verified,
+            chain,
+            route,
+            identifiers,
+            identifier_count: 1,
+            deployment: crate::DurableDeploymentReceipt {
+                stage,
+                identity,
+                identity_generation: generation,
+                descriptor_digest: descriptor.binding_digest(),
+                chain_digest: descriptor.chain_digest,
+                target_generation,
+                previous_identity_generation: (stage == crate::DurableDeploymentStage::Active
+                    && generation > 1)
+                    .then_some(generation - 1),
+                record_generation: generation,
+            },
+        }
+    }
+
     fn setup() -> (
         std::boxed::Box<CertificateManager>,
         Runtime,
@@ -892,6 +1031,98 @@ mod tests {
                 .identity_generation,
             2
         );
+    }
+
+    #[inline(never)]
+    fn create_uncertain_renewal() -> (Runtime, TlsIdentityId, RenewalJournal, u8) {
+        let (mut manager, mut runtime, identity, _) = setup();
+        runtime.uncertain_once = true;
+        let mut issuer = Issuer {
+            identity,
+            retired: 0,
+        };
+        let mut checkpoints = Checkpoints::new(None);
+        assert!(matches!(
+            execute_due_renewal(
+                &mut manager,
+                identity,
+                200,
+                1,
+                60,
+                0,
+                policy(),
+                &mut Entropy,
+                &mut issuer,
+                &mut runtime,
+                &mut checkpoints,
+            ),
+            Err(RenewalExecutionError::ActivationUncertain)
+        ));
+        (runtime, identity, checkpoints.last(), issuer.retired)
+    }
+
+    #[inline(never)]
+    fn restore_material(
+        manager: &mut CertificateManager,
+        journal: &RenewalJournal,
+        identity: TlsIdentityId,
+        generation: u64,
+        stage: crate::DurableDeploymentStage,
+        target_generation: u64,
+        role: RenewalRecoveryMaterialRole,
+    ) {
+        let material = recovered_material(identity, generation, stage, target_generation);
+        validate_recovered_renewal_material(journal, &material, role).unwrap();
+        manager
+            .get_mut(identity)
+            .unwrap()
+            .restore_generation(material)
+            .unwrap();
+    }
+
+    #[inline(never)]
+    fn empty_recovery_manager(identity: TlsIdentityId) -> std::boxed::Box<CertificateManager> {
+        let mut manager = std::boxed::Box::new(CertificateManager::new());
+        manager.enroll(identity, 1).unwrap();
+        manager
+    }
+
+    #[test]
+    fn full_restart_reconstructs_and_resolves_uncertain_activation() {
+        let (mut runtime, identity, journal, retired) = create_uncertain_renewal();
+        let mut checkpoints = Checkpoints::new(None);
+        let mut recovered = empty_recovery_manager(identity);
+        restore_material(
+            &mut recovered,
+            &journal,
+            identity,
+            1,
+            crate::DurableDeploymentStage::Active,
+            1,
+            RenewalRecoveryMaterialRole::Active,
+        );
+        restore_material(
+            &mut recovered,
+            &journal,
+            identity,
+            2,
+            crate::DurableDeploymentStage::ActivationUncertain,
+            2,
+            RenewalRecoveryMaterialRole::Candidate,
+        );
+        recovered.restore_renewal_transaction(journal).unwrap();
+        let activation =
+            resolve_uncertain_renewal(&mut recovered, journal, &mut runtime, &mut checkpoints)
+                .unwrap();
+        assert_eq!(activation.generation, 2);
+        assert_eq!(
+            recovered
+                .renewal_schedule(identity)
+                .unwrap()
+                .identity_generation,
+            2
+        );
+        assert_eq!(retired, 0);
     }
 
     #[test]

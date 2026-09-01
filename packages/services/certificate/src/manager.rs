@@ -1,4 +1,4 @@
-use crate::{IdentityManager, RenewalSchedule, TlsIdentityId};
+use crate::{DurableRenewalStage, IdentityManager, RenewalJournal, RenewalSchedule, TlsIdentityId};
 
 pub const MAX_MANAGED_IDENTITIES: usize = 16;
 
@@ -15,6 +15,7 @@ pub enum CertificateManagerError {
     LeaseMismatch,
     ReplacementMismatch,
     ArithmeticOverflow,
+    RecoveryStateNotEmpty,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -249,6 +250,68 @@ impl CertificateManager {
         Ok(())
     }
 
+    /// Reconstructs only the renewal coordinator's public transaction state.
+    /// The identity generation and any candidate deployment are independently
+    /// restored from their authenticated records before recovery is resumed.
+    pub fn restore_renewal_transaction(
+        &mut self,
+        journal: RenewalJournal,
+    ) -> Result<(), CertificateManagerError> {
+        let index = self.index(journal.lease.identity)?;
+        let identity = self.identities[index].as_ref().unwrap();
+        if self.schedules[index].is_some()
+            || self.leases[index].is_some()
+            || self.pending_schedules[index].is_some()
+        {
+            return Err(CertificateManagerError::RecoveryStateNotEmpty);
+        }
+        if journal.previous.identity != journal.lease.identity
+            || journal.previous.identity_generation != journal.lease.identity_generation
+            || journal.previous.policy_generation != journal.lease.policy_generation
+            || identity.policy_generation() != journal.lease.policy_generation
+        {
+            return Err(CertificateManagerError::ScheduleMismatch);
+        }
+        match journal.stage {
+            DurableRenewalStage::LeaseAcquired => {
+                if journal.replacement.is_some() || journal.candidate.is_some() {
+                    return Err(CertificateManagerError::ReplacementMismatch);
+                }
+                self.schedules[index] = Some(journal.previous);
+                self.leases[index] = Some(journal.lease);
+            }
+            DurableRenewalStage::ReplacementStaged
+            | DurableRenewalStage::Published
+            | DurableRenewalStage::Tested
+            | DurableRenewalStage::ActivationUncertain => {
+                let replacement = journal
+                    .replacement
+                    .ok_or(CertificateManagerError::ReplacementMismatch)?;
+                if journal.candidate.is_none() {
+                    return Err(CertificateManagerError::ReplacementMismatch);
+                }
+                validate_recovered_replacement(journal.lease, journal.previous, replacement)?;
+                self.schedules[index] = Some(journal.previous);
+                self.leases[index] = Some(journal.lease);
+                self.pending_schedules[index] = Some(replacement);
+            }
+            DurableRenewalStage::Active => {
+                let replacement = journal
+                    .replacement
+                    .ok_or(CertificateManagerError::ReplacementMismatch)?;
+                if journal.candidate.is_none() {
+                    return Err(CertificateManagerError::ReplacementMismatch);
+                }
+                validate_recovered_replacement(journal.lease, journal.previous, replacement)?;
+                self.schedules[index] = Some(replacement);
+            }
+            DurableRenewalStage::Aborted => {
+                self.schedules[index] = Some(journal.previous);
+            }
+        }
+        Ok(())
+    }
+
     fn index(&self, identity: TlsIdentityId) -> Result<usize, CertificateManagerError> {
         self.identities
             .iter()
@@ -260,6 +323,26 @@ impl CertificateManager {
     }
 }
 
+fn validate_recovered_replacement(
+    lease: RenewalLease,
+    previous: RenewalSchedule,
+    replacement: RenewalSchedule,
+) -> Result<(), CertificateManagerError> {
+    if replacement.identity != lease.identity
+        || replacement.policy_generation != lease.policy_generation
+        || replacement.identity_generation
+            != lease
+                .identity_generation
+                .checked_add(1)
+                .ok_or(CertificateManagerError::ArithmeticOverflow)?
+        || replacement.certificate_id == previous.certificate_id
+        || replacement.not_after_unix <= previous.not_after_unix
+    {
+        return Err(CertificateManagerError::ReplacementMismatch);
+    }
+    Ok(())
+}
+
 impl Default for CertificateManager {
     fn default() -> Self {
         Self::new()
@@ -269,7 +352,9 @@ impl Default for CertificateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExpiryHealth, RenewalSource};
+    use crate::{
+        ExpiryHealth, PreparedIdentityReceipt, RenewalSource, TlsKeyIdentity, TlsSigningRoute,
+    };
     use mrml_acme::AriCertificateId;
 
     #[test]
@@ -400,5 +485,103 @@ mod tests {
             registry.finish_renewal(lease),
             Err(CertificateManagerError::LeaseMismatch)
         );
+    }
+
+    fn recovery_journal(stage: DurableRenewalStage) -> RenewalJournal {
+        let identity = TlsIdentityId([9; 16]);
+        let previous = schedule(identity, 50);
+        let lease = RenewalLease {
+            identity,
+            identity_generation: previous.identity_generation,
+            policy_generation: previous.policy_generation,
+            lease_generation: 7,
+            expires_at_unix: 80,
+        };
+        let leased = RenewalJournal::lease_acquired(lease, previous, 3).unwrap();
+        if stage == DurableRenewalStage::LeaseAcquired {
+            return leased;
+        }
+        let mut replacement = schedule(identity, 500);
+        replacement.identity_generation = 3;
+        replacement.certificate_id = AriCertificateId::derive(&[3], &[4]).unwrap();
+        replacement.not_after_unix = previous.not_after_unix + 1_000;
+        let route = TlsSigningRoute {
+            identity,
+            identity_generation: 3,
+            key_identity: TlsKeyIdentity([8; 32]),
+            route_generation: 2,
+            capability_id: [7; 16],
+        };
+        let prepared = PreparedIdentityReceipt {
+            identity,
+            generation: 3,
+            descriptor_digest: [5; 32],
+            chain_digest: [6; 32],
+        };
+        let staged = leased
+            .replacement_staged(replacement, route, prepared)
+            .unwrap();
+        match stage {
+            DurableRenewalStage::ReplacementStaged => staged,
+            DurableRenewalStage::Active => staged
+                .published(4)
+                .unwrap()
+                .tested(crate::TestedIdentityReceipt {
+                    prepared,
+                    target_generation: 4,
+                    tls13_ok: true,
+                    http3_quic_v2_ok: true,
+                })
+                .unwrap()
+                .active()
+                .unwrap(),
+            DurableRenewalStage::Aborted => staged.aborted().unwrap(),
+            _ => panic!("unsupported recovery test stage"),
+        }
+    }
+
+    #[test]
+    fn authenticated_renewal_transaction_restores_exact_public_state() {
+        for stage in [
+            DurableRenewalStage::LeaseAcquired,
+            DurableRenewalStage::ReplacementStaged,
+            DurableRenewalStage::Active,
+            DurableRenewalStage::Aborted,
+        ] {
+            let journal = recovery_journal(stage);
+            let mut registry = CertificateManager::new();
+            registry.enroll(journal.lease.identity, 4).unwrap();
+            registry.restore_renewal_transaction(journal).unwrap();
+            let expected = if stage == DurableRenewalStage::Active {
+                journal.replacement.unwrap()
+            } else {
+                journal.previous
+            };
+            assert!(registry.renewal_schedule(journal.lease.identity).unwrap() == expected);
+            if matches!(
+                stage,
+                DurableRenewalStage::LeaseAcquired | DurableRenewalStage::ReplacementStaged
+            ) {
+                assert!(registry.finish_renewal(journal.lease).is_ok());
+            } else {
+                assert_eq!(
+                    registry.finish_renewal(journal.lease),
+                    Err(CertificateManagerError::LeaseMismatch)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_refuses_to_overwrite_live_manager_state() {
+        let journal = recovery_journal(DurableRenewalStage::ReplacementStaged);
+        let mut registry = CertificateManager::new();
+        registry.enroll(journal.lease.identity, 4).unwrap();
+        registry.install_renewal_schedule(journal.previous).unwrap();
+        assert_eq!(
+            registry.restore_renewal_transaction(journal),
+            Err(CertificateManagerError::RecoveryStateNotEmpty)
+        );
+        assert!(registry.renewal_schedule(journal.lease.identity).unwrap() == journal.previous);
     }
 }

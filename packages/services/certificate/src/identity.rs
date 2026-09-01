@@ -1,4 +1,7 @@
-use crate::{PemCertificateChain, VerifiedCertificateReceipt};
+use crate::{
+    DurableDeploymentReceipt, DurableDeploymentStage, PemCertificateChain,
+    VerifiedCertificateReceipt,
+};
 use mrml_acme::{AcmeIdentifier, CertificateProfile, Es256Signature};
 use mrml_crypto::Sha256;
 
@@ -159,6 +162,15 @@ pub struct TestedIdentityReceipt {
     pub http3_quic_v2_ok: bool,
 }
 
+pub struct RecoveredIdentityMaterial {
+    pub verified: VerifiedCertificateReceipt,
+    pub chain: PemCertificateChain,
+    pub route: TlsSigningRoute,
+    pub identifiers: [Option<AcmeIdentifier>; MAX_IDENTITY_NAMES],
+    pub identifier_count: u8,
+    pub deployment: DurableDeploymentReceipt,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ActivationReceipt {
     pub identity: TlsIdentityId,
@@ -257,6 +269,102 @@ impl IdentityManager {
 
     pub const fn has_deployment_state(&self) -> bool {
         self.active.is_some() || self.candidate.is_some() || self.retained.is_some()
+    }
+
+    /// Restores a generation only from independently authenticated certificate,
+    /// key-route, and deployment records. Callers must recover an active
+    /// generation before a later candidate generation.
+    pub fn restore_generation(
+        &mut self,
+        material: RecoveredIdentityMaterial,
+    ) -> Result<PreparedIdentityReceipt, IdentityError> {
+        let deployment = material.deployment;
+        if deployment.identity != self.identity
+            || deployment.identity_generation == 0
+            || material.verified.policy_generation != self.policy_generation
+            || material.verified.chain_digest != material.chain.chain_digest()
+            || material.route.identity != self.identity
+            || material.route.identity_generation != deployment.identity_generation
+            || material.route.key_identity == TlsKeyIdentity([0; 32])
+            || material.route.route_generation == 0
+            || material.route.capability_id == [0; 16]
+            || (deployment.stage == DurableDeploymentStage::CandidatePrepared
+                && deployment.target_generation != 0)
+            || (deployment.stage != DurableDeploymentStage::CandidatePrepared
+                && deployment.target_generation == 0)
+            || material.identifier_count == 0
+            || usize::from(material.identifier_count) > MAX_IDENTITY_NAMES
+            || material.identifiers[..usize::from(material.identifier_count)]
+                .iter()
+                .any(Option::is_none)
+            || material.identifiers[..usize::from(material.identifier_count)]
+                .windows(2)
+                .any(|pair| pair[0].as_ref() >= pair[1].as_ref())
+        {
+            return Err(IdentityError::ReceiptMismatch);
+        }
+        let descriptor = TlsIdentityDescriptor {
+            identity: self.identity,
+            generation: deployment.identity_generation,
+            policy_generation: self.policy_generation,
+            identifiers: material.identifiers,
+            identifier_count: material.identifier_count,
+            chain_digest: material.verified.chain_digest,
+            leaf_spki_digest: material.verified.leaf_spki_digest,
+            key_identity: material.route.key_identity,
+            not_before: material.verified.not_before,
+            not_after: material.verified.not_after,
+            profile: material.verified.profile,
+        };
+        let prepared = PreparedIdentityReceipt {
+            identity: self.identity,
+            generation: descriptor.generation,
+            descriptor_digest: descriptor.binding_digest(),
+            chain_digest: descriptor.chain_digest,
+        };
+        if deployment.descriptor_digest != prepared.descriptor_digest
+            || deployment.chain_digest != prepared.chain_digest
+        {
+            return Err(IdentityError::ReceiptMismatch);
+        }
+        let state = match deployment.stage {
+            DurableDeploymentStage::CandidatePrepared => DeploymentState::Prepared,
+            DurableDeploymentStage::Published => DeploymentState::Prepared,
+            DurableDeploymentStage::Tested => DeploymentState::Tested,
+            DurableDeploymentStage::ActivationUncertain => DeploymentState::ActivationUncertain,
+            DurableDeploymentStage::Active => DeploymentState::Active,
+        };
+        let generation = IdentityGeneration {
+            descriptor,
+            chain: material.chain,
+            route: material.route,
+            state,
+            prepared,
+            target_generation: deployment.target_generation,
+        };
+        if state == DeploymentState::Active {
+            if self.active.is_some() || self.candidate.is_some() || self.retained.is_some() {
+                return Err(IdentityError::InvalidState);
+            }
+            self.active = Some(generation);
+        } else {
+            let expected = self
+                .active
+                .as_ref()
+                .ok_or(IdentityError::InvalidState)?
+                .descriptor
+                .generation
+                .checked_add(1)
+                .ok_or(IdentityError::ArithmeticOverflow)?;
+            if self.candidate.is_some() {
+                return Err(IdentityError::InvalidState);
+            }
+            if deployment.identity_generation != expected {
+                return Err(IdentityError::GenerationMismatch);
+            }
+            self.candidate = Some(generation);
+        }
+        Ok(prepared)
     }
 
     pub(crate) fn active_descriptor(&self) -> Option<TlsIdentityDescriptor> {
@@ -833,5 +941,112 @@ mod tests {
             .unwrap();
         assert!(receipt.key_identity == TlsKeyIdentity([5; 32]));
         assert!(manager.candidate.is_none());
+    }
+
+    fn recovery_material(
+        generation: u64,
+        stage: DurableDeploymentStage,
+    ) -> RecoveredIdentityMaterial {
+        let identity = TlsIdentityId([4; 16]);
+        let chain = PemCertificateChain::parse(
+            b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----",
+        )
+        .unwrap();
+        let verified = VerifiedCertificateReceipt {
+            policy_generation: 2,
+            ca_class: CaClass::Staging,
+            profile: CertificateProfile::parse("classic", 1).unwrap(),
+            order_url_digest: [1; 32],
+            chain_digest: chain.chain_digest(),
+            leaf_spki_digest: [2; 32],
+            not_before: 1,
+            not_after: 100 + generation,
+            trust_store_digest: [3; 32],
+            ari_certificate_id: mrml_acme::AriCertificateId::derive(&[generation as u8], &[1])
+                .unwrap(),
+        };
+        let mut identifiers = [None; MAX_IDENTITY_NAMES];
+        identifiers[0] = Some(AcmeIdentifier::Dns(
+            mrml_acme::DnsIdentifier::parse("git.example", false).unwrap(),
+        ));
+        let route = TlsSigningRoute {
+            identity,
+            identity_generation: generation,
+            key_identity: TlsKeyIdentity([generation as u8; 32]),
+            route_generation: generation,
+            capability_id: [generation as u8; 16],
+        };
+        let descriptor = TlsIdentityDescriptor {
+            identity,
+            generation,
+            policy_generation: 2,
+            identifiers,
+            identifier_count: 1,
+            chain_digest: verified.chain_digest,
+            leaf_spki_digest: verified.leaf_spki_digest,
+            key_identity: route.key_identity,
+            not_before: verified.not_before,
+            not_after: verified.not_after,
+            profile: verified.profile,
+        };
+        RecoveredIdentityMaterial {
+            verified,
+            chain,
+            route,
+            identifiers,
+            identifier_count: 1,
+            deployment: DurableDeploymentReceipt {
+                stage,
+                identity,
+                identity_generation: generation,
+                descriptor_digest: descriptor.binding_digest(),
+                chain_digest: descriptor.chain_digest,
+                target_generation: if stage == DurableDeploymentStage::CandidatePrepared {
+                    0
+                } else {
+                    generation
+                },
+                previous_identity_generation: (stage == DurableDeploymentStage::Active
+                    && generation > 1)
+                    .then_some(generation - 1),
+                record_generation: generation,
+            },
+        }
+    }
+
+    #[test]
+    fn restart_restores_exact_active_then_tested_candidate_generation() {
+        let mut manager = IdentityManager::new(TlsIdentityId([4; 16]), 2);
+        manager
+            .restore_generation(recovery_material(1, DurableDeploymentStage::Active))
+            .unwrap();
+        let candidate = recovery_material(2, DurableDeploymentStage::Tested);
+        let expected = candidate.deployment.descriptor_digest;
+        let prepared = manager.restore_generation(candidate).unwrap();
+        assert_eq!(prepared.descriptor_digest, expected);
+        assert_eq!(manager.active_descriptor().unwrap().generation, 1);
+        assert_eq!(
+            manager.candidate.as_ref().unwrap().state,
+            DeploymentState::Tested
+        );
+        assert_eq!(manager.candidate.as_ref().unwrap().target_generation, 2);
+        assert_eq!(
+            manager
+                .restore_generation(recovery_material(2, DurableDeploymentStage::Tested))
+                .err(),
+            Some(IdentityError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn restart_rejects_substituted_descriptor_binding() {
+        let mut material = recovery_material(1, DurableDeploymentStage::Active);
+        material.deployment.descriptor_digest[0] ^= 1;
+        let mut manager = IdentityManager::new(TlsIdentityId([4; 16]), 2);
+        assert_eq!(
+            manager.restore_generation(material).err(),
+            Some(IdentityError::ReceiptMismatch)
+        );
+        assert!(!manager.has_deployment_state());
     }
 }
