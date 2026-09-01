@@ -464,7 +464,7 @@ impl CacheStore for LinuxFilesystemCacheStore {
     }
 }
 
-const CACHE_RECORD_MAGIC: &[u8; 8] = b"MRMLC1\0\0";
+const CACHE_RECORD_MAGIC: &[u8; 8] = b"MRMLC2\0\0";
 const MAX_CACHE_RECORD: usize = 2 * MAX_RENDERED + 128;
 
 pub struct PersistentRepresentationCache<S: CacheStore> {
@@ -691,7 +691,7 @@ fn decode_cache_record(record: &[u8]) -> Result<CachedRepresentation, BackendErr
         identity: owned_identity,
         zstd: owned_zstd,
         etag_identity: etag(b"identity-v1", identity),
-        etag_zstd: etag(b"zstd-raw-rle-v1", zstd),
+        etag_zstd: etag(b"zstd-rfc8878-v2", zstd),
     })
 }
 
@@ -712,11 +712,11 @@ impl CachedRepresentation {
         plain
             .try_extend_from_slice(identity)
             .map_err(|_| BackendError::ResourceLimit)?;
-        let zstd = encode_http(identity, HttpEncodingProfile::BoundedRawRleV1)
+        let zstd = encode_http(identity, HttpEncodingProfile::BoundedRfc8878V2)
             .map_err(|_| BackendError::ResourceLimit)?;
         Ok(Self {
             etag_identity: etag(b"identity-v1", identity),
-            etag_zstd: etag(b"zstd-raw-rle-v1", &zstd),
+            etag_zstd: etag(b"zstd-rfc8878-v2", &zstd),
             identity: plain,
             zstd,
         })
