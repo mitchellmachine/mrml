@@ -4,7 +4,8 @@ use mrml_http::GitdHttp3Server;
 use crate::{
     AuthenticationStoreError, DeploymentCatalog, GitdConfig, GitdRepositorySet,
     RepositoryAdmissionError, RepositoryRecoveryError, RepositoryRecoverySummary,
-    admit_catalog_repository, load_gitd_authentication, recover_admitted_repository,
+    SharedGitdRepositorySet, admit_catalog_repository, load_gitd_authentication,
+    recover_admitted_repository,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,7 +18,7 @@ pub enum GitdCompositionError {
 }
 
 pub struct GitdComposedService {
-    pub edge: GitdHttp3Server<GitdRepositorySet>,
+    pub edge: GitdHttp3Server<SharedGitdRepositorySet>,
     pub recovery: Vec<(RepositoryIdentity, RepositoryRecoverySummary)>,
 }
 
@@ -53,8 +54,11 @@ pub fn compose_gitd_service(
     if repositories.len() != catalog.repositories.len() {
         return Err(GitdCompositionError::Backend);
     }
+    let shared = repositories
+        .into_shared()
+        .map_err(|_| GitdCompositionError::Backend)?;
     let mut edge =
-        GitdHttp3Server::new(repositories, cache_bytes).map_err(|_| GitdCompositionError::Cache)?;
+        GitdHttp3Server::new(shared, cache_bytes).map_err(|_| GitdCompositionError::Cache)?;
     edge.configure_authentication(authentication);
     Ok(GitdComposedService { edge, recovery })
 }
