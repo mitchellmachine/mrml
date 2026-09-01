@@ -16,6 +16,7 @@ mod inflate;
 mod object;
 mod openpgp_provider;
 mod pack;
+mod pack_delta;
 mod pack_file;
 mod pack_index;
 mod pack_set;

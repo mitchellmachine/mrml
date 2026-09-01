@@ -7,10 +7,11 @@ The implemented change is limited to conventional bounded identifier
 validation, typed generations, streaming traits, classified errors, and opaque
 verified-transaction types. Patent review: NOT_TRIGGERED for that boundary.
 
-The bounded fixed-Huffman LZ77/DEFLATE encoder now triggers the repository
+The bounded dynamic-Huffman level-9 LZ77/DEFLATE encoder triggers the repository
 process. Patent review: TRIGGERED. The implementation follows only RFC 1951's
-general hash-chain compressor shape: a 32 KiB window, a fixed 256-candidate
-search ceiling, standard fixed codes, and standard length/distance symbols. It
+general hash-chain compressor shape: a 32 KiB window, a fixed 4,096-candidate
+search ceiling, deterministic canonical dynamic codes, and standard
+length/distance symbols. It
 does not copy an implementation or add specialized parsing, hardware, media,
 dictionary, or protocol-specific compression mechanisms.
 
@@ -64,9 +65,13 @@ preliminary screen. The shared review log must be updated during integration;
 Agent A's file boundary does not authorize editing it here. Follow
 `docs/patents/README.md`.
 
-The OFS/REF validation path only decodes Git's standard copy/insert form,
+The OFS/REF validation path decodes Git's standard copy/insert form,
 follows exact offsets or full object IDs, and enforces work and depth limits. It
-does not search for similar objects, select bases, or construct deltas. Patent
-review: NOT_TRIGGERED for this bounded interoperability resolver. Delta
-selection and cross-pack recomputation must remain within the preliminary
-review guardrails above.
+does not perform candidate discovery. The encoder's selector directly examines
+only same-kind objects in the preceding fixed 250-object window, constructs
+standard Git deltas with fixed hash-chain bounds, caps aggregate search work,
+and ranks candidates only by raw delta length then complete object ID. It emits
+OFS deltas with a maximum chain depth of 50. It has no similarity cache, sketch,
+location/compression-state ranking, distributed mapping, or recipe/chunk-index
+GC. Patent review: `TRIGGERED`, implemented within the preliminary guardrails
+above. Cross-pack recomputation must preserve the same restrictions.

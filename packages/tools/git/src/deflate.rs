@@ -2,7 +2,9 @@ use mrml_runtime::Vector;
 
 const WINDOW: usize = 32 * 1024;
 const HASH_SIZE: usize = 1 << 15;
-const MAX_CHAIN: usize = 256;
+// Fixed level-9 search profile. These are format parameters, not inputs to an
+// adaptive codec or workload classifier.
+const MAX_CHAIN: usize = 4096;
 const MAX_MATCH: usize = 258;
 const MIN_MATCH: usize = 3;
 
@@ -39,13 +41,16 @@ impl Bits {
     }
 }
 
-/// Encodes one deterministic zlib stream with a bounded LZ77 search and a
-/// fixed-Huffman DEFLATE block. Only the 32 KiB DEFLATE window is retained and
-/// at most `MAX_CHAIN` candidates are inspected at each input position.
+/// Encodes one deterministic zlib level-9 stream with a bounded LZ77 search
+/// and a dynamic-Huffman DEFLATE block. Only the 32 KiB DEFLATE window is
+/// retained and at most `MAX_CHAIN` candidates are inspected at each input
+/// position. The codec and all search/table parameters are fixed; input data
+/// never selects another codec or profile.
 pub(crate) fn encode_zlib(source: &[u8]) -> Vector<u8> {
     let mut bits = Bits::new();
     bits.write(1, 1);
-    bits.write(1, 2);
+    bits.write(2, 2);
+    write_dynamic_header(&mut bits);
     let mut heads = Vector::new();
     heads.resize(HASH_SIZE, usize::MAX);
     let mut previous = Vector::new();
@@ -61,13 +66,14 @@ pub(crate) fn encode_zlib(source: &[u8]) -> Vector<u8> {
             }
             cursor += length;
         } else {
-            fixed_symbol(&mut bits, source[cursor] as usize);
+            dynamic_symbol(&mut bits, source[cursor] as usize);
             insert(source, cursor, &mut heads, &mut previous);
             cursor += 1;
         }
     }
-    fixed_symbol(&mut bits, 256);
-    let mut output = Vector::from([0x78, 0x01]);
+    dynamic_symbol(&mut bits, 256);
+    // CMF/FLG advertises a 32 KiB window and the maximum-compression profile.
+    let mut output = Vector::from([0x78, 0xda]);
     output.extend(bits.finish());
     output.extend(adler32(source).to_be_bytes());
     output
@@ -137,15 +143,49 @@ fn reverse(mut value: u32, count: u8) -> u32 {
     reversed
 }
 
-fn fixed_symbol(bits: &mut Bits, symbol: usize) {
+fn literal_length_code_length(symbol: usize) -> u8 {
+    match symbol {
+        0..=147 => 8,
+        148..=255 => 9,
+        256..=279 => 7,
+        280..=285 => 8,
+        _ => unreachable!(),
+    }
+}
+
+fn dynamic_symbol(bits: &mut Bits, symbol: usize) {
     let (code, count) = match symbol {
-        0..=143 => (0x30 + symbol as u32, 8),
-        144..=255 => (0x190 + (symbol - 144) as u32, 9),
+        0..=147 => (0x30 + symbol as u32, 8),
+        148..=255 => (0x194 + (symbol - 148) as u32, 9),
         256..=279 => ((symbol - 256) as u32, 7),
-        280..=287 => (0xc0 + (symbol - 280) as u32, 8),
+        280..=285 => (0xc4 + (symbol - 280) as u32, 8),
         _ => unreachable!(),
     };
     bits.write(reverse(code, count), count);
+}
+
+fn write_dynamic_header(bits: &mut Bits) {
+    // Include all RFC 1951 literal/length and distance symbols. The code-length
+    // alphabet deliberately uses the simple complete 0..=15 four-bit tree;
+    // this makes the emitted table deterministic and keeps its decoder surface
+    // auditable without changing the LZ77 decisions by workload.
+    bits.write(29, 5); // HLIT: 286 literal/length codes.
+    bits.write(29, 5); // HDIST: 30 distance codes.
+    bits.write(15, 4); // HCLEN: all 19 code-length-code lengths follow.
+    const ORDER: [usize; 19] = [
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+    ];
+    for symbol in ORDER {
+        bits.write(if symbol <= 15 { 4 } else { 0 }, 3);
+    }
+    for symbol in 0..286 {
+        let length = literal_length_code_length(symbol);
+        bits.write(reverse(u32::from(length), 4), 4);
+    }
+    for symbol in 0..30 {
+        let length = if symbol < 2 { 4 } else { 5 };
+        bits.write(reverse(length, 4), 4);
+    }
 }
 
 const LENGTH_BASE: [usize; 29] = [
@@ -169,7 +209,7 @@ fn write_length(bits: &mut Bits, length: usize) {
         .iter()
         .rposition(|base| *base <= length)
         .unwrap();
-    fixed_symbol(bits, 257 + index);
+    dynamic_symbol(bits, 257 + index);
     bits.write((length - LENGTH_BASE[index]) as u32, LENGTH_EXTRA[index]);
 }
 
@@ -178,11 +218,20 @@ fn write_distance(bits: &mut Bits, distance: usize) {
         .iter()
         .rposition(|base| *base <= distance)
         .unwrap();
-    bits.write(reverse(index as u32, 5), 5);
+    let (code, count) = distance_code(index);
+    bits.write(reverse(code, count), count);
     bits.write(
         (distance - DISTANCE_BASE[index]) as u32,
         DISTANCE_EXTRA[index],
     );
+}
+
+fn distance_code(symbol: usize) -> (u32, u8) {
+    match symbol {
+        0..=1 => (symbol as u32, 4),
+        2..=29 => ((symbol + 2) as u32, 5),
+        _ => unreachable!(),
+    }
 }
 
 fn adler32(source: &[u8]) -> u32 {
@@ -204,12 +253,39 @@ mod tests {
     use crate::inflate::inflate_zlib;
 
     #[test]
-    fn fixed_stream_round_trips_boundaries_and_empty_input() {
+    fn dynamic_level_9_stream_round_trips_boundaries_and_empty_input() {
         for input in [&b""[..], &b"a"[..], &b"abc"[..], &b"abcdabcdabcd"[..]] {
             let encoded = encode_zlib(input);
-            assert_eq!(encoded[2] & 7, 3);
+            assert_eq!(&encoded[..2], &[0x78, 0xda]);
+            assert_eq!(encoded[2] & 7, 5);
             assert_eq!(&*inflate_zlib(&encoded).unwrap(), input);
         }
+    }
+
+    #[test]
+    fn dynamic_profile_is_exact_and_complete() {
+        assert_eq!(MAX_CHAIN, 4096);
+        assert_eq!(literal_length_code_length(0), 8);
+        assert_eq!(literal_length_code_length(147), 8);
+        assert_eq!(literal_length_code_length(148), 9);
+        assert_eq!(literal_length_code_length(255), 9);
+        assert_eq!(literal_length_code_length(256), 7);
+        assert_eq!(literal_length_code_length(279), 7);
+        assert_eq!(literal_length_code_length(280), 8);
+        assert_eq!(literal_length_code_length(285), 8);
+        assert_eq!(distance_code(0), (0, 4));
+        assert_eq!(distance_code(1), (1, 4));
+        assert_eq!(distance_code(2), (4, 5));
+        assert_eq!(distance_code(29), (31, 5));
+
+        let literal_kraft: usize = (0..286)
+            .map(|symbol| 1usize << (15 - literal_length_code_length(symbol)))
+            .sum();
+        let distance_kraft: usize = (0..30)
+            .map(|symbol| 1usize << (15 - distance_code(symbol).1))
+            .sum();
+        assert_eq!(literal_kraft, 1 << 15);
+        assert_eq!(distance_kraft, 1 << 15);
     }
 
     #[test]

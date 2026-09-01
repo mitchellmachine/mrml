@@ -1,5 +1,6 @@
 use crate::deflate::encode_zlib;
 use crate::inflate::inflate_zlib_prefix;
+use crate::pack_delta::select_deltas;
 use crate::{ObjectFormat, ObjectId, ObjectKind, PackIndexEntry, encode_loose_object_with_format};
 use core::fmt;
 use mrml_runtime::Vector;
@@ -259,22 +260,48 @@ pub fn encode_pack_with_format(
         if object.contents.len() > MAX_OBJECT {
             return Err(PackError::TooLarge);
         }
-        let kind = match object.kind {
-            ObjectKind::Commit => 1,
-            ObjectKind::Tree => 2,
-            ObjectKind::Blob => 3,
-            ObjectKind::Tag => 4,
-        };
         let (expected, _) = encode_loose_object_with_format(format, object.kind, &object.contents);
         if object.id.format() != format || object.id != expected {
             return Err(PackError::ObjectId);
         }
-        encode_object_header(kind, object.contents.len(), &mut pack);
-        pack.extend(encode_zlib(&object.contents));
+    }
+    let deltas = select_deltas(objects)?;
+    let mut offsets = Vector::new();
+    offsets.try_reserve_exact(objects.len()).map_err(|_| PackError::TooLarge)?;
+    for (index, object) in objects.iter().enumerate() {
+        let offset = pack.len();
+        offsets.push(offset);
+        if let Some(delta) = &deltas[index] {
+            encode_object_header(6, delta.bytes.len(), &mut pack);
+            encode_ofs_distance(offset - offsets[delta.base_index], &mut pack);
+            pack.extend(encode_zlib(&delta.bytes));
+        } else {
+            let kind = match object.kind {
+                ObjectKind::Commit => 1,
+                ObjectKind::Tree => 2,
+                ObjectKind::Blob => 3,
+                ObjectKind::Tag => 4,
+            };
+            encode_object_header(kind, object.contents.len(), &mut pack);
+            pack.extend(encode_zlib(&object.contents));
+        }
     }
     let checksum = format.hash_bytes(&pack);
     pack.extend(checksum.as_bytes().iter().copied());
     Ok(pack)
+}
+
+fn encode_ofs_distance(mut distance: usize, output: &mut Vector<u8>) {
+    let mut bytes = [0u8; 16];
+    let mut cursor = bytes.len();
+    cursor -= 1;
+    bytes[cursor] = (distance & 0x7f) as u8;
+    while distance >> 7 != 0 {
+        distance = (distance >> 7) - 1;
+        cursor -= 1;
+        bytes[cursor] = 0x80 | (distance & 0x7f) as u8;
+    }
+    output.extend(bytes[cursor..].iter().copied());
 }
 
 fn encode_object_header(kind: u8, mut size: usize, output: &mut Vector<u8>) {
@@ -544,6 +571,29 @@ mod tests {
         let encoded = encode_pack(&inputs).unwrap();
         let decoded = parse_pack(&encoded).unwrap();
         assert_eq!(decoded, inputs);
+    }
+
+    #[test]
+    fn generated_pack_uses_ofs_delta_for_a_compressible_predecessor() {
+        let mut changed = Vector::from([b'a'; 4096]);
+        changed[2048] = b'b';
+        let inputs = Vector::from([
+            PackObject {
+                id: ObjectId::blob(&[b'a'; 4096]),
+                kind: ObjectKind::Blob,
+                contents: Vector::from([b'a'; 4096]),
+            },
+            PackObject {
+                id: ObjectId::blob(&changed),
+                kind: ObjectKind::Blob,
+                contents: changed,
+            },
+        ]);
+        let encoded = encode_pack(&inputs).unwrap();
+        assert_eq!((encoded[12] >> 4) & 7, 3);
+        let (_, entries) = parse_pack_with_index(&encoded, ObjectFormat::Sha1).unwrap();
+        assert_eq!((encoded[entries[1].offset as usize] >> 4) & 7, 6);
+        assert_eq!(parse_pack(&encoded).unwrap(), inputs);
     }
 
     #[test]

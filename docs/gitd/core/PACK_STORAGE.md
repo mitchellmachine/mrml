@@ -4,13 +4,18 @@ Status: **PARTIALLY IMPLEMENTED**. Existing bounded whole-buffer compatibility
 parsing, a constant-memory file authentication scan, and the first-party
 authenticated pack-index v2 module are implemented.
 
-The pack encoder now emits a deterministic first-party zlib stream with one
-fixed-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains retain a
-32 KiB window, inspect no more than 256 candidates at each input position, and
-emit matches no longer than 258 bytes. Empty, incompressible, repetitive, and
-window-boundary inputs round-trip through the first-party inflater on Linux and
-through the pinned Windows Rust oracle under Wine. Wine is a hosted
-compatibility probe, not Windows-native evidence.
+The pack encoder now emits a deterministic first-party zlib level-9 stream with
+one dynamic-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains
+retain a 32 KiB window, inspect no more than 4,096 candidates at each input
+position, and emit matches no longer than 258 bytes. The canonical dynamic
+literal/length, distance, and code-length tables are deterministic fixed
+profile parameters rather than workload-selected codecs. Empty,
+incompressible, repetitive, and window-boundary inputs round-trip through the
+first-party inflater on Linux. A controlled Python zlib probe also decompressed
+a loose object emitted by the first-party encoder. Upstream Git 2.55.0
+`index-pack --stdin --strict -v` accepted a generated two-object pack containing
+the dynamic streams and an OFS delta and resolved that delta. These are
+controlled interoperability oracles, not runtime dependencies.
 
 A hosted-Linux functional concurrency test opens the same SHA-256 repository in
 six simultaneous process-local workers and requires every worker to generate a
@@ -19,11 +24,13 @@ read/generation behavior only. It does not establish multi-process service
 isolation, peak memory, foreground latency under compaction, or production
 throughput.
 
-Dynamic Huffman construction, canonical block selection, lazy level-9 match
-selection, and pack delta selection remain open, so this does not yet satisfy
-the canonical storage profile. The completed profile also requires a
-250-object delta candidate window, maximum delta depth 50, OFS deltas, no reuse
-of lower-compression streams, and recomputed canonical deltas.
+The pack encoder now applies deterministic same-kind delta selection over the
+exact preceding 250-object window. It constructs Git copy/insert programs with
+fixed hash-chain bounds, ranks candidates by raw delta length then complete
+object ID, caps aggregate comparison work, emits OFS deltas, and never exceeds
+depth 50. Budget exhaustion deterministically falls back to a whole-object
+representation. No lower-compression stream is reused. Cross-pack canonical
+recomputation remains part of the compactor gate.
 
 Receive must stream into an isolated quarantine under checked byte, object,
 expanded-size, delta, memory, and work limits. Whole-repository repacking is not
@@ -108,9 +115,10 @@ later durable activation still performs its immediate generation/ref re-read.
 Thin-pack capability advertisement remains disabled pending concurrent receive
 tests and production active-pack-set integration.
 
-Pack-generation switching, clone/fetch caching, dynamic Huffman level-9
-encoding, delta selection, and compaction remain open. No outer Zstandard layer
-belongs in Git pack storage.
+Canonical compaction generation switching and exact-key clone/fetch caching
+remain open. Dynamic-Huffman level-9 encoding and direct-window OFS delta
+selection are implemented. No outer Zstandard layer belongs in Git pack
+storage.
 
 Active arrival-pack reads remain fail closed for an immediate authority reason.
 `MRREFS01` authenticates only a scalar `PackGeneration`, and verified receive
@@ -156,7 +164,7 @@ rehashes its Git identity. Thin-pack validation consults this selected view
 before the separately authenticated baseline repository, so sequential receives
 can use prior active arrivals without directory scanning. Protected-history
 traversal uses the same selected view, and the end-to-end receive test prepares
-a second commit whose parent exists only in the first selected arrival. General repository
-view and upload-pack composition still need to route through this selected
-arrival reader. This mechanism is independent of compaction and does not
-authorize patent-gated delta selection.
+a second commit whose parent exists only in the first selected arrival. General
+repository view and upload-pack composition still need to route through this
+selected arrival reader. This membership authority remains independent of the
+guarded delta selector and future compaction policy.
