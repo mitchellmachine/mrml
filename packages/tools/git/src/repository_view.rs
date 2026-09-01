@@ -3,15 +3,92 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefFile, BlobPage, CommitPage, GitdCoreError, ObjectId, ObjectKind, QueryLimits,
-    Repository, RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
-    TreePage,
+    ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdCoreBackend, GitdCoreError,
+    ObjectId, ObjectKind, QueryLimits, Repository, RepositoryGeneration, RepositoryIdentity,
+    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitRequest, SmartGitResponse,
+    TreePage, TrustGeneration, VerificationSummary, WorkBudget,
 };
 
 pub struct FilesystemRepositoryView {
     identity: RepositoryIdentity,
     objects: Repository,
     refs: ActiveRefFile,
+}
+
+impl GitdCoreBackend for FilesystemRepositoryView {
+    fn repository_generation(
+        &self,
+        repository: &RepositoryIdentity,
+    ) -> Result<RepositoryGeneration, GitdCoreError> {
+        Ok(self.load_for(repository)?.repository_generation)
+    }
+
+    fn repository_summary(
+        &self,
+        repository: &RepositoryIdentity,
+        limits: QueryLimits,
+    ) -> Result<RepositorySummary, GitdCoreError> {
+        Self::repository_summary(self, repository, limits)
+    }
+
+    fn resolve_ref(
+        &self,
+        repository: &RepositoryIdentity,
+        revision: &str,
+    ) -> Result<ObjectId, GitdCoreError> {
+        Self::resolve_ref(self, repository, revision)
+    }
+
+    fn read_commit_page(
+        &self,
+        repository: &RepositoryIdentity,
+        commit: ObjectId,
+        limits: QueryLimits,
+    ) -> Result<CommitPage, GitdCoreError> {
+        Self::read_commit_page(self, repository, commit, limits)
+    }
+
+    fn read_tree_page(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        limits: QueryLimits,
+    ) -> Result<TreePage, GitdCoreError> {
+        Self::read_tree_page(self, repository, treeish, path, limits)
+    }
+
+    fn read_blob_page(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        limits: QueryLimits,
+    ) -> Result<BlobPage, GitdCoreError> {
+        Self::read_blob_page(self, repository, treeish, path, limits)
+    }
+
+    fn verification_summary(
+        &self,
+        repository: &RepositoryIdentity,
+        _object: ObjectId,
+        _policy: TrustGeneration,
+        _revocations: RevocationGeneration,
+    ) -> Result<VerificationSummary, GitdCoreError> {
+        self.load_for(repository)?;
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn smart_git(
+        &mut self,
+        request: SmartGitRequest,
+        _input: &mut dyn BoundedRead,
+        _output: &mut dyn BoundedWrite,
+        _budget: WorkBudget,
+    ) -> Result<SmartGitResponse, GitdCoreError> {
+        self.load_for(&request.repository)?;
+        Err(GitdCoreError::Unsupported)
+    }
 }
 
 impl FilesystemRepositoryView {
@@ -333,6 +410,10 @@ mod tests {
             max_bytes: 1024,
         };
         assert_eq!(view.repository_generation(), Ok(RepositoryGeneration(4)));
+        assert_eq!(
+            GitdCoreBackend::repository_generation(&view, &identity),
+            Ok(RepositoryGeneration(4))
+        );
         assert_eq!(view.resolve_ref(&identity, "refs/heads/main"), Ok(commit));
         assert_eq!(
             view.repository_summary(&identity, limits)
@@ -383,6 +464,16 @@ mod tests {
                 },
             ),
             Err(GitdCoreError::Resource)
+        );
+        assert_eq!(
+            GitdCoreBackend::verification_summary(
+                &view,
+                &identity,
+                commit,
+                TrustGeneration(5),
+                RevocationGeneration(6),
+            ),
+            Err(GitdCoreError::Unsupported)
         );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
