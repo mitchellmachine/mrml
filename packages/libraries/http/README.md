@@ -56,10 +56,14 @@ handshake and established protocol state move into that endpoint reactor.
 Application traffic closes before conservative per-key packet/byte limits; full
 QUIC key update is not implemented.
 
-All TLS clients request and require a current issuer-signed stapled OCSP
-response by default, so the policy applies equally to HTTP/1.1, HTTP/2, and
-HTTP/3. Servers can attach the staple through `TlsServerConfig`. Clients and
-servers try X25519MLKEM768 first and retain standard X25519 as the negotiated
+All TLS clients request and require a current stapled OCSP response by default,
+so the policy applies equally to HTTP/1.1, HTTP/2, and HTTP/3. Responses may be
+issuer-signed or signed by one bounded embedded delegated responder that chains
+to the issuer, is time-valid, matches responderID byName, has the OCSP-signing
+EKU, and has no unsupported critical extension. responderID byKey remains
+unsupported because this profile has no SHA-1 identity primitive and therefore
+fails closed. Servers can attach the staple through `TlsServerConfig`. Clients
+and servers try X25519MLKEM768 first and retain standard X25519 as the negotiated
 fallback.
 
 `CrlSet` provides a bounded supplementary hard-deny import for a CRX-verified

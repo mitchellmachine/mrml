@@ -47,3 +47,8 @@ passed under Wine 11.16: HTTP 47 after endpoint routing integration, TLS 25,
 crypto 42, and Zstandard 29. The matching hosted Linux HTTP suite passed 47.
 This is Windows toolchain and Wine runtime coverage. It is not native Windows, WHP,
 physical-network, or production evidence.
+
+After delegated OCSP responder validation, the TLS suites passed 28 hosted Linux
+tests and 27 Windows-target tests under Wine. Coverage includes exact OCSP EKU
+and same-serial/different-issuer hash rejection. No public delegated-responder
+fixture or native Windows execution was exercised.

@@ -111,6 +111,7 @@ const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
 const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
 const EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
 const SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+const OCSP_SIGNING: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09];
 const ANY_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25, 0x00];
 
 fn algorithm(element: Element<'_>, expected: &[u8]) -> Result<(), CertificateError> {
@@ -133,6 +134,7 @@ fn algorithm(element: Element<'_>, expected: &[u8]) -> Result<(), CertificateErr
 
 pub struct Certificate<'a> {
     tbs: &'a [u8],
+    issuer: &'a [u8],
     subject: &'a [u8],
     spki: &'a [u8],
     public_key_bits: &'a [u8],
@@ -322,6 +324,7 @@ impl<'a> Certificate<'a> {
         validate_extensions(extensions)?;
         Ok(Self {
             tbs: tbs.encoded,
+            issuer: issuer.encoded,
             subject: subject.encoded,
             spki: spki.encoded,
             public_key_bits: &bits.value[1..],
@@ -364,6 +367,10 @@ impl<'a> Certificate<'a> {
 
     pub(crate) fn subject_name_der(&self) -> &'a [u8] {
         self.subject
+    }
+
+    pub(crate) fn issuer_name_der(&self) -> &'a [u8] {
+        self.issuer
     }
 
     pub(crate) fn subject_public_key_bits(&self) -> &'a [u8] {
@@ -525,6 +532,35 @@ impl<'a> Certificate<'a> {
                 return Err(CertificateError::Malformed);
             }
             if usage.value == SERVER_AUTH || usage.value == ANY_EXTENDED_KEY_USAGE {
+                return Ok(());
+            }
+        }
+        Err(CertificateError::InvalidPurpose)
+    }
+
+    pub(crate) fn require_ocsp_signing(&self) -> Result<(), CertificateError> {
+        self.require_usage_bit(0)?;
+        match self.require_ca() {
+            Ok(()) => return Err(CertificateError::InvalidPurpose),
+            Err(CertificateError::NotCertificateAuthority) => {}
+            Err(error) => return Err(error),
+        }
+        let value = self
+            .extension(EXTENDED_KEY_USAGE)?
+            .ok_or(CertificateError::InvalidPurpose)?;
+        let mut outer = Reader::new(value);
+        let sequence = outer.next()?;
+        outer.finish()?;
+        if sequence.tag != 0x30 {
+            return Err(CertificateError::Malformed);
+        }
+        let mut usages = Reader::new(sequence.value);
+        while usages.position < usages.bytes.len() {
+            let usage = usages.next()?;
+            if usage.tag != 0x06 {
+                return Err(CertificateError::Malformed);
+            }
+            if usage.value == OCSP_SIGNING {
                 return Ok(());
             }
         }
@@ -739,6 +775,7 @@ mod tests {
     fn certificate_with_extensions(extensions: &[u8]) -> Certificate<'_> {
         Certificate {
             tbs: &[],
+            issuer: &[],
             subject: &[],
             spki: &[],
             public_key_bits: &[],
@@ -825,6 +862,30 @@ mod tests {
             0x30, 0x0c, 0x30, 0x0a, 0x06, 0x03, 0x55, 0x1d, 0x11, 0x01, 0x01, 0xff, 0x04, 0x00,
         ];
         assert_eq!(validate_extensions(&known_critical), Ok(()));
+    }
+
+    #[test]
+    fn delegated_ocsp_requires_the_exact_signing_eku() {
+        let ocsp_signing = [
+            0x30, 0x15, 0x30, 0x13, 0x06, 0x03, 0x55, 0x1d, 0x25, 0x04, 0x0c, 0x30, 0x0a, 0x06,
+            0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09,
+        ];
+        let server_auth = [
+            0x30, 0x15, 0x30, 0x13, 0x06, 0x03, 0x55, 0x1d, 0x25, 0x04, 0x0c, 0x30, 0x0a, 0x06,
+            0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01,
+        ];
+        assert_eq!(
+            certificate_with_extensions(&ocsp_signing).require_ocsp_signing(),
+            Ok(())
+        );
+        assert_eq!(
+            certificate_with_extensions(&server_auth).require_ocsp_signing(),
+            Err(CertificateError::InvalidPurpose)
+        );
+        assert_eq!(
+            certificate_with_extensions(&[]).require_ocsp_signing(),
+            Err(CertificateError::InvalidPurpose)
+        );
     }
 
     #[test]
