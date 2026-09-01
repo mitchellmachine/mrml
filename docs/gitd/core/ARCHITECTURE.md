@@ -27,17 +27,25 @@ object IDs. Protected mutation will require a privately constructed
 `VerifiedRefTransaction`.
 
 The transport-neutral boundary, trust-policy verification, pack indexing,
-quarantine admission/lifecycle, and ordered durable-receive coordinator are
-implemented. The coordinator accepts only a private `VerifiedRefTransaction`
-and delegates concrete fsync/atomic primitives through a narrow storage trait.
-Concrete filesystem durability and recovery, server-side Smart Git, canonical
-compaction, and repository-view implementations remain open and must fail
-closed until implemented.
+quarantine admission/lifecycle, ordered durable-receive coordinator, and a
+generation-stable filesystem repository view are implemented. The coordinator
+accepts only a private `VerifiedRefTransaction` and delegates concrete
+fsync/atomic primitives through a narrow storage trait. Linux file-backed
+arrival packs, journals, ref activation, signed receipt storage, and exact-state
+recovery classification have focused tests. Protocol-v2 `ls-refs`, bounded
+wants/haves fetch construction, receive command parsing, and report framing are
+first-party core operations. Production receive-edge composition, active
+pack-set reads, native-Windows directory durability, and canonical compaction
+remain open and fail closed.
 
 Repository state now also has a canonical single-record active-ref model with
 distinct repository, trust, revocation, and pack generations. The pure update
-boundary consumes only verified ref typestate and produces one next generation;
-durable filesystem activation of that record remains partially implemented.
+boundary consumes only verified ref typestate and produces one next generation.
+The Linux filesystem activation path reopens the exact old state under an
+exclusive lock, writes and fsyncs a complete replacement, renames it, fsyncs
+the directory, and reopens the new state. Process-local concurrency is tested;
+process-kill, power-loss, physical-storage, and native-Windows evidence remain
+open.
 
 Complexity score for the eventual subsystem: high security sensitivity, high
 failure-recovery cost, and multiple independently useful components. The split

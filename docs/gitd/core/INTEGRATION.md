@@ -38,9 +38,12 @@ None of these findings is `NOT_REPRODUCIBLE_ON_CURRENT_HEAD`; each was checked
 at the recorded base rather than inferred from an older chat summary.
 
 The edge branch can import the public `mrml_git::GitdCoreBackend` contract
-without a dependency on HTTP, TLS, or Zstandard packages. A concrete backend is
-still required; transport code must retain fail-closed route disablement until
-one exists.
+without a dependency on HTTP, TLS, or Zstandard packages. The concrete
+`FilesystemRepositoryView` implements generation-stable structured reads and
+the bounded upload-pack subset. Production receive-pack edge composition still
+requires the authorization/proof provider and durable receive store; transport
+code must retain fail-closed route disablement for that operation until those
+capabilities are supplied.
 
 No package or workspace manifests were changed. No dependency is requested by
 this change.
