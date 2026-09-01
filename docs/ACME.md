@@ -98,6 +98,14 @@ server context. Deployment persists a prepared candidate before publication,
 requires separate TLS 1.3 and HTTP/3-over-QUIC-v2 test evidence, activates only
 the exact prepared generation, retains the previous generation, and represents
 ambiguous activation until authoritative target re-read resolves it.
+The first-party TLS server now accepts bounded DER certificate chains paired
+with a use-only P-256 signer object. For each TLS 1.3 handshake it supplies only
+the transcript digest; the certificate-service adapter constructs the fixed
+server CertificateVerify approval, binds the exact identity/key/route
+generations, obtains a raw ES256 signature, and strictly DER-encodes it. The TLS
+server permits only `ecdsa_secp256r1_sha256` on this route and has no private-key
+export path. The legacy RSA PEM constructor remains development-only and its
+public-gitd gate still fails closed.
 The durable-state substrate uses a canonical versioned bounded record, payload
 digest, non-exporting authenticator, exact object and previous/new generations,
 and prepare/commit store receipts. Decode rejects mutation, trailing bytes,

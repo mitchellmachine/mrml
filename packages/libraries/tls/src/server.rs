@@ -1,9 +1,26 @@
 use crate::{
-    KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript, X25519_MLKEM768,
-    finished_verify_data, hybrid_server_share,
+    finished_verify_data, hybrid_server_share, KeySchedule, RecordKeys, TlsError, Transcript,
+    TLS_AES_128_GCM_SHA256, X25519_MLKEM768,
 };
 use mrml_crypto::{rsa_pss_sha256_sign, x25519_public, x25519_shared};
-use mrml_runtime::{TcpStream, Text, Vector};
+use mrml_runtime::{Shared, TcpStream, Text, Vector};
+
+pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
+pub const RSA_PSS_RSAE_SHA256: u16 = 0x0804;
+pub const MAX_TLS13_SIGNATURE_BYTES: usize = 512;
+
+/// Use-only TLS 1.3 CertificateVerify signing boundary. Implementations receive
+/// only the current handshake transcript digest. The implementation must bind
+/// the fixed TLS 1.3 server CertificateVerify context before signing and never
+/// exposes private-key bytes.
+pub trait TlsServerSigningKey: Send + Sync {
+    fn signature_scheme(&self) -> u16;
+    fn sign_certificate_verify_transcript(
+        &self,
+        transcript_digest: &[u8; 32],
+        output: &mut [u8; MAX_TLS13_SIGNATURE_BYTES],
+    ) -> Result<usize, TlsError>;
+}
 
 fn u16_push(out: &mut Vector<u8>, n: usize) -> Result<(), TlsError> {
     if n > u16::MAX as usize {
@@ -182,6 +199,7 @@ pub struct TlsServerConfig {
     private_exponent: Vector<u8>,
     protocols: Vector<Text>,
     ocsp_response: Option<Vector<u8>>,
+    signing_key: Option<Shared<dyn TlsServerSigningKey>>,
 }
 impl Drop for TlsServerConfig {
     fn drop(&mut self) {
@@ -238,7 +256,39 @@ impl TlsServerConfig {
             private_exponent: d,
             protocols: Vector::new(),
             ocsp_response: None,
+            signing_key: None,
         })
+    }
+    pub fn from_der_chain(certificates: &[&[u8]]) -> Result<Self, TlsError> {
+        if certificates.is_empty()
+            || certificates.len() > 8
+            || certificates
+                .iter()
+                .any(|certificate| certificate.is_empty() || certificate.len() > 64 * 1024)
+        {
+            return Err(TlsError::Certificate);
+        }
+        let mut owned = Vector::new();
+        for certificate in certificates {
+            let mut der = Vector::new();
+            der.try_extend_from_slice(certificate)
+                .map_err(|_| TlsError::AllocationFailed)?;
+            owned
+                .try_push(der)
+                .map_err(|_| TlsError::AllocationFailed)?;
+        }
+        Ok(Self {
+            certificates: owned,
+            modulus: Vector::new(),
+            private_exponent: Vector::new(),
+            protocols: Vector::new(),
+            ocsp_response: None,
+            signing_key: None,
+        })
+    }
+    pub fn with_signing_key<S: TlsServerSigningKey + 'static>(mut self, signer: S) -> Self {
+        self.signing_key = Some(Shared::new(signer));
+        self
     }
     pub fn with_protocols(mut self, protocols: &[&str]) -> Result<Self, TlsError> {
         for protocol in protocols {
@@ -274,6 +324,59 @@ impl TlsServerConfig {
         let _ = self;
         Err(TlsError::Certificate)
     }
+}
+
+fn sign_certificate_verify(
+    config: &TlsServerConfig,
+    transcript_digest: &[u8; 32],
+) -> Result<(u16, Vector<u8>), TlsError> {
+    if let Some(signer) = &config.signing_key {
+        let scheme = signer.signature_scheme();
+        if scheme != ECDSA_SECP256R1_SHA256 {
+            return Err(TlsError::Certificate);
+        }
+        let mut bounded = [0; MAX_TLS13_SIGNATURE_BYTES];
+        let written = signer.sign_certificate_verify_transcript(transcript_digest, &mut bounded)?;
+        if written == 0 || written > bounded.len() {
+            bounded.fill(0);
+            return Err(TlsError::AuthenticationFailed);
+        }
+        let mut signature = Vector::new();
+        signature
+            .try_extend_from_slice(&bounded[..written])
+            .map_err(|_| TlsError::AllocationFailed)?;
+        bounded.fill(0);
+        return Ok((scheme, signature));
+    }
+    if config.modulus.is_empty() || config.private_exponent.is_empty() {
+        return Err(TlsError::Certificate);
+    }
+    let mut salt = [0; 32];
+    mrml_runtime::fill_random(&mut salt).map_err(|_| TlsError::AuthenticationFailed)?;
+    let mut signed = Vector::new();
+    signed
+        .try_extend_from_slice(&[0x20; 64])
+        .map_err(|_| TlsError::AllocationFailed)?;
+    signed
+        .try_extend_from_slice(b"TLS 1.3, server CertificateVerify\0")
+        .map_err(|_| TlsError::AllocationFailed)?;
+    signed
+        .try_extend_from_slice(transcript_digest)
+        .map_err(|_| TlsError::AllocationFailed)?;
+    let mut signature = Vector::new();
+    signature
+        .try_resize(config.modulus.len(), 0)
+        .map_err(|_| TlsError::AllocationFailed)?;
+    rsa_pss_sha256_sign(
+        &config.modulus,
+        &config.private_exponent,
+        &signed,
+        &salt,
+        &mut signature,
+    )
+    .map_err(|_| TlsError::AuthenticationFailed)?;
+    salt.fill(0);
+    Ok((RSA_PSS_RSAE_SHA256, signature))
 }
 
 fn record(stream: &mut TcpStream) -> Result<Vector<u8>, TlsError> {
@@ -553,33 +656,9 @@ impl QuicTlsServerHandshake {
         let certificate = handshake(11, &certificate_body)?;
         transcript.update(&certificate);
 
-        let mut signed = Vector::new();
-        signed
-            .try_extend_from_slice(&[0x20; 64])
-            .map_err(|_| TlsError::AllocationFailed)?;
-        signed
-            .try_extend_from_slice(b"TLS 1.3, server CertificateVerify\0")
-            .map_err(|_| TlsError::AllocationFailed)?;
-        signed
-            .try_extend_from_slice(&transcript.hash())
-            .map_err(|_| TlsError::AllocationFailed)?;
-        let mut salt = [0; 32];
-        mrml_runtime::fill_random(&mut salt).map_err(|_| TlsError::AuthenticationFailed)?;
-        let mut signature = Vector::new();
-        signature
-            .try_resize(config.modulus.len(), 0)
-            .map_err(|_| TlsError::AllocationFailed)?;
-        rsa_pss_sha256_sign(
-            &config.modulus,
-            &config.private_exponent,
-            &signed,
-            &salt,
-            &mut signature,
-        )
-        .map_err(|_| TlsError::AuthenticationFailed)?;
-        salt.fill(0);
+        let (signature_scheme, signature) = sign_certificate_verify(config, &transcript.hash())?;
         let mut verify_body = Vector::new();
-        u16_push(&mut verify_body, 0x0804)?;
+        u16_push(&mut verify_body, signature_scheme as usize)?;
         u16_push(&mut verify_body, signature.len())?;
         verify_body
             .try_extend_from_slice(&signature)
@@ -793,33 +872,9 @@ impl TlsServerStream {
             .map_err(|_| TlsError::AllocationFailed)?;
         let certificate = handshake(11, &cert_body)?;
         transcript.update(&certificate);
-        let mut signed = Vector::new();
-        signed
-            .try_extend_from_slice(&[0x20; 64])
-            .map_err(|_| TlsError::AllocationFailed)?;
-        signed
-            .try_extend_from_slice(b"TLS 1.3, server CertificateVerify\0")
-            .map_err(|_| TlsError::AllocationFailed)?;
-        signed
-            .try_extend_from_slice(&transcript.hash())
-            .map_err(|_| TlsError::AllocationFailed)?;
-        let mut salt = [0; 32];
-        mrml_runtime::fill_random(&mut salt).map_err(|_| TlsError::AuthenticationFailed)?;
-        let mut signature = Vector::new();
-        signature
-            .try_resize(config.modulus.len(), 0)
-            .map_err(|_| TlsError::AllocationFailed)?;
-        rsa_pss_sha256_sign(
-            &config.modulus,
-            &config.private_exponent,
-            &signed,
-            &salt,
-            &mut signature,
-        )
-        .map_err(|_| TlsError::AuthenticationFailed)?;
-        salt.fill(0);
+        let (signature_scheme, signature) = sign_certificate_verify(config, &transcript.hash())?;
         let mut verify_body = Vector::new();
-        u16_push(&mut verify_body, 0x0804)?;
+        u16_push(&mut verify_body, signature_scheme as usize)?;
         u16_push(&mut verify_body, signature.len())?;
         verify_body
             .try_extend_from_slice(&signature)
@@ -917,6 +972,52 @@ impl TlsServerStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    struct UseOnlySigner {
+        called: AtomicBool,
+        scheme: u16,
+    }
+
+    impl TlsServerSigningKey for UseOnlySigner {
+        fn signature_scheme(&self) -> u16 {
+            self.scheme
+        }
+        fn sign_certificate_verify_transcript(
+            &self,
+            digest: &[u8; 32],
+            output: &mut [u8; MAX_TLS13_SIGNATURE_BYTES],
+        ) -> Result<usize, TlsError> {
+            assert_ne!(digest, &[0; 32]);
+            self.called.store(true, Ordering::Release);
+            output[..8].copy_from_slice(b"bounded!");
+            Ok(8)
+        }
+    }
+
+    #[test]
+    fn external_p256_route_receives_only_context_digest() {
+        let config = TlsServerConfig::from_der_chain(&[b"certificate"])
+            .unwrap()
+            .with_signing_key(UseOnlySigner {
+                called: AtomicBool::new(false),
+                scheme: ECDSA_SECP256R1_SHA256,
+            });
+        let (scheme, signature) = sign_certificate_verify(&config, &[7; 32]).unwrap();
+        assert_eq!(scheme, ECDSA_SECP256R1_SHA256);
+        assert_eq!(&signature[..], b"bounded!");
+        assert!(config.signing_key.as_ref().unwrap().signature_scheme() == scheme);
+        let invalid = TlsServerConfig::from_der_chain(&[b"certificate"])
+            .unwrap()
+            .with_signing_key(UseOnlySigner {
+                called: AtomicBool::new(false),
+                scheme: RSA_PSS_RSAE_SHA256,
+            });
+        assert!(matches!(
+            sign_certificate_verify(&invalid, &[7; 32]),
+            Err(TlsError::Certificate)
+        ));
+    }
 
     #[test]
     fn public_gitd_rsa_private_signing_fails_closed() {
@@ -926,6 +1027,7 @@ mod tests {
             private_exponent: [1].into(),
             protocols: Vector::new(),
             ocsp_response: None,
+            signing_key: None,
         };
         assert!(matches!(
             config.for_public_gitd(),
@@ -942,24 +1044,20 @@ mod tests {
         assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 1, 2]).is_err());
     }
     use crate::TlsClientStream;
-    use mrml_runtime::{TcpListener, environment_variable, read_file};
+    use mrml_runtime::{environment_variable, read_file, TcpListener};
 
     #[test]
     fn pem_decoder_rejects_non_base64_and_trailing_data() {
-        assert!(
-            pem_blocks(
-                b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
-                b"CERTIFICATE"
-            )
-            .is_err()
-        );
-        assert!(
-            pem_blocks(
-                b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
-                b"CERTIFICATE"
-            )
-            .is_err()
-        );
+        assert!(pem_blocks(
+            b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
+            b"CERTIFICATE"
+        )
+        .is_err());
+        assert!(pem_blocks(
+            b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
+            b"CERTIFICATE"
+        )
+        .is_err());
     }
 
     #[cfg(unix)]
@@ -1050,17 +1148,15 @@ mod tests {
         let config = mrml_runtime::Shared::new(TlsServerConfig::from_pem(&cert, &key).unwrap());
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let socket = listener.accept().unwrap();
-                let mut tls = TlsServerStream::accept(socket, &config).unwrap();
-                let mut request = [0; 4];
-                assert_eq!(tls.read(&mut request).unwrap(), 4);
-                assert_eq!(&request, b"ping");
-                tls.write_all(b"pong").unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let socket = listener.accept().unwrap();
+            let mut tls = TlsServerStream::accept(socket, &config).unwrap();
+            let mut request = [0; 4];
+            assert_eq!(tls.read(&mut request).unwrap(), 4);
+            assert_eq!(&request, b"ping");
+            tls.write_all(b"pong").unwrap();
+        })
+        .is_ok());
         let mut client = TlsClientStream::connect("localhost", port).unwrap();
         assert_eq!(client.negotiated_group(), X25519_MLKEM768);
         client.write_all(b"ping").unwrap();

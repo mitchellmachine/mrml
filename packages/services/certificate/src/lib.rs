@@ -13,6 +13,8 @@ mod durable;
 mod identity;
 mod revocation;
 mod scheduler;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod tls_signing_adapter;
 
 pub use backup::{
     create_backup, restore_backup, verify_backup, BackupDescriptor, BackupError,
@@ -65,3 +67,5 @@ pub use scheduler::{
     ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,
     ReplacementBinding, SchedulerError,
 };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use tls_signing_adapter::IdentityTlsSigningAdapter;

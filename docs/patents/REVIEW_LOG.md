@@ -11362,3 +11362,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 through separately owner-authorized authoritative and recursive-resolver
 capability routes before validation. Routes are fixed by policy; it does not
 perform route selection, CA multi-vantage validation, or challenge proxying.
+
+# 2026-09-01 — Use-only TLS 1.3 P-256 signing route
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary TLS 1.3
+CertificateVerify delegation to an exact generation-bound P-256 signing route.
+It does not implement MultiTLS connection multiplexing or another recorded
+re-review-trigger mechanism.
