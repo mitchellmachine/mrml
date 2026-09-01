@@ -1,0 +1,50 @@
+# Gitd core acceptance record
+
+Classification: **CORE_BLOCKED**.
+
+This file records completion of the focused branch tests; it does not claim
+global production readiness, native-Windows verification, physical durability,
+independent cryptographic review, or patent clearance.
+
+Baseline commit:
+`cf1f75755e6961737d6c1972959aac9a8dcea061ec26b7f7e43b20ab261868c2`.
+
+Final core implementation commit before this evidence record:
+`d853c1bd0f7b2a72fcd2e53424dec43f6725e7ecd1befe2eed22336a89cb234c`.
+
+Executed on 2026-09-01:
+
+- `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
+- `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 135 library tests and 1 CLI test.
+- `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 14 tests.
+- `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 48 tests. Conditional external ML-DSA/OpenSSL fixtures were not configured and therefore are not claimed as executed oracle evidence.
+- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 125 library tests and 1 CLI test using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. This is Wine-hosted Windows-target compatibility evidence, not native Windows.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS before this evidence file.
+- `./target/debug/mrml assurance check` — FAIL: `UnsafeBoundaryUnadmitted { path: docs/compiler/probes/pinned_std_thread_tls_execution.rs }`. This path is outside Agent A's permitted files and arrived through concurrent main integration; it was not hidden or modified here.
+
+Implemented and executed in the focused environments:
+
+- RFC 9580 v6 fingerprint/salt parsing and negative vectors; complete-key identities.
+- purpose-separated `MRML-GIT-HYBRID-V1` AND verification and bounded trust transitions.
+- ML-DSA self-verification, runtime entropy wrappers, malformed-key rejection, and volatile clearing of reviewed secret-derived intermediates.
+- bounded Git object/pack/index parsing, deterministic fixed-Huffman LZ77 DEFLATE, file-backed quarantine validation, OFS/REF delta resolution, authenticated thin-base completion, arrival packs, disk reservation, journals, atomic ref generations, recovery classification, and authenticated audit receipts.
+- deterministic verification of every introduced commit, including merge-side ancestry, concrete detached hybrid proofs, and protected activation that consumes opaque verified state.
+- bounded protocol-v2 request parsing, `ls-refs`, fetch framing, receive command/report framing, and repository-view boundaries without an external Git server runtime.
+
+Explicit blockers (`REMAINS_OPEN`):
+
+- Dynamic-Huffman level-9 canonical encoding, bounded delta selection, cross-pack recomputation, pack caching, and compaction await the required mechanism-level Canadian patent review and CIPO verification recorded in `PATENT_SCREEN.md`; they were not bypassed.
+- The normal installed-as-`git` commit/tag and pull paths do not yet use the complete protected detached-proof transaction end to end.
+- Production durable detached-proof storage/key-service integration, active pack-generation reads, canonical compaction generation switching, and concurrent thin receive tests remain open.
+- Checked-in mandatory ML-DSA sigGen/sigVer and independent pinned interoperability fixtures, itemized FIPS 204 errata mapping, timing evidence, and independent cryptographic/security review remain open.
+- Native Windows directory durability, process-kill fault injection at every durable boundary, power-loss/physical-storage evidence, sanitizer/fuzz campaigns, the required scale/concurrency benchmarks, and production performance measurements remain open.
+- Rich repository views, complete standard command coverage, complete upload-pack negotiation/caching, and production receive-pack edge composition remain partial. Unsupported capability paths remain fail closed and are not advertised.
+- Assurance remains red for the unrelated unadmitted compiler probe identified above.
+
+Patent review: implemented delta decoding/thin completion and conventional
+typed transaction/proof mechanisms are `NOT_TRIGGERED`; the compression and
+storage-selection mechanisms listed above remain `TRIGGERED`/`REMAINS_OPEN` as
+described in `docs/gitd/core/PATENT_SCREEN.md`. No patent-clearance claim is
+made.
