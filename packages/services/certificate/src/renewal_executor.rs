@@ -1,10 +1,10 @@
 use crate::{
     ActivationReceipt, CandidateDeploymentRetirementTarget, CandidateKeyRetirementReceipt,
     CandidateKeyRetirementTarget, CertificateManager, CertificateManagerError,
-    IdentityDeploymentTarget, IdentityError, MAX_IDENTITY_NAMES, PemCertificateChain,
-    RecoveredIdentityMaterial, RenewalCheckpointSink, RenewalEntropy, RenewalJournal,
-    RenewalJournalError, RenewalLease, RenewalPolicy, RenewalSchedule, ReplacementBinding,
-    TlsIdentityId, TlsSigningRoute, VerifiedCertificateReceipt,
+    IdentityDeploymentTarget, IdentityError, PemCertificateChain, RecoveredIdentityMaterial,
+    RenewalCheckpointSink, RenewalEntropy, RenewalJournal, RenewalJournalError, RenewalLease,
+    RenewalPolicy, RenewalSchedule, ReplacementBinding, TlsIdentityId, TlsSigningRoute,
+    VerifiedCertificateReceipt, MAX_IDENTITY_NAMES,
 };
 use mrml_acme::AcmeIdentifier;
 

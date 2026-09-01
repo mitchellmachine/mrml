@@ -1,6 +1,6 @@
 use crate::{
     CommittedStoreReceipt, DurableError, DurableNamespace, DurableObjectId, DurableRecord,
-    DurableStateStore, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
+    DurableStateStore, PreparedStoreReceipt, MAX_DURABLE_RECORD_BYTES,
 };
 use mrml_crypto::Sha256;
 extern crate std;
