@@ -11458,3 +11458,10 @@ finalization to the already reviewed PKCS#10 CSR digest, exact account key,
 finalize URL, identifiers, profile, and prepare receipt, preserving ambiguous
 transport outcomes for authoritative polling. It adds no recorded re-review
 trigger.
+
+# 2026-09-01 — Bounded ACME response media-type admission
+
+Patent review: **NOT_TRIGGERED**. This increment performs conventional bounded
+HTTP `Content-Type` singleton capture and exact media-type classification for
+JSON, problem JSON, and PEM certificate-chain responses. It adds no protocol
+mechanism outside the reviewed ACME scope and no recorded re-review trigger.

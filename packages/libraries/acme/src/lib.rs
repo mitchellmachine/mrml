@@ -95,8 +95,9 @@ pub use response::{
 pub use state::{AccountState, OrderState, StateError};
 pub use transaction::{AcmePostError, AcmePostResponse, MAX_JWS_REQUEST_BYTES, post_jws};
 pub use transport::{
-    AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeResponseMetadata, AcmeTransport,
-    AcmeTransportRequest, AcmeTransportResponse, BadNonceRetry, MAX_ACME_RESPONSE_BODY,
-    MAX_BAD_NONCE_RETRIES, MAX_RETRY_AFTER_BYTES, TransportError,
+    AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeResponseMetadata, AcmeResponseType,
+    AcmeTransport, AcmeTransportRequest, AcmeTransportResponse, BadNonceRetry,
+    MAX_ACME_RESPONSE_BODY, MAX_BAD_NONCE_RETRIES, MAX_CONTENT_TYPE_BYTES, MAX_RETRY_AFTER_BYTES,
+    TransportError,
 };
 pub use url::{AcmeOrigin, AcmeScheme, AcmeUrl, MAX_URL_BYTES, UrlError};

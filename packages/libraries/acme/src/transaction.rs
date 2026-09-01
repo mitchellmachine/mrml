@@ -1,7 +1,7 @@
 use crate::{
-    write_flattened_jws, AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeJwsSigner, AcmeProblem,
+    AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeJwsSigner, AcmeProblem,
     AcmeResponseMetadata, AcmeTransport, AcmeTransportRequest, AcmeUrl, BadNonceRetry, JoseError,
-    ProblemError, ProtectedKey, TransportError,
+    ProblemError, ProtectedKey, TransportError, write_flattened_jws,
 };
 
 pub const MAX_JWS_REQUEST_BYTES: usize = 48 * 1024;
@@ -12,6 +12,7 @@ pub enum AcmePostError<E> {
     Jose(JoseError),
     Problem(ProblemError),
     InvalidProblemEncoding,
+    UnexpectedResponseType,
     BadNonceRetryExhausted,
 }
 
@@ -68,6 +69,9 @@ pub fn post_jws<T: AcmeTransport>(
         jws_scratch[..jws_len].fill(0);
         let metadata = metadata?;
         let problem = if (400..=599).contains(&metadata.status) {
+            if metadata.response_type != crate::AcmeResponseType::ProblemJson {
+                return Err(AcmePostError::UnexpectedResponseType);
+            }
             let text = core::str::from_utf8(&response_body[..metadata.body_length])
                 .map_err(|_| AcmePostError::InvalidProblemEncoding)?;
             Some(AcmeProblem::parse(text).map_err(AcmePostError::Problem)?)
@@ -135,6 +139,13 @@ mod tests {
                 replay_nonce: nonce,
                 retry_after: None,
                 location: None,
+                content_type: if status == 400 {
+                    Some("application/problem+json")
+                } else if request.method == AcmeHttpMethod::Head {
+                    None
+                } else {
+                    Some("application/json")
+                },
                 body_length: body.len(),
             })
         }

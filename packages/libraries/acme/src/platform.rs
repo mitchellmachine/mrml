@@ -1,6 +1,6 @@
 use crate::{
     AcmeContentType, AcmeHttpMethod, AcmeTransport, AcmeTransportRequest, AcmeTransportResponse,
-    MAX_NONCE_BYTES, MAX_RETRY_AFTER_BYTES, MAX_URL_BYTES,
+    MAX_CONTENT_TYPE_BYTES, MAX_NONCE_BYTES, MAX_RETRY_AFTER_BYTES, MAX_URL_BYTES,
 };
 use mrml_http::{Client, Header, HttpError};
 
@@ -22,6 +22,8 @@ pub struct HostedAcmeTransport {
     retry_after_len: usize,
     location: [u8; MAX_URL_BYTES],
     location_len: usize,
+    content_type: [u8; MAX_CONTENT_TYPE_BYTES],
+    content_type_len: usize,
 }
 
 impl Default for HostedAcmeTransport {
@@ -42,6 +44,8 @@ impl HostedAcmeTransport {
             retry_after_len: 0,
             location: [0; MAX_URL_BYTES],
             location_len: 0,
+            content_type: [0; MAX_CONTENT_TYPE_BYTES],
+            content_type_len: 0,
         }
     }
 
@@ -54,6 +58,8 @@ impl HostedAcmeTransport {
         self.retry_after_len = 0;
         self.location.fill(0);
         self.location_len = 0;
+        self.content_type.fill(0);
+        self.content_type_len = 0;
     }
 
     fn copy_singleton(
@@ -106,7 +112,10 @@ impl AcmeTransport for HostedAcmeTransport {
                     url,
                     &[
                         ("Content-Type", "application/jose+json"),
-                        ("Accept", "application/json, application/problem+json"),
+                        (
+                            "Accept",
+                            "application/json, application/problem+json, application/pem-certificate-chain",
+                        ),
                     ],
                     request.body,
                 )
@@ -119,6 +128,8 @@ impl AcmeTransport for HostedAcmeTransport {
             Self::copy_singleton(&response.headers, "retry-after", &mut self.retry_after)?;
         self.location_len =
             Self::copy_singleton(&response.headers, "location", &mut self.location)?;
+        self.content_type_len =
+            Self::copy_singleton(&response.headers, "content-type", &mut self.content_type)?;
         let status = response.status;
         let body = if request.method == AcmeHttpMethod::Head {
             mrml_runtime::Vector::new()
@@ -140,6 +151,8 @@ impl AcmeTransport for HostedAcmeTransport {
                 .then(|| Self::text(&self.retry_after, self.retry_after_len)),
             location: (self.location_len != 0)
                 .then(|| Self::text(&self.location, self.location_len)),
+            content_type: (self.content_type_len != 0)
+                .then(|| Self::text(&self.content_type, self.content_type_len)),
             body_length: body.len(),
         })
     }

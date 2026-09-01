@@ -2,6 +2,7 @@ use crate::{AcmeUrl, NonceError, NoncePool, ReplayNonce, UrlError};
 
 pub const MAX_ACME_RESPONSE_BODY: usize = 64 * 1024;
 pub const MAX_RETRY_AFTER_BYTES: usize = 64;
+pub const MAX_CONTENT_TYPE_BYTES: usize = 128;
 pub const MAX_BAD_NONCE_RETRIES: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,6 +16,15 @@ pub enum AcmeHttpMethod {
 pub enum AcmeContentType {
     Empty,
     JoseJson,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcmeResponseType {
+    Missing,
+    Json,
+    ProblemJson,
+    PemCertificateChain,
+    Other,
 }
 
 /// A request whose endpoint has already been admitted by the current directory
@@ -35,6 +45,7 @@ pub struct AcmeTransportResponse<'a> {
     pub replay_nonce: Option<&'a str>,
     pub retry_after: Option<&'a str>,
     pub location: Option<&'a str>,
+    pub content_type: Option<&'a str>,
     pub body_length: usize,
 }
 
@@ -160,11 +171,13 @@ impl AcmeExchange {
                 Ok(url)
             })
             .transpose()?;
+        let response_type = classify_response_type(response.content_type)?;
         Ok(AcmeResponseMetadata {
             status: response.status,
             body_length: response.body_length,
             has_retry_after: response.retry_after.is_some(),
             location,
+            response_type,
         })
     }
 
@@ -202,6 +215,26 @@ pub struct AcmeResponseMetadata {
     pub body_length: usize,
     pub has_retry_after: bool,
     pub location: Option<AcmeUrl>,
+    pub response_type: AcmeResponseType,
+}
+
+fn classify_response_type<E>(value: Option<&str>) -> Result<AcmeResponseType, TransportError<E>> {
+    let Some(value) = value else {
+        return Ok(AcmeResponseType::Missing);
+    };
+    if value.len() > MAX_CONTENT_TYPE_BYTES || !value.is_ascii() {
+        return Err(TransportError::InvalidContentType);
+    }
+    let essence = value.split(';').next().unwrap_or("").trim();
+    Ok(if essence.eq_ignore_ascii_case("application/json") {
+        AcmeResponseType::Json
+    } else if essence.eq_ignore_ascii_case("application/problem+json") {
+        AcmeResponseType::ProblemJson
+    } else if essence.eq_ignore_ascii_case("application/pem-certificate-chain") {
+        AcmeResponseType::PemCertificateChain
+    } else {
+        AcmeResponseType::Other
+    })
 }
 
 pub struct BadNonceRetry {
@@ -238,6 +271,26 @@ impl BadNonceRetry {
 mod tests {
     use super::*;
 
+    #[test]
+    fn classifies_bounded_acme_media_types() {
+        assert_eq!(
+            classify_response_type::<()>(Some("Application/JSON; charset=utf-8")).unwrap(),
+            AcmeResponseType::Json
+        );
+        assert_eq!(
+            classify_response_type::<()>(Some("application/problem+json")).unwrap(),
+            AcmeResponseType::ProblemJson
+        );
+        assert_eq!(
+            classify_response_type::<()>(Some("application/pem-certificate-chain")).unwrap(),
+            AcmeResponseType::PemCertificateChain
+        );
+        assert_eq!(
+            classify_response_type::<()>(Some("text/plain")).unwrap(),
+            AcmeResponseType::Other
+        );
+    }
+
     struct Adapter<'a> {
         effective_url: &'a str,
         nonce: Option<&'a str>,
@@ -264,6 +317,7 @@ mod tests {
                 replay_nonce: self.nonce,
                 retry_after: None,
                 location: self.location,
+                content_type: None,
                 body_length: usize::from(!body.is_empty()),
             })
         }

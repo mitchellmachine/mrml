@@ -217,6 +217,11 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
             problem,
         )));
     }
+    if result.metadata.response_type != crate::AcmeResponseType::Json {
+        return Err(OrderCreateFailure::Uncertain(
+            OrderCreateError::UnexpectedStatus,
+        ));
+    }
     if result.metadata.status != 201 {
         return Err(OrderCreateFailure::Uncertain(
             OrderCreateError::UnexpectedStatus,
@@ -319,6 +324,9 @@ pub fn fetch_authorization<T: AcmeTransport>(
     if let Some(problem) = result.problem {
         return Err(AuthorizationFetchError::Server(problem));
     }
+    if result.metadata.response_type != crate::AcmeResponseType::Json {
+        return Err(AuthorizationFetchError::UnexpectedStatus);
+    }
     if result.metadata.status != 200 {
         return Err(AuthorizationFetchError::UnexpectedStatus);
     }
@@ -416,6 +424,9 @@ pub fn trigger_published_challenge<T: AcmeTransport>(
     if let Some(problem) = result.problem {
         return Err(ChallengeSubmitError::Server(problem));
     }
+    if result.metadata.response_type != crate::AcmeResponseType::Json {
+        return Err(ChallengeSubmitError::UnexpectedStatus);
+    }
     if result.metadata.status != 200 {
         return Err(ChallengeSubmitError::UnexpectedStatus);
     }
@@ -478,6 +489,9 @@ pub fn execute_prepared_finalize<T: AcmeTransport>(
             .abort_finalize(receipt)
             .map_err(|error| FinalizeFailure::Definitive(FinalizeError::Lifecycle(error)))?;
         return Err(FinalizeFailure::Definitive(FinalizeError::Server(problem)));
+    }
+    if result.metadata.response_type != crate::AcmeResponseType::Json {
+        return Err(FinalizeFailure::Uncertain(FinalizeError::UnexpectedStatus));
     }
     if result.metadata.status != 200 {
         return Err(FinalizeFailure::Uncertain(FinalizeError::UnexpectedStatus));
@@ -567,6 +581,9 @@ pub fn execute_prepared_account_create<T: AcmeTransport>(
             .abort_prepared(receipt)
             .map_err(CreateAccountError::Lifecycle)?;
         return Err(CreateAccountError::Server(problem));
+    }
+    if result.metadata.response_type != crate::AcmeResponseType::Json {
+        return uncertain(lifecycle, CreateAccountError::UnexpectedStatus);
     }
     let account_url = match result.metadata.location {
         Some(url) if result.metadata.status == 201 => url,
@@ -682,6 +699,7 @@ mod tests {
                     replay_nonce: Some("order-nonce-1"),
                     retry_after: None,
                     location: None,
+                    content_type: None,
                     body_length: 0,
                 });
             }
@@ -697,6 +715,7 @@ mod tests {
                     replay_nonce: Some("authz-nonce-1"),
                     retry_after: None,
                     location: None,
+                    content_type: Some("application/json"),
                     body_length: body.len(),
                 });
             }
@@ -709,6 +728,7 @@ mod tests {
                     replay_nonce: Some("challenge-nonce-1"),
                     retry_after: None,
                     location: None,
+                    content_type: Some("application/json"),
                     body_length: body.len(),
                 });
             }
@@ -721,6 +741,7 @@ mod tests {
                     replay_nonce: Some("finalize-nonce-1"),
                     retry_after: None,
                     location: None,
+                    content_type: Some("application/json"),
                     body_length: body.len(),
                 });
             }
@@ -732,6 +753,7 @@ mod tests {
                 replay_nonce: Some("order-nonce-2"),
                 retry_after: None,
                 location: Some("https://ca.example/order/1"),
+                content_type: Some("application/json"),
                 body_length: body.len(),
             })
         }
@@ -750,6 +772,7 @@ mod tests {
                     replay_nonce: Some("nonce-1"),
                     retry_after: None,
                     location: None,
+                    content_type: None,
                     body_length: 0,
                 });
             }
@@ -764,6 +787,7 @@ mod tests {
                 replay_nonce: Some("nonce-2"),
                 retry_after: None,
                 location: Some("https://ca.example/account/1"),
+                content_type: Some("application/json"),
                 body_length: body.len(),
             })
         }
