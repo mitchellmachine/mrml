@@ -19,6 +19,14 @@ trailing bytes. These fields are decoded data, not yet trusted identity:
 independent certificate/chain/hostname/time/SPKI/signature validation and
 monotonic publication are still required before listener use.
 
+The CertificateVerify client operation is purpose-limited to the active
+identity generation, TLS `ecdsa_secp256r1_sha256`, one exact 32-byte transcript
+hash, and a nonzero logical request identifier in addition to the authenticated
+channel sequence. Its response must repeat the generation, scheme, and logical
+request and contain one bounded canonical ECDSA DER signature. Long-form,
+negative, redundantly padded, oversized, truncated, substituted, or trailing
+signature encodings fail closed. The client offers no generic signing method.
+
 The current certd executable does not yet dispatch identity snapshot,
 CertificateVerify, or generation-wait requests. Gitd therefore remains
 non-ready and does not bind public listeners. There is no PEM, embedded-key,
@@ -31,11 +39,12 @@ service's success cannot substitute for the other's failure.
 
 Focused hosted Linux evidence:
 
-- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 13 tests
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 14 tests
   passed, including real authenticated authority and certd Unix socket
   exchanges with kernel-observed peer credentials, plus exact snapshot parsing,
   hostname substitution, rollback-generation, trailing-byte, and canonical-name
-  refusal.
+  refusal, and generation/scheme/request/canonical-DER CertificateVerify
+  response binding.
 - `./target/debug/mrml manifest lock --check`: 70 packages, 5 interfaces, 205
   compile edges, and 185 package edges passed after adding the explicit certd
   dependency.

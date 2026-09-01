@@ -9,6 +9,10 @@ use mrml_certificate::{
 
 const IDENTITY_REQUEST_MAGIC: &[u8; 8] = b"MRGIDR01";
 const IDENTITY_SNAPSHOT_MAGIC: &[u8; 8] = b"MRGIDS01";
+const CERTIFICATE_VERIFY_REQUEST_MAGIC: &[u8; 8] = b"MRGSGN01";
+const CERTIFICATE_VERIFY_RESPONSE_MAGIC: &[u8; 8] = b"MRGSGS01";
+pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
+const MAX_CERTIFICATE_VERIFY_SIGNATURE_BYTES: usize = 72;
 const MAX_SERVER_NAME_BYTES: usize = 253;
 const MAX_CERTIFICATE_CHAIN_ENTRIES: usize = 8;
 const MAX_CERTIFICATE_DER_BYTES: usize = 8 * 1024;
@@ -93,6 +97,39 @@ impl GitdCertdChannelClient {
             &mut output,
         )?;
         parse_identity_snapshot(&output[..written], server_name)
+    }
+
+    pub fn sign_tls13_certificate_verify(
+        &mut self,
+        identity_generation: u64,
+        signature_scheme: u16,
+        transcript_hash: [u8; 32],
+        logical_request_id: u64,
+    ) -> Result<Vec<u8>, GitdCertdChannelError> {
+        if identity_generation == 0
+            || signature_scheme != ECDSA_SECP256R1_SHA256
+            || logical_request_id == 0
+        {
+            return Err(GitdCertdChannelError::Authenticate);
+        }
+        let mut request = Vec::with_capacity(58);
+        request.extend_from_slice(CERTIFICATE_VERIFY_REQUEST_MAGIC);
+        request.extend_from_slice(&identity_generation.to_be_bytes());
+        request.extend_from_slice(&signature_scheme.to_be_bytes());
+        request.extend_from_slice(&transcript_hash);
+        request.extend_from_slice(&logical_request_id.to_be_bytes());
+        let mut output = [0u8; 128];
+        let written = self.exchange(
+            CertdChannelOperation::SignTls13CertificateVerify,
+            &request,
+            &mut output,
+        )?;
+        parse_certificate_verify_response(
+            &output[..written],
+            identity_generation,
+            signature_scheme,
+            logical_request_id,
+        )
     }
 
     pub fn exchange(
@@ -260,6 +297,70 @@ fn validate_server_name(server_name: &str) -> Result<(), GitdCertdChannelError> 
     Ok(())
 }
 
+fn parse_certificate_verify_response(
+    input: &[u8],
+    expected_generation: u64,
+    expected_scheme: u16,
+    expected_request_id: u64,
+) -> Result<Vec<u8>, GitdCertdChannelError> {
+    let mut cursor = SnapshotCursor { input, offset: 0 };
+    if cursor.take(8)? != CERTIFICATE_VERIFY_RESPONSE_MAGIC
+        || cursor.u64()? != expected_generation
+        || cursor.u16()? != expected_scheme
+        || expected_scheme != ECDSA_SECP256R1_SHA256
+        || cursor.u64()? != expected_request_id
+    {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let signature_length = usize::from(cursor.u16()?);
+    if !(8..=MAX_CERTIFICATE_VERIFY_SIGNATURE_BYTES).contains(&signature_length) {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let signature = cursor.take(signature_length)?.to_vec();
+    if cursor.offset != input.len() || !valid_ecdsa_der(&signature) {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    Ok(signature)
+}
+
+fn valid_ecdsa_der(signature: &[u8]) -> bool {
+    if signature.len() < 8
+        || signature.len() > MAX_CERTIFICATE_VERIFY_SIGNATURE_BYTES
+        || signature[0] != 0x30
+        || signature[1] & 0x80 != 0
+        || usize::from(signature[1]) != signature.len() - 2
+    {
+        return false;
+    }
+    let mut offset = 2usize;
+    for _ in 0..2 {
+        if signature.get(offset) != Some(&0x02) {
+            return false;
+        }
+        let Some(&length) = signature.get(offset + 1) else {
+            return false;
+        };
+        let length = usize::from(length);
+        let start = offset + 2;
+        let Some(end) = start.checked_add(length) else {
+            return false;
+        };
+        let Some(integer) = signature.get(start..end) else {
+            return false;
+        };
+        if integer.is_empty()
+            || integer.len() > 33
+            || integer[0] & 0x80 != 0
+            || (integer.len() > 1 && integer[0] == 0 && integer[1] & 0x80 == 0)
+            || (integer.len() == 33 && integer[0] != 0)
+        {
+            return false;
+        }
+        offset = end;
+    }
+    offset == signature.len()
+}
+
 struct SnapshotCursor<'a> {
     input: &'a [u8],
     offset: usize,
@@ -351,6 +452,36 @@ mod tests {
         rollback[8..16].fill(0);
         assert!(parse_identity_snapshot(&rollback, "git.example.com").is_err());
         assert!(encode_identity_request("Git.example.com").is_err());
+    }
+
+    #[test]
+    fn certificate_verify_response_binds_generation_scheme_request_and_der() {
+        let mut response = Vec::new();
+        response.extend_from_slice(CERTIFICATE_VERIFY_RESPONSE_MAGIC);
+        response.extend_from_slice(&7u64.to_be_bytes());
+        response.extend_from_slice(&ECDSA_SECP256R1_SHA256.to_be_bytes());
+        response.extend_from_slice(&11u64.to_be_bytes());
+        response.extend_from_slice(&8u16.to_be_bytes());
+        response.extend_from_slice(&[0x30, 6, 2, 1, 1, 2, 1, 1]);
+        assert_eq!(
+            parse_certificate_verify_response(&response, 7, ECDSA_SECP256R1_SHA256, 11).unwrap(),
+            [0x30, 6, 2, 1, 1, 2, 1, 1]
+        );
+        assert!(
+            parse_certificate_verify_response(&response, 8, ECDSA_SECP256R1_SHA256, 11).is_err()
+        );
+        let mut trailing = response;
+        trailing.push(0);
+        assert!(
+            parse_certificate_verify_response(&trailing, 7, ECDSA_SECP256R1_SHA256, 11).is_err()
+        );
+        let mut noncanonical = trailing[..trailing.len() - 1].to_vec();
+        let signature_offset = 8 + 8 + 2 + 8 + 2;
+        noncanonical[signature_offset + 3] = 2;
+        assert!(
+            parse_certificate_verify_response(&noncanonical, 7, ECDSA_SECP256R1_SHA256, 11)
+                .is_err()
+        );
     }
 
     #[test]
