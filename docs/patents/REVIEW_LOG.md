@@ -11239,3 +11239,12 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment implements the ordinary RFC
 8737 P-256 temporary certificate profile and exact ALPN/SNI selection. It adds
 no MultiTLS multiplexing or other recorded re-review trigger.
+
+# 2026-09-01 — First-party authoritative DNS-01 challenge zone
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary bounded
+authoritative DNS UDP/TCP parsing and SOA/NS/TXT/A responses for a delegated
+challenge zone, with generation-bound TXT lifecycle. It adds no recursive DNS,
+route-selected multi-vantage validation, challenge proxy, or other recorded
+re-review trigger.

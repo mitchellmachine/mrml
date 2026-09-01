@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 175
+compile_edges = 177
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 159
+package_edges = 161
 system_release_edges = 3
 
 [[package]]
@@ -553,6 +553,19 @@ isolation_supported = ["in-process"]
 compile_dependencies = []
 
 static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.certificate"
+path = "packages/services/certificate"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.library.acme", "org.mrml.library.crypto"]
+
+static_runtime = ["org.mrml.library.acme", "org.mrml.library.crypto"]
 boot_bound = []
 system_release_bound = []
 

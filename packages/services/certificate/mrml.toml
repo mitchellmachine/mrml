@@ -1,0 +1,57 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.certificate"
+kind = "service"
+name = "mrml-certd"
+profile = "system-service"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+must_run = true
+runtime_class = "microvm-eligible"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_certificate"
+
+[rust]
+crate_name = "mrml_certificate"
+crate_type = "lib"
+source = "packages/services/certificate/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_acme"
+compile_name = "mrml-acme"
+package = "org.mrml.library.acme"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 8388608

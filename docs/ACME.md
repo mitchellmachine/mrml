@@ -40,6 +40,14 @@ empty subject, one critical dNSName SAN, and the exact critical RFC 8737
 `acmeIdentifier` OCTET STRING. Signing is purpose- and generation-bound. ALPN
 selection rejects `acme-tls/1` unless the exact active SNI is present and never
 falls back to an ordinary production identity.
+
+`org.mrml.service.certificate` is now one Manifest V2 service package targeting
+MRML, Windows, and Linux. Its first confined runtime role is a bounded,
+non-recursive authoritative DNS-01 challenge zone. The shared implementation
+serves SOA, NS, TXT, and nameserver A responses over DNS UDP messages and TCP
+framing, supports concurrent TXT values, binds mutations to policy and record
+generations, expires records, rejects malformed/compression-loop input, refuses
+out-of-zone recursion, and returns truncated UDP responses when necessary.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -52,7 +60,7 @@ arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
 General JOSE response and problem-document parsing, X.509 issuance validation,
-ACME transport, concrete socket adapters and the DNS publisher, durable recovery,
+ACME transport, concrete socket adapters and propagation observation, durable recovery,
 certificate publication, renewal,
 revocation, backup/restore, CLI administration, gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
