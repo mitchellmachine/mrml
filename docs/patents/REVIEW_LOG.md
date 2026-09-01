@@ -12003,3 +12003,10 @@ descriptor already selected for a hosted TLS connection through an
 authenticated local health endpoint. It adds no certificate protocol, signing
 mechanism, TLS multiplexing, validation topology, certificate authority
 operation, or recorded re-review trigger.
+
+# 2026-09-01 — Offline certificate status inspection
+
+Patent review: **NOT_TRIGGERED**. This increment renders the existing bounded,
+read-only canonical lifecycle status payload through the build frontend. It
+adds no certificate protocol, signing mechanism, validation topology,
+certificate authority operation, or recorded re-review trigger.

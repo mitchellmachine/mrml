@@ -220,6 +220,14 @@ constructs the canonical generated request, owns the bounded borrowed-memory
 layout, validates the remote status/error envelope, and decodes the shared
 payload. Frontends therefore cannot substitute scopes, overlap buffers, accept
 an oversized response, or maintain a second status parser.
+`mrml cert status --snapshot FILE` can inspect that same canonical payload in
+human or stable structured form. It accepts only a nonempty regular file within
+the 4096-byte protocol bound and reports no secret or signing-route identifier.
+The snapshot path identifies inert input data; it grants no lifecycle authority
+and cannot mutate certificate state. Omitting `--snapshot` fails closed with an
+explicit `hosted_session: PLANNED` result rather than implying that a live
+administrative route exists. Operational status queries still require the
+supervisor-delivered session broker described below.
 The unattended renewal coordinator acquires one identity-scoped lease, requires
 a fresh use-only candidate key and exact RFC 9773 replacement binding, verifies
 the returned chain receipt, stages the next schedule, publishes and exercises
@@ -357,8 +365,9 @@ not inherit hosted sockets and continues to use the same transport contract
 through capability-bound services.
 
 MRML HTTPS capability adapters, sealed-key backup/restore platform adapters,
-CLI administration, concrete gitd process wiring, and full native-storage/reboot
-recovery remain **PLANNED**. The shared state machine must
+mutation-capable CLI administration and live session acquisition, concrete gitd
+process wiring, and full native-storage/reboot recovery remain **PLANNED**. The
+shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 
 Hosted lifecycle administration now has a bounded transport adapter for a

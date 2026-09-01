@@ -52,6 +52,10 @@ use certificate_caa::{CaaChallengeMethod, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_C
 use generation::mrml_package_identifier;
 use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
+use mrml_certificate::{
+    ExpiryHealth, MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus, RenewalSource,
+    decode_managed_identity_status,
+};
 #[path = "../../../libraries/crypto/src/sha3.rs"]
 #[allow(dead_code)]
 mod package_sha3;
@@ -291,6 +295,7 @@ fn print_help() {
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml assurance <check|generate>");
     println!("       mrml cert caa <recommend|verify> ...");
+    println!("       mrml cert status --snapshot FILE [--output human|structured]");
     println!(
         "       mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o OUTPUT [--release]"
     );
@@ -340,11 +345,157 @@ fn print_help() {
 fn cert_command(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("caa") => cert_caa_command(&args[1..]),
+        Some("status") => cert_status_command(&args[1..]),
         Some(operation) => Err(format!(
             "CertificateOperationUnavailable {{ operation: {operation}, status: REMAINS_OPEN }}"
         )),
-        None => Err("CertificateUsageError { expected: caa recommend|verify }".into()),
+        None => Err("CertificateUsageError { expected: caa|status }".into()),
     }
+}
+
+fn cert_status_command(args: &[String]) -> Result<(), String> {
+    let mut snapshot = None;
+    let mut output = OutputMode::Human;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--snapshot" => {
+                index += 1;
+                snapshot = Some(
+                    args.get(index)
+                        .map(String::as_str)
+                        .ok_or("CertificateStatusSnapshotMissing")?,
+                );
+            }
+            "--output" => {
+                index += 1;
+                output = match args.get(index).map(String::as_str) {
+                    Some("human") => OutputMode::Human,
+                    Some("structured") => OutputMode::Structured,
+                    _ => return Err("CertificateStatusOutputInvalid".into()),
+                };
+            }
+            option => {
+                return Err(format!(
+                    "CertificateStatusUnknownOption {{ option: {option} }}"
+                ));
+            }
+        }
+        index += 1;
+    }
+    let path = snapshot.ok_or(
+        "CertificateStatusRouteUnavailable { required: --snapshot FILE, hosted_session: PLANNED }",
+    )?;
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("CertificateStatusSnapshotUnreadable {{ detail: {error} }}"))?;
+    if !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_MANAGED_STATUS_BYTES as u64
+    {
+        return Err("CertificateStatusSnapshotSizeInvalid".into());
+    }
+    let bytes = fs::read(path)
+        .map_err(|error| format!("CertificateStatusSnapshotUnreadable {{ detail: {error} }}"))?;
+    let status = decode_managed_identity_status(&bytes)
+        .map_err(|error| format!("CertificateStatusSnapshotInvalid {{ detail: {error:?} }}"))?;
+    print!("{}", render_certificate_status(status, output));
+    Ok(())
+}
+
+fn render_certificate_status(status: ManagedIdentityStatus, output: OutputMode) -> String {
+    use core::fmt::Write as _;
+
+    let mut output_text = String::new();
+    let identity = encode_hex(&status.identity.0);
+    let active = status.active;
+    let generation = active.map_or(0, |descriptor| descriptor.generation);
+    let health = status
+        .renewal
+        .map(|renewal| expiry_health_name(renewal.health))
+        .unwrap_or("unconfigured");
+    let mut names = String::new();
+    if let Some(descriptor) = active {
+        let mut scratch = [0u8; 253];
+        for identifier in descriptor.identifiers[..usize::from(descriptor.identifier_count)]
+            .iter()
+            .flatten()
+        {
+            if !names.is_empty() {
+                names.push(',');
+            }
+            names.push_str(identifier.write_value(&mut scratch).unwrap_or("invalid"));
+        }
+    }
+    if names.is_empty() {
+        names.push('-');
+    }
+    match output {
+        OutputMode::Human => {
+            let _ = writeln!(output_text, "TLS identity {identity}");
+            let _ = writeln!(
+                output_text,
+                "  policy generation: {}",
+                status.policy_generation
+            );
+            let _ = writeln!(output_text, "  active generation: {generation}");
+            let _ = writeln!(output_text, "  identifiers: {names}");
+            let _ = writeln!(output_text, "  renewal health: {health}");
+            if let Some(descriptor) = active {
+                let _ = writeln!(
+                    output_text,
+                    "  leaf SPKI SHA-256: {}",
+                    encode_hex(&descriptor.leaf_spki_digest)
+                );
+                let _ = writeln!(
+                    output_text,
+                    "  chain SHA-256: {}",
+                    encode_hex(&descriptor.chain_digest)
+                );
+                let _ = writeln!(output_text, "  expires: {}", descriptor.not_after);
+                let _ = writeln!(output_text, "  profile: {}", descriptor.profile.name());
+            }
+        }
+        OutputMode::Structured => {
+            let (source, renew_at, requery_at, expires, failures) =
+                status.renewal.map_or(("none", 0, 0, 0, 0), |renewal| {
+                    (
+                        match renewal.source {
+                            RenewalSource::Ari => "ari",
+                            RenewalSource::LifetimeFallback => "lifetime-fallback",
+                        },
+                        renewal.renew_at_unix,
+                        renewal.requery_ari_at_unix,
+                        renewal.not_after_unix,
+                        renewal.failure_count,
+                    )
+                });
+            let _ = writeln!(
+                output_text,
+                "cert-status|status=PASS|identity={identity}|policy_generation={}|generation={generation}|identifiers={names}|health={health}|renewal_source={source}|renew_at={renew_at}|ari_requery_at={requery_at}|expires={expires}|failures={failures}|renewal_in_progress={}",
+                status.policy_generation,
+                status.renewal_in_progress()
+            );
+        }
+    }
+    output_text
+}
+
+fn expiry_health_name(health: ExpiryHealth) -> &'static str {
+    match health {
+        ExpiryHealth::Healthy => "healthy",
+        ExpiryHealth::Warning => "warning",
+        ExpiryHealth::Critical => "critical",
+        ExpiryHealth::Expired => "expired",
+    }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use core::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
 }
 
 fn cert_caa_command(args: &[String]) -> Result<(), String> {
@@ -5452,6 +5603,33 @@ mod tests {
             OutputMode::Structured
         );
         assert_eq!(output_mode(&[]), OutputMode::Human);
+    }
+
+    #[test]
+    fn certificate_status_snapshot_rendering_is_exact_and_secret_free() {
+        let status = ManagedIdentityStatus {
+            identity: mrml_certificate::TlsIdentityId([0x2a; 16]),
+            policy_generation: 7,
+            active: None,
+            renewal: None,
+            renewal_lease: None,
+            replacement: None,
+        };
+        assert_eq!(
+            render_certificate_status(status, OutputMode::Structured),
+            "cert-status|status=PASS|identity=2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a|policy_generation=7|generation=0|identifiers=-|health=unconfigured|renewal_source=none|renew_at=0|ari_requery_at=0|expires=0|failures=0|renewal_in_progress=false\n"
+        );
+        assert_eq!(
+            render_certificate_status(status, OutputMode::Human),
+            "TLS identity 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a\n  policy generation: 7\n  active generation: 0\n  identifiers: -\n  renewal health: unconfigured\n"
+        );
+        assert_eq!(
+            cert_status_command(&[]),
+            Err(
+                "CertificateStatusRouteUnavailable { required: --snapshot FILE, hosted_session: PLANNED }"
+                    .into()
+            )
+        );
     }
     #[test]
     fn release_frontend_accepts_only_canonical_operations() {
