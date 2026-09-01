@@ -79,8 +79,7 @@ impl DurableDetachedCommitProofDirectory {
         record: &DetachedCommitProofRecord,
         path: &str,
     ) -> Result<(), DetachedCommitProofFileError> {
-        let file =
-            File::open_regular(path).map_err(|_| DetachedCommitProofFileError::Integrity)?;
+        let file = File::open_regular(path).map_err(|_| DetachedCommitProofFileError::Integrity)?;
         file.sync()
             .map_err(|_| DetachedCommitProofFileError::Durability)?;
         drop(file);
@@ -102,8 +101,8 @@ impl DurableDetachedCommitProofDirectory {
         if !path_exists(&path) {
             return Ok(None);
         }
-        let mut file = File::open_regular(&path)
-            .map_err(|_| DetachedCommitProofFileError::Integrity)?;
+        let mut file =
+            File::open_regular(&path).map_err(|_| DetachedCommitProofFileError::Integrity)?;
         let length = usize::try_from(
             file.len()
                 .map_err(|_| DetachedCommitProofFileError::Integrity)?,
@@ -302,6 +301,7 @@ const fn purpose_byte(purpose: SignaturePurpose) -> u8 {
         SignaturePurpose::BuildReceipt => 5,
         SignaturePurpose::KeyRotation => 6,
         SignaturePurpose::KeyRevocation => 7,
+        SignaturePurpose::EmergencyRecovery => 8,
     }
 }
 
@@ -366,8 +366,16 @@ mod tests {
             .insert(exact, &proof)
             .unwrap();
         let reopened = DurableDetachedCommitProofDirectory::open(&root).unwrap();
-        assert_eq!(reopened.lookup(exact, proof.commit()).unwrap(), Some(proof.clone()));
-        assert_eq!(reopened.lookup(context(&repository, 4), proof.commit()).unwrap(), None);
+        assert_eq!(
+            reopened.lookup(exact, proof.commit()).unwrap(),
+            Some(proof.clone())
+        );
+        assert_eq!(
+            reopened
+                .lookup(context(&repository, 4), proof.commit())
+                .unwrap(),
+            None
+        );
         let wrong = context(&repository, 4);
         let exact_path = reopened.path(exact, proof.commit()).unwrap();
         let wrong_path = reopened.path(wrong, proof.commit()).unwrap();
@@ -400,7 +408,10 @@ mod tests {
             directory.insert(exact, &conflicting),
             Err(DetachedCommitProofFileError::AlreadyExists)
         );
-        assert_eq!(directory.lookup(exact, proof.commit()).unwrap(), Some(proof));
+        assert_eq!(
+            directory.lookup(exact, proof.commit()).unwrap(),
+            Some(proof)
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 

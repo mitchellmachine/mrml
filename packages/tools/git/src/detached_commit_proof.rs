@@ -5,9 +5,10 @@ use mrml_openpgp::{MAX_OPENPGP_SIGNATURE_BYTES, PublicKeyV6};
 use mrml_runtime::Vector;
 
 use crate::{
-    GitObjectType, HistoryVerificationError, HybridTrustPolicy, HybridVerificationRequest,
-    ObjectId, ProtectedCommitVerifier, ProtectedHistoryContext, VerifiedCommitProof,
-    bind_verified_commit_proof, verify_hybrid_signature,
+    DurableDetachedCommitProofDirectory, GitObjectType, HistoryVerificationError,
+    HybridTrustPolicy, HybridVerificationRequest, ObjectId, ProtectedCommitVerifier,
+    ProtectedHistoryContext, VerifiedCommitProof, bind_verified_commit_proof,
+    verify_hybrid_signature,
 };
 
 pub const MAX_DETACHED_COMMIT_PROOFS: usize = 5_000;
@@ -19,6 +20,74 @@ pub struct DetachedCommitProofRecord {
     commit: ObjectId,
     openpgp_signature: Vector<u8>,
     ml_dsa_signature: Vector<u8>,
+}
+
+/// Verification-only adapter backed by the durable, exact-context proof
+/// directory. The directory contains untrusted signatures, while this adapter
+/// obtains verification authority only from its injected public policy state.
+pub struct DurableDetachedHybridCommitVerifier<'a> {
+    store: &'a DurableDetachedCommitProofDirectory,
+    policy: &'a HybridTrustPolicy,
+    openpgp_key: &'a PublicKeyV6,
+    ml_dsa_key: &'a [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
+    openpgp_scratch: &'a mut [u8],
+}
+
+impl<'a> DurableDetachedHybridCommitVerifier<'a> {
+    pub fn new(
+        store: &'a DurableDetachedCommitProofDirectory,
+        policy: &'a HybridTrustPolicy,
+        openpgp_key: &'a PublicKeyV6,
+        ml_dsa_key: &'a [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
+        openpgp_scratch: &'a mut [u8],
+    ) -> Result<Self, HistoryVerificationError> {
+        if openpgp_scratch.len() < MAX_OPENPGP_SIGNATURE_BYTES {
+            return Err(HistoryVerificationError::Resource);
+        }
+        Ok(Self {
+            store,
+            policy,
+            openpgp_key,
+            ml_dsa_key,
+            openpgp_scratch,
+        })
+    }
+}
+
+impl ProtectedCommitVerifier for DurableDetachedHybridCommitVerifier<'_> {
+    fn verify_commit(
+        &mut self,
+        context: ProtectedHistoryContext<'_>,
+        commit: ObjectId,
+        exact_contents: &[u8],
+    ) -> Result<VerifiedCommitProof, HistoryVerificationError> {
+        let record = self
+            .store
+            .lookup(context, commit)
+            .map_err(|_| HistoryVerificationError::Signature)?
+            .ok_or(HistoryVerificationError::Signature)?;
+        let request = HybridVerificationRequest {
+            repository: context.repository,
+            object_format: context.object_format,
+            object_type: GitObjectType::Commit,
+            purpose: context.purpose,
+            trust_generation: context.trust_generation,
+            revocation_generation: context.revocation_generation,
+            payload: exact_contents,
+            openpgp_signature: record.openpgp_signature(),
+            ml_dsa_signature: record.ml_dsa_signature(),
+        };
+        let signature = verify_hybrid_signature(
+            self.policy,
+            self.openpgp_key,
+            self.ml_dsa_key,
+            &request,
+            self.openpgp_scratch,
+        )
+        .map_err(|_| HistoryVerificationError::Signature)?;
+        bind_verified_commit_proof(&signature, commit, exact_contents, context)
+            .map_err(|_| HistoryVerificationError::Signature)
+    }
 }
 
 impl DetachedCommitProofRecord {
@@ -214,7 +283,7 @@ mod tests {
         .unwrap();
         let record =
             DetachedCommitProofRecord::new(commit, &openpgp[..openpgp_len], &ml_dsa).unwrap();
-        let store = DetachedCommitProofStore::new([record].into()).unwrap();
+        let store = DetachedCommitProofStore::new([record.clone()].into()).unwrap();
         let policy = HybridTrustPolicy {
             trust_generation: TrustGeneration(4),
             revocation_generation: RevocationGeneration(8),
@@ -244,6 +313,30 @@ mod tests {
             verifier.verify_commit(context, ObjectId::Sha256([99; 32]), contents),
             Err(HistoryVerificationError::Signature)
         );
+
+        #[cfg(unix)]
+        {
+            let root = mrml_runtime::join_path(
+                &mrml_runtime::temporary_directory(),
+                &mrml_runtime::mrml_format!("mrml-durable-verifier-{}", mrml_runtime::process_id()),
+            );
+            let directory = DurableDetachedCommitProofDirectory::open(&root).unwrap();
+            directory.insert(context, &record).unwrap();
+            let mut durable_scratch = [0; MAX_OPENPGP_SIGNATURE_BYTES];
+            let mut durable = DurableDetachedHybridCommitVerifier::new(
+                &directory,
+                &policy,
+                &public,
+                &ml_public,
+                &mut durable_scratch,
+            )
+            .unwrap();
+            assert!(durable.verify_commit(context, commit, contents).is_ok());
+            assert_eq!(
+                durable.verify_commit(context, commit, b"substituted"),
+                Err(HistoryVerificationError::Signature)
+            );
+        }
     }
 
     #[test]

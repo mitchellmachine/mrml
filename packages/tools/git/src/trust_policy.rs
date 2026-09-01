@@ -32,6 +32,7 @@ pub enum GitObjectType {
     BuildReceipt,
     KeyRotation,
     KeyRevocation,
+    EmergencyRecovery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +57,9 @@ pub enum HybridPolicyError {
     CutoverRollback,
     EmergencyPolicyChanged,
     KeyOutsideValidity,
+    EmergencyAuthorityMismatch,
+    EmergencyThresholdNotMet,
+    EmergencyReplay,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,6 +242,16 @@ impl VerifiedHybridSignature {
     pub const fn purpose(&self) -> SignaturePurpose {
         self.purpose
     }
+
+    pub const fn object_type(&self) -> GitObjectType {
+        self.object_type
+    }
+    pub const fn payload_digest(&self) -> [u8; 64] {
+        self.payload_digest
+    }
+    pub const fn repository_digest(&self) -> [u8; 64] {
+        self.repository_digest
+    }
 }
 
 pub const MAX_POLICY_PAIRS: usize = 64;
@@ -249,6 +263,174 @@ pub const MAX_KEY_REVOCATION_STATEMENT_BYTES: usize = 64 * 1024;
 pub const MAX_KEY_REVOCATION_REASON_BYTES: usize = 512;
 const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP3";
 const REVOCATION_MAGIC: &[u8; 8] = b"MRGREV01";
+const EMERGENCY_AUTHORITY_MAGIC: &[u8; 8] = b"MRGERA01";
+const EMERGENCY_TRANSITION_MAGIC: &[u8; 8] = b"MRGERT01";
+pub const MAX_EMERGENCY_AUTHORITY_BYTES: usize = 64 * 1024;
+pub const MAX_EMERGENCY_TRANSITION_BYTES: usize = 512;
+
+/// Owner-pinned emergency authority. Pair identities are complete hybrid
+/// identities, strictly ordered, and independently revocable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyRecoveryAuthority {
+    repository: RepositoryIdentity,
+    generation: u64,
+    valid_from: u64,
+    valid_until: u64,
+    threshold: u16,
+    pairs: Vector<AuthorizedHybridPair>,
+    revoked_openpgp: Vector<FingerprintV6>,
+    revoked_ml_dsa: Vector<[u8; 64]>,
+}
+
+impl EmergencyRecoveryAuthority {
+    pub fn new(
+        repository: RepositoryIdentity,
+        generation: u64,
+        valid_from: u64,
+        valid_until: u64,
+        threshold: u16,
+        pairs: Vector<AuthorizedHybridPair>,
+        revoked_openpgp: Vector<FingerprintV6>,
+        revoked_ml_dsa: Vector<[u8; 64]>,
+    ) -> Result<Self, HybridPolicyError> {
+        let value = Self {
+            repository,
+            generation,
+            valid_from,
+            valid_until,
+            threshold,
+            pairs,
+            revoked_openpgp,
+            revoked_ml_dsa,
+        };
+        validate_emergency_authority(&value)?;
+        Ok(value)
+    }
+    pub fn repository(&self) -> &RepositoryIdentity {
+        &self.repository
+    }
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub const fn threshold(&self) -> u16 {
+        self.threshold
+    }
+    pub fn pairs(&self) -> &[AuthorizedHybridPair] {
+        &self.pairs
+    }
+    pub fn digest(&self) -> [u8; 64] {
+        let mut hash = Sha3_512::new();
+        hash.update(EMERGENCY_AUTHORITY_MAGIC);
+        hash.update(&(self.repository.as_str().len() as u16).to_be_bytes());
+        hash.update(self.repository.as_str().as_bytes());
+        hash.update(&self.generation.to_be_bytes());
+        hash.update(&self.valid_from.to_be_bytes());
+        hash.update(&self.valid_until.to_be_bytes());
+        hash.update(&self.threshold.to_be_bytes());
+        hash.update(&(self.pairs.len() as u16).to_be_bytes());
+        hash.update(&(self.revoked_openpgp.len() as u16).to_be_bytes());
+        hash.update(&(self.revoked_ml_dsa.len() as u16).to_be_bytes());
+        for pair in &self.pairs {
+            hash.update(pair.openpgp_fingerprint.as_bytes());
+            hash.update(&pair.openpgp_key_digest);
+            hash.update(&pair.ml_dsa_key_digest);
+        }
+        for key in &self.revoked_openpgp {
+            hash.update(key.as_bytes());
+        }
+        for key in &self.revoked_ml_dsa {
+            hash.update(key);
+        }
+        hash.finalize()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyRecoveryTransition {
+    repository: RepositoryIdentity,
+    authority_generation: u64,
+    previous_policy_digest: [u8; 64],
+    previous_trust_generation: TrustGeneration,
+    previous_revocation_generation: RevocationGeneration,
+    next_policy_digest: [u8; 64],
+    next_trust_generation: TrustGeneration,
+    next_revocation_generation: RevocationGeneration,
+    next_authority_digest: [u8; 64],
+    effective_at: u64,
+}
+
+impl EmergencyRecoveryTransition {
+    pub fn new(
+        repository: RepositoryIdentity,
+        authority_generation: u64,
+        previous_policy_digest: [u8; 64],
+        previous_trust_generation: TrustGeneration,
+        previous_revocation_generation: RevocationGeneration,
+        next_policy_digest: [u8; 64],
+        next_trust_generation: TrustGeneration,
+        next_revocation_generation: RevocationGeneration,
+        next_authority_digest: [u8; 64],
+        effective_at: u64,
+    ) -> Result<Self, HybridPolicyError> {
+        if authority_generation == 0
+            || effective_at == 0
+            || next_trust_generation.0 <= previous_trust_generation.0
+            || next_revocation_generation.0 < previous_revocation_generation.0
+            || previous_policy_digest == [0; 64]
+            || next_policy_digest == [0; 64]
+            || next_authority_digest == [0; 64]
+        {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        Ok(Self {
+            repository,
+            authority_generation,
+            previous_policy_digest,
+            previous_trust_generation,
+            previous_revocation_generation,
+            next_policy_digest,
+            next_trust_generation,
+            next_revocation_generation,
+            next_authority_digest,
+            effective_at,
+        })
+    }
+    pub fn digest(&self) -> [u8; 64] {
+        let mut hash = Sha3_512::new();
+        hash.update(EMERGENCY_TRANSITION_MAGIC);
+        hash.update(&(self.repository.as_str().len() as u16).to_be_bytes());
+        hash.update(self.repository.as_str().as_bytes());
+        hash.update(&self.authority_generation.to_be_bytes());
+        hash.update(&self.previous_policy_digest);
+        hash.update(&self.previous_trust_generation.0.to_be_bytes());
+        hash.update(&self.previous_revocation_generation.0.to_be_bytes());
+        hash.update(&self.next_policy_digest);
+        hash.update(&self.next_trust_generation.0.to_be_bytes());
+        hash.update(&self.next_revocation_generation.0.to_be_bytes());
+        hash.update(&self.next_authority_digest);
+        hash.update(&self.effective_at.to_be_bytes());
+        hash.finalize()
+    }
+}
+
+/// Unforgeable outside this module: only exact threshold validation mints it.
+pub struct EmergencyRecoveryAuthorization {
+    authority_digest: [u8; 64],
+    transition_digest: [u8; 64],
+}
+
+#[cfg(test)]
+impl EmergencyRecoveryAuthorization {
+    pub(crate) fn exact_test_authorization(
+        authority: &EmergencyRecoveryAuthority,
+        transition: &EmergencyRecoveryTransition,
+    ) -> Self {
+        Self {
+            authority_digest: authority.digest(),
+            transition_digest: transition.digest(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyRevocationStatement {
@@ -345,6 +527,238 @@ pub struct TrustPolicyCandidate {
     pub revoked_legacy_v4: Vector<Fingerprint>,
     pub revoked_openpgp: Vector<FingerprintV6>,
     pub revoked_ml_dsa: Vector<[u8; 64]>,
+}
+
+fn validate_emergency_authority(
+    value: &EmergencyRecoveryAuthority,
+) -> Result<(), HybridPolicyError> {
+    if value.generation == 0
+        || value.valid_from >= value.valid_until
+        || value.pairs.is_empty()
+        || value.pairs.len() > MAX_POLICY_PAIRS
+        || value.threshold == 0
+        || usize::from(value.threshold) > value.pairs.len()
+        || value.revoked_openpgp.len() > MAX_POLICY_REVOKED_KEYS
+        || value.revoked_ml_dsa.len() > MAX_POLICY_REVOKED_KEYS
+        || !value.pairs.windows(2).all(|w| pair_less(&w[0], &w[1]))
+        || !value
+            .revoked_openpgp
+            .windows(2)
+            .all(|w| w[0].as_bytes() < w[1].as_bytes())
+        || !value.revoked_ml_dsa.windows(2).all(|w| w[0] < w[1])
+        || value.pairs.iter().any(|pair| {
+            value.revoked_openpgp.contains(&pair.openpgp_fingerprint)
+                || value.revoked_ml_dsa.contains(&pair.ml_dsa_key_digest)
+        })
+    {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(())
+}
+
+pub fn encode_emergency_recovery_authority(
+    value: &EmergencyRecoveryAuthority,
+) -> Result<Vector<u8>, HybridPolicyError> {
+    validate_emergency_authority(value)?;
+    let mut out = Vector::new();
+    append(&mut out, EMERGENCY_AUTHORITY_MAGIC)?;
+    append_counted_bytes(&mut out, value.repository.as_str().as_bytes())?;
+    append(&mut out, &value.generation.to_be_bytes())?;
+    append(&mut out, &value.valid_from.to_be_bytes())?;
+    append(&mut out, &value.valid_until.to_be_bytes())?;
+    append(&mut out, &value.threshold.to_be_bytes())?;
+    append_u16(&mut out, value.pairs.len())?;
+    append_u16(&mut out, value.revoked_openpgp.len())?;
+    append_u16(&mut out, value.revoked_ml_dsa.len())?;
+    for pair in &value.pairs {
+        append_pair(&mut out, pair)?;
+    }
+    for key in &value.revoked_openpgp {
+        append(&mut out, key.as_bytes())?;
+    }
+    for key in &value.revoked_ml_dsa {
+        append(&mut out, key)?;
+    }
+    if out.len() > MAX_EMERGENCY_AUTHORITY_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    Ok(out)
+}
+
+pub fn parse_emergency_recovery_authority(
+    input: &[u8],
+) -> Result<EmergencyRecoveryAuthority, HybridPolicyError> {
+    if input.is_empty() || input.len() > MAX_EMERGENCY_AUTHORITY_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    let mut cursor = PolicyCursor::new(input);
+    if cursor.take(8)? != EMERGENCY_AUTHORITY_MAGIC {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let repository = RepositoryIdentity::parse(
+        core::str::from_utf8(cursor.take_counted_bytes()?)
+            .map_err(|_| HybridPolicyError::InvalidPolicy)?,
+    )
+    .map_err(|_| HybridPolicyError::InvalidPolicy)?;
+    let generation = cursor.u64()?;
+    let valid_from = cursor.u64()?;
+    let valid_until = cursor.u64()?;
+    let threshold = cursor.u16()?;
+    let pair_count = usize::from(cursor.u16()?);
+    let pgp_count = usize::from(cursor.u16()?);
+    let ml_count = usize::from(cursor.u16()?);
+    if pair_count > MAX_POLICY_PAIRS
+        || pgp_count > MAX_POLICY_REVOKED_KEYS
+        || ml_count > MAX_POLICY_REVOKED_KEYS
+    {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let mut pairs =
+        Vector::with_capacity(pair_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..pair_count {
+        pairs.push(cursor.pair()?);
+    }
+    let mut revoked_openpgp =
+        Vector::with_capacity(pgp_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..pgp_count {
+        let mut key = [0; 32];
+        key.copy_from_slice(cursor.take(32)?);
+        revoked_openpgp.push(FingerprintV6::from_bytes(key));
+    }
+    let mut revoked_ml_dsa =
+        Vector::with_capacity(ml_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..ml_count {
+        let mut key = [0; 64];
+        key.copy_from_slice(cursor.take(64)?);
+        revoked_ml_dsa.push(key);
+    }
+    if !cursor.is_complete() {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let value = EmergencyRecoveryAuthority::new(
+        repository,
+        generation,
+        valid_from,
+        valid_until,
+        threshold,
+        pairs,
+        revoked_openpgp,
+        revoked_ml_dsa,
+    )?;
+    if &*encode_emergency_recovery_authority(&value)? != input {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(value)
+}
+
+pub fn encode_emergency_recovery_transition(
+    value: &EmergencyRecoveryTransition,
+) -> Result<Vector<u8>, HybridPolicyError> {
+    let mut out = Vector::new();
+    append(&mut out, EMERGENCY_TRANSITION_MAGIC)?;
+    append_counted_bytes(&mut out, value.repository.as_str().as_bytes())?;
+    append(&mut out, &value.authority_generation.to_be_bytes())?;
+    append(&mut out, &value.previous_policy_digest)?;
+    append(&mut out, &value.previous_trust_generation.0.to_be_bytes())?;
+    append(
+        &mut out,
+        &value.previous_revocation_generation.0.to_be_bytes(),
+    )?;
+    append(&mut out, &value.next_policy_digest)?;
+    append(&mut out, &value.next_trust_generation.0.to_be_bytes())?;
+    append(&mut out, &value.next_revocation_generation.0.to_be_bytes())?;
+    append(&mut out, &value.next_authority_digest)?;
+    append(&mut out, &value.effective_at.to_be_bytes())?;
+    if out.len() > MAX_EMERGENCY_TRANSITION_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    Ok(out)
+}
+
+pub fn parse_emergency_recovery_transition(
+    input: &[u8],
+) -> Result<EmergencyRecoveryTransition, HybridPolicyError> {
+    if input.is_empty() || input.len() > MAX_EMERGENCY_TRANSITION_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    let mut cursor = PolicyCursor::new(input);
+    if cursor.take(8)? != EMERGENCY_TRANSITION_MAGIC {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let repository = RepositoryIdentity::parse(
+        core::str::from_utf8(cursor.take_counted_bytes()?)
+            .map_err(|_| HybridPolicyError::InvalidPolicy)?,
+    )
+    .map_err(|_| HybridPolicyError::InvalidPolicy)?;
+    let authority_generation = cursor.u64()?;
+    let mut previous_policy_digest = [0; 64];
+    previous_policy_digest.copy_from_slice(cursor.take(64)?);
+    let previous_trust_generation = TrustGeneration(cursor.u64()?);
+    let previous_revocation_generation = RevocationGeneration(cursor.u64()?);
+    let mut next_policy_digest = [0; 64];
+    next_policy_digest.copy_from_slice(cursor.take(64)?);
+    let next_trust_generation = TrustGeneration(cursor.u64()?);
+    let next_revocation_generation = RevocationGeneration(cursor.u64()?);
+    let mut next_authority_digest = [0; 64];
+    next_authority_digest.copy_from_slice(cursor.take(64)?);
+    let effective_at = cursor.u64()?;
+    if !cursor.is_complete() {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let value = EmergencyRecoveryTransition::new(
+        repository,
+        authority_generation,
+        previous_policy_digest,
+        previous_trust_generation,
+        previous_revocation_generation,
+        next_policy_digest,
+        next_trust_generation,
+        next_revocation_generation,
+        next_authority_digest,
+        effective_at,
+    )?;
+    if &*encode_emergency_recovery_transition(&value)? != input {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(value)
+}
+
+pub fn authorize_emergency_recovery(
+    authority: &EmergencyRecoveryAuthority,
+    transition: &EmergencyRecoveryTransition,
+    approvals: &[VerifiedHybridSignature],
+) -> Result<EmergencyRecoveryAuthorization, HybridPolicyError> {
+    validate_emergency_authority(authority)?;
+    let bytes = encode_emergency_recovery_transition(transition)?;
+    let digest = Sha3_512::digest(&bytes);
+    if transition.repository != authority.repository
+        || transition.authority_generation != authority.generation
+        || transition.effective_at < authority.valid_from
+        || transition.effective_at >= authority.valid_until
+    {
+        return Err(HybridPolicyError::EmergencyAuthorityMismatch);
+    }
+    let mut accepted: Vector<AuthorizedHybridPair> = Vector::new();
+    for approval in approvals {
+        if approval.repository_digest == repository_digest(&authority.repository)
+            && approval.purpose == SignaturePurpose::EmergencyRecovery
+            && approval.object_type == GitObjectType::EmergencyRecovery
+            && approval.payload_digest == digest
+            && approval.trust_generation.0 == authority.generation
+            && approval.revocation_generation == transition.previous_revocation_generation
+            && authority.pairs.contains(&approval.pair)
+            && !accepted.contains(&approval.pair)
+        {
+            accepted.push(approval.pair);
+        }
+    }
+    if accepted.len() < usize::from(authority.threshold) {
+        return Err(HybridPolicyError::EmergencyThresholdNotMet);
+    }
+    Ok(EmergencyRecoveryAuthorization {
+        authority_digest: authority.digest(),
+        transition_digest: digest,
+    })
 }
 
 pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, HybridPolicyError> {
@@ -817,6 +1231,12 @@ impl<'a> PolicyCursor<'a> {
 }
 
 impl TrustPolicyState {
+    #[cfg(test)]
+    pub(crate) fn from_emergency_candidate_for_test(candidate: TrustPolicyCandidate) -> Self {
+        validate_candidate(&candidate).expect("valid emergency policy test candidate");
+        Self::from_candidate(candidate)
+    }
+
     pub fn establish(candidate: TrustPolicyCandidate) -> Result<Self, HybridPolicyError> {
         validate_candidate(&candidate)?;
         if candidate.generation.0 == 0 || candidate.previous_policy_digest != [0u8; 64] {
@@ -953,6 +1373,65 @@ impl TrustPolicyState {
             return Err(HybridPolicyError::MissingNewAuthorization);
         }
         Ok(Self::from_candidate(candidate))
+    }
+
+    /// Applies one exact owner-pinned emergency transition. The authorization
+    /// is consumed by value; persisted replay also fails because the old
+    /// policy digest and generations cease to match after activation.
+    pub fn emergency_transition(
+        &self,
+        authority: &EmergencyRecoveryAuthority,
+        transition: &EmergencyRecoveryTransition,
+        authorization: EmergencyRecoveryAuthorization,
+        candidate: TrustPolicyCandidate,
+    ) -> Result<Self, HybridPolicyError> {
+        validate_candidate(&candidate)?;
+        let next = Self::from_candidate(candidate);
+        let pinned = self
+            .emergency_policy_digest
+            .ok_or(HybridPolicyError::EmergencyAuthorityMismatch)?;
+        if authority.repository != self.repository
+            || authority.digest() != pinned
+            || authorization.authority_digest != pinned
+            || transition.repository != self.repository
+            || transition.previous_policy_digest != self.digest()
+            || transition.previous_trust_generation != self.generation
+            || transition.previous_revocation_generation != self.revocation_generation
+            || transition.next_policy_digest != next.digest()
+            || transition.next_trust_generation != next.generation
+            || transition.next_revocation_generation != next.revocation_generation
+            || transition.next_authority_digest
+                != next
+                    .emergency_policy_digest
+                    .ok_or(HybridPolicyError::EmergencyAuthorityMismatch)?
+            || authorization.transition_digest != transition.digest()
+        {
+            return Err(HybridPolicyError::EmergencyReplay);
+        }
+        if next.generation.0 <= self.generation.0
+            || next.revocation_generation.0 < self.revocation_generation.0
+            || (self.hybrid_required && !next.hybrid_required)
+            || next.allowed_object_formats & !self.allowed_object_formats != 0
+            || self
+                .protected_refs
+                .iter()
+                .any(|reference| !next.protected_refs.contains(reference))
+            || self
+                .revoked_legacy_v4
+                .iter()
+                .any(|key| !next.revoked_legacy_v4.contains(key))
+            || self
+                .revoked_openpgp
+                .iter()
+                .any(|key| !next.revoked_openpgp.contains(key))
+            || self
+                .revoked_ml_dsa
+                .iter()
+                .any(|key| !next.revoked_ml_dsa.contains(key))
+        {
+            return Err(HybridPolicyError::TrustRootBroadened);
+        }
+        Ok(next)
     }
 
     pub fn apply_key_revocation(
@@ -1597,6 +2076,10 @@ const fn purpose_matches_type(purpose: SignaturePurpose, object_type: GitObjectT
                 SignaturePurpose::KeyRevocation,
                 GitObjectType::KeyRevocation
             )
+            | (
+                SignaturePurpose::EmergencyRecovery,
+                GitObjectType::EmergencyRecovery
+            )
     )
 }
 
@@ -1609,6 +2092,7 @@ const fn purpose_code(purpose: SignaturePurpose) -> u8 {
         SignaturePurpose::BuildReceipt => 5,
         SignaturePurpose::KeyRotation => 6,
         SignaturePurpose::KeyRevocation => 7,
+        SignaturePurpose::EmergencyRecovery => 8,
     }
 }
 
@@ -1621,6 +2105,7 @@ const fn object_type_code(object_type: GitObjectType) -> u8 {
         GitObjectType::BuildReceipt => 5,
         GitObjectType::KeyRotation => 6,
         GitObjectType::KeyRevocation => 7,
+        GitObjectType::EmergencyRecovery => 8,
     }
 }
 
@@ -1629,9 +2114,115 @@ mod tests {
     use super::*;
     use mrml_crypto::{ML_DSA_65_SECRET_KEY_BYTES, ml_dsa_65_keygen, ml_dsa_65_sign};
     use mrml_openpgp::{
-        DigestAlgorithm, SigningKey, SigningKeyV6, VerificationPolicy,
-        sign_detached_ascii, sign_detached_v6_ascii_with_salt, verify_detached_ascii,
+        DigestAlgorithm, SigningKey, SigningKeyV6, VerificationPolicy, sign_detached_ascii,
+        sign_detached_v6_ascii_with_salt, verify_detached_ascii,
     };
+
+    #[test]
+    fn emergency_authority_is_canonical_threshold_bound_and_replay_scoped() {
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let first = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([1; 32]),
+            openpgp_key_digest: [2; 64],
+            ml_dsa_key_digest: [3; 64],
+        };
+        let second = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([4; 32]),
+            openpgp_key_digest: [5; 64],
+            ml_dsa_key_digest: [6; 64],
+        };
+        let authority = EmergencyRecoveryAuthority::new(
+            repository.clone(),
+            7,
+            100,
+            200,
+            2,
+            [first, second].into(),
+            Vector::new(),
+            Vector::new(),
+        )
+        .unwrap();
+        let encoded = encode_emergency_recovery_authority(&authority).unwrap();
+        assert_eq!(authority.digest(), Sha3_512::digest(&encoded));
+        assert_eq!(
+            parse_emergency_recovery_authority(&encoded),
+            Ok(authority.clone())
+        );
+        for end in 0..encoded.len() {
+            assert!(parse_emergency_recovery_authority(&encoded[..end]).is_err());
+        }
+        let transition = EmergencyRecoveryTransition::new(
+            repository.clone(),
+            7,
+            [8; 64],
+            TrustGeneration(3),
+            RevocationGeneration(4),
+            [9; 64],
+            TrustGeneration(4),
+            RevocationGeneration(5),
+            [10; 64],
+            150,
+        )
+        .unwrap();
+        let transition_bytes = encode_emergency_recovery_transition(&transition).unwrap();
+        assert_eq!(transition.digest(), Sha3_512::digest(&transition_bytes));
+        assert_eq!(
+            parse_emergency_recovery_transition(&transition_bytes),
+            Ok(transition.clone())
+        );
+        for end in 0..transition_bytes.len() {
+            assert!(parse_emergency_recovery_transition(&transition_bytes[..end]).is_err());
+        }
+        let digest = transition.digest();
+        let approval = |pair| VerifiedHybridSignature {
+            trust_generation: TrustGeneration(7),
+            revocation_generation: RevocationGeneration(4),
+            pair,
+            repository_digest: repository_digest(&repository),
+            payload_digest: digest,
+            purpose: SignaturePurpose::EmergencyRecovery,
+            object_type: GitObjectType::EmergencyRecovery,
+        };
+        assert_eq!(
+            authorize_emergency_recovery(&authority, &transition, &[approval(first)]).err(),
+            Some(HybridPolicyError::EmergencyThresholdNotMet)
+        );
+        assert_eq!(
+            authorize_emergency_recovery(
+                &authority,
+                &transition,
+                &[approval(first), approval(first)]
+            )
+            .err(),
+            Some(HybridPolicyError::EmergencyThresholdNotMet)
+        );
+        assert!(
+            authorize_emergency_recovery(
+                &authority,
+                &transition,
+                &[approval(first), approval(second)]
+            )
+            .is_ok()
+        );
+        let wrong = EmergencyRecoveryTransition::new(
+            repository.clone(),
+            7,
+            [8; 64],
+            TrustGeneration(3),
+            RevocationGeneration(4),
+            [11; 64],
+            TrustGeneration(4),
+            RevocationGeneration(5),
+            [10; 64],
+            150,
+        )
+        .unwrap();
+        assert_eq!(
+            authorize_emergency_recovery(&authority, &wrong, &[approval(first), approval(second)])
+                .err(),
+            Some(HybridPolicyError::EmergencyThresholdNotMet)
+        );
+    }
 
     #[test]
     fn exact_pair_and_all_context_fields_are_required() {

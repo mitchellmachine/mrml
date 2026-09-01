@@ -161,6 +161,7 @@ pub enum SignaturePurpose {
     BuildReceipt,
     KeyRotation,
     KeyRevocation,
+    EmergencyRecovery,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

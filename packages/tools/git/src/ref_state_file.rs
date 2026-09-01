@@ -28,7 +28,9 @@ impl ActiveRefFile {
         state: &ActiveRefState,
         manifest: &PackSetManifest,
     ) -> Result<Self, DurableFailure> {
-        if manifest.digest().map_err(|_| DurableFailure::VerifierCrash)?
+        if manifest
+            .digest()
+            .map_err(|_| DurableFailure::VerifierCrash)?
             != state.pack_set_digest
             || manifest.repository() != &state.repository
             || manifest.repository_generation() != state.repository_generation
@@ -230,9 +232,11 @@ impl ActiveRefFile {
         let state = self.load()?;
         let path = self.pack_set_path(&state.pack_set_digest);
         let bytes = read_bounded(&path, MAX_PACK_SET_MANIFEST_BYTES)?;
-        let manifest = parse_pack_set_manifest(&bytes, limits)
-            .map_err(|_| ActiveRefStateError::Integrity)?;
-        if manifest.digest().map_err(|_| ActiveRefStateError::Integrity)?
+        let manifest =
+            parse_pack_set_manifest(&bytes, limits).map_err(|_| ActiveRefStateError::Integrity)?;
+        if manifest
+            .digest()
+            .map_err(|_| ActiveRefStateError::Integrity)?
             != state.pack_set_digest
             || manifest.repository() != &state.repository
             || manifest.repository_generation() != state.repository_generation
@@ -326,10 +330,7 @@ impl ActiveRefFile {
         })?;
         let manifest_bytes =
             encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
-        self.persist_manifest_bytes(
-            &self.pack_set_path(&next.pack_set_digest),
-            &manifest_bytes,
-        )?;
+        self.persist_manifest_bytes(&self.pack_set_path(&next.pack_set_digest), &manifest_bytes)?;
         let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
         let mut temporary =
             File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
@@ -372,7 +373,8 @@ impl ActiveRefFile {
         manifest: &PackSetManifest,
         digest: &[u8; 32],
     ) -> Result<(), DurableFailure> {
-        let bytes = encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
+        let bytes =
+            encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
         self.persist_manifest_bytes(&self.pack_set_path(digest), &bytes)
     }
 
@@ -436,8 +438,6 @@ fn sync_ref_directory(_: &str) -> Result<(), DurableFailure> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use core::sync::atomic::{AtomicUsize, Ordering};
-    use mrml_runtime::Shared;
     use super::*;
     use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
     use crate::{
@@ -446,6 +446,8 @@ mod tests {
         RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
         build_verified_fast_forward_transaction, verify_introduced_history,
     };
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use mrml_runtime::{Command, Shared, path_exists, process_id, read_directory, write_new_file};
 
     fn fixture() -> (ActiveRefState, VerifiedRefTransaction, ObjectId) {
         fixture_for("owner/repository")
@@ -612,10 +614,19 @@ mod tests {
                 while worker_ready.load(Ordering::Acquire) != 3 {
                     mrml_runtime::yield_now();
                 }
-                match ActiveRefFile::open(&worker_root).unwrap().activate(&worker_verified) {
-                    Ok(_) => { worker_success.fetch_add(1, Ordering::AcqRel); }
-                    Err(DurableFailure::StaleLock) => { worker_stale.fetch_add(1, Ordering::AcqRel); }
-                    Err(_) => { worker_unexpected.fetch_add(1, Ordering::AcqRel); }
+                match ActiveRefFile::open(&worker_root)
+                    .unwrap()
+                    .activate(&worker_verified)
+                {
+                    Ok(_) => {
+                        worker_success.fetch_add(1, Ordering::AcqRel);
+                    }
+                    Err(DurableFailure::StaleLock) => {
+                        worker_stale.fetch_add(1, Ordering::AcqRel);
+                    }
+                    Err(_) => {
+                        worker_unexpected.fetch_add(1, Ordering::AcqRel);
+                    }
                 }
             }) {
                 Ok(worker) => worker,
@@ -627,8 +638,14 @@ mod tests {
         let worker_success = other_success.clone();
         let other_worker = match mrml_runtime::spawn_joinable(move || {
             worker_ready.fetch_add(1, Ordering::AcqRel);
-            while worker_ready.load(Ordering::Acquire) != 3 { mrml_runtime::yield_now(); }
-            if ActiveRefFile::open(&other_root).unwrap().activate(&other_verified).is_ok() {
+            while worker_ready.load(Ordering::Acquire) != 3 {
+                mrml_runtime::yield_now();
+            }
+            if ActiveRefFile::open(&other_root)
+                .unwrap()
+                .activate(&other_verified)
+                .is_ok()
+            {
                 worker_success.fetch_add(1, Ordering::AcqRel);
             }
         }) {
@@ -644,10 +661,153 @@ mod tests {
         assert_eq!(unexpected.load(Ordering::Acquire), 0);
         assert_eq!(other_success.load(Ordering::Acquire), 1);
         let same_final = ActiveRefFile::open(&same_root).unwrap().load().unwrap();
-        assert_eq!((same_final.repository_generation, same_final.refs[0].1), (RepositoryGeneration(8), same_new));
-        let other_final = ActiveRefFile::open(&root("mrml-active-concurrent-other")).unwrap().load().unwrap();
-        assert_eq!((other_final.repository_generation, other_final.refs[0].1), (RepositoryGeneration(8), other_new));
+        assert_eq!(
+            (same_final.repository_generation, same_final.refs[0].1),
+            (RepositoryGeneration(8), same_new)
+        );
+        let other_final = ActiveRefFile::open(&root("mrml-active-concurrent-other"))
+            .unwrap()
+            .load()
+            .unwrap();
+        assert_eq!(
+            (other_final.repository_generation, other_final.refs[0].1),
+            (RepositoryGeneration(8), other_new)
+        );
         mrml_runtime::remove_dir_all(&same_root).unwrap();
         mrml_runtime::remove_dir_all(&root("mrml-active-concurrent-other")).unwrap();
+    }
+
+    #[test]
+    fn child_process_attempts_one_marked_activation() {
+        if !path_exists("run-multiprocess-helper") {
+            return;
+        }
+        let (_, verified, _) = if path_exists("other-repository") {
+            fixture_for("owner/other")
+        } else {
+            fixture()
+        };
+        let ready = mrml_runtime::mrml_format!("ready-{}", process_id());
+        write_new_file(&ready, b"ready").unwrap();
+        while !path_exists("release") {
+            mrml_runtime::yield_now();
+        }
+        let outcome = match ActiveRefFile::open(".").unwrap().activate(&verified) {
+            Ok(_) => "success",
+            Err(DurableFailure::StaleLock) => "stale",
+            Err(error) => panic!("unexpected activation result: {error:?}"),
+        };
+        let name = mrml_runtime::mrml_format!("outcome-{outcome}-{}", process_id());
+        write_new_file(&name, b"complete").unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn separate_processes_serialize_same_repository_and_isolate_distinct_repository() {
+        let same_root = root("mrml-active-process-same");
+        let other_root = root("mrml-active-process-other");
+        let _ = mrml_runtime::remove_dir_all(&same_root);
+        let _ = mrml_runtime::remove_dir_all(&other_root);
+        let (same_state, _, same_new) = fixture();
+        let (other_state, _, other_new) = fixture_for("owner/other");
+        ActiveRefFile::initialize(&same_root, &same_state).unwrap();
+        ActiveRefFile::initialize(&other_root, &other_state).unwrap();
+        write_new_file(&join_path(&same_root, "run-multiprocess-helper"), b"run").unwrap();
+        write_new_file(&join_path(&other_root, "run-multiprocess-helper"), b"run").unwrap();
+        write_new_file(&join_path(&other_root, "other-repository"), b"other").unwrap();
+
+        let mut children = Vector::new();
+        for directory in [&same_root, &same_root, &other_root] {
+            let mut command = Command::new("/proc/self/exe");
+            command
+                .args([
+                    "--exact",
+                    "ref_state_file::tests::child_process_attempts_one_marked_activation",
+                    "--nocapture",
+                ])
+                .current_dir(directory);
+            children.push(command.spawn_silent().unwrap());
+        }
+        for _ in 0..1_000_000 {
+            let same_ready = read_directory(&same_root)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.name.starts_with("ready-"))
+                .count();
+            let other_ready = read_directory(&other_root)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.name.starts_with("ready-"))
+                .count();
+            if same_ready == 2 && other_ready == 1 {
+                break;
+            }
+            mrml_runtime::yield_now();
+        }
+        assert_eq!(
+            read_directory(&same_root)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.name.starts_with("ready-"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            read_directory(&other_root)
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.name.starts_with("ready-"))
+                .count(),
+            1
+        );
+        write_new_file(&join_path(&same_root, "release"), b"release").unwrap();
+        write_new_file(&join_path(&other_root, "release"), b"release").unwrap();
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+
+        let same_entries = read_directory(&same_root).unwrap();
+        assert_eq!(
+            same_entries
+                .iter()
+                .filter(|entry| entry.name.starts_with("outcome-success-"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            same_entries
+                .iter()
+                .filter(|entry| entry.name.starts_with("outcome-stale-"))
+                .count(),
+            1
+        );
+        let other_entries = read_directory(&other_root).unwrap();
+        assert_eq!(
+            other_entries
+                .iter()
+                .filter(|entry| entry.name.starts_with("outcome-success-"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            other_entries
+                .iter()
+                .filter(|entry| entry.name.starts_with("outcome-stale-"))
+                .count(),
+            0
+        );
+
+        let same_final = ActiveRefFile::open(&same_root).unwrap().load().unwrap();
+        assert_eq!(
+            (same_final.repository_generation, same_final.refs[0].1),
+            (RepositoryGeneration(8), same_new)
+        );
+        let other_final = ActiveRefFile::open(&other_root).unwrap().load().unwrap();
+        assert_eq!(
+            (other_final.repository_generation, other_final.refs[0].1),
+            (RepositoryGeneration(8), other_new)
+        );
+        mrml_runtime::remove_dir_all(&same_root).unwrap();
+        mrml_runtime::remove_dir_all(&other_root).unwrap();
     }
 }

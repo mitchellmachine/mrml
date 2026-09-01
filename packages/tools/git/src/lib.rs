@@ -2,9 +2,9 @@
 
 use mrml_runtime::{Text, Vector};
 
-mod arrival_pack;
 #[cfg(test)]
 mod adversarial;
+mod arrival_pack;
 mod audit_receipt;
 mod cache_pack;
 mod cache_pack_file;
@@ -42,6 +42,7 @@ mod signed_audit_receipt;
 mod smart_protocol;
 mod transport;
 mod trust_policy;
+mod trust_policy_file;
 mod verification;
 
 pub use arrival_pack::ArrivalPackStore;
@@ -50,19 +51,19 @@ pub use audit_receipt::{
     parse_audit_receipt,
 };
 pub use cache_pack::{
-    ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES,
-    MAX_PACK_CACHE_KEY_BYTES, MAX_PACK_CACHE_OBJECTS_PER_SIDE, PackCacheError, PackCacheKey,
+    ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,
+    MAX_PACK_CACHE_OBJECTS_PER_SIDE, PackCacheError, PackCacheKey,
 };
 pub use cache_pack_file::{ImmutablePackCacheDirectory, PackCacheFileError};
 pub use compaction::{
     COMPACTION_DEFLATE_LEVEL, COMPACTION_DELTA_WINDOW, COMPACTION_FREE_RESERVE_BYTES,
-    COMPACTION_MAX_DELTA_DEPTH, COMPACTION_MEMORY_LIMIT_BYTES, COMPACTION_WORKERS,
-    CompactionError, CompactionJournal, CompactionPhase, CompactionProfile, CompactionResources,
-    CompactionResult, CompactionSnapshot, CrashOutcome, compact_reachable,
+    COMPACTION_MAX_DELTA_DEPTH, COMPACTION_MEMORY_LIMIT_BYTES, COMPACTION_WORKERS, CompactionError,
+    CompactionJournal, CompactionPhase, CompactionProfile, CompactionResources, CompactionResult,
+    CompactionSnapshot, CrashOutcome, compact_reachable,
 };
 pub use detached_commit_proof::{
     DetachedCommitProofRecord, DetachedCommitProofStore, DetachedHybridCommitVerifier,
-    MAX_DETACHED_COMMIT_PROOFS,
+    DurableDetachedHybridCommitVerifier, MAX_DETACHED_COMMIT_PROOFS,
 };
 pub use detached_commit_proof_file::{
     DetachedCommitProofFileError, DurableDetachedCommitProofDirectory,
@@ -71,15 +72,12 @@ pub use diff::FileDiff;
 pub use gitd_core::{
     AnnotatedTagDetails, AnnotatedTagPage, BlobPage, BoundedRead, BoundedWrite,
     CandidateRefTransaction, CandidateRefUpdate, CommitDetails, CommitPage, FullRefName,
-    GitdCoreBackend, GitdCoreError,
-    ImmutablePackDescriptor, MAX_REFS_PER_TRANSACTION, PackGeneration, QueryLimits,
-    ReadmeCandidate, RepositoryEvent, RepositoryEventCursor, RepositoryEventPage,
-    RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
-    RevocationGeneration, SignaturePurpose,
-    SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,
-    VerificationSummary, VerifiedMetadataDescriptor, VerifiedRefTransaction, VerifiedRefUpdate,
-    WorkBudget,
-    build_verified_fast_forward_transaction,
+    GitdCoreBackend, GitdCoreError, ImmutablePackDescriptor, MAX_REFS_PER_TRANSACTION,
+    PackGeneration, QueryLimits, ReadmeCandidate, RepositoryEvent, RepositoryEventCursor,
+    RepositoryEventPage, RepositoryGeneration, RepositoryIdentity, RepositoryPath,
+    RepositorySummary, RevocationGeneration, SignaturePurpose, SmartGitOperation, SmartGitRequest,
+    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedMetadataDescriptor,
+    VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget, build_verified_fast_forward_transaction,
 };
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
@@ -129,7 +127,9 @@ pub use receive_journal::{
     RecoveryAction, classify_receive_recovery, encode_receive_journal, parse_receive_journal,
 };
 pub use receive_journal_file::ReceiveJournalDirectory;
-pub use receive_pack_core::ReceivePackCore;
+pub use receive_pack_core::{
+    ProtectedReceiveAuthority, ProtectedReceiveAuthorization, ReceivePackCore,
+};
 pub use receive_store::LinuxDurableReceiveStore;
 pub use ref_state::{
     ActiveRefState, ActiveRefStateError, MAX_ACTIVE_REF_STATE_BYTES, MAX_ACTIVE_REFS,
@@ -146,8 +146,8 @@ pub use repository::{
     Repository, RepositoryError,
 };
 pub use repository_view::{
-    FilesystemRepositoryView, MAX_VERIFICATION_SUMMARY_EVIDENCE,
-    VerificationSummaryEvidence, VerificationSummaryStore,
+    FilesystemRepositoryView, MAX_VERIFICATION_SUMMARY_EVIDENCE, VerificationSummaryEvidence,
+    VerificationSummaryStore,
 };
 pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use signed_audit_receipt::{
@@ -166,17 +166,21 @@ pub use transport::{
     parse_push_response_mode, push_request, push_request_mode, push_request_mode_negotiated,
 };
 pub use trust_policy::{
-    AuthorizedHybridPair, GitObjectType, HYBRID_PROFILE_NAME, HybridPolicyError, HybridTrustPolicy,
-    HybridVerificationRequest, KeyRevocationStatement, MAX_ENCODED_TRUST_POLICY_BYTES,
-    MAX_HYBRID_PAYLOAD_BYTES, MAX_KEY_REVOCATION_REASON_BYTES,
-    MAX_KEY_REVOCATION_STATEMENT_BYTES, MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS,
-    MAX_POLICY_REVOKED_KEYS, MAX_POLICY_LEGACY_V4_KEYS, LegacyV4KeyStatus, PolicyPairStatus,
-    TrustPolicyCandidate, TrustPolicyState,
-    VerifiedHybridSignature, bind_verified_commit_proof, bind_verified_git_object_proof,
-    bind_verified_legacy_commit_proof,
-    canonical_hybrid_transcript, encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
+    AuthorizedHybridPair, EmergencyRecoveryAuthority, EmergencyRecoveryAuthorization,
+    EmergencyRecoveryTransition, GitObjectType, HYBRID_PROFILE_NAME, HybridPolicyError,
+    HybridTrustPolicy, HybridVerificationRequest, KeyRevocationStatement, LegacyV4KeyStatus,
+    MAX_EMERGENCY_AUTHORITY_BYTES, MAX_EMERGENCY_TRANSITION_BYTES, MAX_ENCODED_TRUST_POLICY_BYTES,
+    MAX_HYBRID_PAYLOAD_BYTES, MAX_KEY_REVOCATION_REASON_BYTES, MAX_KEY_REVOCATION_STATEMENT_BYTES,
+    MAX_POLICY_LEGACY_V4_KEYS, MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS,
+    MAX_POLICY_REVOKED_KEYS, PolicyPairStatus, TrustPolicyCandidate, TrustPolicyState,
+    VerifiedHybridSignature, authorize_emergency_recovery, bind_verified_commit_proof,
+    bind_verified_git_object_proof, bind_verified_legacy_commit_proof, canonical_hybrid_transcript,
+    encode_emergency_recovery_authority, encode_emergency_recovery_transition,
+    encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
+    parse_emergency_recovery_authority, parse_emergency_recovery_transition,
     parse_key_revocation_statement, parse_trust_policy, verify_hybrid_signature,
 };
+pub use trust_policy_file::{LinuxDurableTrustPolicyStore, TrustPolicyFileError};
 #[cfg(test)]
 pub(crate) use verification::verify_introduced_history;
 pub use verification::{

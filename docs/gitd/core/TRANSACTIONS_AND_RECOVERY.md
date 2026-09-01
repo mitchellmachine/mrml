@@ -173,13 +173,15 @@ successful activation retains the old arrival and manifest for later recovery-
 aware retirement. This is hosted Linux evidence only. Process-kill, power-loss,
 native-Windows directory flush, and physical-storage evidence remain open.
 
-The controlled concurrency test starts three native joinable workers together:
-two target one repository and exact expected generation while one targets a
-different repository identity and storage root. Exactly one same-repository
-transaction succeeds, one fails stale, the independent transaction succeeds,
-and both repositories reopen at exactly their next generation and ref value.
-This is process-local hosted-Linux transaction serialization evidence, not a
-multi-process kill or distributed-concurrency claim.
+The controlled concurrency tests exercise both process-local workers and real
+hosted-Linux child processes. In each case, two writers target one repository
+and exact expected generation while a third targets a different repository
+identity and storage root. The child processes rendezvous before activation so
+their filesystem transactions overlap. Exactly one same-repository transaction
+succeeds, one fails stale, the independent transaction succeeds, and both
+repositories reopen at exactly their next generation and ref value. This is
+hosted-Linux multiprocess activation-serialization evidence, not distributed,
+production-load, or native-Windows evidence.
 
 A second hosted-Linux concurrency test covers the complete thin-receive path.
 Two workers begin from the same exact active state and are held until both have
