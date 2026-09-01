@@ -1,5 +1,37 @@
 # Patent review log
 
+# 2026-09-01 — Bounded RFC 8878 Zstandard encoder — Canada
+
+Patent review: **TRIGGERED**. Disposition: **CONDITIONAL_PROCEED**. Search
+confidence: **MEDIUM**. Technical overlap: **LOW**. Clearance/FTO conclusion:
+none. Jurisdiction: **CA**. Provenance: targeted technical-screening summary
+supplied and adopted by the owner; underlying privileged work product is not
+reproduced here.
+
+Implementation and testing are authorized for a bounded software-only RFC 8878
+profile comprising FSE/tANS sequence encoding, RFC normalized-count table
+descriptions, predefined/RLE/FSE-compressed/repeat modes, canonical Huffman
+coding at the RFC maximum code length, direct and FSE-compressed Huffman
+weights, RFC reverse FSE/Huffman bitstreams, and ordinary deterministic
+encoded-size-based mode selection.
+
+The following remain excluded: binary interpolative/BIC entropy-table
+compression; cumulative tables encoded as one integer; indexed, shared, proxy,
+or remotely retrieved table databases; symmetry-based table reconstruction;
+per-symbol availability-bit range-probability signalling; adaptive in-stream
+frequency mutation; proprietary table-change signalling; gradient-descent or
+proprietary parallel FSE construction; and hardware/FPGA/ASIC compression
+acceleration.
+
+CIPO reported a database service interruption during the status check. An
+authoritative status recheck after service restoration remains an open release
+gate but does not block implementation and testing of this exact bounded
+profile. This entry does not establish patent clearance, freedom to operate,
+non-infringement, validity, essentiality, or completion of independent security
+review. Re-review is required for any excluded mechanism, material algorithm
+change, public/commercial release, or intentional distribution or operation
+outside Canada.
+
 # 2026-08-31 — QUIC version 2 bounded extension — Canada
 
 Patent review: **TRIGGERED**, disposition **CONDITIONAL_PROCEED** under the

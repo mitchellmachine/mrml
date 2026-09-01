@@ -120,3 +120,9 @@ scalar expected counters. Authentication precedes recording, and only `New`
 packets reach CRYPTO/TLS assembly; ACK frames derive from the authenticated
 ranges. Application-space state remains independently owned by the established
 connection.
+
+The authorized RFC 8878 encoder work began with bounded forward/reverse bit
+writers and normalized-count table-description serialization. The hosted Linux
+Zstandard suite passes 33 tests, including exact writer/reader round trips,
+zero-run and `-1` normalized counts, invalid totals, and bit-budget rejection.
+This is encoder-foundation evidence only; HTTP still selects raw/RLE V1.
