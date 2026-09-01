@@ -63,6 +63,59 @@ pub struct AuthorizedHybridPair {
     ml_dsa_key_digest: [u8; 64],
 }
 
+/// Exact pair identity and its bounded authorization lifetime. `valid_until`
+/// is exclusive. Retirement may shorten authority but never extend it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PolicyPairStatus {
+    pair: AuthorizedHybridPair,
+    valid_from: u64,
+    valid_until: u64,
+    retired_at: Option<u64>,
+}
+
+impl PolicyPairStatus {
+    pub fn new(
+        pair: AuthorizedHybridPair,
+        valid_from: u64,
+        valid_until: u64,
+        retired_at: Option<u64>,
+    ) -> Result<Self, HybridPolicyError> {
+        if valid_from >= valid_until
+            || retired_at.is_some_and(|retired| retired < valid_from || retired >= valid_until)
+        {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        Ok(Self {
+            pair,
+            valid_from,
+            valid_until,
+            retired_at,
+        })
+    }
+
+    pub const fn pair(self) -> AuthorizedHybridPair {
+        self.pair
+    }
+    pub const fn valid_from(self) -> u64 {
+        self.valid_from
+    }
+    pub const fn valid_until(self) -> u64 {
+        self.valid_until
+    }
+    pub const fn retired_at(self) -> Option<u64> {
+        self.retired_at
+    }
+
+    pub const fn authorizes_at(self, time: u64) -> bool {
+        time >= self.valid_from
+            && time < self.valid_until
+            && match self.retired_at {
+                Some(retired) => time < retired,
+                None => true,
+            }
+    }
+}
+
 impl AuthorizedHybridPair {
     pub fn bind(openpgp: &PublicKeyV6, ml_dsa: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES]) -> Self {
         Self {
@@ -140,7 +193,7 @@ pub const MAX_POLICY_PAIRS: usize = 64;
 pub const MAX_POLICY_REVOKED_KEYS: usize = 256;
 pub const MAX_POLICY_PROTECTED_REFS: usize = 256;
 pub const MAX_ENCODED_TRUST_POLICY_BYTES: usize = 512 * 1024;
-const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP1";
+const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrustPolicyState {
@@ -155,6 +208,7 @@ pub struct TrustPolicyState {
     hybrid_cutover: Option<ObjectId>,
     emergency_policy_digest: Option<[u8; 64]>,
     active_pairs: Vector<AuthorizedHybridPair>,
+    pair_statuses: Vector<PolicyPairStatus>,
     revoked_openpgp: Vector<FingerprintV6>,
     revoked_ml_dsa: Vector<[u8; 64]>,
 }
@@ -172,6 +226,7 @@ pub struct TrustPolicyCandidate {
     pub hybrid_cutover: Option<ObjectId>,
     pub emergency_policy_digest: Option<[u8; 64]>,
     pub active_pairs: Vector<AuthorizedHybridPair>,
+    pub pair_statuses: Vector<PolicyPairStatus>,
     pub revoked_openpgp: Vector<FingerprintV6>,
     pub revoked_ml_dsa: Vector<[u8; 64]>,
 }
@@ -196,6 +251,7 @@ pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, Hybr
     }
     append_u16(&mut output, policy.protected_refs.len())?;
     append_u16(&mut output, policy.active_pairs.len())?;
+    append_u16(&mut output, policy.pair_statuses.len())?;
     append_u16(&mut output, policy.revoked_openpgp.len())?;
     append_u16(&mut output, policy.revoked_ml_dsa.len())?;
     for reference in &policy.protected_refs {
@@ -205,6 +261,18 @@ pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, Hybr
         append(&mut output, pair.openpgp_fingerprint.as_bytes())?;
         append(&mut output, &pair.openpgp_key_digest)?;
         append(&mut output, &pair.ml_dsa_key_digest)?;
+    }
+    for status in &policy.pair_statuses {
+        append_pair(&mut output, &status.pair)?;
+        append(&mut output, &status.valid_from.to_be_bytes())?;
+        append(&mut output, &status.valid_until.to_be_bytes())?;
+        match status.retired_at {
+            Some(retired) => {
+                output.push(1);
+                append(&mut output, &retired.to_be_bytes())?;
+            }
+            None => output.push(0),
+        }
     }
     for fingerprint in &policy.revoked_openpgp {
         append(&mut output, fingerprint.as_bytes())?;
@@ -254,10 +322,12 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
     };
     let ref_count = usize::from(cursor.u16()?);
     let pair_count = usize::from(cursor.u16()?);
+    let pair_status_count = usize::from(cursor.u16()?);
     let revoked_openpgp_count = usize::from(cursor.u16()?);
     let revoked_ml_dsa_count = usize::from(cursor.u16()?);
     if ref_count > MAX_POLICY_PROTECTED_REFS
         || pair_count > MAX_POLICY_PAIRS
+        || pair_status_count > MAX_POLICY_PAIRS * 2
         || revoked_openpgp_count > MAX_POLICY_REVOKED_KEYS
         || revoked_ml_dsa_count > MAX_POLICY_REVOKED_KEYS
     {
@@ -285,6 +355,24 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
             openpgp_key_digest,
             ml_dsa_key_digest,
         });
+    }
+    let mut pair_statuses =
+        Vector::with_capacity(pair_status_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..pair_status_count {
+        let pair = cursor.pair()?;
+        let valid_from = cursor.u64()?;
+        let valid_until = cursor.u64()?;
+        let retired_at = match cursor.u8()? {
+            0 => None,
+            1 => Some(cursor.u64()?),
+            _ => return Err(HybridPolicyError::InvalidPolicy),
+        };
+        pair_statuses.push(PolicyPairStatus::new(
+            pair,
+            valid_from,
+            valid_until,
+            retired_at,
+        )?);
     }
     let mut revoked_openpgp = Vector::with_capacity(revoked_openpgp_count)
         .map_err(|_| HybridPolicyError::InputTooLarge)?;
@@ -316,6 +404,7 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
         hybrid_cutover,
         emergency_policy_digest,
         active_pairs,
+        pair_statuses,
         revoked_openpgp,
         revoked_ml_dsa,
     };
@@ -333,6 +422,15 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
 fn append_u16(output: &mut Vector<u8>, value: usize) -> Result<(), HybridPolicyError> {
     let value = u16::try_from(value).map_err(|_| HybridPolicyError::InputTooLarge)?;
     append(output, &value.to_be_bytes())
+}
+
+fn append_pair(
+    output: &mut Vector<u8>,
+    pair: &AuthorizedHybridPair,
+) -> Result<(), HybridPolicyError> {
+    append(output, pair.openpgp_fingerprint.as_bytes())?;
+    append(output, &pair.openpgp_key_digest)?;
+    append(output, &pair.ml_dsa_key_digest)
 }
 
 fn append_counted_bytes(output: &mut Vector<u8>, bytes: &[u8]) -> Result<(), HybridPolicyError> {
@@ -397,6 +495,20 @@ impl<'a> PolicyCursor<'a> {
                 .try_into()
                 .map_err(|_| HybridPolicyError::InvalidPolicy)?,
         ))
+    }
+
+    fn pair(&mut self) -> Result<AuthorizedHybridPair, HybridPolicyError> {
+        let mut fingerprint = [0; 32];
+        fingerprint.copy_from_slice(self.take(32)?);
+        let mut openpgp_key_digest = [0; 64];
+        openpgp_key_digest.copy_from_slice(self.take(64)?);
+        let mut ml_dsa_key_digest = [0; 64];
+        ml_dsa_key_digest.copy_from_slice(self.take(64)?);
+        Ok(AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes(fingerprint),
+            openpgp_key_digest,
+            ml_dsa_key_digest,
+        })
     }
 
     fn take_counted_bytes(&mut self) -> Result<&'a [u8], HybridPolicyError> {
@@ -480,6 +592,25 @@ impl TrustPolicyState {
         {
             return Err(HybridPolicyError::RevocationRollback);
         }
+        for previous in &self.pair_statuses {
+            let Some(next) = candidate
+                .pair_statuses
+                .iter()
+                .find(|status| status.pair == previous.pair)
+            else {
+                return Err(HybridPolicyError::PolicyRollback);
+            };
+            if next.valid_from != previous.valid_from
+                || next.valid_until > previous.valid_until
+                || match (previous.retired_at, next.retired_at) {
+                    (Some(old), Some(new)) => new > old,
+                    (Some(_), None) => true,
+                    _ => false,
+                }
+            {
+                return Err(HybridPolicyError::PolicyRollback);
+            }
+        }
         if candidate.active_pairs.iter().any(|pair| {
             candidate
                 .revoked_openpgp
@@ -537,6 +668,21 @@ impl TrustPolicyState {
             hash.update(&pair.openpgp_key_digest);
             hash.update(&pair.ml_dsa_key_digest);
         }
+        hash.update(&(self.pair_statuses.len() as u16).to_be_bytes());
+        for status in &self.pair_statuses {
+            hash.update(status.pair.openpgp_fingerprint.as_bytes());
+            hash.update(&status.pair.openpgp_key_digest);
+            hash.update(&status.pair.ml_dsa_key_digest);
+            hash.update(&status.valid_from.to_be_bytes());
+            hash.update(&status.valid_until.to_be_bytes());
+            match status.retired_at {
+                Some(retired) => {
+                    hash.update(&[1]);
+                    hash.update(&retired.to_be_bytes());
+                }
+                None => hash.update(&[0]),
+            }
+        }
         hash.update(&(self.revoked_openpgp.len() as u16).to_be_bytes());
         for fingerprint in &self.revoked_openpgp {
             hash.update(fingerprint.as_bytes());
@@ -556,6 +702,20 @@ impl TrustPolicyState {
         &self.active_pairs
     }
 
+    pub fn pair_statuses(&self) -> &[PolicyPairStatus] {
+        &self.pair_statuses
+    }
+
+    /// Authorizes an exact pair only inside its half-open validity interval.
+    /// Retired pairs remain recorded for historical verification but cease to
+    /// authorize at their retirement instant.
+    pub fn pair_authorized_at(&self, pair: AuthorizedHybridPair, time: u64) -> bool {
+        self.pair_statuses
+            .iter()
+            .find(|status| status.pair == pair)
+            .is_some_and(|status| status.authorizes_at(time))
+    }
+
     fn from_candidate(candidate: TrustPolicyCandidate) -> Self {
         let allowed_object_formats = candidate.allowed_format_mask();
         Self {
@@ -570,6 +730,7 @@ impl TrustPolicyState {
             hybrid_cutover: candidate.hybrid_cutover,
             emergency_policy_digest: candidate.emergency_policy_digest,
             active_pairs: candidate.active_pairs,
+            pair_statuses: candidate.pair_statuses,
             revoked_openpgp: candidate.revoked_openpgp,
             revoked_ml_dsa: candidate.revoked_ml_dsa,
         }
@@ -587,12 +748,15 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
         || candidate.revocation_generation.0 == 0
         || candidate.active_pairs.is_empty()
         || candidate.active_pairs.len() > MAX_POLICY_PAIRS
+        || candidate.pair_statuses.is_empty()
+        || candidate.pair_statuses.len() > MAX_POLICY_PAIRS * 2
         || candidate.protected_refs.is_empty()
         || candidate.protected_refs.len() > MAX_POLICY_PROTECTED_REFS
         || candidate.revoked_openpgp.len() > MAX_POLICY_REVOKED_KEYS
         || candidate.revoked_ml_dsa.len() > MAX_POLICY_REVOKED_KEYS
         || candidate.allowed_format_mask() == 0
         || !strictly_ordered_by(&candidate.active_pairs, pair_less)
+        || !strictly_ordered_by(&candidate.pair_statuses, status_less)
         || !strictly_ordered_by(&candidate.protected_refs, |left, right| left < right)
         || !strictly_ordered_by(&candidate.revoked_openpgp, |left, right| {
             left.as_bytes() < right.as_bytes()
@@ -611,6 +775,15 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
                     }
             })
     {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let active_statuses = candidate
+        .pair_statuses
+        .iter()
+        .filter(|status| status.retired_at.is_none())
+        .map(|status| status.pair)
+        .collect::<Vector<_>>();
+    if active_statuses != candidate.active_pairs {
         return Err(HybridPolicyError::InvalidPolicy);
     }
     Ok(())
@@ -644,6 +817,10 @@ fn pair_less(left: &AuthorizedHybridPair, right: &AuthorizedHybridPair) -> bool 
         .then(left.openpgp_key_digest.cmp(&right.openpgp_key_digest))
         .then(left.ml_dsa_key_digest.cmp(&right.ml_dsa_key_digest))
         .is_lt()
+}
+
+fn status_less(left: &PolicyPairStatus, right: &PolicyPairStatus) -> bool {
+    pair_less(&left.pair, &right.pair)
 }
 
 fn repository_digest(repository: &RepositoryIdentity) -> [u8; 64] {
@@ -1047,6 +1224,7 @@ mod tests {
             hybrid_cutover: Some(ObjectId::Sha256([8u8; 32])),
             emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [old_pair].into(),
+            pair_statuses: [PolicyPairStatus::new(old_pair, 100, 300, None).unwrap()].into(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         })
@@ -1083,6 +1261,11 @@ mod tests {
             hybrid_cutover: Some(ObjectId::Sha256([8u8; 32])),
             emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [new_pair].into(),
+            pair_statuses: [
+                PolicyPairStatus::new(old_pair, 100, 300, Some(200)).unwrap(),
+                PolicyPairStatus::new(new_pair, 200, 400, None).unwrap(),
+            ]
+            .into(),
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
         };
@@ -1104,12 +1287,163 @@ mod tests {
             hybrid_cutover: Some(ObjectId::Sha256([8u8; 32])),
             emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [new_pair].into(),
+            pair_statuses: [
+                PolicyPairStatus::new(old_pair, 100, 300, Some(200)).unwrap(),
+                PolicyPairStatus::new(new_pair, 200, 400, None).unwrap(),
+            ]
+            .into(),
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
         };
         assert_eq!(
             rotated.transition(downgrade, &new_proof, &new_proof),
             Err(HybridPolicyError::HybridDowngrade)
+        );
+        assert!(rotated.pair_authorized_at(old_pair, 199));
+        assert!(!rotated.pair_authorized_at(old_pair, 200));
+        assert!(!rotated.pair_authorized_at(new_pair, 199));
+        assert!(rotated.pair_authorized_at(new_pair, 200));
+        assert!(!rotated.pair_authorized_at(new_pair, 400));
+    }
+
+    #[test]
+    fn pair_status_encoding_and_transition_narrowing_fail_closed() {
+        let pair = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([10; 32]),
+            openpgp_key_digest: [11; 64],
+            ml_dsa_key_digest: [12; 64],
+        };
+        assert!(PolicyPairStatus::new(pair, 10, 10, None).is_err());
+        assert!(PolicyPairStatus::new(pair, 10, 20, Some(20)).is_err());
+
+        let repository = RepositoryIdentity::parse("owner/status").unwrap();
+        let initial = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(1),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(ObjectId::Sha256([1; 32])),
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [PolicyPairStatus::new(pair, 10, 100, None).unwrap()].into(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let encoded = encode_trust_policy(&initial).unwrap();
+        assert_eq!(parse_trust_policy(&encoded), Ok(initial.clone()));
+        for end in 0..encoded.len() {
+            assert!(parse_trust_policy(&encoded[..end]).is_err());
+        }
+
+        let proof = rotation_proof(&repository, TrustGeneration(1), pair);
+        let next_proof = rotation_proof(&repository, TrustGeneration(2), pair);
+        let candidate = |status| TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(2),
+            previous_policy_digest: initial.digest(),
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(ObjectId::Sha256([1; 32])),
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [status].into(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        };
+        assert_eq!(
+            initial.transition(
+                candidate(PolicyPairStatus::new(pair, 10, 101, None).unwrap()),
+                &proof,
+                &next_proof
+            ),
+            Err(HybridPolicyError::PolicyRollback)
+        );
+        assert!(
+            initial
+                .transition(
+                    candidate(PolicyPairStatus::new(pair, 10, 90, None).unwrap()),
+                    &proof,
+                    &next_proof
+                )
+                .is_ok()
+        );
+
+        let retired = PolicyPairStatus::new(pair, 10, 100, Some(60)).unwrap();
+        let retired_state = TrustPolicyState {
+            pair_statuses: [retired].into(),
+            active_pairs: Vector::new(),
+            ..initial.clone()
+        };
+        let reversal = TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(2),
+            previous_policy_digest: retired_state.digest(),
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: retired_state.protected_refs.clone(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(ObjectId::Sha256([1; 32])),
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [PolicyPairStatus::new(pair, 10, 100, None).unwrap()].into(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        };
+        assert_eq!(
+            retired_state.transition(reversal, &proof, &next_proof),
+            Err(HybridPolicyError::PolicyRollback)
+        );
+
+        let other = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([9; 32]),
+            openpgp_key_digest: [9; 64],
+            ml_dsa_key_digest: [9; 64],
+        };
+        let mut unordered = [
+            PolicyPairStatus::new(pair, 10, 20, None).unwrap(),
+            PolicyPairStatus::new(other, 10, 20, None).unwrap(),
+        ];
+        unordered.sort_unstable_by(|a, b| {
+            if status_less(a, b) {
+                core::cmp::Ordering::Less
+            } else {
+                core::cmp::Ordering::Greater
+            }
+        });
+        let ordered_active = [unordered[0].pair(), unordered[1].pair()];
+        unordered.swap(0, 1);
+        let invalid = TrustPolicyCandidate {
+            repository,
+            generation: TrustGeneration(1),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(ObjectId::Sha256([1; 32])),
+            emergency_policy_digest: None,
+            active_pairs: ordered_active.into(),
+            pair_statuses: unordered.into(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        };
+        assert_eq!(
+            TrustPolicyState::establish(invalid),
+            Err(HybridPolicyError::InvalidPolicy)
         );
     }
 

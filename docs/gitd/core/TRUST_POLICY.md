@@ -16,7 +16,7 @@ ML-DSA public-key digests, and a revocation generation. Lists are bounded and
 must be strictly ordered, so duplicate or alternate-order encodings cannot
 produce competing canonical policy digests.
 
-The first-party persisted `MRMLGTP1` encoding/parser is implemented and capped
+The first-party persisted `MRMLGTP2` encoding/parser is implemented and capped
 at 512 KiB. It uses fixed-width big-endian generations and counts, two-byte
 length-prefixed validated repository/ref identifiers, explicit format and
 hybrid flags, complete 32-byte OpenPGP v6 fingerprints, 64-byte MRML OpenPGP
@@ -26,6 +26,19 @@ reuses typed identifier validation, rejects unknown flag bits and non-Boolean
 values, requires strict collection order, rejects trailing bytes, and
 byte-for-byte re-encodes the result before acceptance. Every truncation of the
 golden policy fixture fails closed.
+
+Each exact OpenPGP/ML-DSA pair also has one canonical `PolicyPairStatus` with
+an inclusive `valid_from`, exclusive `valid_until`, and optional `retired_at`.
+Statuses are strictly ordered by the complete pair identity. The active-pair
+list must exactly equal the ordered non-retired status subset; retired records
+remain present for bounded historical verification. `pair_authorized_at`
+accepts only times in the half-open validity interval and, after retirement,
+only times strictly before the retirement instant.
+
+Normal transitions cannot remove an existing status, move its start, widen its
+end, undo retirement, or delay a recorded retirement. They may narrow the end
+or retire an active pair earlier. This makes expiry and retirement monotonic
+restrictions on authority rather than mutable descriptive metadata.
 
 The canonical state now also carries optional exact-format Git object IDs for
 the final legacy checkpoint and hybrid-required cutover, plus an optional
@@ -44,9 +57,9 @@ active pair at the new generation. A transition cannot lower a generation,
 break the previous-policy digest chain, remove a revocation, reactivate a
 revoked key, or downgrade hybrid-required policy.
 
-Explicit retired-key validity intervals, authenticated emergency recovery
-execution, and canonical key-revocation statement are not yet
-implemented. The current state therefore cannot activate protected refs.
+Authenticated emergency recovery execution and a canonical key-revocation
+statement are not yet implemented. The current state therefore cannot activate
+protected refs through those transition paths.
 
 `verify_introduced_history` now deterministically walks every commit introduced
 by `old..new`, including all merge-side parents, in parent-before-child order.

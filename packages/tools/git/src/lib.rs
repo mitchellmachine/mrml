@@ -132,7 +132,7 @@ pub use transport::{
 pub use trust_policy::{
     AuthorizedHybridPair, GitObjectType, HYBRID_PROFILE_NAME, HybridPolicyError, HybridTrustPolicy,
     HybridVerificationRequest, MAX_ENCODED_TRUST_POLICY_BYTES, MAX_HYBRID_PAYLOAD_BYTES,
-    MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS, MAX_POLICY_REVOKED_KEYS, TrustPolicyCandidate,
+    MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS, MAX_POLICY_REVOKED_KEYS, PolicyPairStatus, TrustPolicyCandidate,
     TrustPolicyState, VerifiedHybridSignature, bind_verified_commit_proof,
     canonical_hybrid_transcript, encode_trust_policy, parse_trust_policy, verify_hybrid_signature,
 };
