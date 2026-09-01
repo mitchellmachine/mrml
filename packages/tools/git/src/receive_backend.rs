@@ -560,7 +560,7 @@ mod tests {
             Ok(signature.len())
         }
 
-        fn verify(&self, transcript: &[u8], signature: &[u8]) -> Result<(), ()> {
+        fn verify(&mut self, transcript: &[u8], signature: &[u8]) -> Result<(), ()> {
             (Sha256::digest(transcript).as_slice() == signature)
                 .then_some(())
                 .ok_or(())
@@ -863,7 +863,7 @@ mod tests {
         assert!(output.bytes.ends_with(b"0000"));
         let signed = crate::AuthenticatedAuditReceiptDirectory::open(&signed_receipts)
             .unwrap()
-            .load(QuarantineTransactionId([31u8; 16]), &authority)
+            .load(QuarantineTransactionId([31u8; 16]), &mut authority)
             .unwrap();
         assert_eq!(
             signed.receipt.activated_repository_generation,

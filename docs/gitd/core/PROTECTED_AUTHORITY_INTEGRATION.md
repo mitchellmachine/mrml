@@ -38,6 +38,14 @@ production protected profile should use `execute_with_authority`, because it
 places exact policy authorization, proof verification, and authenticated
 receipt creation behind one explicit capability-bearing service boundary.
 
+`RemoteProtectedReceiveAuthority` is the Git-core client adapter for that
+boundary. Its transport must authenticate operation, request identifier, peer,
+request, and response. Only an authenticated empty success response can mint
+the crate-private exact commit proof. Receipt verification is mutable because
+the remote channel consumes a strictly advancing request identifier; the
+durable receipt path always calls remote verification after signing and again
+when reopening a stored receipt.
+
 This change introduces no new codec, similarity search, compression selection,
 or garbage-collection mechanism. Patent review: **NOT_TRIGGERED**; the work is
 conventional capability injection and exact-context signature/receipt

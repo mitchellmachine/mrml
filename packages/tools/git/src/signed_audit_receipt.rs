@@ -20,7 +20,7 @@ pub const MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES: usize =
 pub trait AuditReceiptAuthority {
     fn signer_identity(&self) -> [u8; 64];
     fn sign(&mut self, transcript: &[u8], output: &mut [u8]) -> Result<usize, ()>;
-    fn verify(&self, transcript: &[u8], signature: &[u8]) -> Result<(), ()>;
+    fn verify(&mut self, transcript: &[u8], signature: &[u8]) -> Result<(), ()>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,7 +86,7 @@ impl AuthenticatedAuditReceiptDirectory {
     pub fn load(
         &self,
         transaction: QuarantineTransactionId,
-        authority: &dyn AuditReceiptAuthority,
+        authority: &mut dyn AuditReceiptAuthority,
     ) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
         let path = join_path(&self.root, &receipt_name(transaction));
         let mut file = File::open_regular(&path).map_err(|_| DurableFailure::AuditReceipt)?;
@@ -334,7 +334,7 @@ mod tests {
             Ok(signature.len())
         }
 
-        fn verify(&self, transcript: &[u8], signature: &[u8]) -> Result<(), ()> {
+        fn verify(&mut self, transcript: &[u8], signature: &[u8]) -> Result<(), ()> {
             (Sha256::digest(transcript).as_slice() == signature)
                 .then_some(())
                 .ok_or(())
@@ -412,7 +412,7 @@ mod tests {
         directory.append(&receipt, &mut authority).unwrap();
         assert_eq!(
             directory
-                .load(receipt.transaction, &authority)
+                .load(receipt.transaction, &mut authority)
                 .unwrap()
                 .receipt,
             receipt
