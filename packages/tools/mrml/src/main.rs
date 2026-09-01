@@ -3,6 +3,8 @@ pub mod abi;
 pub mod activation;
 mod assurance;
 pub mod binding;
+#[path = "../../../services/certificate/src/caa.rs"]
+mod certificate_caa;
 #[path = "../../../libraries/package-format/src/component_launch.rs"]
 pub mod component_launch;
 #[path = "../../../libraries/package-format/src/component_resolution.rs"]
@@ -46,10 +48,10 @@ use std::path::{Component as PathComponent, Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Instant;
 
+use certificate_caa::{CaaChallengeMethod, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 use generation::mrml_package_identifier;
 use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
-use mrml_certificate::{CaaChallengeMethod, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 #[path = "../../../libraries/crypto/src/sha3.rs"]
 #[allow(dead_code)]
 mod package_sha3;
