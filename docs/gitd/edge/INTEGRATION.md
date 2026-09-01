@@ -94,3 +94,8 @@ HTTP suite: relative images become exact-object `raw.mrml.ca` URLs, remote
 images remain non-fetching labeled links, and traversal, active-data, and
 absolute-host-path forms fail closed. Raw-origin deployment headers are not yet
 public-host evidence.
+
+The same hosted Linux Markdown regression now covers strong/emphasis/strike,
+HTTP(S) autolinks, block quotes, horizontal rules, ordered lists, accessible
+task-list state, and the expanded fixed language-label allowlist. These are
+renderer unit fixtures, not assistive-hardware evidence.

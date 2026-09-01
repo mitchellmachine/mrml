@@ -13,6 +13,12 @@ repository-path validation. Remote HTTP(S) images render as explicit external
 links rather than image loads. Unsafe schemes, absolute paths, traversal,
 encoded paths, and local path syntax fail closed.
 
-The current renderer is deliberately small. Full CommonMark coverage, bounded
-syntax highlighting, raw-origin response-header deployment, and broader golden
-hostile-content fixtures remain **PLANNED**.
+The bounded profile also renders emphasis, strong emphasis, strikethrough,
+ordered and unordered lists, accessible disabled task controls, block quotes,
+horizontal rules, and HTTP(S) autolinks. Fenced language labels cover Rust,
+C/C++, assembly, TOML, JSON, YAML, Bash, PowerShell, Python, HTML, CSS,
+JavaScript, diff, and plain text through a closed allowlist.
+
+The current renderer is deliberately bounded rather than full CommonMark.
+Tables, bounded token coloring, raw-origin response-header deployment, and
+broader golden hostile-content fixtures remain **PLANNED**.
