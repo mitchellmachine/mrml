@@ -4,6 +4,7 @@ mod certificate;
 mod challenge_dns;
 mod challenge_publisher;
 mod identity;
+mod durable;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
@@ -21,4 +22,10 @@ pub use identity::{
     IdentityDeploymentTarget, IdentityError, IdentityManager, PreparedIdentityReceipt,
     TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
     TlsKeyIdentity, TlsSigningRoute,
+};
+pub use durable::{
+    CommittedStoreReceipt, DURABLE_RECORD_VERSION, DurableAuthenticator, DurableError,
+    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
+    DurableTransaction, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
+    SecretHandle, TransactionState,
 };

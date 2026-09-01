@@ -74,6 +74,14 @@ server context. Deployment persists a prepared candidate before publication,
 requires separate TLS 1.3 and HTTP/3-over-QUIC-v2 test evidence, activates only
 the exact prepared generation, retains the previous generation, and represents
 ambiguous activation until authoritative target re-read resolves it.
+The durable-state substrate uses a canonical versioned bounded record, payload
+digest, non-exporting authenticator, exact object and previous/new generations,
+and prepare/commit store receipts. Decode rejects mutation, trailing bytes,
+namespace confusion, and generation errors. Public lifecycle records, account
+secret handles, certificate secret handles, and audit records occupy distinct
+namespaces; only opaque provider handles, never key bytes, are admitted to the
+secret-handle namespaces. An uncertain commit is resolved against the store's
+authoritative generation and digest rather than guessed.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -86,8 +94,8 @@ arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
 General JOSE response parsing, ACME transport, concrete socket adapters and
-propagation observation, durable recovery, alternate-chain selection,
-durable identity-state serialization, renewal, revocation, backup/restore, CLI
+propagation observation, lifecycle-specific state codecs and recovery wiring,
+alternate-chain selection, renewal, revocation, backup/restore, CLI
 administration, concrete gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.

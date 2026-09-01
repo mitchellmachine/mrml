@@ -11233,6 +11233,13 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 Host, token, and request-bound checks for RFC 8555 HTTP-01 and no recorded
 re-review-trigger mechanism.
 
+# 2026-09-01 — Authenticated durable lifecycle journal substrate
+
+Patent review: **NOT_TRIGGERED**. This increment adds conventional bounded,
+versioned authenticated records and prepare/commit/authoritative-read recovery
+receipts. It adds no protocol mechanism covered by the scoped ACME review and
+no recorded re-review trigger.
+
 # 2026-09-01 — Typed ACME problem documents
 
 Patent review: **NOT_TRIGGERED** beyond the owner-supplied
