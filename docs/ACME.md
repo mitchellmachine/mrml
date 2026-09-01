@@ -332,6 +332,15 @@ CLI administration, concrete gitd process wiring, and full native-storage/reboot
 recovery remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 
+The bounded deterministic security-fuzz harness covers ACME directory,
+problem, account, order, authorization, ARI, URL, and Base64url parsing; X.509
+DER and PEM chains; HTTP-01 requests; DNS packets and compression pointers;
+authenticated durable records; and authenticated backup containers. It applies
+truncation, bit flips, poison bytes, duplication, deterministic insert/delete
+mutations, and cross-seed concatenation without allowing parser panics. This is
+repeatable adversarial corpus testing, not coverage-guided fuzzing or proof of
+parser correctness.
+
 Certificate retrieval captures at most eight bounded standard
 `rel="alternate"` links from the authenticated primary response, rejects
 malformed, duplicate, overflow, primary-self, or cross-origin targets, fetches

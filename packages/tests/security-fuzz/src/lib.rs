@@ -3,14 +3,15 @@
 #[cfg(test)]
 mod tests {
     use mrml_acme::{
-        AcmeDirectory, AcmeProblem, AcmeUrl, ChallengeToken, DnsIdentifier, RenewalInfo,
-        decode_base64url, validate_http01_request,
+        decode_base64url, parse_account_response, parse_authorization_response,
+        parse_order_response, validate_http01_request, AcmeDirectory, AcmeIdentifier, AcmeProblem,
+        AcmeUrl, ChallengeToken, DnsIdentifier, RenewalInfo,
     };
     use mrml_certificate::{
-        AuthoritativeChallengeZone, DurableAuthenticator, DurableError, DurableRecord,
-        PemCertificateChain,
+        verify_backup, AuthoritativeChallengeZone, DurableAuthenticator, DurableError,
+        DurableRecord, PemCertificateChain,
     };
-    use mrml_runtime::{Text, join_path, process_id, remove_file, temporary_directory, write_file};
+    use mrml_runtime::{join_path, process_id, remove_file, temporary_directory, write_file, Text};
 
     const MAX_CASE_BYTES: usize = 256;
     const RANDOM_CASES_PER_SEED: usize = 128;
@@ -207,6 +208,28 @@ mod tests {
     }
 
     #[test]
+    fn acme_account_order_and_authorization_response_corpora_never_panic() {
+        let directory_url = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let origin = directory_url.origin();
+        let identifier = AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap());
+        let responses: &[&[u8]] = &[
+            b"",
+            b"{}",
+            br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#,
+            br#"{"status":"pending","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://ca.example/authz/1"],"finalize":"https://ca.example/finalize/1","profile":"classic"}"#,
+            br#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","challenges":[{"type":"http-01","url":"https://ca.example/challenge/1","status":"pending","token":"token"}]}"#,
+            br#"{"status":"valid","status":"revoked"}"#,
+        ];
+        visit_corpus(responses, |bytes| {
+            if let Ok(text) = core::str::from_utf8(bytes) {
+                let _ = parse_account_response(text, origin);
+                let _ = parse_order_response(text, origin, &[identifier], "classic");
+                let _ = parse_authorization_response(text, origin, identifier);
+            }
+        });
+    }
+
+    #[test]
     fn http01_request_corpus_never_panics_or_changes_binding() {
         let identifier = DnsIdentifier::parse("git.example", false).unwrap();
         let token = ChallengeToken::parse("fuzz-token").unwrap();
@@ -262,6 +285,7 @@ mod tests {
         visit_corpus(seeds, |bytes| {
             let _ = PemCertificateChain::parse(bytes);
             let _ = DurableRecord::decode(bytes, &mut RejectingAuthenticator);
+            let _ = verify_backup(bytes, &mut RejectingAuthenticator);
         });
     }
 

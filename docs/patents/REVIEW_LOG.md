@@ -11957,3 +11957,10 @@ advances. The routes are fixed owner policy and the adapter cannot select
 validation vantage points or proxy arbitrary queries, so it does not introduce
 route-selected multi-vantage CA validation, challenge proxying, public CA
 operation, or another recorded re-review trigger.
+
+# 2026-09-01 — Certificate parser and recovery fuzz corpus
+
+Patent review: **NOT_TRIGGERED**. This increment adds deterministic malformed
+input testing for already reviewed ACME response, certificate, DNS, HTTP-01,
+durable-record, and backup parsers. It introduces no shipping protocol,
+validation topology, certificate operation, or recorded re-review trigger.
