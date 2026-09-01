@@ -11514,3 +11514,13 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 order polling with bounded retry/deadline state and exact replay of the
 prepared identifier, profile, finalization URL, and order-scoped authorization
 resources. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Authenticated ACME certificate revocation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment performs ordinary RFC 8555
+certificate revocation with an explicitly selected account-key or
+certificate-key JWS route, exact reason policy, bounded request and response
+handling, and authoritative `alreadyRevoked` replay resolution. It preserves
+ambiguous transport outcomes in the existing recoverable revocation lifecycle
+and adds no recorded re-review-trigger mechanism.

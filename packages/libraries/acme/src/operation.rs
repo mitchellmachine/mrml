@@ -7,7 +7,7 @@ use crate::{
     account_contacts_digest, parse_account_response, parse_authorization_response,
     parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
     write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
-    write_new_order_payload,
+    write_new_order_payload, write_revocation_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -218,6 +218,76 @@ pub enum FinalizeError<E> {
 pub enum FinalizeFailure<E> {
     Definitive(FinalizeError<E>),
     Uncertain(FinalizeError<E>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RevocationOutcome {
+    Submitted,
+    AlreadyRevoked,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum RevokeCertificateError<E> {
+    Payload(PayloadError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    UnexpectedResponse,
+}
+
+/// Submits an RFC 8555 certificate-revocation request with either the account
+/// `kid` or the certificate JWK selected by the caller's use-only signing
+/// route. Transport and malformed-success failures are deliberately ambiguous:
+/// callers must retain their prepared revocation and resolve it by retrying the
+/// exact request. `alreadyRevoked` is an authoritative successful resolution.
+#[allow(clippy::too_many_arguments)]
+pub fn revoke_certificate<T: AcmeTransport>(
+    directory: &AcmeDirectory,
+    certificate_der: &[u8],
+    reason: Option<u8>,
+    protected_key: crate::ProtectedKey<'_>,
+    signing_generation: u64,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    payload_scratch: &mut [u8],
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<RevocationOutcome, RevokeCertificateError<T::Error>> {
+    if exchange.directory_generation() != directory.generation {
+        return Err(RevokeCertificateError::UnexpectedResponse);
+    }
+    let payload = write_revocation_payload(certificate_der, reason, payload_scratch)
+        .map_err(RevokeCertificateError::Payload)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &directory.revoke_cert,
+        protected_key,
+        payload.as_bytes(),
+        signing_generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(RevokeCertificateError::Post)?;
+    if let Some(problem) = result.problem {
+        return if problem.problem_type.as_str() == "urn:ietf:params:acme:error:alreadyRevoked" {
+            Ok(RevocationOutcome::AlreadyRevoked)
+        } else {
+            Err(RevokeCertificateError::Server(problem))
+        };
+    }
+    if result.metadata.status != 200 {
+        return Err(RevokeCertificateError::UnexpectedStatus);
+    }
+    if result.metadata.body_length != 0
+        || result.metadata.response_type != crate::AcmeResponseType::Missing
+    {
+        return Err(RevokeCertificateError::UnexpectedResponse);
+    }
+    Ok(RevocationOutcome::Submitted)
 }
 
 pub struct OrderCreateBuffers<'a> {
@@ -1874,6 +1944,95 @@ mod tests {
         ));
     }
 
+    struct RevocationTransport {
+        calls: u8,
+        already_revoked: bool,
+    }
+
+    impl AcmeTransport for RevocationTransport {
+        type Error = ();
+
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            self.calls += 1;
+            if request.method == AcmeHttpMethod::Head {
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some("revoke-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                });
+            }
+            assert_eq!(request.url.as_str(), "https://ca.example/revoke");
+            assert_eq!(request.content_type, crate::AcmeContentType::JoseJson);
+            assert!(!request.body.is_empty());
+            if self.already_revoked {
+                let body = br#"{"type":"urn:ietf:params:acme:error:alreadyRevoked","status":400}"#;
+                output[..body.len()].copy_from_slice(body);
+                Ok(AcmeTransportResponse {
+                    status: 400,
+                    effective_url: "https://ca.example/revoke",
+                    replay_nonce: Some("revoke-nonce-2"),
+                    retry_after: None,
+                    location: None,
+                    content_type: Some("application/problem+json"),
+                    body_length: body.len(),
+                })
+            } else {
+                Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/revoke",
+                    replay_nonce: Some("revoke-nonce-2"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                })
+            }
+        }
+    }
+
+    fn revocation_accepts_exact_empty_success_and_authoritative_replay_impl() {
+        for (already_revoked, expected) in [
+            (false, RevocationOutcome::Submitted),
+            (true, RevocationOutcome::AlreadyRevoked),
+        ] {
+            let directory = directory();
+            let origin = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+            let mut exchange = crate::AcmeExchange::new(directory.generation, origin);
+            let mut transport = RevocationTransport {
+                calls: 0,
+                already_revoked,
+            };
+            let mut signer = Signer;
+            let mut payload = [0; 1024];
+            let mut response = [0; 1024];
+            let mut jws = [0; 8192];
+            let result = revoke_certificate(
+                &directory,
+                &[0x30, 0x01, 0x00],
+                Some(1),
+                crate::ProtectedKey::Jwk(&key()),
+                12,
+                &mut exchange,
+                &mut transport,
+                &mut signer,
+                &mut payload,
+                &mut response,
+                &mut jws,
+            );
+            assert!(matches!(result, Ok(actual) if actual == expected));
+            assert_eq!(transport.calls, 2);
+            assert!(jws.iter().all(|byte| *byte == 0));
+        }
+    }
+
     fn run_order_test(test: fn()) {
         // Debug builds retain several 2 KiB fixed-capacity URL values while
         // crossing the parser/lifecycle boundary. Exercise that bounded path
@@ -1910,5 +2069,10 @@ mod tests {
     #[test]
     fn account_rollover_uses_nested_new_and_old_key_signatures() {
         run_order_test(account_rollover_uses_nested_new_and_old_key_signatures_impl);
+    }
+
+    #[test]
+    fn revocation_accepts_exact_empty_success_and_authoritative_replay() {
+        run_order_test(revocation_accepts_exact_empty_success_and_authoritative_replay_impl);
     }
 }

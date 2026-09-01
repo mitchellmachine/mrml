@@ -60,9 +60,10 @@ pub use identity::{
     TlsKeyIdentity, TlsSigningRoute,
 };
 pub use revocation::{
-    AutomaticRevocationCause, PreparedRevocation, RevocationAuthentication, RevocationAuthority,
-    RevocationAuthorization, RevocationCredentialPolicy, RevocationError, RevocationLifecycle,
-    RevocationReason, RevocationReceipt, RevocationState,
+    AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
+    PreparedRevocation, RevocationAuthentication, RevocationAuthority, RevocationAuthorization,
+    RevocationCredentialPolicy, RevocationError, RevocationLifecycle, RevocationReason,
+    RevocationReceipt, RevocationState,
 };
 pub use scheduler::{
     ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,

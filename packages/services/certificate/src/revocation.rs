@@ -1,5 +1,9 @@
 use crate::{TlsIdentityId, TlsKeyIdentity};
-use mrml_acme::{AriCertificateId, JwkThumbprint};
+use mrml_acme::{
+    AcmeDirectory, AcmeExchange, AcmeJwsSigner, AcmeTransport, AcmeUrl, AriCertificateId,
+    JwkThumbprint, P256Jwk, ProtectedKey, RevocationOutcome, RevokeCertificateError,
+    revoke_certificate,
+};
 use mrml_crypto::Sha256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,6 +173,132 @@ pub trait RevocationAuthority {
     ) -> Result<Option<RevocationReceipt>, RevocationError>;
 }
 
+#[derive(Clone, Copy)]
+pub enum AcmeRevocationSigningIdentity<'a> {
+    Account {
+        account_url: &'a AcmeUrl,
+        account_generation: u64,
+        account_key: JwkThumbprint,
+    },
+    Certificate {
+        public_key: &'a P256Jwk,
+        key_identity: TlsKeyIdentity,
+        key_generation: u64,
+    },
+}
+
+pub struct AcmeRevocationAuthority<'a, T, S> {
+    pub directory: &'a AcmeDirectory,
+    pub certificate_der: &'a [u8],
+    pub certificate_id: AriCertificateId,
+    pub chain_digest: [u8; 32],
+    pub signing_identity: AcmeRevocationSigningIdentity<'a>,
+    pub exchange: &'a mut AcmeExchange,
+    pub transport: &'a mut T,
+    pub signer: &'a mut S,
+    pub payload_scratch: &'a mut [u8],
+    pub response_body: &'a mut [u8],
+    pub jws_scratch: &'a mut [u8],
+    pub observed_at_unix: u64,
+}
+
+impl<T: AcmeTransport, S: AcmeJwsSigner> AcmeRevocationAuthority<'_, T, S> {
+    fn submit_exact(
+        &mut self,
+        prepared: PreparedRevocation,
+    ) -> Result<RevocationReceipt, RevocationError> {
+        if prepared.certificate_id != self.certificate_id
+            || prepared.chain_digest != self.chain_digest
+            || self.certificate_der.is_empty()
+            || self.observed_at_unix == 0
+        {
+            return Err(RevocationError::ResolutionMismatch);
+        }
+        let (protected_key, signing_generation) = match self.signing_identity {
+            AcmeRevocationSigningIdentity::Account {
+                account_url,
+                account_generation,
+                account_key,
+            } if prepared.authentication
+                == (RevocationAuthentication::AccountKey {
+                    account_generation,
+                    account_key,
+                }) =>
+            {
+                (ProtectedKey::Kid(account_url), account_generation)
+            }
+            AcmeRevocationSigningIdentity::Certificate {
+                public_key,
+                key_identity,
+                key_generation,
+            } if prepared.authentication
+                == (RevocationAuthentication::CertificateKey {
+                    key_identity,
+                    key_generation,
+                }) =>
+            {
+                (ProtectedKey::Jwk(public_key), key_generation)
+            }
+            _ => return Err(RevocationError::Unauthorized),
+        };
+        let outcome = revoke_certificate(
+            self.directory,
+            self.certificate_der,
+            Some(prepared.reason as u8),
+            protected_key,
+            signing_generation,
+            self.exchange,
+            self.transport,
+            self.signer,
+            self.payload_scratch,
+            self.response_body,
+            self.jws_scratch,
+        )
+        .map_err(|error| match error {
+            RevokeCertificateError::Post(_)
+            | RevokeCertificateError::UnexpectedStatus
+            | RevokeCertificateError::UnexpectedResponse => RevocationError::SubmissionUncertain,
+            RevokeCertificateError::Payload(_) | RevokeCertificateError::Server(_) => {
+                RevocationError::ResolutionMismatch
+            }
+        })?;
+        let mut digest = Sha256::new();
+        digest.update(b"mrml-acme-revocation-transaction-v1\0");
+        digest.update(self.directory.revoke_cert.as_str().as_bytes());
+        digest.update(&Sha256::digest(self.certificate_der));
+        digest.update(&[prepared.reason as u8]);
+        digest.update(&[match outcome {
+            RevocationOutcome::Submitted => 1,
+            RevocationOutcome::AlreadyRevoked => 2,
+        }]);
+        Ok(RevocationReceipt {
+            prepared,
+            ca_transaction_digest: digest.finalize(),
+            revoked_at_unix: self.observed_at_unix,
+        })
+    }
+}
+
+impl<T: AcmeTransport, S: AcmeJwsSigner> RevocationAuthority for AcmeRevocationAuthority<'_, T, S> {
+    fn submit(
+        &mut self,
+        prepared: PreparedRevocation,
+    ) -> Result<RevocationReceipt, RevocationError> {
+        self.submit_exact(prepared)
+    }
+
+    fn authoritative(
+        &mut self,
+        prepared: PreparedRevocation,
+    ) -> Result<Option<RevocationReceipt>, RevocationError> {
+        match self.submit_exact(prepared) {
+            Ok(receipt) => Ok(Some(receipt)),
+            Err(RevocationError::ResolutionMismatch) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 pub struct RevocationLifecycle {
     pub state: RevocationState,
     prepared: PreparedRevocation,
@@ -289,6 +419,10 @@ fn authorization_digest(a: RevocationAuthorization) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_acme::{
+        AcmeHttpMethod, AcmeTransportRequest, AcmeTransportResponse, ApprovedAcmeJwsDigest,
+        Es256Signature, JoseError,
+    };
     struct Authority {
         receipt: Option<RevocationReceipt>,
         uncertain: bool,
@@ -367,5 +501,107 @@ mod tests {
             ),
             Err(RevocationError::Unauthorized)
         ));
+    }
+
+    struct Signer;
+    impl AcmeJwsSigner for Signer {
+        fn sign_acme_jws(
+            &mut self,
+            _: &ApprovedAcmeJwsDigest,
+        ) -> Result<Es256Signature, JoseError> {
+            Es256Signature::from_raw([1; 64])
+        }
+    }
+
+    struct AcmeTransportFixture {
+        calls: u8,
+    }
+    impl AcmeTransport for AcmeTransportFixture {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            _: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            self.calls += 1;
+            Ok(if request.method == AcmeHttpMethod::Head {
+                AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some("revocation-nonce"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                }
+            } else {
+                AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/revoke",
+                    replay_nonce: Some("next-revocation-nonce"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn acme_authority_binds_prepared_certificate_and_account_route() {
+        let directory_url = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let directory = AcmeDirectory::parse(
+            r#"{"newNonce":"https://ca.example/new-nonce","newAccount":"https://ca.example/new-account","newOrder":"https://ca.example/new-order","revokeCert":"https://ca.example/revoke","keyChange":"https://ca.example/key-change"}"#,
+            &directory_url,
+            7,
+        )
+        .unwrap();
+        let account_url = AcmeUrl::parse("https://ca.example/account/1", true).unwrap();
+        let account_key = JwkThumbprint([2; 32]);
+        let certificate_der = [0x30, 1, 0];
+        let certificate_id = AriCertificateId::derive(&[1], &[2]).unwrap();
+        let prepared = PreparedRevocation {
+            identity: TlsIdentityId([3; 16]),
+            identity_generation: 4,
+            revocation_generation: 5,
+            certificate_id,
+            chain_digest: [6; 32],
+            reason: RevocationReason::KeyCompromise,
+            authentication: RevocationAuthentication::AccountKey {
+                account_generation: 8,
+                account_key,
+            },
+            authorization_digest: [9; 32],
+        };
+        let mut exchange = AcmeExchange::new(7, directory_url);
+        let mut transport = AcmeTransportFixture { calls: 0 };
+        let mut signer = Signer;
+        let mut payload = [0; 1024];
+        let mut response = [0; 1024];
+        let mut jws = [0; 8192];
+        let mut authority = AcmeRevocationAuthority {
+            directory: &directory,
+            certificate_der: &certificate_der,
+            certificate_id,
+            chain_digest: [6; 32],
+            signing_identity: AcmeRevocationSigningIdentity::Account {
+                account_url: &account_url,
+                account_generation: 8,
+                account_key,
+            },
+            exchange: &mut exchange,
+            transport: &mut transport,
+            signer: &mut signer,
+            payload_scratch: &mut payload,
+            response_body: &mut response,
+            jws_scratch: &mut jws,
+            observed_at_unix: 10,
+        };
+        let receipt = authority.submit(prepared).unwrap();
+        assert!(receipt.prepared == prepared);
+        assert_ne!(receipt.ca_transaction_digest, [0; 32]);
+        assert_eq!(receipt.revoked_at_unix, 10);
+        assert!(jws.iter().all(|byte| *byte == 0));
     }
 }
