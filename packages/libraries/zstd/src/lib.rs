@@ -57,6 +57,7 @@ pub enum Error {
     HuffmanSymbolTruncated(u8, usize),
     InvalidOffset,
     BlockTooLarge,
+    InputTooLarge,
 }
 
 impl fmt::Display for Error {
@@ -90,6 +91,7 @@ impl fmt::Display for Error {
             ),
             Self::InvalidOffset => output.write_str("invalid Zstandard match offset"),
             Self::BlockTooLarge => output.write_str("Zstandard block exceeds 128 KiB"),
+            Self::InputTooLarge => output.write_str("Zstandard HTTP input exceeds 8 MiB"),
         }
     }
 }
@@ -187,6 +189,74 @@ pub struct FrameInfo {
     pub window_size: u64,
     pub content_size: Option<u64>,
     pub checksum: bool,
+}
+
+pub const HTTP_MAX_WINDOW: usize = 8 * 1024 * 1024;
+const MAX_BLOCK: usize = 128 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HttpEncodingProfile {
+    /// Deterministic standards-conformant raw/RLE blocks. This profile is a
+    /// bounded cache representation floor, not a level-22 equivalence claim.
+    BoundedRawRleV1,
+}
+
+/// Encode one deterministic Zstandard frame suitable for precomputed HTTP
+/// content coding. The frame carries an exact content size, no dictionary, no
+/// checksum, and never advertises a window above 8 MiB.
+#[cfg(any(windows, unix))]
+pub fn encode_http(input: &[u8], profile: HttpEncodingProfile) -> Result<Vector<u8>> {
+    if input.len() > HTTP_MAX_WINDOW {
+        return Err(Error::InputTooLarge);
+    }
+    let _ = profile;
+    let mut output = Vector::new();
+    output
+        .try_extend_from_slice(&FRAME_MAGIC.to_le_bytes())
+        .map_err(|_| Error::Allocation)?;
+    let size = input.len() as u64;
+    if size < 256 {
+        output.try_push(0x20).map_err(|_| Error::Allocation)?;
+        output.try_push(size as u8).map_err(|_| Error::Allocation)?;
+    } else if size < 65_792 {
+        output.try_push(0x60).map_err(|_| Error::Allocation)?;
+        output
+            .try_extend_from_slice(&((size - 256) as u16).to_le_bytes())
+            .map_err(|_| Error::Allocation)?;
+    } else if size <= u32::MAX as u64 {
+        output.try_push(0xa0).map_err(|_| Error::Allocation)?;
+        output
+            .try_extend_from_slice(&(size as u32).to_le_bytes())
+            .map_err(|_| Error::Allocation)?;
+    } else {
+        output.try_push(0xe0).map_err(|_| Error::Allocation)?;
+        output
+            .try_extend_from_slice(&size.to_le_bytes())
+            .map_err(|_| Error::Allocation)?;
+    }
+
+    if input.is_empty() {
+        output
+            .try_extend_from_slice(&[1, 0, 0])
+            .map_err(|_| Error::Allocation)?;
+        return Ok(output);
+    }
+    for (index, block) in input.chunks(MAX_BLOCK).enumerate() {
+        let last = (index + 1) * MAX_BLOCK >= input.len();
+        let rle = block.iter().all(|byte| *byte == block[0]);
+        let header = ((block.len() as u32) << 3) | ((rle as u32) << 1) | last as u32;
+        output
+            .try_extend_from_slice(&[header as u8, (header >> 8) as u8, (header >> 16) as u8])
+            .map_err(|_| Error::Allocation)?;
+        if rle {
+            output.try_push(block[0]).map_err(|_| Error::Allocation)?;
+        } else {
+            output
+                .try_extend_from_slice(block)
+                .map_err(|_| Error::Allocation)?;
+        }
+    }
+    Ok(output)
 }
 
 pub fn inspect_frame(input: &[u8]) -> Result<FrameInfo> {
@@ -584,6 +654,38 @@ mod tests {
             0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0, b'a', b'b', b'c',
         ];
         assert_eq!(&*decode(&frame).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn http_encoder_is_deterministic_bounded_and_round_trips() {
+        for input in [
+            &b""[..],
+            &b"mrml"[..],
+            &[7; 4096][..],
+            &[0x5a; 256 * 1024][..],
+        ] {
+            let first = encode_http(input, HttpEncodingProfile::BoundedRawRleV1).unwrap();
+            let second = encode_http(input, HttpEncodingProfile::BoundedRawRleV1).unwrap();
+            assert_eq!(first, second);
+            let info = inspect_frame(&first).unwrap();
+            assert_eq!(info.content_size, Some(input.len() as u64));
+            assert!(info.window_size <= HTTP_MAX_WINDOW as u64);
+            assert_eq!(&decode(&first).unwrap()[..], input);
+        }
+        let mut oversized = Vector::new();
+        oversized.try_resize(HTTP_MAX_WINDOW + 1, 0).unwrap();
+        assert_eq!(
+            encode_http(&oversized, HttpEncodingProfile::BoundedRawRleV1),
+            Err(Error::InputTooLarge)
+        );
+    }
+
+    #[test]
+    fn http_encoder_uses_rle_without_overstating_compression_profile() {
+        let input = [b'x'; 64 * 1024];
+        let encoded = encode_http(&input, HttpEncodingProfile::BoundedRawRleV1).unwrap();
+        assert!(encoded.len() < 32);
+        assert_eq!(&decode(&encoded).unwrap()[..], &input);
     }
 
     #[test]
