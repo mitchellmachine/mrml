@@ -118,8 +118,8 @@ pub use renewal_executor::{
     execute_due_renewal, resolve_uncertain_renewal,
 };
 pub use renewal_journal::{
-    DurableRenewalStage, RENEWAL_PAYLOAD_VERSION, RenewalJournal, RenewalJournalError,
-    commit_or_resolve_renewal,
+    DurableRenewalCheckpointSink, DurableRenewalStage, RENEWAL_PAYLOAD_VERSION,
+    RenewalCheckpointSink, RenewalJournal, RenewalJournalError, commit_or_resolve_renewal,
 };
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,

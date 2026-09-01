@@ -11895,3 +11895,11 @@ renewal boundaries in the existing generational durable-record mechanism. It
 also strictly reconstructs canonical RFC 9773 certificate identifiers. It
 introduces no new certificate protocol, validation topology, or recorded
 re-review trigger.
+
+# 2026-09-01 — Durable unattended-renewal checkpoint wiring
+
+Patent review: **NOT_TRIGGERED**. This increment places authenticated durable
+checkpoints around the existing replacement issuance and activation state
+machine and resolves injected store failures without reissuing or retiring an
+already active key. It introduces no new ACME, TLS, validation-topology, or
+recorded re-review mechanism.

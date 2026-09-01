@@ -2,8 +2,9 @@ use crate::{
     ActivationReceipt, CandidateDeploymentRetirementTarget, CandidateKeyRetirementReceipt,
     CandidateKeyRetirementTarget, CertificateManager, CertificateManagerError,
     IdentityDeploymentTarget, IdentityError, MAX_IDENTITY_NAMES, PemCertificateChain,
-    RenewalEntropy, RenewalLease, RenewalPolicy, RenewalSchedule, ReplacementBinding,
-    TlsIdentityId, TlsSigningRoute, VerifiedCertificateReceipt,
+    RenewalCheckpointSink, RenewalEntropy, RenewalJournal, RenewalJournalError, RenewalLease,
+    RenewalPolicy, RenewalSchedule, ReplacementBinding, TlsIdentityId, TlsSigningRoute,
+    VerifiedCertificateReceipt,
 };
 use mrml_acme::AcmeIdentifier;
 
@@ -38,6 +39,8 @@ pub enum RenewalExecutionError<E> {
     Identity(IdentityError),
     Cleanup(IdentityError),
     ActivationUncertain,
+    Journal(RenewalJournalError),
+    PostActivationJournal(RenewalJournalError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +49,8 @@ pub enum RenewalRecoveryError {
     Identity(IdentityError),
     ActivationUncertain,
     ReplacementMismatch,
+    Journal(RenewalJournalError),
+    PostActivationJournal(RenewalJournalError),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -55,10 +60,12 @@ pub fn execute_due_renewal<I, D, E>(
     now_unix: u64,
     lease_generation: u64,
     lease_seconds: u64,
+    renewal_record_generation: u64,
     renewal_policy: RenewalPolicy,
     entropy: &mut E,
     issuer: &mut I,
     deployment: &mut D,
+    checkpoints: &mut impl RenewalCheckpointSink,
 ) -> Result<ActivationReceipt, RenewalExecutionError<I::Error>>
 where
     I: RenewalIssuer,
@@ -82,12 +89,15 @@ where
     let lease = manager
         .begin_renewal(identity, now_unix, lease_generation, lease_seconds)
         .map_err(RenewalExecutionError::Manager)?;
+    let mut journal = RenewalJournal::lease_acquired(lease, previous, renewal_record_generation)
+        .map_err(RenewalExecutionError::Journal)?;
+    journal = checkpoints
+        .persist(journal)
+        .map_err(RenewalExecutionError::Journal)?;
     let candidate = match issuer.issue_replacement(lease, previous) {
         Ok(candidate) => candidate,
         Err(error) => {
-            manager
-                .finish_renewal(lease)
-                .map_err(RenewalExecutionError::Manager)?;
+            persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
             return Err(RenewalExecutionError::Issuance(error));
         }
     };
@@ -95,9 +105,7 @@ where
         Some(generation) => generation,
         None => {
             cleanup_unprepared(issuer, candidate.route).map_err(RenewalExecutionError::Cleanup)?;
-            manager
-                .finish_renewal(lease)
-                .map_err(RenewalExecutionError::Manager)?;
+            persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
             return Err(RenewalExecutionError::Manager(
                 CertificateManagerError::ArithmeticOverflow,
             ));
@@ -118,9 +126,7 @@ where
         && candidate.route.capability_id != [0; 16];
     if !binding_valid {
         cleanup_unprepared(issuer, candidate.route).map_err(RenewalExecutionError::Cleanup)?;
-        manager
-            .finish_renewal(lease)
-            .map_err(RenewalExecutionError::Manager)?;
+        persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
         return Err(RenewalExecutionError::CandidateBinding);
     }
     let replacement_schedule = match RenewalSchedule::fallback(
@@ -134,9 +140,7 @@ where
         Ok(schedule) => schedule,
         Err(_) => {
             cleanup_unprepared(issuer, candidate.route).map_err(RenewalExecutionError::Cleanup)?;
-            manager
-                .finish_renewal(lease)
-                .map_err(RenewalExecutionError::Manager)?;
+            persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
             return Err(RenewalExecutionError::Schedule);
         }
     };
@@ -156,9 +160,7 @@ where
         Ok(prepared) => prepared,
         Err(error) => {
             cleanup_unprepared(issuer, candidate.route).map_err(RenewalExecutionError::Cleanup)?;
-            manager
-                .finish_renewal(lease)
-                .map_err(RenewalExecutionError::Manager)?;
+            persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
             return Err(RenewalExecutionError::Manager(error));
         }
     };
@@ -168,11 +170,24 @@ where
             .map_err(RenewalExecutionError::Manager)?
             .abort_candidate(prepared, deployment, issuer)
             .map_err(RenewalExecutionError::Cleanup)?;
-        manager
-            .finish_renewal(lease)
-            .map_err(RenewalExecutionError::Manager)?;
+        persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
         return Err(RenewalExecutionError::Manager(error));
     }
+    let staged_journal = journal
+        .replacement_staged(replacement_schedule)
+        .map_err(RenewalExecutionError::Journal)?;
+    journal = match checkpoints.persist(staged_journal) {
+        Ok(journal) => journal,
+        Err(error) => {
+            manager
+                .get_mut(identity)
+                .map_err(RenewalExecutionError::Manager)?
+                .abort_candidate(prepared, deployment, issuer)
+                .map_err(RenewalExecutionError::Cleanup)?;
+            persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
+            return Err(RenewalExecutionError::Journal(error));
+        }
+    };
     let operation = (|| {
         let identity_manager = manager
             .get_mut(identity)
@@ -196,6 +211,12 @@ where
     let activation = match operation {
         Ok(receipt) => receipt,
         Err(RenewalExecutionError::ActivationUncertain) => {
+            let uncertain = journal
+                .activation_uncertain()
+                .map_err(RenewalExecutionError::PostActivationJournal)?;
+            checkpoints
+                .persist(uncertain)
+                .map_err(RenewalExecutionError::PostActivationJournal)?;
             return Err(RenewalExecutionError::ActivationUncertain);
         }
         Err(error) => {
@@ -204,30 +225,76 @@ where
                 .map_err(RenewalExecutionError::Manager)?
                 .abort_candidate(prepared, deployment, issuer)
                 .map_err(RenewalExecutionError::Cleanup)?;
-            manager
-                .finish_renewal(lease)
-                .map_err(RenewalExecutionError::Manager)?;
+            persist_abort::<I::Error>(manager, lease, journal, checkpoints)?;
             return Err(error);
         }
     };
+    let active_journal = journal
+        .active()
+        .map_err(RenewalExecutionError::PostActivationJournal)?;
+    checkpoints
+        .persist(active_journal)
+        .map_err(RenewalExecutionError::PostActivationJournal)?;
     manager
         .commit_renewal(lease)
         .map_err(RenewalExecutionError::Manager)?;
     Ok(activation)
 }
 
-pub fn resolve_uncertain_renewal(
+fn persist_abort<E>(
     manager: &mut CertificateManager,
     lease: RenewalLease,
+    journal: RenewalJournal,
+    checkpoints: &mut impl RenewalCheckpointSink,
+) -> Result<(), RenewalExecutionError<E>> {
+    checkpoints
+        .persist(journal.aborted().map_err(RenewalExecutionError::Journal)?)
+        .map_err(RenewalExecutionError::Journal)?;
+    manager
+        .finish_renewal(lease)
+        .map_err(RenewalExecutionError::Manager)
+}
+
+pub fn resolve_uncertain_renewal(
+    manager: &mut CertificateManager,
+    mut journal: RenewalJournal,
     deployment: &mut impl IdentityDeploymentTarget,
+    checkpoints: &mut impl RenewalCheckpointSink,
 ) -> Result<ActivationReceipt, RenewalRecoveryError> {
+    let lease = journal.lease;
     let replacement = manager
         .staged_renewal_replacement(lease)
         .map_err(RenewalRecoveryError::Manager)?;
-    let resolved = manager
+    if journal.previous
+        != manager
+            .renewal_schedule(lease.identity)
+            .map_err(RenewalRecoveryError::Manager)?
+        || journal.replacement != Some(replacement)
+    {
+        return Err(RenewalRecoveryError::ReplacementMismatch);
+    }
+    journal = match journal.stage {
+        crate::DurableRenewalStage::ReplacementStaged => checkpoints
+            .persist(
+                journal
+                    .activation_uncertain()
+                    .map_err(RenewalRecoveryError::Journal)?,
+            )
+            .map_err(RenewalRecoveryError::Journal)?,
+        crate::DurableRenewalStage::ActivationUncertain => journal,
+        _ => return Err(RenewalRecoveryError::ReplacementMismatch),
+    };
+    let identity_manager = manager
         .get_mut(lease.identity)
-        .map_err(RenewalRecoveryError::Manager)?
-        .resolve_activation(deployment);
+        .map_err(RenewalRecoveryError::Manager)?;
+    let resolved = if identity_manager
+        .active_descriptor()
+        .is_some_and(|active| active.generation == replacement.identity_generation)
+    {
+        identity_manager.confirm_active(deployment)
+    } else {
+        identity_manager.resolve_activation(deployment)
+    };
     let activation = match resolved {
         Ok(receipt) => receipt,
         Err(IdentityError::ActivationNotCommitted) => manager
@@ -251,6 +318,13 @@ pub fn resolve_uncertain_renewal(
     {
         return Err(RenewalRecoveryError::ReplacementMismatch);
     }
+    checkpoints
+        .persist(
+            journal
+                .active()
+                .map_err(RenewalRecoveryError::PostActivationJournal)?,
+        )
+        .map_err(RenewalRecoveryError::PostActivationJournal)?;
     manager
         .commit_renewal(lease)
         .map_err(RenewalRecoveryError::Manager)?;
@@ -287,6 +361,43 @@ mod tests {
     impl RenewalEntropy for Entropy {
         fn random_u64(&mut self) -> Result<u64, crate::SchedulerError> {
             Ok(7)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct Checkpoints {
+        records: [Option<RenewalJournal>; 8],
+        count: u8,
+        fail_at: Option<u8>,
+    }
+    impl Checkpoints {
+        const fn new(fail_at: Option<u8>) -> Self {
+            Self {
+                records: [None; 8],
+                count: 0,
+                fail_at,
+            }
+        }
+        fn last(&self) -> RenewalJournal {
+            self.records[usize::from(self.count - 1)].unwrap()
+        }
+    }
+    impl RenewalCheckpointSink for Checkpoints {
+        fn persist(
+            &mut self,
+            mut journal: RenewalJournal,
+        ) -> Result<RenewalJournal, RenewalJournalError> {
+            let call = self.count + 1;
+            if self.fail_at == Some(call) {
+                self.fail_at = None;
+                return Err(RenewalJournalError::Durable(
+                    crate::DurableError::StoreUnavailable,
+                ));
+            }
+            journal.record_generation += 1;
+            self.records[usize::from(self.count)] = Some(journal);
+            self.count += 1;
+            Ok(journal)
         }
     }
 
@@ -560,16 +671,19 @@ mod tests {
             identity,
             retired: 0,
         };
+        let mut checkpoints = Checkpoints::new(None);
         let activation = execute_due_renewal(
             &mut manager,
             identity,
             200,
             1,
             60,
+            0,
             policy(),
             &mut Entropy,
             &mut issuer,
             &mut runtime,
+            &mut checkpoints,
         )
         .unwrap();
         assert_eq!(activation.generation, 2);
@@ -578,6 +692,19 @@ mod tests {
         assert_eq!(replacement.identity_generation, 2);
         assert!(replacement.certificate_id != previous.certificate_id);
         assert_eq!(runtime.active.unwrap().0, 2);
+        assert_eq!(checkpoints.count, 3);
+        assert_eq!(
+            checkpoints.records[0].unwrap().stage,
+            crate::DurableRenewalStage::LeaseAcquired
+        );
+        assert_eq!(
+            checkpoints.records[1].unwrap().stage,
+            crate::DurableRenewalStage::ReplacementStaged
+        );
+        assert_eq!(
+            checkpoints.records[2].unwrap().stage,
+            crate::DurableRenewalStage::Active
+        );
     }
 
     #[test]
@@ -588,6 +715,7 @@ mod tests {
             identity,
             retired: 0,
         };
+        let mut checkpoints = Checkpoints::new(None);
         assert!(matches!(
             execute_due_renewal(
                 &mut manager,
@@ -595,10 +723,12 @@ mod tests {
                 200,
                 1,
                 60,
+                0,
                 policy(),
                 &mut Entropy,
                 &mut issuer,
                 &mut runtime,
+                &mut checkpoints,
             ),
             Err(RenewalExecutionError::Identity(IdentityError::TestFailed))
         ));
@@ -607,6 +737,10 @@ mod tests {
         assert_eq!(runtime.active.unwrap().0, 1);
         assert!(manager.renewal_schedule(identity).unwrap() == previous);
         assert!(manager.begin_renewal(identity, 200, 2, 60).is_ok());
+        assert_eq!(
+            checkpoints.last().stage,
+            crate::DurableRenewalStage::Aborted
+        );
     }
 
     #[test]
@@ -617,6 +751,7 @@ mod tests {
             identity,
             retired: 0,
         };
+        let mut checkpoints = Checkpoints::new(None);
         assert!(matches!(
             execute_due_renewal(
                 &mut manager,
@@ -624,10 +759,12 @@ mod tests {
                 200,
                 1,
                 60,
+                0,
                 policy(),
                 &mut Entropy,
                 &mut issuer,
                 &mut runtime,
+                &mut checkpoints,
             ),
             Err(RenewalExecutionError::ActivationUncertain)
         ));
@@ -645,7 +782,14 @@ mod tests {
                 .identity_generation,
             2
         );
-        let activation = resolve_uncertain_renewal(&mut manager, lease, &mut runtime).unwrap();
+        let recovered = checkpoints.last();
+        assert_eq!(
+            recovered.stage,
+            crate::DurableRenewalStage::ActivationUncertain
+        );
+        let activation =
+            resolve_uncertain_renewal(&mut manager, recovered, &mut runtime, &mut checkpoints)
+                .unwrap();
         assert_eq!(activation.generation, 2);
         assert_eq!(runtime.active.unwrap().0, 2);
         assert_eq!(
@@ -655,5 +799,87 @@ mod tests {
                 .identity_generation,
             2
         );
+    }
+
+    #[test]
+    fn staged_checkpoint_failure_aborts_before_publication() {
+        let (mut manager, mut runtime, identity, previous) = setup();
+        let mut issuer = Issuer {
+            identity,
+            retired: 0,
+        };
+        let mut checkpoints = Checkpoints::new(Some(2));
+        assert!(matches!(
+            execute_due_renewal(
+                &mut manager,
+                identity,
+                200,
+                1,
+                60,
+                0,
+                policy(),
+                &mut Entropy,
+                &mut issuer,
+                &mut runtime,
+                &mut checkpoints,
+            ),
+            Err(RenewalExecutionError::Journal(
+                RenewalJournalError::Durable(crate::DurableError::StoreUnavailable)
+            ))
+        ));
+        assert_eq!(issuer.retired, 1);
+        assert_eq!(runtime.active.unwrap().0, 1);
+        assert!(runtime.candidate.is_none());
+        assert!(manager.renewal_schedule(identity).unwrap() == previous);
+        assert_eq!(
+            checkpoints.last().stage,
+            crate::DurableRenewalStage::Aborted
+        );
+        assert!(manager.begin_renewal(identity, 200, 2, 60).is_ok());
+    }
+
+    #[test]
+    fn active_checkpoint_failure_recovers_without_reissuing_or_retiring_key() {
+        let (mut manager, mut runtime, identity, previous) = setup();
+        let mut issuer = Issuer {
+            identity,
+            retired: 0,
+        };
+        let mut checkpoints = Checkpoints::new(Some(3));
+        assert!(matches!(
+            execute_due_renewal(
+                &mut manager,
+                identity,
+                200,
+                1,
+                60,
+                0,
+                policy(),
+                &mut Entropy,
+                &mut issuer,
+                &mut runtime,
+                &mut checkpoints,
+            ),
+            Err(RenewalExecutionError::PostActivationJournal(
+                RenewalJournalError::Durable(crate::DurableError::StoreUnavailable)
+            ))
+        ));
+        assert_eq!(runtime.active.unwrap().0, 2);
+        assert_eq!(issuer.retired, 0);
+        assert!(manager.renewal_schedule(identity).unwrap() == previous);
+        let staged = checkpoints.last();
+        assert_eq!(staged.stage, crate::DurableRenewalStage::ReplacementStaged);
+        let activation =
+            resolve_uncertain_renewal(&mut manager, staged, &mut runtime, &mut checkpoints)
+                .unwrap();
+        assert_eq!(activation.generation, 2);
+        assert_eq!(
+            manager
+                .renewal_schedule(identity)
+                .unwrap()
+                .identity_generation,
+            2
+        );
+        assert_eq!(checkpoints.last().stage, crate::DurableRenewalStage::Active);
     }
 }

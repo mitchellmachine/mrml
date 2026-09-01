@@ -459,6 +459,30 @@ impl IdentityManager {
         }
     }
 
+    pub fn confirm_active(
+        &mut self,
+        target: &mut impl IdentityDeploymentTarget,
+    ) -> Result<ActivationReceipt, IdentityError> {
+        let active = self.active.as_ref().ok_or(IdentityError::InvalidState)?;
+        let (generation, digest) = target.describe_active(self.identity)?;
+        if generation != active.descriptor.generation
+            || digest != active.descriptor.binding_digest()
+            || active.target_generation == 0
+        {
+            return Err(IdentityError::ResolutionMismatch);
+        }
+        Ok(ActivationReceipt {
+            identity: self.identity,
+            generation,
+            descriptor_digest: digest,
+            previous_generation: self
+                .retained
+                .as_ref()
+                .map(|retained| retained.descriptor.generation),
+            target_generation: active.target_generation,
+        })
+    }
+
     pub fn abort_candidate(
         &mut self,
         prepared: PreparedIdentityReceipt,

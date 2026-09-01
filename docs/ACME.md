@@ -194,9 +194,16 @@ lease-acquired, replacement-staged, activation-uncertain, and active boundaries,
 including both exact canonical RFC 9773 certificate identifiers and complete
 schedules. Mutated records, skipped stages, wrong objects, and contradictory
 replacement generations fail closed; uncertain store commits advance the
-journal generation only after authoritative re-read. Wiring each executor
-boundary to this journal and reconstructing the in-memory manager plus identity
-candidate after a process restart remain required.
+journal generation only after authoritative re-read. The executor now requires
+a checkpoint sink: it commits the lease before issuance, the replacement
+schedule before publication, activation uncertainty before returning it, and
+the active boundary before committing the manager schedule. Definitive failures
+write an aborted terminal record. Injected store failures before publication
+preserve the old identity and retire the candidate; failures after activation
+are recovered by confirming the already-active generation without reissuance or
+key retirement. Reconstructing the in-memory manager, candidate deployment, and
+failed-candidate cleanup binding after a complete process restart remains
+required.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact

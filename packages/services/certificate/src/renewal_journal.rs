@@ -17,6 +17,7 @@ pub enum DurableRenewalStage {
     ReplacementStaged = 2,
     ActivationUncertain = 3,
     Active = 4,
+    Aborted = 5,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +26,7 @@ pub enum RenewalJournalError {
     InvalidStage,
     ReceiptMismatch,
     Malformed,
+    NotCommitted,
 }
 
 impl From<DurableError> for RenewalJournalError {
@@ -40,6 +42,44 @@ pub struct RenewalJournal {
     pub previous: RenewalSchedule,
     pub replacement: Option<RenewalSchedule>,
     pub record_generation: u64,
+}
+
+pub trait RenewalCheckpointSink {
+    fn persist(&mut self, journal: RenewalJournal) -> Result<RenewalJournal, RenewalJournalError>;
+}
+
+pub struct DurableRenewalCheckpointSink<'a, A, S> {
+    object: DurableObjectId,
+    authenticator: &'a mut A,
+    store: &'a mut S,
+}
+
+impl<'a, A, S> DurableRenewalCheckpointSink<'a, A, S> {
+    pub fn new(object: DurableObjectId, authenticator: &'a mut A, store: &'a mut S) -> Self {
+        Self {
+            object,
+            authenticator,
+            store,
+        }
+    }
+}
+
+impl<A: DurableAuthenticator, S: DurableStateStore> RenewalCheckpointSink
+    for DurableRenewalCheckpointSink<'_, A, S>
+{
+    fn persist(
+        &mut self,
+        mut journal: RenewalJournal,
+    ) -> Result<RenewalJournal, RenewalJournalError> {
+        let mut transaction =
+            journal.prepare_persist(self.object, self.authenticator, self.store)?;
+        if commit_or_resolve_renewal(&mut journal, &mut transaction, self.store)?
+            != TransactionState::Committed
+        {
+            return Err(RenewalJournalError::NotCommitted);
+        }
+        Ok(journal)
+    }
 }
 
 impl RenewalJournal {
@@ -98,6 +138,19 @@ impl RenewalJournal {
             return Err(RenewalJournalError::InvalidStage);
         }
         self.stage = DurableRenewalStage::Active;
+        Ok(self)
+    }
+
+    pub fn aborted(mut self) -> Result<Self, RenewalJournalError> {
+        if matches!(
+            self.stage,
+            DurableRenewalStage::ActivationUncertain
+                | DurableRenewalStage::Active
+                | DurableRenewalStage::Aborted
+        ) {
+            return Err(RenewalJournalError::InvalidStage);
+        }
+        self.stage = DurableRenewalStage::Aborted;
         Ok(self)
     }
 
@@ -170,6 +223,7 @@ impl RenewalJournal {
             2 => DurableRenewalStage::ReplacementStaged,
             3 => DurableRenewalStage::ActivationUncertain,
             4 => DurableRenewalStage::Active,
+            5 => DurableRenewalStage::Aborted,
             _ => return Err(RenewalJournalError::Malformed),
         };
         let record_generation = read_u64(&input[11..19])?;
@@ -190,6 +244,7 @@ impl RenewalJournal {
         };
         match (stage, replacement) {
             (DurableRenewalStage::LeaseAcquired, None) => Ok(journal),
+            (DurableRenewalStage::Aborted, None) => Ok(journal),
             (DurableRenewalStage::ReplacementStaged, Some(replacement))
             | (DurableRenewalStage::ActivationUncertain, Some(replacement))
             | (DurableRenewalStage::Active, Some(replacement)) => {
@@ -200,6 +255,11 @@ impl RenewalJournal {
                 } else {
                     Err(RenewalJournalError::Malformed)
                 }
+            }
+            (DurableRenewalStage::Aborted, Some(replacement)) => {
+                Self::lease_acquired(lease, previous, record_generation)?
+                    .replacement_staged(replacement)?;
+                Ok(journal)
             }
             _ => Err(RenewalJournalError::Malformed),
         }
@@ -442,8 +502,17 @@ mod tests {
         let staged = leased.replacement_staged(replacement).unwrap();
         let uncertain = staged.activation_uncertain().unwrap();
         let active = uncertain.active().unwrap();
+        let aborted_before_issue = leased.aborted().unwrap();
+        let aborted_candidate = staged.aborted().unwrap();
         let object = DurableObjectId([7; 16]);
-        for expected in [leased, staged, uncertain, active] {
+        for expected in [
+            leased,
+            staged,
+            uncertain,
+            active,
+            aborted_before_issue,
+            aborted_candidate,
+        ] {
             let mut auth = Auth([9; 32]);
             let record = expected.authenticated_record(object, &mut auth).unwrap();
             let mut encoded = [0; MAX_DURABLE_RECORD_BYTES];
