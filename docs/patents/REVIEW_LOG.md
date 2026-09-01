@@ -12026,3 +12026,11 @@ existing authenticated backup container across bounded lifecycle-sized chunks,
 then invokes the existing verify and clean-target transactional restore paths.
 It adds no certificate protocol, signing mechanism, validation topology,
 certificate authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Purpose-bound backup transfer commands
+
+Patent review: **NOT_TRIGGERED**. This increment canonically encodes ordinary
+bounded sequential backup-transfer commands and binds verify-only versus
+restore purpose across their state transitions. It adds no certificate
+protocol, signing mechanism, validation topology, certificate authority
+operation, or recorded re-review trigger.

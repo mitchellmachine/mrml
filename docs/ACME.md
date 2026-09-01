@@ -199,8 +199,14 @@ replay, reordering, truncation, overflow, and digest substitution. Verification
 uses the existing durable authenticator over the completed container. Restore
 is available only after successful verification, still requires an empty
 transactional target, and clears the 269492-byte bounded assembly buffer after
-a successful commit or explicit cancellation. Lifecycle request codecs and the
-hosted CLI/provider wiring for these transfer steps remain required.
+a successful commit or explicit cancellation. A canonical 72-byte command
+header now carries begin, append, verify, restore, and cancel through the
+existing 4096-byte lifecycle request window, leaving 4024 bytes per chunk. Its
+decoder rejects reserved bytes, trailing data, inconsistent metadata, zero
+generations, and oversized chunks. Every command binds `VERIFY_ONLY` or
+`RESTORE`; the session rejects cross-purpose append, verification, cancellation,
+or restore, so verification authority cannot be escalated into state mutation.
+The hosted provider/client and CLI wiring for these commands remain required.
 RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
 and DER serial contents, including a required leading zero, and are carried in
 the verified-chain receipt. RenewalInfo parsing bounds and validates the exact

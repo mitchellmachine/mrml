@@ -48,7 +48,9 @@ pub use backup::{
     restore_sealed_key_record, verify_backup,
 };
 pub use backup_transfer::{
-    BackupTransferError, BackupUploadSession, MAX_BACKUP_TRANSFER_CHUNK,
+    BACKUP_TRANSFER_HEADER_BYTES, BackupTransferCommand, BackupTransferError,
+    BackupTransferPurpose, BackupUploadSession, MAX_BACKUP_TRANSFER_CHUNK, MAX_BACKUP_WIRE_CHUNK,
+    decode_backup_transfer_command, encode_backup_transfer_command,
 };
 pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 pub use catalog_lifecycle_provider::{
