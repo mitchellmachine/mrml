@@ -11325,3 +11325,10 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 contract to MRML's existing HTTP/TLS client for Linux and Windows targets,
 without following redirects or introducing a third-party ACME implementation.
 It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Deterministic alternate certificate-chain selection
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary deterministic
+selection among already validated X.509 chains using an exact owner-approved
+chain-digest preference list. It adds no recorded re-review-trigger mechanism.

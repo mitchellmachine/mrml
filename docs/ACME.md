@@ -65,6 +65,10 @@ a verified-chain receipt. The MRML target builds the same policy and verifier
 interface without inheriting a host ambient trust store. Checked-in leaf/root
 fixtures were independently generated with the OpenSSL CLI solely as a test
 oracle; no fixture private key is retained or shipped.
+Alternate responses are disabled unless their exact chain digests appear in an
+owner policy. When multiple validated candidates are admitted, selection uses
+that explicit preference order with a digest tie-break and never trusts CA
+response order.
 The identity manager exposes an identity-scoped consumer capability for
 description, bounded chain reads, generation observation, and acquisition of a
 use-only TLS signing route. The route binds identity generation, key identity,
@@ -132,7 +136,7 @@ through capability-bound services.
 
 General JOSE response parsing, MRML HTTPS capability adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
-alternate-chain selection, renewal execution, revocation transport,
+alternate-chain link retrieval, renewal execution, revocation transport,
 backup/restore, CLI administration, interface dispatch/service loop, concrete
 gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must

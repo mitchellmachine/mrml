@@ -5,6 +5,7 @@ pub const MAX_CERTIFICATE_CHAIN_BYTES: usize = 65_536;
 pub const MAX_CERTIFICATE_DER_BYTES: usize = 16_384;
 pub const MAX_CERTIFICATES: usize = 8;
 pub const MAX_IDENTITY_NAMES: usize = 16;
+pub const MAX_ALTERNATE_CHAINS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CertificateValidationError {
@@ -21,6 +22,7 @@ pub enum CertificateValidationError {
     InvalidValidity,
     UntrustedChain,
     StagingProductionMismatch,
+    AlternateChainNotApproved,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -151,6 +153,60 @@ pub trait CertificateChainVerifier {
         chain: &PemCertificateChain,
         policy: &CertificateValidationPolicy,
     ) -> Result<VerifiedCertificateReceipt, CertificateValidationError>;
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AlternateChainPolicy {
+    /// Exact chain digests in descending owner preference. Empty policy means
+    /// alternate-chain selection is disabled rather than trusting response
+    /// order.
+    pub preferred_chain_digests: [Option<[u8; 32]>; MAX_ALTERNATE_CHAINS],
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct SelectedCertificateChain {
+    pub candidate_index: u8,
+    pub preference_index: u8,
+    pub receipt: VerifiedCertificateReceipt,
+}
+
+pub fn select_alternate_chain<V: CertificateChainVerifier>(
+    candidates: &[&PemCertificateChain],
+    policy: &CertificateValidationPolicy,
+    alternate_policy: &AlternateChainPolicy,
+    verifier: &mut V,
+) -> Result<SelectedCertificateChain, CertificateValidationError> {
+    if candidates.is_empty() || candidates.len() > MAX_ALTERNATE_CHAINS {
+        return Err(CertificateValidationError::AlternateChainNotApproved);
+    }
+    let mut selected = None;
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        let digest = candidate.chain_digest();
+        let Some(preference_index) = alternate_policy
+            .preferred_chain_digests
+            .iter()
+            .position(|approved| *approved == Some(digest))
+        else {
+            continue;
+        };
+        let receipt = verifier.verify(candidate, policy)?;
+        let choice = SelectedCertificateChain {
+            candidate_index: candidate_index as u8,
+            preference_index: preference_index as u8,
+            receipt,
+        };
+        if selected
+            .as_ref()
+            .is_none_or(|current: &SelectedCertificateChain| {
+                choice.preference_index < current.preference_index
+                    || (choice.preference_index == current.preference_index
+                        && choice.receipt.chain_digest < current.receipt.chain_digest)
+            })
+        {
+            selected = Some(choice);
+        }
+    }
+    selected.ok_or(CertificateValidationError::AlternateChainNotApproved)
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -320,12 +376,95 @@ mod tests {
         assert_eq!(chain.count(), 2);
         assert_eq!(chain.certificate(0), Some(&[1, 2, 3][..]));
         assert_ne!(chain.chain_digest(), [0; 32]);
-        assert!(
-            PemCertificateChain::parse(
-                b"-----BEGIN CERTIFICATE-----\nAQI=AAAA\n-----END CERTIFICATE-----"
+        assert!(PemCertificateChain::parse(
+            b"-----BEGIN CERTIFICATE-----\nAQI=AAAA\n-----END CERTIFICATE-----"
+        )
+        .is_err());
+    }
+
+    struct ReceiptVerifier;
+
+    impl CertificateChainVerifier for ReceiptVerifier {
+        fn verify(
+            &mut self,
+            chain: &PemCertificateChain,
+            policy: &CertificateValidationPolicy,
+        ) -> Result<VerifiedCertificateReceipt, CertificateValidationError> {
+            Ok(VerifiedCertificateReceipt {
+                policy_generation: policy.policy_generation,
+                ca_class: policy.ca_class,
+                profile: policy.profile,
+                order_url_digest: policy.order_url_digest,
+                chain_digest: chain.chain_digest(),
+                leaf_spki_digest: [0; 32],
+                not_before: 1,
+                not_after: 2,
+                trust_store_digest: policy.trust_store_digest,
+                ari_certificate_id: AriCertificateId::derive(&[1], &[1]).unwrap(),
+            })
+        }
+    }
+
+    #[test]
+    fn alternate_chain_selection_uses_owner_preference_not_response_order() {
+        let first = PemCertificateChain::parse(
+            b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        let preferred = PemCertificateChain::parse(
+            b"-----BEGIN CERTIFICATE-----\nBAUG\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        let policy = CertificateValidationPolicy {
+            policy_generation: 1,
+            ca_class: CaClass::Staging,
+            profile: CertificateProfile::parse("test", 1).unwrap(),
+            order_url_digest: [1; 32],
+            expected_key: P256Jwk::from_coordinates(
+                [
+                    0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+                    0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1,
+                    0x39, 0x45, 0xd8, 0x98, 0xc2, 0x96,
+                ],
+                [
+                    0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c,
+                    0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6,
+                    0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+                ],
             )
-            .is_err()
-        );
+            .unwrap(),
+            identifiers: [None; MAX_IDENTITY_NAMES],
+            identifier_count: 1,
+            now_unix: 1,
+            maximum_validity_seconds: 1,
+            maximum_chain_length: 1,
+            trust_store_digest: [2; 32],
+        };
+        let mut preferred_chain_digests = [None; MAX_ALTERNATE_CHAINS];
+        preferred_chain_digests[0] = Some(preferred.chain_digest());
+        preferred_chain_digests[1] = Some(first.chain_digest());
+        let selected = select_alternate_chain(
+            &[&first, &preferred],
+            &policy,
+            &AlternateChainPolicy {
+                preferred_chain_digests,
+            },
+            &mut ReceiptVerifier,
+        )
+        .unwrap();
+        assert_eq!(selected.candidate_index, 1);
+        assert_eq!(selected.preference_index, 0);
+        assert!(matches!(
+            select_alternate_chain(
+                &[&first],
+                &policy,
+                &AlternateChainPolicy {
+                    preferred_chain_digests: [None; MAX_ALTERNATE_CHAINS]
+                },
+                &mut ReceiptVerifier,
+            ),
+            Err(CertificateValidationError::AlternateChainNotApproved)
+        ));
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
