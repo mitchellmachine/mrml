@@ -4,7 +4,12 @@ use mrml_acme::{
     AcmeDirectory, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint,
     MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_URL_BYTES, OrderState, OwnerTermsApproval,
 };
-use mrml_certificate::certd_identifier_set_digest;
+use mrml_certificate::{
+    Dns01PublicationReceipt, Dns01PublicationRequest, Dns01RecordName, Dns01TxtValue,
+    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, certd_identifier_set_digest,
+    dns01_publication_binding,
+};
+use mrml_crypto::Sha256;
 use mrml_json::Value;
 
 pub const MAX_ACMED_CONFIG_BYTES: usize = 16 * 1024;
@@ -14,6 +19,8 @@ const CHANNEL_REQUEST_MAGIC: &[u8; 8] = b"MRMLRID1";
 pub const CHANNEL_REQUEST_RESERVATION: u64 = 1_000_000;
 const ORDER_RECORD_MAGIC: &[u8; 8] = b"MRMLAOR1";
 const ORDER_RECORD_HEADER_BYTES: usize = 130;
+const CHALLENGE_RECORD_MAGIC: &[u8; 8] = b"MRMLACH1";
+const CHALLENGE_RECORD_HEADER_BYTES: usize = 146;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcmedRequestIdReservation {
@@ -480,6 +487,319 @@ fn read_order_u64(input: &[u8]) -> Result<u64, AcmedOrderRecordError> {
         input
             .try_into()
             .map_err(|_| AcmedOrderRecordError::Malformed)?,
+    ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcmedChallengePhase {
+    Selected = 1,
+    Published = 2,
+    Propagated = 3,
+    Accepted = 4,
+    CleanupPending = 5,
+    Complete = 6,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AcmedChallengeRecord {
+    pub phase: AcmedChallengePhase,
+    pub authorization_index: u8,
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub policy_generation: u64,
+    pub identity: [u8; 16],
+    pub operation_id: [u8; 16],
+    pub challenge_generation: u64,
+    pub identifier: DnsIdentifier,
+    pub authorization_url: AcmeUrl,
+    pub challenge_url: AcmeUrl,
+    pub token: mrml_acme::ChallengeToken,
+    pub key_authorization_digest: [u8; 32],
+    pub provider_record_id: [u8; MAX_DNS01_PROVIDER_RECORD_ID_BYTES],
+    pub provider_record_id_length: u8,
+    pub provider_binding_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcmedChallengeRecordError {
+    InvalidState,
+    OutputTooSmall,
+    Malformed,
+    PolicyMismatch,
+}
+
+impl AcmedChallengeRecord {
+    pub fn durable_object_id(&self) -> [u8; 16] {
+        challenge_object_id(
+            self.identity,
+            self.authorization_index,
+            self.identifier,
+        )
+    }
+
+    pub fn publication_receipt(
+        &self,
+    ) -> Result<Option<Dns01PublicationReceipt>, AcmedChallengeRecordError> {
+        if self.phase == AcmedChallengePhase::Selected {
+            return Ok(None);
+        }
+        let name = Dns01RecordName::for_identifier(self.identifier)
+            .map_err(|_| AcmedChallengeRecordError::InvalidState)?;
+        let value = Dns01TxtValue::from_key_authorization_digest(self.key_authorization_digest);
+        let receipt = Dns01PublicationReceipt {
+            operation_id: self.operation_id,
+            generation: self.challenge_generation,
+            identifier: self.identifier,
+            key_authorization_digest: self.key_authorization_digest,
+            name,
+            value,
+            provider_record_id: self.provider_record_id,
+            provider_record_id_length: self.provider_record_id_length,
+            binding_digest: self.provider_binding_digest,
+        };
+        let request = Dns01PublicationRequest {
+            operation_id: self.operation_id,
+            generation: self.challenge_generation,
+            identifier: self.identifier,
+            key_authorization_digest: self.key_authorization_digest,
+        };
+        if receipt.provider_record_id().map_err(|_| AcmedChallengeRecordError::InvalidState)?
+            .is_empty()
+            || dns01_publication_binding(
+                request,
+                name,
+                value,
+                receipt
+                    .provider_record_id()
+                    .map_err(|_| AcmedChallengeRecordError::InvalidState)?,
+            ) != receipt.binding_digest
+        {
+            return Err(AcmedChallengeRecordError::InvalidState);
+        }
+        Ok(Some(receipt))
+    }
+
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, AcmedChallengeRecordError> {
+        let identifier = self.identifier.as_str().as_bytes();
+        let authorization = self.authorization_url.as_str().as_bytes();
+        let challenge = self.challenge_url.as_str().as_bytes();
+        let token = self.token.as_str().as_bytes();
+        let provider_length = usize::from(self.provider_record_id_length);
+        let published = self.phase != AcmedChallengePhase::Selected;
+        if self.directory_generation == 0
+            || self.account_generation == 0
+            || self.policy_generation == 0
+            || self.identity == [0; 16]
+            || self.operation_id == [0; 16]
+            || self.challenge_generation == 0
+            || self.key_authorization_digest == [0; 32]
+            || self.authorization_index as usize >= MAX_AUTHORIZATIONS
+            || identifier.is_empty()
+            || identifier.len() > u8::MAX as usize
+            || authorization.len() > u16::MAX as usize
+            || challenge.len() > u16::MAX as usize
+            || token.is_empty()
+            || token.len() > u8::MAX as usize
+            || provider_length > MAX_DNS01_PROVIDER_RECORD_ID_BYTES
+            || published != (provider_length != 0 && self.provider_binding_digest != [0; 32])
+            || self.provider_record_id[provider_length..]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(AcmedChallengeRecordError::InvalidState);
+        }
+        if published {
+            self.publication_receipt()?;
+        }
+        let length = CHALLENGE_RECORD_HEADER_BYTES
+            .checked_add(identifier.len())
+            .and_then(|length| length.checked_add(authorization.len()))
+            .and_then(|length| length.checked_add(challenge.len()))
+            .and_then(|length| length.checked_add(token.len()))
+            .and_then(|length| length.checked_add(provider_length))
+            .ok_or(AcmedChallengeRecordError::OutputTooSmall)?;
+        if output.len() < length {
+            return Err(AcmedChallengeRecordError::OutputTooSmall);
+        }
+        output[..length].fill(0);
+        output[..8].copy_from_slice(CHALLENGE_RECORD_MAGIC);
+        output[8] = self.phase as u8;
+        output[9] = self.authorization_index;
+        output[10] = identifier.len() as u8;
+        output[11] = token.len() as u8;
+        output[12..14].copy_from_slice(&(authorization.len() as u16).to_be_bytes());
+        output[14..16].copy_from_slice(&(challenge.len() as u16).to_be_bytes());
+        output[16] = self.provider_record_id_length;
+        output[18..26].copy_from_slice(&self.directory_generation.to_be_bytes());
+        output[26..34].copy_from_slice(&self.account_generation.to_be_bytes());
+        output[34..42].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[42..58].copy_from_slice(&self.identity);
+        output[58..74].copy_from_slice(&self.operation_id);
+        output[74..82].copy_from_slice(&self.challenge_generation.to_be_bytes());
+        output[82..114].copy_from_slice(&self.key_authorization_digest);
+        output[114..146].copy_from_slice(&self.provider_binding_digest);
+        let mut cursor = CHALLENGE_RECORD_HEADER_BYTES;
+        for value in [identifier, authorization, challenge, token, &self.provider_record_id[..provider_length]] {
+            output[cursor..cursor + value.len()].copy_from_slice(value);
+            cursor += value.len();
+        }
+        Ok(length)
+    }
+
+    pub fn decode(
+        input: &[u8],
+        configured_directory: &AcmeUrl,
+        allow_test_http: bool,
+        wildcard_allowed: bool,
+    ) -> Result<Self, AcmedChallengeRecordError> {
+        if input.len() < CHALLENGE_RECORD_HEADER_BYTES
+            || input.get(..8) != Some(CHALLENGE_RECORD_MAGIC)
+            || input[17] != 0
+        {
+            return Err(AcmedChallengeRecordError::Malformed);
+        }
+        let phase = match input[8] {
+            1 => AcmedChallengePhase::Selected,
+            2 => AcmedChallengePhase::Published,
+            3 => AcmedChallengePhase::Propagated,
+            4 => AcmedChallengePhase::Accepted,
+            5 => AcmedChallengePhase::CleanupPending,
+            6 => AcmedChallengePhase::Complete,
+            _ => return Err(AcmedChallengeRecordError::Malformed),
+        };
+        let lengths = [
+            usize::from(input[10]),
+            usize::from(u16::from_be_bytes([input[12], input[13]])),
+            usize::from(u16::from_be_bytes([input[14], input[15]])),
+            usize::from(input[11]),
+            usize::from(input[16]),
+        ];
+        if lengths
+            .iter()
+            .try_fold(CHALLENGE_RECORD_HEADER_BYTES, |sum, value| sum.checked_add(*value))
+            != Some(input.len())
+        {
+            return Err(AcmedChallengeRecordError::Malformed);
+        }
+        let mut cursor = CHALLENGE_RECORD_HEADER_BYTES;
+        let mut next = |length: usize| -> Result<&[u8], AcmedChallengeRecordError> {
+            let end = cursor
+                .checked_add(length)
+                .ok_or(AcmedChallengeRecordError::Malformed)?;
+            let value = input
+                .get(cursor..end)
+                .ok_or(AcmedChallengeRecordError::Malformed)?;
+            cursor = end;
+            Ok(value)
+        };
+        let identifier = DnsIdentifier::parse(
+            core::str::from_utf8(next(lengths[0])?)
+                .map_err(|_| AcmedChallengeRecordError::Malformed)?,
+            wildcard_allowed,
+        )
+        .map_err(|_| AcmedChallengeRecordError::Malformed)?;
+        let authorization_url = decode_challenge_url(
+            next(lengths[1])?,
+            configured_directory,
+            allow_test_http,
+        )?;
+        let challenge_url = decode_challenge_url(
+            next(lengths[2])?,
+            configured_directory,
+            allow_test_http,
+        )?;
+        let token = mrml_acme::ChallengeToken::parse(
+            core::str::from_utf8(next(lengths[3])?)
+                .map_err(|_| AcmedChallengeRecordError::Malformed)?,
+        )
+        .map_err(|_| AcmedChallengeRecordError::Malformed)?;
+        let provider = next(lengths[4])?;
+        let mut provider_record_id = [0u8; MAX_DNS01_PROVIDER_RECORD_ID_BYTES];
+        provider_record_id[..provider.len()].copy_from_slice(provider);
+        let record = Self {
+            phase,
+            authorization_index: input[9],
+            directory_generation: read_challenge_u64(&input[18..26])?,
+            account_generation: read_challenge_u64(&input[26..34])?,
+            policy_generation: read_challenge_u64(&input[34..42])?,
+            identity: input[42..58]
+                .try_into()
+                .map_err(|_| AcmedChallengeRecordError::Malformed)?,
+            operation_id: input[58..74]
+                .try_into()
+                .map_err(|_| AcmedChallengeRecordError::Malformed)?,
+            challenge_generation: read_challenge_u64(&input[74..82])?,
+            identifier,
+            authorization_url,
+            challenge_url,
+            token,
+            key_authorization_digest: input[82..114]
+                .try_into()
+                .map_err(|_| AcmedChallengeRecordError::Malformed)?,
+            provider_record_id,
+            provider_record_id_length: input[16],
+            provider_binding_digest: input[114..146]
+                .try_into()
+                .map_err(|_| AcmedChallengeRecordError::Malformed)?,
+        };
+        let mut canonical = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+        let length = record.encode(&mut canonical)?;
+        if canonical[..length] != *input {
+            return Err(AcmedChallengeRecordError::Malformed);
+        }
+        Ok(record)
+    }
+
+    pub fn require_policy(&self, config: &AcmedConfig) -> Result<(), AcmedChallengeRecordError> {
+        if self.directory_generation != config.directory_generation
+            || self.account_generation != config.account_generation
+            || self.policy_generation != config.policy_generation
+            || self.identity != config.identity
+            || usize::from(self.authorization_index) >= usize::from(config.identifier_count)
+            || config.identifiers[usize::from(self.authorization_index)] != Some(self.identifier)
+        {
+            Err(AcmedChallengeRecordError::PolicyMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub fn challenge_object_id(
+    identity: [u8; 16],
+    authorization_index: u8,
+    identifier: DnsIdentifier,
+) -> [u8; 16] {
+    let mut digest = Sha256::new();
+    digest.update(b"MRML acmed DNS-01 challenge object v1\0");
+    digest.update(&identity);
+    digest.update(&[authorization_index]);
+    digest.update(identifier.as_str().as_bytes());
+    let digest = digest.finalize();
+    let mut object = [0u8; 16];
+    object.copy_from_slice(&digest[..16]);
+    object
+}
+
+fn decode_challenge_url(
+    input: &[u8],
+    configured_directory: &AcmeUrl,
+    allow_test_http: bool,
+) -> Result<AcmeUrl, AcmedChallengeRecordError> {
+    let text = core::str::from_utf8(input).map_err(|_| AcmedChallengeRecordError::Malformed)?;
+    let url = AcmeUrl::parse(text, allow_test_http)
+        .map_err(|_| AcmedChallengeRecordError::Malformed)?;
+    url.require_origin(configured_directory.origin())
+        .map_err(|_| AcmedChallengeRecordError::PolicyMismatch)?;
+    Ok(url)
+}
+
+fn read_challenge_u64(input: &[u8]) -> Result<u64, AcmedChallengeRecordError> {
+    Ok(u64::from_be_bytes(
+        input
+            .try_into()
+            .map_err(|_| AcmedChallengeRecordError::Malformed)?,
     ))
 }
 
@@ -1063,6 +1383,109 @@ mod tests {
             AcmedOrderRecord::decode(&encoded[..length], &config.directory_url, false),
             Err(AcmedOrderRecordError::PolicyMismatch)
         ));
+    }
+
+    #[test]
+    fn challenge_record_round_trips_selected_and_exact_publication_receipt() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let identifier = config.identifiers[0].unwrap();
+        let selected = AcmedChallengeRecord {
+            phase: AcmedChallengePhase::Selected,
+            authorization_index: 0,
+            directory_generation: 1,
+            account_generation: 1,
+            policy_generation: 1,
+            identity: config.identity,
+            operation_id: [9; 16],
+            challenge_generation: 1,
+            identifier,
+            authorization_url: AcmeUrl::parse(
+                "https://acme-staging-v02.api.letsencrypt.org/authz/1",
+                false,
+            )
+            .unwrap(),
+            challenge_url: AcmeUrl::parse(
+                "https://acme-staging-v02.api.letsencrypt.org/challenge/1",
+                false,
+            )
+            .unwrap(),
+            token: mrml_acme::ChallengeToken::parse("token-1").unwrap(),
+            key_authorization_digest: [0x21; 32],
+            provider_record_id: [0; MAX_DNS01_PROVIDER_RECORD_ID_BYTES],
+            provider_record_id_length: 0,
+            provider_binding_digest: [0; 32],
+        };
+        selected.require_policy(&config).unwrap();
+        assert!(selected.publication_receipt().unwrap().is_none());
+        let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+        let length = selected.encode(&mut encoded).unwrap();
+        assert!(
+            AcmedChallengeRecord::decode(
+                &encoded[..length],
+                &config.directory_url,
+                false,
+                false,
+            )
+            .unwrap()
+                == selected
+        );
+
+        let request = Dns01PublicationRequest {
+            operation_id: selected.operation_id,
+            generation: selected.challenge_generation,
+            identifier,
+            key_authorization_digest: selected.key_authorization_digest,
+        };
+        let name = Dns01RecordName::for_identifier(identifier).unwrap();
+        let value = Dns01TxtValue::from_key_authorization_digest(selected.key_authorization_digest);
+        let provider_id = b"0123456789abcdef0123456789abcdef";
+        let mut provider_record_id = [0u8; MAX_DNS01_PROVIDER_RECORD_ID_BYTES];
+        provider_record_id[..provider_id.len()].copy_from_slice(provider_id);
+        let published = AcmedChallengeRecord {
+            phase: AcmedChallengePhase::Published,
+            provider_record_id,
+            provider_record_id_length: provider_id.len() as u8,
+            provider_binding_digest: dns01_publication_binding(
+                request,
+                name,
+                value,
+                core::str::from_utf8(provider_id).unwrap(),
+            ),
+            ..selected
+        };
+        let length = published.encode(&mut encoded).unwrap();
+        let decoded = AcmedChallengeRecord::decode(
+            &encoded[..length],
+            &config.directory_url,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(decoded == published);
+        assert_eq!(
+            decoded
+                .publication_receipt()
+                .unwrap()
+                .unwrap()
+                .provider_record_id()
+                .unwrap(),
+            core::str::from_utf8(provider_id).unwrap()
+        );
+    }
+
+    #[test]
+    fn challenge_objects_are_domain_separated_and_mutation_fails_closed() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let first = config.identifiers[0].unwrap();
+        let second = config.identifiers[1].unwrap();
+        assert_ne!(
+            challenge_object_id(config.identity, 0, first),
+            challenge_object_id(config.identity, 1, second)
+        );
+        assert_ne!(
+            challenge_object_id(config.identity, 0, first),
+            config.identity
+        );
     }
 
     #[test]

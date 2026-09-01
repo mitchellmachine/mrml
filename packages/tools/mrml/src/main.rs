@@ -1880,6 +1880,9 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
         encoded.push_str(&format!("role = \"{role}\"\n"));
         encoded.push_str(&format!("package = \"{package}\"\n\n"));
     }
+    if encoded.ends_with("\n\n") {
+        encoded.pop();
+    }
     let canonical = encoded;
     let path = workspace.root.join("mrml.lock");
     let current = fs::read_to_string(&path).ok();

@@ -53,6 +53,12 @@ package = "org.mrml.service.certificate"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_json"
 compile_name = "mrml-json"
 package = "org.mrml.library.json"
