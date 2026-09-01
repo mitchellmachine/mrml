@@ -16,11 +16,11 @@ Executed on 2026-09-01:
 
 - `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
 - `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
-- `./target/debug/mrml test mrml-git --target linux` — PASS, 135 library tests and 1 CLI test.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 136 library tests and 2 CLI tests.
 - `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 14 tests.
 - `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 48 tests, including mandatory pinned NIST ACVP sigGen/sigVer and OpenSSL 3.6.4 differential fixtures.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.crypto --target windows` — PASS, 48 tests with the same mandatory ML-DSA fixtures under the pinned Wine-hosted Windows target.
-- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 125 library tests and 1 CLI test using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. This is Wine-hosted Windows-target compatibility evidence, not native Windows.
+- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 126 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. This is Wine-hosted Windows-target compatibility evidence, not native Windows.
 - `cargo fmt --all -- --check` — PASS.
 - `git diff --check` — PASS before this evidence file.
 - `./target/debug/mrml assurance check` — FAIL: `UnsafeBoundaryUnadmitted { path: docs/compiler/probes/pinned_std_thread_tls_execution.rs }`. This path is outside Agent A's permitted files and arrived through concurrent main integration; it was not hidden or modified here.
@@ -37,7 +37,7 @@ Implemented and executed in the focused environments:
 Explicit blockers (`REMAINS_OPEN`):
 
 - Dynamic-Huffman level-9 canonical encoding, bounded delta selection, cross-pack recomputation, pack caching, and compaction await the required mechanism-level Canadian patent review and CIPO verification recorded in `PATENT_SCREEN.md`; they were not bypassed.
-- The normal installed-as-`git` commit/tag and pull paths do not yet use the complete protected detached-proof transaction end to end.
+- The normal installed-as-`git` commit/tag paths do not yet use the complete protected detached-proof transaction end to end. Pull now authenticates and fully traverses its isolated candidate before installation and accepts the exact `--ff-only` spelling, but production trust-policy proof retrieval remains open.
 - Production durable detached-proof storage/key-service integration, active pack-generation reads, canonical compaction generation switching, and concurrent thin receive tests remain open.
 - Itemized FIPS 204 errata mapping, constant-time timing evidence, and independent cryptographic/security review remain open. The checked-in mandatory NIST ACVP and independent OpenSSL interoperability fixtures pass on Linux and the Wine-hosted Windows target.
 - Native Windows directory durability, process-kill fault injection at every durable boundary, power-loss/physical-storage evidence, sanitizer/fuzz campaigns, the required scale/concurrency benchmarks, and production performance measurements remain open.

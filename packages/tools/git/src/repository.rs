@@ -322,6 +322,25 @@ impl Repository {
 
     pub fn import_pack(&self, source: &[u8]) -> Result<Vector<ObjectId>, RepositoryError> {
         let objects = parse_pack_with_format(source, self.object_format)?;
+        self.install_parsed_pack(objects)
+    }
+
+    /// Authenticates and traverses all advertised commit tips against an
+    /// isolated parsed candidate before any loose object becomes visible.
+    pub fn import_pack_validated_commit_tips(
+        &self,
+        source: &[u8],
+        tips: &[ObjectId],
+    ) -> Result<Vector<ObjectId>, RepositoryError> {
+        let objects = parse_pack_with_format(source, self.object_format)?;
+        self.validate_commit_tips_with_candidates(tips, &objects)?;
+        self.install_parsed_pack(objects)
+    }
+
+    fn install_parsed_pack(
+        &self,
+        objects: Vector<PackObject>,
+    ) -> Result<Vector<ObjectId>, RepositoryError> {
         let mut ids = Vector::new();
         for object in objects {
             let id = self.write_object(object.kind, &object.contents)?;
@@ -379,6 +398,14 @@ impl Repository {
     }
 
     pub fn validate_commit_tips(&self, tips: &[ObjectId]) -> Result<(), RepositoryError> {
+        self.validate_commit_tips_with_candidates(tips, &[])
+    }
+
+    fn validate_commit_tips_with_candidates(
+        &self,
+        tips: &[ObjectId],
+        candidates: &[PackObject],
+    ) -> Result<(), RepositoryError> {
         let mut pending = Vector::new();
         for tip in tips {
             if tip.format() != self.object_format {
@@ -388,7 +415,14 @@ impl Repository {
         }
         let mut seen = Vector::new();
         while let Some((id, expected_kind)) = pending.pop() {
-            let object = self.read_object(id)?;
+            let object = if let Some(candidate) = candidates.iter().find(|object| object.id == id) {
+                Object {
+                    kind: candidate.kind,
+                    contents: candidate.contents.clone(),
+                }
+            } else {
+                self.read_object(id)?
+            };
             if object.kind != expected_kind {
                 return Err(RepositoryError::InvalidReference);
             }
@@ -3540,6 +3574,43 @@ mod tests {
             Err(RepositoryError::ReferenceMissing)
         );
         remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn fetch_candidate_is_fully_traversed_before_objects_become_visible() {
+        let source_path = root("validated-import-source");
+        let source = Repository::init_with_format(&source_path, ObjectFormat::Sha256).unwrap();
+        write_file(&join_path(&source_path, "tracked"), b"candidate").unwrap();
+        source.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        let commit = source
+            .commit("candidate", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        let pack = source.pack_reachable(commit).unwrap();
+
+        let destination_path = root("validated-import-destination");
+        let destination =
+            Repository::init_with_format(&destination_path, ObjectFormat::Sha256).unwrap();
+        destination
+            .import_pack_validated_commit_tips(&pack, &[commit])
+            .unwrap();
+        assert_eq!(destination.read_commit(commit).unwrap().message, "candidate\n");
+
+        let blob = source.write_object(ObjectKind::Blob, b"not a commit").unwrap();
+        let blob_pack = source.pack_reachable(blob).unwrap();
+        let rejected_path = root("rejected-import-destination");
+        let rejected = Repository::init_with_format(&rejected_path, ObjectFormat::Sha256).unwrap();
+        assert_eq!(
+            rejected.import_pack_validated_commit_tips(&blob_pack, &[blob]),
+            Err(RepositoryError::InvalidReference)
+        );
+        assert_eq!(
+            rejected.read_object(blob),
+            Err(RepositoryError::ReferenceMissing)
+        );
+
+        remove_dir_all(&source_path).unwrap();
+        remove_dir_all(&destination_path).unwrap();
+        remove_dir_all(&rejected_path).unwrap();
     }
 
     #[test]

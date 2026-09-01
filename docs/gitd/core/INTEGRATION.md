@@ -29,6 +29,16 @@ commit, tag, and blob contents; binary pretty-printing fails explicitly because
 the current runtime output interface is text-only. It never performs lossy
 conversion or invokes an external Git process.
 
+`git pull --ff-only [remote] [branch]` is accepted exactly; unknown pull
+options remain rejected. The SSH fetch client parses and authenticates the
+bounded pack, then traverses every advertised commit, tree, and blob against
+the isolated parsed candidate plus the existing object database before any
+candidate object is installed or any remote ref is updated. A malformed,
+wrong-kind, incomplete, or over-budget candidate therefore leaves both the
+object database and refs unchanged. This is controlled client-path evidence;
+it does not claim the stronger production file-backed quarantine durability of
+the server receive path.
+
 The detached-signing service interface currently enumerates SHA-256, SHA-384,
 and SHA-512 only. Adding policy-controlled OpenPGP SHA3-512 requires a separate
 interface-generation change outside this branch's allowed files before the Git

@@ -149,6 +149,22 @@ fn checked_positionals(values: &[Text]) -> Result<&[Text]> {
     Ok(values)
 }
 
+fn parse_pull_arguments(arguments: &[Text]) -> Result<(&str, Option<&str>)> {
+    let positionals = if arguments.first().is_some_and(|value| value == "--ff-only") {
+        &arguments[1..]
+    } else {
+        arguments
+    };
+    if positionals.len() > 2 {
+        return Err(anyhow!("pull accepts only [--ff-only] [remote] [branch]"));
+    }
+    checked_positionals(positionals)?;
+    Ok((
+        positionals.first().map(Text::as_str).unwrap_or("origin"),
+        positionals.get(1).map(Text::as_str),
+    ))
+}
+
 fn ssh_remote(repository: Option<&str>, name: &str) -> Result<(Text, SshRemote)> {
     let url = native_repository(repository)?
         .remotes()
@@ -1236,14 +1252,12 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 tail.first().map(Text::as_str).unwrap_or("origin"),
             )
         }
-        "pull" if tail.len() <= 2 => {
-            checked_positionals(tail)?;
-            let remote = tail.first().map(Text::as_str).unwrap_or("origin");
+        "pull" => {
+            let (remote, requested_branch) = parse_pull_arguments(tail)?;
             native_fetch(repository, remote)?;
             let repo = native_repository(repository)?;
-            let branch = tail
-                .get(1)
-                .cloned()
+            let branch = requested_branch
+                .map(Into::into)
                 .or_else(|| repo.current_branch().ok().flatten())
                 .ok_or_else(|| anyhow!("pull requires a branch for detached HEAD"))?;
             let revision = format!("refs/remotes/{remote}/{branch}");
@@ -1737,6 +1751,19 @@ mod tests {
                 .collect(),
         })
         .unwrap();
+    }
+
+    #[test]
+    fn pull_accepts_only_the_exact_fast_forward_spelling() {
+        let values = |parts: &[&str]| parts.iter().map(|part| Text::from(*part)).collect::<Vector<_>>();
+        let empty = values(&[]);
+        assert_eq!(parse_pull_arguments(&empty).unwrap(), ("origin", None));
+        let flag = values(&["--ff-only"]);
+        assert_eq!(parse_pull_arguments(&flag).unwrap(), ("origin", None));
+        let exact = values(&["--ff-only", "upstream", "main"]);
+        assert_eq!(parse_pull_arguments(&exact).unwrap(), ("upstream", Some("main")));
+        assert!(parse_pull_arguments(&values(&["--rebase"])).is_err());
+        assert!(parse_pull_arguments(&values(&["origin", "main", "extra"])).is_err());
     }
 
     #[test]

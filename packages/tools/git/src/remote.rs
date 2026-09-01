@@ -96,11 +96,8 @@ pub fn fetch_ssh(
     let response = collect_to_close(&mut channel)?;
     let pack = extract_pack_response(&response, side_band).map_err(|_| FetchError::Protocol)?;
     let objects = repository
-        .import_pack(&pack)
+        .import_pack_validated_commit_tips(&pack, &wants)
         .map_err(|_| FetchError::Pack)?;
-    repository
-        .validate_commit_tips(&wants)
-        .map_err(|_| FetchError::Repository)?;
     let default_branch = advertisement.capabilities.iter().find_map(|capability| {
         capability
             .strip_prefix("symref=HEAD:refs/heads/")
