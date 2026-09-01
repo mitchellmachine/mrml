@@ -447,6 +447,15 @@ pub fn read_directory(path: &str) -> Result<Vector<DirectoryEntry>, FileError> {
     }
     Ok(entries)
 }
+
+#[cfg(unix)]
+pub fn sync_directory(path: &str) -> Result<(), FileError> {
+    let encoded = encode_unix_path(path).ok_or(FileError::InvalidPath)?;
+    let path =
+        core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+    let directory = mrml_linux::NativeDirectory::open(path).ok_or(FileError::DirectoryFailed)?;
+    directory.sync().then_some(()).ok_or(FileError::WriteFailed)
+}
 impl core::error::Error for FileError {}
 
 pub struct File {

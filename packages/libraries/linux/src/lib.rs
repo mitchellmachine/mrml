@@ -116,6 +116,7 @@ unsafe extern "C" {
     fn fcntl(file: c_int, command: c_int, ...) -> c_int;
     fn rename(existing: *const i8, replacement: *const i8) -> c_int;
     fn opendir(path: *const i8) -> *mut c_void;
+    fn dirfd(directory: *mut c_void) -> c_int;
     fn readdir(directory: *mut c_void) -> *mut Dirent;
     fn closedir(directory: *mut c_void) -> c_int;
     fn realpath(path: *const i8, resolved: *mut i8) -> *mut i8;
@@ -1110,6 +1111,11 @@ impl NativeDirectory {
         const DT_DIR: u8 = 4;
         const DT_LNK: u8 = 10;
         Some((&name[..len], entry.kind == DT_DIR, entry.kind == DT_LNK))
+    }
+
+    pub fn sync(&self) -> bool {
+        let descriptor = unsafe { dirfd(self.0) };
+        descriptor >= 0 && (unsafe { fsync(descriptor) }) == 0
     }
 }
 

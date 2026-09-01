@@ -63,3 +63,15 @@ and 49 Windows-target tests under Wine. Corruption eviction used an in-memory
 
 After integrating bounded single-flight generation into the HTTP server, HTTP
 passed 50 tests on hosted Linux and 50 Windows-target tests under Wine.
+
+After adding the Linux filesystem L2 adapter and the supporting runtime
+directory-sync primitive, HTTP passed 51 tests on hosted Linux and the unchanged
+50 Windows-target tests under the pinned toolchain under Wine. The Linux test
+exercised bounded no-follow reads, exclusive temporary creation, file sync,
+atomic rename, directory sync, and entry-quota eviction. No crash-injection,
+native Windows, physical disk, or production filesystem evidence was produced.
+The supporting `org.mrml.library.runtime` Linux suite passed 44 tests and failed
+2 loopback network tests (`loopback_udp_preserves_datagram_and_peer_identity`
+and `loopback_listener_exchanges_bytes`) with `BindFailed` in the restricted
+sandbox; its filesystem tests passed. Those network failures are not evidence
+against the cache path.
