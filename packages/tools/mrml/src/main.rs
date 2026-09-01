@@ -53,8 +53,8 @@ use generation::mrml_package_identifier;
 use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
 use mrml_certificate::{
-    ExpiryHealth, MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus, RenewalSource,
-    decode_managed_identity_status,
+    ExpiryHealth, HostedLifecycleClient, MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus,
+    RenewalSource, TlsIdentityId, decode_managed_identity_status,
 };
 #[path = "../../../libraries/crypto/src/sha3.rs"]
 #[allow(dead_code)]
@@ -295,7 +295,9 @@ fn print_help() {
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml assurance <check|generate>");
     println!("       mrml cert caa <recommend|verify> ...");
-    println!("       mrml cert status --snapshot FILE [--output human|structured]");
+    println!(
+        "       mrml cert status (--snapshot FILE | --endpoint 127.0.0.1:PORT --session-capability FILE --identity HEX) [--output human|structured]"
+    );
     println!(
         "       mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o OUTPUT [--release]"
     );
@@ -355,6 +357,9 @@ fn cert_command(args: &[String]) -> Result<(), String> {
 
 fn cert_status_command(args: &[String]) -> Result<(), String> {
     let mut snapshot = None;
+    let mut endpoint = None;
+    let mut session_capability = None;
+    let mut identity = None;
     let mut output = OutputMode::Human;
     let mut index = 0;
     while index < args.len() {
@@ -375,6 +380,30 @@ fn cert_status_command(args: &[String]) -> Result<(), String> {
                     _ => return Err("CertificateStatusOutputInvalid".into()),
                 };
             }
+            "--endpoint" => {
+                index += 1;
+                endpoint = Some(
+                    args.get(index)
+                        .map(String::as_str)
+                        .ok_or("CertificateStatusEndpointMissing")?,
+                );
+            }
+            "--session-capability" => {
+                index += 1;
+                session_capability = Some(
+                    args.get(index)
+                        .map(String::as_str)
+                        .ok_or("CertificateStatusSessionCapabilityMissing")?,
+                );
+            }
+            "--identity" => {
+                index += 1;
+                identity = Some(
+                    args.get(index)
+                        .map(String::as_str)
+                        .ok_or("CertificateStatusIdentityMissing")?,
+                );
+            }
             option => {
                 return Err(format!(
                     "CertificateStatusUnknownOption {{ option: {option} }}"
@@ -383,9 +412,21 @@ fn cert_status_command(args: &[String]) -> Result<(), String> {
         }
         index += 1;
     }
-    let path = snapshot.ok_or(
-        "CertificateStatusRouteUnavailable { required: --snapshot FILE, hosted_session: PLANNED }",
-    )?;
+    let status = match (snapshot, endpoint, session_capability, identity) {
+        (Some(path), None, None, None) => read_certificate_status_snapshot(path)?,
+        (None, Some(endpoint), Some(capability_path), Some(identity)) => {
+            read_live_certificate_status(endpoint, capability_path, identity)?
+        }
+        (None, None, None, None) => {
+            return Err("CertificateStatusRouteMissing { expected: --snapshot FILE or --endpoint ... --session-capability ... --identity ... }".into());
+        }
+        _ => return Err("CertificateStatusRouteAmbiguous".into()),
+    };
+    print!("{}", render_certificate_status(status, output));
+    Ok(())
+}
+
+fn read_certificate_status_snapshot(path: &str) -> Result<ManagedIdentityStatus, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("CertificateStatusSnapshotUnreadable {{ detail: {error} }}"))?;
     if !metadata.is_file()
@@ -396,10 +437,38 @@ fn cert_status_command(args: &[String]) -> Result<(), String> {
     }
     let bytes = fs::read(path)
         .map_err(|error| format!("CertificateStatusSnapshotUnreadable {{ detail: {error} }}"))?;
-    let status = decode_managed_identity_status(&bytes)
-        .map_err(|error| format!("CertificateStatusSnapshotInvalid {{ detail: {error:?} }}"))?;
-    print!("{}", render_certificate_status(status, output));
-    Ok(())
+    decode_managed_identity_status(&bytes)
+        .map_err(|error| format!("CertificateStatusSnapshotInvalid {{ detail: {error:?} }}"))
+}
+
+fn read_live_certificate_status(
+    endpoint: &str,
+    capability_path: &str,
+    identity: &str,
+) -> Result<ManagedIdentityStatus, String> {
+    let port = endpoint
+        .strip_prefix("127.0.0.1:")
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .ok_or("CertificateStatusEndpointInvalid { required: 127.0.0.1:PORT }")?;
+    let identity = decode_fixed_hex::<16>(identity)
+        .ok_or("CertificateStatusIdentityInvalid { required: 32 lowercase hex digits }")?;
+    let metadata = fs::metadata(capability_path).map_err(|error| {
+        format!("CertificateStatusSessionCapabilityUnreadable {{ detail: {error} }}")
+    })?;
+    if !metadata.is_file() || metadata.len() != 32 {
+        return Err("CertificateStatusSessionCapabilitySizeInvalid".into());
+    }
+    let mut bytes = fs::read(capability_path).map_err(|error| {
+        format!("CertificateStatusSessionCapabilityUnreadable {{ detail: {error} }}")
+    })?;
+    let mut capability = [0u8; 32];
+    capability.copy_from_slice(&bytes);
+    bytes.fill(0);
+    let result = HostedLifecycleClient::connect_session([127, 0, 0, 1], port, capability)
+        .and_then(|mut client| client.identity_status(TlsIdentityId(identity)));
+    capability.fill(0);
+    result.map_err(|error| format!("CertificateStatusSessionFailed {{ detail: {error:?} }}"))
 }
 
 fn render_certificate_status(status: ManagedIdentityStatus, output: OutputMode) -> String {
@@ -496,6 +565,29 @@ fn encode_hex(bytes: &[u8]) -> String {
         let _ = write!(output, "{byte:02x}");
     }
     output
+}
+
+fn decode_fixed_hex<const N: usize>(input: &str) -> Option<[u8; N]> {
+    if input.len() != N * 2
+        || !input
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let mut output = [0u8; N];
+    for (index, pair) in input.as_bytes().chunks_exact(2).enumerate() {
+        output[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    }
+    Some(output)
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn cert_caa_command(args: &[String]) -> Result<(), String> {
@@ -5623,13 +5715,16 @@ mod tests {
             render_certificate_status(status, OutputMode::Human),
             "TLS identity 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a\n  policy generation: 7\n  active generation: 0\n  identifiers: -\n  renewal health: unconfigured\n"
         );
-        assert_eq!(
-            cert_status_command(&[]),
-            Err(
-                "CertificateStatusRouteUnavailable { required: --snapshot FILE, hosted_session: PLANNED }"
-                    .into()
-            )
+        assert!(
+            cert_status_command(&[])
+                .unwrap_err()
+                .starts_with("CertificateStatusRouteMissing")
         );
+        assert_eq!(
+            decode_fixed_hex::<4>("0123abcd"),
+            Some([0x01, 0x23, 0xab, 0xcd])
+        );
+        assert_eq!(decode_fixed_hex::<4>("0123ABCD"), None);
     }
     #[test]
     fn release_frontend_accepts_only_canonical_operations() {

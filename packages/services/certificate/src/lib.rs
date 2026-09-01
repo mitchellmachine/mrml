@@ -124,8 +124,8 @@ pub use lifecycle_service::{
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use lifecycle_transport_hosted::{
-    HostedLifecycleClient, HostedLifecycleServer, HostedLifecycleTransportError,
-    MAX_HOSTED_LIFECYCLE_MEMORY,
+    HostedLifecycleClient, HostedLifecycleServer, HostedLifecycleSessionCapability,
+    HostedLifecycleTransportError, MAX_HOSTED_LIFECYCLE_MEMORY,
 };
 pub use manager::{
     CertificateManager, CertificateManagerError, MAX_MANAGED_IDENTITIES, ManagedIdentityStatus,

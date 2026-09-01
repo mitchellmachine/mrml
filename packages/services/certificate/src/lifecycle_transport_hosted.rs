@@ -1,15 +1,17 @@
 use crate::{
-    decode_managed_identity_status, dispatch_lifecycle_call, CertificateLifecycleAuthorizer,
-    CertificateLifecycleProvider, ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId,
-    MAX_MANAGED_STATUS_BYTES,
+    CertificateLifecycleAuthorizer, CertificateLifecycleProvider, MAX_MANAGED_STATUS_BYTES,
+    ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId, decode_managed_identity_status,
+    dispatch_lifecycle_call,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
-use mrml_runtime::{NetError, TcpStream};
+use mrml_runtime::{NetError, TcpListener, TcpStream};
 
 pub const MAX_HOSTED_LIFECYCLE_MEMORY: usize = 16 * 1024;
 const HEADER_BYTES: usize = 16;
 const REQUEST_MAGIC: &[u8; 8] = b"MRMLCLR1";
 const RESPONSE_MAGIC: &[u8; 8] = b"MRMLCLS1";
+const SESSION_MAGIC: &[u8; 8] = b"MRMLCAP1";
+const SESSION_ACCEPTED: &[u8; 8] = b"MRMLOK01";
 const IO_TIMEOUT_MILLIS: u64 = 2_000;
 const MAX_FRAME_BYTES: usize = abi::IDENTITY_OPERATION_REQUEST_BYTES;
 
@@ -23,6 +25,63 @@ pub enum HostedLifecycleTransportError {
     Protocol(abi::ProtocolError),
     RemoteStatus(abi::StatusError),
     Status(ManagedStatusCodecError),
+    InvalidSessionCapability,
+    SessionDenied,
+}
+
+/// One-use out-of-band authority for accepting a hosted lifecycle session.
+/// The listener address identifies the service but does not authorize it.
+pub struct HostedLifecycleSessionCapability {
+    secret: [u8; 32],
+    consumed: bool,
+}
+
+impl HostedLifecycleSessionCapability {
+    pub fn new(secret: [u8; 32]) -> Result<Self, HostedLifecycleTransportError> {
+        if secret == [0; 32] {
+            return Err(HostedLifecycleTransportError::InvalidSessionCapability);
+        }
+        Ok(Self {
+            secret,
+            consumed: false,
+        })
+    }
+
+    pub fn accept_one(
+        &mut self,
+        listener: &TcpListener,
+    ) -> Result<HostedLifecycleServer, HostedLifecycleTransportError> {
+        if self.consumed {
+            return Err(HostedLifecycleTransportError::SessionDenied);
+        }
+        self.consumed = true;
+        let mut stream = listener
+            .accept()
+            .map_err(HostedLifecycleTransportError::Network)?;
+        configure(&mut stream)?;
+        let mut request = [0u8; 40];
+        let read_result = stream.read_exact(&mut request);
+        let mut difference = 0u8;
+        for (presented, expected) in request[8..].iter().zip(self.secret) {
+            difference |= presented ^ expected;
+        }
+        self.secret.fill(0);
+        let accepted = read_result.is_ok() && &request[..8] == SESSION_MAGIC && difference == 0;
+        request.fill(0);
+        if !accepted {
+            return Err(HostedLifecycleTransportError::SessionDenied);
+        }
+        stream
+            .write_all(SESSION_ACCEPTED)
+            .map_err(HostedLifecycleTransportError::Network)?;
+        Ok(HostedLifecycleServer { stream })
+    }
+}
+
+impl Drop for HostedLifecycleSessionCapability {
+    fn drop(&mut self) {
+        self.secret.fill(0);
+    }
 }
 
 /// Client over one connection already authorized and delivered by the host
@@ -33,6 +92,38 @@ pub struct HostedLifecycleClient {
 }
 
 impl HostedLifecycleClient {
+    pub fn connect_session(
+        ip: [u8; 4],
+        port: u16,
+        mut capability: [u8; 32],
+    ) -> Result<Self, HostedLifecycleTransportError> {
+        if capability == [0; 32] || port == 0 {
+            capability.fill(0);
+            return Err(HostedLifecycleTransportError::InvalidSessionCapability);
+        }
+        let stream =
+            TcpStream::connect(ip, port).map_err(HostedLifecycleTransportError::Network)?;
+        let mut client = Self::from_authorized_stream(stream)?;
+        let mut request = [0u8; 40];
+        request[..8].copy_from_slice(SESSION_MAGIC);
+        request[8..].copy_from_slice(&capability);
+        capability.fill(0);
+        let result = client.stream.write_all(&request);
+        request.fill(0);
+        result.map_err(HostedLifecycleTransportError::Network)?;
+        let mut response = [0u8; 8];
+        client
+            .stream
+            .read_exact(&mut response)
+            .map_err(HostedLifecycleTransportError::Network)?;
+        if &response != SESSION_ACCEPTED {
+            response.fill(0);
+            return Err(HostedLifecycleTransportError::SessionDenied);
+        }
+        response.fill(0);
+        Ok(client)
+    }
+
     pub fn from_authorized_stream(
         mut stream: TcpStream,
     ) -> Result<Self, HostedLifecycleTransportError> {
@@ -274,12 +365,14 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(mrml_runtime::spawn_detached(move || {
-            let stream = server_listener.accept().unwrap();
-            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-            server.serve_one(&Authorizer, &mut Provider).unwrap();
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let stream = server_listener.accept().unwrap();
+                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+                server.serve_one(&Authorizer, &mut Provider).unwrap();
+            })
+            .is_ok()
+        );
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut memory = [0u8; 64];
@@ -326,12 +419,14 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(mrml_runtime::spawn_detached(move || {
-            let stream = server_listener.accept().unwrap();
-            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-            server.serve_one(&Authorizer, &mut Provider).unwrap();
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let stream = server_listener.accept().unwrap();
+                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+                server.serve_one(&Authorizer, &mut Provider).unwrap();
+            })
+            .is_ok()
+        );
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let identity = TlsIdentityId([9; 16]);
@@ -339,5 +434,29 @@ mod tests {
         assert!(status.identity == identity);
         assert_eq!(status.policy_generation, 7);
         assert!(status.active.is_none());
+    }
+
+    #[test]
+    fn one_use_session_capability_authorizes_live_status_without_address_authority() {
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let listener = Shared::new(listener);
+        let server_listener = listener.clone();
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let mut capability = HostedLifecycleSessionCapability::new([0x5a; 32]).unwrap();
+                let mut server = capability.accept_one(&server_listener).unwrap();
+                server.serve_one(&Authorizer, &mut Provider).unwrap();
+                assert!(matches!(
+                    capability.accept_one(&server_listener),
+                    Err(HostedLifecycleTransportError::SessionDenied)
+                ));
+            })
+            .is_ok()
+        );
+        let mut client =
+            HostedLifecycleClient::connect_session([127, 0, 0, 1], port, [0x5a; 32]).unwrap();
+        let status = client.identity_status(TlsIdentityId([9; 16])).unwrap();
+        assert_eq!(status.policy_generation, 7);
     }
 }

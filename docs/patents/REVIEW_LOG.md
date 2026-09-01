@@ -12010,3 +12010,11 @@ Patent review: **NOT_TRIGGERED**. This increment renders the existing bounded,
 read-only canonical lifecycle status payload through the build frontend. It
 adds no certificate protocol, signing mechanism, validation topology,
 certificate authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — One-use hosted lifecycle session
+
+Patent review: **NOT_TRIGGERED**. This increment gates the existing local
+lifecycle framing with an ordinary one-use random bearer ticket and exposes the
+existing typed status query through that admitted stream. It adds no signing
+mechanism, certificate protocol, validation topology, MultiTLS multiplexing,
+certificate authority operation, or recorded re-review trigger.

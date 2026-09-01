@@ -220,14 +220,17 @@ constructs the canonical generated request, owns the bounded borrowed-memory
 layout, validates the remote status/error envelope, and decodes the shared
 payload. Frontends therefore cannot substitute scopes, overlap buffers, accept
 an oversized response, or maintain a second status parser.
-`mrml cert status --snapshot FILE` can inspect that same canonical payload in
-human or stable structured form. It accepts only a nonempty regular file within
-the 4096-byte protocol bound and reports no secret or signing-route identifier.
-The snapshot path identifies inert input data; it grants no lifecycle authority
-and cannot mutate certificate state. Omitting `--snapshot` fails closed with an
-explicit `hosted_session: PLANNED` result rather than implying that a live
-administrative route exists. Operational status queries still require the
-supervisor-delivered session broker described below.
+`mrml cert status` can inspect that same canonical payload in human or stable
+structured form. Offline `--snapshot FILE` accepts only a nonempty regular file
+within the 4096-byte protocol bound; the path identifies inert input data,
+grants no lifecycle authority, and cannot mutate certificate state. Hosted
+`--endpoint 127.0.0.1:PORT --session-capability FILE --identity HEX` performs the
+typed status call through a one-use 256-bit ticket delivered out of band by the
+supervisor. The ticket file must contain exactly 32 bytes and is cleared from
+the frontend's read buffers after use. The endpoint only locates the service:
+it is fixed to literal loopback and does not authorize the request. Mixed or
+partial offline/live routes fail closed. Neither form reports secret or
+signing-route identifiers.
 The unattended renewal coordinator acquires one identity-scoped lease, requires
 a fresh use-only candidate key and exact RFC 9773 replacement binding, verifies
 the returned chain receipt, stages the next schedule, publishes and exercises
@@ -370,16 +373,20 @@ process wiring, and full native-storage/reboot recovery remain **PLANNED**. The
 shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 
-Hosted lifecycle administration now has a bounded transport adapter for a
-preconnected stream supplied by the host supervisor. The adapter does not bind,
-discover, or accept a listener and deliberately treats no address, port,
-pathname, object name, or request field as authority. It carries the canonical
-generated lifecycle frame plus at most 16 KiB of borrowed memory, applies
-two-second read/write deadlines, rejects noncanonical lengths and reserved
-fields, retains the exact per-operation authorizer, and clears server scratch
-after each call. The supervisor-delivered connection remains the route
-capability; a hosted daemon listener/session broker and CLI acquisition path are
-still required before operational administration can be claimed.
+Hosted lifecycle administration has a bounded transport adapter for either a
+preconnected stream supplied by the host supervisor or one loopback stream
+admitted with a one-use supervisor ticket. The ticket is nonzero, compared
+without secret-dependent early exit, consumed even when admission fails, and
+erased by both peers; reconnecting requires newly delegated authority. The
+adapter deliberately treats no address, port, pathname, object name, or request
+field as authority. It carries the canonical generated lifecycle frame plus at
+most 16 KiB of borrowed memory, applies two-second read/write deadlines, rejects
+noncanonical lengths and reserved fields, retains the exact per-operation
+authorizer, and clears server scratch after each call. The client and generic
+one-session admission primitive are implemented and exercised on Linux and the
+Windows target under Wine. A long-running hosted daemon that reconstructs the
+real durable catalog and asks the supervisor for fresh tickets remains required
+before operational administration can be claimed.
 
 The bounded deterministic security-fuzz harness covers ACME directory,
 problem, account, order, authorization, ARI, URL, and Base64url parsing; X.509
