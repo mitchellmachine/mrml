@@ -527,6 +527,7 @@ impl DispatchedRetiredNativeFilesystemProvider {
                 receipt: self.receipt,
                 service: self.service,
                 task: self.task,
+                cause: NativeFilesystemProviderStopCause::Retirement,
             },
             self.dispatch,
         )
@@ -538,6 +539,7 @@ pub struct RestartableStoppedNativeFilesystemProvider {
     receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     service: ServiceId,
     task: TaskId,
+    cause: NativeFilesystemProviderStopCause,
 }
 
 impl RestartableStoppedNativeFilesystemProvider {
@@ -549,6 +551,10 @@ impl RestartableStoppedNativeFilesystemProvider {
         self.task
     }
 
+    pub const fn cause(&self) -> NativeFilesystemProviderStopCause {
+        self.cause
+    }
+
     pub const fn receipt(
         &self,
     ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
@@ -558,6 +564,13 @@ impl RestartableStoppedNativeFilesystemProvider {
     pub fn into_receipt(self) -> FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
         self.receipt
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderStopCause {
+    Retirement,
+    Fault(TrapDisposition),
+    ProtocolViolation(TaskProtocolViolation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -932,6 +945,7 @@ pub struct DispatchedFaultedNativeFilesystemProvider {
     receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     service: ServiceId,
     task: TaskId,
+    cause: NativeFilesystemProviderStopCause,
     dispatch: TaskTerminationDispatch,
 }
 
@@ -974,6 +988,7 @@ impl DispatchedFaultedNativeFilesystemProvider {
                 receipt: self.receipt,
                 service: self.service,
                 task: self.task,
+                cause: self.cause,
             },
             self.dispatch,
         )
@@ -1011,11 +1026,13 @@ pub fn dispatch_cleaned_native_filesystem_provider_fault<
 > {
     let service = cleaned.service();
     let task = cleaned.task();
+    let cause = NativeFilesystemProviderStopCause::Fault(cleaned.cleaned.disposition());
     match cleaned.cleaned.dispatch(runtime) {
         Ok(dispatch) => Ok(DispatchedFaultedNativeFilesystemProvider {
             receipt: cleaned.receipt,
             service,
             task,
+            cause,
             dispatch,
         }),
         Err(failure) => Err(CleanedNativeFilesystemProviderFaultDispatchFailure {
@@ -1222,6 +1239,7 @@ pub struct DispatchedViolatingNativeFilesystemProvider {
     receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     service: ServiceId,
     task: TaskId,
+    cause: NativeFilesystemProviderStopCause,
     dispatch: TaskTerminationDispatch,
 }
 
@@ -1264,6 +1282,7 @@ impl DispatchedViolatingNativeFilesystemProvider {
                 receipt: self.receipt,
                 service: self.service,
                 task: self.task,
+                cause: self.cause,
             },
             self.dispatch,
         )
@@ -1301,11 +1320,13 @@ pub fn dispatch_cleaned_native_filesystem_provider_violation<
 > {
     let service = cleaned.service();
     let task = cleaned.task();
+    let cause = NativeFilesystemProviderStopCause::ProtocolViolation(cleaned.cleaned.violation());
     match cleaned.cleaned.dispatch(runtime) {
         Ok(dispatch) => Ok(DispatchedViolatingNativeFilesystemProvider {
             receipt: cleaned.receipt,
             service,
             task,
+            cause,
             dispatch,
         }),
         Err(failure) => Err(CleanedNativeFilesystemProviderViolationDispatchFailure {
@@ -2808,6 +2829,10 @@ mod tests {
                 assert_eq!(restartable.service(), service_id);
                 assert_eq!(restartable.task(), target);
                 assert_eq!(
+                    restartable.cause(),
+                    NativeFilesystemProviderStopCause::Retirement
+                );
+                assert_eq!(
                     restartable.receipt().association_generation(),
                     association.association_generation
                 );
@@ -2917,6 +2942,13 @@ mod tests {
                 let (restartable, dispatch) = dispatched.into_restart_parts();
                 assert_eq!(restartable.service(), service_id);
                 assert_eq!(restartable.task(), target);
+                assert_eq!(
+                    restartable.cause(),
+                    NativeFilesystemProviderStopCause::Fault(TrapDisposition::TerminateUser {
+                        vector: 14,
+                        address: Some(0xfeed_0000),
+                    })
+                );
                 assert_eq!(
                     restartable.receipt().association_generation(),
                     association.association_generation
@@ -3033,6 +3065,12 @@ mod tests {
                 let (restartable, dispatch) = dispatched.into_restart_parts();
                 assert_eq!(restartable.service(), service_id);
                 assert_eq!(restartable.task(), target);
+                assert_eq!(
+                    restartable.cause(),
+                    NativeFilesystemProviderStopCause::ProtocolViolation(
+                        TaskProtocolViolation::BufferedReceiveMappingDrift
+                    )
+                );
                 assert_eq!(
                     restartable.receipt().association_generation(),
                     association.association_generation

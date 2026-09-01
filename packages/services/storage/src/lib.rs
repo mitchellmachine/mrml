@@ -137,6 +137,7 @@ pub use filesystem_provider_launch::{
     NativeFilesystemProviderLaunchSpec, NativeFilesystemProviderLaunchSpecError,
     NativeFilesystemProviderRestartError, NativeFilesystemProviderRestartFailure,
     NativeFilesystemProviderRetirement, NativeFilesystemProviderRetirementError,
+    NativeFilesystemProviderStopCause,
     NativeFilesystemProviderSupervisedFaultFailure,
     NativeFilesystemProviderSupervisedRetirementFailure,
     NativeFilesystemProviderSupervisedViolationFailure, NativeFilesystemProviderTeardownBackend,

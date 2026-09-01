@@ -10258,8 +10258,10 @@ therefore need not reconstruct association identity from names or task IDs. Only
 complete resource and supervisor cleanup exposes successor dispatch. The
 retirement, fault, and protocol-violation dispatch results can each split into the
 one-use runtime dispatch and a separate typed stopped-generation restart owner
-retaining the exact service generation, task, and association receipt; neither
-token reconstructs the other. After that dispatch is consumed, the storage restart
+retaining the exact service generation, task, association receipt, and stop cause.
+Fault cleanup preserves the exact user-fault disposition and violation cleanup
+preserves the typed protocol violation; neither token reconstructs the other.
+After that dispatch is consumed, the storage restart
 join accepts only a fresh active launch
 receipt with the same provider object, association generation, filesystem and
 block provider generations, and system generation. It then invokes the kernel's

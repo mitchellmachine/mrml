@@ -235,6 +235,13 @@ impl SupervisedConstructedServiceFault {
     pub const fn cleanup(&self) -> ServiceCleanupTicket {
         self.cleanup
     }
+
+    pub const fn disposition(&self) -> TrapDisposition {
+        TrapDisposition::TerminateUser {
+            vector: self.retirement.vector,
+            address: self.retirement.address,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -266,6 +273,13 @@ impl CleanedSupervisedConstructedServiceFault {
 
     pub const fn task(&self) -> TaskId {
         self.binding.task
+    }
+
+    pub const fn disposition(&self) -> TrapDisposition {
+        TrapDisposition::TerminateUser {
+            vector: self.retirement.vector,
+            address: self.retirement.address,
+        }
     }
 
     pub fn dispatch<const TASKS: usize, const CAPS: usize>(
@@ -319,6 +333,10 @@ impl SupervisedConstructedServiceViolation {
     pub const fn cleanup(&self) -> ServiceCleanupTicket {
         self.cleanup
     }
+
+    pub const fn violation(&self) -> TaskProtocolViolation {
+        self.retirement.violation
+    }
 }
 
 #[derive(Debug)]
@@ -350,6 +368,10 @@ impl CleanedSupervisedConstructedServiceViolation {
 
     pub const fn task(&self) -> TaskId {
         self.binding.task
+    }
+
+    pub const fn violation(&self) -> TaskProtocolViolation {
+        self.retirement.violation
     }
 
     pub fn dispatch<const TASKS: usize, const CAPS: usize>(
@@ -2722,6 +2744,13 @@ mod tests {
             .unwrap();
         assert_eq!(fault.service(), binding.service());
         assert_eq!(fault.task(), native.task());
+        assert_eq!(
+            fault.disposition(),
+            TrapDisposition::TerminateUser {
+                vector: 14,
+                address: Some(0xfeed_0000),
+            }
+        );
         assert_eq!(supervisor.state(binding.service()), Ok(ServiceState::Faulted));
         assert_eq!(
             supervisor.pending_cleanup(binding.service()),
@@ -2747,6 +2776,13 @@ mod tests {
             .unwrap();
         assert_eq!(cleaned.service(), binding.service());
         assert_eq!(cleaned.task(), native.task());
+        assert_eq!(
+            cleaned.disposition(),
+            TrapDisposition::TerminateUser {
+                vector: 14,
+                address: Some(0xfeed_0000),
+            }
+        );
         assert_eq!(eraser.erased.map(|(task, _)| task), Some(native.task()));
         assert_eq!(supervisor.pending_cleanup(binding.service()), Ok(None));
         let dispatch = cleaned.dispatch(&mut runtime).unwrap();
@@ -2779,6 +2815,10 @@ mod tests {
             .unwrap();
         assert_eq!(violation.service(), binding.service());
         assert_eq!(violation.task(), native.task());
+        assert_eq!(
+            violation.violation(),
+            TaskProtocolViolation::BufferedReceiveMappingDrift
+        );
         assert_eq!(supervisor.state(binding.service()), Ok(ServiceState::Faulted));
         assert_eq!(
             supervisor.pending_cleanup(binding.service()),
@@ -2807,6 +2847,10 @@ mod tests {
             .unwrap();
         assert_eq!(cleaned.service(), binding.service());
         assert_eq!(cleaned.task(), native.task());
+        assert_eq!(
+            cleaned.violation(),
+            TaskProtocolViolation::BufferedReceiveMappingDrift
+        );
         assert_eq!(eraser.erased.map(|(task, _)| task), Some(native.task()));
         assert_eq!(supervisor.pending_cleanup(binding.service()), Ok(None));
         let dispatch = cleaned.dispatch(&mut runtime).unwrap();
