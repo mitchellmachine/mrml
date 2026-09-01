@@ -8,6 +8,8 @@ mod challenge_dns_hosted;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_http;
 mod challenge_publisher;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod challenge_tls_alpn_hosted;
 mod dns_propagation;
 mod durable;
 mod identity;
@@ -44,6 +46,11 @@ pub use challenge_http::{
     HostedHttp01Error,
 };
 pub use challenge_publisher::DnsChallengePublisher;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use challenge_tls_alpn_hosted::{
+    HostedTlsAlpn01Challenge, HostedTlsAlpn01Error, TLS_ALPN01_READ_TIMEOUT_MILLIS,
+    TLS_ALPN01_WRITE_TIMEOUT_MILLIS, TemporaryTlsAlpnSigningKey,
+};
 pub use dns_propagation::{
     DnsObservationClass, DnsObservationRoute, DnsPropagationError, DnsPropagationObserver,
     DnsPropagationPolicy, DnsPropagationQuery, DnsPropagationReceipt, DnsTxtObservationReceipt,

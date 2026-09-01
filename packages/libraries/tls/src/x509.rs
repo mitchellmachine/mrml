@@ -111,6 +111,7 @@ const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
 const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
 const EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
 const AUTHORITY_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x23];
+const ACME_IDENTIFIER: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x1f];
 const SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
 const OCSP_SIGNING: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09];
 const ANY_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25, 0x00];
@@ -474,6 +475,58 @@ impl<'a> Certificate<'a> {
         Ok(None)
     }
 
+    pub fn require_tls_alpn01(
+        &self,
+        hostname: &str,
+        key_authorization_digest: &[u8; 32],
+    ) -> Result<(), CertificateError> {
+        self.require_exact_dns_names(&[hostname])?;
+        if self.extensions.is_empty() {
+            return Err(CertificateError::Malformed);
+        }
+        let mut wrapper = Reader::new(self.extensions);
+        let sequence = wrapper.next()?;
+        wrapper.finish()?;
+        if sequence.tag != 0x30 {
+            return Err(CertificateError::Malformed);
+        }
+        let mut entries = Reader::new(sequence.value);
+        while entries.position < entries.bytes.len() {
+            let entry = entries.next()?;
+            if entry.tag != 0x30 {
+                return Err(CertificateError::Malformed);
+            }
+            let mut fields = Reader::new(entry.value);
+            let oid = fields.next()?;
+            if oid.tag != 0x06 {
+                return Err(CertificateError::Malformed);
+            }
+            let mut value = fields.next()?;
+            let critical = if value.tag == 0x01 {
+                if value.value != [0xff] {
+                    return Err(CertificateError::Malformed);
+                }
+                value = fields.next()?;
+                true
+            } else {
+                false
+            };
+            fields.finish()?;
+            if oid.value == ACME_IDENTIFIER {
+                if !critical
+                    || value.tag != 0x04
+                    || value.value.len() != 34
+                    || value.value[..2] != [0x04, 0x20]
+                    || value.value[2..] != key_authorization_digest[..]
+                {
+                    return Err(CertificateError::Malformed);
+                }
+                return Ok(());
+            }
+        }
+        Err(CertificateError::Malformed)
+    }
+
     pub fn require_ca(&self) -> Result<(), CertificateError> {
         let (ca, _) = self
             .basic_constraints()?
@@ -771,7 +824,8 @@ fn validate_extensions(extensions: &[u8]) -> Result<(), CertificateError> {
             || oid.value == BASIC_CONSTRAINTS
             || oid.value == KEY_USAGE
             || oid.value == EXTENDED_KEY_USAGE
-            || oid.value == AUTHORITY_KEY_IDENTIFIER;
+            || oid.value == AUTHORITY_KEY_IDENTIFIER
+            || oid.value == ACME_IDENTIFIER;
         if critical && !supported {
             return Err(CertificateError::UnsupportedCriticalExtension);
         }

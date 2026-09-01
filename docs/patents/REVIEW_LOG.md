@@ -11240,6 +11240,16 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 Host, token, and request-bound checks for RFC 8555 HTTP-01 and no recorded
 re-review-trigger mechanism.
 
+# 2026-09-01 — Exact hosted TLS-ALPN-01 runtime role
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** RFC 7301/RFC 8737 scope. This increment accepts TCP
+TLS only for the exact active DNS identifier and `acme-tls/1`, validates the
+single self-signed challenge certificate's exact critical `acmeIdentifier`
+digest and SAN, signs through a temporary use-only P-256 route, and requires
+provider retirement when the activation is dropped or construction fails. It
+does not implement MultiTLS multiplexing or another recorded re-review trigger.
+
 # 2026-09-01 — Certificate revocation lifecycle
 
 Patent review: **NOT_TRIGGERED** beyond the owner-supplied

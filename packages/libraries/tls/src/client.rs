@@ -1,6 +1,6 @@
 use crate::{
-    finished_verify_data, hybrid_client_share, verify_server_chain, HybridClientSecret,
-    KeySchedule, RecordKeys, TlsError, Transcript, TLS_AES_128_GCM_SHA256, X25519_MLKEM768,
+    HybridClientSecret, KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript,
+    X25519_MLKEM768, finished_verify_data, hybrid_client_share, verify_server_chain,
 };
 use mrml_crypto::{x25519_public, x25519_shared};
 use mrml_runtime::{TcpStream, Text, Vector};
@@ -697,6 +697,31 @@ impl TlsClientStream {
         port: u16,
         protocols: &[&str],
     ) -> Result<Self, TlsError> {
+        Self::connect_resolved_with_policy(host, address, port, protocols, None)
+    }
+
+    pub fn connect_resolved_for_acme_tls_alpn01(
+        host: &str,
+        address: [u8; 4],
+        port: u16,
+        key_authorization_digest: [u8; 32],
+    ) -> Result<Self, TlsError> {
+        Self::connect_resolved_with_policy(
+            host,
+            address,
+            port,
+            &["acme-tls/1"],
+            Some(key_authorization_digest),
+        )
+    }
+
+    fn connect_resolved_with_policy(
+        host: &str,
+        address: [u8; 4],
+        port: u16,
+        protocols: &[&str],
+        acme_tls_alpn01_digest: Option<[u8; 32]>,
+    ) -> Result<Self, TlsError> {
         let mut stream = TcpStream::connect(address, port).map_err(|_| TlsError::Io)?;
         stream
             .set_read_timeout_millis(30_000)
@@ -794,22 +819,33 @@ impl TlsClientStream {
                             return Err(TlsError::Handshake);
                         }
                         certificate_chain(&message, &mut certificates, &mut stapled_ocsp)?;
-                        let refs: Vector<&[u8]> = certificates.iter().map(|v| &v[..]).collect();
-                        verify_server_chain(host, &refs).map_err(|_| TlsError::Certificate)?;
                         let leaf = crate::Certificate::parse(&certificates[0])
                             .map_err(|_| TlsError::Certificate)?;
-                        let issuer = crate::Certificate::parse(
-                            certificates.get(1).ok_or(TlsError::Certificate)?,
-                        )
-                        .map_err(|_| TlsError::Certificate)?;
-                        let now = mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?;
-                        crate::verify_stapled_ocsp(
-                            stapled_ocsp.as_deref().ok_or(TlsError::Certificate)?,
-                            &leaf,
-                            &issuer,
-                            now,
-                        )
-                        .map_err(|_| TlsError::Certificate)?;
+                        if let Some(digest) = acme_tls_alpn01_digest.as_ref() {
+                            if certificates.len() != 1
+                                || negotiated_protocol.as_deref() != Some("acme-tls/1")
+                            {
+                                return Err(TlsError::Certificate);
+                            }
+                            leaf.require_tls_alpn01(host, digest)
+                                .map_err(|_| TlsError::Certificate)?;
+                        } else {
+                            let refs: Vector<&[u8]> = certificates.iter().map(|v| &v[..]).collect();
+                            verify_server_chain(host, &refs).map_err(|_| TlsError::Certificate)?;
+                            let issuer = crate::Certificate::parse(
+                                certificates.get(1).ok_or(TlsError::Certificate)?,
+                            )
+                            .map_err(|_| TlsError::Certificate)?;
+                            let now =
+                                mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?;
+                            crate::verify_stapled_ocsp(
+                                stapled_ocsp.as_deref().ok_or(TlsError::Certificate)?,
+                                &leaf,
+                                &issuer,
+                                now,
+                            )
+                            .map_err(|_| TlsError::Certificate)?;
+                        }
                         got_certificate = true;
                         transcript.update(&message)
                     }
@@ -1004,9 +1040,11 @@ mod tests {
         assert_eq!(&quic_extensions(&message).unwrap()[..], &[0xaa, 0xbb]);
         let (_, hello) = QuicTlsClientHandshake::new("example.com", &[1, 2, 3]).unwrap();
         assert_eq!(hello[38], 0, "QUIC must disable TLS compatibility mode");
-        assert!(hello
-            .windows(7)
-            .any(|window| window == [0, 57, 0, 3, 1, 2, 3]));
+        assert!(
+            hello
+                .windows(7)
+                .any(|window| window == [0, 57, 0, 3, 1, 2, 3])
+        );
         let (tcp_hello, _, _) = client_hello("example.com", &["h2"], None).unwrap();
         assert_eq!(tcp_hello[38], 32);
     }
