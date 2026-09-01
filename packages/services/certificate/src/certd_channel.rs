@@ -62,7 +62,8 @@ impl CertdChannelOperation {
             ),
             CertdChannelRole::Acmed => matches!(
                 self,
-                Self::GetAcmeAccountPublicIdentity
+                Self::Health
+                    | Self::GetAcmeAccountPublicIdentity
                     | Self::SignAcmeJws
                     | Self::CreateTlsKeyGeneration
                     | Self::CreateCertificateSigningRequest
