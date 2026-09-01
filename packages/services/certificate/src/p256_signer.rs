@@ -15,6 +15,18 @@ pub struct AccountP256SigningKey {
 }
 
 impl AccountP256SigningKey {
+    pub(crate) fn from_secret_key(
+        key: P256SecretKey,
+        directory_generation: u64,
+        account_generation: u64,
+    ) -> Self {
+        Self {
+            key,
+            directory_generation,
+            account_generation,
+        }
+    }
+
     pub fn generate(
         directory_generation: u64,
         account_generation: u64,
@@ -69,14 +81,13 @@ pub struct CertificateP256SigningKey {
 }
 
 impl CertificateP256SigningKey {
-    pub fn generate(
+    pub(crate) fn from_secret_key(
+        key: P256SecretKey,
         key_generation: u64,
         policy_generation: u64,
         identifier_set_digest: [u8; 32],
         mut route: TlsSigningRoute,
-        entropy: impl FnMut(&mut [u8]) -> Result<(), P256Error>,
     ) -> Result<Self, P256Error> {
-        let key = P256SecretKey::generate_with(entropy)?;
         let public = key.public_key()?;
         route.key_identity = derive_key_identity(&public);
         Ok(Self {
@@ -86,6 +97,23 @@ impl CertificateP256SigningKey {
             identifier_set_digest,
             route,
         })
+    }
+
+    pub fn generate(
+        key_generation: u64,
+        policy_generation: u64,
+        identifier_set_digest: [u8; 32],
+        route: TlsSigningRoute,
+        entropy: impl FnMut(&mut [u8]) -> Result<(), P256Error>,
+    ) -> Result<Self, P256Error> {
+        let key = P256SecretKey::generate_with(entropy)?;
+        Self::from_secret_key(
+            key,
+            key_generation,
+            policy_generation,
+            identifier_set_digest,
+            route,
+        )
     }
 
     pub fn route(&self) -> TlsSigningRoute {

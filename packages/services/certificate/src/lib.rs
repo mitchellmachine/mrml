@@ -39,6 +39,8 @@ mod hot_reload;
 mod hosted_daemon;
 #[cfg(target_os = "linux")]
 mod hosted_secret;
+#[cfg(target_os = "linux")]
+mod hosted_key_store;
 mod identity;
 mod identity_service;
 mod keyed_authenticator;
@@ -182,6 +184,10 @@ pub use hosted_daemon::{
 pub use hosted_secret::{
     HostedSecret, HostedSecretError, MAX_HOSTED_SECRET_BYTES, PRODUCTION_SECRET_MODE,
     load_durable_authenticator,
+};
+#[cfg(target_os = "linux")]
+pub use hosted_key_store::{
+    HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore,
 };
 pub use identity::{
     ActivationReceipt, ApprovedTls13CertificateVerify, CandidateDeploymentRetirementReceipt,
