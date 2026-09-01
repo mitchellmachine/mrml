@@ -48,6 +48,12 @@ provider_profile = "core"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_certificate"
+compile_name = "mrml-certd"
+package = "org.mrml.service.certificate"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_git"
 compile_name = "mrml-git"
 package = "org.mrml.tool.git"
