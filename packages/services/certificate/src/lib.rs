@@ -11,6 +11,7 @@ mod challenge_publisher;
 mod challenge_service;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_tls_alpn_hosted;
+mod deployment_journal;
 mod dns_propagation;
 mod durable;
 mod identity;
@@ -61,6 +62,10 @@ pub use challenge_service::{
 pub use challenge_tls_alpn_hosted::{
     HostedTlsAlpn01Challenge, HostedTlsAlpn01Error, TLS_ALPN01_READ_TIMEOUT_MILLIS,
     TLS_ALPN01_WRITE_TIMEOUT_MILLIS, TemporaryTlsAlpnSigningKey,
+};
+pub use deployment_journal::{
+    DEPLOYMENT_PAYLOAD_VERSION, DeploymentJournalError, DurableDeploymentReceipt,
+    DurableDeploymentStage, commit_or_resolve_deployment,
 };
 pub use dns_propagation::{
     DnsObservationClass, DnsObservationRoute, DnsPropagationError, DnsPropagationObserver,

@@ -11760,3 +11760,11 @@ capability-selected certificate identity state machines in a fixed-capacity
 service collection. It does not select identities from SNI, multiplex multiple
 TLS identities on one listener, or implement the recorded MultiTLS re-review
 trigger.
+
+# 2026-09-01 — Authenticated certificate deployment journal
+
+Patent review: **NOT_TRIGGERED**. This increment records bounded candidate,
+published, tested, activation-uncertain, and active deployment transitions in
+the existing authenticated generational state store and resolves uncertain
+commits by authoritative re-read. It introduces no new certificate protocol,
+validation topology, or recorded re-review trigger.
