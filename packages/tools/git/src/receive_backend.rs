@@ -3,14 +3,15 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefState, AuditReceipt, AuthenticatedReceiveStore, DurableReceiveError, GitdCoreError,
-    HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore, Object,
-    ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
-    QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, Repository,
-    SignaturePurpose, SmartGitOperation, SmartGitRequest, VerifiedCommitProof,
-    VerifiedRefTransaction, WorkBudget, build_verified_fast_forward_transaction,
-    durably_activate_verified_receive, read_receive_pack_commands, reserve_push_disk_before_body,
-    verify_protected_introduced_history,
+    ActiveRefState, AuditReceipt, AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError,
+    GitdCoreError, HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore,
+    Object, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
+    QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
+    Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
+    VerifiedCommitProof, VerifiedRefTransaction, WorkBudget,
+    build_verified_fast_forward_transaction, durably_activate_verified_receive,
+    read_receive_pack_commands, reserve_push_disk_before_body, verify_protected_introduced_history,
+    write_receive_pack_report,
 };
 
 /// Verification-only authority. Implementations receive public policy/key state
@@ -60,6 +61,44 @@ pub fn activate_prepared_protected_receive(
 ) -> Result<AuditReceipt, GitdCoreError> {
     durably_activate_verified_receive(&mut prepared.transaction, &prepared.verified, store)
         .map_err(map_durable_error)
+}
+
+/// Complete activation and emit the negotiated receive-pack result. Once
+/// activation succeeds, any output failure is reported as `UncertainCommit`:
+/// the caller must not retry as though refs were unchanged.
+pub fn finish_prepared_protected_receive(
+    prepared: PreparedProtectedReceive,
+    store: &mut AuthenticatedReceiveStore<'_>,
+    output: &mut dyn BoundedWrite,
+    initial_budget: WorkBudget,
+) -> Result<SmartGitResponse, GitdCoreError> {
+    let request = prepared.request.clone();
+    let mut protocol = prepared.protocol_budget;
+    let receipt = activate_prepared_protected_receive(prepared, store)?;
+    let mut statuses = Vector::new();
+    statuses
+        .try_reserve_exact(request.candidate.updates.len())
+        .map_err(|_| GitdCoreError::UncertainCommit)?;
+    for update in &request.candidate.updates {
+        statuses.push(ReceiveRefStatus {
+            name: update.name.clone(),
+            error: None,
+        });
+    }
+    write_receive_pack_report(output, &request, None, &statuses, &mut protocol)
+        .map_err(|_| GitdCoreError::UncertainCommit)?;
+    Ok(SmartGitResponse {
+        repository_generation: receipt.activated_repository_generation,
+        bytes_read: initial_budget
+            .max_input_bytes
+            .checked_sub(protocol.input_remaining())
+            .ok_or(GitdCoreError::UncertainCommit)?,
+        bytes_written: initial_budget
+            .max_output_bytes
+            .checked_sub(protocol.output_remaining())
+            .ok_or(GitdCoreError::UncertainCommit)?,
+        refs_activated: true,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -296,6 +335,28 @@ mod tests {
         }
     }
 
+    struct Writer {
+        bytes: Vector<u8>,
+        remaining: u64,
+    }
+
+    impl crate::BoundedWrite for Writer {
+        fn remaining(&self) -> u64 {
+            self.remaining
+        }
+
+        fn write(&mut self, input: &[u8]) -> Result<(), GitdCoreError> {
+            if input.len() as u64 > self.remaining {
+                return Err(GitdCoreError::Resource);
+            }
+            self.bytes
+                .try_extend_from_slice(input)
+                .map_err(|_| GitdCoreError::Resource)?;
+            self.remaining -= input.len() as u64;
+            Ok(())
+        }
+    }
+
     struct ExactVerifier {
         repository: RepositoryIdentity,
         generation: RepositoryGeneration,
@@ -444,6 +505,12 @@ mod tests {
             revocations: RevocationGeneration(9),
             expected: new,
         };
+        let work_budget = WorkBudget {
+            max_input_bytes: 2 * 1024 * 1024,
+            max_output_bytes: 1024 * 1024,
+            max_memory_bytes: 1024 * 1024,
+            max_work_units: 8 * 1024 * 1024,
+        };
         let prepared = prepare_protected_receive(
             SmartGitRequest {
                 repository: identity,
@@ -467,12 +534,7 @@ mod tests {
             HistoryVerificationLimits::default(),
             16 * 1024 * 1024,
             &mut input,
-            WorkBudget {
-                max_input_bytes: 2 * 1024 * 1024,
-                max_output_bytes: 1024 * 1024,
-                max_memory_bytes: 1024 * 1024,
-                max_work_units: 8 * 1024 * 1024,
-            },
+            work_budget,
         )
         .unwrap();
         assert_eq!(
@@ -485,24 +547,36 @@ mod tests {
         let signed_receipts = path(&root, "signed-receipts");
         let mut store = store;
         let mut authority = ReceiptAuthority;
-        let receipt = {
+        let mut output = Writer {
+            bytes: Vector::new(),
+            remaining: work_budget.max_output_bytes,
+        };
+        let response = {
             let mut authenticated =
                 crate::AuthenticatedReceiveStore::new(&mut store, &signed_receipts, &mut authority)
                     .unwrap();
-            activate_prepared_protected_receive(prepared, &mut authenticated).unwrap()
+            finish_prepared_protected_receive(
+                prepared,
+                &mut authenticated,
+                &mut output,
+                work_budget,
+            )
+            .unwrap()
         };
         let activated = store.active_refs().load().unwrap();
         assert_eq!(activated.repository_generation, RepositoryGeneration(8));
         assert_eq!(activated.refs[0].1, new);
-        assert_eq!(
-            receipt.activated_repository_generation,
-            RepositoryGeneration(8)
-        );
+        assert_eq!(response.repository_generation, RepositoryGeneration(8));
+        assert!(response.refs_activated);
+        assert!(output.bytes.ends_with(b"0000"));
         let signed = crate::AuthenticatedAuditReceiptDirectory::open(&signed_receipts)
             .unwrap()
-            .load(receipt.transaction, &authority)
+            .load(QuarantineTransactionId([31u8; 16]), &authority)
             .unwrap();
-        assert_eq!(signed.receipt, receipt);
+        assert_eq!(
+            signed.receipt.activated_repository_generation,
+            RepositoryGeneration(8)
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

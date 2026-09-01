@@ -86,7 +86,7 @@ pub use quarantine::{
 };
 pub use receive_backend::{
     PreparedProtectedReceive, ProtectedCommitVerifier, activate_prepared_protected_receive,
-    prepare_protected_receive,
+    finish_prepared_protected_receive, prepare_protected_receive,
 };
 pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,

@@ -84,8 +84,12 @@ candidate and is rejected unless the backend explicitly enabled deletion
 candidates when it advertised `delete-refs`; the client cannot grant that
 authority by echoing the server-only capability. Authorization still belongs
 to a separate policy-specific verified transaction builder. The
-parser cannot activate refs; receive pack-body quarantine and end-to-end
-backend wiring remain open.
+parser cannot activate refs by itself. `prepare_protected_receive` composes it
+with bounded quarantine ingestion, authenticated pack/index and thin-base
+validation, exact introduced-history proof verification, and the private
+verified-ref transaction. `finish_prepared_protected_receive` consumes that
+opaque preparation, activates only through the authenticated-receipt store,
+and emits the negotiated ordered result.
 
 The bounded report-status-v2 writer emits the standard `unpack`, ordered `ok`
 or `ng`, and flush packets. Since MRML does not use `proc-receive` rewriting,
@@ -95,8 +99,13 @@ mixed result. Error text is limited to 512 printable ASCII bytes and cannot
 inject framing. When `side-band-64k` was selected, the complete inner report is
 carried on band 1 in bounded outer packets followed by an outer flush. Golden
 tests round-trip both plain and side-band output through the existing
-first-party client parser. Pack-body quarantine and complete backend wiring
-remain open.
+first-party client parser. The hosted-Linux protected receive test covers
+command/body preparation through authenticated-receipt activation and success
+framing. If framing fails after activation, the compositor returns
+`UncertainCommit` instead of suggesting retry safety. Production construction
+must still supply the exact repository capability, detached-proof verifier,
+receipt authority, storage limits, and free-space observation; none are
+accepted from untrusted edge input.
 
 Errors distinguish malformed input/identifiers/refs/paths, authorization,
 object validation, ancestry, signature, policy, resources, storage, stale
