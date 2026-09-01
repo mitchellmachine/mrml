@@ -1,7 +1,9 @@
 # MRML-GIT-HYBRID-V1
 
-Status: **PARTIALLY IMPLEMENTED**. The existing nested signature format is not
-this profile. The OpenPGP library now parses the exact RFC 9580 v6 Ed25519
+Status: **PARTIALLY IMPLEMENTED**. The canonical transcript and exact-pair AND
+verifier are implemented in `trust_policy.rs`; the existing nested commit
+format is not this profile and does not satisfy it. The OpenPGP library parses
+the exact RFC 9580 v6 Ed25519
 primary-key packet shape and computes the full 32-byte SHA-256 fingerprint,
 with the RFC Appendix A certificate as a byte-exact vector. V6 detached
 signing and verification now use algorithm-sized salts before all other hash
@@ -15,7 +17,32 @@ Ed25519 signature, an authorized ML-DSA-65 signature, and an authorized binding
 between those exact full public-key identities. Conventional-only signatures
 must not satisfy hybrid-required policy.
 
-The future canonical signed transcript must length-prefix and domain-separate:
+Both signatures cover this byte-exact canonical transcript. Integers are
+unsigned big-endian and text is exact ASCII already validated by its typed
+constructor:
+
+```text
+"MRML-GIT-HYBRID-V1" 00
+purpose:u8
+repository_length:u16 repository:bytes
+object_format:u8 object_type:u8
+trust_generation:u64
+openpgp_v6_fingerprint:32
+sha3_512(canonical_openpgp_primary_key_body):64
+sha3_512(ml_dsa_65_public_key):64
+payload_length:u64 payload:bytes
+```
+
+Purpose codes 1 through 7 respectively identify `GitCommit`,
+`GitAnnotatedTag`, `SourceManifest`, `SourceLock`, `BuildReceipt`,
+`KeyRotation`, and `KeyRevocation`. Object-type codes use the same ordering.
+Object-format 1 is SHA-1 compatibility and 2 is SHA-256. A purpose/object-type
+mismatch is rejected before cryptographic verification. The canonical OpenPGP
+primary-key body is version 6, creation time, algorithm 27, four-byte key
+material length 32, and the exact Ed25519 public bytes. Its SHA3-512 value is an
+MRML public-key digest, never an OpenPGP fingerprint.
+
+The transcript therefore binds:
 
 - profile version and one of `GitCommit`, `GitAnnotatedTag`, `SourceManifest`,
   `SourceLock`, `BuildReceipt`, `KeyRotation`, or `KeyRevocation`;
@@ -30,7 +57,13 @@ Unknown critical fields, duplicates, reordering, alternate line endings,
 invalid continuation/base64 data, trailing data, algorithm or digest
 substitution, and all context mismatches must fail closed.
 
-No byte encoding or test vector is declared normative here yet. RFC 9580 v6
-fingerprints/salts and final FIPS 204 ML-DSA-65 require exact positive,
-negative, official, and independent-oracle evidence before this status can be
-promoted.
+The zero-identity golden transcript for `owner/repository`, SHA-256 commit,
+generation 4, and payload `payload` is 223 bytes and has SHA3-512 digest
+`99acd226d5b49f391265c3143c2c9f7df4a113a4dde77e234dd5d96932826d71017e02e8fd170ff18aee338b2939d1b6d30eb8c2dce80c6ab339bff4ef7a1b48`.
+
+The verifier independently recomputes both public-key digests, requires the
+exact authorized pair, checks exact trust and revocation generations, verifies
+the salted OpenPGP v6 signature, then verifies ML-DSA-65. Its success typestate
+has private fields. Complete generational policy parsing, rotation/revocation,
+range verification, independent interoperability evidence, and final FIPS 204
+ML-DSA-65 evidence remain open, so the status cannot be promoted.

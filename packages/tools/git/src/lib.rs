@@ -15,6 +15,7 @@ mod repository;
 mod sha1;
 mod smart_protocol;
 mod transport;
+mod trust_policy;
 
 pub use diff::FileDiff;
 pub use gitd_core::{
@@ -59,6 +60,11 @@ pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
     extract_pack_response, fetch_request, parse_advertisement, parse_push_response,
     parse_push_response_mode, push_request, push_request_mode, push_request_mode_negotiated,
+};
+pub use trust_policy::{
+    AuthorizedHybridPair, GitObjectType, HYBRID_PROFILE_NAME, HybridPolicyError, HybridTrustPolicy,
+    HybridVerificationRequest, MAX_HYBRID_PAYLOAD_BYTES, VerifiedHybridSignature,
+    canonical_hybrid_transcript, verify_hybrid_signature,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
