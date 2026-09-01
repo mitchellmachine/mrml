@@ -11,6 +11,7 @@ mod http3;
 mod huffman;
 mod quic;
 mod quic_connection;
+mod quic_endpoint;
 mod quic_retry;
 
 pub use crlset_update::{
@@ -33,6 +34,10 @@ pub use quic::{
     QuicTransportParameters, QuicVersion, SentPacket, ShortPacket, initial_token,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
+pub use quic_endpoint::{
+    QuicConnectionHandle, QuicEndpointDatagram, QuicEndpointRoute, QuicPathClassification,
+    QuicServerEndpoint,
+};
 pub use quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryKey, QuicRetryPurpose,
     QuicRetryTokenManager,
