@@ -436,6 +436,8 @@ fn sync_ref_directory(_: &str) -> Result<(), DurableFailure> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use mrml_runtime::Shared;
     use super::*;
     use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
     use crate::{
@@ -446,7 +448,11 @@ mod tests {
     };
 
     fn fixture() -> (ActiveRefState, VerifiedRefTransaction, ObjectId) {
-        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        fixture_for("owner/repository")
+    }
+
+    fn fixture_for(identity: &str) -> (ActiveRefState, VerifiedRefTransaction, ObjectId) {
+        let repository = RepositoryIdentity::parse(identity).unwrap();
         let old = ObjectId::Sha256([1u8; 32]);
         let new = ObjectId::Sha256([2u8; 32]);
         let range = verify_introduced_history(
@@ -581,68 +587,67 @@ mod tests {
     #[test]
     fn concurrent_same_and_distinct_repository_activations_are_isolated() {
         let same_root = root("mrml-active-concurrent-same");
+        let other_root = root("mrml-active-concurrent-other");
         let _ = mrml_runtime::remove_dir_all(&same_root);
+        let _ = mrml_runtime::remove_dir_all(&other_root);
         let (same_state, same_verified, same_new) = fixture();
+        let (other_state, other_verified, other_new) = fixture_for("owner/other");
         ActiveRefFile::initialize(&same_root, &same_state).unwrap();
-        let mut same_workers = Vector::new();
-        for _ in 0..3 {
+        ActiveRefFile::initialize(&other_root, &other_state).unwrap();
+        let ready = Shared::new(AtomicUsize::new(0));
+        let same_success = Shared::new(AtomicUsize::new(0));
+        let same_stale = Shared::new(AtomicUsize::new(0));
+        let unexpected = Shared::new(AtomicUsize::new(0));
+        let other_success = Shared::new(AtomicUsize::new(0));
+        let mut workers = Vector::new();
+        for _ in 0..2 {
             let worker_root = same_root.clone();
             let worker_verified = same_verified.clone();
+            let worker_ready = ready.clone();
+            let worker_success = same_success.clone();
+            let worker_stale = same_stale.clone();
+            let worker_unexpected = unexpected.clone();
             let worker = match mrml_runtime::spawn_joinable(move || {
-                    let _ = ActiveRefFile::open(&worker_root)
-                        .unwrap()
-                        .activate(&worker_verified);
-                }) {
+                worker_ready.fetch_add(1, Ordering::AcqRel);
+                while worker_ready.load(Ordering::Acquire) != 3 {
+                    mrml_runtime::yield_now();
+                }
+                match ActiveRefFile::open(&worker_root).unwrap().activate(&worker_verified) {
+                    Ok(_) => { worker_success.fetch_add(1, Ordering::AcqRel); }
+                    Err(DurableFailure::StaleLock) => { worker_stale.fetch_add(1, Ordering::AcqRel); }
+                    Err(_) => { worker_unexpected.fetch_add(1, Ordering::AcqRel); }
+                }
+            }) {
                 Ok(worker) => worker,
                 Err(_) => panic!("failed to start same-repository activation worker"),
             };
-            same_workers.push(worker);
+            workers.push(worker);
         }
-        for worker in same_workers {
+        let worker_ready = ready.clone();
+        let worker_success = other_success.clone();
+        let other_worker = match mrml_runtime::spawn_joinable(move || {
+            worker_ready.fetch_add(1, Ordering::AcqRel);
+            while worker_ready.load(Ordering::Acquire) != 3 { mrml_runtime::yield_now(); }
+            if ActiveRefFile::open(&other_root).unwrap().activate(&other_verified).is_ok() {
+                worker_success.fetch_add(1, Ordering::AcqRel);
+            }
+        }) {
+            Ok(worker) => worker,
+            Err(_) => panic!("failed to start distinct-repository activation worker"),
+        };
+        workers.push(other_worker);
+        for worker in workers {
             assert!(worker.join());
         }
+        assert_eq!(same_success.load(Ordering::Acquire), 1);
+        assert_eq!(same_stale.load(Ordering::Acquire), 1);
+        assert_eq!(unexpected.load(Ordering::Acquire), 0);
+        assert_eq!(other_success.load(Ordering::Acquire), 1);
         let same_final = ActiveRefFile::open(&same_root).unwrap().load().unwrap();
-        assert_eq!(same_final.repository_generation, RepositoryGeneration(8));
-        assert_eq!(same_final.refs[0].1, same_new);
-
-        let mut distinct_roots = Vector::new();
-        let mut distinct_workers = Vector::new();
-        for index in 0..3 {
-            let worker_root = root(&mrml_runtime::mrml_format!(
-                "mrml-active-concurrent-distinct-{index}"
-            ));
-            let _ = mrml_runtime::remove_dir_all(&worker_root);
-            let (state, verified, _) = fixture();
-            ActiveRefFile::initialize(&worker_root, &state).unwrap();
-            distinct_roots.push(worker_root.clone());
-            let worker = match mrml_runtime::spawn_joinable(move || {
-                    ActiveRefFile::open(&worker_root)
-                        .unwrap()
-                        .activate(&verified)
-                        .unwrap();
-                }) {
-                Ok(worker) => worker,
-                Err(_) => panic!("failed to start distinct-repository activation worker"),
-            };
-            distinct_workers.push(worker);
-        }
-        for worker in distinct_workers {
-            assert!(worker.join());
-        }
-        for worker_root in &distinct_roots {
-            assert_eq!(
-                ActiveRefFile::open(worker_root)
-                    .unwrap()
-                    .load()
-                    .unwrap()
-                    .repository_generation,
-                RepositoryGeneration(8)
-            );
-        }
-
+        assert_eq!((same_final.repository_generation, same_final.refs[0].1), (RepositoryGeneration(8), same_new));
+        let other_final = ActiveRefFile::open(&root("mrml-active-concurrent-other")).unwrap().load().unwrap();
+        assert_eq!((other_final.repository_generation, other_final.refs[0].1), (RepositoryGeneration(8), other_new));
         mrml_runtime::remove_dir_all(&same_root).unwrap();
-        for worker_root in distinct_roots {
-            mrml_runtime::remove_dir_all(&worker_root).unwrap();
-        }
+        mrml_runtime::remove_dir_all(&root("mrml-active-concurrent-other")).unwrap();
     }
 }

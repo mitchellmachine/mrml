@@ -31,6 +31,17 @@ than optional IDs being interpreted as ambient authority.
 separately limits input, output, memory, and work units. Implementations must
 enforce the smaller of transport and backend limits and use checked arithmetic.
 
+`ReceivePackCore` is the concrete receive-side composition boundary for an
+injected edge transport. Its exact request envelope binds repository
+generation, quarantine/history limits, transaction identity, admitted ordinary
+free space, and work budget. Verification-only `ProtectedCommitVerifier` and
+audit-receipt authorities are injected separately. Its standard and
+policy-classified operations parse the request, reserve before the body,
+quarantine and authenticate objects, verify every introduced commit, durably
+activate the opaque verified transaction, append the authenticated receipt,
+and emit report-status-v2. It owns no signing key and exposes no raw protected-
+ref mutation.
+
 `FilesystemRepositoryView` binds one validated `RepositoryIdentity`, one
 canonical first-party object store, one canonical `ActiveRefFile`, and an
 optional read-only `VerificationSummaryStore`. Evidence enters that store only

@@ -169,13 +169,13 @@ successful activation retains the old arrival and manifest for later recovery-
 aware retirement. This is hosted Linux evidence only. Process-kill, power-loss,
 native-Windows directory flush, and physical-storage evidence remain open.
 
-The controlled concurrency test starts three native joinable workers against
-one exact repository transaction: the final state advances exactly once to the
-next generation and exact new ref, irrespective of which worker acquires the
-lock. It then starts one activation worker for each of three distinct
-repositories; all three independently advance, demonstrating that lock scope
-does not serialize or authorize across repositories. This is process-local
-thread concurrency evidence, not multi-process kill or distributed testing.
+The controlled concurrency test starts three native joinable workers together:
+two target one repository and exact expected generation while one targets a
+different repository identity and storage root. Exactly one same-repository
+transaction succeeds, one fails stale, the independent transaction succeeds,
+and both repositories reopen at exactly their next generation and ref value.
+This is process-local hosted-Linux transaction serialization evidence, not a
+multi-process kill or distributed-concurrency claim.
 
 `MRRCPT01` is a deterministic receipt transcript binding the transaction and
 repository identities, pre-activation and exactly-next repository generations,

@@ -29,6 +29,7 @@ mod quarantine;
 mod receive_backend;
 mod receive_journal;
 mod receive_journal_file;
+mod receive_pack_core;
 mod receive_store;
 mod ref_state;
 mod ref_state_file;
@@ -124,6 +125,7 @@ pub use receive_journal::{
     RecoveryAction, classify_receive_recovery, encode_receive_journal, parse_receive_journal,
 };
 pub use receive_journal_file::ReceiveJournalDirectory;
+pub use receive_pack_core::ReceivePackCore;
 pub use receive_store::LinuxDurableReceiveStore;
 pub use ref_state::{
     ActiveRefState, ActiveRefStateError, MAX_ACTIVE_REF_STATE_BYTES, MAX_ACTIVE_REFS,

@@ -632,19 +632,15 @@ mod tests {
             max_memory_bytes: 1024 * 1024,
             max_work_units: 8 * 1024 * 1024,
         };
-        let prepared = prepare_protected_receive(
-            SmartGitRequest {
-                repository: identity,
+        let core = crate::ReceivePackCore {
+            request: SmartGitRequest {
+                repository: identity.clone(),
                 repository_generation: RepositoryGeneration(7),
                 operation: SmartGitOperation::ReceivePack,
                 object_format: ObjectFormat::Sha256,
             },
-            &active,
-            &repository,
-            &store,
-            &mut verifier,
-            QuarantineTransactionId([31u8; 16]),
-            QuarantineLimits {
+            transaction: QuarantineTransactionId([31u8; 16]),
+            quarantine_limits: QuarantineLimits {
                 max_incoming_pack_bytes: 1024 * 1024,
                 max_expanded_object_bytes: 1024 * 1024,
                 max_individual_object_bytes: 1024 * 1024,
@@ -652,18 +648,10 @@ mod tests {
                 max_refs: 4,
                 minimum_free_space_bytes: 0,
             },
-            HistoryVerificationLimits::default(),
-            16 * 1024 * 1024,
-            &mut input,
+            history_limits: HistoryVerificationLimits::default(),
+            ordinary_free_bytes: 16 * 1024 * 1024,
             work_budget,
-        )
-        .unwrap();
-        assert_eq!(
-            prepared.transaction().phase(),
-            crate::QuarantinePhase::HistoryVerified
-        );
-        assert_eq!(prepared.verified().updates()[0].proposed_new(), Some(new));
-        assert_eq!(store.active_refs().load().unwrap(), active);
+        };
 
         let signed_receipts = path(&root, "signed-receipts");
         let mut store = store;
@@ -672,18 +660,18 @@ mod tests {
             bytes: Vector::new(),
             remaining: work_budget.max_output_bytes,
         };
-        let response = {
-            let mut authenticated =
-                crate::AuthenticatedReceiveStore::new(&mut store, &signed_receipts, &mut authority)
-                    .unwrap();
-            finish_prepared_protected_receive(
-                prepared,
-                &mut authenticated,
+        let response = core
+            .execute(
+                &active,
+                &repository,
+                &mut store,
+                &mut verifier,
+                &signed_receipts,
+                &mut authority,
+                &mut input,
                 &mut output,
-                work_budget,
             )
-            .unwrap()
-        };
+            .unwrap();
         let activated = store.active_refs().load().unwrap();
         assert_eq!(activated.repository_generation, RepositoryGeneration(8));
         assert_eq!(activated.refs[0].1, new);
@@ -740,19 +728,15 @@ mod tests {
             revocations: RevocationGeneration(9),
             expected: newer,
         };
-        let prepared_later = prepare_protected_receive(
-            SmartGitRequest {
+        let core = crate::ReceivePackCore {
+            request: SmartGitRequest {
                 repository: active.repository.clone(),
                 repository_generation: RepositoryGeneration(8),
                 operation: SmartGitOperation::ReceivePack,
                 object_format: ObjectFormat::Sha256,
             },
-            &active,
-            &repository,
-            &store,
-            &mut verifier,
-            QuarantineTransactionId([32; 16]),
-            QuarantineLimits {
+            transaction: QuarantineTransactionId([32; 16]),
+            quarantine_limits: QuarantineLimits {
                 max_incoming_pack_bytes: 1024 * 1024,
                 max_expanded_object_bytes: 1024 * 1024,
                 max_individual_object_bytes: 1024 * 1024,
@@ -760,10 +744,45 @@ mod tests {
                 max_refs: 4,
                 minimum_free_space_bytes: 0,
             },
-            HistoryVerificationLimits::default(),
-            16 * 1024 * 1024,
-            &mut input,
+            history_limits: HistoryVerificationLimits::default(),
+            ordinary_free_bytes: 16 * 1024 * 1024,
             work_budget,
+        };
+        let before_failed = store.active_refs().load().unwrap();
+        let mut malformed = Reader {
+            bytes: Vector::from(*b"0003"),
+            offset: 0,
+        };
+        let mut failed_output = Writer {
+            bytes: Vector::new(),
+            remaining: work_budget.max_output_bytes,
+        };
+        assert!(core
+            .execute(
+                &active,
+                &repository,
+                &mut store,
+                &mut verifier,
+                &signed_receipts,
+                &mut authority,
+                &mut malformed,
+                &mut failed_output,
+            )
+            .is_err());
+        assert_eq!(store.active_refs().load().unwrap(), before_failed);
+
+        let prepared_later = prepare_protected_receive(
+            core.request,
+            &active,
+            &repository,
+            &store,
+            &mut verifier,
+            core.transaction,
+            core.quarantine_limits,
+            core.history_limits,
+            core.ordinary_free_bytes,
+            &mut input,
+            core.work_budget,
         )
         .unwrap();
         assert_eq!(prepared_later.verified().updates()[0].proposed_new(), Some(newer));

@@ -40,10 +40,11 @@ at the recorded base rather than inferred from an older chat summary.
 The edge branch can import the public `mrml_git::GitdCoreBackend` contract
 without a dependency on HTTP, TLS, or Zstandard packages. The concrete
 `FilesystemRepositoryView` implements generation-stable structured reads and
-the bounded upload-pack subset. Production receive-pack edge composition still
-requires the authorization/proof provider and durable receive store; transport
-code must retain fail-closed route disablement for that operation until those
-capabilities are supplied.
+the bounded upload-pack subset. `ReceivePackCore` composes the bounded receive
+parser, reservation, quarantine, complete-history verifier, durable store,
+atomic activation, authenticated receipt, and report-status writer. The edge
+must inject exact policy/proof and receipt authorities; absent those
+capabilities, its receive route remains fail closed.
 
 No package or workspace manifests were changed. No dependency is requested by
 this change.
