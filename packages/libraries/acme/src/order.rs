@@ -148,6 +148,14 @@ impl OrderLifecycle {
             .flatten()
     }
 
+    pub fn authorization_by_url_digest(
+        &self,
+        url_digest: [u8; 32],
+    ) -> Option<&AuthorizationBinding> {
+        self.authorizations()
+            .find(|authorization| authorization.url_digest == url_digest)
+    }
+
     pub fn bind_authorization(
         &mut self,
         url: AcmeUrl,

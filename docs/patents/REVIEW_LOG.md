@@ -11433,3 +11433,11 @@ POST to the exact account generation/key, directory generation, profile,
 identifier payload, deadline, and returned resource. Lost or malformed success
 responses are classified as uncertain rather than retried blindly. It adds no
 recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Order-scoped authorization retrieval
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment performs ordinary ACME
+POST-as-GET authorization retrieval and binds each returned identifier and
+challenge set to the exact order URL digest, account generation, and directory
+generation. It adds no recorded re-review-trigger mechanism.

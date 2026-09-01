@@ -1,8 +1,9 @@
 use crate::{
     AccountError, AccountLifecycle, AcmeDirectory, AcmeJwsSigner, AcmePostError, AcmeProblem,
-    AcmeTransport, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint, OrderError,
-    OrderLifecycle, P256Jwk, ParsedAccountStatus, PayloadError, PreparedAccountAction,
-    ResponseError, account_contacts_digest, parse_account_response, parse_order_response, post_jws,
+    AcmeTransport, AcmeUrl, CertificateProfile, ChallengeKind, DnsIdentifier, JwkThumbprint,
+    OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus, ParsedAuthorizationResponse,
+    PayloadError, PreparedAccountAction, ResponseError, account_contacts_digest,
+    parse_account_response, parse_authorization_response, parse_order_response, post_jws,
     write_new_account_payload, write_new_order_payload,
 };
 use mrml_crypto::Sha256;
@@ -64,11 +65,30 @@ pub enum OrderCreateFailure<E> {
     Uncertain(OrderCreateError<E>),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AuthorizationResource {
+    pub url: AcmeUrl,
+    pub order_url_digest: [u8; 32],
+    pub directory_generation: u64,
+    pub account_generation: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AuthorizationFetchError<E> {
+    ResourceMismatch,
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    ChallengeUnavailable,
+    Lifecycle(OrderError),
+}
+
 pub struct OrderCreateBuffers<'a> {
     pub payload: &'a mut [u8],
     pub response: &'a mut [u8],
     pub jws: &'a mut [u8],
-    pub authorization_urls: &'a mut [Option<AcmeUrl>],
+    pub authorizations: &'a mut [Option<AuthorizationResource>],
 }
 
 pub fn prepare_order_creation(
@@ -134,7 +154,7 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
         .ok_or(OrderCreateFailure::Definitive(
             OrderCreateError::PreparedMismatch,
         ))?;
-    if buffers.authorization_urls.len() < identifiers.len() {
+    if buffers.authorizations.len() < identifiers.len() {
         return Err(OrderCreateFailure::Definitive(
             OrderCreateError::AuthorizationOutputTooSmall,
         ));
@@ -186,13 +206,18 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
         profile.name(),
     )
     .map_err(|error| OrderCreateFailure::Uncertain(OrderCreateError::Response(error)))?;
-    buffers.authorization_urls.fill(None);
+    buffers.authorizations.fill(None);
     for (slot, url) in buffers
-        .authorization_urls
+        .authorizations
         .iter_mut()
         .zip(response.authorizations())
     {
-        *slot = Some(*url);
+        *slot = Some(AuthorizationResource {
+            url: *url,
+            order_url_digest: Sha256::digest(order_url.as_str().as_bytes()),
+            directory_generation: directory.generation,
+            account_generation: account.generation,
+        });
     }
     let response_status = response.status;
     let finalize_url = response.finalize;
@@ -213,6 +238,94 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
         .apply_order_response(1, response_status, certificate_url, now_unix)
         .map_err(|error| OrderCreateFailure::Uncertain(OrderCreateError::Lifecycle(error)))?;
     Ok(lifecycle)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fetch_authorization<T: AcmeTransport>(
+    resource: AuthorizationResource,
+    expected_identifier: DnsIdentifier,
+    selected_challenge: Option<ChallengeKind>,
+    response_generation: u64,
+    now_unix: u64,
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &mut OrderLifecycle,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<ParsedAuthorizationResponse, AuthorizationFetchError<T::Error>> {
+    if !account.active
+        || resource.directory_generation != directory.generation
+        || resource.directory_generation != order.directory_generation
+        || resource.account_generation != account.generation
+        || resource.account_generation != order.account_generation
+        || resource.order_url_digest != Sha256::digest(order.order_url.as_str().as_bytes())
+        || resource.url.origin() != order.order_url.origin()
+    {
+        return Err(AuthorizationFetchError::ResourceMismatch);
+    }
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(AuthorizationFetchError::ResourceMismatch)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &resource.url,
+        crate::ProtectedKey::Kid(account_url),
+        b"",
+        account.generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(AuthorizationFetchError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(AuthorizationFetchError::Server(problem));
+    }
+    if result.metadata.status != 200 {
+        return Err(AuthorizationFetchError::UnexpectedStatus);
+    }
+    let body = core::str::from_utf8(&response_body[..result.metadata.body_length])
+        .map_err(|_| AuthorizationFetchError::Response(ResponseError::Malformed))?;
+    let parsed =
+        parse_authorization_response(body, directory.new_order.origin(), expected_identifier)
+            .map_err(AuthorizationFetchError::Response)?;
+    if selected_challenge.is_some_and(|selected| {
+        !parsed
+            .challenges()
+            .any(|challenge| challenge.kind == selected)
+    }) {
+        return Err(AuthorizationFetchError::ChallengeUnavailable);
+    }
+    let url_digest = Sha256::digest(resource.url.as_str().as_bytes());
+    if let Some(existing) = order.authorization_by_url_digest(url_digest) {
+        if existing.identifier != expected_identifier {
+            return Err(AuthorizationFetchError::ResourceMismatch);
+        }
+    } else {
+        order
+            .bind_authorization(
+                resource.url,
+                expected_identifier,
+                parsed.wildcard,
+                response_generation,
+            )
+            .map_err(AuthorizationFetchError::Lifecycle)?;
+    }
+    order
+        .update_authorization(
+            url_digest,
+            response_generation,
+            parsed.status,
+            selected_challenge,
+            now_unix,
+        )
+        .map_err(AuthorizationFetchError::Lifecycle)?;
+    Ok(parsed)
 }
 
 pub fn execute_prepared_account_create<T: AcmeTransport>(
@@ -354,6 +467,18 @@ mod tests {
             }
             if self.fail_post {
                 return Err(());
+            }
+            if request.url.as_str() == "https://ca.example/authz/1" {
+                let body = br#"{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[{"type":"http-01","url":"https://ca.example/challenge/1","status":"pending","token":"token-1"}]}"#;
+                output[..body.len()].copy_from_slice(body);
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/authz/1",
+                    replay_nonce: Some("authz-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    body_length: body.len(),
+                });
             }
             let body = br#"{"status":"pending","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":["https://ca.example/authz/1"],"finalize":"https://ca.example/order/1/finalize","profile":"classic"}"#;
             output[..body.len()].copy_from_slice(body);
@@ -548,7 +673,7 @@ mod tests {
         let mut payload = [0; 2048];
         let mut response = [0; 2048];
         let mut jws = [0; 8192];
-        let mut authorization_urls = [None; 1];
+        let mut authorizations = [None; 1];
         let created = execute_prepared_order_create(
             prepared,
             &directory,
@@ -564,19 +689,40 @@ mod tests {
                 payload: &mut payload,
                 response: &mut response,
                 jws: &mut jws,
-                authorization_urls: &mut authorization_urls,
+                authorizations: &mut authorizations,
             },
         );
-        let created = match created {
+        let mut created = match created {
             Ok(created) => created,
             Err(_) => panic!("prepared order creation failed"),
         };
         assert_eq!(created.order_url.as_str(), "https://ca.example/order/1");
         assert_eq!(created.state, crate::OrderState::Pending);
         assert_eq!(
-            authorization_urls[0].unwrap().as_str(),
+            authorizations[0].unwrap().url.as_str(),
             "https://ca.example/authz/1"
         );
+        let parsed = fetch_authorization(
+            authorizations[0].unwrap(),
+            identifiers[0],
+            Some(ChallengeKind::Http01),
+            1,
+            100,
+            &directory,
+            &account,
+            &mut created,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        );
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(_) => panic!("authorization fetch failed"),
+        };
+        assert!(parsed.identifier == identifiers[0]);
+        assert_eq!(created.authorizations().count(), 1);
     }
 
     fn order_post_failure_is_explicitly_uncertain_impl() {
@@ -602,7 +748,7 @@ mod tests {
         let mut payload = [0; 2048];
         let mut response = [0; 2048];
         let mut jws = [0; 8192];
-        let mut authorization_urls = [None; 1];
+        let mut authorizations = [None; 1];
         assert!(matches!(
             execute_prepared_order_create(
                 prepared,
@@ -619,7 +765,7 @@ mod tests {
                     payload: &mut payload,
                     response: &mut response,
                     jws: &mut jws,
-                    authorization_urls: &mut authorization_urls,
+                    authorizations: &mut authorizations,
                 },
             ),
             Err(OrderCreateFailure::Uncertain(OrderCreateError::Post(_)))
