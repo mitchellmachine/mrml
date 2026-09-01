@@ -44,7 +44,8 @@ pub use challenge::{
     PublicationState, dns01_txt_digest, publication_binding_digest, write_key_authorization,
 };
 pub use challenge_http::{
-    Http01Error, MAX_HTTP01_HEADERS, MAX_HTTP01_REQUEST, validate_http01_request,
+    Http01Error, MAX_HTTP01_HEADERS, MAX_HTTP01_REQUEST, validate_http01_identifier_request,
+    validate_http01_request,
 };
 pub use challenge_tls_alpn::{
     ACME_TLS_ALPN_PROTOCOL, ApprovedTlsAlpnCertificateDigest, MAX_TLS_ALPN_CERTIFICATE,
@@ -74,7 +75,7 @@ pub use local_authority::{
     LOCAL_FINALIZE_URL, LOCAL_KEY_CHANGE_URL, LOCAL_NEW_ACCOUNT_URL, LOCAL_NEW_NONCE_URL,
     LOCAL_NEW_ORDER_URL, LOCAL_ORDER_URL, LOCAL_RENEWAL_INFO_CERTIFICATE_URL,
     LOCAL_RENEWAL_INFO_URL, LOCAL_REVOKE_URL, LocalAuthorityChallenge, LocalAuthorityError,
-    LocalAuthorityFault, LocalAuthorityState, LocalJwsVerifier,
+    LocalAuthorityFault, LocalAuthorityIdentifier, LocalAuthorityState, LocalJwsVerifier,
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, MAX_SEEN_NONCES, NonceError, NoncePool, ReplayNonce};
 pub use operation::{

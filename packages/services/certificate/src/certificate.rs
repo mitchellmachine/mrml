@@ -1,6 +1,6 @@
 use mrml_acme::{
-    AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeJwsSigner, AcmePostError, AcmeProblem,
-    AcmeResponseType, AcmeTransport, AriCertificateId, CaClass, CertificateProfile, DnsIdentifier,
+    AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeIdentifier, AcmeJwsSigner, AcmePostError,
+    AcmeProblem, AcmeResponseType, AcmeTransport, AriCertificateId, CaClass, CertificateProfile,
     OrderLifecycle, OrderState, P256Jwk, ProtectedKey, post_jws,
 };
 use mrml_crypto::Sha256;
@@ -139,8 +139,9 @@ pub struct CertificateValidationPolicy {
     pub profile: CertificateProfile,
     pub order_url_digest: [u8; 32],
     pub expected_key: P256Jwk,
-    pub identifiers: [Option<DnsIdentifier>; MAX_IDENTITY_NAMES],
+    pub identifiers: [Option<AcmeIdentifier>; MAX_IDENTITY_NAMES],
     pub identifier_count: u8,
+    pub allow_ip_identifiers: bool,
     pub now_unix: u64,
     pub maximum_validity_seconds: u64,
     pub maximum_chain_length: u8,
@@ -207,6 +208,11 @@ pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVeri
             .iter()
             .zip(order.identifiers())
             .all(|(provided, expected)| provided.as_ref() == Some(expected))
+        || (!policy.allow_ip_identifiers
+            && policy.identifiers[..usize::from(policy.identifier_count)]
+                .iter()
+                .flatten()
+                .any(|identifier| matches!(identifier, AcmeIdentifier::Ip(_))))
     {
         return Err(CertificateRetrievalError::ResourceMismatch);
     }
@@ -443,22 +449,39 @@ impl CertificateChainVerifier for HostedCertificateChainVerifier<'_> {
         }
         leaf.require_p256_public_key(&policy.expected_key.sec1_uncompressed())
             .map_err(|_| CertificateValidationError::PublicKeyMismatch)?;
-        let mut names = [""; MAX_IDENTITY_NAMES];
-        for (index, identifier) in policy.identifiers[..usize::from(policy.identifier_count)]
-            .iter()
-            .enumerate()
+        let identifiers = &policy.identifiers[..usize::from(policy.identifier_count)];
+        if identifiers.iter().any(Option::is_none)
+            || (!policy.allow_ip_identifiers
+                && identifiers
+                    .iter()
+                    .flatten()
+                    .any(|identifier| matches!(identifier, AcmeIdentifier::Ip(_))))
+            || identifiers
+                .windows(2)
+                .any(|pair| pair[0].as_ref() >= pair[1].as_ref())
         {
-            names[index] = identifier
-                .as_ref()
-                .ok_or(CertificateValidationError::InvalidPolicy)?
-                .as_str();
+            return Err(CertificateValidationError::InvalidPolicy);
         }
-        for pair in names[..usize::from(policy.identifier_count)].windows(2) {
-            if pair[0] >= pair[1] {
-                return Err(CertificateValidationError::InvalidPolicy);
+        let mut dns_names = [""; MAX_IDENTITY_NAMES];
+        let mut ip_names = [&[][..]; MAX_IDENTITY_NAMES];
+        let mut dns_count = 0usize;
+        let mut ip_count = 0usize;
+        for identifier in identifiers.iter().flatten() {
+            match identifier {
+                AcmeIdentifier::Dns(identifier) => {
+                    dns_names[dns_count] = identifier.as_str();
+                    dns_count += 1;
+                }
+                AcmeIdentifier::Ip(identifier) => {
+                    ip_names[ip_count] = identifier.octets();
+                    ip_count += 1;
+                }
             }
         }
-        leaf.require_exact_dns_names(&names[..usize::from(policy.identifier_count)])
+        if dns_count.checked_add(ip_count) != Some(usize::from(policy.identifier_count)) {
+            return Err(CertificateValidationError::InvalidPolicy);
+        }
+        leaf.require_exact_dns_and_ip_names(&dns_names[..dns_count], &ip_names[..ip_count])
             .map_err(|_| CertificateValidationError::IdentifierMismatch)?;
         let mut chain_refs = [&[][..]; MAX_CERTIFICATES];
         for (index, slot) in chain_refs.iter_mut().enumerate().take(chain.count()) {
@@ -567,11 +590,11 @@ mod tests {
     use super::*;
     use mrml_acme::{
         AccountPolicy, AcmeHttpMethod, AcmeTransportRequest, AcmeTransportResponse,
-        ApprovedAcmeJwsDigest, DeterministicAcmeAuthority, Es256Signature, JoseError,
-        LOCAL_ACCOUNT_URL, LOCAL_AUTHORIZATION_URL, LOCAL_CERTIFICATE_URL, LOCAL_CHALLENGE_URL,
-        LOCAL_DIRECTORY_URL, LOCAL_FINALIZE_URL, LOCAL_NEW_ORDER_URL, LOCAL_ORDER_URL,
-        LocalJwsVerifier, OwnerTermsApproval, account_contacts_digest, fetch_directory,
-        fetch_renewal_info,
+        ApprovedAcmeJwsDigest, DeterministicAcmeAuthority, DnsIdentifier, Es256Signature,
+        IpIdentifier, JoseError, LOCAL_ACCOUNT_URL, LOCAL_AUTHORIZATION_URL, LOCAL_CERTIFICATE_URL,
+        LOCAL_CHALLENGE_URL, LOCAL_DIRECTORY_URL, LOCAL_FINALIZE_URL, LOCAL_NEW_ORDER_URL,
+        LOCAL_ORDER_URL, LocalJwsVerifier, OwnerTermsApproval, account_contacts_digest,
+        fetch_directory, fetch_renewal_info,
     };
     #[test]
     fn pem_chain_is_bounded_strict_and_digest_ordered() {
@@ -742,7 +765,8 @@ mod tests {
             mrml_acme::AcmeUrl::parse("https://ca.example/order/1", false).unwrap(),
             mrml_acme::AcmeUrl::parse("https://ca.example/order/1/finalize", false).unwrap(),
             profile,
-            &identifiers,
+            &[AcmeIdentifier::Dns(identifiers[0])],
+            false,
             200,
             3,
         )
@@ -762,7 +786,7 @@ mod tests {
             )
             .unwrap();
         let mut policy_identifiers = [None; MAX_IDENTITY_NAMES];
-        policy_identifiers[0] = Some(identifiers[0]);
+        policy_identifiers[0] = Some(AcmeIdentifier::Dns(identifiers[0]));
         let policy = CertificateValidationPolicy {
             policy_generation: 3,
             ca_class: CaClass::Staging,
@@ -771,6 +795,7 @@ mod tests {
             expected_key: key,
             identifiers: policy_identifiers,
             identifier_count: 1,
+            allow_ip_identifiers: false,
             now_unix: 100,
             maximum_validity_seconds: 100,
             maximum_chain_length: 2,
@@ -869,6 +894,7 @@ mod tests {
             .unwrap(),
             identifiers: [None; MAX_IDENTITY_NAMES],
             identifier_count: 1,
+            allow_ip_identifiers: false,
             now_unix: 1,
             maximum_validity_seconds: 1,
             maximum_chain_length: 1,
@@ -910,8 +936,12 @@ mod tests {
         let root_der = root.certificate(0).unwrap();
         let leaf = mrml_tls::Certificate::parse(chain.certificate(0).unwrap()).unwrap();
         let mut identifiers = [None; MAX_IDENTITY_NAMES];
-        identifiers[0] = Some(DnsIdentifier::parse("git.example", false).unwrap());
-        identifiers[1] = Some(DnsIdentifier::parse("raw.example", false).unwrap());
+        identifiers[0] = Some(AcmeIdentifier::Dns(
+            DnsIdentifier::parse("git.example", false).unwrap(),
+        ));
+        identifiers[1] = Some(AcmeIdentifier::Dns(
+            DnsIdentifier::parse("raw.example", false).unwrap(),
+        ));
         let key = P256Jwk::from_coordinates(
             [
                 0x83, 0x28, 0x77, 0xd9, 0x3d, 0x62, 0x0b, 0x0e, 0xec, 0x22, 0x03, 0xcd, 0x56, 0x95,
@@ -933,6 +963,7 @@ mod tests {
             expected_key: key,
             identifiers,
             identifier_count: 2,
+            allow_ip_identifiers: false,
             now_unix: leaf.not_before(),
             maximum_validity_seconds: 366 * 86_400,
             maximum_chain_length: 3,
@@ -953,10 +984,86 @@ mod tests {
             Err(CertificateValidationError::StagingProductionMismatch)
         ));
         wrong = policy;
-        wrong.identifiers[1] = Some(DnsIdentifier::parse("wrong.example", false).unwrap());
+        wrong.identifiers[1] = Some(AcmeIdentifier::Dns(
+            DnsIdentifier::parse("wrong.example", false).unwrap(),
+        ));
         assert!(matches!(
             verifier.verify(&chain, &wrong),
             Err(CertificateValidationError::IdentifierMismatch)
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn independently_generated_chain_binds_exact_dns_and_ip_sans() {
+        let chain =
+            PemCertificateChain::parse(include_bytes!("../tests/fixtures/ip-leaf.pem")).unwrap();
+        let root =
+            PemCertificateChain::parse(include_bytes!("../tests/fixtures/ip-root.pem")).unwrap();
+        let leaf = mrml_tls::Certificate::parse(chain.certificate(0).unwrap()).unwrap();
+        let key = P256Jwk::from_coordinates(
+            [
+                0xbc, 0x43, 0x95, 0x42, 0x47, 0x69, 0x7e, 0xc0, 0x1d, 0x37, 0xad, 0xe4, 0x4c, 0xdb,
+                0x82, 0xbf, 0x4c, 0xac, 0xf6, 0x33, 0x3e, 0xb4, 0xd3, 0x37, 0x21, 0x78, 0x24, 0x75,
+                0x29, 0x95, 0xaa, 0xc9,
+            ],
+            [
+                0xcb, 0x5b, 0xd0, 0x3a, 0x48, 0xb1, 0x17, 0x7b, 0x2d, 0x96, 0x13, 0x59, 0x63, 0x67,
+                0x65, 0x7e, 0x40, 0x11, 0xa6, 0x9b, 0xa6, 0xae, 0x2b, 0x97, 0x78, 0xe0, 0x27, 0xef,
+                0x73, 0x8c, 0x80, 0xdb,
+            ],
+        )
+        .unwrap();
+        let mut identifiers = [None; MAX_IDENTITY_NAMES];
+        identifiers[0] = Some(AcmeIdentifier::Dns(
+            DnsIdentifier::parse("git.example", false).unwrap(),
+        ));
+        identifiers[1] = Some(AcmeIdentifier::Ip(
+            IpIdentifier::parse("192.0.2.1").unwrap(),
+        ));
+        identifiers[2] = Some(AcmeIdentifier::Ip(
+            IpIdentifier::parse("2001:db8::1").unwrap(),
+        ));
+        let policy = CertificateValidationPolicy {
+            policy_generation: 5,
+            ca_class: CaClass::Staging,
+            profile: CertificateProfile::parse("ip-enabled", 8).unwrap(),
+            order_url_digest: [6; 32],
+            expected_key: key,
+            identifiers,
+            identifier_count: 3,
+            allow_ip_identifiers: true,
+            now_unix: leaf.not_before(),
+            maximum_validity_seconds: 366 * 86_400,
+            maximum_chain_length: 2,
+            trust_store_digest: [7; 32],
+        };
+        let roots = [root.certificate(0).unwrap()];
+        let mut verifier = HostedCertificateChainVerifier {
+            ca_class: CaClass::Staging,
+            trust_store_digest: [7; 32],
+            approved_roots: &roots,
+        };
+        assert!(verifier.verify(&chain, &policy).is_ok());
+        let mut disabled = policy;
+        disabled.allow_ip_identifiers = false;
+        assert!(matches!(
+            verifier.verify(&chain, &disabled),
+            Err(CertificateValidationError::InvalidPolicy)
+        ));
+        let mut missing = policy;
+        missing.identifier_count = 2;
+        assert!(matches!(
+            verifier.verify(&chain, &missing),
+            Err(CertificateValidationError::IdentifierMismatch)
+        ));
+        let mut substituted = policy;
+        substituted.identifiers[1] = Some(AcmeIdentifier::Dns(
+            DnsIdentifier::parse("192.0.2.1.example", false).unwrap(),
+        ));
+        assert!(matches!(
+            verifier.verify(&chain, &substituted),
+            Err(CertificateValidationError::InvalidPolicy)
         ));
     }
 
@@ -1046,7 +1153,8 @@ mod tests {
             mrml_acme::AcmeUrl::parse(LOCAL_ORDER_URL, false).unwrap(),
             mrml_acme::AcmeUrl::parse(LOCAL_FINALIZE_URL, false).unwrap(),
             profile,
-            &[identifier],
+            &[AcmeIdentifier::Dns(identifier)],
+            false,
             200,
             3,
         )
@@ -1083,7 +1191,7 @@ mod tests {
         )
         .unwrap();
         let mut identifiers = [None; MAX_IDENTITY_NAMES];
-        identifiers[0] = Some(identifier);
+        identifiers[0] = Some(AcmeIdentifier::Dns(identifier));
         let policy = CertificateValidationPolicy {
             policy_generation: 8,
             ca_class: CaClass::Staging,
@@ -1092,6 +1200,7 @@ mod tests {
             expected_key: certificate_key,
             identifiers,
             identifier_count: 1,
+            allow_ip_identifiers: false,
             now_unix: leaf.not_before(),
             maximum_validity_seconds: 366 * 86_400,
             maximum_chain_length: 3,

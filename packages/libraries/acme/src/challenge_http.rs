@@ -1,4 +1,4 @@
-use crate::{ChallengeToken, DnsIdentifier};
+use crate::{AcmeIdentifier, ChallengeToken, DnsIdentifier, MAX_DNS_NAME};
 
 pub const MAX_HTTP01_REQUEST: usize = 4096;
 pub const MAX_HTTP01_HEADERS: usize = 16;
@@ -19,6 +19,14 @@ pub enum Http01Error {
 pub fn validate_http01_request(
     request: &[u8],
     identifier: &DnsIdentifier,
+    token: &ChallengeToken,
+) -> Result<(), Http01Error> {
+    validate_http01_identifier_request(request, &AcmeIdentifier::Dns(*identifier), token)
+}
+
+pub fn validate_http01_identifier_request(
+    request: &[u8],
+    identifier: &AcmeIdentifier,
     token: &ChallengeToken,
 ) -> Result<(), Http01Error> {
     if request.len() > MAX_HTTP01_REQUEST {
@@ -63,18 +71,42 @@ pub fn validate_http01_request(
                 return Err(Http01Error::DuplicateHost);
             }
             let value = value.trim();
-            if value.contains(['@', '[', ']']) {
+            if value.contains('@') {
                 return Err(Http01Error::WrongHost);
             }
             host = Some(value);
         }
     }
     let host = host.ok_or(Http01Error::MissingHost)?;
-    if !host.eq_ignore_ascii_case(identifier.as_str())
-        && !host
-            .strip_suffix(":80")
-            .is_some_and(|name| name.eq_ignore_ascii_case(identifier.as_str()))
-    {
+    let mut expected = [0u8; MAX_DNS_NAME];
+    let expected = identifier
+        .write_value(&mut expected)
+        .map_err(|_| Http01Error::WrongHost)?;
+    let matches = match identifier {
+        AcmeIdentifier::Dns(_) => {
+            host.eq_ignore_ascii_case(expected)
+                || host
+                    .strip_suffix(":80")
+                    .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+        }
+        AcmeIdentifier::Ip(identifier) if identifier.is_ipv4() => {
+            host.eq_ignore_ascii_case(expected)
+                || host
+                    .strip_suffix(":80")
+                    .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+        }
+        AcmeIdentifier::Ip(identifier) if !identifier.is_ipv4() => {
+            host.strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+                || host
+                    .strip_prefix('[')
+                    .and_then(|value| value.strip_suffix("]:80"))
+                    .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+        }
+        _ => false,
+    };
+    if !matches {
         return Err(Http01Error::WrongHost);
     }
     Ok(())
@@ -128,6 +160,37 @@ mod tests {
                 &token
             ),
             Err(Http01Error::WrongHost)
+        );
+    }
+
+    #[test]
+    fn ip_host_authority_is_exact_and_ipv6_is_bracketed() {
+        let token = ChallengeToken::parse("abc_123").unwrap();
+        let ipv4 = AcmeIdentifier::Ip(crate::IpIdentifier::parse("192.0.2.1").unwrap());
+        assert!(
+            validate_http01_identifier_request(
+                b"GET /.well-known/acme-challenge/abc_123 HTTP/1.1\r\nHost: 192.0.2.1:80\r\n\r\n",
+                &ipv4,
+                &token,
+            )
+            .is_ok()
+        );
+        let ipv6 = AcmeIdentifier::Ip(crate::IpIdentifier::parse("2001:db8::1").unwrap());
+        assert!(
+            validate_http01_identifier_request(
+                b"GET /.well-known/acme-challenge/abc_123 HTTP/1.1\r\nHost: [2001:db8::1]:80\r\n\r\n",
+                &ipv6,
+                &token,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_http01_identifier_request(
+                b"GET /.well-known/acme-challenge/abc_123 HTTP/1.1\r\nHost: 2001:db8::1\r\n\r\n",
+                &ipv6,
+                &token,
+            )
+            .is_err()
         );
     }
 }

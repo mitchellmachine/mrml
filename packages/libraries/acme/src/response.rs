@@ -1,8 +1,8 @@
 use crate::directory::{Parser, Token};
 use crate::{
-    AcmeOrigin, AcmeUrl, ChallengeKind, ChallengeState, DirectoryError, DnsIdentifier,
-    MAX_AUTHORIZATIONS, MAX_CHALLENGES_PER_AUTHORIZATION, MAX_DIRECTORY_BYTES,
-    MAX_ORDER_IDENTIFIERS, OrderState,
+    AcmeIdentifier, AcmeOrigin, AcmeUrl, ChallengeKind, ChallengeState, DirectoryError,
+    DnsIdentifier, IpIdentifier, MAX_AUTHORIZATIONS, MAX_CHALLENGES_PER_AUTHORIZATION,
+    MAX_DIRECTORY_BYTES, MAX_ORDER_IDENTIFIERS, OrderState,
 };
 use mrml_crypto::Sha256;
 
@@ -53,7 +53,7 @@ pub struct ParsedChallenge {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ParsedAuthorizationResponse {
-    pub identifier: DnsIdentifier,
+    pub identifier: AcmeIdentifier,
     pub wildcard: bool,
     pub status: crate::AuthorizationState,
     challenges: [Option<ParsedChallenge>; MAX_CHALLENGES_PER_AUTHORIZATION],
@@ -205,7 +205,7 @@ pub fn parse_account_response(
 pub fn parse_order_response(
     source: &str,
     origin: AcmeOrigin<'_>,
-    expected_identifiers: &[DnsIdentifier],
+    expected_identifiers: &[AcmeIdentifier],
     expected_profile: &str,
 ) -> Result<ParsedOrderResponse, ResponseError> {
     if source.len() > MAX_DIRECTORY_BYTES {
@@ -300,7 +300,7 @@ pub fn parse_order_response(
 pub fn parse_authorization_response(
     source: &str,
     origin: AcmeOrigin<'_>,
-    expected_identifier: DnsIdentifier,
+    expected_identifier: AcmeIdentifier,
 ) -> Result<ParsedAuthorizationResponse, ResponseError> {
     if source.len() > MAX_DIRECTORY_BYTES {
         return Err(ResponseError::TooLarge);
@@ -377,13 +377,17 @@ pub fn parse_authorization_response(
     })?;
     parser.finish()?;
     let response_identifier = identifier.ok_or(ResponseError::MissingField)?;
-    let identifier_matches = if expected_identifier.is_wildcard() {
-        expected_identifier
-            .as_str()
-            .strip_prefix("*.")
-            .is_some_and(|base| base == response_identifier.as_str())
-    } else {
-        response_identifier == expected_identifier
+    let identifier_matches = match expected_identifier {
+        AcmeIdentifier::Dns(expected) if expected.is_wildcard() => {
+            let AcmeIdentifier::Dns(response) = response_identifier else {
+                return Err(ResponseError::IdentifierMismatch);
+            };
+            expected
+                .as_str()
+                .strip_prefix("*.")
+                .is_some_and(|base| base == response.as_str())
+        }
+        _ => response_identifier == expected_identifier,
     };
     if !identifier_matches || wildcard != expected_identifier.is_wildcard() {
         return Err(ResponseError::IdentifierMismatch);
@@ -400,7 +404,7 @@ pub fn parse_authorization_response(
     })
 }
 
-fn parse_identifier(parser: &mut Parser<'_>) -> Result<DnsIdentifier, DirectoryError> {
+fn parse_identifier(parser: &mut Parser<'_>) -> Result<AcmeIdentifier, DirectoryError> {
     parser.expect(Token::ObjectStart)?;
     let mut kind = None;
     let mut value = None;
@@ -422,11 +426,16 @@ fn parse_identifier(parser: &mut Parser<'_>) -> Result<DnsIdentifier, DirectoryE
         }
         Ok(())
     })?;
-    if kind != Some("dns") {
-        return Err(DirectoryError::InvalidCaaIdentity);
+    let value = value.ok_or(DirectoryError::Malformed)?;
+    match kind {
+        Some("dns") => DnsIdentifier::parse(value, false)
+            .map(AcmeIdentifier::Dns)
+            .map_err(|_| DirectoryError::InvalidCaaIdentity),
+        Some("ip") => IpIdentifier::parse(value)
+            .map(AcmeIdentifier::Ip)
+            .map_err(|_| DirectoryError::InvalidCaaIdentity),
+        _ => Err(DirectoryError::InvalidCaaIdentity),
     }
-    DnsIdentifier::parse(value.ok_or(DirectoryError::Malformed)?, false)
-        .map_err(|_| DirectoryError::InvalidCaaIdentity)
 }
 
 fn parse_challenge(
@@ -507,35 +516,14 @@ fn parse_challenge_status(value: &str) -> Result<ChallengeState, DirectoryError>
 
 fn parse_identifiers(
     parser: &mut Parser<'_>,
-    expected: &[DnsIdentifier],
+    expected: &[AcmeIdentifier],
 ) -> Result<(), DirectoryError> {
     parser.expect(Token::ArrayStart)?;
     for (index, expected) in expected.iter().enumerate() {
         if index != 0 {
             parser.expect(Token::Comma)?;
         }
-        parser.expect(Token::ObjectStart)?;
-        let mut kind = None;
-        let mut value = None;
-        let mut seen = 0u8;
-        parser.object_fields(|parser, name| {
-            let bit = match name {
-                "type" => 1,
-                "value" => 2,
-                _ => 0,
-            };
-            if bit != 0 && seen & bit != 0 {
-                return Err(DirectoryError::DuplicateField);
-            }
-            seen |= bit;
-            match name {
-                "type" => kind = Some(parser.string()?),
-                "value" => value = Some(parser.string()?),
-                _ => parser.skip_value(2)?,
-            }
-            Ok(())
-        })?;
-        if kind != Some("dns") || value != Some(expected.as_str()) {
+        if parse_identifier(parser)? != *expected {
             return Err(DirectoryError::InvalidCaaIdentity);
         }
     }
@@ -602,8 +590,8 @@ mod tests {
     #[test]
     fn order_response_binds_exact_names_profile_and_origin() {
         let names = [
-            DnsIdentifier::parse("api.example", false).unwrap(),
-            DnsIdentifier::parse("git.example", false).unwrap(),
+            AcmeIdentifier::Dns(DnsIdentifier::parse("api.example", false).unwrap()),
+            AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
         ];
         let directory = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
         let response = parse_order_response(
@@ -626,7 +614,7 @@ mod tests {
     #[test]
     fn authorization_response_binds_name_origin_and_supported_challenges() {
         let directory = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
-        let identifier = DnsIdentifier::parse("git.example", false).unwrap();
+        let identifier = AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap());
         let parsed = parse_authorization_response(
             r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","challenges":[{"type":"future-01","url":"https://ca.example/c/0","status":"pending","token":"ignored"},{"type":"http-01","url":"https://ca.example/c/1","status":"pending","token":"abc_123"},{"type":"dns-01","url":"https://ca.example/c/2","status":"processing","token":"def_456"}]}"#,
             directory.origin(),
@@ -638,12 +626,48 @@ mod tests {
         assert!(parse_authorization_response(
             r#"{"identifier":{"type":"dns","value":"other.example"},"status":"pending","challenges":[{"type":"http-01","url":"https://ca.example/c/1","status":"pending","token":"abc"}]}"#,
             directory.origin(), identifier).is_err());
-        let wildcard = DnsIdentifier::parse("*.git.example", true).unwrap();
+        let wildcard = AcmeIdentifier::Dns(DnsIdentifier::parse("*.git.example", true).unwrap());
         assert!(parse_authorization_response(
             r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":true,"challenges":[{"type":"dns-01","url":"https://ca.example/c/2","status":"pending","token":"abc"}]}"#,
             directory.origin(), wildcard).is_ok());
         assert!(parse_authorization_response(
             r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","challenges":[{"type":"http-01","url":"https://evil.example/c/1","status":"pending","token":"abc"}]}"#,
             directory.origin(), identifier).is_err());
+    }
+
+    #[test]
+    fn typed_responses_bind_ip_kind_and_canonical_value() {
+        let directory = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let identifiers = [
+            AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
+            AcmeIdentifier::Ip(IpIdentifier::parse("192.0.2.1").unwrap()),
+            AcmeIdentifier::Ip(IpIdentifier::parse("2001:db8::1").unwrap()),
+        ];
+        assert!(
+            parse_order_response(
+                r#"{"status":"pending","identifiers":[{"type":"dns","value":"git.example"},{"type":"ip","value":"192.0.2.1"},{"type":"ip","value":"2001:db8::1"}],"authorizations":["https://ca.example/a/1","https://ca.example/a/2","https://ca.example/a/3"],"finalize":"https://ca.example/o/1/finalize","profile":"ip-enabled"}"#,
+                directory.origin(),
+                &identifiers,
+                "ip-enabled",
+            )
+            .is_ok()
+        );
+        let expected_ip = identifiers[1];
+        assert!(
+            parse_authorization_response(
+                r#"{"identifier":{"type":"ip","value":"192.0.2.1"},"status":"pending","challenges":[{"type":"http-01","url":"https://ca.example/c/1","status":"pending","token":"abc"}]}"#,
+                directory.origin(),
+                expected_ip,
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_authorization_response(
+                r#"{"identifier":{"type":"dns","value":"192.0.2.1"},"status":"pending","challenges":[{"type":"http-01","url":"https://ca.example/c/1","status":"pending","token":"abc"}]}"#,
+                directory.origin(),
+                expected_ip,
+            )
+            .is_err()
+        );
     }
 }

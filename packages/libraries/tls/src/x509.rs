@@ -687,11 +687,31 @@ impl<'a> Certificate<'a> {
     }
 
     pub fn require_exact_dns_names(&self, expected: &[&str]) -> Result<(), CertificateError> {
-        if expected.is_empty() {
+        self.require_exact_dns_and_ip_names(expected, &[])
+    }
+
+    pub fn require_exact_dns_and_ip_names(
+        &self,
+        expected_dns: &[&str],
+        expected_ip: &[&[u8]],
+    ) -> Result<(), CertificateError> {
+        if expected_dns.is_empty() && expected_ip.is_empty() {
             return Err(CertificateError::HostnameMismatch);
         }
-        for pair in expected.windows(2) {
+        for pair in expected_dns.windows(2) {
             if pair[0] >= pair[1] {
+                return Err(CertificateError::HostnameMismatch);
+            }
+        }
+        for address in expected_ip {
+            if !matches!(address.len(), 4 | 16) {
+                return Err(CertificateError::HostnameMismatch);
+            }
+        }
+        for pair in expected_ip.windows(2) {
+            if pair[0].len() > pair[1].len()
+                || (pair[0].len() == pair[1].len() && pair[0] >= pair[1])
+            {
                 return Err(CertificateError::HostnameMismatch);
             }
         }
@@ -705,32 +725,48 @@ impl<'a> Certificate<'a> {
             return Err(CertificateError::Malformed);
         }
         let mut entries = Reader::new(names.value);
-        let mut count = 0usize;
+        let mut dns_count = 0usize;
+        let mut ip_count = 0usize;
         while entries.position < entries.bytes.len() {
             let name = entries.next()?;
-            if name.tag != 0x82
-                || name.value.is_empty()
-                || !name.value.is_ascii()
-                || !expected
-                    .iter()
-                    .any(|candidate| candidate.as_bytes().eq_ignore_ascii_case(name.value))
-            {
+            let admitted = match name.tag {
+                0x82 => {
+                    dns_count += 1;
+                    !name.value.is_empty()
+                        && name.value.is_ascii()
+                        && expected_dns
+                            .iter()
+                            .any(|candidate| candidate.as_bytes().eq_ignore_ascii_case(name.value))
+                }
+                0x87 => {
+                    ip_count += 1;
+                    matches!(name.value.len(), 4 | 16)
+                        && expected_ip.iter().any(|candidate| *candidate == name.value)
+                }
+                _ => false,
+            };
+            if !admitted {
                 return Err(CertificateError::HostnameMismatch);
             }
             let mut duplicate_reader = Reader::new(names.value);
             let mut occurrences = 0usize;
             while duplicate_reader.position < duplicate_reader.bytes.len() {
                 let candidate = duplicate_reader.next()?;
-                if candidate.tag == 0x82 && candidate.value.eq_ignore_ascii_case(name.value) {
+                if candidate.tag == name.tag
+                    && if name.tag == 0x82 {
+                        candidate.value.eq_ignore_ascii_case(name.value)
+                    } else {
+                        candidate.value == name.value
+                    }
+                {
                     occurrences += 1;
                 }
             }
             if occurrences != 1 {
                 return Err(CertificateError::HostnameMismatch);
             }
-            count += 1;
         }
-        if count == expected.len() {
+        if dns_count == expected_dns.len() && ip_count == expected_ip.len() {
             Ok(())
         } else {
             Err(CertificateError::HostnameMismatch)
@@ -1004,6 +1040,32 @@ mod tests {
         );
         assert_eq!(
             certificate.require_exact_dns_names(&["b.example", "a.example"]),
+            Err(CertificateError::HostnameMismatch)
+        );
+    }
+    #[test]
+    fn exact_dns_and_ip_set_rejects_type_substitution_and_extras() {
+        let extensions = [
+            0x30, 0x2e, 0x30, 0x2c, 0x06, 0x03, 0x55, 0x1d, 0x11, 0x04, 0x25, 0x30, 0x23, 0x82,
+            0x09, b'a', b'.', b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x87, 0x04, 192, 0, 2, 1,
+            0x87, 0x10, 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ];
+        let certificate = certificate_with_extensions(&extensions);
+        let ipv4 = [192, 0, 2, 1];
+        let ipv6 = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        assert_eq!(
+            certificate.require_exact_dns_and_ip_names(
+                &["a.example"],
+                &[ipv4.as_slice(), ipv6.as_slice()],
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            certificate.require_exact_dns_and_ip_names(&["a.example"], &[ipv4.as_slice()]),
+            Err(CertificateError::HostnameMismatch)
+        );
+        assert_eq!(
+            certificate.require_exact_dns_names(&["a.example"]),
             Err(CertificateError::HostnameMismatch)
         );
     }

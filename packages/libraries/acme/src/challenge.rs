@@ -1,4 +1,6 @@
-use crate::{encode_base64url, AcmeUrl, ChallengeKind, DnsIdentifier, JwkThumbprint};
+use crate::{
+    AcmeIdentifier, AcmeUrl, ChallengeKind, JwkThumbprint, MAX_DNS_NAME, encode_base64url,
+};
 use mrml_crypto::Sha256;
 
 pub const MAX_CHALLENGE_TOKEN: usize = 128;
@@ -16,6 +18,7 @@ pub enum ChallengeError {
     StaleGeneration,
     WrongPublisher,
     WildcardRequiresDns01,
+    IpRequiresHttp01,
     NotYetActive,
     Expired,
     ArithmeticOverflow,
@@ -68,7 +71,7 @@ pub struct ChallengePublicationRequest {
     pub challenge_generation: u64,
     pub order_url_digest: [u8; 32],
     pub authorization_url_digest: [u8; 32],
-    pub identifier: DnsIdentifier,
+    pub identifier: AcmeIdentifier,
     pub kind: ChallengeKind,
     pub token: ChallengeToken,
     pub key_authorization_digest: [u8; 32],
@@ -114,7 +117,7 @@ impl ChallengeLifecycle {
         challenge_generation: u64,
         order_url: &AcmeUrl,
         authorization_url: &AcmeUrl,
-        identifier: DnsIdentifier,
+        identifier: AcmeIdentifier,
         kind: ChallengeKind,
         token: ChallengeToken,
         account_key: JwkThumbprint,
@@ -127,6 +130,9 @@ impl ChallengeLifecycle {
         }
         if identifier.is_wildcard() && kind != ChallengeKind::Dns01 {
             return Err(ChallengeError::WildcardRequiresDns01);
+        }
+        if matches!(identifier, AcmeIdentifier::Ip(_)) && kind != ChallengeKind::Http01 {
+            return Err(ChallengeError::IpRequiresHttp01);
         }
         let mut key_authorization = [0u8; MAX_KEY_AUTHORIZATION];
         let len = write_key_authorization(&token, account_key, &mut key_authorization)?;
@@ -263,13 +269,31 @@ fn validate_receipt(
 }
 
 pub fn publication_binding_digest(request: &ChallengePublicationRequest) -> [u8; 32] {
-    let mut input = [0u8; 32 * 3 + 16];
-    input[..32].copy_from_slice(&request.order_url_digest);
-    input[32..64].copy_from_slice(&request.authorization_url_digest);
-    input[64..96].copy_from_slice(&request.key_authorization_digest);
-    input[96..104].copy_from_slice(&request.challenge_generation.to_be_bytes());
-    input[104..112].copy_from_slice(&request.publisher_policy_generation.to_be_bytes());
-    Sha256::digest(&input)
+    let mut identifier = [0u8; MAX_DNS_NAME];
+    let identifier = request
+        .identifier
+        .write_value(&mut identifier)
+        .unwrap_or("");
+    let mut digest = Sha256::new();
+    digest.update(b"mrml-acme-challenge-publication-v2\0");
+    digest.update(&request.order_url_digest);
+    digest.update(&request.authorization_url_digest);
+    digest.update(request.identifier.kind().as_bytes());
+    digest.update(&(identifier.len() as u16).to_be_bytes());
+    digest.update(identifier.as_bytes());
+    digest.update(&[match request.kind {
+        ChallengeKind::Http01 => 1,
+        ChallengeKind::TlsAlpn01 => 2,
+        ChallengeKind::Dns01 => 3,
+    }]);
+    digest.update(&(request.token.as_str().len() as u16).to_be_bytes());
+    digest.update(request.token.as_str().as_bytes());
+    digest.update(&request.key_authorization_digest);
+    digest.update(&request.challenge_generation.to_be_bytes());
+    digest.update(&request.not_before_unix.to_be_bytes());
+    digest.update(&request.expires_unix.to_be_bytes());
+    digest.update(&request.publisher_policy_generation.to_be_bytes());
+    digest.finalize()
 }
 
 #[cfg(test)]
@@ -286,16 +310,10 @@ mod tests {
             &mut self,
             request: ChallengePublicationRequest,
         ) -> Result<PublicationReceipt, ChallengeError> {
-            let mut input = [0u8; 112];
-            input[..32].copy_from_slice(&request.order_url_digest);
-            input[32..64].copy_from_slice(&request.authorization_url_digest);
-            input[64..96].copy_from_slice(&request.key_authorization_digest);
-            input[96..104].copy_from_slice(&request.challenge_generation.to_be_bytes());
-            input[104..112].copy_from_slice(&request.publisher_policy_generation.to_be_bytes());
             Ok(PublicationReceipt {
                 challenge_generation: request.challenge_generation,
                 publisher_generation: self.generation,
-                binding_digest: Sha256::digest(&input),
+                binding_digest: publication_binding_digest(&request),
                 kind: request.kind,
             })
         }
@@ -341,7 +359,7 @@ mod tests {
             3,
             &url("order/1"),
             &url("authz/1"),
-            DnsIdentifier::parse("git.example", false).unwrap(),
+            AcmeIdentifier::Dns(crate::DnsIdentifier::parse("git.example", false).unwrap()),
             ChallengeKind::Http01,
             ChallengeToken::parse("abc_123").unwrap(),
             JwkThumbprint([7; 32]),
@@ -372,7 +390,7 @@ mod tests {
                 1,
                 &url("o"),
                 &url("a"),
-                DnsIdentifier::parse("*.example", true).unwrap(),
+                AcmeIdentifier::Dns(crate::DnsIdentifier::parse("*.example", true).unwrap()),
                 ChallengeKind::TlsAlpn01,
                 ChallengeToken::parse("abc").unwrap(),
                 JwkThumbprint([1; 32]),
@@ -382,5 +400,45 @@ mod tests {
             ),
             Err(ChallengeError::WildcardRequiresDns01)
         ));
+    }
+
+    #[test]
+    fn ip_challenge_is_http_only_and_identifier_bound() {
+        let ipv4 = AcmeIdentifier::Ip(crate::IpIdentifier::parse("192.0.2.1").unwrap());
+        let http = ChallengeLifecycle::new(
+            1,
+            &url("order"),
+            &url("authz"),
+            ipv4,
+            ChallengeKind::Http01,
+            ChallengeToken::parse("token").unwrap(),
+            JwkThumbprint([1; 32]),
+            10,
+            20,
+            3,
+        )
+        .unwrap();
+        assert!(matches!(
+            ChallengeLifecycle::new(
+                1,
+                &url("order"),
+                &url("authz"),
+                ipv4,
+                ChallengeKind::Dns01,
+                ChallengeToken::parse("token").unwrap(),
+                JwkThumbprint([1; 32]),
+                10,
+                20,
+                3,
+            ),
+            Err(ChallengeError::IpRequiresHttp01)
+        ));
+        let mut substituted = http.request;
+        substituted.identifier =
+            AcmeIdentifier::Ip(crate::IpIdentifier::parse("192.0.2.2").unwrap());
+        assert_ne!(
+            publication_binding_digest(&http.request),
+            publication_binding_digest(&substituted)
+        );
     }
 }

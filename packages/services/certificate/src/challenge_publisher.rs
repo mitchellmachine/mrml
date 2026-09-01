@@ -1,6 +1,6 @@
 use crate::{AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_TXT_RECORDS};
 use mrml_acme::{
-    ChallengeError, ChallengeKind, ChallengePublicationRequest, ChallengePublisher,
+    AcmeIdentifier, ChallengeError, ChallengeKind, ChallengePublicationRequest, ChallengePublisher,
     PublicationReceipt, PublicationState, publication_binding_digest,
 };
 
@@ -53,7 +53,9 @@ impl ChallengePublisher for DnsChallengePublisher {
         &mut self,
         request: ChallengePublicationRequest,
     ) -> Result<PublicationReceipt, ChallengeError> {
-        if request.kind != ChallengeKind::Dns01 {
+        if request.kind != ChallengeKind::Dns01
+            || !matches!(request.identifier, AcmeIdentifier::Dns(_))
+        {
             return Err(ChallengeError::WrongPublisher);
         }
         if self.bindings.iter().flatten().any(|binding| {
@@ -90,9 +92,12 @@ impl ChallengePublisher for DnsChallengePublisher {
         if binding.state != PublicationState::Prepared {
             return Err(ChallengeError::InvalidState);
         }
+        let AcmeIdentifier::Dns(identifier) = binding.request.identifier else {
+            return Err(ChallengeError::WrongPublisher);
+        };
         self.zone
             .insert_txt(
-                binding.request.identifier,
+                identifier,
                 binding.request.key_authorization_digest,
                 binding.request.challenge_generation,
                 binding.request.expires_unix,
@@ -120,8 +125,11 @@ impl ChallengePublisher for DnsChallengePublisher {
         if binding.state != PublicationState::RemovalPrepared {
             return Err(ChallengeError::InvalidState);
         }
+        let AcmeIdentifier::Dns(identifier) = binding.request.identifier else {
+            return Err(ChallengeError::WrongPublisher);
+        };
         if let Err(error) = self.zone.remove_txt(
-            binding.request.identifier,
+            identifier,
             binding.request.key_authorization_digest,
             binding.request.challenge_generation,
         ) {
@@ -181,7 +189,7 @@ mod tests {
             4,
             &url("o"),
             &url("a"),
-            DnsIdentifier::parse("git.example", false).unwrap(),
+            mrml_acme::AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
             ChallengeKind::Dns01,
             ChallengeToken::parse("token").unwrap(),
             JwkThumbprint([9; 32]),

@@ -1,14 +1,14 @@
 use crate::{
-    AccountError, AccountLifecycle, AccountOperation, AcmeDirectory, AcmeJwsSigner, AcmePostError,
-    AcmeProblem, AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError, ChallengeKind,
-    ChallengeLifecycle, DnsIdentifier, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk,
+    AccountError, AccountLifecycle, AccountOperation, AcmeDirectory, AcmeIdentifier, AcmeJwsSigner,
+    AcmePostError, AcmeProblem, AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError,
+    ChallengeKind, ChallengeLifecycle, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk,
     ParsedAccountStatus, ParsedAuthorizationResponse, ParsedChallenge, PayloadError,
     PreparedAccountAction, PreparedFinalization, PreparedTermsTransition, PublicationReceipt,
     ResponseError, account_contacts_digest, parse_account_response, parse_authorization_response,
     parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
     write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
-    write_new_order_payload, write_preauthorization_payload, write_revocation_payload,
-    write_terms_agreement_payload,
+    write_new_order_identifiers_payload, write_preauthorization_identifier_payload,
+    write_revocation_payload, write_terms_agreement_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -168,6 +168,7 @@ pub struct PreparedOrderCreation {
     pub request_digest: [u8; 32],
     pub deadline_unix: u64,
     pub retry_limit: u8,
+    pub allow_ip_identifiers: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,6 +176,7 @@ pub enum PrepareOrderError {
     AccountInactive,
     DirectoryGenerationMismatch,
     ProfileGenerationMismatch,
+    IpIdentifiersNotAllowed,
     Payload(PayloadError),
 }
 
@@ -209,14 +211,14 @@ pub struct AuthorizationResource {
 pub struct PreparedPreauthorization {
     pub directory_generation: u64,
     pub account_generation: u64,
-    pub identifier: DnsIdentifier,
+    pub identifier: AcmeIdentifier,
     pub request_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct PreauthorizationResource {
     pub url: AcmeUrl,
-    pub identifier: DnsIdentifier,
+    pub identifier: AcmeIdentifier,
     pub directory_generation: u64,
     pub account_generation: u64,
 }
@@ -236,7 +238,7 @@ pub enum PreauthorizationError<E> {
 pub fn prepare_preauthorization(
     directory: &AcmeDirectory,
     account: &AccountLifecycle,
-    identifier: DnsIdentifier,
+    identifier: AcmeIdentifier,
     payload_scratch: &mut [u8],
 ) -> Result<PreparedPreauthorization, PreauthorizationError<core::convert::Infallible>> {
     if directory.new_authz.is_none() {
@@ -245,7 +247,7 @@ pub fn prepare_preauthorization(
     if !account.active || account.directory_generation != directory.generation {
         return Err(PreauthorizationError::PreparedMismatch);
     }
-    let payload = write_preauthorization_payload(&identifier, payload_scratch)
+    let payload = write_preauthorization_identifier_payload(&identifier, payload_scratch)
         .map_err(PreauthorizationError::Payload)?;
     Ok(PreparedPreauthorization {
         directory_generation: directory.generation,
@@ -282,7 +284,7 @@ pub fn execute_prepared_preauthorization<T: AcmeTransport>(
         .account_url
         .as_ref()
         .ok_or(PreauthorizationError::PreparedMismatch)?;
-    let payload = write_preauthorization_payload(&prepared.identifier, payload_scratch)
+    let payload = write_preauthorization_identifier_payload(&prepared.identifier, payload_scratch)
         .map_err(PreauthorizationError::Payload)?;
     if Sha256::digest(payload.as_bytes()) != prepared.request_digest {
         return Err(PreauthorizationError::PreparedMismatch);
@@ -450,11 +452,12 @@ pub struct OrderCreateBuffers<'a> {
 pub fn prepare_order_creation(
     directory: &AcmeDirectory,
     account: &AccountLifecycle,
-    identifiers: &[DnsIdentifier],
+    identifiers: &[AcmeIdentifier],
     profile: &CertificateProfile,
     replaces: Option<&str>,
     deadline_unix: u64,
     retry_limit: u8,
+    allow_ip_identifiers: bool,
     payload_scratch: &mut [u8],
 ) -> Result<PreparedOrderCreation, PrepareOrderError> {
     if !account.active || account.account_url.is_none() {
@@ -466,8 +469,16 @@ pub fn prepare_order_creation(
     if profile.directory_generation() != directory.generation {
         return Err(PrepareOrderError::ProfileGenerationMismatch);
     }
-    let payload = write_new_order_payload(identifiers, profile, replaces, payload_scratch)
-        .map_err(PrepareOrderError::Payload)?;
+    if !allow_ip_identifiers
+        && identifiers
+            .iter()
+            .any(|identifier| matches!(identifier, AcmeIdentifier::Ip(_)))
+    {
+        return Err(PrepareOrderError::IpIdentifiersNotAllowed);
+    }
+    let payload =
+        write_new_order_identifiers_payload(identifiers, profile, replaces, payload_scratch)
+            .map_err(PrepareOrderError::Payload)?;
     Ok(PreparedOrderCreation {
         directory_generation: directory.generation,
         account_generation: account.generation,
@@ -475,6 +486,7 @@ pub fn prepare_order_creation(
         request_digest: Sha256::digest(payload.as_bytes()),
         deadline_unix,
         retry_limit,
+        allow_ip_identifiers,
     })
 }
 
@@ -483,9 +495,10 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
     prepared: PreparedOrderCreation,
     directory: &AcmeDirectory,
     account: &AccountLifecycle,
-    identifiers: &[DnsIdentifier],
+    identifiers: &[AcmeIdentifier],
     profile: CertificateProfile,
     replaces: Option<&str>,
+    allow_ip_identifiers: bool,
     now_unix: u64,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
@@ -498,6 +511,7 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
         || account.generation != prepared.account_generation
         || account.key != prepared.account_key
         || profile.directory_generation() != prepared.directory_generation
+        || allow_ip_identifiers != prepared.allow_ip_identifiers
         || now_unix > prepared.deadline_unix
     {
         return Err(OrderCreateFailure::Definitive(
@@ -515,8 +529,9 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
             OrderCreateError::AuthorizationOutputTooSmall,
         ));
     }
-    let payload = write_new_order_payload(identifiers, &profile, replaces, buffers.payload)
-        .map_err(|error| OrderCreateFailure::Definitive(OrderCreateError::Payload(error)))?;
+    let payload =
+        write_new_order_identifiers_payload(identifiers, &profile, replaces, buffers.payload)
+            .map_err(|error| OrderCreateFailure::Definitive(OrderCreateError::Payload(error)))?;
     if Sha256::digest(payload.as_bytes()) != prepared.request_digest {
         return Err(OrderCreateFailure::Definitive(
             OrderCreateError::PreparedMismatch,
@@ -591,6 +606,7 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
         finalize_url,
         profile,
         identifiers,
+        allow_ip_identifiers,
         prepared.deadline_unix,
         prepared.retry_limit,
     )
@@ -604,7 +620,7 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
 #[allow(clippy::too_many_arguments)]
 pub fn fetch_authorization<T: AcmeTransport>(
     resource: AuthorizationResource,
-    expected_identifier: DnsIdentifier,
+    expected_identifier: AcmeIdentifier,
     selected_challenge: Option<ChallengeKind>,
     response_generation: u64,
     now_unix: u64,
@@ -672,7 +688,7 @@ pub fn fetch_authorization<T: AcmeTransport>(
         }
     } else {
         order
-            .bind_authorization(
+            .bind_identifier_authorization(
                 resource.url,
                 expected_identifier,
                 parsed.wildcard,
@@ -696,7 +712,7 @@ pub fn fetch_authorization<T: AcmeTransport>(
 pub fn poll_order<T: AcmeTransport>(
     response_generation: u64,
     now_unix: u64,
-    identifiers: &[DnsIdentifier],
+    identifiers: &[AcmeIdentifier],
     authorization_resources: &[AuthorizationResource],
     directory: &AcmeDirectory,
     account: &AccountLifecycle,
@@ -856,7 +872,7 @@ pub fn trigger_published_challenge<T: AcmeTransport>(
 pub fn execute_prepared_finalize<T: AcmeTransport>(
     receipt: PreparedFinalization,
     csr_der: &[u8],
-    identifiers: &[DnsIdentifier],
+    identifiers: &[AcmeIdentifier],
     now_unix: u64,
     directory: &AcmeDirectory,
     account: &AccountLifecycle,
@@ -1606,7 +1622,7 @@ mod tests {
     use crate::{
         AccountOperation, AccountPolicy, AcmeHttpMethod, AcmeTransportRequest,
         AcmeTransportResponse, ApprovedAcmeJwsDigest, CaClass, ChallengePublicationRequest,
-        ChallengePublisher, Es256Signature, JoseError, PublicationState,
+        ChallengePublisher, DnsIdentifier, Es256Signature, JoseError, PublicationState,
         publication_binding_digest,
     };
 
@@ -2309,7 +2325,9 @@ mod tests {
 
     fn order_creation_binds_prepared_payload_and_resource_impl() {
         let (directory, account) = active_account();
-        let identifiers = [DnsIdentifier::parse("example.com", false).unwrap()];
+        let identifiers = [AcmeIdentifier::Dns(
+            DnsIdentifier::parse("example.com", false).unwrap(),
+        )];
         let profile = directory.profiles().next().unwrap().profile;
         let mut prepare_scratch = [0; 2048];
         let prepared = prepare_order_creation(
@@ -2320,6 +2338,7 @@ mod tests {
             None,
             200,
             4,
+            false,
             &mut prepare_scratch,
         )
         .unwrap();
@@ -2338,6 +2357,7 @@ mod tests {
             &identifiers,
             profile,
             None,
+            false,
             100,
             &mut exchange,
             &mut transport,
@@ -2470,7 +2490,9 @@ mod tests {
 
     fn order_post_failure_is_explicitly_uncertain_impl() {
         let (directory, account) = active_account();
-        let identifiers = [DnsIdentifier::parse("example.com", false).unwrap()];
+        let identifiers = [AcmeIdentifier::Dns(
+            DnsIdentifier::parse("example.com", false).unwrap(),
+        )];
         let profile = directory.profiles().next().unwrap().profile;
         let mut prepare_scratch = [0; 2048];
         let prepared = prepare_order_creation(
@@ -2481,6 +2503,7 @@ mod tests {
             None,
             200,
             4,
+            false,
             &mut prepare_scratch,
         )
         .unwrap();
@@ -2500,6 +2523,7 @@ mod tests {
                 &identifiers,
                 profile,
                 None,
+                false,
                 100,
                 &mut exchange,
                 &mut transport,
@@ -2566,7 +2590,7 @@ mod tests {
         )
         .unwrap();
         let (_, account) = active_account();
-        let identifier = DnsIdentifier::parse("example.com", false).unwrap();
+        let identifier = AcmeIdentifier::Dns(DnsIdentifier::parse("example.com", false).unwrap());
         let mut payload = [0; 1024];
         let prepared =
             match prepare_preauthorization(&directory, &account, identifier, &mut payload) {

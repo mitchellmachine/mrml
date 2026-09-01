@@ -32,8 +32,13 @@ const RENEWAL_INFO: &str = r#"{"suggestedWindow":{"start":"2026-10-01T00:00:00Z"
 const ORDER_PENDING: &str = r#"{"status":"pending","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
 const ORDER_READY: &str = r#"{"status":"ready","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
 const ORDER_VALID: &str = r#"{"status":"valid","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","certificate":"https://local-ca.invalid/acme/certificate/1","profile":"classic"}"#;
+const ORDER_IP_PENDING: &str = r#"{"status":"pending","identifiers":[{"type":"ip","value":"192.0.2.1"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
+const ORDER_IP_READY: &str = r#"{"status":"ready","identifiers":[{"type":"ip","value":"192.0.2.1"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
+const ORDER_IP_VALID: &str = r#"{"status":"valid","identifiers":[{"type":"ip","value":"192.0.2.1"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","certificate":"https://local-ca.invalid/acme/certificate/1","profile":"classic"}"#;
 const AUTH_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
 const AUTH_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
+const AUTH_IP_PENDING: &str = r#"{"identifier":{"type":"ip","value":"192.0.2.1"},"status":"pending","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
+const AUTH_IP_VALID: &str = r#"{"identifier":{"type":"ip","value":"192.0.2.1"},"status":"valid","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
 const AUTH_TLS_ALPN_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"tls-alpn-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
 const AUTH_TLS_ALPN_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"tls-alpn-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
 const AUTH_DNS_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"dns-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
@@ -74,6 +79,11 @@ pub enum LocalAuthorityChallenge {
     Http01,
     TlsAlpn01,
     Dns01,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalAuthorityIdentifier {
+    Dns,
+    Ip,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityFault {
@@ -128,6 +138,7 @@ pub struct DeterministicAcmeAuthority<V> {
     alternate_links_current: bool,
     require_eab: bool,
     challenge: LocalAuthorityChallenge,
+    identifier: LocalAuthorityIdentifier,
 }
 impl<V> DeterministicAcmeAuthority<V> {
     pub const fn new(verifier: V, key: P256Jwk) -> Self {
@@ -144,6 +155,7 @@ impl<V> DeterministicAcmeAuthority<V> {
             alternate_links_current: false,
             require_eab: false,
             challenge: LocalAuthorityChallenge::Http01,
+            identifier: LocalAuthorityIdentifier::Dns,
         }
     }
     pub const fn state(&self) -> LocalAuthorityState {
@@ -170,6 +182,13 @@ impl<V> DeterministicAcmeAuthority<V> {
     }
     pub fn with_challenge(mut self, challenge: LocalAuthorityChallenge) -> Self {
         self.challenge = challenge;
+        self
+    }
+    pub fn with_identifier(mut self, identifier: LocalAuthorityIdentifier) -> Self {
+        self.identifier = identifier;
+        if identifier == LocalAuthorityIdentifier::Ip {
+            self.challenge = LocalAuthorityChallenge::Http01;
+        }
         self
     }
     fn issue_nonce(&mut self) -> &'static str {
@@ -382,7 +401,16 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     );
                 }
                 if self.state != LocalAuthorityState::AccountValid
-                    || !contains(payload, r#""value":"git.example""#)
+                    || !match self.identifier {
+                        LocalAuthorityIdentifier::Dns => {
+                            contains(payload, r#""type":"dns""#)
+                                && contains(payload, r#""value":"git.example""#)
+                        }
+                        LocalAuthorityIdentifier::Ip => {
+                            contains(payload, r#""type":"ip""#)
+                                && contains(payload, r#""value":"192.0.2.1""#)
+                        }
+                    }
                 {
                     return Err(LocalAuthorityError::InvalidState);
                 }
@@ -394,7 +422,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     next,
                     Some(LOCAL_ORDER_URL),
                     Some("application/json"),
-                    ORDER_PENDING,
+                    order_body(self.identifier, LocalAuthorityState::OrderPending),
                 )
             }
             LOCAL_AUTHORIZATION_URL => {
@@ -410,16 +438,16 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                         next,
                         None,
                         Some("application/json"),
-                        authorization_body(self.challenge, false),
+                        authorization_body(self.identifier, self.challenge, false),
                     );
                 }
                 let body = if self.state == LocalAuthorityState::OrderPending {
-                    authorization_body(self.challenge, false)
+                    authorization_body(self.identifier, self.challenge, false)
                 } else if matches!(
                     self.state,
                     LocalAuthorityState::AuthorizationValid | LocalAuthorityState::OrderValid
                 ) {
-                    authorization_body(self.challenge, true)
+                    authorization_body(self.identifier, self.challenge, true)
                 } else {
                     return Err(LocalAuthorityError::InvalidState);
                 };
@@ -445,7 +473,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     next,
                     None,
                     Some("application/json"),
-                    authorization_body(self.challenge, true),
+                    authorization_body(self.identifier, self.challenge, true),
                 )
             }
             LOCAL_ORDER_URL => {
@@ -461,13 +489,19 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                         next,
                         None,
                         Some("application/json"),
-                        ORDER_PENDING,
+                        order_body(self.identifier, LocalAuthorityState::OrderPending),
                     );
                 }
                 let body = match self.state {
-                    LocalAuthorityState::OrderPending => ORDER_PENDING,
-                    LocalAuthorityState::AuthorizationValid => ORDER_READY,
-                    LocalAuthorityState::OrderValid => ORDER_VALID,
+                    LocalAuthorityState::OrderPending => {
+                        order_body(self.identifier, LocalAuthorityState::OrderPending)
+                    }
+                    LocalAuthorityState::AuthorizationValid => {
+                        order_body(self.identifier, LocalAuthorityState::AuthorizationValid)
+                    }
+                    LocalAuthorityState::OrderValid => {
+                        order_body(self.identifier, LocalAuthorityState::OrderValid)
+                    }
                     _ => return Err(LocalAuthorityError::InvalidState),
                 };
                 if self.fault == LocalAuthorityFault::DelayOrderOnce && !self.fault_used {
@@ -479,7 +513,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                         next,
                         None,
                         Some("application/json"),
-                        ORDER_PENDING,
+                        order_body(self.identifier, LocalAuthorityState::OrderPending),
                     );
                 }
                 reply(
@@ -506,7 +540,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     next,
                     None,
                     Some("application/json"),
-                    ORDER_VALID,
+                    order_body(self.identifier, LocalAuthorityState::OrderValid),
                 )
             }
             LOCAL_CERTIFICATE_URL => {
@@ -816,7 +850,29 @@ fn json_string_field<'a>(source: &'a str, name: &str) -> Result<&'a str, LocalAu
     }
     Ok(&rest[..end])
 }
-fn authorization_body(challenge: LocalAuthorityChallenge, valid: bool) -> &'static str {
+fn order_body(identifier: LocalAuthorityIdentifier, state: LocalAuthorityState) -> &'static str {
+    match (identifier, state) {
+        (LocalAuthorityIdentifier::Dns, LocalAuthorityState::OrderPending) => ORDER_PENDING,
+        (LocalAuthorityIdentifier::Dns, LocalAuthorityState::AuthorizationValid) => ORDER_READY,
+        (LocalAuthorityIdentifier::Dns, LocalAuthorityState::OrderValid) => ORDER_VALID,
+        (LocalAuthorityIdentifier::Ip, LocalAuthorityState::OrderPending) => ORDER_IP_PENDING,
+        (LocalAuthorityIdentifier::Ip, LocalAuthorityState::AuthorizationValid) => ORDER_IP_READY,
+        (LocalAuthorityIdentifier::Ip, LocalAuthorityState::OrderValid) => ORDER_IP_VALID,
+        _ => ORDER_PENDING,
+    }
+}
+fn authorization_body(
+    identifier: LocalAuthorityIdentifier,
+    challenge: LocalAuthorityChallenge,
+    valid: bool,
+) -> &'static str {
+    if identifier == LocalAuthorityIdentifier::Ip {
+        return if valid {
+            AUTH_IP_VALID
+        } else {
+            AUTH_IP_PENDING
+        };
+    }
     match (challenge, valid) {
         (LocalAuthorityChallenge::Http01, false) => AUTH_PENDING,
         (LocalAuthorityChallenge::Http01, true) => AUTH_VALID,
@@ -1354,6 +1410,84 @@ mod tests {
                 core::str::from_utf8(&response[..authorization.metadata.body_length]).unwrap();
             assert!(body.contains(expected));
         }
+    }
+
+    #[test]
+    fn authority_issues_type_bound_ip_order_and_http_authorization() {
+        let directory_url = url(LOCAL_DIRECTORY_URL);
+        let public_key = key();
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, public_key)
+            .with_identifier(LocalAuthorityIdentifier::Ip);
+        let mut exchange = AcmeExchange::new(5, directory_url);
+        let mut response = [0u8; 65_536];
+        let mut jws = [0u8; 49_152];
+        let directory = fetch_directory(
+            &directory_url,
+            5,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let mut signer = Signer;
+        post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_account,
+            ProtectedKey::Jwk(&public_key),
+            b"{}",
+            0,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        let account = url(LOCAL_ACCOUNT_URL);
+        let order = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_order,
+            ProtectedKey::Kid(&account),
+            br#"{"identifiers":[{"type":"ip","value":"192.0.2.1"}],"profile":"classic"}"#,
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        let body = core::str::from_utf8(&response[..order.metadata.body_length]).unwrap();
+        let identifier =
+            crate::AcmeIdentifier::Ip(crate::IpIdentifier::parse("192.0.2.1").unwrap());
+        assert!(
+            crate::parse_order_response(
+                body,
+                directory.new_order.origin(),
+                &[identifier],
+                "classic"
+            )
+            .is_ok()
+        );
+        let authorization = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &url(LOCAL_AUTHORIZATION_URL),
+            ProtectedKey::Kid(&account),
+            b"",
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        let body = core::str::from_utf8(&response[..authorization.metadata.body_length]).unwrap();
+        let parsed =
+            crate::parse_authorization_response(body, directory.new_order.origin(), identifier)
+                .unwrap();
+        assert!(parsed.identifier == identifier);
+        assert!(parsed.challenges().next().unwrap().kind == crate::ChallengeKind::Http01);
     }
 
     #[test]

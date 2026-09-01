@@ -1,6 +1,6 @@
 use mrml_acme::{
-    validate_http01_request, ChallengeKind, ChallengePublicationRequest, MAX_HTTP01_REQUEST,
-    MAX_KEY_AUTHORIZATION,
+    ChallengeKind, ChallengePublicationRequest, MAX_HTTP01_REQUEST, MAX_KEY_AUTHORIZATION,
+    validate_http01_identifier_request,
 };
 use mrml_crypto::Sha256;
 use mrml_runtime::{NetError, TcpListener, TcpStream};
@@ -88,7 +88,7 @@ impl HostedHttp01Challenge {
                 break;
             }
         }
-        let valid = validate_http01_request(
+        let valid = validate_http01_identifier_request(
             &request[..used],
             &self.request.identifier,
             &self.request.token,
@@ -152,7 +152,7 @@ mod tests {
             1,
             &AcmeUrl::parse("https://ca.example/order/1", false).unwrap(),
             &AcmeUrl::parse("https://ca.example/authz/1", false).unwrap(),
-            DnsIdentifier::parse("git.example", false).unwrap(),
+            mrml_acme::AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
             ChallengeKind::Http01,
             token,
             thumbprint,
@@ -173,10 +173,12 @@ mod tests {
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
         let (challenge, key_authorization, key_authorization_len) = challenge();
-        assert!(mrml_runtime::spawn_detached(move || {
-            assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
+            })
+            .is_ok()
+        );
         let mut client = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         client.set_read_timeout_millis(1000).unwrap();
         client
@@ -201,5 +203,54 @@ mod tests {
             &response[start..used],
             &key_authorization[..key_authorization_len]
         );
+    }
+
+    #[test]
+    fn loopback_serves_exact_ipv4_identifier_authority() {
+        let token = ChallengeToken::parse("ip-token").unwrap();
+        let thumbprint = JwkThumbprint([4; 32]);
+        let mut key_authorization = [0; MAX_KEY_AUTHORIZATION];
+        let written =
+            mrml_acme::write_key_authorization(&token, thumbprint, &mut key_authorization).unwrap();
+        let lifecycle = ChallengeLifecycle::new(
+            2,
+            &AcmeUrl::parse("https://ca.example/order/ip", false).unwrap(),
+            &AcmeUrl::parse("https://ca.example/authz/ip", false).unwrap(),
+            mrml_acme::AcmeIdentifier::Ip(mrml_acme::IpIdentifier::parse("127.0.0.1").unwrap()),
+            ChallengeKind::Http01,
+            token,
+            thumbprint,
+            10,
+            20,
+            1,
+        )
+        .unwrap();
+        let challenge =
+            HostedHttp01Challenge::new(lifecycle.request, &key_authorization[..written]).unwrap();
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
+            })
+            .is_ok()
+        );
+        let mut client = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        client.set_read_timeout_millis(1000).unwrap();
+        client
+            .write_all(
+                b"GET /.well-known/acme-challenge/ip-token HTTP/1.1\r\nHost: 127.0.0.1:80\r\n\r\n",
+            )
+            .unwrap();
+        let mut response = [0; 512];
+        let mut used = 0usize;
+        loop {
+            let read = client.read(&mut response[used..]).unwrap();
+            if read == 0 {
+                break;
+            }
+            used += read;
+        }
+        assert!(response[..used].starts_with(b"HTTP/1.1 200 OK\r\n"));
     }
 }

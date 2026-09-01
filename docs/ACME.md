@@ -22,10 +22,15 @@ creation, contact updates, key rollover, deactivation, and uncertain-result
 reconciliation.
 The same package now has a binary IPv4/IPv6 identifier type with bounded
 RFC 5952-style canonical rendering. It rejects bracketed addresses, ports,
-IPv6 zone IDs, and ambiguous IPv4 syntax. IP identifiers are not yet admitted
-to the order lifecycle or certificate activation; those paths remain
-fail-closed until the configured CA/profile advertisement and full IP SAN
-validation are bound end to end. The bounded payload and PKCS#10 layers can
+IPv6 zone IDs, and ambiguous IPv4 syntax. Typed IP identifiers are admitted to
+order preparation, response parsing, authorization binding, HTTP-01
+publication, PKCS#10 generation, and certificate verification only when the
+owner policy explicitly enables them for the selected CA/profile generation.
+DNS-only prepared operations cannot be replayed with that permission changed.
+IP authorizations accept only HTTP-01; DNS-01 and TLS-ALPN-01 fail closed.
+Publishing an IP certificate as a service identity remains disabled until the
+identity interface and durable activation descriptor carry typed identifiers.
+The bounded payload and PKCS#10 layers can
 encode typed, canonically ordered DNS and IP identifiers without confusing
 their ACME kinds; PKCS#10 encodes IP SAN values as exact 4- or 16-byte address
 octets rather than textual DNS names.
@@ -41,10 +46,11 @@ profile, an exact authorization count, unique same-origin authorization URLs,
 same-origin finalization/certificate endpoints, known status values, singleton
 fields, bounded JSON complexity, and no trailing data. Cross-order or
 cross-origin substitution is rejected before lifecycle mutation.
-Authorization responses likewise require the exact expected DNS identifier,
-including RFC wildcard representation (`wildcard: true` with the base name), a
-known terminal/nonterminal state, and a bounded nonempty set of unique supported
-challenge kinds and URLs. HTTP-01, TLS-ALPN-01, and DNS-01 tokens are strictly
+Authorization responses likewise require the exact expected typed identifier,
+a known terminal/nonterminal state, and a bounded nonempty set of unique
+supported challenge kinds and URLs. DNS wildcards use the RFC representation
+(`wildcard: true` with the base name), while IP identifiers can never be
+wildcard. HTTP-01, TLS-ALPN-01, and DNS-01 tokens are strictly
 validated and every URL remains in the admitted CA origin. Unknown challenge
 kinds are ignored only after their bounded object has been safely parsed; they
 cannot displace or impersonate a supported challenge.
@@ -63,7 +69,8 @@ token, key-authorization digest, policy generation, activation window, and
 publisher receipt. Publication and cleanup are prepare/commit operations;
 uncertain cleanup remains represented until authoritative publisher re-read.
 The bounded HTTP-01 request validator accepts only an exact `GET` challenge
-path and exact Host (optionally port 80), rejects percent/query/path ambiguity,
+path and exact DNS or IP Host authority (optionally port 80, with IPv6 brackets
+required), rejects percent/query/path/authority ambiguity,
 duplicate Host fields, oversized requests, and excess headers, and compares the
 active token without data-dependent early exit.
 The TLS-ALPN-01 encoder emits a bounded P-256 self-signed certificate with an
@@ -105,14 +112,17 @@ substituted receipts fail closed. This is fixed owner policy, not route-selected
 multi-vantage CA validation.
 Certificate-chain retrieval has a strict fixed-capacity PEM decoder and a
 shared validation policy/receipt. The hosted first-party X.509 adapter verifies
-the exact P-256 SPKI, exact sorted SAN set with no extra GeneralNames, TLS server
-purpose, explicit validity bounds, supported critical extensions, bounded path
+the exact P-256 SPKI, exact sorted typed DNS/IP SAN set with no extra
+GeneralNames, TLS server purpose, explicit validity bounds, supported critical
+extensions, bounded path
 length, signatures to explicitly supplied owner-approved roots, CA class,
 profile, order digest, policy generation, and trust-store digest before issuing
 a verified-chain receipt. The MRML target builds the same policy and verifier
 interface without inheriting a host ambient trust store. Checked-in leaf/root
 fixtures were independently generated with the OpenSSL CLI solely as a test
-oracle; no fixture private key is retained or shipped.
+oracle; no fixture private key is retained or shipped. The mixed DNS, IPv4,
+and IPv6 fixture proves type substitution, missing names, and disabled IP
+policy fail closed.
 Alternate responses are disabled unless their exact chain digests appear in an
 owner policy. When multiple validated candidates are admitted, selection uses
 that explicit preference order with a digest tie-break and never trusts CA

@@ -11847,3 +11847,16 @@ Patent review: **NOT_TRIGGERED**. This increment deterministically encodes
 bounded DNS and canonical IP identifier values with their distinct standard
 ACME type strings. It does not enable IP issuance or add a validation
 mechanism, and it introduces no recorded re-review trigger.
+
+# 2026-09-01 — Policy-gated ACME IP authorization and exact SAN validation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment carries ordinary typed IPv4 and
+IPv6 ACME identifiers through bounded order and authorization parsing, admits
+only owner-policy-enabled HTTP-01 validation for IP identifiers, strengthens
+the existing challenge receipt digest to bind the exact typed identifier and
+publication fields, and verifies the exact typed DNS/IP X.509 SAN set against
+an independently generated OpenSSL test oracle. It introduces no MultiTLS
+multiplexing, route-selected multi-vantage CA validation, challenge proxying,
+5G certificate brokerage, smart-card precomputed signing machinery, public CA
+operation, or other recorded re-review trigger.

@@ -1,4 +1,7 @@
-use crate::{AcmeDirectory, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint, OrderState};
+use crate::{
+    AcmeDirectory, AcmeIdentifier, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint,
+    OrderState,
+};
 use mrml_crypto::Sha256;
 
 pub const MAX_ORDER_IDENTIFIERS: usize = 16;
@@ -48,6 +51,7 @@ pub enum OrderError {
     DeadlineExceeded,
     AuthorizationIncomplete,
     WildcardRequiresDns01,
+    IpIdentifiersNotAllowed,
     ReceiptMismatch,
     ArithmeticOverflow,
 }
@@ -56,7 +60,7 @@ pub enum OrderError {
 pub struct AuthorizationBinding {
     pub url: AcmeUrl,
     pub url_digest: [u8; 32],
-    pub identifier: DnsIdentifier,
+    pub identifier: AcmeIdentifier,
     pub wildcard: bool,
     pub generation: u64,
     pub state: AuthorizationState,
@@ -83,7 +87,7 @@ pub struct OrderLifecycle {
     pub state: OrderState,
     pub deadline_unix: u64,
     pub retries_remaining: u8,
-    identifiers: [Option<DnsIdentifier>; MAX_ORDER_IDENTIFIERS],
+    identifiers: [Option<AcmeIdentifier>; MAX_ORDER_IDENTIFIERS],
     identifier_count: u8,
     authorizations: [Option<AuthorizationBinding>; MAX_AUTHORIZATIONS],
     authorization_count: u8,
@@ -99,11 +103,12 @@ impl OrderLifecycle {
         order_url: AcmeUrl,
         finalize_url: AcmeUrl,
         profile: CertificateProfile,
-        identifiers: &[DnsIdentifier],
+        identifiers: &[AcmeIdentifier],
+        allow_ip_identifiers: bool,
         deadline_unix: u64,
         retry_limit: u8,
     ) -> Result<Self, OrderError> {
-        validate_identifiers(identifiers)?;
+        validate_identifiers(identifiers, allow_ip_identifiers)?;
         if profile.directory_generation() != directory.generation {
             return Err(OrderError::ProfileGenerationMismatch);
         }
@@ -136,7 +141,7 @@ impl OrderLifecycle {
         })
     }
 
-    pub fn identifiers(&self) -> impl Iterator<Item = &DnsIdentifier> {
+    pub fn identifiers(&self) -> impl Iterator<Item = &AcmeIdentifier> {
         self.identifiers[..usize::from(self.identifier_count)]
             .iter()
             .flatten()
@@ -160,6 +165,21 @@ impl OrderLifecycle {
         &mut self,
         url: AcmeUrl,
         identifier: DnsIdentifier,
+        wildcard: bool,
+        generation: u64,
+    ) -> Result<(), OrderError> {
+        self.bind_identifier_authorization(
+            url,
+            AcmeIdentifier::Dns(identifier),
+            wildcard,
+            generation,
+        )
+    }
+
+    pub fn bind_identifier_authorization(
+        &mut self,
+        url: AcmeUrl,
+        identifier: AcmeIdentifier,
         wildcard: bool,
         generation: u64,
     ) -> Result<(), OrderError> {
@@ -313,15 +333,25 @@ impl OrderLifecycle {
     }
 }
 
-fn validate_identifiers(identifiers: &[DnsIdentifier]) -> Result<(), OrderError> {
+fn validate_identifiers(
+    identifiers: &[AcmeIdentifier],
+    allow_ip_identifiers: bool,
+) -> Result<(), OrderError> {
     if identifiers.is_empty() {
         return Err(OrderError::EmptyIdentifiers);
     }
     if identifiers.len() > MAX_ORDER_IDENTIFIERS {
         return Err(OrderError::TooManyIdentifiers);
     }
+    if !allow_ip_identifiers
+        && identifiers
+            .iter()
+            .any(|identifier| matches!(identifier, AcmeIdentifier::Ip(_)))
+    {
+        return Err(OrderError::IpIdentifiersNotAllowed);
+    }
     for pair in identifiers.windows(2) {
-        match pair[0].as_str().cmp(pair[1].as_str()) {
+        match pair[0].cmp(&pair[1]) {
             core::cmp::Ordering::Less => {}
             core::cmp::Ordering::Equal => return Err(OrderError::DuplicateIdentifier),
             core::cmp::Ordering::Greater => return Err(OrderError::UnsortedIdentifiers),
@@ -371,7 +401,8 @@ mod tests {
     #[test]
     fn rejects_authorization_substitution_and_wildcard_non_dns() {
         let d = directory();
-        let names = [DnsIdentifier::parse("*.example", true).unwrap()];
+        let dns_name = DnsIdentifier::parse("*.example", true).unwrap();
+        let names = [AcmeIdentifier::Dns(dns_name)];
         let mut order = OrderLifecycle::create(
             &d,
             2,
@@ -380,12 +411,13 @@ mod tests {
             url("finalize/1"),
             CertificateProfile::parse("classic", 7).unwrap(),
             &names,
+            false,
             100,
             3,
         )
         .unwrap();
         order
-            .bind_authorization(url("authz/1"), names[0], true, 1)
+            .bind_authorization(url("authz/1"), dns_name, true, 1)
             .unwrap();
         let digest = order.authorizations().next().unwrap().url_digest;
         assert_eq!(
@@ -412,7 +444,8 @@ mod tests {
     #[test]
     fn finalize_requires_exact_valid_authorizations_and_one_use_receipt() {
         let d = directory();
-        let names = [DnsIdentifier::parse("git.example", false).unwrap()];
+        let dns_name = DnsIdentifier::parse("git.example", false).unwrap();
+        let names = [AcmeIdentifier::Dns(dns_name)];
         let mut order = OrderLifecycle::create(
             &d,
             2,
@@ -421,12 +454,13 @@ mod tests {
             url("finalize/1"),
             CertificateProfile::parse("classic", 7).unwrap(),
             &names,
+            false,
             100,
             3,
         )
         .unwrap();
         order
-            .bind_authorization(url("authz/1"), names[0], false, 1)
+            .bind_authorization(url("authz/1"), dns_name, false, 1)
             .unwrap();
         order
             .apply_order_response(2, OrderState::Ready, None, 1)
@@ -450,6 +484,63 @@ mod tests {
         assert_eq!(
             order.commit_finalize(receipt),
             Err(OrderError::ReceiptMismatch)
+        );
+    }
+
+    #[test]
+    fn ip_authorization_is_type_bound_and_never_treated_as_wildcard() {
+        let d = directory();
+        let identifier = AcmeIdentifier::Ip(crate::IpIdentifier::parse("192.0.2.1").unwrap());
+        assert!(matches!(
+            OrderLifecycle::create(
+                &d,
+                2,
+                thumbprint(),
+                url("order/ip-disabled"),
+                url("finalize/ip-disabled"),
+                CertificateProfile::parse("classic", 7).unwrap(),
+                &[identifier],
+                false,
+                100,
+                3,
+            ),
+            Err(OrderError::IpIdentifiersNotAllowed)
+        ));
+        let mut order = OrderLifecycle::create(
+            &d,
+            2,
+            thumbprint(),
+            url("order/ip"),
+            url("finalize/ip"),
+            CertificateProfile::parse("classic", 7).unwrap(),
+            &[identifier],
+            true,
+            100,
+            3,
+        )
+        .unwrap();
+        order
+            .bind_identifier_authorization(url("authz/ip"), identifier, false, 1)
+            .unwrap();
+        let digest = order.authorizations().next().unwrap().url_digest;
+        assert_eq!(
+            order.update_authorization(
+                digest,
+                2,
+                AuthorizationState::Valid,
+                Some(ChallengeKind::Http01),
+                1,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            order.bind_identifier_authorization(
+                url("authz/substitute"),
+                AcmeIdentifier::Dns(DnsIdentifier::parse("192.0.2.1.example", false).unwrap()),
+                false,
+                3,
+            ),
+            Err(OrderError::Substitution)
         );
     }
 }

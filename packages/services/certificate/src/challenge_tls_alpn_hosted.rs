@@ -1,5 +1,7 @@
 use crate::{ApprovedTls13CertificateVerify, TlsCertificateSigningKey, TlsSigningRoute};
-use mrml_acme::{ACME_TLS_ALPN_PROTOCOL, ChallengeKind, ChallengePublicationRequest};
+use mrml_acme::{
+    ACME_TLS_ALPN_PROTOCOL, AcmeIdentifier, ChallengeKind, ChallengePublicationRequest,
+};
 use mrml_crypto::encode_der_signature;
 use mrml_runtime::{NetError, SpinMutex, TcpListener};
 use mrml_tls::{
@@ -78,6 +80,10 @@ impl HostedTlsAlpn01Challenge {
         route: TlsSigningRoute,
         mut key: K,
     ) -> Result<Self, HostedTlsAlpn01Error> {
+        let AcmeIdentifier::Dns(identifier) = request.identifier else {
+            key.retire();
+            return Err(HostedTlsAlpn01Error::InvalidChallenge);
+        };
         if request.kind != ChallengeKind::TlsAlpn01
             || request.identifier.is_wildcard()
             || certificate_der.is_empty()
@@ -88,10 +94,8 @@ impl HostedTlsAlpn01Challenge {
         }
         if mrml_tls::Certificate::parse(certificate_der)
             .and_then(|certificate| {
-                certificate.require_tls_alpn01(
-                    request.identifier.as_str(),
-                    &request.key_authorization_digest,
-                )
+                certificate
+                    .require_tls_alpn01(identifier.as_str(), &request.key_authorization_digest)
             })
             .is_err()
         {
@@ -112,7 +116,7 @@ impl HostedTlsAlpn01Challenge {
                 return Err(HostedTlsAlpn01Error::Tls(error));
             }
         };
-        let config = match config.require_server_name(request.identifier.as_str()) {
+        let config = match config.require_server_name(identifier.as_str()) {
             Ok(value) => value,
             Err(error) => {
                 key.retire();
@@ -200,7 +204,7 @@ mod tests {
             4,
             &AcmeUrl::parse("https://ca.example/order/1", false).unwrap(),
             &AcmeUrl::parse("https://ca.example/authz/1", false).unwrap(),
-            DnsIdentifier::parse("git.example", false).unwrap(),
+            mrml_acme::AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
             ChallengeKind::TlsAlpn01,
             ChallengeToken::parse("tls-token").unwrap(),
             JwkThumbprint([3; 32]),
