@@ -217,7 +217,8 @@ uncertain post-activation failure remain distinct results. Hosted-Linux tests
 exercise prepare-through-activation and reopen the authenticated receipt;
 Windows compilation and non-filesystem behavior are exercised under Wine.
 Production key-service integration, native-Windows directory durability,
-process-kill injection, power-loss, and physical-storage evidence remain open.
+process-kill injection at the other durable boundaries, power-loss, and
+physical-storage evidence remain open.
 
 `LinuxDurableReceiveStore` composes the concrete journal, immutable arrival
 pack/index, active-ref generation, and receipt directories behind the same

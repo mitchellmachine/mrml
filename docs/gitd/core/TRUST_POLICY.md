@@ -101,7 +101,16 @@ break the previous-policy digest chain, remove a revocation, reactivate a
 revoked key, or downgrade hybrid-required policy.
 
 Authenticated emergency recovery execution is not yet implemented. The current
-state therefore cannot activate protected refs through that transition path.
+state stores only an opaque emergency-policy digest, with no canonical
+descriptor binding the repository, authorized hybrid identities, validity,
+revocation, threshold, and recovery generation. The verifier policy is supplied
+separately and cannot prove that it is the policy named by that digest. Treating
+it as the pinned authority would permit policy substitution. A future design
+therefore needs a purpose-separated canonical transition, strictly increasing
+trust and recovery generations, nondecreasing complete revocations, an opaque
+verifier-minted authorization bound to both descriptor and transition digests,
+and a durable one-use activation boundary. Until those architectural types
+exist, protected refs cannot activate through the emergency path.
 
 `verify_introduced_history` now deterministically walks every commit introduced
 by `old..new`, including all merge-side parents, in parent-before-child order.
