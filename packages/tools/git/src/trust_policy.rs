@@ -1628,6 +1628,10 @@ impl TrustPolicyState {
         self.hybrid_cutover
     }
 
+    pub fn protects_ref(&self, reference: &FullRefName) -> bool {
+        self.protected_refs.contains(reference)
+    }
+
     /// Looks up an explicitly policy-pinned complete v4 fingerprint at trusted
     /// time. This is not a commit-graph ancestry decision.
     pub fn legacy_v4_authorized_at(&self, fingerprint: Fingerprint, time: u64) -> bool {

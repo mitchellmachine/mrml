@@ -53,6 +53,18 @@ compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_git"
+compile_name = "mrml-git"
+package = "org.mrml.tool.git"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_openpgp"
+compile_name = "mrml-openpgp"
+package = "org.mrml.library.openpgp"
+scope = "compile"
+
 [[host_test]]
 targets = ["LINUX"]
 

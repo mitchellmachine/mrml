@@ -4,7 +4,7 @@ const MAGIC: &[u8; 8] = b"MRMLGAV1";
 const VERSION: u16 = 1;
 pub const AUTHORITY_HEADER_BYTES: usize = 98;
 pub const AUTHORITY_CAPABILITY_BYTES: usize = 32;
-pub const MAX_AUTHORITY_PAYLOAD_BYTES: usize = 64 * 1024;
+pub const MAX_AUTHORITY_PAYLOAD_BYTES: usize = 1024 * 1024 + 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]

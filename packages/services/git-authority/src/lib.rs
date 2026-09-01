@@ -1,9 +1,11 @@
 #![feature(peer_credentials_unix_socket)]
 
+mod authority;
 mod channel;
 #[cfg(target_os = "linux")]
 mod unix;
 
+pub use authority::{AuthorityDispatchError, ProductionAuthority};
 pub use channel::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityError, AuthorityFrame,
     AuthorityFrameKind, AuthorityOperation, AuthorityPeer, AuthorityReplayWindow,

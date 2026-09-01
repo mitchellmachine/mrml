@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 199
+compile_edges = 201
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 179
+package_edges = 181
 system_release_edges = 3
 
 [[package]]
@@ -680,9 +680,9 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "microvm"
 isolation_supported = ["native-service", "microvm"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.openpgp", "org.mrml.library.runtime", "org.mrml.tool.git"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.openpgp", "org.mrml.library.runtime", "org.mrml.tool.git"]
 boot_bound = []
 system_release_bound = []
 
