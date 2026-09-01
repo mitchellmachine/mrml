@@ -29,6 +29,12 @@ pub struct AuthorityCommitRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorityRefTransactionRequest {
+    pub transaction: CandidateRefTransaction,
+    pub policy_digest: [u8; 64],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorityReceiptRequest {
     pub transcript: Vector<u8>,
     pub signature: Vector<u8>,
@@ -71,6 +77,7 @@ pub fn parse_authority_receive(
 
 pub fn encode_authority_ref_transaction(
     transaction: &CandidateRefTransaction,
+    policy_digest: [u8; 64],
 ) -> Result<Vector<u8>, GitdCoreError> {
     if transaction.updates.is_empty() || transaction.updates.len() > crate::MAX_REFS_PER_TRANSACTION
     {
@@ -85,6 +92,7 @@ pub fn encode_authority_ref_transaction(
         transaction.trust_generation,
         transaction.revocation_generation,
     )?;
+    append(&mut output, &policy_digest)?;
     append(
         &mut output,
         &u16::try_from(transaction.updates.len())
@@ -101,11 +109,13 @@ pub fn encode_authority_ref_transaction(
 
 pub fn parse_authority_ref_transaction(
     input: &[u8],
-) -> Result<CandidateRefTransaction, GitdCoreError> {
+) -> Result<AuthorityRefTransactionRequest, GitdCoreError> {
     let mut cursor = Cursor::new(input);
     cursor.magic(REFS_MAGIC)?;
     let (repository, repository_generation, trust_generation, revocation_generation) =
         cursor.context()?;
+    let mut policy_digest = [0u8; 64];
+    policy_digest.copy_from_slice(cursor.take(64)?);
     let count = usize::from(cursor.u16()?);
     if count == 0 || count > crate::MAX_REFS_PER_TRANSACTION {
         return Err(GitdCoreError::Resource);
@@ -123,12 +133,15 @@ pub fn parse_authority_ref_transaction(
         });
     }
     cursor.finish()?;
-    Ok(CandidateRefTransaction {
-        repository,
-        repository_generation,
-        trust_generation,
-        revocation_generation,
-        updates,
+    Ok(AuthorityRefTransactionRequest {
+        transaction: CandidateRefTransaction {
+            repository,
+            repository_generation,
+            trust_generation,
+            revocation_generation,
+            updates,
+        },
+        policy_digest,
     })
 }
 
@@ -446,10 +459,13 @@ mod tests {
         };
         assert_eq!(
             parse_authority_ref_transaction(
-                &encode_authority_ref_transaction(&transaction).unwrap()
+                &encode_authority_ref_transaction(&transaction, [6; 64]).unwrap()
             )
             .unwrap(),
-            transaction
+            AuthorityRefTransactionRequest {
+                transaction,
+                policy_digest: [6; 64]
+            }
         );
     }
 

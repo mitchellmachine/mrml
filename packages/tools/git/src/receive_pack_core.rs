@@ -2,12 +2,12 @@
 
 use crate::receive_backend::prepare_authority_classified_receive;
 use crate::{
-    finish_prepared_protected_receive, prepare_policy_classified_receive,
-    prepare_protected_receive, ActiveRefState, AuditReceiptAuthority, AuthenticatedReceiveStore,
-    BoundedRead, BoundedWrite, GitdCoreError, HistoryVerificationLimits, LinuxDurableReceiveStore,
-    ProtectedCommitVerifier, QuarantineLimits, QuarantineTransactionId, Repository,
-    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, SmartGitRequest,
-    SmartGitResponse, TrustGeneration, TrustPolicyState, WorkBudget,
+    ActiveRefState, AuditReceiptAuthority, AuthenticatedReceiveStore, BoundedRead, BoundedWrite,
+    GitdCoreError, HistoryVerificationLimits, LinuxDurableReceiveStore, ProtectedCommitVerifier,
+    QuarantineLimits, QuarantineTransactionId, Repository, RepositoryGeneration,
+    RepositoryIdentity, RevocationGeneration, SmartGitRequest, SmartGitResponse, TrustGeneration,
+    TrustPolicyState, WorkBudget, finish_prepared_protected_receive,
+    prepare_policy_classified_receive, prepare_protected_receive,
 };
 
 /// Exact public context presented to the capability-bearing protected Git
@@ -35,17 +35,22 @@ pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAutho
     fn authorize_ref_transaction(
         &mut self,
         transaction: &crate::CandidateRefTransaction,
+        policy_digest: [u8; 64],
     ) -> Result<(), GitdCoreError>;
 }
 
-struct AuthorityVerifier<'a, A>(&'a mut A);
+struct AuthorityVerifier<'a, A> {
+    authority: &'a mut A,
+    policy_digest: [u8; 64],
+}
 
 impl<A: ProtectedReceiveAuthority> ProtectedCommitVerifier for AuthorityVerifier<'_, A> {
     fn authorize_transaction(
         &mut self,
         transaction: &crate::CandidateRefTransaction,
     ) -> Result<(), GitdCoreError> {
-        self.0.authorize_ref_transaction(transaction)
+        self.authority
+            .authorize_ref_transaction(transaction, self.policy_digest)
     }
 
     fn verify_commit(
@@ -54,7 +59,8 @@ impl<A: ProtectedReceiveAuthority> ProtectedCommitVerifier for AuthorityVerifier
         commit: crate::ObjectId,
         exact_contents: &[u8],
     ) -> Result<crate::VerifiedCommitProof, crate::HistoryVerificationError> {
-        self.0.verify_commit(context, commit, exact_contents)
+        self.authority
+            .verify_commit(context, commit, exact_contents)
     }
 
     fn verify_legacy_commit(
@@ -63,7 +69,8 @@ impl<A: ProtectedReceiveAuthority> ProtectedCommitVerifier for AuthorityVerifier
         commit: crate::ObjectId,
         exact_contents: &[u8],
     ) -> Result<crate::VerifiedLegacyCommitProof, crate::HistoryVerificationError> {
-        self.0.verify_legacy_commit(context, commit, exact_contents)
+        self.authority
+            .verify_legacy_commit(context, commit, exact_contents)
     }
 }
 
@@ -118,7 +125,10 @@ impl ReceivePackCore {
             active,
             active_objects,
             store,
-            &mut AuthorityVerifier(authority),
+            &mut AuthorityVerifier {
+                authority,
+                policy_digest: policy.digest(),
+            },
             policy,
             self.transaction,
             self.quarantine_limits,
