@@ -14,6 +14,14 @@ growth. PRESSURE/RECOVERY reject large diffs; SIEGE admits only cached pages and
 Git reads. Reactor wiring must supply trusted resource snapshots and call
 completion for every admitted permit.
 
-Distributed-source tests, sustained soak, endpoint-wide established-connection
-quotas, reactor wiring, and production load measurements remain open gates.
-These deterministic unit tests are not DDoS-resistance evidence.
+Endpoint wiring now consumes and releases exact handshake and open-connection
+permits, including rollback and timeout reconciliation. Deterministic tests fill
+and reject the next slot at 8,000 open connections, 1,000 lightweight requests,
+128 handshakes, 64 cached streams, 64 Git reads, 16 pushes, 8 renders, and 4
+Zstandard jobs. Endpoint counters cover received packets/bytes, drops, new
+Initials, handshakes, established routes, and candidate paths.
+
+Distributed-source tests, sustained soak, the socket-independent encrypted
+reactor, and production CPU/RSS/latency measurements remain open gates. These
+deterministic unit tests establish exact bounds, not DDoS resistance or host
+capacity.
