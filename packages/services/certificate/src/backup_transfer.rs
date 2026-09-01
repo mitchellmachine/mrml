@@ -3,6 +3,7 @@ use crate::{
     restore_backup, verify_backup,
 };
 use mrml_crypto::Sha256;
+use mrml_interface_certificate_lifecycle_v1 as abi;
 
 pub const MAX_BACKUP_TRANSFER_CHUNK: usize = 4096;
 pub const BACKUP_TRANSFER_HEADER_BYTES: usize = 72;
@@ -56,6 +57,39 @@ pub enum BackupTransferError {
     MalformedCommand,
     Backup(BackupError),
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackupTransferProgress {
+    pub purpose: BackupTransferPurpose,
+    pub transfer_generation: u64,
+    pub policy_generation: u64,
+    pub accepted_bytes: usize,
+    pub total_bytes: usize,
+    pub verified: Option<BackupDescriptor>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackupTransferReceiptState {
+    Accepted,
+    Verified,
+    Restored,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackupTransferReceipt {
+    pub state: BackupTransferReceiptState,
+    pub purpose: BackupTransferPurpose,
+    pub transfer_generation: u64,
+    pub policy_generation: u64,
+    pub accepted_bytes: u32,
+    pub total_bytes: u32,
+    pub record_count: u16,
+    pub backup_digest: [u8; 32],
+}
+
+pub const BACKUP_TRANSFER_RECEIPT_BYTES: usize = 80;
+const RECEIPT_MAGIC: &[u8; 8] = b"MRMLBR01";
 
 impl From<BackupError> for BackupTransferError {
     fn from(value: BackupError) -> Self {
@@ -216,6 +250,17 @@ impl<'a> BackupUploadSession<'a> {
     pub fn clear(&mut self) {
         self.bytes.fill(0);
         self.upload = None;
+    }
+
+    pub fn progress(&self) -> Option<BackupTransferProgress> {
+        self.upload.map(|upload| BackupTransferProgress {
+            purpose: upload.purpose,
+            transfer_generation: upload.transfer_generation,
+            policy_generation: upload.policy_generation,
+            accepted_bytes: upload.written,
+            total_bytes: upload.total_bytes,
+            verified: upload.verified,
+        })
     }
 
     pub fn cancel(
@@ -435,6 +480,275 @@ fn read_u64(input: &[u8], offset: usize) -> Result<u64, BackupTransferError> {
         .get(offset..offset + 8)
         .ok_or(BackupTransferError::MalformedCommand)?;
     Ok(u64::from_be_bytes(value.try_into().unwrap()))
+}
+
+pub struct BackupTransferLifecycle<'a> {
+    session: BackupUploadSession<'a>,
+}
+
+impl<'a> BackupTransferLifecycle<'a> {
+    pub fn new(storage: &'a mut [u8]) -> Result<Self, BackupTransferError> {
+        Ok(Self {
+            session: BackupUploadSession::new(storage)?,
+        })
+    }
+
+    pub fn handle<A: DurableAuthenticator, T: BackupRestoreTarget>(
+        &mut self,
+        operation: u32,
+        policy_generation: u64,
+        request: &[u8],
+        output: &mut [u8],
+        authenticator: &mut A,
+        target: &mut T,
+    ) -> Result<abi::BackupOperationResponse, abi::BackupOperationError> {
+        if policy_generation == 0 {
+            return Err(abi::BackupOperationError::StalePolicy);
+        }
+        let command = decode_backup_transfer_command(request)
+            .map_err(|_| abi::BackupOperationError::InvalidRequest)?;
+        let (receipt, clear_after) = match command {
+            BackupTransferCommand::Begin {
+                purpose,
+                transfer_generation,
+                policy_generation: command_policy,
+                total_bytes,
+                expected_digest,
+            } if operation_matches(operation, purpose) && command_policy == policy_generation => {
+                self.session
+                    .begin(
+                        purpose,
+                        transfer_generation,
+                        policy_generation,
+                        total_bytes,
+                        expected_digest,
+                    )
+                    .map_err(map_transfer_error)?;
+                (
+                    receipt_from_progress(
+                        self.session.progress().unwrap(),
+                        BackupTransferReceiptState::Accepted,
+                    ),
+                    false,
+                )
+            }
+            BackupTransferCommand::Append {
+                purpose,
+                transfer_generation,
+                offset,
+                chunk,
+            } if operation_matches(operation, purpose) => {
+                self.require_binding(purpose, transfer_generation, policy_generation)?;
+                self.session
+                    .append(purpose, transfer_generation, offset, chunk)
+                    .map_err(map_transfer_error)?;
+                (
+                    receipt_from_progress(
+                        self.session.progress().unwrap(),
+                        BackupTransferReceiptState::Accepted,
+                    ),
+                    false,
+                )
+            }
+            BackupTransferCommand::Verify {
+                purpose,
+                transfer_generation,
+            } if operation_matches(operation, purpose) => {
+                self.require_binding(purpose, transfer_generation, policy_generation)?;
+                let descriptor = self
+                    .session
+                    .verify(purpose, transfer_generation, authenticator)
+                    .map_err(map_transfer_error)?;
+                let mut receipt = receipt_from_progress(
+                    self.session.progress().unwrap(),
+                    BackupTransferReceiptState::Verified,
+                );
+                receipt.record_count = descriptor.record_count;
+                receipt.backup_digest = descriptor.backup_digest;
+                (receipt, purpose == BackupTransferPurpose::VerifyOnly)
+            }
+            BackupTransferCommand::Restore {
+                transfer_generation,
+            } if operation == abi::RESTORE_COMMIT => {
+                self.require_binding(
+                    BackupTransferPurpose::Restore,
+                    transfer_generation,
+                    policy_generation,
+                )?;
+                let progress = self.session.progress().unwrap();
+                let descriptor = self
+                    .session
+                    .restore(transfer_generation, authenticator, target)
+                    .map_err(map_transfer_error)?;
+                let mut receipt =
+                    receipt_from_progress(progress, BackupTransferReceiptState::Restored);
+                receipt.record_count = descriptor.record_count;
+                receipt.backup_digest = descriptor.backup_digest;
+                (receipt, false)
+            }
+            BackupTransferCommand::Cancel {
+                purpose,
+                transfer_generation,
+            } if operation_matches(operation, purpose) => {
+                self.require_binding(purpose, transfer_generation, policy_generation)?;
+                let progress = self.session.progress().unwrap();
+                self.session
+                    .cancel(purpose, transfer_generation)
+                    .map_err(map_transfer_error)?;
+                (
+                    receipt_from_progress(progress, BackupTransferReceiptState::Cancelled),
+                    false,
+                )
+            }
+            _ => return Err(abi::BackupOperationError::InvalidRequest),
+        };
+        encode_backup_transfer_receipt(receipt, output)
+            .map_err(|_| abi::BackupOperationError::OperationFailed)?;
+        if clear_after {
+            self.session.clear();
+        }
+        Ok(abi::BackupOperationResponse {
+            written: BACKUP_TRANSFER_RECEIPT_BYTES as u64,
+            backup_generation: receipt.transfer_generation,
+        })
+    }
+
+    fn require_binding(
+        &self,
+        purpose: BackupTransferPurpose,
+        transfer_generation: u64,
+        policy_generation: u64,
+    ) -> Result<(), abi::BackupOperationError> {
+        match self.session.progress() {
+            Some(progress)
+                if progress.purpose == purpose
+                    && progress.transfer_generation == transfer_generation
+                    && progress.policy_generation == policy_generation =>
+            {
+                Ok(())
+            }
+            Some(progress) if progress.policy_generation != policy_generation => {
+                Err(abi::BackupOperationError::StalePolicy)
+            }
+            _ => Err(abi::BackupOperationError::InvalidRequest),
+        }
+    }
+}
+
+fn operation_matches(operation: u32, purpose: BackupTransferPurpose) -> bool {
+    matches!(
+        (operation, purpose),
+        (abi::BACKUP_VERIFY, BackupTransferPurpose::VerifyOnly)
+            | (abi::RESTORE_VERIFY_ONLY, BackupTransferPurpose::Restore)
+    )
+}
+
+fn map_transfer_error(error: BackupTransferError) -> abi::BackupOperationError {
+    match error {
+        BackupTransferError::MalformedCommand
+        | BackupTransferError::InvalidTransfer
+        | BackupTransferError::StaleTransfer
+        | BackupTransferError::OutOfOrder
+        | BackupTransferError::Incomplete
+        | BackupTransferError::PurposeMismatch => abi::BackupOperationError::InvalidRequest,
+        BackupTransferError::TransferInProgress
+        | BackupTransferError::DigestMismatch
+        | BackupTransferError::Backup(_) => abi::BackupOperationError::OperationFailed,
+    }
+}
+
+fn receipt_from_progress(
+    progress: BackupTransferProgress,
+    state: BackupTransferReceiptState,
+) -> BackupTransferReceipt {
+    BackupTransferReceipt {
+        state,
+        purpose: progress.purpose,
+        transfer_generation: progress.transfer_generation,
+        policy_generation: progress.policy_generation,
+        accepted_bytes: progress.accepted_bytes as u32,
+        total_bytes: progress.total_bytes as u32,
+        record_count: 0,
+        backup_digest: [0; 32],
+    }
+}
+
+pub fn encode_backup_transfer_receipt(
+    receipt: BackupTransferReceipt,
+    output: &mut [u8],
+) -> Result<(), BackupTransferError> {
+    if receipt.transfer_generation == 0
+        || receipt.policy_generation == 0
+        || receipt.total_bytes == 0
+        || receipt.accepted_bytes > receipt.total_bytes
+        || matches!(
+            receipt.state,
+            BackupTransferReceiptState::Verified | BackupTransferReceiptState::Restored
+        ) && (receipt.record_count == 0 || receipt.backup_digest == [0; 32])
+    {
+        return Err(BackupTransferError::MalformedCommand);
+    }
+    let output = output
+        .get_mut(..BACKUP_TRANSFER_RECEIPT_BYTES)
+        .ok_or(BackupTransferError::MalformedCommand)?;
+    output.fill(0);
+    output[..8].copy_from_slice(RECEIPT_MAGIC);
+    output[8] = match receipt.state {
+        BackupTransferReceiptState::Accepted => 1,
+        BackupTransferReceiptState::Verified => 2,
+        BackupTransferReceiptState::Restored => 3,
+        BackupTransferReceiptState::Cancelled => 4,
+    };
+    output[9] = receipt.purpose as u8;
+    output[16..24].copy_from_slice(&receipt.transfer_generation.to_be_bytes());
+    output[24..32].copy_from_slice(&receipt.policy_generation.to_be_bytes());
+    output[32..36].copy_from_slice(&receipt.accepted_bytes.to_be_bytes());
+    output[36..40].copy_from_slice(&receipt.total_bytes.to_be_bytes());
+    output[40..42].copy_from_slice(&receipt.record_count.to_be_bytes());
+    output[48..80].copy_from_slice(&receipt.backup_digest);
+    Ok(())
+}
+
+pub fn decode_backup_transfer_receipt(
+    input: &[u8],
+) -> Result<BackupTransferReceipt, BackupTransferError> {
+    if input.len() != BACKUP_TRANSFER_RECEIPT_BYTES
+        || input.get(..8) != Some(RECEIPT_MAGIC)
+        || input[10..16] != [0; 6]
+        || input[42..48] != [0; 6]
+    {
+        return Err(BackupTransferError::MalformedCommand);
+    }
+    let state = match input[8] {
+        1 => BackupTransferReceiptState::Accepted,
+        2 => BackupTransferReceiptState::Verified,
+        3 => BackupTransferReceiptState::Restored,
+        4 => BackupTransferReceiptState::Cancelled,
+        _ => return Err(BackupTransferError::MalformedCommand),
+    };
+    let purpose = match input[9] {
+        1 => BackupTransferPurpose::VerifyOnly,
+        2 => BackupTransferPurpose::Restore,
+        _ => return Err(BackupTransferError::MalformedCommand),
+    };
+    let mut backup_digest = [0; 32];
+    backup_digest.copy_from_slice(&input[48..80]);
+    let receipt = BackupTransferReceipt {
+        state,
+        purpose,
+        transfer_generation: read_u64(input, 16)?,
+        policy_generation: read_u64(input, 24)?,
+        accepted_bytes: read_u32(input, 32)?,
+        total_bytes: read_u32(input, 36)?,
+        record_count: read_u16(input, 40)?,
+        backup_digest,
+    };
+    let mut canonical = [0u8; BACKUP_TRANSFER_RECEIPT_BYTES];
+    encode_backup_transfer_receipt(receipt, &mut canonical)?;
+    if canonical != input {
+        return Err(BackupTransferError::MalformedCommand);
+    }
+    Ok(receipt)
 }
 
 #[cfg(test)]
@@ -666,5 +980,103 @@ mod tests {
             decode_backup_transfer_command(&wire[..BACKUP_TRANSFER_HEADER_BYTES]),
             Err(BackupTransferError::MalformedCommand)
         );
+    }
+
+    #[test]
+    fn lifecycle_handler_binds_policy_purpose_and_atomic_restore() {
+        let (encoded, descriptor) = fixture();
+        let mut storage = std::vec![0; MAX_BACKUP_BYTES];
+        let mut lifecycle = BackupTransferLifecycle::new(&mut storage).unwrap();
+        let mut request = [0u8; 4096];
+        let mut response = [0u8; BACKUP_TRANSFER_RECEIPT_BYTES];
+        let begin = BackupTransferCommand::Begin {
+            purpose: BackupTransferPurpose::Restore,
+            transfer_generation: 41,
+            policy_generation: 9,
+            total_bytes: encoded.len(),
+            expected_digest: descriptor.backup_digest,
+        };
+        let written = encode_backup_transfer_command(begin, &mut request).unwrap();
+        lifecycle
+            .handle(
+                abi::RESTORE_VERIFY_ONLY,
+                9,
+                &request[..written],
+                &mut response,
+                &mut Auth,
+                &mut Target::default(),
+            )
+            .unwrap();
+        for (index, chunk) in encoded.chunks(MAX_BACKUP_WIRE_CHUNK).enumerate() {
+            let command = BackupTransferCommand::Append {
+                purpose: BackupTransferPurpose::Restore,
+                transfer_generation: 41,
+                offset: index * MAX_BACKUP_WIRE_CHUNK,
+                chunk,
+            };
+            let written = encode_backup_transfer_command(command, &mut request).unwrap();
+            lifecycle
+                .handle(
+                    abi::RESTORE_VERIFY_ONLY,
+                    9,
+                    &request[..written],
+                    &mut response,
+                    &mut Auth,
+                    &mut Target::default(),
+                )
+                .unwrap();
+        }
+        let verify = BackupTransferCommand::Verify {
+            purpose: BackupTransferPurpose::Restore,
+            transfer_generation: 41,
+        };
+        let written = encode_backup_transfer_command(verify, &mut request).unwrap();
+        lifecycle
+            .handle(
+                abi::RESTORE_VERIFY_ONLY,
+                9,
+                &request[..written],
+                &mut response,
+                &mut Auth,
+                &mut Target::default(),
+            )
+            .unwrap();
+        let receipt = decode_backup_transfer_receipt(&response).unwrap();
+        assert_eq!(receipt.state, BackupTransferReceiptState::Verified);
+        assert_eq!(receipt.backup_digest, descriptor.backup_digest);
+        let restore = BackupTransferCommand::Restore {
+            transfer_generation: 41,
+        };
+        let written = encode_backup_transfer_command(restore, &mut request).unwrap();
+        assert_eq!(
+            lifecycle.handle(
+                abi::RESTORE_COMMIT,
+                8,
+                &request[..written],
+                &mut response,
+                &mut Auth,
+                &mut Target::default(),
+            ),
+            Err(abi::BackupOperationError::StalePolicy)
+        );
+        let mut clean = Target {
+            empty: true,
+            ..Target::default()
+        };
+        lifecycle
+            .handle(
+                abi::RESTORE_COMMIT,
+                9,
+                &request[..written],
+                &mut response,
+                &mut Auth,
+                &mut clean,
+            )
+            .unwrap();
+        assert_eq!(
+            decode_backup_transfer_receipt(&response).unwrap().state,
+            BackupTransferReceiptState::Restored
+        );
+        assert!(clean.committed && clean.imported == 1);
     }
 }

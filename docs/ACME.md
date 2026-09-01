@@ -206,7 +206,14 @@ decoder rejects reserved bytes, trailing data, inconsistent metadata, zero
 generations, and oversized chunks. Every command binds `VERIFY_ONLY` or
 `RESTORE`; the session rejects cross-purpose append, verification, cancellation,
 or restore, so verification authority cannot be escalated into state mutation.
-The hosted provider/client and CLI wiring for these commands remain required.
+A concrete lifecycle-side handler now maps `BACKUP_VERIFY`,
+`RESTORE_VERIFY_ONLY`, and `RESTORE_COMMIT` onto those transitions. It rechecks
+the exact policy generation on every call, returns an 80-byte canonical progress
+or completion receipt, clears verify-only state immediately after reporting its
+authenticated descriptor, and retains restore state only until exact commit or
+cancel. Clean-target and durable authentication failures remain explicit and do
+not fabricate completion. The hosted client and CLI wiring for these commands
+remain required; backup creation/download remains separate and open.
 RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
 and DER serial contents, including a required leading zero, and are carried in
 the verified-chain receipt. RenewalInfo parsing bounds and validates the exact
