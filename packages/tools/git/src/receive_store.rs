@@ -2,9 +2,10 @@
 
 use crate::{
     ActivationSnapshot, ActiveRefFile, ArrivalPackStore, AuditReceipt, AuditReceiptDirectory,
-    DurableFailure, DurableReceiveStore, ObjectFormat, QuarantineTransaction,
-    QuarantineTransactionId, ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord,
-    RecoveryAction, VerifiedRefTransaction, classify_receive_recovery,
+    BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object, ObjectFormat,
+    ObjectId, QuarantineTransaction, QuarantineTransactionId, ReceiveJournalDirectory,
+    ReceiveJournalError, ReceiveJournalRecord, RecoveryAction, VerifiedRefTransaction,
+    classify_receive_recovery,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -20,6 +21,33 @@ pub struct LinuxDurableReceiveStore {
 }
 
 impl LinuxDurableReceiveStore {
+    pub(crate) fn receive_pack_body(
+        &self,
+        transaction: &mut QuarantineTransaction,
+        input: &mut dyn BoundedRead,
+    ) -> Result<(), GitdCoreError> {
+        self.arrivals.receive_pack_body(transaction, input)
+    }
+
+    pub(crate) fn validate_received_pack(
+        &self,
+        transaction: &mut QuarantineTransaction,
+        required_tips: &[ObjectId],
+    ) -> Result<(), GitdCoreError> {
+        self.arrivals
+            .validate_received_pack(transaction, required_tips)
+    }
+
+    pub(crate) fn read_quarantined_object(
+        &self,
+        transaction: QuarantineTransactionId,
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<Object, GitdCoreError> {
+        self.arrivals
+            .read_quarantined_object(transaction, id, max_bytes)
+    }
+
     pub fn open(
         journals: &str,
         arrivals: &str,

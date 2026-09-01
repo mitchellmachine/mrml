@@ -574,6 +574,16 @@ impl ProtocolBudget {
         self.work_remaining
     }
 
+    pub(crate) fn consume_external_input(&mut self, amount: u64) -> Result<(), GitdCoreError> {
+        let amount = usize::try_from(amount).map_err(|_| GitdCoreError::Resource)?;
+        self.consume_input(amount)
+    }
+
+    pub(crate) fn consume_external_work(&mut self, amount: u64) -> Result<(), GitdCoreError> {
+        let amount = usize::try_from(amount).map_err(|_| GitdCoreError::Resource)?;
+        self.consume_work(amount)
+    }
+
     fn consume_input(&mut self, amount: usize) -> Result<(), GitdCoreError> {
         self.input_remaining = self
             .input_remaining

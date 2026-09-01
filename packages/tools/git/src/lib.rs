@@ -16,6 +16,7 @@ mod pack;
 mod pack_file;
 mod pack_index;
 mod quarantine;
+mod receive_backend;
 mod receive_journal;
 mod receive_journal_file;
 mod receive_store;
@@ -76,6 +77,9 @@ pub use quarantine::{
     QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
     QuarantineTransactionId, durably_activate_verified_receive, reserve_push_disk,
     reserve_push_disk_before_body,
+};
+pub use receive_backend::{
+    PreparedProtectedReceive, ProtectedCommitVerifier, prepare_protected_receive,
 };
 pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,

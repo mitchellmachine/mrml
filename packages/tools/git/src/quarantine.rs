@@ -259,6 +259,7 @@ pub struct QuarantineTransaction {
     revocation_generation: RevocationGeneration,
     reservation: PushDiskReservation,
     validated_object_count: Option<u32>,
+    validated_expanded_bytes: Option<u64>,
     phase: QuarantinePhase,
     failure: Option<DurableFailure>,
 }
@@ -287,6 +288,7 @@ impl QuarantineTransaction {
             revocation_generation,
             reservation,
             validated_object_count: None,
+            validated_expanded_bytes: None,
             phase: QuarantinePhase::CandidateReceived,
             failure: None,
         })
@@ -324,6 +326,10 @@ impl QuarantineTransaction {
         self.validated_object_count
     }
 
+    pub const fn validated_expanded_bytes(&self) -> Option<u64> {
+        self.validated_expanded_bytes
+    }
+
     pub const fn failure(&self) -> Option<DurableFailure> {
         self.failure
     }
@@ -354,6 +360,7 @@ impl QuarantineTransaction {
             QuarantinePhase::ObjectsValidated,
         )?;
         self.validated_object_count = Some(object_count);
+        self.validated_expanded_bytes = Some(expanded_bytes);
         Ok(())
     }
 

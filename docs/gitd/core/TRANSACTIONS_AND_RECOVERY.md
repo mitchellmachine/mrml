@@ -61,9 +61,23 @@ ranges whose opaque per-commit proofs match the candidate's exact repository,
 repository/trust/revocation generations, `GitCommit` purpose, object format,
 and old/new IDs. Every introduced merge-side commit is covered; an unsigned
 intermediate or a no-op verifier cannot mint the range. Creation, deletion,
-history replacement, authenticated proof loading in the receive backend, and
+history replacement, a concrete authenticated detached-proof store, and
 audit signing remain unavailable until their policy-specific concrete storage
 implementations exist.
+
+`prepare_protected_receive` now composes the pre-activation protected path for
+existing refs: it parses only atomic `report-status-v2` commands, exact-matches
+repository/object-format/generations and every active old ID, reserves disk
+before body consumption, streams and validates the quarantine pack, charges
+wire plus two file passes plus expanded bytes against the work permit, and
+walks every introduced commit using authenticated quarantine scratch objects or
+the exact active object generation. A `ProtectedCommitVerifier` can return the
+opaque proof only through crate verification APIs; it receives exact commit
+bytes and public context and has no signing operation. The opaque prepared
+result stops at `HistoryVerified`, and a hosted-Linux test proves refs remain
+unchanged. Signed receipt authorization and final report/activation composition
+remain the next fail-closed gate; creation, deletion, and history replacement
+are still rejected.
 
 `durably_activate_verified_receive` now makes the storage ordering
 non-bypassable through `DurableReceiveStore`. It persists and fsyncs the
