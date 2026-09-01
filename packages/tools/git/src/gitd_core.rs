@@ -1,0 +1,458 @@
+//! Transport-neutral boundary between an untrusted Git/web edge and gitd.
+//!
+//! Names identify objects but never carry authority. Implementations of
+//! [`GitdCoreBackend`] must independently authorize each operation and bind
+//! reads and mutations to the exact generations supplied by the caller.
+
+use core::fmt;
+use mrml_runtime::{Text, Vector};
+
+use crate::{ObjectFormat, ObjectId};
+
+pub const MAX_REPOSITORY_IDENTITY_BYTES: usize = 257;
+pub const MAX_REF_NAME_BYTES: usize = 1_024;
+pub const MAX_REPOSITORY_PATH_BYTES: usize = 4_096;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RepositoryGeneration(pub u64);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TrustGeneration(pub u64);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RevocationGeneration(pub u64);
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RepositoryIdentity(Text);
+
+impl RepositoryIdentity {
+    pub fn parse(value: &str) -> Result<Self, GitdCoreError> {
+        if value.is_empty()
+            || value.len() > MAX_REPOSITORY_IDENTITY_BYTES
+            || value.bytes().any(|byte| !byte.is_ascii())
+        {
+            return Err(GitdCoreError::MalformedIdentifier);
+        }
+        let mut pieces = value.split('/');
+        let owner = pieces.next().ok_or(GitdCoreError::MalformedIdentifier)?;
+        let repository = pieces.next().ok_or(GitdCoreError::MalformedIdentifier)?;
+        if pieces.next().is_some()
+            || !valid_identity_part(owner)
+            || !valid_identity_part(repository)
+        {
+            return Err(GitdCoreError::MalformedIdentifier);
+        }
+        Ok(Self(value.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+fn valid_identity_part(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.starts_with('.')
+        && !value.ends_with('.')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct FullRefName(Text);
+
+impl FullRefName {
+    pub fn parse(value: &str) -> Result<Self, GitdCoreError> {
+        if value.len() > MAX_REF_NAME_BYTES
+            || !value.starts_with("refs/")
+            || value.ends_with('/')
+            || value.ends_with('.')
+            || value.ends_with(".lock")
+            || value.contains("..")
+            || value.contains("@{")
+            || value.contains("//")
+            || value
+                .split('/')
+                .any(|part| part.is_empty() || part.starts_with('.'))
+            || value.bytes().any(|byte| {
+                !byte.is_ascii()
+                    || byte <= b' '
+                    || byte == 0x7f
+                    || matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
+            })
+        {
+            return Err(GitdCoreError::MalformedRef);
+        }
+        Ok(Self(value.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RepositoryPath(Text);
+
+impl RepositoryPath {
+    pub fn parse(value: &str) -> Result<Self, GitdCoreError> {
+        if value.len() > MAX_REPOSITORY_PATH_BYTES
+            || value.starts_with('/')
+            || value.ends_with('/')
+            || value.contains('\\')
+            || value.bytes().any(|byte| byte == 0 || !byte.is_ascii())
+            || (!value.is_empty()
+                && value
+                    .split('/')
+                    .any(|part| part.is_empty() || matches!(part, "." | "..")))
+        {
+            return Err(GitdCoreError::MalformedPath);
+        }
+        Ok(Self(value.into()))
+    }
+
+    pub fn root() -> Self {
+        Self(Text::new())
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueryLimits {
+    pub max_entries: u32,
+    pub max_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkBudget {
+    pub max_input_bytes: u64,
+    pub max_output_bytes: u64,
+    pub max_memory_bytes: u64,
+    pub max_work_units: u64,
+}
+
+pub trait BoundedRead {
+    fn remaining(&self) -> u64;
+    fn read(&mut self, output: &mut [u8]) -> Result<usize, GitdCoreError>;
+}
+
+pub trait BoundedWrite {
+    fn remaining(&self) -> u64;
+    fn write(&mut self, input: &[u8]) -> Result<(), GitdCoreError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignaturePurpose {
+    GitCommit,
+    GitAnnotatedTag,
+    SourceManifest,
+    SourceLock,
+    BuildReceipt,
+    KeyRotation,
+    KeyRevocation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitPage {
+    pub repository_generation: RepositoryGeneration,
+    pub commits: Vector<ObjectId>,
+    pub next: Option<ObjectId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TreePage {
+    pub repository_generation: RepositoryGeneration,
+    pub tree: ObjectId,
+    pub entries: Vector<RepositoryPath>,
+    pub next_offset: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlobPage {
+    pub repository_generation: RepositoryGeneration,
+    pub blob: ObjectId,
+    pub offset: u64,
+    pub bytes: Vector<u8>,
+    pub complete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositorySummary {
+    pub repository_generation: RepositoryGeneration,
+    pub default_branch: FullRefName,
+    pub object_format: ObjectFormat,
+    pub refs: Vector<(FullRefName, ObjectId)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationSummary {
+    pub object: ObjectId,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub purpose: SignaturePurpose,
+    pub openpgp_authorized: bool,
+    pub ml_dsa_65_authorized: bool,
+    pub exact_pair_authorized: bool,
+    pub hybrid_required: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SmartGitOperation {
+    UploadPack,
+    ReceivePack,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SmartGitRequest {
+    pub repository: RepositoryIdentity,
+    pub repository_generation: RepositoryGeneration,
+    pub operation: SmartGitOperation,
+    pub object_format: ObjectFormat,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SmartGitResponse {
+    pub repository_generation: RepositoryGeneration,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
+    pub refs_activated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateRefUpdate {
+    pub name: FullRefName,
+    pub expected_old: Option<ObjectId>,
+    pub proposed_new: Option<ObjectId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateRefTransaction {
+    pub repository: RepositoryIdentity,
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub updates: Vector<CandidateRefUpdate>,
+}
+
+/// A ref update whose object closure, ancestry, signatures, and exact policy
+/// generation have been verified. Fields are deliberately private.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedRefUpdate {
+    name: FullRefName,
+    expected_old: Option<ObjectId>,
+    proposed_new: Option<ObjectId>,
+}
+
+impl VerifiedRefUpdate {
+    pub fn name(&self) -> &FullRefName {
+        &self.name
+    }
+
+    pub fn expected_old(&self) -> Option<ObjectId> {
+        self.expected_old
+    }
+
+    pub fn proposed_new(&self) -> Option<ObjectId> {
+        self.proposed_new
+    }
+}
+
+/// An atomic transaction produced only by the gitd verifier. Fields are
+/// private so transport code cannot manufacture authorization from object IDs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedRefTransaction {
+    repository: RepositoryIdentity,
+    repository_generation: RepositoryGeneration,
+    trust_generation: TrustGeneration,
+    revocation_generation: RevocationGeneration,
+    updates: Vector<VerifiedRefUpdate>,
+}
+
+impl VerifiedRefTransaction {
+    pub fn repository(&self) -> &RepositoryIdentity {
+        &self.repository
+    }
+
+    pub fn repository_generation(&self) -> RepositoryGeneration {
+        self.repository_generation
+    }
+
+    pub fn trust_generation(&self) -> TrustGeneration {
+        self.trust_generation
+    }
+
+    pub fn revocation_generation(&self) -> RevocationGeneration {
+        self.revocation_generation
+    }
+
+    pub fn updates(&self) -> &[VerifiedRefUpdate] {
+        &self.updates
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitdCoreError {
+    MalformedInput,
+    MalformedIdentifier,
+    MalformedRef,
+    MalformedPath,
+    Authorization,
+    ObjectValidation,
+    Ancestry,
+    Signature,
+    Policy,
+    Resource,
+    Storage,
+    StaleGeneration,
+    UncertainCommit,
+    Unsupported,
+}
+
+impl fmt::Display for GitdCoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MalformedInput => "malformed Git protocol input",
+            Self::MalformedIdentifier => "malformed repository identity",
+            Self::MalformedRef => "malformed full ref name",
+            Self::MalformedPath => "malformed repository path",
+            Self::Authorization => "operation is not authorized",
+            Self::ObjectValidation => "Git object validation failed",
+            Self::Ancestry => "required ancestry proof failed",
+            Self::Signature => "required signature verification failed",
+            Self::Policy => "trust policy rejected the operation",
+            Self::Resource => "bounded resource budget exhausted",
+            Self::Storage => "repository storage operation failed",
+            Self::StaleGeneration => "repository generation is stale",
+            Self::UncertainCommit => "durable transaction outcome is uncertain",
+            Self::Unsupported => "Git protocol operation is unsupported",
+        })
+    }
+}
+
+impl core::error::Error for GitdCoreError {}
+
+pub trait GitdCoreBackend {
+    fn repository_generation(
+        &self,
+        repository: &RepositoryIdentity,
+    ) -> Result<RepositoryGeneration, GitdCoreError>;
+
+    fn repository_summary(
+        &self,
+        repository: &RepositoryIdentity,
+        limits: QueryLimits,
+    ) -> Result<RepositorySummary, GitdCoreError>;
+
+    fn resolve_ref(
+        &self,
+        repository: &RepositoryIdentity,
+        revision: &str,
+    ) -> Result<ObjectId, GitdCoreError>;
+
+    fn read_commit_page(
+        &self,
+        repository: &RepositoryIdentity,
+        commit: ObjectId,
+        limits: QueryLimits,
+    ) -> Result<CommitPage, GitdCoreError>;
+
+    fn read_tree_page(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        limits: QueryLimits,
+    ) -> Result<TreePage, GitdCoreError>;
+
+    fn read_blob_page(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        limits: QueryLimits,
+    ) -> Result<BlobPage, GitdCoreError>;
+
+    fn verification_summary(
+        &self,
+        repository: &RepositoryIdentity,
+        object: ObjectId,
+        policy: TrustGeneration,
+        revocations: RevocationGeneration,
+    ) -> Result<VerificationSummary, GitdCoreError>;
+
+    fn smart_git(
+        &mut self,
+        request: SmartGitRequest,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+        budget: WorkBudget,
+    ) -> Result<SmartGitResponse, GitdCoreError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_identity_is_exactly_owner_and_name() {
+        assert_eq!(
+            RepositoryIdentity::parse("mitchellrenouf/mrml")
+                .unwrap()
+                .as_str(),
+            "mitchellrenouf/mrml"
+        );
+        for invalid in [
+            "",
+            "owner",
+            "/repo",
+            "owner/",
+            "a/b/c",
+            "../repo",
+            "owner/.git",
+        ] {
+            assert_eq!(
+                RepositoryIdentity::parse(invalid),
+                Err(GitdCoreError::MalformedIdentifier)
+            );
+        }
+    }
+
+    #[test]
+    fn full_refs_reject_revision_and_filesystem_escapes() {
+        assert_eq!(
+            FullRefName::parse("refs/heads/main").unwrap().as_str(),
+            "refs/heads/main"
+        );
+        for invalid in [
+            "main",
+            "refs/heads/../main",
+            "refs//main",
+            "refs/heads/main.lock",
+            "refs/heads/@{1}",
+            "refs/heads/a\\b",
+        ] {
+            assert_eq!(
+                FullRefName::parse(invalid),
+                Err(GitdCoreError::MalformedRef)
+            );
+        }
+    }
+
+    #[test]
+    fn repository_paths_never_escape_the_object_graph() {
+        assert!(RepositoryPath::parse("src/lib.rs").is_ok());
+        assert_eq!(RepositoryPath::root().as_str(), "");
+        for invalid in ["/etc/passwd", "../secret", "src/../secret", "a//b", "a\\b"] {
+            assert_eq!(
+                RepositoryPath::parse(invalid),
+                Err(GitdCoreError::MalformedPath)
+            );
+        }
+    }
+}

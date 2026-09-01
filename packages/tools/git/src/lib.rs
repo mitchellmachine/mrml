@@ -3,6 +3,7 @@
 use mrml_runtime::{Text, Vector};
 
 mod diff;
+mod gitd_core;
 mod hybrid_signing;
 mod index;
 mod inflate;
@@ -15,6 +16,13 @@ mod sha1;
 mod transport;
 
 pub use diff::FileDiff;
+pub use gitd_core::{
+    BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, CommitPage,
+    FullRefName, GitdCoreBackend, GitdCoreError, QueryLimits, RepositoryGeneration,
+    RepositoryIdentity, RepositoryPath, RepositorySummary, RevocationGeneration, SignaturePurpose,
+    SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,
+    VerificationSummary, VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget,
+};
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
 pub use mrml_openpgp::{
