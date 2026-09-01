@@ -126,7 +126,7 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         identifiers[index] = Some(identifier);
         previous = Some(identifier);
     }
-    let identifier_set_digest = identifier_digest(&identifiers[..list.len()]);
+    let identifier_set_digest = certd_identifier_set_digest(&identifiers[..list.len()]);
     Ok(CertdConfig {
         directory_url,
         directory_generation,
@@ -143,7 +143,7 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
     })
 }
 
-fn identifier_digest(identifiers: &[Option<DnsIdentifier>]) -> [u8; 32] {
+pub fn certd_identifier_set_digest(identifiers: &[Option<DnsIdentifier>]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"mrml-certd-approved-identifier-set-v1\0");
     digest.update(&(identifiers.len() as u16).to_be_bytes());

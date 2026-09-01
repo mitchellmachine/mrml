@@ -1,10 +1,12 @@
-use mrml_acmed::{parse_acmed_config, AcmedConfig, MAX_ACMED_CONFIG_BYTES};
+use mrml_acmed::{AcmedConfig, MAX_ACMED_CONFIG_BYTES, parse_acmed_config};
 use mrml_certificate::{
-    decode_certd_channel_request, encode_certd_channel_request, load_durable_authenticator,
-    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
-    CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, CloudflareDns01Provider,
-    HostedDurableStateStore, HostedSecret, UnixCertdSession, CERTD_CHANNEL_HEADER_BYTES,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PRODUCTION_SECRET_MODE,
+    CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_RESPONSE_BYTES,
+    CertdAccountKeyRequest, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
+    CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
+    CertdTlsKeyRequest, CloudflareDns01Provider, HostedDurableStateStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CSR_BYTES, PRODUCTION_SECRET_MODE, UnixCertdSession,
+    decode_certd_channel_request, encode_certd_account_key_request, encode_certd_channel_request,
+    encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -59,7 +61,7 @@ fn application_main() -> Result<(), &'static str> {
 fn serve(config: AcmedConfig, capability: CertdChannelCapability) -> Result<(), &'static str> {
     let _state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
-    let mut request_id = 1u64;
+    let mut request_id = bootstrap_certd(&config, &capability)?;
     loop {
         if certd_health(&capability, request_id).is_err() {
             eprintln!("mrml-acmed: certd health degraded");
@@ -72,16 +74,37 @@ fn serve(config: AcmedConfig, capability: CertdChannelCapability) -> Result<(), 
 }
 
 fn certd_health(capability: &CertdChannelCapability, request_id: u64) -> Result<(), &'static str> {
+    let mut response = [0u8; 16];
+    let length = certd_call(
+        capability,
+        request_id,
+        CertdChannelOperation::Health,
+        &[],
+        &mut response,
+    )?;
+    if &response[..length] != b"ready" {
+        return Err("certd is not ready");
+    }
+    Ok(())
+}
+
+fn certd_call(
+    capability: &CertdChannelCapability,
+    request_id: u64,
+    operation: CertdChannelOperation,
+    payload: &[u8],
+    output: &mut [u8],
+) -> Result<usize, &'static str> {
     let mut session =
         UnixCertdSession::connect(Path::new(CERTD_SOCKET)).map_err(|_| "certd unavailable")?;
     let mut frame = [0u8; MAX_FRAME_BYTES];
     let written = encode_certd_channel_request(
         CertdChannelRequest {
             role: CertdChannelRole::Acmed,
-            operation: CertdChannelOperation::Health,
+            operation,
             request_id,
             peer: ACMED_PEER,
-            payload: &[],
+            payload,
         },
         capability,
         &mut frame,
@@ -104,13 +127,74 @@ fn certd_health(capability: &CertdChannelCapability, request_id: u64) -> Result<
         &mut CertdReplayWindow::new(),
     )
     .map_err(|_| "invalid certd health response")?;
-    if response.operation != CertdChannelOperation::Health
-        || response.request_id != request_id
-        || response.payload != b"ready"
-    {
-        return Err("certd is not ready");
+    if response.operation != operation || response.request_id != request_id {
+        return Err("certd response binding mismatch");
     }
-    Ok(())
+    if output.len() < response.payload.len() {
+        return Err("certd response exceeds output");
+    }
+    output[..response.payload.len()].copy_from_slice(response.payload);
+    Ok(response.payload.len())
+}
+
+fn bootstrap_certd(
+    config: &AcmedConfig,
+    capability: &CertdChannelCapability,
+) -> Result<u64, &'static str> {
+    let account_request = encode_certd_account_key_request(CertdAccountKeyRequest {
+        account_identity: config.account_identity,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+    })
+    .map_err(|_| "invalid account key request")?;
+    let mut account_public = [0u8; CERTD_P256_PUBLIC_KEY_BYTES];
+    let length = certd_call(
+        capability,
+        1,
+        CertdChannelOperation::GetAcmeAccountPublicIdentity,
+        &account_request,
+        &mut account_public,
+    )?;
+    if length != account_public.len() || !p256_public_key_is_valid(&account_public) {
+        return Err("invalid certd account public key");
+    }
+
+    let tls_request = encode_certd_tls_key_request(CertdTlsKeyRequest {
+        identity: config.identity,
+        key_generation: config.key_generation,
+        policy_generation: config.policy_generation,
+        identifier_set_digest: config.identifier_set_digest,
+    })
+    .map_err(|_| "invalid TLS key request")?;
+    let mut tls_response = [0u8; CERTD_TLS_KEY_RESPONSE_BYTES];
+    let length = certd_call(
+        capability,
+        2,
+        CertdChannelOperation::CreateTlsKeyGeneration,
+        &tls_request,
+        &mut tls_response,
+    )?;
+    if length != tls_response.len()
+        || !p256_public_key_is_valid(&tls_response[..CERTD_P256_PUBLIC_KEY_BYTES])
+        || tls_response[CERTD_P256_PUBLIC_KEY_BYTES..]
+            .iter()
+            .all(|byte| *byte == 0)
+    {
+        return Err("invalid certd TLS key response");
+    }
+
+    let mut csr = [0u8; MAX_CSR_BYTES];
+    let length = certd_call(
+        capability,
+        3,
+        CertdChannelOperation::CreateCertificateSigningRequest,
+        &tls_request,
+        &mut csr,
+    )?;
+    if length < 4 || csr[0] != 0x30 {
+        return Err("invalid certd certificate signing request");
+    }
+    Ok(4)
 }
 
 fn load_config() -> Result<AcmedConfig, &'static str> {

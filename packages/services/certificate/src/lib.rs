@@ -122,7 +122,7 @@ pub use certd_key_protocol::{
 #[cfg(target_os = "linux")]
 pub use certd_config::{
     CertdConfig, CertdConfigError, CertdDirectoryClass, MAX_CERTD_CONFIG_BYTES,
-    parse_certd_config,
+    certd_identifier_set_digest, parse_certd_config,
 };
 pub use constrained_acme_signing::{
     AcmeJwsOperation, ConstrainedAcmeJwsError, ConstrainedAcmeJwsPolicy,
@@ -242,6 +242,7 @@ pub use native_service::{
 };
 pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
 pub use mrml_acme::{MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, write_pkcs10_csr};
+pub use mrml_crypto::p256_public_key_is_valid;
 pub use renewal_executor::{
     IssuedRenewalCandidate, RenewalExecutionError, RenewalIssuer, RenewalRecoveryError,
     RenewalRecoveryMaterialRole, execute_due_renewal, resolve_uncertain_renewal,

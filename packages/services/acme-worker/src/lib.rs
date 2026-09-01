@@ -1,6 +1,7 @@
 #![no_std]
 
-use mrml_acme::{AcmeUrl, DnsIdentifier};
+use mrml_acme::{AcmeUrl, DnsIdentifier, MAX_CSR_IDENTIFIERS};
+use mrml_certificate::certd_identifier_set_digest;
 use mrml_json::Value;
 
 pub const MAX_ACMED_CONFIG_BYTES: usize = 16 * 1024;
@@ -20,6 +21,14 @@ pub struct AcmedConfig {
     pub zone_id: [u8; 32],
     pub zone: DnsIdentifier,
     pub identity: [u8; 16],
+    pub account_identity: [u8; 16],
+    pub account_generation: u64,
+    pub key_generation: u64,
+    pub policy_generation: u64,
+    pub identifiers: [Option<DnsIdentifier>; MAX_CSR_IDENTIFIERS],
+    pub identifier_count: u8,
+    pub identifier_set_digest: [u8; 32],
+    pub wildcard_enabled: bool,
     pub poll_interval_seconds: u64,
     pub global_concurrency: u8,
     pub per_identity_concurrency: u8,
@@ -44,7 +53,7 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| AcmedConfigError::Malformed)?;
     let object = value.as_object().ok_or(AcmedConfigError::Malformed)?;
-    const FIELDS: [&str; 10] = [
+    const FIELDS: [&str; 16] = [
         "directory_url",
         "directory_generation",
         "directory_class",
@@ -53,6 +62,12 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         "zone_id",
         "zone",
         "identity",
+        "account_identity",
+        "account_generation",
+        "key_generation",
+        "policy_generation",
+        "identifiers",
+        "wildcard_enabled",
         "poll_interval_seconds",
         "global_concurrency",
     ];
@@ -101,17 +116,43 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     if zone.is_wildcard() {
         return Err(AcmedConfigError::InvalidZone);
     }
-    let identity_text = text(&value, "identity")?;
-    if !valid_hex(identity_text, 32) {
+    let identity = parse_identity(text(&value, "identity")?)?;
+    let account_identity = parse_identity(text(&value, "account_identity")?)?;
+    if identity == account_identity {
         return Err(AcmedConfigError::InvalidIdentity);
     }
-    let mut identity = [0u8; 16];
-    for (index, output) in identity.iter_mut().enumerate() {
-        *output = decode_hex(&identity_text.as_bytes()[index * 2..index * 2 + 2])?;
+    let account_generation = number(&value, "account_generation")?;
+    let key_generation = number(&value, "key_generation")?;
+    let policy_generation = number(&value, "policy_generation")?;
+    if account_generation == 0 || key_generation == 0 || policy_generation == 0 {
+        return Err(AcmedConfigError::InvalidBounds);
     }
-    if identity == [0; 16] {
+    let wildcard_enabled = value
+        .get("wildcard_enabled")
+        .and_then(Value::as_bool)
+        .ok_or(AcmedConfigError::MissingField)?;
+    let list = value
+        .get("identifiers")
+        .and_then(Value::as_array)
+        .ok_or(AcmedConfigError::MissingField)?;
+    if list.is_empty() || list.len() > MAX_CSR_IDENTIFIERS {
         return Err(AcmedConfigError::InvalidIdentity);
     }
+    let mut identifiers = [None; MAX_CSR_IDENTIFIERS];
+    let mut previous: Option<DnsIdentifier> = None;
+    for (index, item) in list.iter().enumerate() {
+        let identifier = DnsIdentifier::parse(
+            item.as_str().ok_or(AcmedConfigError::InvalidIdentity)?,
+            wildcard_enabled,
+        )
+        .map_err(|_| AcmedConfigError::InvalidIdentity)?;
+        if previous.is_some_and(|prior| prior.as_str() >= identifier.as_str()) {
+            return Err(AcmedConfigError::InvalidIdentity);
+        }
+        identifiers[index] = Some(identifier);
+        previous = Some(identifier);
+    }
+    let identifier_set_digest = certd_identifier_set_digest(&identifiers[..list.len()]);
     let poll_interval_seconds = number(&value, "poll_interval_seconds")?;
     let global_concurrency = u8::try_from(number(&value, "global_concurrency")?)
         .map_err(|_| AcmedConfigError::InvalidBounds)?;
@@ -125,10 +166,33 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         zone_id,
         zone,
         identity,
+        account_identity,
+        account_generation,
+        key_generation,
+        policy_generation,
+        identifiers,
+        identifier_count: list.len() as u8,
+        identifier_set_digest,
+        wildcard_enabled,
         poll_interval_seconds,
         global_concurrency,
         per_identity_concurrency: 1,
     })
+}
+
+fn parse_identity(value: &str) -> Result<[u8; 16], AcmedConfigError> {
+    if !valid_hex(value, 32) {
+        return Err(AcmedConfigError::InvalidIdentity);
+    }
+    let mut identity = [0u8; 16];
+    for (index, output) in identity.iter_mut().enumerate() {
+        *output = decode_hex(&value.as_bytes()[index * 2..index * 2 + 2])?;
+    }
+    if identity == [0; 16] {
+        Err(AcmedConfigError::InvalidIdentity)
+    } else {
+        Ok(identity)
+    }
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, AcmedConfigError> {
@@ -171,7 +235,7 @@ fn decode_hex(value: &[u8]) -> Result<u8, AcmedConfigError> {
 mod tests {
     use super::*;
 
-    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","poll_interval_seconds":30,"global_concurrency":2}"#;
+    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
 
     #[test]
     fn staging_configuration_is_exact_and_bounded() {
@@ -182,6 +246,8 @@ mod tests {
             "acme-staging-v02.api.letsencrypt.org"
         );
         assert_eq!(config.per_identity_concurrency, 1);
+        assert_eq!(config.identifier_count, 2);
+        assert_ne!(config.identifier_set_digest, [0; 32]);
     }
 
     #[test]
