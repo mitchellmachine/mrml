@@ -149,7 +149,12 @@ manifest represents a repository with no arrival packs and gives bootstrap a
 real digest instead of a sentinel. The end-to-end receive test reopens the
 selected next generation and its exact transaction/object membership.
 
-Normal repository object lookup does not yet consume the selected entries. That
-remaining gate must open only the enumerated pack/index files and independently
-revalidate every binding. This mechanism is independent of compaction and does
-not authorize patent-gated delta selection.
+The receive store can now resolve an exact object from the selected arrival set:
+it finds the single manifest entry, reauthenticates that installed pack/index
+summary byte-for-byte, opens only the transaction's bounded scratch object, and
+rehashes its Git identity. Thin-pack validation consults this selected view
+before the separately authenticated baseline repository, so sequential receives
+can use prior active arrivals without directory scanning. General repository
+view and upload-pack composition still need to route through this selected
+arrival reader. This mechanism is independent of compaction and does not
+authorize patent-gated delta selection.

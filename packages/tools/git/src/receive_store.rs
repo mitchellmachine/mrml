@@ -65,6 +65,9 @@ impl LinuxDurableReceiveStore {
             transaction,
             required_tips,
             |id, limit| {
+                if let Ok(object) = self.read_active_arrival_object(id, limit) {
+                    return Ok(Some((object.kind, object.contents)));
+                }
                 let object = match active_objects.read_object(id) {
                     Ok(object) => object,
                     Err(_) => return Ok(None),
@@ -75,6 +78,18 @@ impl LinuxDurableReceiveStore {
                 Ok(Some((object.kind, object.contents)))
             },
         )
+    }
+
+    pub(crate) fn read_active_arrival_object(
+        &self,
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<Object, GitdCoreError> {
+        let manifest = self
+            .refs
+            .load_selected_pack_set(receive_pack_set_limits())
+            .map_err(|_| GitdCoreError::StaleGeneration)?;
+        self.arrivals.read_selected_object(&manifest, id, max_bytes)
     }
 
     pub(crate) fn read_quarantined_object(
@@ -493,6 +508,13 @@ mod tests {
         assert_eq!(selected.entries().len(), 1);
         assert_eq!(selected.entries()[0].transaction(), id);
         assert_eq!(selected.entries()[0].object_ids(), &[new]);
+        assert_eq!(
+            store.read_active_arrival_object(new, 1024).unwrap(),
+            Object {
+                kind: ObjectKind::Blob,
+                contents: Vector::from(*b"received"),
+            }
+        );
         assert_eq!(store.receipts().load(id).unwrap(), receipt);
         let final_journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
             .unwrap()

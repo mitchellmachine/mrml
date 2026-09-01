@@ -10,7 +10,7 @@ use crate::sha1::GitObjectHasher;
 use crate::{
     BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
     DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
-    PackError, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
+    PackError, PackSetManifest, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
     parse_pack_index_v2, parse_pack_with_index,
 };
 use crate::pack_set::AuthenticatedPackIndexSummary;
@@ -270,8 +270,15 @@ impl ArrivalPackStore {
             return Err(DurableFailure::StaleLock);
         }
         create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
+        let scratch = join_path(&directory, "objects");
+        create_dir_all(&scratch).map_err(|_| DurableFailure::DiskFull)?;
+        for object in &objects {
+            write_scratch_object(&scratch, object.id, object.kind, &object.contents)
+                .map_err(|_| DurableFailure::ShortWrite)?;
+        }
         write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
         write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
+        sync_pack_directory(&scratch)?;
         sync_pack_directory(&directory)?;
         sync_pack_directory(&self.quarantine)?;
         self.verify_directory(&directory, transaction.reservation().object_count())?;
@@ -309,6 +316,42 @@ impl ArrivalPackStore {
         object_count: u32,
     ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
         self.summarize_directory(&self.arrival_path(transaction), transaction, object_count)
+    }
+
+    pub(crate) fn read_selected_object(
+        &self,
+        manifest: &PackSetManifest,
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<crate::Object, GitdCoreError> {
+        if manifest.object_format() != self.format || id.format() != self.format || max_bytes == 0 {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let entry = manifest
+            .entries()
+            .iter()
+            .find(|entry| entry.object_ids().binary_search(&id).is_ok())
+            .ok_or(GitdCoreError::ObjectValidation)?;
+        let summary = self
+            .authenticated_installed_summary(entry.transaction(), entry.object_count())
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if summary.pack_checksum != entry.pack_checksum()
+            || summary.index_checksum != entry.index_checksum()
+            || summary.pack_bytes != entry.pack_bytes()
+            || summary.index_bytes != entry.index_bytes()
+            || summary.work_units != entry.work_units()
+            || &*summary.object_ids != entry.object_ids()
+        {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let (kind, contents) = read_scratch_object(
+            &join_path(&self.arrival_path(entry.transaction()), "objects"),
+            id,
+            max_bytes,
+        )
+        .map_err(|_| GitdCoreError::ObjectValidation)?
+        .ok_or(GitdCoreError::ObjectValidation)?;
+        Ok(crate::Object { kind, contents })
     }
 
     fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {

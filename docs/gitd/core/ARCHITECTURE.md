@@ -54,7 +54,10 @@ possessing any other manifest grants no read authority. The active-ref store
 durably writes and reopens the immutable selected manifest around that atomic
 transition. The hosted-Linux receive store now constructs the cumulative next
 manifest from reauthenticated installed indexes and performs that transition.
-Normal active object lookup remains an explicit incomplete gate.
+The receive store resolves selected arrival objects only after reauthenticating
+the exact manifest entry and Git object identity, and uses that view for later
+thin receives. General repository-view/upload-pack composition remains an
+explicit incomplete gate.
 
 Repository state now also has a canonical single-record active-ref model with
 distinct repository, trust, revocation, and pack generations. The pure update
