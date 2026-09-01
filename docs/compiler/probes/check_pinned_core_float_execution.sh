@@ -7,13 +7,28 @@ sysroot="$rustup_root/toolchains/$toolchain"
 library_root="$sysroot/lib/rustlib/x86_64-pc-windows-gnullvm/lib"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
-expected_size=466432
-expected_hash=1361ccc72696c0f5c8c20f18f561283d88808bd93dee316cc2adbbd6186195eb
-
-test "$#" -eq 0 || {
-    echo "usage: $0" >&2
+test "$#" -le 1 || {
+    echo "usage: $0 [parse|format]" >&2
     exit 1
 }
+case ${1:-parse} in
+    parse)
+        crate_name=mrml_core_float_probe
+        probe_source=docs/compiler/probes/pinned_core_float_execution.rs
+        expected_size=466432
+        expected_hash=1361ccc72696c0f5c8c20f18f561283d88808bd93dee316cc2adbbd6186195eb
+        ;;
+    format)
+        crate_name=mrml_core_float_format_probe
+        probe_source=docs/compiler/probes/pinned_core_float_format_execution.rs
+        expected_size=466432
+        expected_hash=8d28157fc2387863c905ab4b337b257ab3106c285213f9477d5f5ecd131a663c
+        ;;
+    *)
+        echo "usage: $0 [parse|format]" >&2
+        exit 1
+        ;;
+esac
 test -x "$driver" || {
     echo "missing release driver: run ./target/debug/mrml build org.mrml.compiler.driver --target linux --release" >&2
     exit 1
@@ -52,10 +67,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-"$rustc" --edition=2024 --crate-name mrml_core_float_probe \
+"$rustc" --edition=2024 --crate-name "$crate_name" \
     --crate-type=lib --emit=obj -C panic=abort -C embed-bitcode=no \
     -C opt-level=3 --target x86_64-pc-windows-gnullvm \
-    docs/compiler/probes/pinned_core_float_execution.rs \
+    "$probe_source" \
     -o "$probe/consumer.obj"
 clang --target=x86_64-pc-windows-msvc -c \
     docs/compiler/probes/pinned_std_execution_stubs.s \
@@ -85,4 +100,4 @@ test "$execution_status" -eq 42 || {
     exit 1
 }
 
-echo "pinned_core_float_execution size=$actual_size sha256=$actual_hash exit=42 result=PASS"
+echo "pinned_core_float_execution mode=${1:-parse} size=$actual_size sha256=$actual_hash exit=42 result=PASS"
