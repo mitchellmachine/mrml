@@ -18,10 +18,12 @@ content-addressed names, refuses final-component symlinks when reading, bounds
 records before allocation, writes through exclusive temporary files, syncs the
 file, atomically renames it, syncs the containing directory, and prunes regular
 cache records to configured entry and byte quotas. Cache files remain
-disposable; deletion is a miss and never changes authoritative results. The
-focused test exercises round trips, quota eviction, and absence of leftover
-temporary files. Filesystem crash injection and production-disk exhaustion have
-not been exercised.
+disposable; deletion is a miss and a later write recreates the root without
+changing authoritative results. Construction removes bounded regular `.tmp-`
+records left by interrupted writes while refusing directory and symlink targets.
+Focused tests exercise round trips, quota eviction, interrupted-write cleanup,
+root deletion/recreation, and absence of leftover temporary files. Filesystem
+crash injection and production-disk exhaustion have not been exercised.
 
 The encoder is a deterministic bounded raw/RLE Zstandard profile, not level 22.
 General compressed blocks and Huffman/FSE encoding remain production blockers.
