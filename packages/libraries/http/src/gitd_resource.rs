@@ -250,4 +250,33 @@ mod tests {
         controller.observe(healthy);
         assert_eq!(controller.mode(), GitdPressureMode::Normal);
     }
+
+    #[test]
+    fn configured_concurrency_envelope_is_exact_and_fail_closed() {
+        fn fill(class: GitdWorkClass, expected: usize) {
+            let mut controller = GitdResourceController::new(expected + 1).unwrap();
+            for index in 0..expected {
+                let source = SourceIdentity::ipv4([
+                    10,
+                    ((index >> 8) & 0xff) as u8,
+                    (index & 0xff) as u8,
+                    1,
+                ]);
+                assert!(controller.admit(source, class, 0), "rejected slot {index}");
+            }
+            assert!(!controller.admit(SourceIdentity::ipv4([198, 51, 100, 254]), class, 0));
+            for _ in 0..expected {
+                controller.complete(class);
+            }
+            assert!(controller.admit(SourceIdentity::ipv4([198, 51, 100, 254]), class, 1));
+        }
+
+        fill(GitdWorkClass::Handshake, 128);
+        fill(GitdWorkClass::LightweightRequest, 1_000);
+        fill(GitdWorkClass::CachedPage, 64);
+        fill(GitdWorkClass::Render, 8);
+        fill(GitdWorkClass::Zstd, 4);
+        fill(GitdWorkClass::GitRead, 64);
+        fill(GitdWorkClass::GitPush, 16);
+    }
 }
