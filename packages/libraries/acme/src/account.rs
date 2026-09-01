@@ -56,7 +56,20 @@ pub enum AccountOperation {
     ContactUpdatePrepared,
     RolloverPrepared,
     DeactivationPrepared,
+    TermsUpdatePrepared,
     Uncertain,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PreparedTermsTransition {
+    pub account_generation: u64,
+    pub previous_directory_generation: u64,
+    pub directory_generation: u64,
+    pub policy_generation: u64,
+    pub terms_url_digest: [u8; 32],
+    pub terms_content_digest: [u8; 32],
+    pub account_key: JwkThumbprint,
+    pub contact_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -81,6 +94,7 @@ pub struct AccountLifecycle {
     pub active: bool,
     pub operation: AccountOperation,
     prepared: Option<PreparedAccountAction>,
+    terms_prepared: Option<PreparedTermsTransition>,
 }
 
 impl AccountLifecycle {
@@ -122,6 +136,7 @@ impl AccountLifecycle {
                 active: false,
                 operation: AccountOperation::CreatePrepared,
                 prepared: Some(prepared),
+                terms_prepared: None,
             },
             prepared,
         ))
@@ -228,6 +243,99 @@ impl AccountLifecycle {
         Ok(prepared)
     }
 
+    pub fn prepare_terms_transition(
+        &mut self,
+        directory: &AcmeDirectory,
+        approval: &OwnerTermsApproval,
+        policy_generation: u64,
+    ) -> Result<PreparedTermsTransition, AccountError> {
+        self.require_idle_active()?;
+        if directory.generation <= self.directory_generation
+            || policy_generation <= self.policy_generation
+            || directory.terms_of_service.is_none()
+            || !approval.matches(directory)
+        {
+            return Err(AccountError::TermsApprovalMismatch);
+        }
+        self.account_url
+            .as_ref()
+            .ok_or(AccountError::InvalidState)?
+            .require_origin(directory.new_account.origin())
+            .map_err(|_| AccountError::AccountUrlPolicy)?;
+        let prepared = PreparedTermsTransition {
+            account_generation: self
+                .generation
+                .checked_add(1)
+                .ok_or(AccountError::StaleGeneration)?,
+            previous_directory_generation: self.directory_generation,
+            directory_generation: directory.generation,
+            policy_generation,
+            terms_url_digest: approval.terms_url_digest,
+            terms_content_digest: approval.terms_content_digest,
+            account_key: self.key,
+            contact_digest: self.contact_digest,
+        };
+        self.operation = AccountOperation::TermsUpdatePrepared;
+        self.terms_prepared = Some(prepared);
+        Ok(prepared)
+    }
+
+    pub fn mark_terms_uncertain(
+        &mut self,
+        receipt: PreparedTermsTransition,
+    ) -> Result<(), AccountError> {
+        if self.terms_prepared != Some(receipt) {
+            return Err(AccountError::ReceiptMismatch);
+        }
+        if self.operation == AccountOperation::Uncertain {
+            return Ok(());
+        }
+        if self.operation != AccountOperation::TermsUpdatePrepared {
+            return Err(AccountError::ReceiptMismatch);
+        }
+        self.operation = AccountOperation::Uncertain;
+        Ok(())
+    }
+
+    pub fn commit_terms_transition(
+        &mut self,
+        receipt: PreparedTermsTransition,
+    ) -> Result<(), AccountError> {
+        if !matches!(
+            self.operation,
+            AccountOperation::TermsUpdatePrepared | AccountOperation::Uncertain
+        ) || self.terms_prepared != Some(receipt)
+            || receipt.previous_directory_generation != self.directory_generation
+            || receipt.account_generation != self.generation.checked_add(1).unwrap_or(0)
+            || receipt.account_key != self.key
+            || receipt.contact_digest != self.contact_digest
+        {
+            return Err(AccountError::ReceiptMismatch);
+        }
+        self.generation = receipt.account_generation;
+        self.directory_generation = receipt.directory_generation;
+        self.policy_generation = receipt.policy_generation;
+        self.operation = AccountOperation::None;
+        self.terms_prepared = None;
+        Ok(())
+    }
+
+    pub fn abort_terms_transition(
+        &mut self,
+        receipt: PreparedTermsTransition,
+    ) -> Result<(), AccountError> {
+        if !matches!(
+            self.operation,
+            AccountOperation::TermsUpdatePrepared | AccountOperation::Uncertain
+        ) || self.terms_prepared != Some(receipt)
+        {
+            return Err(AccountError::ReceiptMismatch);
+        }
+        self.operation = AccountOperation::None;
+        self.terms_prepared = None;
+        Ok(())
+    }
+
     pub fn commit(&mut self, receipt: PreparedAccountAction) -> Result<(), AccountError> {
         let action = receipt.action;
         self.require_prepared(receipt, action)?;
@@ -243,6 +351,7 @@ impl AccountLifecycle {
         self.policy_generation = receipt.policy_generation;
         self.operation = AccountOperation::None;
         self.prepared = None;
+        self.terms_prepared = None;
         Ok(())
     }
 
@@ -333,7 +442,11 @@ impl AccountLifecycle {
     }
 
     fn require_idle_active(&self) -> Result<(), AccountError> {
-        if self.active && self.operation == AccountOperation::None && self.prepared.is_none() {
+        if self.active
+            && self.operation == AccountOperation::None
+            && self.prepared.is_none()
+            && self.terms_prepared.is_none()
+        {
             Ok(())
         } else {
             Err(AccountError::InvalidState)

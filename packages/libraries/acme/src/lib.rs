@@ -29,7 +29,7 @@ mod url;
 
 pub use account::{
     AccountError, AccountLifecycle, AccountOperation, AccountPolicy, CaClass, OwnerTermsApproval,
-    PreparedAccountAction,
+    PreparedAccountAction, PreparedTermsTransition,
 };
 pub use ari::{
     AriCertificateId, AriError, MAX_ARI_CERTIFICATE_ID, MAX_ARI_RESPONSE_BYTES, RenewalInfo,
@@ -70,9 +70,10 @@ pub use operation::{
     DirectoryFetchError, FinalizeError, FinalizeFailure, OrderCreateBuffers, OrderCreateError,
     OrderCreateFailure, OrderPollError, OrderPollReceipt, PreauthorizationError,
     PreauthorizationResource, PrepareOrderError, PreparedOrderCreation, PreparedPreauthorization,
-    RevocationOutcome, RevokeCertificateError, execute_prepared_account_create,
-    execute_prepared_account_rollover, execute_prepared_account_update, execute_prepared_finalize,
-    execute_prepared_order_create, execute_prepared_preauthorization, fetch_authorization,
+    RevocationOutcome, RevokeCertificateError, TermsTransitionError, TermsTransitionFailure,
+    execute_prepared_account_create, execute_prepared_account_rollover,
+    execute_prepared_account_update, execute_prepared_finalize, execute_prepared_order_create,
+    execute_prepared_preauthorization, execute_prepared_terms_transition, fetch_authorization,
     fetch_directory, poll_order, prepare_order_creation, prepare_preauthorization,
     recover_uncertain_account_creation, resolve_uncertain_account_action, revoke_certificate,
     trigger_published_challenge,
@@ -86,7 +87,7 @@ pub use payload::{
     MAX_ACCOUNT_CONTACT_BYTES, MAX_ACCOUNT_CONTACTS, MAX_ACME_PAYLOAD_BYTES, PayloadError,
     account_contacts_digest, write_account_contacts_payload, write_account_status_payload,
     write_finalize_payload, write_new_account_payload, write_new_order_payload,
-    write_preauthorization_payload, write_revocation_payload,
+    write_preauthorization_payload, write_revocation_payload, write_terms_agreement_payload,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use platform::{HostedAcmeTransport, HostedTransportError};

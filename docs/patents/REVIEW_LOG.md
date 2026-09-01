@@ -11542,3 +11542,12 @@ RFC 8555 `newAuthz` transaction only when advertised and explicitly selected,
 binding the DNS identifier, payload digest, resource location, account
 generation, and directory generation. It adds no route-selected multi-vantage
 validation or other recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Owner-approved ACME Terms-of-Service transitions
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment performs an ordinary ACME
+account Terms-of-Service acknowledgement only after fresh owner approval binds
+the exact new directory generation, terms URL, fetched-content digest, account
+key, contacts, and policy generation. Exact retry resolves ambiguous transport
+outcomes. It adds no recorded re-review-trigger mechanism.

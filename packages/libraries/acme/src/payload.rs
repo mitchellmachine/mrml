@@ -172,6 +172,15 @@ pub fn write_account_status_payload(active: bool, output: &mut [u8]) -> Result<&
     core::str::from_utf8(&output[..value.len()]).map_err(|_| PayloadError::OutputTooSmall)
 }
 
+pub fn write_terms_agreement_payload(output: &mut [u8]) -> Result<&str, PayloadError> {
+    const VALUE: &[u8] = b"{\"termsOfServiceAgreed\":true}";
+    output
+        .get_mut(..VALUE.len())
+        .ok_or(PayloadError::OutputTooSmall)?
+        .copy_from_slice(VALUE);
+    core::str::from_utf8(&output[..VALUE.len()]).map_err(|_| PayloadError::OutputTooSmall)
+}
+
 pub fn write_preauthorization_payload<'a>(
     identifier: &DnsIdentifier,
     output: &'a mut [u8],

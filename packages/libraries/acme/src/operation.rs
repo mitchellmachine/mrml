@@ -3,11 +3,12 @@ use crate::{
     AcmeProblem, AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError, ChallengeKind,
     ChallengeLifecycle, DnsIdentifier, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk,
     ParsedAccountStatus, ParsedAuthorizationResponse, ParsedChallenge, PayloadError,
-    PreparedAccountAction, PreparedFinalization, PublicationReceipt, ResponseError,
-    account_contacts_digest, parse_account_response, parse_authorization_response,
+    PreparedAccountAction, PreparedFinalization, PreparedTermsTransition, PublicationReceipt,
+    ResponseError, account_contacts_digest, parse_account_response, parse_authorization_response,
     parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
     write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
     write_new_order_payload, write_preauthorization_payload, write_revocation_payload,
+    write_terms_agreement_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -79,6 +80,23 @@ pub enum AccountActionResolutionError<E> {
     UnexpectedStatus,
     Response(ResponseError),
     Lifecycle(AccountError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum TermsTransitionError<E> {
+    PreparedMismatch,
+    Payload(PayloadError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    Lifecycle(AccountError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum TermsTransitionFailure<E> {
+    Definitive(TermsTransitionError<E>),
+    Uncertain(TermsTransitionError<E>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1335,6 +1353,131 @@ pub fn resolve_uncertain_account_action<T: AcmeTransport>(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn execute_prepared_terms_transition<T: AcmeTransport>(
+    lifecycle: &mut AccountLifecycle,
+    receipt: PreparedTermsTransition,
+    directory: &AcmeDirectory,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    buffers: AccountCreateBuffers<'_>,
+) -> Result<(), TermsTransitionFailure<T::Error>> {
+    let account_url = lifecycle
+        .account_url
+        .as_ref()
+        .ok_or(TermsTransitionFailure::Definitive(
+            TermsTransitionError::PreparedMismatch,
+        ))?;
+    if !matches!(
+        lifecycle.operation,
+        AccountOperation::TermsUpdatePrepared | AccountOperation::Uncertain
+    ) || receipt.previous_directory_generation != lifecycle.directory_generation
+        || receipt.directory_generation != directory.generation
+        || receipt.account_generation != lifecycle.generation.checked_add(1).unwrap_or(0)
+        || receipt.account_key != lifecycle.key
+        || receipt.contact_digest != lifecycle.contact_digest
+        || directory.terms_of_service.as_ref().is_none_or(|terms| {
+            Sha256::digest(terms.as_str().as_bytes()) != receipt.terms_url_digest
+        })
+        || account_url.origin() != directory.new_account.origin()
+    {
+        return Err(TermsTransitionFailure::Definitive(
+            TermsTransitionError::PreparedMismatch,
+        ));
+    }
+    let payload = write_terms_agreement_payload(buffers.payload).map_err(|error| {
+        TermsTransitionFailure::Definitive(TermsTransitionError::Payload(error))
+    })?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        account_url,
+        crate::ProtectedKey::Kid(account_url),
+        payload.as_bytes(),
+        lifecycle.generation,
+        signer,
+        buffers.response,
+        buffers.jws,
+    );
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            lifecycle
+                .mark_terms_uncertain(receipt)
+                .map_err(|lifecycle_error| {
+                    TermsTransitionFailure::Uncertain(TermsTransitionError::Lifecycle(
+                        lifecycle_error,
+                    ))
+                })?;
+            return Err(TermsTransitionFailure::Uncertain(
+                TermsTransitionError::Post(error),
+            ));
+        }
+    };
+    if let Some(problem) = result.problem {
+        lifecycle.abort_terms_transition(receipt).map_err(|error| {
+            TermsTransitionFailure::Definitive(TermsTransitionError::Lifecycle(error))
+        })?;
+        return Err(TermsTransitionFailure::Definitive(
+            TermsTransitionError::Server(problem),
+        ));
+    }
+    if result.metadata.status != 200
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        lifecycle.mark_terms_uncertain(receipt).map_err(|error| {
+            TermsTransitionFailure::Uncertain(TermsTransitionError::Lifecycle(error))
+        })?;
+        return Err(TermsTransitionFailure::Uncertain(
+            TermsTransitionError::UnexpectedStatus,
+        ));
+    }
+    let body = match core::str::from_utf8(&buffers.response[..result.metadata.body_length]) {
+        Ok(body) => body,
+        Err(_) => {
+            lifecycle.mark_terms_uncertain(receipt).map_err(|error| {
+                TermsTransitionFailure::Uncertain(TermsTransitionError::Lifecycle(error))
+            })?;
+            return Err(TermsTransitionFailure::Uncertain(
+                TermsTransitionError::Response(ResponseError::Malformed),
+            ));
+        }
+    };
+    let parsed = match parse_account_response(body, account_url.origin()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            lifecycle
+                .mark_terms_uncertain(receipt)
+                .map_err(|lifecycle_error| {
+                    TermsTransitionFailure::Uncertain(TermsTransitionError::Lifecycle(
+                        lifecycle_error,
+                    ))
+                })?;
+            return Err(TermsTransitionFailure::Uncertain(
+                TermsTransitionError::Response(error),
+            ));
+        }
+    };
+    if parsed.status != ParsedAccountStatus::Valid
+        || parsed.contacts_digest != receipt.contact_digest
+    {
+        lifecycle.mark_terms_uncertain(receipt).map_err(|error| {
+            TermsTransitionFailure::Uncertain(TermsTransitionError::Lifecycle(error))
+        })?;
+        return Err(TermsTransitionFailure::Uncertain(
+            TermsTransitionError::PreparedMismatch,
+        ));
+    }
+    lifecycle
+        .commit_terms_transition(receipt)
+        .map_err(|error| {
+            TermsTransitionFailure::Uncertain(TermsTransitionError::Lifecycle(error))
+        })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn execute_prepared_account_rollover<T: AcmeTransport>(
     lifecycle: &mut AccountLifecycle,
     receipt: PreparedAccountAction,
@@ -2048,6 +2191,118 @@ mod tests {
         assert!(jws.iter().all(|byte| *byte == 0));
     }
 
+    struct TermsTransitionTransport {
+        fail_post: bool,
+    }
+    impl AcmeTransport for TermsTransitionTransport {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            if request.method == AcmeHttpMethod::Head {
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some("terms-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                });
+            }
+            if self.fail_post {
+                return Err(());
+            }
+            assert_eq!(request.url.as_str(), "https://ca.example/account/1");
+            let body = br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#;
+            output[..body.len()].copy_from_slice(body);
+            Ok(AcmeTransportResponse {
+                status: 200,
+                effective_url: "https://ca.example/account/1",
+                replay_nonce: Some("terms-nonce-2"),
+                retry_after: None,
+                location: None,
+                content_type: Some("application/json"),
+                body_length: body.len(),
+            })
+        }
+    }
+
+    fn changed_terms_require_exact_fresh_owner_approval_impl() {
+        let (_, mut account) = active_account();
+        let directory_url = AcmeUrl::parse("https://ca.example/directory-v2", false).unwrap();
+        let directory = AcmeDirectory::parse(
+            r#"{"newNonce":"https://ca.example/new-nonce","newAccount":"https://ca.example/new-account","newOrder":"https://ca.example/new-order","revokeCert":"https://ca.example/revoke","keyChange":"https://ca.example/key-change","meta":{"termsOfService":"https://ca.example/terms-v2"}}"#,
+            &directory_url,
+            10,
+        )
+        .unwrap();
+        let wrong = crate::OwnerTermsApproval::new(
+            9,
+            directory.terms_of_service.as_ref().unwrap(),
+            b"terms v2",
+        );
+        assert!(
+            account
+                .prepare_terms_transition(&directory, &wrong, 6)
+                .is_err()
+        );
+        let approval = crate::OwnerTermsApproval::new(
+            10,
+            directory.terms_of_service.as_ref().unwrap(),
+            b"terms v2",
+        );
+        let receipt = account
+            .prepare_terms_transition(&directory, &approval, 6)
+            .unwrap();
+        assert_ne!(receipt.terms_content_digest, [0; 32]);
+        let mut exchange = crate::AcmeExchange::new(10, directory_url);
+        let mut transport = TermsTransitionTransport { fail_post: true };
+        let mut signer = Signer;
+        let mut payload = [0; 256];
+        let mut response = [0; 2048];
+        let mut jws = [0; 8192];
+        assert!(matches!(
+            execute_prepared_terms_transition(
+                &mut account,
+                receipt,
+                &directory,
+                &mut exchange,
+                &mut transport,
+                &mut signer,
+                AccountCreateBuffers {
+                    payload: &mut payload,
+                    response: &mut response,
+                    jws: &mut jws,
+                },
+            ),
+            Err(TermsTransitionFailure::Uncertain(_))
+        ));
+        assert_eq!(account.operation, AccountOperation::Uncertain);
+        transport.fail_post = false;
+        assert!(
+            execute_prepared_terms_transition(
+                &mut account,
+                receipt,
+                &directory,
+                &mut exchange,
+                &mut transport,
+                &mut signer,
+                AccountCreateBuffers {
+                    payload: &mut payload,
+                    response: &mut response,
+                    jws: &mut jws,
+                },
+            )
+            .is_ok()
+        );
+        assert_eq!(account.directory_generation, 10);
+        assert_eq!(account.generation, 2);
+        assert_eq!(account.policy_generation, 6);
+    }
+
     fn order_creation_binds_prepared_payload_and_resource_impl() {
         let (directory, account) = active_account();
         let identifiers = [DnsIdentifier::parse("example.com", false).unwrap()];
@@ -2465,6 +2720,11 @@ mod tests {
     #[test]
     fn uncertain_rollover_resolves_with_new_use_only_key() {
         run_order_test(uncertain_rollover_resolves_with_new_use_only_key_impl);
+    }
+
+    #[test]
+    fn changed_terms_require_exact_fresh_owner_approval() {
+        run_order_test(changed_terms_require_exact_fresh_owner_approval_impl);
     }
 
     #[test]
