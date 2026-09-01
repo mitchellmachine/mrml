@@ -48,6 +48,7 @@ pub use diff::FileDiff;
 pub use gitd_core::{
     BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate,
     CommitDetails, CommitPage, FullRefName, GitdCoreBackend, GitdCoreError,
+    ImmutablePackDescriptor,
     MAX_REFS_PER_TRANSACTION, PackGeneration, QueryLimits, ReadmeCandidate, RepositoryGeneration,
     RepositoryIdentity, RepositoryPath, RepositorySummary, RevocationGeneration, SignaturePurpose,
     SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,

@@ -93,3 +93,11 @@ packet/armor parsers and verifier; and ML-DSA key/signature verification. They
 run identically on Linux and the pinned Wine-hosted Windows target. This is
 structured-random regression evidence, not a claim of sanitizer-backed or
 coverage-guided fuzz completion.
+
+The repository-view contract now exposes a generation-bound immutable-pack
+descriptor for an exact commit. Construction authenticates and traverses the
+complete commit closure, rejects non-commit or mixed-format identities, and
+rechecks the active generation before returning profile/encoder version 1.
+It is a stable cache-generation request descriptor, not evidence that a cached
+or canonical compacted pack exists. Patent review: NOT_TRIGGERED for this typed
+identity descriptor; it performs no compression or delta-selection mechanism.

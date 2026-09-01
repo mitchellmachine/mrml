@@ -4,7 +4,8 @@ use mrml_runtime::Vector;
 
 use crate::{
     ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitDetails, CommitPage, GitdCoreBackend,
-    GitdCoreError, ObjectId, ObjectKind, PktLine, ProtocolBudget, ProtocolV2Request, QueryLimits,
+    GitdCoreError, ImmutablePackDescriptor, ObjectId, ObjectKind, PktLine, ProtocolBudget,
+    ProtocolV2Request, QueryLimits,
     ReadmeCandidate, Repository, RepositoryGeneration, RepositoryIdentity, RepositoryPath,
     RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse,
     TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request, write_pkt_line,
@@ -106,6 +107,14 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         treeish: ObjectId,
     ) -> Result<Option<ReadmeCandidate>, GitdCoreError> {
         Self::resolve_readme_candidate(self, repository, treeish)
+    }
+
+    fn immutable_pack_descriptor(
+        &self,
+        repository: &RepositoryIdentity,
+        commit: ObjectId,
+    ) -> Result<ImmutablePackDescriptor, GitdCoreError> {
+        Self::immutable_pack_descriptor(self, repository, commit)
     }
 
     fn verification_summary(
@@ -470,6 +479,35 @@ impl FilesystemRepositoryView {
         }
         self.ensure_generation(before.repository_generation)?;
         Ok(selected)
+    }
+
+    pub fn immutable_pack_descriptor(
+        &self,
+        repository: &RepositoryIdentity,
+        commit: ObjectId,
+    ) -> Result<ImmutablePackDescriptor, GitdCoreError> {
+        let before = self.load_for(repository)?;
+        if commit.format() != before.object_format {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let object = self
+            .objects
+            .read_object(commit)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if object.kind != ObjectKind::Commit {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        self.objects
+            .validate_commit_tips(&[commit])
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        self.ensure_generation(before.repository_generation)?;
+        Ok(ImmutablePackDescriptor {
+            repository_generation: before.repository_generation,
+            commit,
+            object_format: before.object_format,
+            pack_profile_version: 1,
+            encoder_version: 1,
+        })
     }
 
     pub fn read_tree_page(
@@ -858,6 +896,17 @@ mod tests {
         assert_eq!(readme.repository_generation, RepositoryGeneration(4));
         assert_eq!(readme.path, RepositoryPath::parse("README.md").unwrap());
         assert_eq!(readme.blob, blob);
+        let descriptor = GitdCoreBackend::immutable_pack_descriptor(&view, &identity, commit)
+            .unwrap();
+        assert_eq!(descriptor.repository_generation, RepositoryGeneration(4));
+        assert_eq!(descriptor.commit, commit);
+        assert_eq!(descriptor.object_format, ObjectFormat::Sha256);
+        assert_eq!(descriptor.pack_profile_version, 1);
+        assert_eq!(descriptor.encoder_version, 1);
+        assert_eq!(
+            GitdCoreBackend::immutable_pack_descriptor(&view, &identity, blob),
+            Err(GitdCoreError::ObjectValidation)
+        );
         assert_eq!(
             &*view
                 .read_tree_page(&identity, commit, &RepositoryPath::root(), limits)

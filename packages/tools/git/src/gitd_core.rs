@@ -206,6 +206,15 @@ pub struct ReadmeCandidate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImmutablePackDescriptor {
+    pub repository_generation: RepositoryGeneration,
+    pub commit: ObjectId,
+    pub object_format: ObjectFormat,
+    pub pack_profile_version: u32,
+    pub encoder_version: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositorySummary {
     pub repository_generation: RepositoryGeneration,
     pub default_branch: FullRefName,
@@ -507,6 +516,14 @@ pub trait GitdCoreBackend {
         _repository: &RepositoryIdentity,
         _treeish: ObjectId,
     ) -> Result<Option<ReadmeCandidate>, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn immutable_pack_descriptor(
+        &self,
+        _repository: &RepositoryIdentity,
+        _commit: ObjectId,
+    ) -> Result<ImmutablePackDescriptor, GitdCoreError> {
         Err(GitdCoreError::Unsupported)
     }
 

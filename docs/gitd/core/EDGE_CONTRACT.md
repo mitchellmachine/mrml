@@ -47,8 +47,12 @@ overflowing offsets fail closed. Commit pages have a companion exact-details
 query carrying the authenticated tree, complete bounded parent list, author,
 and message. README resolution checks only `README.md`, `README.txt`,
 `README.rst`, then `README`, in that order, inside the exact Git tree and
-returns a generation-tagged blob descriptor. This component does not yet
-implement release/event/archive descriptors, verification summaries, the
+returns a generation-tagged blob descriptor. An immutable-pack descriptor
+validates the complete exact commit closure before returning the repository
+generation, object format, exact commit ID, pack profile version, and encoder
+version; those fields form the cache/production request identity and do not
+claim a pack has already been generated. This component does not yet implement
+release/event descriptors, verification summaries, the
 complete upload-pack profile, or production receive construction, so it is not
 yet a complete production `GitdCoreBackend`.
 
