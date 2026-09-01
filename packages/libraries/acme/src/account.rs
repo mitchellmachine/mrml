@@ -34,6 +34,23 @@ impl OwnerTermsApproval {
             terms_content_digest: Sha256::digest(content),
         }
     }
+
+    /// Reconstructs an operator approval from a separately verified content
+    /// digest without requiring the approved terms document at daemon startup.
+    pub fn from_content_digest(
+        directory_generation: u64,
+        terms_url: &AcmeUrl,
+        content_digest: [u8; 32],
+    ) -> Result<Self, AccountError> {
+        if directory_generation == 0 || content_digest == [0; 32] {
+            return Err(AccountError::TermsApprovalMismatch);
+        }
+        Ok(Self {
+            directory_generation,
+            terms_url_digest: Sha256::digest(terms_url.as_str().as_bytes()),
+            terms_content_digest: content_digest,
+        })
+    }
     fn matches(&self, directory: &AcmeDirectory) -> bool {
         self.directory_generation == directory.generation
             && directory
@@ -554,6 +571,19 @@ mod tests {
             Err(AccountError::TermsApprovalMismatch)
         ));
         let approval = OwnerTermsApproval::new(4, &d.terms_of_service.unwrap(), b"terms");
+        let restored = OwnerTermsApproval::from_content_digest(
+            4,
+            &d.terms_of_service.unwrap(),
+            approval.terms_content_digest,
+        )
+        .unwrap();
+        assert!(restored == approval);
+        assert!(OwnerTermsApproval::from_content_digest(
+            4,
+            &d.terms_of_service.unwrap(),
+            [0; 32],
+        )
+        .is_err());
         assert!(matches!(
             AccountLifecycle::prepare_create(&d, policy, &key(1), Some(&approval), false),
             Err(AccountError::ExternalAccountBindingRequired)

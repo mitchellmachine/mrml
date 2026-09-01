@@ -1,6 +1,8 @@
 #![no_std]
 
-use mrml_acme::{AcmeUrl, DnsIdentifier, MAX_CSR_IDENTIFIERS};
+use mrml_acme::{
+    AcmeDirectory, AcmeUrl, DnsIdentifier, MAX_CSR_IDENTIFIERS, OwnerTermsApproval,
+};
 use mrml_certificate::certd_identifier_set_digest;
 use mrml_json::Value;
 
@@ -48,6 +50,31 @@ pub enum AcmedConfigError {
     InvalidZone,
     InvalidIdentity,
     InvalidBounds,
+}
+
+impl AcmedConfig {
+    pub fn terms_approval(
+        &self,
+        directory: &AcmeDirectory,
+    ) -> Result<Option<OwnerTermsApproval>, AcmedConfigError> {
+        match (
+            directory.terms_of_service.as_ref(),
+            self.approved_terms_url.as_ref(),
+            self.approved_terms_content_digest,
+        ) {
+            (None, None, None) => Ok(None),
+            (Some(advertised), Some(approved), Some(digest)) if advertised == approved => {
+                OwnerTermsApproval::from_content_digest(
+                    directory.generation,
+                    approved,
+                    digest,
+                )
+                .map(Some)
+                .map_err(|_| AcmedConfigError::InvalidTermsApproval)
+            }
+            _ => Err(AcmedConfigError::InvalidTermsApproval),
+        }
+    }
 }
 
 pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError> {
@@ -294,6 +321,23 @@ mod tests {
         assert_ne!(config.identifier_set_digest, [0; 32]);
         assert!(config.approved_terms_url.is_some());
         assert_eq!(config.approved_terms_content_digest, Some([0x11; 32]));
+        let directory = AcmeDirectory::parse(
+            r#"{"newNonce":"https://acme-staging-v02.api.letsencrypt.org/nonce","newAccount":"https://acme-staging-v02.api.letsencrypt.org/account","newOrder":"https://acme-staging-v02.api.letsencrypt.org/order","revokeCert":"https://acme-staging-v02.api.letsencrypt.org/revoke","keyChange":"https://acme-staging-v02.api.letsencrypt.org/key-change","meta":{"termsOfService":"https://letsencrypt.org/documents/approved.pdf"}}"#,
+            &config.directory_url,
+            config.directory_generation,
+        )
+        .unwrap();
+        assert!(config.terms_approval(&directory).unwrap().is_some());
+        let changed = AcmeDirectory::parse(
+            r#"{"newNonce":"https://acme-staging-v02.api.letsencrypt.org/nonce","newAccount":"https://acme-staging-v02.api.letsencrypt.org/account","newOrder":"https://acme-staging-v02.api.letsencrypt.org/order","revokeCert":"https://acme-staging-v02.api.letsencrypt.org/revoke","keyChange":"https://acme-staging-v02.api.letsencrypt.org/key-change","meta":{"termsOfService":"https://letsencrypt.org/documents/changed.pdf"}}"#,
+            &config.directory_url,
+            config.directory_generation,
+        )
+        .unwrap();
+        assert!(matches!(
+            config.terms_approval(&changed),
+            Err(AcmedConfigError::InvalidTermsApproval)
+        ));
     }
 
     #[test]
