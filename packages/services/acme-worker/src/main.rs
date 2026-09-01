@@ -1,13 +1,16 @@
 use mrml_acmed::{
     AcmedAccountPhase, AcmedAccountRecord, AcmedChannelRequestCounter, AcmedConfig,
-    AcmedRequestIdReservation, AcmeDirectoryClass, MAX_ACMED_CONFIG_BYTES, parse_acmed_config,
+    AcmedOrderPhase, AcmedOrderRecord, AcmedRequestIdReservation, AcmeDirectoryClass,
+    MAX_ACMED_CONFIG_BYTES, parse_acmed_config,
 };
 use mrml_acme::{
     AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
-    AcmeJwsEnvelopeWriter, AcmeUrl, CaClass, HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES,
-    MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES, P256Jwk, ProtectedKey, ReplayNonce,
-    account_contacts_digest, execute_prepared_account_create, fetch_directory,
-    recover_uncertain_account_creation,
+    AcmeIdentifier, AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, CaClass,
+    HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS,
+    MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES, OrderCreateBuffers,
+    OrderLifecycle, P256Jwk, ProtectedKey, ReplayNonce, account_contacts_digest,
+    execute_prepared_account_create, execute_prepared_order_create, fetch_directory,
+    prepare_order_creation, recover_uncertain_account_creation,
 };
 use mrml_certificate::{
     CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_RESPONSE_BYTES,
@@ -22,7 +25,7 @@ use mrml_certificate::{
     encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
 };
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ACMED_UID: u32 = 21004;
 const ACMED_PEER: CertdPeerIdentity = CertdPeerIdentity {
@@ -179,9 +182,16 @@ fn serve(
         operation: AcmeJwsOperation::NewAccount,
         next_request_id: bootstrap.next_request_id,
     };
-    let _account = establish_account(
+    let account = establish_account(
         &config,
         &bootstrap.account_public_key,
+        &mut envelope_writer,
+        &mut state,
+        &mut state_authenticator,
+    )?;
+    let _order = establish_order(
+        &config,
+        &account,
         &mut envelope_writer,
         &mut state,
         &mut state_authenticator,
@@ -589,6 +599,260 @@ fn persist_account_record(
     let committed = state
         .commit(prepared)
         .map_err(|_| "ACME account state commit uncertain")?;
+    Ok(committed.generation)
+}
+
+fn establish_order(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<(OrderLifecycle, [Option<AuthorizationResource>; MAX_AUTHORIZATIONS]), &'static str> {
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock precedes Unix epoch")?
+        .as_secs();
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for order")?;
+    let count = usize::from(config.identifier_count);
+    let first = config.identifiers[0].ok_or("missing configured identifier")?;
+    let mut identifier_storage = [AcmeIdentifier::Dns(first); MAX_CSR_IDENTIFIERS];
+    for (slot, identifier) in identifier_storage
+        .iter_mut()
+        .zip(config.identifiers[..count].iter().flatten())
+    {
+        *slot = AcmeIdentifier::Dns(*identifier);
+    }
+    let identifiers = &identifier_storage[..count];
+    match load_order_record(config, state, authenticator)? {
+        Some((record, _)) if record.phase == AcmedOrderPhase::RequestMayHaveBeenSent => {
+            record.require_policy(config).map_err(|_| "stale ACME order policy")?;
+            Err("ACME order response is uncertain; duplicate order creation refused")
+        }
+        Some((record, _)) if record.phase == AcmedOrderPhase::Created => {
+            record.require_policy(config).map_err(|_| "stale ACME order policy")?;
+            if usize::from(record.authorization_count) != count {
+                return Err("ACME order authorization count mismatch");
+            }
+            let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+            let prepared = prepare_order_creation(
+                &directory,
+                account,
+                identifiers,
+                &config.certificate_profile,
+                None,
+                record.deadline_unix,
+                config.order_retry_limit,
+                false,
+                &mut payload,
+            )
+            .map_err(|_| "cannot reconstruct ACME order request")?;
+            if prepared.request_digest != record.request_digest {
+                return Err("ACME order request binding mismatch");
+            }
+            let mut order = OrderLifecycle::create(
+                &directory,
+                account.generation,
+                account.key,
+                record.order_url.ok_or("created order URL missing")?,
+                record.finalize_url.ok_or("created finalize URL missing")?,
+                config.certificate_profile,
+                identifiers,
+                false,
+                record.deadline_unix,
+                config.order_retry_limit,
+            )
+            .map_err(|_| "cannot restore ACME order")?;
+            order
+                .apply_order_response(
+                    1,
+                    record.state.ok_or("created order state missing")?,
+                    record.certificate_url,
+                    now_unix,
+                )
+                .map_err(|_| "restored ACME order is stale or invalid")?;
+            let mut resources = [None; MAX_AUTHORIZATIONS];
+            for (slot, url) in resources
+                .iter_mut()
+                .zip(record.authorization_urls[..count].iter().flatten())
+            {
+                *slot = Some(
+                    AuthorizationResource::bind(
+                        &order.order_url,
+                        *url,
+                        directory.generation,
+                        account.generation,
+                    )
+                    .map_err(|_| "invalid restored authorization resource")?,
+                );
+            }
+            Ok((order, resources))
+        }
+        Some(_) => Err("unsupported ACME order durable phase"),
+        None => {
+            let deadline = now_unix
+                .checked_add(config.order_lifetime_seconds)
+                .ok_or("ACME order deadline overflow")?;
+            let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+            let prepared = prepare_order_creation(
+                &directory,
+                account,
+                identifiers,
+                &config.certificate_profile,
+                None,
+                deadline,
+                config.order_retry_limit,
+                false,
+                &mut payload,
+            )
+            .map_err(|_| "cannot prepare ACME order")?;
+            let pending = AcmedOrderRecord {
+                phase: AcmedOrderPhase::RequestMayHaveBeenSent,
+                directory_generation: config.directory_generation,
+                account_generation: config.account_generation,
+                policy_generation: config.policy_generation,
+                identity: config.identity,
+                request_digest: prepared.request_digest,
+                deadline_unix: deadline,
+                state: None,
+                order_url: None,
+                finalize_url: None,
+                certificate_url: None,
+                authorization_urls: [None; MAX_AUTHORIZATIONS],
+                authorization_count: 0,
+            };
+            let pending_generation = persist_order_record(
+                config,
+                state,
+                authenticator,
+                0,
+                &pending,
+            )?;
+            let mut response = [0u8; MAX_DIRECTORY_BYTES];
+            let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+            let mut resources = [None; MAX_AUTHORIZATIONS];
+            signer.operation = AcmeJwsOperation::NewOrder;
+            let order = execute_prepared_order_create(
+                prepared,
+                &directory,
+                account,
+                identifiers,
+                config.certificate_profile,
+                None,
+                false,
+                now_unix,
+                &mut exchange,
+                &mut transport,
+                signer,
+                OrderCreateBuffers {
+                    payload: &mut payload,
+                    response: &mut response,
+                    jws: &mut jws,
+                    authorizations: &mut resources[..count],
+                },
+            )
+            .map_err(|_| "ACME order creation is uncertain or rejected")?;
+            let mut authorization_urls = [None; MAX_AUTHORIZATIONS];
+            for (slot, resource) in authorization_urls
+                .iter_mut()
+                .zip(resources[..count].iter().flatten())
+            {
+                *slot = Some(resource.url);
+            }
+            let created = AcmedOrderRecord {
+                phase: AcmedOrderPhase::Created,
+                directory_generation: config.directory_generation,
+                account_generation: config.account_generation,
+                policy_generation: config.policy_generation,
+                identity: config.identity,
+                request_digest: prepared.request_digest,
+                deadline_unix: deadline,
+                state: Some(order.state),
+                order_url: Some(order.order_url),
+                finalize_url: Some(order.finalize_url),
+                certificate_url: order.certificate_url,
+                authorization_urls,
+                authorization_count: count as u8,
+            };
+            persist_order_record(
+                config,
+                state,
+                authenticator,
+                pending_generation,
+                &created,
+            )?;
+            Ok((order, resources))
+        }
+    }
+}
+
+fn load_order_record(
+    config: &AcmedConfig,
+    state: &HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<(AcmedOrderRecord, u64)>, &'static str> {
+    let object = DurableObjectId(config.identity);
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let Some(length) = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot read ACME order state")?
+    else {
+        return Ok(None);
+    };
+    let durable = DurableRecord::decode(&encoded[..length], authenticator)
+        .map_err(|_| "ACME order state authentication failed")?;
+    if durable.namespace != DurableNamespace::PublicState
+        || durable.kind != DurableRecordKind::Order
+        || durable.object != object
+    {
+        return Err("ACME order durable record type mismatch");
+    }
+    let order = AcmedOrderRecord::decode(
+        durable.payload(),
+        &config.directory_url,
+        config.directory_class == AcmeDirectoryClass::LocalTest,
+    )
+    .map_err(|_| "invalid ACME order durable record")?;
+    Ok(Some((order, durable.generation)))
+}
+
+fn persist_order_record(
+    config: &AcmedConfig,
+    state: &mut impl DurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    previous_generation: u64,
+    order: &AcmedOrderRecord,
+) -> Result<u64, &'static str> {
+    order.require_policy(config).map_err(|_| "stale ACME order policy")?;
+    let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
+    let length = order
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode ACME order state")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::Order,
+        DurableObjectId(config.identity),
+        previous_generation,
+        &payload[..length],
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate ACME order state")?;
+    let prepared = state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare ACME order state")?;
+    let committed = state
+        .commit(prepared)
+        .map_err(|_| "ACME order state commit uncertain")?;
     Ok(committed.generation)
 }
 

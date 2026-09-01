@@ -1,8 +1,8 @@
 #![no_std]
 
 use mrml_acme::{
-    AcmeDirectory, AcmeUrl, DnsIdentifier, JwkThumbprint, MAX_CSR_IDENTIFIERS, MAX_URL_BYTES,
-    OwnerTermsApproval,
+    AcmeDirectory, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint,
+    MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_URL_BYTES, OrderState, OwnerTermsApproval,
 };
 use mrml_certificate::certd_identifier_set_digest;
 use mrml_json::Value;
@@ -12,6 +12,8 @@ const ACCOUNT_RECORD_MAGIC: &[u8; 8] = b"MRMLACA1";
 const ACCOUNT_RECORD_HEADER_BYTES: usize = 116;
 const CHANNEL_REQUEST_MAGIC: &[u8; 8] = b"MRMLRID1";
 pub const CHANNEL_REQUEST_RESERVATION: u64 = 1_000_000;
+const ORDER_RECORD_MAGIC: &[u8; 8] = b"MRMLAOR1";
+const ORDER_RECORD_HEADER_BYTES: usize = 130;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcmedRequestIdReservation {
@@ -234,6 +236,254 @@ fn read_u64(input: &[u8]) -> Result<u64, AcmedAccountRecordError> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcmedOrderPhase {
+    RequestMayHaveBeenSent = 1,
+    Created = 2,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AcmedOrderRecord {
+    pub phase: AcmedOrderPhase,
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub policy_generation: u64,
+    pub identity: [u8; 16],
+    pub request_digest: [u8; 32],
+    pub deadline_unix: u64,
+    pub state: Option<OrderState>,
+    pub order_url: Option<AcmeUrl>,
+    pub finalize_url: Option<AcmeUrl>,
+    pub certificate_url: Option<AcmeUrl>,
+    pub authorization_urls: [Option<AcmeUrl>; MAX_AUTHORIZATIONS],
+    pub authorization_count: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcmedOrderRecordError {
+    InvalidState,
+    OutputTooSmall,
+    Malformed,
+    PolicyMismatch,
+}
+
+impl AcmedOrderRecord {
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, AcmedOrderRecordError> {
+        let count = usize::from(self.authorization_count);
+        if self.directory_generation == 0
+            || self.account_generation == 0
+            || self.policy_generation == 0
+            || self.identity == [0; 16]
+            || self.request_digest == [0; 32]
+            || self.deadline_unix == 0
+            || count > MAX_AUTHORIZATIONS
+            || self.authorization_urls[count..].iter().any(Option::is_some)
+        {
+            return Err(AcmedOrderRecordError::InvalidState);
+        }
+        let created = self.phase == AcmedOrderPhase::Created;
+        if created
+            != (self.state.is_some()
+                && self.order_url.is_some()
+                && self.finalize_url.is_some())
+            || (!created
+                && (self.certificate_url.is_some()
+                    || count != 0
+                    || self.authorization_urls.iter().any(Option::is_some)))
+            || self.authorization_urls[..count].iter().any(Option::is_none)
+        {
+            return Err(AcmedOrderRecordError::InvalidState);
+        }
+        let order = text_url(self.order_url.as_ref());
+        let finalize = text_url(self.finalize_url.as_ref());
+        let certificate = text_url(self.certificate_url.as_ref());
+        let mut length = ORDER_RECORD_HEADER_BYTES;
+        for url in [order, finalize, certificate]
+            .into_iter()
+            .chain(self.authorization_urls[..count].iter().flatten().map(AcmeUrl::as_str))
+        {
+            if url.len() > MAX_URL_BYTES {
+                return Err(AcmedOrderRecordError::InvalidState);
+            }
+            length = length
+                .checked_add(url.len())
+                .ok_or(AcmedOrderRecordError::OutputTooSmall)?;
+        }
+        if output.len() < length {
+            return Err(AcmedOrderRecordError::OutputTooSmall);
+        }
+        output[..length].fill(0);
+        output[..8].copy_from_slice(ORDER_RECORD_MAGIC);
+        output[8] = self.phase as u8;
+        output[9] = self.state.map(encode_order_state).unwrap_or(0);
+        output[10] = self.authorization_count;
+        output[12..20].copy_from_slice(&self.directory_generation.to_be_bytes());
+        output[20..28].copy_from_slice(&self.account_generation.to_be_bytes());
+        output[28..36].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[36..52].copy_from_slice(&self.identity);
+        output[52..84].copy_from_slice(&self.request_digest);
+        output[84..92].copy_from_slice(&self.deadline_unix.to_be_bytes());
+        for (index, url) in [order, finalize, certificate]
+            .into_iter()
+            .chain(self.authorization_urls[..count].iter().flatten().map(AcmeUrl::as_str))
+            .enumerate()
+        {
+            let start = 92 + index * 2;
+            output[start..start + 2].copy_from_slice(&(url.len() as u16).to_be_bytes());
+        }
+        let mut cursor = ORDER_RECORD_HEADER_BYTES;
+        for url in [order, finalize, certificate]
+            .into_iter()
+            .chain(self.authorization_urls[..count].iter().flatten().map(AcmeUrl::as_str))
+        {
+            output[cursor..cursor + url.len()].copy_from_slice(url.as_bytes());
+            cursor += url.len();
+        }
+        Ok(length)
+    }
+
+    pub fn decode(
+        input: &[u8],
+        configured_directory: &AcmeUrl,
+        allow_test_http: bool,
+    ) -> Result<Self, AcmedOrderRecordError> {
+        if input.len() < ORDER_RECORD_HEADER_BYTES
+            || input.get(..8) != Some(ORDER_RECORD_MAGIC)
+            || input[11] != 0
+        {
+            return Err(AcmedOrderRecordError::Malformed);
+        }
+        let phase = match input[8] {
+            1 => AcmedOrderPhase::RequestMayHaveBeenSent,
+            2 => AcmedOrderPhase::Created,
+            _ => return Err(AcmedOrderRecordError::Malformed),
+        };
+        let state = if input[9] == 0 {
+            None
+        } else {
+            Some(decode_order_state(input[9])?)
+        };
+        let count = usize::from(input[10]);
+        if count > MAX_AUTHORIZATIONS {
+            return Err(AcmedOrderRecordError::Malformed);
+        }
+        let mut lengths = [0usize; 3 + MAX_AUTHORIZATIONS];
+        for (index, length) in lengths.iter_mut().enumerate() {
+            let start = 92 + index * 2;
+            *length = usize::from(u16::from_be_bytes([input[start], input[start + 1]]));
+        }
+        if lengths[3 + count..].iter().any(|length| *length != 0)
+            || lengths
+                .iter()
+                .try_fold(ORDER_RECORD_HEADER_BYTES, |sum, value| sum.checked_add(*value))
+                != Some(input.len())
+        {
+            return Err(AcmedOrderRecordError::Malformed);
+        }
+        let mut cursor = ORDER_RECORD_HEADER_BYTES;
+        let mut urls = [None; 3 + MAX_AUTHORIZATIONS];
+        for (index, length) in lengths.iter().enumerate() {
+            if *length == 0 {
+                continue;
+            }
+            let end = cursor
+                .checked_add(*length)
+                .ok_or(AcmedOrderRecordError::Malformed)?;
+            let text = core::str::from_utf8(
+                input
+                    .get(cursor..end)
+                    .ok_or(AcmedOrderRecordError::Malformed)?,
+            )
+            .map_err(|_| AcmedOrderRecordError::Malformed)?;
+            let url = AcmeUrl::parse(text, allow_test_http)
+                .map_err(|_| AcmedOrderRecordError::Malformed)?;
+            url.require_origin(configured_directory.origin())
+                .map_err(|_| AcmedOrderRecordError::PolicyMismatch)?;
+            urls[index] = Some(url);
+            cursor = end;
+        }
+        let mut authorization_urls = [None; MAX_AUTHORIZATIONS];
+        authorization_urls[..count].copy_from_slice(&urls[3..3 + count]);
+        let record = Self {
+            phase,
+            directory_generation: read_order_u64(&input[12..20])?,
+            account_generation: read_order_u64(&input[20..28])?,
+            policy_generation: read_order_u64(&input[28..36])?,
+            identity: input[36..52]
+                .try_into()
+                .map_err(|_| AcmedOrderRecordError::Malformed)?,
+            request_digest: input[52..84]
+                .try_into()
+                .map_err(|_| AcmedOrderRecordError::Malformed)?,
+            deadline_unix: read_order_u64(&input[84..92])?,
+            state,
+            order_url: urls[0],
+            finalize_url: urls[1],
+            certificate_url: urls[2],
+            authorization_urls,
+            authorization_count: count as u8,
+        };
+        let mut canonical = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+        let length = record.encode(&mut canonical)?;
+        if canonical[..length] != *input {
+            return Err(AcmedOrderRecordError::Malformed);
+        }
+        Ok(record)
+    }
+
+    pub fn require_policy(&self, config: &AcmedConfig) -> Result<(), AcmedOrderRecordError> {
+        if self.directory_generation != config.directory_generation
+            || self.account_generation != config.account_generation
+            || self.policy_generation != config.policy_generation
+            || self.identity != config.identity
+        {
+            Err(AcmedOrderRecordError::PolicyMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn text_url(url: Option<&AcmeUrl>) -> &str {
+    url.map(AcmeUrl::as_str).unwrap_or("")
+}
+
+fn encode_order_state(state: OrderState) -> u8 {
+    match state {
+        OrderState::Pending => 1,
+        OrderState::Ready => 2,
+        OrderState::Processing => 3,
+        OrderState::Valid => 4,
+        OrderState::Invalid => 5,
+        OrderState::Deactivated => 6,
+        OrderState::Expired => 7,
+        OrderState::Revoked => 8,
+    }
+}
+
+fn decode_order_state(value: u8) -> Result<OrderState, AcmedOrderRecordError> {
+    Ok(match value {
+        1 => OrderState::Pending,
+        2 => OrderState::Ready,
+        3 => OrderState::Processing,
+        4 => OrderState::Valid,
+        5 => OrderState::Invalid,
+        6 => OrderState::Deactivated,
+        7 => OrderState::Expired,
+        8 => OrderState::Revoked,
+        _ => return Err(AcmedOrderRecordError::Malformed),
+    })
+}
+
+fn read_order_u64(input: &[u8]) -> Result<u64, AcmedOrderRecordError> {
+    Ok(u64::from_be_bytes(
+        input
+            .try_into()
+            .map_err(|_| AcmedOrderRecordError::Malformed)?,
+    ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AcmeDirectoryClass {
     LocalTest,
     PublicStaging,
@@ -254,6 +504,9 @@ pub struct AcmedConfig {
     pub account_generation: u64,
     pub key_generation: u64,
     pub policy_generation: u64,
+    pub certificate_profile: CertificateProfile,
+    pub order_lifetime_seconds: u64,
+    pub order_retry_limit: u8,
     pub identifiers: [Option<DnsIdentifier>; MAX_CSR_IDENTIFIERS],
     pub identifier_count: u8,
     pub identifier_set_digest: [u8; 32],
@@ -308,7 +561,7 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| AcmedConfigError::Malformed)?;
     let object = value.as_object().ok_or(AcmedConfigError::Malformed)?;
-    const FIELDS: [&str; 18] = [
+    const FIELDS: [&str; 21] = [
         "directory_url",
         "directory_generation",
         "directory_class",
@@ -323,6 +576,9 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         "account_generation",
         "key_generation",
         "policy_generation",
+        "certificate_profile",
+        "order_lifetime_seconds",
+        "order_retry_limit",
         "identifiers",
         "wildcard_enabled",
         "poll_interval_seconds",
@@ -394,6 +650,17 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     if account_generation == 0 || key_generation == 0 || policy_generation == 0 {
         return Err(AcmedConfigError::InvalidBounds);
     }
+    let certificate_profile = CertificateProfile::parse(
+        text(&value, "certificate_profile")?,
+        directory_generation,
+    )
+    .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    let order_lifetime_seconds = number(&value, "order_lifetime_seconds")?;
+    let order_retry_limit = u8::try_from(number(&value, "order_retry_limit")?)
+        .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    if !(300..=86_400).contains(&order_lifetime_seconds) || !(1..=16).contains(&order_retry_limit) {
+        return Err(AcmedConfigError::InvalidBounds);
+    }
     let wildcard_enabled = value
         .get("wildcard_enabled")
         .and_then(Value::as_bool)
@@ -439,6 +706,9 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         account_generation,
         key_generation,
         policy_generation,
+        certificate_profile,
+        order_lifetime_seconds,
+        order_retry_limit,
         identifiers,
         identifier_count: list.len() as u8,
         identifier_set_digest,
@@ -535,7 +805,7 @@ mod tests {
         HmacSha256DurableAuthenticator, MAX_DURABLE_RECORD_BYTES,
     };
 
-    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
+    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"certificate_profile":"classic","order_lifetime_seconds":3600,"order_retry_limit":6,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
 
     #[test]
     fn account_record_round_trips_only_exact_policy_bound_states() {
@@ -669,6 +939,133 @@ mod tests {
     }
 
     #[test]
+    fn order_record_round_trips_pending_and_created_resource_sets() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let pending = AcmedOrderRecord {
+            phase: AcmedOrderPhase::RequestMayHaveBeenSent,
+            directory_generation: 1,
+            account_generation: 1,
+            policy_generation: 1,
+            identity: config.identity,
+            request_digest: [8; 32],
+            deadline_unix: 10_000,
+            state: None,
+            order_url: None,
+            finalize_url: None,
+            certificate_url: None,
+            authorization_urls: [None; MAX_AUTHORIZATIONS],
+            authorization_count: 0,
+        };
+        let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+        let length = pending.encode(&mut encoded).unwrap();
+        let decoded = AcmedOrderRecord::decode(
+            &encoded[..length],
+            &config.directory_url,
+            false,
+        )
+        .unwrap();
+        assert!(decoded == pending);
+        decoded.require_policy(&config).unwrap();
+
+        let mut authorizations = [None; MAX_AUTHORIZATIONS];
+        authorizations[0] = Some(
+            AcmeUrl::parse(
+                "https://acme-staging-v02.api.letsencrypt.org/authz/1",
+                false,
+            )
+            .unwrap(),
+        );
+        authorizations[1] = Some(
+            AcmeUrl::parse(
+                "https://acme-staging-v02.api.letsencrypt.org/authz/2",
+                false,
+            )
+            .unwrap(),
+        );
+        let created = AcmedOrderRecord {
+            phase: AcmedOrderPhase::Created,
+            state: Some(OrderState::Pending),
+            order_url: Some(
+                AcmeUrl::parse(
+                    "https://acme-staging-v02.api.letsencrypt.org/order/1",
+                    false,
+                )
+                .unwrap(),
+            ),
+            finalize_url: Some(
+                AcmeUrl::parse(
+                    "https://acme-staging-v02.api.letsencrypt.org/finalize/1",
+                    false,
+                )
+                .unwrap(),
+            ),
+            authorization_urls: authorizations,
+            authorization_count: 2,
+            ..pending
+        };
+        let length = created.encode(&mut encoded).unwrap();
+        assert!(
+            AcmedOrderRecord::decode(&encoded[..length], &config.directory_url, false).unwrap()
+                == created
+        );
+        let mut writer = HmacSha256DurableAuthenticator::new([0x61; 32]);
+        let durable = DurableRecord::prepare(
+            DurableNamespace::PublicState,
+            DurableRecordKind::Order,
+            DurableObjectId(config.identity),
+            0,
+            &encoded[..length],
+            &mut writer,
+        )
+        .unwrap();
+        let mut authenticated = [0u8; MAX_DURABLE_RECORD_BYTES];
+        let authenticated_length = durable.encode(&mut authenticated).unwrap();
+        let mut wrong = HmacSha256DurableAuthenticator::new([0x62; 32]);
+        assert!(DurableRecord::decode(&authenticated[..authenticated_length], &mut wrong).is_err());
+        encoded[11] = 1;
+        assert!(AcmedOrderRecord::decode(
+            &encoded[..length],
+            &config.directory_url,
+            false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn order_record_rejects_cross_origin_and_partial_created_state() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let partial = AcmedOrderRecord {
+            phase: AcmedOrderPhase::Created,
+            directory_generation: 1,
+            account_generation: 1,
+            policy_generation: 1,
+            identity: config.identity,
+            request_digest: [8; 32],
+            deadline_unix: 10_000,
+            state: Some(OrderState::Pending),
+            order_url: Some(AcmeUrl::parse("https://other.example/order/1", false).unwrap()),
+            finalize_url: None,
+            certificate_url: None,
+            authorization_urls: [None; MAX_AUTHORIZATIONS],
+            authorization_count: 0,
+        };
+        let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+        assert!(matches!(
+            partial.encode(&mut encoded),
+            Err(AcmedOrderRecordError::InvalidState)
+        ));
+        let complete = AcmedOrderRecord {
+            finalize_url: Some(AcmeUrl::parse("https://other.example/finalize/1", false).unwrap()),
+            ..partial
+        };
+        let length = complete.encode(&mut encoded).unwrap();
+        assert!(matches!(
+            AcmedOrderRecord::decode(&encoded[..length], &config.directory_url, false),
+            Err(AcmedOrderRecordError::PolicyMismatch)
+        ));
+    }
+
+    #[test]
     fn staging_configuration_is_exact_and_bounded() {
         let config = parse_acmed_config(STAGING).unwrap();
         assert_eq!(config.directory_class, AcmeDirectoryClass::PublicStaging);
@@ -678,6 +1075,9 @@ mod tests {
         );
         assert_eq!(config.per_identity_concurrency, 1);
         assert_eq!(config.identifier_count, 2);
+        assert_eq!(config.certificate_profile.name(), "classic");
+        assert_eq!(config.order_lifetime_seconds, 3_600);
+        assert_eq!(config.order_retry_limit, 6);
         assert_ne!(config.identifier_set_digest, [0; 32]);
         assert!(config.approved_terms_url.is_some());
         assert_eq!(config.approved_terms_content_digest, Some([0x11; 32]));
@@ -724,6 +1124,10 @@ mod tests {
             parse_acmed_config(
                 &STAGING.replace("poll_interval_seconds\":30", "poll_interval_seconds\":0")
             ),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace("order_retry_limit\":6", "order_retry_limit\":0")),
             Err(AcmedConfigError::InvalidBounds)
         ));
         assert!(matches!(

@@ -208,6 +208,28 @@ pub struct AuthorizationResource {
     pub account_generation: u64,
 }
 
+impl AuthorizationResource {
+    pub fn bind(
+        order_url: &AcmeUrl,
+        url: AcmeUrl,
+        directory_generation: u64,
+        account_generation: u64,
+    ) -> Result<Self, OrderError> {
+        if directory_generation == 0 || account_generation == 0 {
+            return Err(OrderError::InvalidState);
+        }
+        if url.origin() != order_url.origin() {
+            return Err(OrderError::UrlPolicy);
+        }
+        Ok(Self {
+            url,
+            order_url_digest: Sha256::digest(order_url.as_str().as_bytes()),
+            directory_generation,
+            account_generation,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct PreparedPreauthorization {
     pub directory_generation: u64,
