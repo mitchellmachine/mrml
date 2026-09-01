@@ -71,10 +71,49 @@ pub enum AccountRolloverFailure<E> {
     Uncertain(AccountRolloverError<E>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryFetchError<E> {
+    Transport(crate::TransportError<E>),
+    UnexpectedStatus,
+    UnexpectedContentType,
+    Encoding,
+    Directory(crate::DirectoryError),
+}
+
 pub struct AccountCreateBuffers<'a> {
     pub payload: &'a mut [u8],
     pub response: &'a mut [u8],
     pub jws: &'a mut [u8],
+}
+
+pub fn fetch_directory<T: AcmeTransport>(
+    configured_url: &AcmeUrl,
+    generation: u64,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    response_body: &mut [u8],
+) -> Result<AcmeDirectory, DirectoryFetchError<T::Error>> {
+    let metadata = exchange
+        .execute(
+            transport,
+            crate::AcmeTransportRequest {
+                method: crate::AcmeHttpMethod::Get,
+                url: configured_url,
+                content_type: crate::AcmeContentType::Empty,
+                body: &[],
+            },
+            response_body,
+        )
+        .map_err(DirectoryFetchError::Transport)?;
+    if metadata.status != 200 {
+        return Err(DirectoryFetchError::UnexpectedStatus);
+    }
+    if metadata.response_type != crate::AcmeResponseType::Json {
+        return Err(DirectoryFetchError::UnexpectedContentType);
+    }
+    let source = core::str::from_utf8(&response_body[..metadata.body_length])
+        .map_err(|_| DirectoryFetchError::Encoding)?;
+    AcmeDirectory::parse(source, configured_url, generation).map_err(DirectoryFetchError::Directory)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1021,6 +1060,27 @@ mod tests {
     struct RecoveryTransport {
         calls: usize,
     }
+    struct DirectoryTransport;
+    impl AcmeTransport for DirectoryTransport {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            _request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            let body = br#"{"newNonce":"https://ca.example/new-nonce","newAccount":"https://ca.example/new-account","newOrder":"https://ca.example/new-order","revokeCert":"https://ca.example/revoke","keyChange":"https://ca.example/key-change"}"#;
+            output[..body.len()].copy_from_slice(body);
+            Ok(AcmeTransportResponse {
+                status: 200,
+                effective_url: "https://ca.example/directory",
+                replay_nonce: None,
+                retry_after: None,
+                location: None,
+                content_type: Some("application/json"),
+                body_length: body.len(),
+            })
+        }
+    }
     impl AcmeTransport for RecoveryTransport {
         type Error = ();
         fn exchange(
@@ -1290,6 +1350,18 @@ mod tests {
         let (lifecycle, receipt) =
             AccountLifecycle::prepare_create(&directory, policy, &key, None, false).unwrap();
         (directory, key, lifecycle, receipt)
+    }
+
+    #[test]
+    fn directory_fetch_is_authenticated_generation_input() {
+        let url = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let mut exchange = crate::AcmeExchange::new(11, url);
+        let mut transport = DirectoryTransport;
+        let mut response = [0; 2048];
+        let directory =
+            fetch_directory(&url, 11, &mut exchange, &mut transport, &mut response).unwrap();
+        assert_eq!(directory.generation, 11);
+        assert_eq!(directory.new_order.as_str(), "https://ca.example/new-order");
     }
 
     fn creation_binds_signed_response_location_and_contacts_impl() {

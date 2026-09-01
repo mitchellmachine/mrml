@@ -11498,3 +11498,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 account URL, directory generation, prepared receipt, and separate use-only
 signing routes. It adds no smart-card precomputation machinery or other
 recorded re-review trigger.
+
+# 2026-09-01 — Authenticated ACME directory discovery
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment fetches and parses the ordinary
+configured ACME directory through the already reviewed bounded authenticated
+transport, exact origin, JSON media type, and explicit generation. It adds no
+recorded re-review-trigger mechanism.
