@@ -152,6 +152,17 @@ independently serviced activation, launched service or guest,
 resolver-to-launch dispatch, persistent root discovery, or actual reclamation
 lifecycle is implemented.
 
+The reusable OpenPGP detached-signing boundary is **IMPLEMENTED** only as the
+generation-1 schema, generated fixed codec, and typed in-process host adapter.
+Its opaque endpoint and expected primary fingerprint identify one exact key
+generation; only a separately delivered endpoint capability authorizes signing.
+Signing and public-key-description routes remain separate, and key use never
+implies secret export. The adapter type's `Isolated` name does not establish an
+isolation boundary. Capability-projected IPC provider deployment, supervised
+runtime binding/revocation, boot and recovery use, protected key custody, and
+physical evidence remain **PLANNED**; detailed status is canonical in
+[packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md).
+
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical
 in [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Those mechanisms are
