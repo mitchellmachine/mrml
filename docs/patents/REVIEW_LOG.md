@@ -11233,6 +11233,14 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 Host, token, and request-bound checks for RFC 8555 HTTP-01 and no recorded
 re-review-trigger mechanism.
 
+# 2026-09-01 — Certificate revocation lifecycle
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary ACME certificate
+revocation state and exact reason/credential/authorization binding with
+authoritative uncertainty resolution. It adds no recorded re-review-trigger
+mechanism.
+
 # 2026-09-01 — Authenticated durable lifecycle journal substrate
 
 Patent review: **NOT_TRIGGERED**. This increment adds conventional bounded,

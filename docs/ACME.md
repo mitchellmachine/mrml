@@ -91,6 +91,13 @@ persists replacement relationships. Its fallback derives timing from the
 certificate's actual lifetime, applies jittered exponential backoff and
 Retry-After, and exposes healthy, warning, critical, and expired states without
 assuming a 90-day profile.
+Revocation is a separate generation-bound lifecycle. It binds the exact
+identity generation, ARI certificate identifier, chain digest, permitted RFC
+reason, owner preview or narrowly authorized automatic cause, and the exact
+current account-key or certificate-key credential. Automatic revocation is
+limited to confirmed key compromise or an explicitly bound replacement policy.
+Submission uncertainty remains resolvable through authoritative CA state and
+does not retire, delete, or misreport the only active identity.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -104,7 +111,8 @@ review.
 
 General JOSE response parsing, ACME transport, concrete socket adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
-alternate-chain selection, renewal execution, revocation, backup/restore, CLI
+alternate-chain selection, renewal execution, revocation transport,
+backup/restore, CLI
 administration, concrete gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.

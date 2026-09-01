@@ -5,6 +5,7 @@ mod challenge_dns;
 mod challenge_publisher;
 mod identity;
 mod scheduler;
+mod revocation;
 mod durable;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -27,6 +28,11 @@ pub use identity::{
 pub use scheduler::{
     ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,
     ReplacementBinding, SchedulerError,
+};
+pub use revocation::{
+    AutomaticRevocationCause, PreparedRevocation, RevocationAuthentication, RevocationAuthority,
+    RevocationAuthorization, RevocationCredentialPolicy, RevocationError, RevocationLifecycle,
+    RevocationReason, RevocationReceipt, RevocationState,
 };
 pub use durable::{
     CommittedStoreReceipt, DURABLE_RECORD_VERSION, DurableAuthenticator, DurableError,
