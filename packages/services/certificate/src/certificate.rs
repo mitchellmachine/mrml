@@ -1,7 +1,7 @@
 use mrml_acme::{
-    AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeIdentifier, AcmeJwsSigner, AcmePostError,
-    AcmeProblem, AcmeResponseType, AcmeTransport, AriCertificateId, CaClass, CertificateProfile,
-    OrderLifecycle, OrderState, P256Jwk, ProtectedKey, post_jws,
+    AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeIdentifier, AcmeJwsEnvelopeWriter,
+    AcmeJwsSigner, AcmePostError, AcmeProblem, AcmeResponseType, AcmeTransport, AriCertificateId,
+    CaClass, CertificateProfile, OrderLifecycle, OrderState, P256Jwk, ProtectedKey, post_jws,
 };
 use mrml_crypto::Sha256;
 
@@ -167,27 +167,18 @@ pub struct RetrievedCertificate {
     pub receipt: VerifiedCertificateReceipt,
 }
 
-pub trait CertificateChainVerifier {
-    fn verify(
-        &mut self,
-        chain: &PemCertificateChain,
-        policy: &CertificateValidationPolicy,
-    ) -> Result<VerifiedCertificateReceipt, CertificateValidationError>;
-}
-
 #[allow(clippy::too_many_arguments)]
-pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVerifier>(
+pub fn retrieve_certificate_chain<T: AcmeTransport>(
     directory: &AcmeDirectory,
     account: &AccountLifecycle,
     order: &OrderLifecycle,
-    policy: &CertificateValidationPolicy,
+    identifiers: &[Option<AcmeIdentifier>],
     exchange: &mut AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
-    verifier: &mut V,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
-) -> Result<RetrievedCertificate, CertificateRetrievalError<T::Error>> {
+) -> Result<PemCertificateChain, CertificateRetrievalError<T::Error>> {
     let certificate_url = order
         .certificate_url
         .as_ref()
@@ -201,18 +192,12 @@ pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVeri
         || directory.generation != order.directory_generation
         || account.generation != order.account_generation
         || account.key != order.account_key
-        || policy.profile != order.profile
-        || policy.order_url_digest != Sha256::digest(order.order_url.as_str().as_bytes())
-        || usize::from(policy.identifier_count) != order.identifiers().count()
-        || !policy.identifiers[..usize::from(policy.identifier_count)]
+        || identifiers.is_empty()
+        || identifiers.len() != order.identifiers().count()
+        || !identifiers
             .iter()
             .zip(order.identifiers())
             .all(|(provided, expected)| provided.as_ref() == Some(expected))
-        || (!policy.allow_ip_identifiers
-            && policy.identifiers[..usize::from(policy.identifier_count)]
-                .iter()
-                .flatten()
-                .any(|identifier| matches!(identifier, AcmeIdentifier::Ip(_))))
     {
         return Err(CertificateRetrievalError::ResourceMismatch);
     }
@@ -238,8 +223,62 @@ pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVeri
     if result.metadata.response_type != AcmeResponseType::PemCertificateChain {
         return Err(CertificateRetrievalError::UnexpectedContentType);
     }
-    let chain = PemCertificateChain::parse(&response_body[..result.metadata.body_length])
-        .map_err(CertificateRetrievalError::Validation)?;
+    PemCertificateChain::parse(&response_body[..result.metadata.body_length])
+        .map_err(CertificateRetrievalError::Validation)
+}
+
+pub trait CertificateChainVerifier {
+    fn verify(
+        &mut self,
+        chain: &PemCertificateChain,
+        policy: &CertificateValidationPolicy,
+    ) -> Result<VerifiedCertificateReceipt, CertificateValidationError>;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVerifier>(
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    policy: &CertificateValidationPolicy,
+    exchange: &mut AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
+    verifier: &mut V,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<RetrievedCertificate, CertificateRetrievalError<T::Error>> {
+    if !account.active
+        || order.state != OrderState::Valid
+        || directory.generation != order.directory_generation
+        || account.generation != order.account_generation
+        || account.key != order.account_key
+        || policy.profile != order.profile
+        || policy.order_url_digest != Sha256::digest(order.order_url.as_str().as_bytes())
+        || usize::from(policy.identifier_count) != order.identifiers().count()
+        || !policy.identifiers[..usize::from(policy.identifier_count)]
+            .iter()
+            .zip(order.identifiers())
+            .all(|(provided, expected)| provided.as_ref() == Some(expected))
+        || (!policy.allow_ip_identifiers
+            && policy.identifiers[..usize::from(policy.identifier_count)]
+                .iter()
+                .flatten()
+                .any(|identifier| matches!(identifier, AcmeIdentifier::Ip(_))))
+    {
+        return Err(CertificateRetrievalError::ResourceMismatch);
+    }
+    let chain = retrieve_certificate_chain(
+        directory,
+        account,
+        order,
+        &policy.identifiers[..usize::from(policy.identifier_count)],
+        exchange,
+        transport,
+        signer,
+        response_body,
+        jws_scratch,
+    )?;
     let receipt = verifier
         .verify(&chain, policy)
         .map_err(CertificateRetrievalError::Validation)?;
