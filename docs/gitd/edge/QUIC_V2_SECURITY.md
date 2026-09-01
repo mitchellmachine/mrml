@@ -21,3 +21,9 @@ malformed, unknown, and retired IDs before connection decryption and preserves
 the authenticated peer while labeling a different source a candidate path.
 Full reactor-owned protocol state, key update, reordered old-phase handling, and
 IPv6 `/64` admission are **PLANNED**. The runtime address ABI is IPv4-only.
+
+Authenticated ACK ranges are revalidated with checked arithmetic immediately
+before recovery lookup, even though frame decoding performs the same semantic
+validation. Oversized gap arithmetic, first-range underflow, gap underflow, and
+range underflow return typed connection-local errors before sent-packet or
+recovery state changes.

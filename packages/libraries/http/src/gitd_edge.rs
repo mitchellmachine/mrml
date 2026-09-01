@@ -11,6 +11,15 @@ const MAX_MARKDOWN: usize = 2 * 1024 * 1024;
 const MAX_RENDERED: usize = 8 * 1024 * 1024;
 const MAX_MARKDOWN_LINES: usize = 100_000;
 const MAX_HEADING_DEPTH: usize = 6;
+const MARKDOWN_PROFILE_VERSION: &str = "markdown-bounded-v3";
+const RENDERER_VERSION: &str = "gitd-html-v3";
+const TEMPLATE_VERSION: &str = "mrml-template-v2";
+const THEME_VERSION: &str = "charcoal-amber-v1";
+const SANITIZER_VERSION: &str = "structural-sanitizer-v2";
+const HIGHLIGHTER_VERSION: &str = "language-labels-v1";
+const ENCODING_PROFILE_VERSION: &str = "zstd-bounded-raw-rle-v1";
+const VERIFIER_VERSION: &str = "gitd-verifier-view-v1";
+const HYBRID_PROFILE_VERSION: &str = "mrml-hybrid-v1";
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepositoryIdentity(Text);
@@ -842,10 +851,10 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         }
         let target = request.target.split('?').next().unwrap_or("");
         if target == "/" {
-            return self.html_page(request, "MRML", "Independent systems research", "<h1>MRML</h1><p>Experimental operating-system, compiler, and application-platform research.</p>", true, "home-v1");
+            return self.html_page(request, "MRML", "Independent systems research", "<h1>MRML</h1><p>Experimental operating-system, compiler, and application-platform research.</p>", true, "/", "home-v1");
         }
         if target == "/projects" {
-            return self.html_page(request, "Public projects", "Public MRML source repositories", "<h1>Public projects</h1><p><a href=\"/mitchellrenouf/mrml\">mitchellrenouf/mrml</a></p>", true, "projects-v1");
+            return self.html_page(request, "Public projects", "Public MRML source repositories", "<h1>Public projects</h1><p><a href=\"/mitchellrenouf/mrml\">mitchellrenouf/mrml</a></p>", true, "/projects", "projects-v1");
         }
         if target == "/robots.txt" {
             return self.text(200, "text/plain; charset=utf-8", b"User-agent: *\nDisallow: /api/\nDisallow: /*.git/\nSitemap: https://mrml.ca/sitemap.xml\n", false);
@@ -902,14 +911,16 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             .unwrap_or(summary.default_branch.as_str());
         validate_revision(revision)?;
         let object = self.backend.resolve_ref(&repository, revision)?;
-        let context = mrml_runtime::mrml_format!(
-            "{}:{}:{}:{}:{}",
-            repository.as_str(),
-            generation.0,
+        let context = representation_cache_key(
+            &repository,
+            generation,
             kind,
-            object.hex(),
-            self.trust.0 ^ self.revocations.0
-        );
+            target,
+            revision,
+            &object,
+            self.trust,
+            self.revocations,
+        )?;
         if let Some(cached) = self.cache.get(&context) {
             return Ok(representation_response(request, cached, true));
         }
@@ -1040,21 +1051,23 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         description: &str,
         content: &str,
         index: bool,
+        canonical_path: &str,
         key: &str,
     ) -> Result<GitdHttpResponse, BackendError> {
-        if self.cache.get(key).is_none() {
+        let key = static_cache_key(key)?;
+        if self.cache.get(&key).is_none() {
             let page = document(
                 title,
                 &mrml_runtime::mrml_format!("<h1>{}</h1>{}", escape(description), content),
-                "/",
+                canonical_path,
                 index,
             );
             self.cache
-                .insert(key, CachedRepresentation::prepare(page.as_bytes())?)?;
+                .insert(&key, CachedRepresentation::prepare(page.as_bytes())?)?;
         }
         Ok(representation_response(
             request,
-            self.cache.get(key).ok_or(BackendError::Storage)?,
+            self.cache.get(&key).ok_or(BackendError::Storage)?,
             index,
         ))
     }
@@ -1095,6 +1108,82 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             body: Vector::new(),
         })
     }
+}
+
+fn key_field(output: &mut Text, name: &str, value: &str) -> Result<(), BackendError> {
+    if name.len() > 64 || value.len() > MAX_PATH {
+        return Err(BackendError::ResourceLimit);
+    }
+    output.push_str(name);
+    output.push('=');
+    output.push_str(&mrml_runtime::mrml_format!("{}:", value.len()));
+    output.push_str(value);
+    output.push('|');
+    Ok(())
+}
+
+fn static_cache_key(name: &str) -> Result<Text, BackendError> {
+    let mut output: Text = "gitd-representation-v3|".into();
+    for (field, value) in [
+        ("static", name),
+        ("renderer", RENDERER_VERSION),
+        ("template", TEMPLATE_VERSION),
+        ("theme", THEME_VERSION),
+        ("encoding", ENCODING_PROFILE_VERSION),
+    ] {
+        key_field(&mut output, field, value)?;
+    }
+    Ok(cache_key_digest(&output))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn representation_cache_key(
+    repository: &RepositoryIdentity,
+    generation: RepositoryGeneration,
+    kind: &str,
+    target: &str,
+    revision: &str,
+    object: &ObjectId,
+    trust: TrustGeneration,
+    revocations: RevocationGeneration,
+) -> Result<Text, BackendError> {
+    let mut output: Text = "gitd-representation-v3|".into();
+    let generation = mrml_runtime::mrml_format!("{}", generation.0);
+    let trust = mrml_runtime::mrml_format!("{}", trust.0);
+    let revocations = mrml_runtime::mrml_format!("{}", revocations.0);
+    let object = object.hex();
+    for (field, value) in [
+        ("repository", repository.as_str()),
+        ("object-format", "sha256"),
+        ("generation", generation.as_str()),
+        ("kind", kind),
+        ("target", target),
+        ("revision", revision),
+        ("object", object.as_str()),
+        ("markdown", MARKDOWN_PROFILE_VERSION),
+        ("renderer", RENDERER_VERSION),
+        ("template", TEMPLATE_VERSION),
+        ("theme", THEME_VERSION),
+        ("sanitizer", SANITIZER_VERSION),
+        ("highlighter", HIGHLIGHTER_VERSION),
+        ("encoding", ENCODING_PROFILE_VERSION),
+        ("trust", trust.as_str()),
+        ("revocations", revocations.as_str()),
+        ("verifier", VERIFIER_VERSION),
+        ("hybrid", HYBRID_PROFILE_VERSION),
+    ] {
+        key_field(&mut output, field, value)?;
+    }
+    Ok(cache_key_digest(&output))
+}
+
+fn cache_key_digest(material: &str) -> Text {
+    let digest = Sha256::digest(material.as_bytes());
+    let mut output: Text = "gitd-v3-".into();
+    for byte in digest {
+        output.push_str(&mrml_runtime::mrml_format!("{byte:02x}"));
+    }
+    output
 }
 
 fn accepts_zstd(request: &RequestHead) -> bool {
@@ -1921,6 +2010,12 @@ mod tests {
             assert_eq!(response.status, 200, "route {target}");
             assert!(!response.body.is_empty(), "route {target}");
         }
+        let projects = server.handle(&request("GET", "/projects", false));
+        assert!(
+            core::str::from_utf8(&projects.body)
+                .unwrap()
+                .contains("<link rel=\"canonical\" href=\"https://mrml.ca/projects\">")
+        );
         for target in [
             "/mitchellrenouf/mrml.git/info/refs?service=git-upload-pack",
             "/mitchellrenouf/mrml.git/git-upload-pack",
@@ -2202,13 +2297,40 @@ mod tests {
             4 * 1024 * 1024,
         )
         .unwrap();
-        server.set_verification_generations(TrustGeneration(1), RevocationGeneration(1));
+        server.set_verification_generations(TrustGeneration(1), RevocationGeneration(2));
         let first = server.handle(&request("GET", "/mitchellrenouf/mrml/signatures", false));
         let count = server.cache.generation_count;
-        server.set_verification_generations(TrustGeneration(1), RevocationGeneration(2));
+        server.set_verification_generations(TrustGeneration(2), RevocationGeneration(1));
         let second = server.handle(&request("GET", "/mitchellrenouf/mrml/signatures", false));
         assert_eq!(first.status, 200);
         assert_eq!(second.status, 200);
         assert!(server.cache.generation_count > count);
+
+        let repository = RepositoryIdentity::parse("mitchellrenouf/mrml").unwrap();
+        let first_key = representation_cache_key(
+            &repository,
+            RepositoryGeneration(7),
+            "blob",
+            "/mitchellrenouf/mrml/blob/main/README.md",
+            "main",
+            &oid(9),
+            TrustGeneration(1),
+            RevocationGeneration(2),
+        )
+        .unwrap();
+        let second_key = representation_cache_key(
+            &repository,
+            RepositoryGeneration(7),
+            "blob",
+            "/mitchellrenouf/mrml/blob/main/docs/README.md",
+            "main",
+            &oid(9),
+            TrustGeneration(2),
+            RevocationGeneration(1),
+        )
+        .unwrap();
+        assert_ne!(first_key, second_key);
+        assert!(first_key.starts_with("gitd-v3-"));
+        assert_eq!(first_key.len(), 72);
     }
 }
