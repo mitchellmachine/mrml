@@ -63,6 +63,11 @@ The DNS role implements the shared challenge-publisher contract: preparation
 does not publish, activation inserts the exact TXT digest, cleanup removes the
 exact record generation, and successful removal releases bounded publisher
 capacity. Multiple authorization-bound records remain independently scoped.
+The hosted DNS role binds UDP and TCP listeners to the same port, applies
+two-second I/O timeouts, accepts one bounded datagram or one exact length-framed
+TCP query per operation, and delegates all parsing and response policy to the
+shared authoritative zone. Linux and Windows-target-under-Wine loopbacks verify
+both transports against the same active TXT generation.
 Certificate-chain retrieval has a strict fixed-capacity PEM decoder and a
 shared validation policy/receipt. The hosted first-party X.509 adapter verifies
 the exact P-256 SPKI, exact sorted SAN set with no extra GeneralNames, TLS server

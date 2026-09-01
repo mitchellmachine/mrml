@@ -4,6 +4,8 @@ mod backup;
 mod certificate;
 mod challenge_dns;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
+mod challenge_dns_hosted;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_http;
 mod challenge_publisher;
 mod durable;
@@ -25,6 +27,10 @@ pub use certificate::{
 };
 pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
+};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use challenge_dns_hosted::{
+    HostedDnsChallengeError, HostedDnsChallengeSockets, DNS_IO_TIMEOUT_MILLIS,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_http::{

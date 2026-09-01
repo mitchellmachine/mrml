@@ -11346,3 +11346,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment adds the ordinary RFC 8555
 HTTP-01 TCP response role with exact challenge/lifetime/key-authorization
 binding and bounded timeouts. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Hosted authoritative DNS challenge sockets
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment exposes the already reviewed
+narrow authoritative challenge zone over ordinary UDP and TCP DNS sockets on
+one port with bounded framing and timeouts. It adds no recursive resolver,
+multi-vantage selection, proxy, or recorded re-review-trigger mechanism.
