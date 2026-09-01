@@ -1,6 +1,6 @@
 # Gitd core acceptance record
 
-Classification: **CORE_PRODUCTION_CANDIDATE**.
+Classification: **CORE_BLOCKED**.
 
 This file records completion of the focused branch tests; it does not claim
 global production readiness, native-Windows verification, physical durability,
@@ -50,7 +50,7 @@ Implemented and executed in the focused environments:
 - six simultaneous process-local Linux fetch-pack generations from one immutable object graph, all byte-identical to the independently generated expected pack.
 - conservative pre-body disk admission at the exact 2 GiB incoming-pack limit and fail-closed rejection at 2 GiB plus one byte, without allocating or consuming a body. This is boundary/admission evidence, not a completed 2 GiB stream or storage-performance run.
 
-External evidence and deployment follow-ups (`REMAINS_OPEN`, non-blocking for core integration):
+External evidence and integration blockers (`REMAINS_OPEN`):
 
 - The constrained compression, delta, exact-key cache, and reachability-compaction mechanisms remain inside the user-supplied `PATENT_REVIEW_PRELIMINARY_CLEAR_WITH_GUARDRAILS` screen recorded in `PATENT_SCREEN.md`. This is not a formal freedom-to-operate opinion; production sign-off by qualified Canadian patent counsel and shared review-log integration remain open.
 - Deployment must provide the owner-controlled `ProtectedReceiveAuthority` implementation and key custody. The core now checks its exact policy authorization before consuming input, retrieves and verifies durable exact-context hybrid proofs, and uses the same authority boundary for authenticated receipts. Missing authority remains fail closed.
