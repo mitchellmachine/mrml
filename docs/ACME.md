@@ -106,6 +106,11 @@ generations, obtains a raw ES256 signature, and strictly DER-encodes it. The TLS
 server permits only `ecdsa_secp256r1_sha256` on this route and has no private-key
 export path. The legacy RSA PEM constructor remains development-only and its
 public-gitd gate still fails closed.
+TLS ClientHello parsing now admits at most one bounded host-name SNI and a
+server configuration can require one exact normalized name. Missing, malformed,
+duplicate, or substituted SNI fails before certificate signing. This is a
+single-identity admission check, not MultiTLS identity multiplexing; the latter
+remains a recorded patent re-review trigger and is not silently introduced.
 The durable-state substrate uses a canonical versioned bounded record, payload
 digest, non-exporting authenticator, exact object and previous/new generations,
 and prepare/commit store receipts. Decode rejects mutation, trailing bytes,

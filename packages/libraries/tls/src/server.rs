@@ -200,6 +200,7 @@ pub struct TlsServerConfig {
     protocols: Vector<Text>,
     ocsp_response: Option<Vector<u8>>,
     signing_key: Option<Shared<dyn TlsServerSigningKey>>,
+    required_server_name: Option<Text>,
 }
 impl Drop for TlsServerConfig {
     fn drop(&mut self) {
@@ -257,6 +258,7 @@ impl TlsServerConfig {
             protocols: Vector::new(),
             ocsp_response: None,
             signing_key: None,
+            required_server_name: None,
         })
     }
     pub fn from_der_chain(certificates: &[&[u8]]) -> Result<Self, TlsError> {
@@ -284,11 +286,35 @@ impl TlsServerConfig {
             protocols: Vector::new(),
             ocsp_response: None,
             signing_key: None,
+            required_server_name: None,
         })
     }
     pub fn with_signing_key<S: TlsServerSigningKey + 'static>(mut self, signer: S) -> Self {
         self.signing_key = Some(Shared::new(signer));
         self
+    }
+    pub fn require_server_name(mut self, name: &str) -> Result<Self, TlsError> {
+        if name.is_empty()
+            || name.len() > 253
+            || !name.is_ascii()
+            || name.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+        {
+            return Err(TlsError::Handshake);
+        }
+        self.required_server_name = Some(
+            Text::try_from_str(name)
+                .map_err(|_| TlsError::AllocationFailed)?
+                .to_ascii_lowercase(),
+        );
+        Ok(self)
     }
     pub fn with_protocols(mut self, protocols: &[&str]) -> Result<Self, TlsError> {
         for protocol in protocols {
@@ -414,7 +440,18 @@ fn compatibility_change_cipher_spec(record: &[u8]) -> Result<bool, TlsError> {
 }
 fn client_offer(
     msg: &[u8],
-) -> Result<(&[u8], u16, &[u8], Vector<Text>, Option<Vector<u8>>, bool), TlsError> {
+) -> Result<
+    (
+        &[u8],
+        u16,
+        &[u8],
+        Vector<Text>,
+        Option<Vector<u8>>,
+        bool,
+        Option<Text>,
+    ),
+    TlsError,
+> {
     let mut c = Cursor::new(msg);
     if c.byte()? != 1 || c.u24()? != msg.len() - 4 || c.take(2)? != [3, 3] {
         return Err(TlsError::Handshake);
@@ -442,11 +479,33 @@ fn client_offer(
     let mut protocols = Vector::new();
     let mut transport_parameters = None;
     let mut status_requested = false;
+    let mut server_name = None;
     while !e.done() {
         let kind = e.u16()?;
         let n = e.u16()? as usize;
         let value = e.take(n)?;
-        if kind == 51 {
+        if kind == 0 {
+            if server_name.is_some() {
+                return Err(TlsError::Handshake);
+            }
+            let mut list = Cursor::new(value);
+            let total = list.u16()? as usize;
+            let mut names = Cursor::new(list.take(total)?);
+            if !list.done() || names.byte()? != 0 {
+                return Err(TlsError::Handshake);
+            }
+            let length = names.u16()? as usize;
+            let bytes = names.take(length)?;
+            if !names.done() || bytes.is_empty() || bytes.len() > 253 || !bytes.is_ascii() {
+                return Err(TlsError::Handshake);
+            }
+            let name = core::str::from_utf8(bytes).map_err(|_| TlsError::Handshake)?;
+            server_name = Some(
+                Text::try_from_str(name)
+                    .map_err(|_| TlsError::AllocationFailed)?
+                    .to_ascii_lowercase(),
+            );
+        } else if kind == 51 {
             let mut k = Cursor::new(value);
             let total = k.u16()? as usize;
             let mut shares = Cursor::new(k.take(total)?);
@@ -502,7 +561,19 @@ fn client_offer(
         protocols,
         transport_parameters,
         status_requested,
+        server_name,
     ))
+}
+
+fn require_configured_server_name(
+    config: &TlsServerConfig,
+    offered: Option<&str>,
+) -> Result<(), TlsError> {
+    match (&config.required_server_name, offered) {
+        (None, _) => Ok(()),
+        (Some(required), Some(offered)) if required.eq_ignore_ascii_case(offered) => Ok(()),
+        _ => Err(TlsError::Handshake),
+    }
 }
 
 pub struct QuicTlsServerFlight {
@@ -529,8 +600,16 @@ impl QuicTlsServerHandshake {
         if transport_parameters.len() > 4096 || config.ocsp_response.is_none() {
             return Err(TlsError::Handshake);
         }
-        let (session, group, share, protocols, peer_transport_parameters, status_requested) =
-            client_offer(client_hello)?;
+        let (
+            session,
+            group,
+            share,
+            protocols,
+            peer_transport_parameters,
+            status_requested,
+            server_name,
+        ) = client_offer(client_hello)?;
+        require_configured_server_name(config, server_name.as_deref())?;
         if !session.is_empty() || !protocols.iter().any(|protocol| protocol == "h3") {
             return Err(TlsError::Handshake);
         }
@@ -738,8 +817,9 @@ impl TlsServerStream {
             return Err(TlsError::Handshake);
         }
         let client_hello = &first[5..];
-        let (session, group, share, offered_protocols, _, status_requested) =
+        let (session, group, share, offered_protocols, _, status_requested, server_name) =
             client_offer(client_hello)?;
+        require_configured_server_name(config, server_name.as_deref())?;
         let negotiated_protocol = if config.protocols.is_empty() {
             None
         } else {
@@ -1020,6 +1100,30 @@ mod tests {
     }
 
     #[test]
+    fn exact_sni_policy_never_falls_back() {
+        let config = TlsServerConfig::from_der_chain(&[b"certificate"])
+            .unwrap()
+            .require_server_name("Git.Example")
+            .unwrap();
+        assert_eq!(
+            require_configured_server_name(&config, Some("git.example")),
+            Ok(())
+        );
+        assert_eq!(
+            require_configured_server_name(&config, Some("other.example")),
+            Err(TlsError::Handshake)
+        );
+        assert_eq!(
+            require_configured_server_name(&config, None),
+            Err(TlsError::Handshake)
+        );
+        assert!(TlsServerConfig::from_der_chain(&[b"certificate"])
+            .unwrap()
+            .require_server_name("bad_name")
+            .is_err());
+    }
+
+    #[test]
     fn public_gitd_rsa_private_signing_fails_closed() {
         let config = TlsServerConfig {
             certificates: Vector::new(),
@@ -1028,6 +1132,7 @@ mod tests {
             protocols: Vector::new(),
             ocsp_response: None,
             signing_key: None,
+            required_server_name: None,
         };
         assert!(matches!(
             config.for_public_gitd(),

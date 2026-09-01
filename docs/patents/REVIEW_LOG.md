@@ -11370,3 +11370,10 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 CertificateVerify delegation to an exact generation-bound P-256 signing route.
 It does not implement MultiTLS connection multiplexing or another recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Exact TLS server-name admission
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary exact SNI parsing
+and fail-closed admission for a configured TLS identity. It selects no alternate
+identity and does not implement the recorded MultiTLS multiplexing trigger.
