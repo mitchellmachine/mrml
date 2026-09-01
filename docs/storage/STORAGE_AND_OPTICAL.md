@@ -2608,7 +2608,9 @@ the retained candidate generation and requires the same separate module control,
 interface inspection, provider control, and endpoint signal capabilities as
 launch; a guessed module object never authorizes backend execution. Public state
 inspection likewise requires exact module `INSPECT`, and raw class enumeration
-remains internal to the registry. Storage passes
+remains internal to the registry. Initial binding and cross-slot replacement reject
+every module/provider/endpoint cross-role object collision while permitting the
+one deliberate shared interface object and same-slot generation succession. Storage passes
 181 tests on Windows and Arch Linux before extraction. The AHCI mechanism is now
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
@@ -2627,7 +2629,8 @@ enumeration endpoint, capability-cleanup-gated service loop, and raw userspace
 syscall adapter; installed supervisor execution remains **PLANNED**.
 
 Patent review: **NOT_TRIGGERED**. Exact capability revalidation before retry or
-inspection is conventional authorization plumbing for the existing registry. See
+inspection and fixed identity-collision rejection are conventional authorization
+plumbing for the existing registry. See
 `docs/patents/REVIEW_LOG.md`.
 
 The service-image block adapter now rejects kernel-returned payload or

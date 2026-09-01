@@ -212,6 +212,7 @@ pub enum StorageModuleError {
     NotActive,
     StaleReplacement,
     StaleRetry,
+    ObjectCollision,
     CleanupFailed,
     LaunchFailed,
 }
@@ -368,6 +369,14 @@ impl<const N: usize> StorageModuleRegistry<N> {
         if self.state(binding.module_object).is_some() {
             return Err(StorageModuleError::AlreadyBound);
         }
+        if self
+            .slots
+            .iter()
+            .flatten()
+            .any(|state| state.conflicts_with(binding))
+        {
+            return Err(StorageModuleError::ObjectCollision);
+        }
         let slot = self
             .slots
             .iter_mut()
@@ -419,6 +428,11 @@ impl<const N: usize> StorageModuleRegistry<N> {
                 && candidate.provider_generation == old.provider_generation)
         {
             return Err(StorageModuleError::StaleReplacement);
+        }
+        if self.slots.iter().flatten().any(|state| {
+            state.module_object() != candidate.module_object && state.conflicts_with(candidate)
+        }) {
+            return Err(StorageModuleError::ObjectCollision);
         }
         self.slots[index] = Some(StorageModuleState::Replacing { old, candidate });
         if backend.revoke_cleanup_and_erase(old).is_err() {
@@ -493,6 +507,18 @@ impl StorageModuleState {
         }
     }
 
+    fn conflicts_with(self, candidate: StorageModuleBinding) -> bool {
+        match self {
+            Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
+                bindings_conflict(binding, candidate)
+            }
+            Self::Replacing {
+                old,
+                candidate: next,
+            } => bindings_conflict(old, candidate) || bindings_conflict(next, candidate),
+        }
+    }
+
     #[cfg(test)]
     const fn class(self) -> StorageModuleClass {
         match self {
@@ -502,6 +528,27 @@ impl StorageModuleState {
             Self::Replacing { old, .. } => old.class,
         }
     }
+}
+
+fn bindings_conflict(left: StorageModuleBinding, right: StorageModuleBinding) -> bool {
+    let left_objects = [
+        left.module_object,
+        left.interface_object,
+        left.provider_object,
+        left.endpoint_object,
+    ];
+    let right_objects = [
+        right.module_object,
+        right.interface_object,
+        right.provider_object,
+        right.endpoint_object,
+    ];
+    left_objects.iter().enumerate().any(|(left_kind, left)| {
+        right_objects
+            .iter()
+            .enumerate()
+            .any(|(right_kind, right)| left == right && !(left_kind == 1 && right_kind == 1))
+    })
 }
 
 fn validate_binding(binding: StorageModuleBinding) -> Result<(), StorageModuleError> {
@@ -659,6 +706,19 @@ mod tests {
                 nvme,
             )
             .unwrap();
+        let colliding_slot = binding_in(14, ahci.endpoint_object.0, 1, 7, 1);
+        let (collision_caps, collision_handles) = capabilities(colliding_slot);
+        assert_eq!(
+            registry.bind_initial(
+                &collision_caps,
+                collision_handles[0],
+                collision_handles[1],
+                collision_handles[2],
+                collision_handles[3],
+                colliding_slot,
+            ),
+            Err(StorageModuleError::ObjectCollision)
+        );
         assert_eq!(
             registry
                 .states_for_class(StorageModuleClass::BlockProvider)
@@ -671,6 +731,22 @@ mod tests {
             launch: true,
             calls: [0; 2],
         };
+        let colliding_replacement = binding_in(12, ahci.endpoint_object.0, 6, 8, 2);
+        let (collision_caps, collision_handles) = capabilities(colliding_replacement);
+        assert_eq!(
+            registry.replace(
+                &collision_caps,
+                collision_handles[0],
+                collision_handles[1],
+                collision_handles[2],
+                collision_handles[3],
+                nvme.binding_generation,
+                colliding_replacement,
+                &mut backend,
+            ),
+            Err(StorageModuleError::ObjectCollision)
+        );
+        assert_eq!(backend.calls, [0, 0]);
         registry
             .replace(
                 &next_caps,
