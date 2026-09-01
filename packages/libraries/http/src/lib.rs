@@ -403,6 +403,10 @@ impl Client {
         let url = Url::parse(url)?;
         self.request(&url, "POST", headers, true, body)
     }
+    pub fn delete(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, HttpError> {
+        let url = Url::parse(url)?;
+        self.request(&url, "DELETE", headers, true, &[])
+    }
     pub fn get_follow(
         &self,
         url: &str,
