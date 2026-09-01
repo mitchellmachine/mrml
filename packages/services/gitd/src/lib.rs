@@ -6,6 +6,7 @@ mod certd_rpc;
 mod config;
 mod identity;
 mod startup;
+mod tls_identity;
 
 pub use auth_store::{AuthenticationStoreError, load_gitd_authentication};
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
@@ -26,3 +27,4 @@ pub use startup::{
     RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,
     admit_catalog_repository, recover_admitted_repository, validate_storage_layout,
 };
+pub use tls_identity::{GitdCertdTlsSigningKey, build_certd_tls_server_config};

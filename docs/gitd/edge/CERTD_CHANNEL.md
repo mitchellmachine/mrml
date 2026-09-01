@@ -36,6 +36,16 @@ canonical DER signature with the leaf certificate under the TLS library's fixed
 TLS 1.3 server context. The TLS verifier itself constructs that context; neither
 side gains a generic-message signing or verification shortcut.
 
+After validation, `build_certd_tls_server_config` consumes the validated
+snapshot and the authenticated certd client. It constructs an exact-SNI TLS
+configuration from the DER chain and installs a `TlsServerSigningKey` that owns
+no private key: each handshake forwards only the 32-byte transcript digest,
+active identity generation, fixed ECDSA scheme, and a process-monotonic logical
+request ID through a mutex-serialized certd channel. Sequence exhaustion,
+poisoning, channel failure, wrong generation/scheme/request, or oversized output
+fails the handshake. Existing TLS configuration has no PEM or local-key
+fallback.
+
 Generation notification is a bounded request containing the exact current
 nonzero generation and a 1–30,000 ms wait. The authenticated response either
 reports an unchanged generation as a timeout or a strictly greater generation
