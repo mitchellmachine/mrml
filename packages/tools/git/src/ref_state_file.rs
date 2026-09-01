@@ -268,4 +268,72 @@ mod tests {
         assert_eq!(store.load().unwrap(), state);
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
+
+    #[test]
+    fn concurrent_same_and_distinct_repository_activations_are_isolated() {
+        let same_root = root("mrml-active-concurrent-same");
+        let _ = mrml_runtime::remove_dir_all(&same_root);
+        let (same_state, same_verified, same_new) = fixture();
+        ActiveRefFile::initialize(&same_root, &same_state).unwrap();
+        let mut same_workers = Vector::new();
+        for _ in 0..3 {
+            let worker_root = same_root.clone();
+            let worker_verified = same_verified.clone();
+            let worker = match mrml_runtime::spawn_joinable(move || {
+                    let _ = ActiveRefFile::open(&worker_root)
+                        .unwrap()
+                        .activate(&worker_verified);
+                }) {
+                Ok(worker) => worker,
+                Err(_) => panic!("failed to start same-repository activation worker"),
+            };
+            same_workers.push(worker);
+        }
+        for worker in same_workers {
+            assert!(worker.join());
+        }
+        let same_final = ActiveRefFile::open(&same_root).unwrap().load().unwrap();
+        assert_eq!(same_final.repository_generation, RepositoryGeneration(8));
+        assert_eq!(same_final.refs[0].1, same_new);
+
+        let mut distinct_roots = Vector::new();
+        let mut distinct_workers = Vector::new();
+        for index in 0..3 {
+            let worker_root = root(&mrml_runtime::mrml_format!(
+                "mrml-active-concurrent-distinct-{index}"
+            ));
+            let _ = mrml_runtime::remove_dir_all(&worker_root);
+            let (state, verified, _) = fixture();
+            ActiveRefFile::initialize(&worker_root, &state).unwrap();
+            distinct_roots.push(worker_root.clone());
+            let worker = match mrml_runtime::spawn_joinable(move || {
+                    ActiveRefFile::open(&worker_root)
+                        .unwrap()
+                        .activate(&verified)
+                        .unwrap();
+                }) {
+                Ok(worker) => worker,
+                Err(_) => panic!("failed to start distinct-repository activation worker"),
+            };
+            distinct_workers.push(worker);
+        }
+        for worker in distinct_workers {
+            assert!(worker.join());
+        }
+        for worker_root in &distinct_roots {
+            assert_eq!(
+                ActiveRefFile::open(worker_root)
+                    .unwrap()
+                    .load()
+                    .unwrap()
+                    .repository_generation,
+                RepositoryGeneration(8)
+            );
+        }
+
+        mrml_runtime::remove_dir_all(&same_root).unwrap();
+        for worker_root in distinct_roots {
+            mrml_runtime::remove_dir_all(&worker_root).unwrap();
+        }
+    }
 }

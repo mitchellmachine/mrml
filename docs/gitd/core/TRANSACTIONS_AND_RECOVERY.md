@@ -154,6 +154,14 @@ and a simulated crash-stale lock. Windows remains fail-closed pending a runtime
 directory flush primitive. Process-kill at every syscall boundary, power-loss,
 and physical-filesystem atomicity evidence remain open.
 
+The controlled concurrency test starts three native joinable workers against
+one exact repository transaction: the final state advances exactly once to the
+next generation and exact new ref, irrespective of which worker acquires the
+lock. It then starts one activation worker for each of three distinct
+repositories; all three independently advance, demonstrating that lock scope
+does not serialize or authorize across repositories. This is process-local
+thread concurrency evidence, not multi-process kill or distributed testing.
+
 `MRRCPT01` is a deterministic receipt transcript binding the transaction and
 repository identities, pre-activation and exactly-next repository generations,
 trust and revocation generations, and a strictly sorted exact old/new ref set.

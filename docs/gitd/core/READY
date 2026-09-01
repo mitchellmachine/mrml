@@ -16,7 +16,7 @@ Executed on 2026-09-01:
 
 - `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
 - `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
-- `./target/debug/mrml test mrml-git --target linux` — PASS, 140 library tests and 2 CLI tests.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 141 library tests and 2 CLI tests.
 - `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 15 tests.
 - `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 49 tests, including mandatory pinned NIST ACVP sigGen/sigVer and OpenSSL 3.6.4 differential fixtures.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.openpgp --target windows` — PASS, 15 tests under the pinned Wine-hosted Windows target.
