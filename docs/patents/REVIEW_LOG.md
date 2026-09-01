@@ -11833,3 +11833,10 @@ Patent review: **NOT_TRIGGERED**. This increment adds bounded parsing, binary
 storage, and deterministic canonical rendering for ordinary IPv4 and IPv6 ACME
 identifier data. It does not enable issuance or add a network-validation
 mechanism, and it introduces no recorded re-review trigger.
+
+# 2026-09-01 — Typed ACME identifier payload encoding
+
+Patent review: **NOT_TRIGGERED**. This increment deterministically encodes
+bounded DNS and canonical IP identifier values with their distinct standard
+ACME type strings. It does not enable IP issuance or add a validation
+mechanism, and it introduces no recorded re-review trigger.

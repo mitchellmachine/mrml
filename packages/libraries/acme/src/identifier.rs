@@ -1,3 +1,6 @@
+use crate::IpIdentifier;
+use core::cmp::Ordering;
+
 pub const MAX_DNS_NAME: usize = 253;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,6 +18,67 @@ pub enum IdentifierError {
 pub struct DnsIdentifier {
     bytes: [u8; MAX_DNS_NAME],
     len: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcmeIdentifierError {
+    OutputTooSmall,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AcmeIdentifier {
+    Dns(DnsIdentifier),
+    Ip(IpIdentifier),
+}
+
+impl AcmeIdentifier {
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Dns(_) => "dns",
+            Self::Ip(_) => "ip",
+        }
+    }
+
+    pub fn is_wildcard(&self) -> bool {
+        match self {
+            Self::Dns(identifier) => identifier.is_wildcard(),
+            Self::Ip(_) => false,
+        }
+    }
+
+    pub fn write_value<'a>(&self, output: &'a mut [u8]) -> Result<&'a str, AcmeIdentifierError> {
+        match self {
+            Self::Dns(identifier) => {
+                let value = identifier.as_str().as_bytes();
+                output
+                    .get_mut(..value.len())
+                    .ok_or(AcmeIdentifierError::OutputTooSmall)?
+                    .copy_from_slice(value);
+                core::str::from_utf8(&output[..value.len()])
+                    .map_err(|_| AcmeIdentifierError::OutputTooSmall)
+            }
+            Self::Ip(identifier) => identifier
+                .write_canonical(output)
+                .map_err(|_| AcmeIdentifierError::OutputTooSmall),
+        }
+    }
+}
+
+impl Ord for AcmeIdentifier {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Dns(left), Self::Dns(right)) => left.as_str().cmp(right.as_str()),
+            (Self::Ip(left), Self::Ip(right)) => left.octets().cmp(right.octets()),
+            (Self::Dns(_), Self::Ip(_)) => Ordering::Less,
+            (Self::Ip(_), Self::Dns(_)) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for AcmeIdentifier {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl DnsIdentifier {
@@ -122,9 +186,11 @@ mod tests {
     }
     #[test]
     fn wildcard_is_explicit() {
-        assert!(DnsIdentifier::parse("*.example", true)
-            .unwrap()
-            .is_wildcard());
+        assert!(
+            DnsIdentifier::parse("*.example", true)
+                .unwrap()
+                .is_wildcard()
+        );
         assert!(matches!(
             DnsIdentifier::parse("*", true),
             Err(IdentifierError::WildcardNotAllowed)

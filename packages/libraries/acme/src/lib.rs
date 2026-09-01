@@ -58,7 +58,9 @@ pub use directory::{
     AcmeDirectory, DirectoryError, MAX_CAA_IDENTITIES, MAX_DIRECTORY_BYTES, MAX_DIRECTORY_PROFILES,
     ProfileAdvertisement,
 };
-pub use identifier::{DnsIdentifier, IdentifierError, MAX_DNS_NAME};
+pub use identifier::{
+    AcmeIdentifier, AcmeIdentifierError, DnsIdentifier, IdentifierError, MAX_DNS_NAME,
+};
 pub use ip_identifier::{IpIdentifier, IpIdentifierError, MAX_IP_IDENTIFIER_TEXT};
 pub use jose::{
     AcmeJwsSigner, ApprovedAcmeJwsDigest, ApprovedEabMac, Es256Signature, ExternalAccountMac,
@@ -97,7 +99,8 @@ pub use order::{
 pub use payload::{
     MAX_ACCOUNT_CONTACT_BYTES, MAX_ACCOUNT_CONTACTS, MAX_ACME_PAYLOAD_BYTES, PayloadError,
     account_contacts_digest, write_account_contacts_payload, write_account_status_payload,
-    write_finalize_payload, write_new_account_payload, write_new_order_payload,
+    write_finalize_payload, write_new_account_payload, write_new_order_identifiers_payload,
+    write_new_order_payload, write_preauthorization_identifier_payload,
     write_preauthorization_payload, write_revocation_payload, write_terms_agreement_payload,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]

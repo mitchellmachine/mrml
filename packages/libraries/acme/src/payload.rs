@@ -1,5 +1,6 @@
 use crate::{
-    CertificateProfile, DnsIdentifier, MAX_CSR_BYTES, MAX_ORDER_IDENTIFIERS, encode_base64url,
+    AcmeIdentifier, CertificateProfile, DnsIdentifier, MAX_CSR_BYTES, MAX_DNS_NAME,
+    MAX_ORDER_IDENTIFIERS, encode_base64url,
 };
 use mrml_crypto::Sha256;
 
@@ -192,6 +193,23 @@ pub fn write_preauthorization_payload<'a>(
     Ok(writer.finish())
 }
 
+pub fn write_preauthorization_identifier_payload<'a>(
+    identifier: &AcmeIdentifier,
+    output: &'a mut [u8],
+) -> Result<&'a str, PayloadError> {
+    let mut value = [0; MAX_DNS_NAME];
+    let value = identifier
+        .write_value(&mut value)
+        .map_err(|_| PayloadError::OutputTooSmall)?;
+    let mut writer = Writer::new(output)?;
+    writer.push(b"{\"identifier\":{\"type\":\"")?;
+    writer.push(identifier.kind().as_bytes())?;
+    writer.push(b"\",\"value\":\"")?;
+    writer.push(value.as_bytes())?;
+    writer.push(b"\"}}")?;
+    Ok(writer.finish())
+}
+
 pub fn write_new_order_payload<'a>(
     identifiers: &[DnsIdentifier],
     profile: &CertificateProfile,
@@ -222,6 +240,56 @@ pub fn write_new_order_payload<'a>(
         }
         writer.push(b"{\"type\":\"dns\",\"value\":\"")?;
         writer.push(identifier.as_str().as_bytes())?;
+        writer.push(b"\"}")?;
+    }
+    writer.push(b"],\"profile\":\"")?;
+    writer.push(profile.name().as_bytes())?;
+    writer.push(b"\"")?;
+    if let Some(replaces) = replaces {
+        writer.push(b",\"replaces\":\"")?;
+        writer.push(replaces.as_bytes())?;
+        writer.push(b"\"")?;
+    }
+    writer.push(b"}")?;
+    Ok(writer.finish())
+}
+
+pub fn write_new_order_identifiers_payload<'a>(
+    identifiers: &[AcmeIdentifier],
+    profile: &CertificateProfile,
+    replaces: Option<&str>,
+    output: &'a mut [u8],
+) -> Result<&'a str, PayloadError> {
+    if identifiers.is_empty() {
+        return Err(PayloadError::EmptyIdentifiers);
+    }
+    if identifiers.len() > MAX_ORDER_IDENTIFIERS {
+        return Err(PayloadError::TooManyIdentifiers);
+    }
+    for pair in identifiers.windows(2) {
+        match pair[0].cmp(&pair[1]) {
+            core::cmp::Ordering::Less => {}
+            core::cmp::Ordering::Equal => return Err(PayloadError::DuplicateIdentifier),
+            core::cmp::Ordering::Greater => return Err(PayloadError::UnsortedIdentifiers),
+        }
+    }
+    if replaces.is_some_and(|value| !safe_json_string(value, 512)) {
+        return Err(PayloadError::InvalidReplacement);
+    }
+    let mut writer = Writer::new(output)?;
+    writer.push(b"{\"identifiers\":[")?;
+    for (index, identifier) in identifiers.iter().enumerate() {
+        if index != 0 {
+            writer.push(b",")?;
+        }
+        let mut value = [0; MAX_DNS_NAME];
+        let value = identifier
+            .write_value(&mut value)
+            .map_err(|_| PayloadError::OutputTooSmall)?;
+        writer.push(b"{\"type\":\"")?;
+        writer.push(identifier.kind().as_bytes())?;
+        writer.push(b"\",\"value\":\"")?;
+        writer.push(value.as_bytes())?;
         writer.push(b"\"}")?;
     }
     writer.push(b"],\"profile\":\"")?;
@@ -338,6 +406,33 @@ mod tests {
             )
             .unwrap(),
             r#"{"identifier":{"type":"dns","value":"git.example"}}"#
+        );
+    }
+
+    #[test]
+    fn typed_identifier_payloads_preserve_dns_and_canonical_ip_kinds() {
+        let identifiers = [
+            AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
+            AcmeIdentifier::Ip(crate::IpIdentifier::parse("2001:0db8::1").unwrap()),
+        ];
+        let profile = CertificateProfile::parse("ip-enabled", 8).unwrap();
+        let mut output = [0; 512];
+        assert_eq!(
+            write_new_order_identifiers_payload(&identifiers, &profile, None, &mut output).unwrap(),
+            r#"{"identifiers":[{"type":"dns","value":"git.example"},{"type":"ip","value":"2001:db8::1"}],"profile":"ip-enabled"}"#
+        );
+        assert_eq!(
+            write_preauthorization_identifier_payload(&identifiers[1], &mut output).unwrap(),
+            r#"{"identifier":{"type":"ip","value":"2001:db8::1"}}"#
+        );
+        assert_eq!(
+            write_new_order_identifiers_payload(
+                &[identifiers[1], identifiers[0]],
+                &profile,
+                None,
+                &mut output,
+            ),
+            Err(PayloadError::UnsortedIdentifiers)
         );
     }
 }

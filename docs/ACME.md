@@ -23,9 +23,10 @@ reconciliation.
 The same package now has a binary IPv4/IPv6 identifier type with bounded
 RFC 5952-style canonical rendering. It rejects bracketed addresses, ports,
 IPv6 zone IDs, and ambiguous IPv4 syntax. IP identifiers are not yet admitted
-to orders, CSRs, or certificate activation; those paths remain fail-closed
-until the configured CA/profile advertisement and full IP SAN validation are
-bound end to end.
+to the order lifecycle, CSRs, or certificate activation; those paths remain
+fail-closed until the configured CA/profile advertisement and full IP SAN
+validation are bound end to end. The bounded payload layer can encode typed,
+canonically ordered DNS and IP identifiers without confusing their ACME kinds.
 Orders bind a sorted exact identifier set, account and directory generations,
 profile generation, same-origin order/finalization/certificate URLs, bounded
 poll retries and deadlines, and one authorization URL per identifier. Stale or
