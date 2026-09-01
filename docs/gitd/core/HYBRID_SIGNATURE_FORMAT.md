@@ -4,7 +4,11 @@ Status: **PARTIALLY IMPLEMENTED**. The existing nested signature format is not
 this profile. The OpenPGP library now parses the exact RFC 9580 v6 Ed25519
 primary-key packet shape and computes the full 32-byte SHA-256 fingerprint,
 with the RFC Appendix A certificate as a byte-exact vector. V6 detached
-signature parsing and salted verification remain open.
+signing and verification now use algorithm-sized salts before all other hash
+input, four-byte subpacket lengths, complete v6 issuer fingerprints, and native
+64-byte Ed25519 signatures. Focused regressions distinguish correct,
+omitted/wrong-sized, and payload-before-salt hashing. Independent detached-v6
+interoperability evidence and SHA3-512 interface support remain open.
 
 Protected history will require an AND decision over an authorized OpenPGP v6
 Ed25519 signature, an authorized ML-DSA-65 signature, and an authorized binding

@@ -10,6 +10,12 @@ one exists.
 No package or workspace manifests were changed. No dependency is requested by
 this change.
 
+The detached-signing service interface currently enumerates SHA-256, SHA-384,
+and SHA-512 only. Adding policy-controlled OpenPGP SHA3-512 requires a separate
+interface-generation change outside this branch's allowed files before the Git
+CLI/service route can expose it. The first-party v6 implementation therefore
+fails closed instead of advertising SHA3-512 prematurely.
+
 Shared generated assurance inventories may need regeneration after integration
 because three focused package tests were added. This branch is forbidden from
 editing those inventories; run the repository-supported assurance regeneration

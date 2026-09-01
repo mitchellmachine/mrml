@@ -52,6 +52,14 @@ impl DigestAlgorithm {
             _ => None,
         }
     }
+
+    pub const fn v6_salt_bytes(self) -> usize {
+        match self {
+            Self::Sha256 => 16,
+            Self::Sha384 => 24,
+            Self::Sha512 => 32,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,6 +174,25 @@ pub struct PublicKeyV6 {
 }
 
 impl PublicKeyV6 {
+    pub fn from_seed(seed: &[u8; 32], created_at: u32) -> Result<Self, Error> {
+        Self::from_public(ed25519_public(seed), created_at)
+    }
+
+    pub fn from_public(public: [u8; 32], created_at: u32) -> Result<Self, Error> {
+        if created_at == 0 {
+            return Err(Error::InvalidTime);
+        }
+        if !ed25519_public_is_valid(&public) {
+            return Err(Error::InvalidPublicKey);
+        }
+        let body = public_key_body_v6(public, created_at);
+        Ok(Self {
+            created_at,
+            public,
+            fingerprint: fingerprint_v6(&body),
+        })
+    }
+
     pub const fn created_at(&self) -> u32 {
         self.created_at
     }
@@ -177,6 +204,50 @@ impl PublicKeyV6 {
     pub const fn fingerprint(&self) -> FingerprintV6 {
         self.fingerprint
     }
+}
+
+pub struct SigningKeyV6 {
+    seed: [u8; 32],
+    public: PublicKeyV6,
+}
+
+impl SigningKeyV6 {
+    pub fn from_seed(mut seed: [u8; 32], created_at: u32) -> Result<Self, Error> {
+        match PublicKeyV6::from_seed(&seed, created_at) {
+            Ok(public) => Ok(Self { seed, public }),
+            Err(error) => {
+                wipe_sensitive(&mut seed);
+                Err(error)
+            }
+        }
+    }
+
+    pub const fn public_key(&self) -> PublicKeyV6 {
+        self.public
+    }
+}
+
+impl Drop for SigningKeyV6 {
+    fn drop(&mut self) {
+        wipe_sensitive(&mut self.seed);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerificationPolicyV6 {
+    pub expected_primary_fingerprint: FingerprintV6,
+    pub validation_time: Option<u64>,
+    pub key_not_after: Option<u64>,
+    pub key_revoked: bool,
+    pub enforce_signature_expiration: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSignatureV6 {
+    pub primary_fingerprint: FingerprintV6,
+    pub digest_algorithm: DigestAlgorithm,
+    pub created_at: u64,
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -523,6 +594,264 @@ fn parse_primary_key_v6(body: &[u8]) -> Result<PublicKeyV6, Error> {
     })
 }
 
+pub fn sign_detached_v6_ascii_with_salt(
+    key: &SigningKeyV6,
+    payload: &[u8],
+    digest_algorithm: DigestAlgorithm,
+    created_at: u64,
+    salt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, Error> {
+    if payload.len() > MAX_OPENPGP_PAYLOAD_BYTES {
+        return Err(Error::InputTooLarge);
+    }
+    if salt.len() != digest_algorithm.v6_salt_bytes() {
+        return Err(Error::InvalidSignature);
+    }
+    let created_at = u32::try_from(created_at).map_err(|_| Error::InvalidTime)?;
+    if created_at == 0 || created_at < key.public.created_at {
+        return Err(Error::InvalidTime);
+    }
+    let mut body = [0u8; 192];
+    body[0] = 6;
+    body[1] = 0;
+    body[2] = 27;
+    body[3] = digest_algorithm as u8;
+    body[4..8].copy_from_slice(&41u32.to_be_bytes());
+    body[8] = 5;
+    body[9] = 2;
+    body[10..14].copy_from_slice(&created_at.to_be_bytes());
+    body[14] = 34;
+    body[15] = 33;
+    body[16] = 6;
+    body[17..49].copy_from_slice(key.public.fingerprint.as_bytes());
+    let hashed_end = 49;
+    let digest = signature_digest_v6(digest_algorithm, salt, payload, &body[..hashed_end])?;
+    body[49..53].copy_from_slice(&0u32.to_be_bytes());
+    body[53..55].copy_from_slice(&digest.bytes[..2]);
+    body[55] = salt.len() as u8;
+    body[56..56 + salt.len()].copy_from_slice(salt);
+    let signature = ed25519_sign(&key.seed, digest.as_slice());
+    let used = 56 + salt.len() + signature.len();
+    body[56 + salt.len()..used].copy_from_slice(&signature);
+    let mut packet = [0u8; 194];
+    packet[0] = 0xc2;
+    packet[1] = u8::try_from(used).map_err(|_| Error::InvalidSignature)?;
+    packet[2..2 + used].copy_from_slice(&body[..used]);
+    encode_armor(SIGNATURE_BEGIN, SIGNATURE_END, &packet[..2 + used], output)
+}
+
+pub fn verify_detached_v6_ascii(
+    public_key: &PublicKeyV6,
+    payload: &[u8],
+    signature: &[u8],
+    policy: &VerificationPolicyV6,
+    scratch: &mut [u8],
+) -> Result<VerifiedSignatureV6, Error> {
+    if payload.len() > MAX_OPENPGP_PAYLOAD_BYTES
+        || signature.is_empty()
+        || signature.len() > MAX_OPENPGP_SIGNATURE_BYTES
+    {
+        return Err(Error::InputTooLarge);
+    }
+    if public_key.fingerprint != policy.expected_primary_fingerprint {
+        return Err(Error::FingerprintMismatch);
+    }
+    if policy.key_revoked {
+        return Err(Error::RevokedKey);
+    }
+    let decoded = decode_armor(SIGNATURE_BEGIN, SIGNATURE_END, signature, scratch)?;
+    let (tag, body, end) = parse_packet(decoded, 0)?;
+    if tag != 2 || end != decoded.len() {
+        return Err(Error::AmbiguousSignature);
+    }
+    let parsed = parse_signature_body_v6(body, &public_key.fingerprint)?;
+    if parsed.created_at < u64::from(public_key.created_at) {
+        return Err(Error::InvalidTime);
+    }
+    if policy
+        .validation_time
+        .is_some_and(|now| parsed.created_at > now)
+    {
+        return Err(Error::FutureSignature);
+    }
+    if policy
+        .key_not_after
+        .is_some_and(|not_after| parsed.created_at >= not_after)
+    {
+        return Err(Error::ExpiredKey);
+    }
+    if policy.enforce_signature_expiration
+        && policy
+            .validation_time
+            .zip(parsed.expires_at)
+            .is_some_and(|(now, expires)| now >= expires)
+    {
+        return Err(Error::ExpiredSignature);
+    }
+    let digest = signature_digest_v6(
+        parsed.digest_algorithm,
+        parsed.salt,
+        payload,
+        parsed.hashed_header,
+    )?;
+    if !constant_time_equal(&digest.bytes[..2], parsed.digest_prefix)
+        || !ed25519_verify(
+            public_key.public_bytes(),
+            digest.as_slice(),
+            &parsed.signature,
+        )
+    {
+        return Err(Error::InvalidSignature);
+    }
+    Ok(VerifiedSignatureV6 {
+        primary_fingerprint: public_key.fingerprint,
+        digest_algorithm: parsed.digest_algorithm,
+        created_at: parsed.created_at,
+        expires_at: parsed.expires_at,
+    })
+}
+
+struct ParsedSignatureV6<'a> {
+    digest_algorithm: DigestAlgorithm,
+    created_at: u64,
+    expires_at: Option<u64>,
+    hashed_header: &'a [u8],
+    digest_prefix: &'a [u8],
+    salt: &'a [u8],
+    signature: [u8; 64],
+}
+
+fn parse_signature_body_v6<'a>(
+    body: &'a [u8],
+    expected_fingerprint: &FingerprintV6,
+) -> Result<ParsedSignatureV6<'a>, Error> {
+    if body.len() < 4 + 4 + 4 + 2 + 1 + 16 + 64 || body[0] != 6 {
+        return Err(Error::UnsupportedVersion);
+    }
+    if body[1] != 0 {
+        return Err(Error::UnsupportedSignatureType);
+    }
+    if body[2] != 27 {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    let digest_algorithm =
+        DigestAlgorithm::from_openpgp_id(body[3]).ok_or(Error::UnsupportedDigest)?;
+    let hashed_length = usize::try_from(u32::from_be_bytes(
+        body[4..8].try_into().map_err(|_| Error::InvalidSignature)?,
+    ))
+    .map_err(|_| Error::InvalidSignature)?;
+    let hashed_end = 8usize
+        .checked_add(hashed_length)
+        .ok_or(Error::InvalidSignature)?;
+    let hashed_bytes = body.get(8..hashed_end).ok_or(Error::InvalidSignature)?;
+    let (created_at, expires_at) = parse_subpackets_v6(hashed_bytes, expected_fingerprint)?;
+    let unhashed_length_end = hashed_end.checked_add(4).ok_or(Error::InvalidSignature)?;
+    let unhashed_length = usize::try_from(u32::from_be_bytes(
+        body.get(hashed_end..unhashed_length_end)
+            .ok_or(Error::InvalidSignature)?
+            .try_into()
+            .map_err(|_| Error::InvalidSignature)?,
+    ))
+    .map_err(|_| Error::InvalidSignature)?;
+    if unhashed_length != 0 {
+        return Err(Error::InvalidSignature);
+    }
+    let prefix_start = unhashed_length_end;
+    let salt_length_at = prefix_start.checked_add(2).ok_or(Error::InvalidSignature)?;
+    let digest_prefix = body
+        .get(prefix_start..salt_length_at)
+        .ok_or(Error::InvalidSignature)?;
+    let salt_length = usize::from(*body.get(salt_length_at).ok_or(Error::InvalidSignature)?);
+    if salt_length != digest_algorithm.v6_salt_bytes() {
+        return Err(Error::InvalidSignature);
+    }
+    let salt_start = salt_length_at + 1;
+    let salt_end = salt_start
+        .checked_add(salt_length)
+        .ok_or(Error::InvalidSignature)?;
+    let signature_end = salt_end.checked_add(64).ok_or(Error::InvalidSignature)?;
+    if signature_end != body.len() {
+        return Err(Error::InvalidSignature);
+    }
+    let mut signature = [0u8; 64];
+    signature.copy_from_slice(&body[salt_end..signature_end]);
+    Ok(ParsedSignatureV6 {
+        digest_algorithm,
+        created_at,
+        expires_at,
+        hashed_header: &body[..hashed_end],
+        digest_prefix,
+        salt: &body[salt_start..salt_end],
+        signature,
+    })
+}
+
+fn parse_subpackets_v6(
+    input: &[u8],
+    expected_fingerprint: &FingerprintV6,
+) -> Result<(u64, Option<u64>), Error> {
+    let mut offset = 0usize;
+    let mut created_at = None;
+    let mut expiration = None;
+    let mut issuer = false;
+    while offset < input.len() {
+        let (length, length_bytes) = parse_subpacket_length(&input[offset..])?;
+        offset = offset
+            .checked_add(length_bytes)
+            .ok_or(Error::InvalidSignature)?;
+        let end = offset.checked_add(length).ok_or(Error::InvalidSignature)?;
+        let packet = input.get(offset..end).ok_or(Error::InvalidSignature)?;
+        let kind = *packet.first().ok_or(Error::InvalidSignature)?;
+        let critical = kind & 0x80 != 0;
+        let data = &packet[1..];
+        match kind & 0x7f {
+            2 => {
+                if data.len() != 4 || created_at.is_some() {
+                    return Err(Error::InvalidSignature);
+                }
+                created_at = Some(u64::from(u32::from_be_bytes(
+                    data.try_into().map_err(|_| Error::InvalidSignature)?,
+                )));
+            }
+            3 => {
+                if data.len() != 4 || expiration.is_some() {
+                    return Err(Error::InvalidSignature);
+                }
+                expiration = Some(u32::from_be_bytes(
+                    data.try_into().map_err(|_| Error::InvalidSignature)?,
+                ));
+            }
+            33 => {
+                if data.len() != 33
+                    || data[0] != 6
+                    || issuer
+                    || !constant_time_equal(&data[1..], expected_fingerprint.as_bytes())
+                {
+                    return Err(Error::FingerprintMismatch);
+                }
+                issuer = true;
+            }
+            _ if critical => return Err(Error::UnknownCriticalSubpacket),
+            _ => {}
+        }
+        offset = end;
+    }
+    let created_at = created_at.ok_or(Error::InvalidTime)?;
+    if !issuer {
+        return Err(Error::MissingIssuerFingerprint);
+    }
+    let expires_at = match expiration {
+        Some(0) | None => None,
+        Some(seconds) => Some(
+            created_at
+                .checked_add(u64::from(seconds))
+                .ok_or(Error::InvalidTime)?,
+        ),
+    };
+    Ok((created_at, expires_at))
+}
+
 pub fn sign_detached_ascii(
     key: &SigningKey,
     payload: &[u8],
@@ -664,6 +993,24 @@ fn public_key_body(public: [u8; 32], created_at: u32) -> [u8; 51] {
     body[18] = 0x40;
     body[19..].copy_from_slice(&public);
     body
+}
+
+fn public_key_body_v6(public: [u8; 32], created_at: u32) -> [u8; 42] {
+    let mut body = [0u8; 42];
+    body[0] = 6;
+    body[1..5].copy_from_slice(&created_at.to_be_bytes());
+    body[5] = 27;
+    body[6..10].copy_from_slice(&32u32.to_be_bytes());
+    body[10..].copy_from_slice(&public);
+    body
+}
+
+fn fingerprint_v6(body: &[u8; 42]) -> FingerprintV6 {
+    let mut input = [0u8; 47];
+    input[0] = 0x9b;
+    input[1..5].copy_from_slice(&42u32.to_be_bytes());
+    input[5..].copy_from_slice(body);
+    FingerprintV6(Sha256::digest(&input))
 }
 
 fn fingerprint_v4(body: &[u8; 51]) -> Fingerprint {
@@ -1021,6 +1368,25 @@ fn signature_digest(
     hash.update(payload);
     hash.update(hashed_header);
     hash.update(&[4, 0xff]);
+    hash.update(&header_length.to_be_bytes());
+    Ok(hash.finalize())
+}
+
+fn signature_digest_v6(
+    algorithm: DigestAlgorithm,
+    salt: &[u8],
+    payload: &[u8],
+    hashed_header: &[u8],
+) -> Result<DigestBytes, Error> {
+    if salt.len() != algorithm.v6_salt_bytes() || hashed_header.first() != Some(&6) {
+        return Err(Error::InvalidSignature);
+    }
+    let header_length = u32::try_from(hashed_header.len()).map_err(|_| Error::InvalidSignature)?;
+    let mut hash = DigestState::new(algorithm);
+    hash.update(salt);
+    hash.update(payload);
+    hash.update(hashed_header);
+    hash.update(&[6, 0xff]);
     hash.update(&header_length.to_be_bytes());
     Ok(hash.finalize())
 }
@@ -1477,6 +1843,76 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
         body[6..10].copy_from_slice(&31u32.to_be_bytes());
         body[10..].copy_from_slice(&public);
         assert_eq!(parse_primary_key_v6(&body), Err(Error::InvalidPublicKey));
+    }
+
+    #[test]
+    fn v6_detached_signatures_round_trip_with_exact_salt_sizes() {
+        let key = SigningKeyV6::from_seed([0x42; 32], 1_700_000_000).unwrap();
+        let public = key.public_key();
+        for algorithm in [
+            DigestAlgorithm::Sha256,
+            DigestAlgorithm::Sha384,
+            DigestAlgorithm::Sha512,
+        ] {
+            let salt = [0x5a; 32];
+            let salt = &salt[..algorithm.v6_salt_bytes()];
+            let mut armor = [0u8; 512];
+            let written = sign_detached_v6_ascii_with_salt(
+                &key,
+                b"MRML v6",
+                algorithm,
+                1_700_000_001,
+                salt,
+                &mut armor,
+            )
+            .unwrap();
+            let mut scratch = [0u8; MAX_OPENPGP_SIGNATURE_BYTES];
+            let verified = verify_detached_v6_ascii(
+                &public,
+                b"MRML v6",
+                &armor[..written],
+                &VerificationPolicyV6 {
+                    expected_primary_fingerprint: public.fingerprint(),
+                    validation_time: Some(1_700_000_001),
+                    key_not_after: None,
+                    key_revoked: false,
+                    enforce_signature_expiration: true,
+                },
+                &mut scratch,
+            )
+            .unwrap();
+            assert_eq!(verified.digest_algorithm, algorithm);
+        }
+    }
+
+    #[test]
+    fn v6_salt_is_hashed_first_and_cannot_be_omitted_or_misordered() {
+        let header = [6, 0, 27, 8, 0, 0, 0, 0];
+        let salt = [0x33; 16];
+        let correct =
+            signature_digest_v6(DigestAlgorithm::Sha256, &salt, b"payload", &header).unwrap();
+
+        let mut omitted = DigestState::new(DigestAlgorithm::Sha256);
+        omitted.update(b"payload");
+        omitted.update(&header);
+        omitted.update(&[6, 0xff]);
+        omitted.update(&(header.len() as u32).to_be_bytes());
+        let omitted = omitted.finalize();
+
+        let mut misordered = DigestState::new(DigestAlgorithm::Sha256);
+        misordered.update(b"payload");
+        misordered.update(&salt);
+        misordered.update(&header);
+        misordered.update(&[6, 0xff]);
+        misordered.update(&(header.len() as u32).to_be_bytes());
+        let misordered = misordered.finalize();
+
+        assert_ne!(correct.as_slice(), omitted.as_slice());
+        assert_ne!(correct.as_slice(), misordered.as_slice());
+        assert_eq!(
+            signature_digest_v6(DigestAlgorithm::Sha256, &salt[..15], b"payload", &header).err(),
+            Some(Error::InvalidSignature)
+        );
     }
 
     #[test]
