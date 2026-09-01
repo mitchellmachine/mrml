@@ -13,6 +13,7 @@ mod inflate;
 mod object;
 mod openpgp_provider;
 mod pack;
+mod pack_file;
 mod pack_index;
 mod quarantine;
 mod receive_journal;

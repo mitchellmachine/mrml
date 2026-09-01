@@ -155,6 +155,34 @@ impl ObjectFormat {
     }
 }
 
+pub(crate) enum GitObjectHasher {
+    Sha1(Sha1),
+    Sha256(Sha256),
+}
+
+impl GitObjectHasher {
+    pub(crate) fn new(format: ObjectFormat) -> Self {
+        match format {
+            ObjectFormat::Sha1 => Self::Sha1(Sha1::new()),
+            ObjectFormat::Sha256 => Self::Sha256(Sha256::new()),
+        }
+    }
+
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Sha1(hash) => hash.update(bytes),
+            Self::Sha256(hash) => hash.update(bytes),
+        }
+    }
+
+    pub(crate) fn finalize(self) -> ObjectId {
+        match self {
+            Self::Sha1(hash) => ObjectId::Sha1(hash.finalize()),
+            Self::Sha256(hash) => ObjectId::Sha256(hash.finalize()),
+        }
+    }
+}
+
 impl fmt::Display for ObjectFormat {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.name())

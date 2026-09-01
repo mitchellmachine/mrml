@@ -1,7 +1,8 @@
 # Git pack storage
 
-Status: **PARTIALLY IMPLEMENTED**. Existing bounded whole-buffer pack parsing
-and the first-party authenticated pack-index v2 module are implemented.
+Status: **PARTIALLY IMPLEMENTED**. Existing bounded whole-buffer compatibility
+parsing, a constant-memory file authentication scan, and the first-party
+authenticated pack-index v2 module are implemented.
 
 The pack encoder now emits a deterministic first-party zlib stream with one
 fixed-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains retain a
@@ -22,6 +23,16 @@ expanded-size, delta, memory, and work limits. Whole-repository repacking is not
 part of push latency. Immutable arrival packs are activated first; a bounded
 low-priority compactor later creates and verifies canonical cold packs against
 one consistent repository generation.
+
+The receive path now performs an initial sequential `scan_pack_file` pass over
+the reopened regular quarantine file. It snapshots and bounds the length,
+incrementally hashes at most 64 KiB at a time, validates `PACK`, v2/v3, the
+nonzero bounded object count, and the exact SHA-1 or SHA-256 trailer, and charges
+one work unit per admitted byte. The trailer is excluded from the pack hash and
+mixed-width IDs fail closed. This detects truncation, replacement, count-limit,
+and checksum failure before the compatibility parser allocates the pack. Entry
+inflation and delta resolution are not yet streaming, so this pass alone does
+not satisfy the production receive memory gate.
 
 `pack_index.rs` constructs and parses Git pack index v2 for both SHA-1
 compatibility and SHA-256 repositories. It validates monotonic fanout tables,

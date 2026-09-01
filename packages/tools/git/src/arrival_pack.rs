@@ -5,6 +5,7 @@ use mrml_runtime::{
     rename_file,
 };
 
+use crate::pack_file::scan_pack_file;
 use crate::{
     BoundedRead, DEFAULT_MAX_INCOMING_PACK_BYTES, DurableFailure, GitdCoreError, ObjectFormat,
     ObjectId, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
@@ -75,11 +76,21 @@ impl ArrivalPackStore {
     ) -> Result<(), GitdCoreError> {
         let directory = self.quarantine_path(transaction.id());
         let incoming = join_path(&directory, "incoming.pack");
+        let scan = scan_pack_file(
+            &incoming,
+            self.format,
+            transaction.reservation().incoming_pack_bytes(),
+            transaction.reservation().object_count(),
+            transaction.reservation().incoming_pack_bytes(),
+        )
+        .map_err(|_| GitdCoreError::ObjectValidation)?;
         let pack = read_regular_bounded(&incoming, self.max_pack_bytes)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
         let (objects, entries) = parse_pack_with_index(&pack, self.format)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
         if objects.is_empty()
+            || objects.len() != scan.object_count as usize
+            || pack.len() as u64 != scan.bytes
             || objects.len() > transaction.reservation().object_count() as usize
             || required_tips.is_empty()
             || required_tips.iter().any(|tip| {
@@ -105,6 +116,9 @@ impl ArrivalPackStore {
         let trailer =
             ObjectId::from_bytes(self.format, &pack[pack.len() - self.format.hash_len()..])
                 .ok_or(GitdCoreError::ObjectValidation)?;
+        if trailer != scan.checksum {
+            return Err(GitdCoreError::ObjectValidation);
+        }
         let index = build_pack_index_v2(self.format, &entries, trailer)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
         write_new_synced(&join_path(&directory, "objects.idx"), &index)
