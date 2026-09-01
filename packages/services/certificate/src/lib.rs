@@ -10,6 +10,8 @@ mod caa;
 mod catalog_lifecycle_provider;
 mod certificate;
 mod certd_channel;
+#[cfg(target_os = "linux")]
+mod certd_config;
 mod constrained_acme_signing;
 #[cfg(target_os = "linux")]
 mod certd_channel_unix;
@@ -108,6 +110,11 @@ pub use certd_channel::{
     CertdChannelError, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
     CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     decode_certd_channel_request, encode_certd_channel_request,
+};
+#[cfg(target_os = "linux")]
+pub use certd_config::{
+    CertdConfig, CertdConfigError, CertdDirectoryClass, MAX_CERTD_CONFIG_BYTES,
+    parse_certd_config,
 };
 pub use constrained_acme_signing::{
     AcmeJwsOperation, ConstrainedAcmeJwsError, ConstrainedAcmeJwsPolicy,
