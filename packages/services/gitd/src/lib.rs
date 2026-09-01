@@ -3,6 +3,7 @@ mod authority_rpc;
 mod backend;
 mod catalog;
 mod certd_rpc;
+mod composition;
 mod config;
 mod http2_stream;
 mod identity;
@@ -19,6 +20,7 @@ pub use catalog::{
     verify_repository_admission,
 };
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError, GitdIdentitySnapshot};
+pub use composition::{GitdComposedService, GitdCompositionError, compose_gitd_service};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};
 pub use http2_stream::{GitdHttp2StreamError, serve_gitd_http2_connection, serve_smart_git_http2};
 pub use identity::{
