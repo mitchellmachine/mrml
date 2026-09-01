@@ -27,6 +27,7 @@ mod response;
 mod state;
 mod transaction;
 mod transport;
+mod transport_capability;
 mod url;
 
 pub use account::{
@@ -124,5 +125,9 @@ pub use transport::{
     AcmeTransport, AcmeTransportRequest, AcmeTransportResponse, BadNonceRetry,
     MAX_ACME_RESPONSE_BODY, MAX_ALTERNATE_LINK_BYTES, MAX_ALTERNATE_LINKS, MAX_BAD_NONCE_RETRIES,
     MAX_CONTENT_TYPE_BYTES, MAX_RETRY_AFTER_BYTES, TransportError,
+};
+pub use transport_capability::{
+    AcmeHttpsCapability, AcmeHttpsRoute, CapabilityAcmeTransport, CapabilityHttpsRequest,
+    CapabilityHttpsResponse, CapabilityTransportError,
 };
 pub use url::{AcmeOrigin, AcmeScheme, AcmeUrl, MAX_URL_BYTES, UrlError};

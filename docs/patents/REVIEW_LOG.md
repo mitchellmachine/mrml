@@ -12058,3 +12058,11 @@ authenticated backup container through the existing hosted lifecycle route and
 requires an exact digest confirmation before clean-target restore. It adds no
 certificate protocol, signing mechanism, validation topology, certificate
 authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Capability-bound MRML ACME HTTPS transport
+
+Patent review: **NOT_TRIGGERED**. This increment projects ordinary
+authenticated HTTPS request/response semantics through an exact attenuated
+service capability and validates its generation-bound receipt. It adds no new
+certificate protocol, signing mechanism, validation topology, certificate
+authority operation, or recorded re-review trigger.

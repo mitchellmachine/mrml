@@ -401,9 +401,18 @@ and `mrml-tls` stack. It emits exact GET, HEAD, or JOSE POST requests, refuses
 duplicate ACME singleton headers, copies response bodies only within the caller
 budget, and never invokes the HTTP redirect-following API. The MRML target does
 not inherit hosted sockets and continues to use the same transport contract
-through capability-bound services.
+through capability-bound services. Its concrete adapter accepts only a nonzero
+HTTPS capability identity, route generation, directory generation, and
+owner-approved HTTPS origin. Every exchange passes that exact binding to the
+backend capability and requires the receipt to return it unchanged with the
+exact effective URL and bounded response metadata. Origin, capability, route,
+or directory substitution; invalid lengths or status; duplicate alternate
+links; non-ASCII metadata; and populated trailing link slots fail closed. The
+adapter contains no socket, resolver, host trust store, filesystem, or syscall
+dependency, so MRML can supply authenticated HTTPS as a capability without
+forking the ACME state machine.
 
-MRML HTTPS capability adapters, sealed-key backup/restore platform adapters,
+Sealed-key backup/restore platform adapters,
 mutation-capable CLI administration and live session acquisition, concrete gitd
 process wiring, and full native-storage/reboot recovery remain **PLANNED**. The
 shared state machine must
