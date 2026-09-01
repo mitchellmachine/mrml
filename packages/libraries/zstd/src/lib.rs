@@ -386,7 +386,7 @@ fn encode_huffman_literals(literals: &[u8]) -> Result<Option<Vector<u8>>> {
         Err(Error::InvalidHuffmanTree) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let tree = table.serialize_direct_tree()?;
+    let tree = table.serialize_tree()?;
     let stream = table.encode_stream(literals)?;
     let compressed_size = tree
         .len()
