@@ -149,6 +149,16 @@ repository view, the complete active state is re-read before insertion and
 again before response, and a later repository generation necessarily misses.
 Focused hosted-Linux tests cover durable reopen, full-key and stale-generation
 misses, immutable insertion, tampering, and six simultaneous same-key writers.
+Bounded precomputation selects the exact active default-branch tip when born,
+every exact `refs/tags/` tip (annotated or lightweight), and caller-supplied
+popular full ref names. Caller names must resolve in the active state; names
+identify candidates but do not authorize objects. The combined input is capped
+at 4,096 refs, sorted canonically, and deduplicated first by name and then by
+complete object ID before one single-want canonical pack is populated per tip.
+Selection never uses storage location, compression state, workload profiles,
+sketches, similarity search, or adaptive ranking. The active state is re-read
+through the existing exact-generation cache path before every insertion and on
+completion.
 Production hit-rate, eviction/retention operations, crash-stale-claim recovery,
 and native-Windows durability evidence remain open.
 

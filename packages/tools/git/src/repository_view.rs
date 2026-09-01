@@ -4,7 +4,7 @@ use mrml_runtime::Vector;
 
 use crate::{
     ActiveRefFile, AnnotatedTagDetails, AnnotatedTagPage, ArrivalPackStore, BlobPage, BoundedRead,
-    BoundedWrite, Commit, CommitDetails, CommitPage, GitdCoreBackend, Index, IndexEntry,
+    BoundedWrite, Commit, CommitDetails, CommitPage, FullRefName, GitdCoreBackend, Index, IndexEntry,
     GitdCoreError, ImmutablePackDescriptor, ObjectId, ObjectKind, PktLine, ProtocolBudget,
     ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
@@ -26,6 +26,7 @@ const SELECTED_PACK_SET_LIMITS: PackSetLimits = PackSetLimits {
 };
 const FETCH_PACK_PROFILE_VERSION: u32 = 1;
 const FETCH_PACK_ENCODER_VERSION: u32 = 1;
+const MAX_FETCH_PRECOMPUTE_REFS: usize = 4_096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationSummaryEvidence {
@@ -573,6 +574,103 @@ impl FilesystemRepositoryView {
         }
         self.fetch_pack(&state, wants, haves)?;
         self.ensure_exact_generation(&state)
+    }
+
+    /// Precomputes one canonical single-want pack for the default branch, all
+    /// exact tag refs, and caller-selected popular refs. Names identify
+    /// candidates but grant no authority: every name resolves through the
+    /// exact active state, and duplicate object tips produce one cache entry.
+    pub fn precompute_selected_fetch_packs(
+        &self,
+        repository: &RepositoryIdentity,
+        popular: &[FullRefName],
+    ) -> Result<usize, GitdCoreError> {
+        if self.pack_cache.is_none() {
+            return Err(GitdCoreError::Unsupported);
+        }
+        if popular.len() > MAX_FETCH_PRECOMPUTE_REFS {
+            return Err(GitdCoreError::Resource);
+        }
+        let state = self.load_for(repository)?;
+        let tag_count = state
+            .refs
+            .iter()
+            .filter(|(name, _)| name.as_str().starts_with("refs/tags/"))
+            .count();
+        let default_count = usize::from(
+            state
+                .refs
+                .iter()
+                .any(|(name, _)| name == &state.default_branch),
+        );
+        let intrinsic_count = tag_count
+            .checked_add(default_count)
+            .ok_or(GitdCoreError::Resource)?;
+        if intrinsic_count > MAX_FETCH_PRECOMPUTE_REFS {
+            return Err(GitdCoreError::Resource);
+        }
+        let selection_bound = intrinsic_count
+            .checked_add(popular.len())
+            .ok_or(GitdCoreError::Resource)?;
+        let mut names = Vector::new();
+        names
+            .try_reserve_exact(selection_bound)
+            .map_err(|_| GitdCoreError::Resource)?;
+        if default_count == 1 {
+            names.push(state.default_branch.clone());
+        }
+        for (name, _) in &state.refs {
+            if name.as_str().starts_with("refs/tags/") {
+                names.push(name.clone());
+            }
+        }
+        for name in popular {
+            if !state.refs.iter().any(|(active, _)| active == name) {
+                return Err(GitdCoreError::ObjectValidation);
+            }
+            names.push(name.clone());
+        }
+        names.sort_unstable();
+        let mut unique_names = Vector::new();
+        unique_names
+            .try_reserve_exact(names.len())
+            .map_err(|_| GitdCoreError::Resource)?;
+        for name in names {
+            if unique_names.last() != Some(&name) {
+                unique_names.push(name);
+            }
+        }
+        if unique_names.len() > MAX_FETCH_PRECOMPUTE_REFS {
+            return Err(GitdCoreError::Resource);
+        }
+
+        let mut tips = Vector::new();
+        tips.try_reserve_exact(unique_names.len())
+            .map_err(|_| GitdCoreError::Resource)?;
+        for name in unique_names {
+            let tip = state
+                .refs
+                .iter()
+                .find(|(active, _)| active == &name)
+                .map(|(_, id)| *id)
+                .ok_or(GitdCoreError::ObjectValidation)?;
+            tips.push(tip);
+        }
+        tips.sort_unstable();
+        let mut unique_tips = Vector::new();
+        unique_tips
+            .try_reserve_exact(tips.len())
+            .map_err(|_| GitdCoreError::Resource)?;
+        for tip in tips {
+            if unique_tips.last() != Some(&tip) {
+                unique_tips.push(tip);
+            }
+        }
+        for tip in &unique_tips {
+            self.fetch_pack(&state, core::slice::from_ref(tip), &[])?;
+        }
+        self.ensure_exact_generation(&state)?;
+        Ok(unique_tips.len())
     }
 
     pub fn repository_generation(&self) -> Result<RepositoryGeneration, GitdCoreError> {
@@ -2047,6 +2145,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cache.lookup(&stale_key).unwrap(), None);
+        assert_eq!(
+            view.precompute_selected_fetch_packs(
+                &identity,
+                &[
+                    FullRefName::parse("refs/heads/main").unwrap(),
+                    FullRefName::parse("refs/tags/latest").unwrap(),
+                ],
+            ),
+            Ok(2)
+        );
+        let tag_key = PackCacheKey::new(
+            ObjectFormat::Sha256,
+            Vector::from([tag]),
+            Vector::new(),
+            RepositoryGeneration(4),
+            FETCH_PACK_PROFILE_VERSION,
+            FETCH_PACK_ENCODER_VERSION,
+        )
+        .unwrap();
+        assert!(cache.lookup(&tag_key).unwrap().is_some());
+        assert_eq!(
+            view.precompute_selected_fetch_packs(
+                &identity,
+                &[FullRefName::parse("refs/heads/missing").unwrap()],
+            ),
+            Err(GitdCoreError::ObjectValidation)
+        );
+        let too_many = core::iter::repeat(FullRefName::parse("refs/heads/main").unwrap())
+            .take(MAX_FETCH_PRECOMPUTE_REFS + 1)
+            .collect::<Vector<_>>();
+        assert_eq!(
+            view.precompute_selected_fetch_packs(&identity, &too_many),
+            Err(GitdCoreError::Resource)
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 
