@@ -43,6 +43,14 @@ empty subject, one critical dNSName SAN, and the exact critical RFC 8737
 `acmeIdentifier` OCTET STRING. Signing is purpose- and generation-bound. ALPN
 selection rejects `acme-tls/1` unless the exact active SNI is present and never
 falls back to an ordinary production identity.
+The hosted certificate role serves HTTP-01 over a first-party TCP listener. It
+accepts only the exact active authorization-bound token and Host within its
+validity interval, uses two-second read/write timeouts and a 4096-byte request
+ceiling, returns the exact pre-validated key authorization with `no-store`, and
+returns 404 for every nonmatching request. Dropping the role clears its
+volatile key-authorization buffer. Linux and Windows-target-under-Wine
+loopbacks exercise the same implementation; binding production port 80 remains
+a deployment/supervision responsibility.
 
 `org.mrml.service.certificate` is now one Manifest V2 service package targeting
 MRML, Windows, and Linux. Its first confined runtime role is a bounded,
@@ -143,8 +151,8 @@ budget, and never invokes the HTTP redirect-following API. The MRML target does
 not inherit hosted sockets and continues to use the same transport contract
 through capability-bound services.
 
-General JOSE response parsing, MRML HTTPS capability adapters and
-propagation observation, lifecycle-specific state codecs and recovery wiring,
+General JOSE response parsing, MRML HTTPS capability adapters, DNS propagation
+observation, lifecycle-specific state codecs and recovery wiring,
 alternate-chain link retrieval, renewal execution, revocation transport,
 sealed-key backup/restore adapters, CLI administration, interface dispatch/service loop, concrete
 gitd hot reload, and the MRML

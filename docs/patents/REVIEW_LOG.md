@@ -11339,3 +11339,10 @@ Patent review: **NOT_TRIGGERED**. This increment adds a conventional bounded,
 versioned authenticated container over already authenticated durable records
 and atomic clean-target restore operations. It adds no scoped ACME protocol
 mechanism and no recorded re-review trigger.
+
+# 2026-09-01 — Hosted HTTP-01 TCP role
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds the ordinary RFC 8555
+HTTP-01 TCP response role with exact challenge/lifetime/key-authorization
+binding and bounded timeouts. It adds no recorded re-review-trigger mechanism.

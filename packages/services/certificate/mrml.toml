@@ -86,6 +86,13 @@ scope = "compile"
 targets = ["WINDOWS", "LINUX"]
 
 [[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+targets = ["WINDOWS", "LINUX"]
+
+[[dependency]]
 alias = "mrml_interface_certificate_signing_v1"
 compile_name = "mrml-interface-certificate-signing-v1"
 package = "org.mrml.interface.certificate.signing"
