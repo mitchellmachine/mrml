@@ -103,11 +103,12 @@ README resolution checks only `README.md`, `README.txt`,
 returns a generation-tagged blob descriptor. An immutable-pack descriptor
 validates the complete exact commit closure before returning the repository
 generation, object format, exact commit ID, pack profile version, and encoder
-version; those fields form the cache/production request identity and do not
-claim a pack has already been generated. This component does not yet implement
-release descriptors, durable verification-evidence loading, the
-complete upload-pack profile, or production receive construction, so it is not
-yet a complete production `GitdCoreBackend`.
+version. Those fields form the cache/production request identity. An optional
+durable cache now precomputes, populates, and serves exact ordered
+wants/haves/generation/profile/encoder representations, while later generations
+miss by construction. This component does not yet implement release
+descriptors, durable verification-evidence loading, or the complete upload-pack
+profile, so it is not yet a complete production `GitdCoreBackend`.
 
 `repository_events_after` provides bounded cache-invalidation events across
 the repository, trust, revocation, and pack generations. A cursor ahead of any
@@ -150,9 +151,10 @@ preflights the complete framed response before emitting the standard `packfile`
 section with mandatory band-1 framing. The golden
 hosted-Linux test reparses that emitted pack and finds the requested commit.
 Arbitrary non-tip reachable wants, ACK negotiation rounds, thin-pack
-generation, streaming generation without a whole-pack memory allocation, and
-receive-pack backend activation remain open, so the omitted features are not
-advertised.
+generation, and streaming generation without a whole-pack memory allocation
+remain open, so the omitted features are not advertised. Receive activation is
+provided separately by `ReceivePackCore` with injected verification and receipt
+authorities.
 
 The receive-pack command boundary parses at most 32 exact-width SHA-1 or
 SHA-256 old/new IDs and validated full ref names, requires `report-status-v2`
