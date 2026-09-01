@@ -59,6 +59,17 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         Self::read_tree_page(self, repository, treeish, path, limits)
     }
 
+    fn read_tree_page_at(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<TreePage, GitdCoreError> {
+        Self::read_tree_page_at(self, repository, treeish, path, offset, limits)
+    }
+
     fn read_blob_page(
         &self,
         repository: &RepositoryIdentity,
@@ -67,6 +78,17 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         limits: QueryLimits,
     ) -> Result<BlobPage, GitdCoreError> {
         Self::read_blob_page(self, repository, treeish, path, limits)
+    }
+
+    fn read_blob_page_at(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<BlobPage, GitdCoreError> {
+        Self::read_blob_page_at(self, repository, treeish, path, offset, limits)
     }
 
     fn verification_summary(
@@ -366,6 +388,17 @@ impl FilesystemRepositoryView {
         path: &RepositoryPath,
         limits: QueryLimits,
     ) -> Result<TreePage, GitdCoreError> {
+        self.read_tree_page_at(repository, treeish, path, 0, limits)
+    }
+
+    pub fn read_tree_page_at(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<TreePage, GitdCoreError> {
         validate_limits(limits)?;
         let before = self.load_for(repository)?;
         let tree = self.tree_id(treeish, before.object_format)?;
@@ -375,15 +408,31 @@ impl FilesystemRepositoryView {
             .map_err(|_| GitdCoreError::ObjectValidation)?;
         let prefix = path.as_str();
         let prefix_slash = mrml_runtime::mrml_format!("{prefix}/");
+        let offset = usize::try_from(offset).map_err(|_| GitdCoreError::Resource)?;
+        let matching = index
+            .entries
+            .iter()
+            .filter(|entry| {
+                prefix.is_empty()
+                    || entry.path == prefix
+                    || entry.path.starts_with(prefix_slash.as_str())
+            })
+            .count();
+        if offset > matching {
+            return Err(GitdCoreError::MalformedInput);
+        }
         let mut entries = Vector::new();
         let mut bytes = 0u64;
-        for entry in &index.entries {
-            if !prefix.is_empty()
-                && entry.path != prefix
-                && !entry.path.starts_with(prefix_slash.as_str())
-            {
-                continue;
-            }
+        for entry in index
+            .entries
+            .iter()
+            .filter(|entry| {
+                prefix.is_empty()
+                    || entry.path == prefix
+                    || entry.path.starts_with(prefix_slash.as_str())
+            })
+            .skip(offset)
+        {
             if entries.len() >= limits.max_entries as usize {
                 break;
             }
@@ -395,17 +444,10 @@ impl FilesystemRepositoryView {
             }
             entries.push(RepositoryPath::parse(&entry.path)?);
         }
-        let truncated = entries.len()
-            < index
-                .entries
-                .iter()
-                .filter(|entry| {
-                    prefix.is_empty()
-                        || entry.path == prefix
-                        || entry.path.starts_with(prefix_slash.as_str())
-                })
-                .count();
-        let next_offset = truncated.then_some(entries.len() as u64);
+        let consumed = offset
+            .checked_add(entries.len())
+            .ok_or(GitdCoreError::Resource)?;
+        let next_offset = (consumed < matching).then_some(consumed as u64);
         self.ensure_generation(before.repository_generation)?;
         Ok(TreePage {
             repository_generation: before.repository_generation,
@@ -420,6 +462,17 @@ impl FilesystemRepositoryView {
         repository: &RepositoryIdentity,
         treeish: ObjectId,
         path: &RepositoryPath,
+        limits: QueryLimits,
+    ) -> Result<BlobPage, GitdCoreError> {
+        self.read_blob_page_at(repository, treeish, path, 0, limits)
+    }
+
+    pub fn read_blob_page_at(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        offset: u64,
         limits: QueryLimits,
     ) -> Result<BlobPage, GitdCoreError> {
         validate_limits(limits)?;
@@ -439,21 +492,26 @@ impl FilesystemRepositoryView {
         if object.kind != ObjectKind::Blob {
             return Err(GitdCoreError::ObjectValidation);
         }
+        let offset = usize::try_from(offset).map_err(|_| GitdCoreError::Resource)?;
+        if offset > object.contents.len() {
+            return Err(GitdCoreError::MalformedInput);
+        }
         let take = object
             .contents
             .len()
+            .saturating_sub(offset)
             .min(usize::try_from(limits.max_bytes).map_err(|_| GitdCoreError::Resource)?);
         let mut bytes = Vector::new();
         bytes
-            .try_extend_from_slice(&object.contents[..take])
+            .try_extend_from_slice(&object.contents[offset..offset + take])
             .map_err(|_| GitdCoreError::Resource)?;
         self.ensure_generation(before.repository_generation)?;
         Ok(BlobPage {
             repository_generation: before.repository_generation,
             blob: entry.id,
-            offset: 0,
+            offset: offset as u64,
             bytes,
-            complete: take == object.contents.len(),
+            complete: offset + take == object.contents.len(),
         })
     }
 
@@ -718,6 +776,32 @@ mod tests {
             .unwrap();
         assert_eq!(&*blob_page.bytes, b"bounded");
         assert!(!blob_page.complete);
+        let blob_tail = GitdCoreBackend::read_blob_page_at(
+            &view,
+            &identity,
+            commit,
+            &RepositoryPath::parse("README.md").unwrap(),
+            7,
+            QueryLimits {
+                max_entries: 1,
+                max_bytes: 16,
+            },
+        )
+        .unwrap();
+        assert_eq!(blob_tail.offset, 7);
+        assert_eq!(&*blob_tail.bytes, b" view");
+        assert!(blob_tail.complete);
+        let tree_tail = GitdCoreBackend::read_tree_page_at(
+            &view,
+            &identity,
+            commit,
+            &RepositoryPath::root(),
+            1,
+            limits,
+        )
+        .unwrap();
+        assert!(tree_tail.entries.is_empty());
+        assert_eq!(tree_tail.next_offset, None);
         assert_eq!(
             view.repository_summary(
                 &RepositoryIdentity::parse("other/repository").unwrap(),

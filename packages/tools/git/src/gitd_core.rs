@@ -439,6 +439,20 @@ pub trait GitdCoreBackend {
         limits: QueryLimits,
     ) -> Result<TreePage, GitdCoreError>;
 
+    fn read_tree_page_at(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<TreePage, GitdCoreError> {
+        if offset != 0 {
+            return Err(GitdCoreError::Unsupported);
+        }
+        self.read_tree_page(repository, treeish, path, limits)
+    }
+
     fn read_blob_page(
         &self,
         repository: &RepositoryIdentity,
@@ -446,6 +460,20 @@ pub trait GitdCoreBackend {
         path: &RepositoryPath,
         limits: QueryLimits,
     ) -> Result<BlobPage, GitdCoreError>;
+
+    fn read_blob_page_at(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<BlobPage, GitdCoreError> {
+        if offset != 0 {
+            return Err(GitdCoreError::Unsupported);
+        }
+        self.read_blob_page(repository, treeish, path, limits)
+    }
 
     fn verification_summary(
         &self,

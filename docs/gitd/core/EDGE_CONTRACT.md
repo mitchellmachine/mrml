@@ -40,8 +40,11 @@ after object access; concurrent activation returns `StaleGeneration` instead
 of a mixed-generation result. Cross-repository identities and object-format
 mismatches fail authorization. The hosted-Linux test exercises SHA-256 commit,
 tree, and truncated blob reads without invoking an external Git executable.
-This component does not yet implement rich commit metadata, resumable tree/blob
-pagination, tags/releases/events/archive descriptors, verification summaries,
+Tree and blob reads also expose backward-compatible `*_at` methods whose
+checked offsets resume an exact tree enumeration or blob byte range; returned
+continuations remain bound to the rechecked repository generation. Invalid or
+overflowing offsets fail closed. This component does not yet implement rich
+commit metadata, tags/releases/events/archive descriptors, verification summaries,
 the complete upload-pack profile, or receive-pack, so it is not yet a complete
 `GitdCoreBackend`.
 
