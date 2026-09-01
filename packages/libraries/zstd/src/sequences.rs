@@ -1,5 +1,7 @@
 use crate::bits::{ReverseBitWriter, ReverseBits};
-use crate::fse::{CompressionPath, Entry, State as FseState, Table, parse_table};
+use crate::fse::{
+    CompressionPath, Entry, State as FseState, Table, parse_table, serialize_probabilities,
+};
 use crate::{Error, Result};
 use mrml_runtime::Vector;
 
@@ -39,6 +41,7 @@ impl State {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Kind {
     Literals,
     Offset,
@@ -259,24 +262,24 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
         match_extras.push(match_extra);
     }
 
-    let (literal_mode, literal_table) = selected_table(&literal_symbols, Kind::Literals)?;
-    let (offset_mode, offset_table) = selected_table(&offset_symbols, Kind::Offset)?;
-    let (match_mode, match_table) = selected_table(&match_symbols, Kind::Match)?;
+    let (literal_mode, literal_table, literal_description) =
+        selected_table(&literal_symbols, Kind::Literals)?;
+    let (offset_mode, offset_table, offset_description) =
+        selected_table(&offset_symbols, Kind::Offset)?;
+    let (match_mode, match_table, match_description) = selected_table(&match_symbols, Kind::Match)?;
     let mut output = Vector::new();
     write_sequence_count(sequences.len(), &mut output)?;
     output
         .try_push((literal_mode << 6) | (offset_mode << 4) | (match_mode << 2))
         .map_err(|_| Error::Allocation)?;
-    for (mode, symbols) in [
-        (literal_mode, &literal_symbols),
-        (offset_mode, &offset_symbols),
-        (match_mode, &match_symbols),
+    for description in [
+        &literal_description,
+        &offset_description,
+        &match_description,
     ] {
-        if mode == 1 {
-            output
-                .try_push(symbols[0] as u8)
-                .map_err(|_| Error::Allocation)?;
-        }
+        output
+            .try_extend_from_slice(description)
+            .map_err(|_| Error::Allocation)?;
     }
     let literal_path = CompressionPath::for_symbols(&literal_table, &literal_symbols)?;
     let offset_path = CompressionPath::for_symbols(&offset_table, &offset_symbols)?;
@@ -313,7 +316,7 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
     Ok(output)
 }
 
-fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table)> {
+fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table, Vector<u8>)> {
     let first = *symbols.first().ok_or(Error::InvalidSequencesSection)?;
     if symbols.iter().all(|symbol| *symbol == first) {
         let maximum = match kind {
@@ -330,16 +333,117 @@ fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table)> {
             bits: 0,
             baseline: 0,
         });
-        Ok((
+        let mut description = Vector::new();
+        description
+            .try_push(first as u8)
+            .map_err(|_| Error::Allocation)?;
+        return Ok((
             1,
             Table {
                 accuracy: 0,
                 entries,
             },
-        ))
-    } else {
-        Ok((0, predefined(kind)?))
+            description,
+        ));
     }
+    let predefined = predefined(kind)?;
+    let predefined_bits = path_bits(&predefined, symbols)?;
+    let maximum_accuracy = match kind {
+        Kind::Offset => 8,
+        Kind::Literals | Kind::Match => 9,
+    };
+    if let Ok((probabilities, accuracy)) = normalize_counts(symbols, maximum_accuracy) {
+        let compressed = Table::from_probabilities(&probabilities, accuracy)?;
+        let description = serialize_probabilities(&probabilities, accuracy)?;
+        let compressed_bits = path_bits(&compressed, symbols)?
+            .checked_add(
+                description
+                    .len()
+                    .checked_mul(8)
+                    .ok_or(Error::BlockTooLarge)?,
+            )
+            .ok_or(Error::BlockTooLarge)?;
+        if compressed_bits < predefined_bits {
+            return Ok((2, compressed, description));
+        }
+    }
+    Ok((0, predefined, Vector::new()))
+}
+
+fn path_bits(table: &Table, symbols: &[u16]) -> Result<usize> {
+    let path = CompressionPath::for_symbols(table, symbols)?;
+    let mut bits = table.accuracy as usize;
+    for index in 0..symbols.len() - 1 {
+        bits = bits
+            .checked_add(path.transition(table, index)?.1 as usize)
+            .ok_or(Error::BlockTooLarge)?;
+    }
+    Ok(bits)
+}
+
+fn normalize_counts(symbols: &[u16], maximum_accuracy: u8) -> Result<(Vector<i16>, u8)> {
+    let maximum_symbol = *symbols.iter().max().ok_or(Error::InvalidFseTable)? as usize;
+    let mut counts = Vector::with_capacity(maximum_symbol + 1).map_err(|_| Error::Allocation)?;
+    counts.resize(maximum_symbol + 1, 0u32);
+    for symbol in symbols {
+        counts[*symbol as usize] = counts[*symbol as usize]
+            .checked_add(1)
+            .ok_or(Error::BlockTooLarge)?;
+    }
+    let distinct = counts.iter().filter(|count| **count != 0).count();
+    let mut accuracy = 5u8;
+    while accuracy < maximum_accuracy && (1usize << accuracy) < distinct.saturating_mul(2) {
+        accuracy += 1;
+    }
+    if distinct > 1usize << accuracy {
+        return Err(Error::InvalidFseTable);
+    }
+    let size = 1u32 << accuracy;
+    let total = symbols.len() as u32;
+    let mut probabilities = Vector::with_capacity(counts.len()).map_err(|_| Error::Allocation)?;
+    probabilities.resize(counts.len(), 0i16);
+    let mut assigned = 0u32;
+    for (index, count) in counts.iter().enumerate() {
+        if *count != 0 {
+            let probability = ((*count as u64 * size as u64) / total as u64).max(1) as u32;
+            probabilities[index] = probability as i16;
+            assigned += probability;
+        }
+    }
+    while assigned < size {
+        let index = counts
+            .iter()
+            .enumerate()
+            .filter(|(_, count)| **count != 0)
+            .max_by_key(|(index, count)| {
+                (
+                    (**count as u64 * size as u64) % total as u64,
+                    **count,
+                    usize::MAX - *index,
+                )
+            })
+            .map(|(index, _)| index)
+            .ok_or(Error::InvalidFseTable)?;
+        probabilities[index] += 1;
+        assigned += 1;
+    }
+    while assigned > size {
+        let index = probabilities
+            .iter()
+            .enumerate()
+            .filter(|(_, probability)| **probability > 1)
+            .max_by_key(|(index, probability)| (**probability, counts[*index], usize::MAX - *index))
+            .map(|(index, _)| index)
+            .ok_or(Error::InvalidFseTable)?;
+        probabilities[index] -= 1;
+        assigned -= 1;
+    }
+    for probability in &mut probabilities {
+        if *probability == 1 {
+            *probability = -1;
+        }
+    }
+    Ok((probabilities, accuracy))
 }
 
 fn encode_length(value: u32, table: &[(u32, u8)]) -> Result<(u16, u32)> {
@@ -590,6 +694,26 @@ mod encode_tests {
         assert_eq!(decoded[0].literals, 3);
         assert_eq!(decoded[0].length, 7);
         assert_eq!(decoded[0].offset, 3);
+    }
+
+    #[test]
+    fn skewed_code_stream_selects_fse_compressed_table() {
+        let mut symbols = Vector::new();
+        for index in 0..1024 {
+            symbols.push(if index % 31 == 0 {
+                2
+            } else if index % 7 == 0 {
+                1
+            } else {
+                0
+            });
+        }
+        let (mode, table, description) = selected_table(&symbols, Kind::Literals).unwrap();
+        assert_eq!(mode, 2);
+        assert!(!description.is_empty());
+        let (parsed, consumed) = parse_table(&description, 9, 35).unwrap();
+        assert_eq!(consumed, description.len());
+        assert_eq!(parsed.entries, table.entries);
     }
 
     #[test]
