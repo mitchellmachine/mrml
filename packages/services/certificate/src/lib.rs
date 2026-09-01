@@ -7,6 +7,7 @@ mod backup_transfer;
 mod caa;
 mod catalog_lifecycle_provider;
 mod certificate;
+mod certd_channel;
 mod challenge_dns;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_dns_hosted;
@@ -87,6 +88,12 @@ pub use certificate::{
     PemCertificateChain, RetrievedCertificate, SelectedCertificateChain,
     VerifiedCertificateReceipt, retrieve_and_select_certificate_chain,
     retrieve_and_verify_certificate, select_alternate_chain,
+};
+pub use certd_channel::{
+    CERTD_CHANNEL_CAPABILITY_BYTES, CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability,
+    CertdChannelError, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
+    CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
+    decode_certd_channel_request, encode_certd_channel_request,
 };
 pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
