@@ -18,6 +18,7 @@ mod openpgp_provider;
 mod pack;
 mod pack_file;
 mod pack_index;
+mod pack_set;
 mod quarantine;
 mod receive_backend;
 mod receive_journal;
@@ -82,6 +83,10 @@ pub use pack_index::{
     DEFAULT_MAX_PACK_INDEX_OBJECTS, PackIndex, PackIndexEntry, PackIndexError, build_pack_index_v2,
     parse_pack_index_v2,
 };
+pub use pack_set::{
+    MAX_PACK_SET_MANIFEST_BYTES, PackSetEntry, PackSetError, PackSetLimits, PackSetManifest,
+    encode_pack_set_manifest, parse_pack_set_manifest,
+};
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
     DEFAULT_MAX_INCOMING_PACK_BYTES, DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
@@ -139,7 +144,8 @@ pub use trust_policy::{
     HybridVerificationRequest, KeyRevocationStatement, MAX_ENCODED_TRUST_POLICY_BYTES,
     MAX_HYBRID_PAYLOAD_BYTES, MAX_KEY_REVOCATION_REASON_BYTES,
     MAX_KEY_REVOCATION_STATEMENT_BYTES, MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS,
-    MAX_POLICY_REVOKED_KEYS, PolicyPairStatus, TrustPolicyCandidate, TrustPolicyState,
+    MAX_POLICY_REVOKED_KEYS, MAX_POLICY_LEGACY_V4_KEYS, LegacyV4KeyStatus, PolicyPairStatus,
+    TrustPolicyCandidate, TrustPolicyState,
     VerifiedHybridSignature, bind_verified_commit_proof, bind_verified_git_object_proof,
     canonical_hybrid_transcript, encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
     parse_key_revocation_statement, parse_trust_policy, verify_hybrid_signature,

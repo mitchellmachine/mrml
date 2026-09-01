@@ -7,7 +7,8 @@
 
 use mrml_crypto::{ML_DSA_65_PUBLIC_KEY_BYTES, Sha3_512, ml_dsa_65_verify};
 use mrml_openpgp::{
-    DigestAlgorithmSet, FingerprintV6, PublicKeyV6, VerificationPolicyV6, verify_detached_v6_ascii,
+    DigestAlgorithmSet, Fingerprint, FingerprintV6, PublicKeyV6, VerificationPolicyV6,
+    verify_detached_v6_ascii,
 };
 use mrml_runtime::Vector;
 
@@ -72,6 +73,57 @@ pub struct PolicyPairStatus {
     valid_from: u64,
     valid_until: u64,
     retired_at: Option<u64>,
+}
+
+/// Complete legacy OpenPGP v4 identity and its historical authorization
+/// lifetime. This ledger is policy data only; it does not prove graph ancestry
+/// or authorize protected-ref activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LegacyV4KeyStatus {
+    fingerprint: Fingerprint,
+    valid_from: u64,
+    valid_until: u64,
+    retired_at: Option<u64>,
+}
+
+impl LegacyV4KeyStatus {
+    pub fn new(
+        fingerprint: Fingerprint,
+        valid_from: u64,
+        valid_until: u64,
+        retired_at: Option<u64>,
+    ) -> Result<Self, HybridPolicyError> {
+        if valid_from >= valid_until || retired_at.is_some_and(|retired| retired >= valid_until) {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        Ok(Self {
+            fingerprint,
+            valid_from,
+            valid_until,
+            retired_at,
+        })
+    }
+
+    pub const fn fingerprint(self) -> Fingerprint {
+        self.fingerprint
+    }
+    pub const fn valid_from(self) -> u64 {
+        self.valid_from
+    }
+    pub const fn valid_until(self) -> u64 {
+        self.valid_until
+    }
+    pub const fn retired_at(self) -> Option<u64> {
+        self.retired_at
+    }
+    pub const fn authorizes_at(self, time: u64) -> bool {
+        time >= self.valid_from
+            && time < self.valid_until
+            && match self.retired_at {
+                Some(retired) => time < retired,
+                None => true,
+            }
+    }
 }
 
 impl PolicyPairStatus {
@@ -189,12 +241,13 @@ impl VerifiedHybridSignature {
 }
 
 pub const MAX_POLICY_PAIRS: usize = 64;
+pub const MAX_POLICY_LEGACY_V4_KEYS: usize = 64;
 pub const MAX_POLICY_REVOKED_KEYS: usize = 256;
 pub const MAX_POLICY_PROTECTED_REFS: usize = 256;
 pub const MAX_ENCODED_TRUST_POLICY_BYTES: usize = 512 * 1024;
 pub const MAX_KEY_REVOCATION_STATEMENT_BYTES: usize = 64 * 1024;
 pub const MAX_KEY_REVOCATION_REASON_BYTES: usize = 512;
-const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP2";
+const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP3";
 const REVOCATION_MAGIC: &[u8; 8] = b"MRGREV01";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -268,6 +321,8 @@ pub struct TrustPolicyState {
     emergency_policy_digest: Option<[u8; 64]>,
     active_pairs: Vector<AuthorizedHybridPair>,
     pair_statuses: Vector<PolicyPairStatus>,
+    legacy_v4_statuses: Vector<LegacyV4KeyStatus>,
+    revoked_legacy_v4: Vector<Fingerprint>,
     revoked_openpgp: Vector<FingerprintV6>,
     revoked_ml_dsa: Vector<[u8; 64]>,
 }
@@ -286,6 +341,8 @@ pub struct TrustPolicyCandidate {
     pub emergency_policy_digest: Option<[u8; 64]>,
     pub active_pairs: Vector<AuthorizedHybridPair>,
     pub pair_statuses: Vector<PolicyPairStatus>,
+    pub legacy_v4_statuses: Vector<LegacyV4KeyStatus>,
+    pub revoked_legacy_v4: Vector<Fingerprint>,
     pub revoked_openpgp: Vector<FingerprintV6>,
     pub revoked_ml_dsa: Vector<[u8; 64]>,
 }
@@ -311,6 +368,8 @@ pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, Hybr
     append_u16(&mut output, policy.protected_refs.len())?;
     append_u16(&mut output, policy.active_pairs.len())?;
     append_u16(&mut output, policy.pair_statuses.len())?;
+    append_u16(&mut output, policy.legacy_v4_statuses.len())?;
+    append_u16(&mut output, policy.revoked_legacy_v4.len())?;
     append_u16(&mut output, policy.revoked_openpgp.len())?;
     append_u16(&mut output, policy.revoked_ml_dsa.len())?;
     for reference in &policy.protected_refs {
@@ -332,6 +391,21 @@ pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, Hybr
             }
             None => output.push(0),
         }
+    }
+    for status in &policy.legacy_v4_statuses {
+        append(&mut output, status.fingerprint.as_bytes())?;
+        append(&mut output, &status.valid_from.to_be_bytes())?;
+        append(&mut output, &status.valid_until.to_be_bytes())?;
+        match status.retired_at {
+            Some(retired) => {
+                output.push(1);
+                append(&mut output, &retired.to_be_bytes())?;
+            }
+            None => output.push(0),
+        }
+    }
+    for fingerprint in &policy.revoked_legacy_v4 {
+        append(&mut output, fingerprint.as_bytes())?;
     }
     for fingerprint in &policy.revoked_openpgp {
         append(&mut output, fingerprint.as_bytes())?;
@@ -382,11 +456,15 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
     let ref_count = usize::from(cursor.u16()?);
     let pair_count = usize::from(cursor.u16()?);
     let pair_status_count = usize::from(cursor.u16()?);
+    let legacy_v4_status_count = usize::from(cursor.u16()?);
+    let revoked_legacy_v4_count = usize::from(cursor.u16()?);
     let revoked_openpgp_count = usize::from(cursor.u16()?);
     let revoked_ml_dsa_count = usize::from(cursor.u16()?);
     if ref_count > MAX_POLICY_PROTECTED_REFS
         || pair_count > MAX_POLICY_PAIRS
         || pair_status_count > MAX_POLICY_PAIRS * 2
+        || legacy_v4_status_count > MAX_POLICY_LEGACY_V4_KEYS
+        || revoked_legacy_v4_count > MAX_POLICY_REVOKED_KEYS
         || revoked_openpgp_count > MAX_POLICY_REVOKED_KEYS
         || revoked_ml_dsa_count > MAX_POLICY_REVOKED_KEYS
     {
@@ -433,6 +511,32 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
             retired_at,
         )?);
     }
+    let mut legacy_v4_statuses = Vector::with_capacity(legacy_v4_status_count)
+        .map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..legacy_v4_status_count {
+        let mut fingerprint = [0; 20];
+        fingerprint.copy_from_slice(cursor.take(20)?);
+        let valid_from = cursor.u64()?;
+        let valid_until = cursor.u64()?;
+        let retired_at = match cursor.u8()? {
+            0 => None,
+            1 => Some(cursor.u64()?),
+            _ => return Err(HybridPolicyError::InvalidPolicy),
+        };
+        legacy_v4_statuses.push(LegacyV4KeyStatus::new(
+            Fingerprint::from_bytes(fingerprint),
+            valid_from,
+            valid_until,
+            retired_at,
+        )?);
+    }
+    let mut revoked_legacy_v4 = Vector::with_capacity(revoked_legacy_v4_count)
+        .map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..revoked_legacy_v4_count {
+        let mut fingerprint = [0; 20];
+        fingerprint.copy_from_slice(cursor.take(20)?);
+        revoked_legacy_v4.push(Fingerprint::from_bytes(fingerprint));
+    }
     let mut revoked_openpgp = Vector::with_capacity(revoked_openpgp_count)
         .map_err(|_| HybridPolicyError::InputTooLarge)?;
     for _ in 0..revoked_openpgp_count {
@@ -464,6 +568,8 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
         emergency_policy_digest,
         active_pairs,
         pair_statuses,
+        legacy_v4_statuses,
+        revoked_legacy_v4,
         revoked_openpgp,
         revoked_ml_dsa,
     };
@@ -738,6 +844,11 @@ impl TrustPolicyState {
         if candidate.revocation_generation.0 < self.revocation_generation.0 {
             return Err(HybridPolicyError::RevocationRollback);
         }
+        if candidate.revoked_legacy_v4 != self.revoked_legacy_v4
+            && candidate.revocation_generation.0 <= self.revocation_generation.0
+        {
+            return Err(HybridPolicyError::RevocationRollback);
+        }
         if self.hybrid_required && !candidate.hybrid_required {
             return Err(HybridPolicyError::HybridDowngrade);
         }
@@ -759,9 +870,13 @@ impl TrustPolicyState {
             return Err(HybridPolicyError::TrustRootBroadened);
         }
         if self
-            .revoked_openpgp
+            .revoked_legacy_v4
             .iter()
-            .any(|key| !candidate.revoked_openpgp.contains(key))
+            .any(|key| !candidate.revoked_legacy_v4.contains(key))
+            || self
+                .revoked_openpgp
+                .iter()
+                .any(|key| !candidate.revoked_openpgp.contains(key))
             || self
                 .revoked_ml_dsa
                 .iter()
@@ -787,6 +902,30 @@ impl TrustPolicyState {
             {
                 return Err(HybridPolicyError::PolicyRollback);
             }
+        }
+        for previous in &self.legacy_v4_statuses {
+            let Some(next) = candidate
+                .legacy_v4_statuses
+                .iter()
+                .find(|status| status.fingerprint == previous.fingerprint)
+            else {
+                return Err(HybridPolicyError::PolicyRollback);
+            };
+            if next.valid_from != previous.valid_from
+                || next.valid_until > previous.valid_until
+                || match (previous.retired_at, next.retired_at) {
+                    (Some(old), Some(new)) => new > old,
+                    (Some(_), None) => true,
+                    _ => false,
+                }
+            {
+                return Err(HybridPolicyError::PolicyRollback);
+            }
+        }
+        if candidate.legacy_v4_statuses.iter().any(|status| {
+            candidate.revoked_legacy_v4.contains(&status.fingerprint) && status.retired_at.is_none()
+        }) {
+            return Err(HybridPolicyError::RevokedKeyReactivated);
         }
         if candidate.active_pairs.iter().any(|pair| {
             candidate
@@ -899,6 +1038,8 @@ impl TrustPolicyState {
             emergency_policy_digest: next.emergency_policy_digest,
             active_pairs: next.active_pairs.clone(),
             pair_statuses: next.pair_statuses.clone(),
+            legacy_v4_statuses: next.legacy_v4_statuses.clone(),
+            revoked_legacy_v4: next.revoked_legacy_v4.clone(),
             revoked_openpgp: next.revoked_openpgp.clone(),
             revoked_ml_dsa: next.revoked_ml_dsa.clone(),
         })?;
@@ -907,7 +1048,7 @@ impl TrustPolicyState {
 
     pub fn digest(&self) -> [u8; 64] {
         let mut hash = Sha3_512::new();
-        hash.update(b"MRML-GIT-TRUST-POLICY-V1\0");
+        hash.update(b"MRML-GIT-TRUST-POLICY-V3\0");
         hash.update(&(self.repository.as_str().len() as u16).to_be_bytes());
         hash.update(self.repository.as_str().as_bytes());
         hash.update(&self.generation.0.to_be_bytes());
@@ -949,6 +1090,23 @@ impl TrustPolicyState {
                 None => hash.update(&[0]),
             }
         }
+        hash.update(&(self.legacy_v4_statuses.len() as u16).to_be_bytes());
+        for status in &self.legacy_v4_statuses {
+            hash.update(status.fingerprint.as_bytes());
+            hash.update(&status.valid_from.to_be_bytes());
+            hash.update(&status.valid_until.to_be_bytes());
+            match status.retired_at {
+                Some(retired) => {
+                    hash.update(&[1]);
+                    hash.update(&retired.to_be_bytes());
+                }
+                None => hash.update(&[0]),
+            }
+        }
+        hash.update(&(self.revoked_legacy_v4.len() as u16).to_be_bytes());
+        for fingerprint in &self.revoked_legacy_v4 {
+            hash.update(fingerprint.as_bytes());
+        }
         hash.update(&(self.revoked_openpgp.len() as u16).to_be_bytes());
         for fingerprint in &self.revoked_openpgp {
             hash.update(fingerprint.as_bytes());
@@ -970,6 +1128,25 @@ impl TrustPolicyState {
 
     pub fn pair_statuses(&self) -> &[PolicyPairStatus] {
         &self.pair_statuses
+    }
+
+    pub fn legacy_v4_statuses(&self) -> &[LegacyV4KeyStatus] {
+        &self.legacy_v4_statuses
+    }
+    pub fn revoked_legacy_v4(&self) -> &[Fingerprint] {
+        &self.revoked_legacy_v4
+    }
+
+    /// Looks up an explicitly policy-pinned complete v4 fingerprint at trusted
+    /// time. This is not a commit-graph ancestry decision.
+    pub fn legacy_v4_authorized_at(&self, fingerprint: Fingerprint, time: u64) -> bool {
+        self.legacy_checkpoint.is_some()
+            && !self.revoked_legacy_v4.contains(&fingerprint)
+            && self
+                .legacy_v4_statuses
+                .iter()
+                .find(|status| status.fingerprint == fingerprint)
+                .is_some_and(|status| status.authorizes_at(time))
     }
 
     /// Authorizes an exact pair only inside its half-open validity interval.
@@ -1030,6 +1207,8 @@ impl TrustPolicyState {
             emergency_policy_digest: candidate.emergency_policy_digest,
             active_pairs: candidate.active_pairs,
             pair_statuses: candidate.pair_statuses,
+            legacy_v4_statuses: candidate.legacy_v4_statuses,
+            revoked_legacy_v4: candidate.revoked_legacy_v4,
             revoked_openpgp: candidate.revoked_openpgp,
             revoked_ml_dsa: candidate.revoked_ml_dsa,
         }
@@ -1049,6 +1228,8 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
         || candidate.active_pairs.len() > MAX_POLICY_PAIRS
         || candidate.pair_statuses.is_empty()
         || candidate.pair_statuses.len() > MAX_POLICY_PAIRS * 2
+        || candidate.legacy_v4_statuses.len() > MAX_POLICY_LEGACY_V4_KEYS
+        || candidate.revoked_legacy_v4.len() > MAX_POLICY_REVOKED_KEYS
         || candidate.protected_refs.is_empty()
         || candidate.protected_refs.len() > MAX_POLICY_PROTECTED_REFS
         || candidate.revoked_openpgp.len() > MAX_POLICY_REVOKED_KEYS
@@ -1056,6 +1237,12 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
         || candidate.allowed_format_mask() == 0
         || !strictly_ordered_by(&candidate.active_pairs, pair_less)
         || !strictly_ordered_by(&candidate.pair_statuses, status_less)
+        || !strictly_ordered_by(&candidate.legacy_v4_statuses, |left, right| {
+            left.fingerprint.as_bytes() < right.fingerprint.as_bytes()
+        })
+        || !strictly_ordered_by(&candidate.revoked_legacy_v4, |left, right| {
+            left.as_bytes() < right.as_bytes()
+        })
         || !strictly_ordered_by(&candidate.protected_refs, |left, right| left < right)
         || !strictly_ordered_by(&candidate.revoked_openpgp, |left, right| {
             left.as_bytes() < right.as_bytes()
@@ -1063,6 +1250,8 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
         || !strictly_ordered_by(&candidate.revoked_ml_dsa, |left, right| left < right)
         || candidate.hybrid_required && candidate.hybrid_cutover.is_none()
         || candidate.legacy_checkpoint.is_some() && candidate.hybrid_cutover.is_none()
+        || candidate.legacy_checkpoint.is_some() != !candidate.legacy_v4_statuses.is_empty()
+        || candidate.legacy_checkpoint.is_none() && !candidate.revoked_legacy_v4.is_empty()
         || [candidate.legacy_checkpoint, candidate.hybrid_cutover]
             .into_iter()
             .flatten()
@@ -1084,6 +1273,11 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
         .collect::<Vector<_>>();
     if active_statuses != candidate.active_pairs {
         return Err(HybridPolicyError::InvalidPolicy);
+    }
+    if candidate.legacy_v4_statuses.iter().any(|status| {
+        candidate.revoked_legacy_v4.contains(&status.fingerprint) && status.retired_at.is_none()
+    }) {
+        return Err(HybridPolicyError::RevokedKeyReactivated);
     }
     Ok(())
 }
@@ -1560,22 +1754,60 @@ mod tests {
             enforce_signature_expiration: true,
         };
         for (object_type, purpose, kind, payload) in [
-            (GitObjectType::AnnotatedTag, SignaturePurpose::GitAnnotatedTag, ObjectKind::Tag, &b"tag payload"[..]),
-            (GitObjectType::SourceManifest, SignaturePurpose::SourceManifest, ObjectKind::Blob, &b"manifest"[..]),
-            (GitObjectType::SourceLock, SignaturePurpose::SourceLock, ObjectKind::Blob, &b"lock"[..]),
-            (GitObjectType::BuildReceipt, SignaturePurpose::BuildReceipt, ObjectKind::Blob, &b"receipt"[..]),
+            (
+                GitObjectType::AnnotatedTag,
+                SignaturePurpose::GitAnnotatedTag,
+                ObjectKind::Tag,
+                &b"tag payload"[..],
+            ),
+            (
+                GitObjectType::SourceManifest,
+                SignaturePurpose::SourceManifest,
+                ObjectKind::Blob,
+                &b"manifest"[..],
+            ),
+            (
+                GitObjectType::SourceLock,
+                SignaturePurpose::SourceLock,
+                ObjectKind::Blob,
+                &b"lock"[..],
+            ),
+            (
+                GitObjectType::BuildReceipt,
+                SignaturePurpose::BuildReceipt,
+                ObjectKind::Blob,
+                &b"receipt"[..],
+            ),
         ] {
             let transcript = canonical_hybrid_transcript(
-                &repository, ObjectFormat::Sha256, object_type, purpose,
-                TrustGeneration(4), pair, payload,
-            ).unwrap();
+                &repository,
+                ObjectFormat::Sha256,
+                object_type,
+                purpose,
+                TrustGeneration(4),
+                pair,
+                payload,
+            )
+            .unwrap();
             let mut openpgp_signature = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
             let openpgp_len = sign_detached_v6_ascii_with_salt(
-                &openpgp, &transcript, DigestAlgorithm::Sha512, 1_700_000_001,
-                &[23; 32], &mut openpgp_signature,
-            ).unwrap();
+                &openpgp,
+                &transcript,
+                DigestAlgorithm::Sha512,
+                1_700_000_001,
+                &[23; 32],
+                &mut openpgp_signature,
+            )
+            .unwrap();
             let mut ml_signature = [0; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES];
-            ml_dsa_65_sign(&ml_secret, ML_DSA_CONTEXT, &transcript, &[24; 32], &mut ml_signature).unwrap();
+            ml_dsa_65_sign(
+                &ml_secret,
+                ML_DSA_CONTEXT,
+                &transcript,
+                &[24; 32],
+                &mut ml_signature,
+            )
+            .unwrap();
             let request = HybridVerificationRequest {
                 repository: &repository,
                 object_format: ObjectFormat::Sha256,
@@ -1588,33 +1820,84 @@ mod tests {
                 ml_dsa_signature: &ml_signature,
             };
             let mut scratch = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
-            let verified = verify_hybrid_signature(&policy, &public, &ml_public, &request, &mut scratch).unwrap();
+            let verified =
+                verify_hybrid_signature(&policy, &public, &ml_public, &request, &mut scratch)
+                    .unwrap();
             let object = hash_git_object(ObjectFormat::Sha256, kind, payload);
-            assert!(bind_verified_git_object_proof(
-                &verified, object, payload, &repository, RepositoryGeneration(3),
-                TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
-            ).is_ok());
+            assert!(
+                bind_verified_git_object_proof(
+                    &verified,
+                    object,
+                    payload,
+                    &repository,
+                    RepositoryGeneration(3),
+                    TrustGeneration(4),
+                    RevocationGeneration(8),
+                    ObjectFormat::Sha256,
+                    kind,
+                    purpose,
+                )
+                .is_ok()
+            );
             for result in [
                 bind_verified_git_object_proof(
-                    &verified, object, b"tampered", &repository, RepositoryGeneration(3),
-                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+                    &verified,
+                    object,
+                    b"tampered",
+                    &repository,
+                    RepositoryGeneration(3),
+                    TrustGeneration(4),
+                    RevocationGeneration(8),
+                    ObjectFormat::Sha256,
+                    kind,
+                    purpose,
                 ),
                 bind_verified_git_object_proof(
-                    &verified, object, payload, &other, RepositoryGeneration(3),
-                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+                    &verified,
+                    object,
+                    payload,
+                    &other,
+                    RepositoryGeneration(3),
+                    TrustGeneration(4),
+                    RevocationGeneration(8),
+                    ObjectFormat::Sha256,
+                    kind,
+                    purpose,
                 ),
                 bind_verified_git_object_proof(
-                    &verified, object, payload, &repository, RepositoryGeneration(0),
-                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+                    &verified,
+                    object,
+                    payload,
+                    &repository,
+                    RepositoryGeneration(0),
+                    TrustGeneration(4),
+                    RevocationGeneration(8),
+                    ObjectFormat::Sha256,
+                    kind,
+                    purpose,
                 ),
                 bind_verified_git_object_proof(
-                    &verified, object, payload, &repository, RepositoryGeneration(3),
-                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256,
-                    ObjectKind::Commit, purpose,
+                    &verified,
+                    object,
+                    payload,
+                    &repository,
+                    RepositoryGeneration(3),
+                    TrustGeneration(4),
+                    RevocationGeneration(8),
+                    ObjectFormat::Sha256,
+                    ObjectKind::Commit,
+                    purpose,
                 ),
                 bind_verified_git_object_proof(
-                    &verified, object, payload, &repository, RepositoryGeneration(3),
-                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind,
+                    &verified,
+                    object,
+                    payload,
+                    &repository,
+                    RepositoryGeneration(3),
+                    TrustGeneration(4),
+                    RevocationGeneration(8),
+                    ObjectFormat::Sha256,
+                    kind,
                     SignaturePurpose::GitCommit,
                 ),
             ] {
@@ -1650,6 +1933,15 @@ mod tests {
             emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [old_pair].into(),
             pair_statuses: [PolicyPairStatus::new(old_pair, 100, 300, None).unwrap()].into(),
+            legacy_v4_statuses: [LegacyV4KeyStatus::new(
+                Fingerprint::from_bytes([0x11; 20]),
+                10,
+                100,
+                Some(90),
+            )
+            .unwrap()]
+            .into(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         })
@@ -1709,6 +2001,15 @@ mod tests {
                 PolicyPairStatus::new(new_pair, 200, 400, None).unwrap(),
             ]
             .into(),
+            legacy_v4_statuses: [LegacyV4KeyStatus::new(
+                Fingerprint::from_bytes([0x11; 20]),
+                10,
+                100,
+                Some(90),
+            )
+            .unwrap()]
+            .into(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
         };
@@ -1735,6 +2036,15 @@ mod tests {
                 PolicyPairStatus::new(new_pair, 200, 400, None).unwrap(),
             ]
             .into(),
+            legacy_v4_statuses: [LegacyV4KeyStatus::new(
+                Fingerprint::from_bytes([0x11; 20]),
+                10,
+                100,
+                Some(90),
+            )
+            .unwrap()]
+            .into(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
         };
@@ -1774,6 +2084,8 @@ mod tests {
             emergency_policy_digest: None,
             active_pairs: [pair].into(),
             pair_statuses: [PolicyPairStatus::new(pair, 10, 100, None).unwrap()].into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         })
@@ -1800,6 +2112,8 @@ mod tests {
             emergency_policy_digest: None,
             active_pairs: [pair].into(),
             pair_statuses: [status].into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         };
@@ -1841,6 +2155,8 @@ mod tests {
             emergency_policy_digest: None,
             active_pairs: [pair].into(),
             pair_statuses: [PolicyPairStatus::new(pair, 10, 100, None).unwrap()].into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         };
@@ -1881,11 +2197,147 @@ mod tests {
             emergency_policy_digest: None,
             active_pairs: ordered_active.into(),
             pair_statuses: unordered.into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         };
         assert_eq!(
             TrustPolicyState::establish(invalid),
+            Err(HybridPolicyError::InvalidPolicy)
+        );
+    }
+
+    #[test]
+    fn legacy_v4_ledger_is_canonical_time_bounded_and_monotonic() {
+        let repository = RepositoryIdentity::parse("owner/legacy").unwrap();
+        let pair = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([3; 32]),
+            openpgp_key_digest: [4; 64],
+            ml_dsa_key_digest: [5; 64],
+        };
+        // These complete identities share their final 19 bytes. A short-ID or
+        // suffix comparison would collide; canonical policy keeps them apart.
+        let first = Fingerprint::from_bytes([1; 20]);
+        let mut second_bytes = [1; 20];
+        second_bytes[0] = 2;
+        let second = Fingerprint::from_bytes(second_bytes);
+        let initial = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(1),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: true,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: Some(ObjectId::Sha1([7; 20])),
+            hybrid_cutover: Some(ObjectId::Sha1([8; 20])),
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [PolicyPairStatus::new(pair, 1, 1_000, None).unwrap()].into(),
+            legacy_v4_statuses: [
+                LegacyV4KeyStatus::new(first, 10, 100, None).unwrap(),
+                LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
+            ]
+            .into(),
+            revoked_legacy_v4: Vector::new(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        assert!(initial.legacy_v4_authorized_at(first, 10));
+        assert!(!initial.legacy_v4_authorized_at(first, 100));
+        assert!(initial.legacy_v4_authorized_at(second, 79));
+        assert!(!initial.legacy_v4_authorized_at(second, 80));
+        assert_ne!(first, second);
+
+        let encoded = encode_trust_policy(&initial).unwrap();
+        assert_eq!(&encoded[..8], b"MRMLGTP3");
+        assert_eq!(parse_trust_policy(&encoded), Ok(initial.clone()));
+        assert_eq!(
+            encode_trust_policy(&parse_trust_policy(&encoded).unwrap()).unwrap(),
+            encoded
+        );
+        for end in 0..encoded.len() {
+            assert!(parse_trust_policy(&encoded[..end]).is_err());
+        }
+
+        let proof = rotation_proof(&repository, TrustGeneration(1), pair);
+        let next_proof = rotation_proof(&repository, TrustGeneration(2), pair);
+        let candidate = |statuses: Vector<LegacyV4KeyStatus>, revoked| TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(2),
+            previous_policy_digest: initial.digest(),
+            revocation_generation: RevocationGeneration(2),
+            protected_refs: initial.protected_refs.clone(),
+            allow_sha1: true,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: initial.legacy_checkpoint,
+            hybrid_cutover: initial.hybrid_cutover,
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: initial.pair_statuses.clone(),
+            legacy_v4_statuses: statuses,
+            revoked_legacy_v4: revoked,
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        };
+        assert_eq!(
+            initial.transition(
+                candidate(
+                    [
+                        LegacyV4KeyStatus::new(first, 10, 101, None).unwrap(),
+                        LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
+                    ]
+                    .into(),
+                    Vector::new()
+                ),
+                &proof,
+                &next_proof
+            ),
+            Err(HybridPolicyError::PolicyRollback)
+        );
+        assert_eq!(
+            initial.transition(
+                candidate(
+                    [
+                        LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
+                        LegacyV4KeyStatus::new(first, 10, 100, None).unwrap(),
+                    ]
+                    .into(),
+                    Vector::new()
+                ),
+                &proof,
+                &next_proof
+            ),
+            Err(HybridPolicyError::InvalidPolicy)
+        );
+        let narrowed = initial
+            .transition(
+                candidate(
+                    [
+                        LegacyV4KeyStatus::new(first, 10, 90, Some(70)).unwrap(),
+                        LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
+                    ]
+                    .into(),
+                    [first].into(),
+                ),
+                &proof,
+                &next_proof,
+            )
+            .unwrap();
+        assert!(!narrowed.legacy_v4_authorized_at(first, 50));
+        assert_eq!(narrowed.revoked_legacy_v4(), &[first]);
+
+        let absent_without_checkpoint = TrustPolicyCandidate {
+            legacy_checkpoint: None,
+            legacy_v4_statuses: initial.legacy_v4_statuses.clone(),
+            ..candidate(initial.legacy_v4_statuses.clone(), Vector::new())
+        };
+        assert_eq!(
+            TrustPolicyState::establish(absent_without_checkpoint),
             Err(HybridPolicyError::InvalidPolicy)
         );
     }
@@ -1921,6 +2373,8 @@ mod tests {
                 PolicyPairStatus::new(authorizing_pair, 100, 1000, None).unwrap(),
             ]
             .into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
         })

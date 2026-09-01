@@ -16,7 +16,7 @@ ML-DSA public-key digests, and a revocation generation. Lists are bounded and
 must be strictly ordered, so duplicate or alternate-order encodings cannot
 produce competing canonical policy digests.
 
-The first-party persisted `MRMLGTP2` encoding/parser is implemented and capped
+The first-party persisted `MRMLGTP3` encoding/parser is implemented and capped
 at 512 KiB. It uses fixed-width big-endian generations and counts, two-byte
 length-prefixed validated repository/ref identifiers, explicit format and
 hybrid flags, complete 32-byte OpenPGP v6 fingerprints, 64-byte MRML OpenPGP
@@ -26,6 +26,25 @@ reuses typed identifier validation, rejects unknown flag bits and non-Boolean
 values, requires strict collection order, rejects trailing bytes, and
 byte-for-byte re-encodes the result before acceptance. Every truncation of the
 golden policy fixture fails closed.
+
+`MRMLGTP3` adds a bounded, strictly full-fingerprint-ordered legacy OpenPGP v4
+ledger. Each `LegacyV4KeyStatus` records the complete 20-byte fingerprint, an
+inclusive `valid_from`, exclusive `valid_until`, and optional retirement time;
+no short key ID is encoded or compared. A separate strictly ordered complete
+v4 revocation list is bound into both the canonical bytes and V3 policy digest.
+Legacy statuses must be nonempty exactly when a legacy checkpoint exists, and
+legacy revocations cannot exist without that checkpoint. Lookup at a caller-
+supplied trusted time rejects absent, expired, retired, or revoked identities.
+
+Normal transitions cannot remove a legacy status, move its start, widen its
+end, reverse or delay retirement, remove a revocation, or reactivate a revoked
+identity. Adding a legacy revocation requires a strictly newer revocation
+generation. Focused tests cover V3 byte-for-byte re-encoding, every truncation,
+alternate ordering, full-fingerprint suffix collisions, expiry, retirement,
+revocation, and transition narrowing. This is only the canonical schema
+prerequisite: it does not classify commit ancestry or activate a v4-signed
+protected history. Such activation remains fail closed pending an authenticated
+graph proof for the exact legacy checkpoint and hybrid cutover.
 
 Each exact OpenPGP/ML-DSA pair also has one canonical `PolicyPairStatus` with
 an inclusive `valid_from`, exclusive `valid_until`, and optional `retired_at`.
