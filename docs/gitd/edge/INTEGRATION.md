@@ -99,3 +99,6 @@ The same hosted Linux Markdown regression now covers strong/emphasis/strike,
 HTTP(S) autolinks, block quotes, horizontal rules, ordered lists, accessible
 task-list state, and the expanded fixed language-label allowlist. These are
 renderer unit fixtures, not assistive-hardware evidence.
+
+Bounded semantic pipe-table rendering and the 64-column rejection case are also
+covered by that hosted Linux HTTP regression.

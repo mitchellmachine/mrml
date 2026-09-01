@@ -1260,7 +1260,8 @@ pub fn render_markdown(
     let mut in_code = false;
     let mut list: Option<&str> = None;
     let mut heading_ids: Vector<Text> = Vector::new();
-    for line in source.lines() {
+    let mut lines = source.lines().peekable();
+    while let Some(line) = lines.next() {
         if line.starts_with("```") {
             if in_code {
                 output.push_str("</code></pre>");
@@ -1280,6 +1281,32 @@ pub fn render_markdown(
         if in_code {
             output.push_str(&escape(line));
             output.push('\n');
+            continue;
+        }
+        if line.contains('|')
+            && let Some(separator) = lines.peek()
+            && table_separator(separator)?
+        {
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
+            }
+            lines.next();
+            output.push_str("<div class=\"table-scroll\" tabindex=\"0\"><table><thead>");
+            render_table_row(&mut output, line, "th", repository, object)?;
+            output.push_str("</thead><tbody>");
+            while let Some(row) = lines.peek().copied() {
+                if row.trim().is_empty() || !row.contains('|') {
+                    break;
+                }
+                lines.next();
+                render_table_row(&mut output, row, "td", repository, object)?;
+            }
+            output.push_str("</tbody></table></div>");
+            if output.len() > MAX_RENDERED {
+                return Err(BackendError::ResourceLimit);
+            }
             continue;
         }
         let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
@@ -1382,6 +1409,48 @@ pub fn render_markdown(
         output.push('>');
     }
     Ok(output)
+}
+
+fn table_separator(line: &str) -> Result<bool, BackendError> {
+    let trimmed = line.trim().trim_matches('|');
+    let mut columns = 0usize;
+    for cell in trimmed.split('|') {
+        columns += 1;
+        if columns > 64 {
+            return Err(BackendError::ResourceLimit);
+        }
+        let cell = cell.trim().trim_matches(':');
+        if cell.len() < 3 || !cell.bytes().all(|byte| byte == b'-') {
+            return Ok(false);
+        }
+    }
+    Ok(columns > 0)
+}
+
+fn render_table_row(
+    output: &mut Text,
+    line: &str,
+    cell_tag: &str,
+    repository: &RepositoryIdentity,
+    object: &ObjectId,
+) -> Result<(), BackendError> {
+    output.push_str("<tr>");
+    let mut columns = 0usize;
+    for cell in line.trim().trim_matches('|').split('|') {
+        columns += 1;
+        if columns > 64 {
+            return Err(BackendError::ResourceLimit);
+        }
+        output.push('<');
+        output.push_str(cell_tag);
+        output.push('>');
+        output.push_str(&inline_markdown(cell.trim(), repository, object)?);
+        output.push_str("</");
+        output.push_str(cell_tag);
+        output.push('>');
+    }
+    output.push_str("</tr>");
+    Ok(())
 }
 
 fn ordered_list_item(line: &str) -> Option<&str> {
@@ -2080,6 +2149,28 @@ mod tests {
         ] {
             assert!(profile.contains(expected), "missing {expected}: {profile}");
         }
+        let table = render_markdown(
+            b"| Name | State |\n| --- | --- |\n| edge | **ready** |",
+            &repository,
+            &oid(1),
+        )
+        .unwrap();
+        assert!(table.contains("<div class=\"table-scroll\" tabindex=\"0\"><table>"));
+        assert!(table.contains("<th>Name</th><th>State</th>"));
+        assert!(table.contains("<td>edge</td><td><strong>ready</strong></td>"));
+        let mut wide_header = Text::new();
+        let mut wide_separator = Text::new();
+        for _ in 0..65 {
+            wide_header.push_str("|x");
+            wide_separator.push_str("|---");
+        }
+        wide_header.push_str("|\n");
+        wide_header.push_str(&wide_separator);
+        wide_header.push('|');
+        assert_eq!(
+            render_markdown(wide_header.as_bytes(), &repository, &oid(1)),
+            Err(BackendError::ResourceLimit)
+        );
         for unsafe_url in [
             "javascript:alert(1)",
             "data:text/html,x",

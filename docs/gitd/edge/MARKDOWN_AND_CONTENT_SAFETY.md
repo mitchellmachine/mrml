@@ -19,6 +19,11 @@ horizontal rules, and HTTP(S) autolinks. Fenced language labels cover Rust,
 C/C++, assembly, TOML, JSON, YAML, Bash, PowerShell, Python, HTML, CSS,
 JavaScript, diff, and plain text through a closed allowlist.
 
+Pipe tables render as semantic `table`, `thead`, `tbody`, `th`, and `td`
+elements inside a keyboard-focusable horizontal scroll region. Header and body
+cells reuse the safe inline renderer. Tables are limited to 64 columns and an
+overwide separator fails before row rendering.
+
 The current renderer is deliberately bounded rather than full CommonMark.
-Tables, bounded token coloring, raw-origin response-header deployment, and
+Bounded token coloring, raw-origin response-header deployment, and
 broader golden hostile-content fixtures remain **PLANNED**.
