@@ -2,6 +2,7 @@
 
 mod ari;
 mod base64url;
+mod csr;
 mod identifier;
 mod jose;
 mod nonce;
@@ -11,6 +12,9 @@ mod url;
 
 pub use ari::{AriError, RenewalWindow};
 pub use base64url::{Base64UrlError, decode_base64url, encode_base64url};
+pub use csr::{
+    ApprovedCsrDigest, CsrError, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, Pkcs10Signer, write_pkcs10_csr,
+};
 pub use identifier::{DnsIdentifier, IdentifierError, MAX_DNS_NAME};
 pub use jose::{
     AcmeJwsSigner, ApprovedAcmeJwsDigest, Es256Signature, JoseError, JwkThumbprint, P256Jwk,

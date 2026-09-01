@@ -48,7 +48,12 @@ pub use ml_kem::{
     MlKem768Ciphertext, MlKem768DecapsulationKey, MlKem768EncapsulationKey, MlKemError,
     ml_kem_768_decapsulate, ml_kem_768_encapsulate, ml_kem_768_keygen,
 };
-pub use p256::{P256Error, ecdsa_p256_sha256_verify, p256_public_key_is_valid};
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+pub use p256::P256SecretKey;
+pub use p256::{
+    P256Error, ecdsa_p256_digest_verify_raw, ecdsa_p256_sha256_verify, encode_der_signature,
+    p256_public_key_is_valid,
+};
 #[cfg(feature = "runtime")]
 pub use p384::{P384Error, ecdsa_p384_sha384_verify};
 pub use poly1305::poly1305;

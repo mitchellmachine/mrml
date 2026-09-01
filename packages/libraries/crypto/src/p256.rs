@@ -1,9 +1,14 @@
 use crate::Sha256;
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+use crate::{hmac_sha256, zeroize::volatile_zero};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum P256Error {
     InvalidKey,
     InvalidSignature,
+    EntropyUnavailable,
+    SigningFailed,
+    OutputTooSmall,
 }
 
 type U256 = [u64; 4];
@@ -38,6 +43,195 @@ const GY: U256 = [
     0x8ee7_eb4a_7c0f_9e16,
     0x4fe3_42e2_fe1a_7f9b,
 ];
+
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+const HALF_N: U256 = [
+    0x79dc_e561_7e31_92a8,
+    0xde73_7d56_d38b_cf42,
+    0x7fff_ffff_ffff_ffff,
+    0x7fff_ffff_8000_0000,
+];
+
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+fn to_be(value: U256) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (index, word) in value.iter().rev().enumerate() {
+        out[index * 8..index * 8 + 8].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+pub struct P256SecretKey {
+    bytes: [u8; 32],
+}
+
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+impl Drop for P256SecretKey {
+    fn drop(&mut self) {
+        volatile_zero(&mut self.bytes);
+    }
+}
+
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+impl P256SecretKey {
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, P256Error> {
+        let scalar = from_be(&bytes).ok_or(P256Error::InvalidKey)?;
+        if scalar == [0; 4] || compare(scalar, N) != core::cmp::Ordering::Less {
+            return Err(P256Error::InvalidKey);
+        }
+        Ok(Self { bytes })
+    }
+
+    pub fn generate_with(
+        mut fill_entropy: impl FnMut(&mut [u8]) -> Result<(), P256Error>,
+    ) -> Result<Self, P256Error> {
+        let mut candidate = [0u8; 32];
+        for _ in 0..128 {
+            fill_entropy(&mut candidate)?;
+            if let Ok(key) = Self::from_bytes(candidate) {
+                volatile_zero(&mut candidate);
+                return Ok(key);
+            }
+            volatile_zero(&mut candidate);
+        }
+        Err(P256Error::EntropyUnavailable)
+    }
+
+    #[cfg(feature = "runtime")]
+    pub fn generate() -> Result<Self, P256Error> {
+        Self::generate_with(|output| {
+            mrml_runtime::fill_random(output).map_err(|_| P256Error::EntropyUnavailable)
+        })
+    }
+
+    pub fn public_key(&self) -> Result<[u8; 65], P256Error> {
+        let mut scalar_value = from_be(&self.bytes).ok_or(P256Error::InvalidKey)?;
+        let point = scalar(Affine { x: GX, y: GY }, scalar_value)
+            .affine()
+            .ok_or(P256Error::InvalidKey)?;
+        let mut output = [0u8; 65];
+        output[0] = 4;
+        output[1..33].copy_from_slice(&to_be(point.x));
+        output[33..].copy_from_slice(&to_be(point.y));
+        volatile_zero(&mut scalar_value);
+        Ok(output)
+    }
+
+    pub fn sign_digest_raw(&self, digest: &[u8; 32]) -> Result<[u8; 64], P256Error> {
+        let mut private = from_be(&self.bytes).ok_or(P256Error::InvalidKey)?;
+        let mut z = from_be(digest).ok_or(P256Error::SigningFailed)?;
+        if compare(z, N) != core::cmp::Ordering::Less {
+            z = subtract_raw(z, N).0;
+        }
+        let mut nonce = deterministic_nonce(&self.bytes, digest)?;
+        let result = (|| {
+            let point = scalar(Affine { x: GX, y: GY }, nonce)
+                .affine()
+                .ok_or(P256Error::SigningFailed)?;
+            let r = if compare(point.x, N) == core::cmp::Ordering::Less {
+                point.x
+            } else {
+                subtract_raw(point.x, N).0
+            };
+            if r == [0; 4] {
+                return Err(P256Error::SigningFailed);
+            }
+            let inverse = inverse(nonce, N).ok_or(P256Error::SigningFailed)?;
+            let mut s = mul_mod(inverse, add_mod(z, mul_mod(r, private, N), N), N);
+            if s == [0; 4] {
+                return Err(P256Error::SigningFailed);
+            }
+            if compare(s, HALF_N) == core::cmp::Ordering::Greater {
+                s = subtract_raw(N, s).0;
+            }
+            let mut signature = [0u8; 64];
+            signature[..32].copy_from_slice(&to_be(r));
+            signature[32..].copy_from_slice(&to_be(s));
+            let public = self.public_key()?;
+            ecdsa_p256_digest_verify_raw(&public, digest, &signature)?;
+            Ok(signature)
+        })();
+        volatile_zero(&mut private);
+        volatile_zero(&mut z);
+        volatile_zero(&mut nonce);
+        result
+    }
+
+    pub fn sign_digest_der<'a>(
+        &self,
+        digest: &[u8; 32],
+        output: &'a mut [u8],
+    ) -> Result<&'a [u8], P256Error> {
+        let mut raw = self.sign_digest_raw(digest)?;
+        let result = encode_der_signature(&raw, output);
+        volatile_zero(&mut raw);
+        result
+    }
+}
+
+#[cfg(any(test, feature = "experimental-p256-signing"))]
+fn deterministic_nonce(private: &[u8; 32], digest: &[u8; 32]) -> Result<U256, P256Error> {
+    let mut v = [1u8; 32];
+    let mut k = [0u8; 32];
+    k = hmac_sha256(&k, &[&v, &[0], private, digest]);
+    v = hmac_sha256(&k, &[&v]);
+    k = hmac_sha256(&k, &[&v, &[1], private, digest]);
+    v = hmac_sha256(&k, &[&v]);
+    for _ in 0..128 {
+        v = hmac_sha256(&k, &[&v]);
+        let candidate = from_be(&v).ok_or(P256Error::SigningFailed)?;
+        if candidate != [0; 4] && compare(candidate, N) == core::cmp::Ordering::Less {
+            volatile_zero(&mut k);
+            volatile_zero(&mut v);
+            return Ok(candidate);
+        }
+        k = hmac_sha256(&k, &[&v, &[0]]);
+        v = hmac_sha256(&k, &[&v]);
+    }
+    volatile_zero(&mut k);
+    volatile_zero(&mut v);
+    Err(P256Error::SigningFailed)
+}
+
+fn encode_der_integer<'a>(value: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], P256Error> {
+    let first = value
+        .iter()
+        .position(|byte| *byte != 0)
+        .unwrap_or(value.len() - 1);
+    let value = &value[first..];
+    let prefix = usize::from(value[0] & 0x80 != 0);
+    let length = value.len() + prefix;
+    if output.len() < length + 2 {
+        return Err(P256Error::OutputTooSmall);
+    }
+    output[0] = 2;
+    output[1] = length as u8;
+    if prefix == 1 {
+        output[2] = 0;
+    }
+    output[2 + prefix..2 + length].copy_from_slice(value);
+    Ok(&output[..2 + length])
+}
+
+pub fn encode_der_signature<'a>(
+    raw: &[u8; 64],
+    output: &'a mut [u8],
+) -> Result<&'a [u8], P256Error> {
+    let mut r = [0u8; 35];
+    let mut s = [0u8; 35];
+    let r_len = encode_der_integer(&raw[..32], &mut r)?.len();
+    let s_len = encode_der_integer(&raw[32..], &mut s)?.len();
+    let length = r_len + s_len;
+    if output.len() < length + 2 {
+        return Err(P256Error::OutputTooSmall);
+    }
+    output[0] = 0x30;
+    output[1] = length as u8;
+    output[2..2 + r_len].copy_from_slice(&r[..r_len]);
+    output[2 + r_len..2 + length].copy_from_slice(&s[..s_len]);
+    Ok(&output[..2 + length])
+}
 
 fn from_be(bytes: &[u8]) -> Option<U256> {
     if bytes.is_empty() || bytes.len() > 32 {
@@ -294,7 +488,20 @@ pub fn ecdsa_p256_sha256_verify(
     if at != signature.len() {
         return Err(P256Error::InvalidSignature);
     }
-    let z = from_be(&Sha256::digest(message)).ok_or(P256Error::InvalidSignature)?;
+    let digest = Sha256::digest(message);
+    verify_digest_scalars(public, &digest, r, s)
+}
+
+fn verify_digest_scalars(
+    public: Affine,
+    digest: &[u8; 32],
+    r: U256,
+    s: U256,
+) -> Result<(), P256Error> {
+    let mut z = from_be(digest).ok_or(P256Error::InvalidSignature)?;
+    if compare(z, N) != core::cmp::Ordering::Less {
+        z = subtract_raw(z, N).0;
+    }
     let inverse = inverse(s, N).ok_or(P256Error::InvalidSignature)?;
     let left = scalar(Affine { x: GX, y: GY }, mul_mod(z, inverse, N))
         .affine()
@@ -312,6 +519,24 @@ pub fn ecdsa_p256_sha256_verify(
         subtract_raw(point.x, N).0
     };
     (x == r).then_some(()).ok_or(P256Error::InvalidSignature)
+}
+
+pub fn ecdsa_p256_digest_verify_raw(
+    public_key: &[u8],
+    digest: &[u8; 32],
+    signature: &[u8; 64],
+) -> Result<(), P256Error> {
+    let public = public_point(public_key).ok_or(P256Error::InvalidKey)?;
+    let r = from_be(&signature[..32]).ok_or(P256Error::InvalidSignature)?;
+    let s = from_be(&signature[32..]).ok_or(P256Error::InvalidSignature)?;
+    if r == [0; 4]
+        || s == [0; 4]
+        || compare(r, N) != core::cmp::Ordering::Less
+        || compare(s, N) != core::cmp::Ordering::Less
+    {
+        return Err(P256Error::InvalidSignature);
+    }
+    verify_digest_scalars(public, digest, r, s)
 }
 
 fn public_point(public_key: &[u8]) -> Option<Affine> {
@@ -344,6 +569,71 @@ pub fn p256_public_key_is_valid(public_key: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hex<const N: usize>(value: &str) -> [u8; N] {
+        assert_eq!(value.len(), N * 2);
+        let mut out = [0u8; N];
+        for (index, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn rfc6979_p256_sha256_signature_is_deterministic_low_s_and_self_verified() {
+        let key = P256SecretKey::from_bytes(hex(
+            "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721",
+        ))
+        .unwrap();
+        let public = key.public_key().unwrap();
+        let mut expected_public = [0u8; 65];
+        expected_public[0] = 4;
+        expected_public[1..33].copy_from_slice(&hex::<32>(
+            "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6",
+        ));
+        expected_public[33..].copy_from_slice(&hex::<32>(
+            "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299",
+        ));
+        assert_eq!(public, expected_public);
+        let digest = Sha256::digest(b"sample");
+        let signature = key.sign_digest_raw(&digest).unwrap();
+        assert_eq!(
+            signature[..32],
+            hex::<32>("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716")
+        );
+        assert_eq!(
+            signature[32..],
+            hex::<32>("0834E36AD29A83BF2BC9385E491D6099C8FDF9D1ED67AA7EA5F51F93782857A9")
+        );
+        assert_eq!(
+            ecdsa_p256_digest_verify_raw(&public, &digest, &signature),
+            Ok(())
+        );
+        assert_eq!(signature, key.sign_digest_raw(&digest).unwrap());
+        let mut der = [0u8; 72];
+        let der = key.sign_digest_der(&digest, &mut der).unwrap();
+        assert_eq!(ecdsa_p256_sha256_verify(&public, b"sample", der), Ok(()));
+    }
+
+    #[test]
+    fn key_generation_rejects_invalid_draws_and_fails_closed() {
+        let mut calls = 0usize;
+        let key = P256SecretKey::generate_with(|output| {
+            calls += 1;
+            output.fill(0);
+            if calls == 2 {
+                output[31] = 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(key.public_key().unwrap()[1..33], to_be(GX));
+        assert_eq!(
+            P256SecretKey::generate_with(|_| Err(P256Error::EntropyUnavailable)).err(),
+            Some(P256Error::EntropyUnavailable)
+        );
+    }
 
     #[test]
     fn validates_only_strict_uncompressed_curve_points() {

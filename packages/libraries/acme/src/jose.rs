@@ -71,6 +71,14 @@ impl P256Jwk {
         hash.update(b"\"}");
         Ok(JwkThumbprint(hash.finalize()))
     }
+
+    pub fn sec1_uncompressed(&self) -> [u8; 65] {
+        let mut output = [0u8; 65];
+        output[0] = 4;
+        output[1..33].copy_from_slice(&self.x);
+        output[33..].copy_from_slice(&self.y);
+        output
+    }
 }
 
 pub enum ProtectedKey<'a> {

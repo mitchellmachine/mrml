@@ -16,10 +16,18 @@ ES256 scalar bounds, purpose-typed signing approval, and flattened JWS output.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
-Private-key operations, JOSE parsing and EAB, PKCS#10, X.509 issuance
-validation, ACME transport, accounts, challenges, durable recovery, certificate
-publication, renewal, revocation, backup/restore, CLI administration, gitd hot
-reload, and the MRML certificate service remain **PLANNED**. The shared state machine must
+The bounded PKCS#10 encoder now emits an empty subject, exact P-256 SPKI, and an
+extension-request containing only the sorted owner-approved SAN identifiers.
+An experimental P-256 signing path implements rejection-sampled keys, RFC 6979,
+low-S output, strict DER, self-verification, and volatile buffer clearing, but it
+is excluded from ordinary feature profiles because the inherited curve
+arithmetic remains variable-time and has not passed independent cryptographic
+review.
+
+JOSE parsing and EAB, X.509 issuance validation, ACME transport, accounts,
+challenges, durable recovery, certificate publication, renewal, revocation,
+backup/restore, CLI administration, gitd hot reload, and the MRML certificate
+service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 Future platform adapters belong inside these logical packages and must not fork
 their public semantics.
