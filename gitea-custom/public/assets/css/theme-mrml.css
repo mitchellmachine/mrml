@@ -146,7 +146,7 @@ header .navbar {
   background: rgb(13 16 20 / 94%) !important;
 }
 
-/* Gitea's brand image is quite small by default. The MRML logo is SVG,
+/* The legacy theme's brand image is quite small by default. The MRML logo is SVG,
    so increasing its CSS size remains perfectly sharp on HiDPI displays. */
 .ui.menu.bar .brand,
 header .navbar .brand {
