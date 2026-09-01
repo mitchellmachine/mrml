@@ -494,6 +494,16 @@ owner policy. Response order never selects trust compatibility.
 Future platform adapters belong inside these logical packages and must not fork
 their public semantics.
 
+Repository CI now configures the canonical manifest, lock, audit, assurance,
+clippy, full Linux release, native-Windows release, pinned
+Windows-GNU/LLVM-under-Wine certificate, deterministic interface-regeneration,
+CUDA compile-only, and Linux AddressSanitizer gates. The focused ACME,
+certificate-service, and security-fuzz packages run explicitly in the hosted
+lanes so their results remain visible even when an unrelated full-repository
+gate fails. Workflow configuration is not execution evidence: a green runner
+result may be recorded only after that exact environment completes, and Wine
+continues to be labelled `WINDOWS_GNULLVM_UNDER_WINE`, never native Windows.
+
 The owner supplied a Canada-first claim screen and applicable IETF-disclosure
 review dated 2026-09-01 with engineering classification
 `REVIEWED_NOT_BLOCKING`; the exact disposition and re-review triggers are in

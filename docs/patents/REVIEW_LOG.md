@@ -12128,3 +12128,11 @@ sealed-key service receipts and returns only non-exporting handles. It adds no
 certificate protocol, signing mechanism, validation topology, certificate
 authority operation, smart-card precomputed signing machinery, or recorded
 re-review trigger.
+
+# 2026-09-01 — Certificate lifecycle continuous-integration gates
+
+Patent review: **NOT_TRIGGERED**. This increment configures existing repository,
+platform, interface-generation, sanitizer, and deterministic certificate test
+commands in continuous integration. It adds no certificate protocol, signing
+mechanism, validation topology, certificate authority operation, or recorded
+re-review trigger.
