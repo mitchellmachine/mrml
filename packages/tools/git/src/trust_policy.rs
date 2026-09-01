@@ -81,9 +81,7 @@ impl PolicyPairStatus {
         valid_until: u64,
         retired_at: Option<u64>,
     ) -> Result<Self, HybridPolicyError> {
-        if valid_from >= valid_until
-            || retired_at.is_some_and(|retired| retired < valid_from || retired >= valid_until)
-        {
+        if valid_from >= valid_until || retired_at.is_some_and(|retired| retired >= valid_until) {
             return Err(HybridPolicyError::InvalidPolicy);
         }
         Ok(Self {
@@ -194,7 +192,67 @@ pub const MAX_POLICY_PAIRS: usize = 64;
 pub const MAX_POLICY_REVOKED_KEYS: usize = 256;
 pub const MAX_POLICY_PROTECTED_REFS: usize = 256;
 pub const MAX_ENCODED_TRUST_POLICY_BYTES: usize = 512 * 1024;
+pub const MAX_KEY_REVOCATION_STATEMENT_BYTES: usize = 64 * 1024;
+pub const MAX_KEY_REVOCATION_REASON_BYTES: usize = 512;
 const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP2";
+const REVOCATION_MAGIC: &[u8; 8] = b"MRGREV01";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeyRevocationStatement {
+    repository: RepositoryIdentity,
+    previous_generation: RevocationGeneration,
+    next_generation: RevocationGeneration,
+    effective_at: u64,
+    reason: Vector<u8>,
+    openpgp: Vector<FingerprintV6>,
+    ml_dsa: Vector<[u8; 64]>,
+}
+
+impl KeyRevocationStatement {
+    pub fn new(
+        repository: RepositoryIdentity,
+        previous_generation: RevocationGeneration,
+        next_generation: RevocationGeneration,
+        effective_at: u64,
+        reason: Vector<u8>,
+        openpgp: Vector<FingerprintV6>,
+        ml_dsa: Vector<[u8; 64]>,
+    ) -> Result<Self, HybridPolicyError> {
+        let statement = Self {
+            repository,
+            previous_generation,
+            next_generation,
+            effective_at,
+            reason,
+            openpgp,
+            ml_dsa,
+        };
+        validate_revocation_statement(&statement)?;
+        Ok(statement)
+    }
+
+    pub fn repository(&self) -> &RepositoryIdentity {
+        &self.repository
+    }
+    pub const fn previous_generation(&self) -> RevocationGeneration {
+        self.previous_generation
+    }
+    pub const fn next_generation(&self) -> RevocationGeneration {
+        self.next_generation
+    }
+    pub const fn effective_at(&self) -> u64 {
+        self.effective_at
+    }
+    pub fn reason(&self) -> &[u8] {
+        &self.reason
+    }
+    pub fn openpgp(&self) -> &[FingerprintV6] {
+        &self.openpgp
+    }
+    pub fn ml_dsa(&self) -> &[[u8; 64]] {
+        &self.ml_dsa
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrustPolicyState {
@@ -420,6 +478,124 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
     Ok(policy)
 }
 
+pub fn encode_key_revocation_statement(
+    statement: &KeyRevocationStatement,
+) -> Result<Vector<u8>, HybridPolicyError> {
+    validate_revocation_statement(statement)?;
+    let mut output = Vector::new();
+    append(&mut output, REVOCATION_MAGIC)?;
+    append_counted_bytes(&mut output, statement.repository.as_str().as_bytes())?;
+    append(&mut output, &statement.previous_generation.0.to_be_bytes())?;
+    append(&mut output, &statement.next_generation.0.to_be_bytes())?;
+    append(&mut output, &statement.effective_at.to_be_bytes())?;
+    append_counted_bytes(&mut output, &statement.reason)?;
+    append_u16(&mut output, statement.openpgp.len())?;
+    append_u16(&mut output, statement.ml_dsa.len())?;
+    for fingerprint in &statement.openpgp {
+        append(&mut output, fingerprint.as_bytes())?;
+    }
+    for digest in &statement.ml_dsa {
+        append(&mut output, digest)?;
+    }
+    if output.len() > MAX_KEY_REVOCATION_STATEMENT_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    Ok(output)
+}
+
+pub fn parse_key_revocation_statement(
+    input: &[u8],
+) -> Result<KeyRevocationStatement, HybridPolicyError> {
+    if input.is_empty() || input.len() > MAX_KEY_REVOCATION_STATEMENT_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    let mut cursor = PolicyCursor::new(input);
+    if cursor.take(REVOCATION_MAGIC.len())? != REVOCATION_MAGIC {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let repository = RepositoryIdentity::parse(
+        core::str::from_utf8(cursor.take_counted_bytes()?)
+            .map_err(|_| HybridPolicyError::InvalidPolicy)?,
+    )
+    .map_err(|_| HybridPolicyError::InvalidPolicy)?;
+    let previous_generation = RevocationGeneration(cursor.u64()?);
+    let next_generation = RevocationGeneration(cursor.u64()?);
+    let effective_at = cursor.u64()?;
+    let reason_bytes = cursor.take_counted_bytes()?;
+    let mut reason = Vector::new();
+    reason
+        .try_extend_from_slice(reason_bytes)
+        .map_err(|_| HybridPolicyError::InputTooLarge)?;
+    let openpgp_count = usize::from(cursor.u16()?);
+    let ml_dsa_count = usize::from(cursor.u16()?);
+    if openpgp_count > MAX_POLICY_REVOKED_KEYS || ml_dsa_count > MAX_POLICY_REVOKED_KEYS {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let mut openpgp =
+        Vector::with_capacity(openpgp_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..openpgp_count {
+        let mut bytes = [0; 32];
+        bytes.copy_from_slice(cursor.take(32)?);
+        openpgp.push(FingerprintV6::from_bytes(bytes));
+    }
+    let mut ml_dsa =
+        Vector::with_capacity(ml_dsa_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..ml_dsa_count {
+        let mut bytes = [0; 64];
+        bytes.copy_from_slice(cursor.take(64)?);
+        ml_dsa.push(bytes);
+    }
+    if !cursor.is_complete() {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let statement = KeyRevocationStatement::new(
+        repository,
+        previous_generation,
+        next_generation,
+        effective_at,
+        reason,
+        openpgp,
+        ml_dsa,
+    )?;
+    if &*encode_key_revocation_statement(&statement)? != input {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(statement)
+}
+
+pub fn key_revocation_statement_digest(
+    statement: &KeyRevocationStatement,
+) -> Result<[u8; 64], HybridPolicyError> {
+    Ok(Sha3_512::digest(&encode_key_revocation_statement(
+        statement,
+    )?))
+}
+
+fn validate_revocation_statement(
+    statement: &KeyRevocationStatement,
+) -> Result<(), HybridPolicyError> {
+    if statement.previous_generation.0 == 0
+        || statement.next_generation.0 <= statement.previous_generation.0
+        || statement.effective_at == 0
+        || statement.reason.is_empty()
+        || statement.reason.len() > MAX_KEY_REVOCATION_REASON_BYTES
+        || statement
+            .reason
+            .iter()
+            .any(|byte| !(b' '..=b'~').contains(byte))
+        || statement.openpgp.len() > MAX_POLICY_REVOKED_KEYS
+        || statement.ml_dsa.len() > MAX_POLICY_REVOKED_KEYS
+        || statement.openpgp.is_empty() && statement.ml_dsa.is_empty()
+        || !strictly_ordered_by(&statement.openpgp, |left, right| {
+            left.as_bytes() < right.as_bytes()
+        })
+        || !strictly_ordered_by(&statement.ml_dsa, |left, right| left < right)
+    {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(())
+}
+
 fn append_u16(output: &mut Vector<u8>, value: usize) -> Result<(), HybridPolicyError> {
     let value = u16::try_from(value).map_err(|_| HybridPolicyError::InputTooLarge)?;
     append(output, &value.to_be_bytes())
@@ -638,6 +814,95 @@ impl TrustPolicyState {
             return Err(HybridPolicyError::MissingNewAuthorization);
         }
         Ok(Self::from_candidate(candidate))
+    }
+
+    pub fn apply_key_revocation(
+        &self,
+        statement: &KeyRevocationStatement,
+        authorization: &VerifiedHybridSignature,
+    ) -> Result<Self, HybridPolicyError> {
+        validate_revocation_statement(statement)?;
+        if statement.repository != self.repository
+            || statement.previous_generation != self.revocation_generation
+            || statement.next_generation.0 <= self.revocation_generation.0
+        {
+            return Err(HybridPolicyError::RevocationRollback);
+        }
+        let encoded = encode_key_revocation_statement(statement)?;
+        if authorization.repository_digest != repository_digest(&self.repository)
+            || authorization.purpose != SignaturePurpose::KeyRevocation
+            || authorization.object_type != GitObjectType::KeyRevocation
+            || authorization.trust_generation != self.generation
+            || authorization.revocation_generation != self.revocation_generation
+            || authorization.payload_digest != Sha3_512::digest(&encoded)
+            || !self.active_pairs.contains(&authorization.pair)
+            || !self.pair_authorized_at(authorization.pair, statement.effective_at)
+        {
+            return Err(HybridPolicyError::MissingPreviousAuthorization);
+        }
+        let adds_identity = statement
+            .openpgp
+            .iter()
+            .any(|value| !self.revoked_openpgp.contains(value))
+            || statement
+                .ml_dsa
+                .iter()
+                .any(|value| !self.revoked_ml_dsa.contains(value));
+        if !adds_identity {
+            return Err(HybridPolicyError::RevocationRollback);
+        }
+        let mut next = self.clone();
+        next.revocation_generation = statement.next_generation;
+        for fingerprint in &statement.openpgp {
+            if !next.revoked_openpgp.contains(fingerprint) {
+                next.revoked_openpgp.push(*fingerprint);
+            }
+        }
+        for digest in &statement.ml_dsa {
+            if !next.revoked_ml_dsa.contains(digest) {
+                next.revoked_ml_dsa.push(*digest);
+            }
+        }
+        next.revoked_openpgp
+            .sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        next.revoked_ml_dsa.sort_unstable();
+        for status in &mut next.pair_statuses {
+            if statement.openpgp.contains(&status.pair.openpgp_fingerprint)
+                || statement.ml_dsa.contains(&status.pair.ml_dsa_key_digest)
+            {
+                let latest = statement
+                    .effective_at
+                    .min(status.valid_until.saturating_sub(1));
+                status.retired_at = Some(status.retired_at.map_or(latest, |old| old.min(latest)));
+            }
+        }
+        next.active_pairs = next
+            .pair_statuses
+            .iter()
+            .filter(|status| status.retired_at.is_none())
+            .map(|status| status.pair)
+            .collect();
+        if next.active_pairs.is_empty() {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        validate_candidate(&TrustPolicyCandidate {
+            repository: next.repository.clone(),
+            generation: next.generation,
+            previous_policy_digest: next.previous_policy_digest,
+            revocation_generation: next.revocation_generation,
+            protected_refs: next.protected_refs.clone(),
+            allow_sha1: next.allowed_object_formats & 1 != 0,
+            allow_sha256: next.allowed_object_formats & 2 != 0,
+            hybrid_required: next.hybrid_required,
+            legacy_checkpoint: next.legacy_checkpoint,
+            hybrid_cutover: next.hybrid_cutover,
+            emergency_policy_digest: next.emergency_policy_digest,
+            active_pairs: next.active_pairs.clone(),
+            pair_statuses: next.pair_statuses.clone(),
+            revoked_openpgp: next.revoked_openpgp.clone(),
+            revoked_ml_dsa: next.revoked_ml_dsa.clone(),
+        })?;
+        Ok(next)
     }
 
     pub fn digest(&self) -> [u8; 64] {
@@ -1497,6 +1762,155 @@ mod tests {
             TrustPolicyState::establish(invalid),
             Err(HybridPolicyError::InvalidPolicy)
         );
+    }
+
+    #[test]
+    fn canonical_key_revocation_only_adds_and_retires_exact_identities() {
+        let repository = RepositoryIdentity::parse("owner/revocations").unwrap();
+        let revoked_pair = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([1; 32]),
+            openpgp_key_digest: [2; 64],
+            ml_dsa_key_digest: [3; 64],
+        };
+        let authorizing_pair = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([4; 32]),
+            openpgp_key_digest: [5; 64],
+            ml_dsa_key_digest: [6; 64],
+        };
+        let state = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(7),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(9),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(ObjectId::Sha256([8; 32])),
+            emergency_policy_digest: None,
+            active_pairs: [revoked_pair, authorizing_pair].into(),
+            pair_statuses: [
+                PolicyPairStatus::new(revoked_pair, 100, 1000, None).unwrap(),
+                PolicyPairStatus::new(authorizing_pair, 100, 1000, None).unwrap(),
+            ]
+            .into(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let statement = KeyRevocationStatement::new(
+            repository.clone(),
+            RevocationGeneration(9),
+            RevocationGeneration(10),
+            500,
+            Vector::from(*b"owner-confirmed compromise"),
+            [revoked_pair.openpgp_fingerprint].into(),
+            [revoked_pair.ml_dsa_key_digest].into(),
+        )
+        .unwrap();
+        let encoded = encode_key_revocation_statement(&statement).unwrap();
+        assert_eq!(
+            parse_key_revocation_statement(&encoded),
+            Ok(statement.clone())
+        );
+        for end in 0..encoded.len() {
+            assert!(parse_key_revocation_statement(&encoded[..end]).is_err());
+        }
+        let mut tampered = encoded.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        let tampered_statement = parse_key_revocation_statement(&tampered).unwrap();
+        assert_ne!(
+            key_revocation_statement_digest(&tampered_statement).unwrap(),
+            key_revocation_statement_digest(&statement).unwrap()
+        );
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(parse_key_revocation_statement(&trailing).is_err());
+
+        let authorization = revocation_proof(&state, &statement, authorizing_pair);
+        assert_eq!(
+            state.apply_key_revocation(&tampered_statement, &authorization),
+            Err(HybridPolicyError::MissingPreviousAuthorization)
+        );
+        let next = state
+            .apply_key_revocation(&statement, &authorization)
+            .unwrap();
+        assert_eq!(next.revocation_generation, RevocationGeneration(10));
+        assert!(!next.pair_authorized_at(revoked_pair, 500));
+        assert!(next.pair_authorized_at(revoked_pair, 499));
+        assert!(next.pair_authorized_at(authorizing_pair, 500));
+        assert!(
+            next.revoked_openpgp
+                .contains(&revoked_pair.openpgp_fingerprint)
+        );
+        assert!(
+            next.revoked_ml_dsa
+                .contains(&revoked_pair.ml_dsa_key_digest)
+        );
+        assert_eq!(
+            next.apply_key_revocation(&statement, &authorization),
+            Err(HybridPolicyError::RevocationRollback)
+        );
+
+        let mut unauthorized = authorization;
+        unauthorized.payload_digest[0] ^= 1;
+        assert_eq!(
+            state.apply_key_revocation(&statement, &unauthorized),
+            Err(HybridPolicyError::MissingPreviousAuthorization)
+        );
+        let mut wrong_purpose = authorization;
+        wrong_purpose.purpose = SignaturePurpose::KeyRotation;
+        wrong_purpose.object_type = GitObjectType::KeyRotation;
+        assert_eq!(
+            state.apply_key_revocation(&statement, &wrong_purpose),
+            Err(HybridPolicyError::MissingPreviousAuthorization)
+        );
+        let duplicate = KeyRevocationStatement::new(
+            repository,
+            RevocationGeneration(9),
+            RevocationGeneration(10),
+            500,
+            Vector::from(*b"duplicate"),
+            [
+                revoked_pair.openpgp_fingerprint,
+                revoked_pair.openpgp_fingerprint,
+            ]
+            .into(),
+            Vector::new(),
+        );
+        assert_eq!(duplicate, Err(HybridPolicyError::InvalidPolicy));
+        let unordered = KeyRevocationStatement::new(
+            RepositoryIdentity::parse("owner/revocations").unwrap(),
+            RevocationGeneration(9),
+            RevocationGeneration(10),
+            500,
+            Vector::from(*b"unordered"),
+            [
+                FingerprintV6::from_bytes([8; 32]),
+                FingerprintV6::from_bytes([7; 32]),
+            ]
+            .into(),
+            Vector::new(),
+        );
+        assert_eq!(unordered, Err(HybridPolicyError::InvalidPolicy));
+    }
+
+    fn revocation_proof(
+        state: &TrustPolicyState,
+        statement: &KeyRevocationStatement,
+        pair: AuthorizedHybridPair,
+    ) -> VerifiedHybridSignature {
+        VerifiedHybridSignature {
+            trust_generation: state.generation,
+            revocation_generation: state.revocation_generation,
+            pair,
+            repository_digest: repository_digest(&state.repository),
+            payload_digest: key_revocation_statement_digest(statement).unwrap(),
+            purpose: SignaturePurpose::KeyRevocation,
+            object_type: GitObjectType::KeyRevocation,
+        }
     }
 
     fn rotation_proof(

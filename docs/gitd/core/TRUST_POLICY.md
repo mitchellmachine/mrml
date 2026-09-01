@@ -46,6 +46,24 @@ end, undo retirement, or delay a recorded retirement. They may narrow the end
 or retire an active pair earlier. This makes expiry and retirement monotonic
 restrictions on authority rather than mutable descriptive metadata.
 
+Key revocation is a separate purpose-bound transition, not policy rotation or
+emergency recovery. The canonical `MRGREV01` statement is capped at 64 KiB and
+binds repository identity, exact previous and strictly greater next revocation
+generations, nonzero effective time, a bounded printable reason, and strictly
+ordered complete OpenPGP v6 fingerprints and ML-DSA public-key digests. Empty
+identity sets, duplicates, alternate ordering, malformed text, truncation, and
+trailing bytes fail closed. Its SHA3-512 digest covers the complete canonical
+encoding.
+
+Application requires a `VerifiedHybridSignature` over those exact bytes with
+the `KeyRevocation` purpose and object type, current trust and revocation
+generations, the exact repository, and a currently time-authorized active pair.
+It only unions new revocations. Affected pair-status identities remain recorded
+and are retired no later than the statement's effective time; earlier expiry or
+retirement is preserved. Revocations cannot disappear, reactivate a pair, or
+be replayed as a generation transition. Revoking every active pair fails closed;
+emergency recovery remains a distinct future authority path.
+
 The canonical state now also carries optional exact-format Git object IDs for
 the final legacy checkpoint and hybrid-required cutover, plus an optional
 64-byte digest naming a separately authenticated emergency-recovery policy.
@@ -63,9 +81,8 @@ active pair at the new generation. A transition cannot lower a generation,
 break the previous-policy digest chain, remove a revocation, reactivate a
 revoked key, or downgrade hybrid-required policy.
 
-Authenticated emergency recovery execution and a canonical key-revocation
-statement are not yet implemented. The current state therefore cannot activate
-protected refs through those transition paths.
+Authenticated emergency recovery execution is not yet implemented. The current
+state therefore cannot activate protected refs through that transition path.
 
 `verify_introduced_history` now deterministically walks every commit introduced
 by `old..new`, including all merge-side parents, in parent-before-child order.
