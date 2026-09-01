@@ -10,6 +10,7 @@ mod inflate;
 mod object;
 mod openpgp_provider;
 mod pack;
+mod pack_index;
 mod remote;
 mod repository;
 mod sha1;
@@ -45,6 +46,10 @@ pub use openpgp_provider::{
 };
 pub use pack::{
     PackError, PackObject, encode_pack, encode_pack_with_format, parse_pack, parse_pack_with_format,
+};
+pub use pack_index::{
+    DEFAULT_MAX_PACK_INDEX_OBJECTS, PackIndex, PackIndexEntry, PackIndexError, build_pack_index_v2,
+    parse_pack_index_v2,
 };
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
