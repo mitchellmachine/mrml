@@ -24,10 +24,43 @@ mechanism search, and no patent-clearance, non-infringement, validity, or legal
 conclusion is made. Search confidence is LOW, technical-overlap confidence is
 MEDIUM for the exact general RFC mechanism, and legal-status confidence is LOW.
 
-Dynamic Huffman construction, bounded delta selection, cross-pack
-recomputation, pack caching, and compaction remain `REMAINS_OPEN` and require
-their own mechanism-level Canadian search and CIPO verification before
-implementation. The shared review log must be updated during integration;
+## 2026-09-01 preliminary Canadian review
+
+Classification: `PATENT_REVIEW_PRELIMINARY_CLEAR_WITH_GUARDRAILS`.
+
+A user-supplied Canadian landscape and preliminary independent-claim review
+covered standards-conforming DEFLATE/zlib level-9 compression, deterministic
+bounded-window Git delta selection, immutable exact-key pack representation
+caching, and reachability-based repack/compaction. It reported no in-force
+Canadian claim facially covering the constrained implementation. This permits
+implementation within the guardrails below; it is not a formal freedom-to-
+operate opinion, patent-clearance claim, or substitute for production review by
+qualified Canadian patent counsel.
+
+CA 2,843,922 was specifically screened. Its independent claims were reported to
+require a distributed deduplication cluster using block fingerprints, stream
+sketches, routing sketches to physical nodes, storage-address responses, and
+distributed sketch/address updates. MRML gitd must not implement those
+mechanisms. Related Canadian applications CA 2,799,976, CA 2,501,548, and
+CA 2,947,158 were reported abandoned. CIPO's public database was experiencing a
+documented service disruption when this record was refreshed, so this branch
+records the supplied review without representing that Codex independently
+reperformed counsel-grade status verification.
+
+The implementation guardrails are normative:
+
+- use fixed standards-conforming codecs and parameters;
+- do not adaptively select codecs or workload profiles;
+- do not use sketches, MinHash, locality signatures, or similarity caches for
+  candidate search;
+- do not rank candidates by cache/storage location or compression state;
+- do not map sketches to distributed nodes or storage addresses; and
+- do not implement file-recipe/chunk-index delta-store garbage collection.
+
+Within those restrictions, dynamic-Huffman construction, bounded direct-window
+delta selection, immutable exact-key pack caching, and reachability-based
+compaction are `TRIGGERED` and authorized for implementation under this
+preliminary screen. The shared review log must be updated during integration;
 Agent A's file boundary does not authorize editing it here. Follow
 `docs/patents/README.md`.
 
@@ -35,5 +68,5 @@ The OFS/REF validation path only decodes Git's standard copy/insert form,
 follows exact offsets or full object IDs, and enforces work and depth limits. It
 does not search for similar objects, select bases, or construct deltas. Patent
 review: NOT_TRIGGERED for this bounded interoperability resolver. Delta
-selection and cross-pack recomputation retain the separate `REMAINS_OPEN`
-trigger above.
+selection and cross-pack recomputation must remain within the preliminary
+review guardrails above.
