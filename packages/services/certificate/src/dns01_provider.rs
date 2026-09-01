@@ -271,8 +271,7 @@ mod tests {
             Err(Dns01ProviderError::InvalidReceipt)
         );
         let mut changed_identifier = receipt;
-        changed_identifier.identifier =
-            DnsIdentifier::parse("other.example.com", false).unwrap();
+        changed_identifier.identifier = DnsIdentifier::parse("other.example.com", false).unwrap();
         assert_eq!(
             provider.cleanup(changed_identifier),
             Err(Dns01ProviderError::InvalidReceipt)
