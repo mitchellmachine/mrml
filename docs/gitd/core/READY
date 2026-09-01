@@ -10,7 +10,7 @@ Baseline commit:
 `cf1f75755e6961737d6c1972959aac9a8dcea061ec26b7f7e43b20ab261868c2`.
 
 Final core implementation commit before this evidence record:
-`ae1e971f`.
+`564f49fa`.
 
 Executed on 2026-09-01:
 
@@ -37,6 +37,7 @@ Implemented and executed in the focused environments:
 - canonical full-fingerprint legacy-v4 validity/retirement/revocation policy state; policy membership alone remains inert and cannot bypass graph classification.
 - bounded checkpoint/cutover graph classification with a valid conventional-v4 signature bound to exact commit bytes, complete fingerprint, trusted signing time, repository, and generations; every non-checkpoint-ancestry commit still requires hybrid evidence.
 - canonical bounded pack-set manifests and an `MRREFS02` transition that atomically binds the exact manifest digest while advancing repository and pack generations; hosted receive cumulatively persists the selected set and reauthenticates exact selected arrival objects for subsequent thin bases.
+- sequential protected receive history traversal over prior selected arrivals; the focused test prepares a second commit whose parent exists only in the first activated arrival generation.
 - bounded annotated-tag pages/details and verified metadata descriptors for exact source-manifest, source-lock, and build-receipt blobs without assuming ambient host paths or unsigned filename authority.
 - bounded protocol-v2 request parsing, `ls-refs`, fetch framing, receive command/report framing, and repository-view boundaries without an external Git server runtime.
 - deterministic bounded hostile-input corpora for Git pack/index/object/transport/trust/journal/ref-state/name/path parsers, OpenPGP packet/armor parsing, and ML-DSA key/signature verification on Linux and the Wine-hosted Windows target.
