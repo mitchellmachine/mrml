@@ -71,6 +71,16 @@ pub enum AccountRolloverFailure<E> {
     Uncertain(AccountRolloverError<E>),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AccountActionResolutionError<E> {
+    PreparedMismatch,
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    Lifecycle(AccountError),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectoryFetchError<E> {
     Transport(crate::TransportError<E>),
@@ -1089,6 +1099,119 @@ pub fn recover_uncertain_account_creation<T: AcmeTransport>(
     Ok(account_url)
 }
 
+/// Resolves an ambiguous contact update, deactivation, or key rollover by
+/// authenticating POST-as-GET with the caller-selected old or new use-only key
+/// route and comparing the authoritative account representation with both the
+/// committed and prepared generations.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_uncertain_account_action<T: AcmeTransport>(
+    lifecycle: &mut AccountLifecycle,
+    receipt: PreparedAccountAction,
+    directory: &AcmeDirectory,
+    signing_key: &P256Jwk,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<u64, AccountActionResolutionError<T::Error>> {
+    let signing_thumbprint = signing_key
+        .thumbprint()
+        .map_err(|_| AccountActionResolutionError::PreparedMismatch)?;
+    if lifecycle.operation != AccountOperation::Uncertain
+        || lifecycle.directory_generation != directory.generation
+        || receipt.directory_generation != directory.generation
+        || !matches!(
+            receipt.action,
+            AccountOperation::ContactUpdatePrepared
+                | AccountOperation::DeactivationPrepared
+                | AccountOperation::RolloverPrepared
+        )
+        || (receipt.old_key != Some(signing_thumbprint)
+            && receipt.new_key != Some(signing_thumbprint))
+    {
+        return Err(AccountActionResolutionError::PreparedMismatch);
+    }
+    let account_url = lifecycle
+        .account_url
+        .as_ref()
+        .ok_or(AccountActionResolutionError::PreparedMismatch)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        account_url,
+        crate::ProtectedKey::Kid(account_url),
+        b"",
+        if signing_thumbprint == lifecycle.key {
+            lifecycle.generation
+        } else {
+            receipt.account_generation
+        },
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(AccountActionResolutionError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(AccountActionResolutionError::Server(problem));
+    }
+    if result.metadata.status != 200
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        return Err(AccountActionResolutionError::UnexpectedStatus);
+    }
+    let body = core::str::from_utf8(&response_body[..result.metadata.body_length])
+        .map_err(|_| AccountActionResolutionError::Response(ResponseError::Malformed))?;
+    let parsed = parse_account_response(body, account_url.origin())
+        .map_err(AccountActionResolutionError::Response)?;
+    let prepared_active = receipt.action != AccountOperation::DeactivationPrepared;
+    let prepared_key = receipt
+        .new_key
+        .or(receipt.old_key)
+        .ok_or(AccountActionResolutionError::PreparedMismatch)?;
+    let prepared_matches = parsed.contacts_digest == receipt.contact_digest
+        && parsed.status
+            == if prepared_active {
+                ParsedAccountStatus::Valid
+            } else {
+                ParsedAccountStatus::Deactivated
+            }
+        && signing_thumbprint == prepared_key;
+    let committed_matches = parsed.contacts_digest == lifecycle.contact_digest
+        && parsed.status
+            == if lifecycle.active {
+                ParsedAccountStatus::Valid
+            } else {
+                ParsedAccountStatus::Deactivated
+            }
+        && signing_thumbprint == lifecycle.key;
+    let authoritative_generation = if prepared_matches {
+        receipt.account_generation
+    } else if committed_matches {
+        lifecycle.generation
+    } else {
+        return Err(AccountActionResolutionError::PreparedMismatch);
+    };
+    lifecycle
+        .resolve_authoritative(
+            authoritative_generation,
+            if prepared_matches {
+                prepared_active
+            } else {
+                lifecycle.active
+            },
+            if prepared_matches {
+                prepared_key
+            } else {
+                lifecycle.key
+            },
+            parsed.contacts_digest,
+        )
+        .map_err(AccountActionResolutionError::Lifecycle)?;
+    Ok(authoritative_generation)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn execute_prepared_account_rollover<T: AcmeTransport>(
     lifecycle: &mut AccountLifecycle,
@@ -1736,6 +1859,73 @@ mod tests {
         assert_eq!(account.generation, 2);
     }
 
+    struct AccountResolutionTransport {
+        calls: u8,
+    }
+    impl AcmeTransport for AccountResolutionTransport {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            self.calls += 1;
+            if request.method == AcmeHttpMethod::Head {
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some("resolution-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                });
+            }
+            assert_eq!(request.url.as_str(), "https://ca.example/account/1");
+            let body = br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#;
+            output[..body.len()].copy_from_slice(body);
+            Ok(AcmeTransportResponse {
+                status: 200,
+                effective_url: "https://ca.example/account/1",
+                replay_nonce: Some("resolution-nonce-2"),
+                retry_after: None,
+                location: None,
+                content_type: Some("application/json"),
+                body_length: body.len(),
+            })
+        }
+    }
+
+    fn uncertain_rollover_resolves_with_new_use_only_key_impl() {
+        let (directory, mut account) = active_account();
+        let new_key = replacement_key();
+        let receipt = account.prepare_rollover(&new_key, 5).unwrap();
+        account.mark_uncertain().unwrap();
+        let origin = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let mut exchange = crate::AcmeExchange::new(directory.generation, origin);
+        let mut transport = AccountResolutionTransport { calls: 0 };
+        let mut signer = Signer;
+        let mut response = [0; 2048];
+        let mut jws = [0; 8192];
+        let resolved = resolve_uncertain_account_action(
+            &mut account,
+            receipt,
+            &directory,
+            &new_key,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        );
+        assert!(matches!(resolved, Ok(2)));
+        assert_eq!(account.operation, AccountOperation::None);
+        assert_eq!(account.generation, 2);
+        assert!(account.key == new_key.thumbprint().unwrap());
+        assert_eq!(transport.calls, 2);
+        assert!(jws.iter().all(|byte| *byte == 0));
+    }
+
     fn order_creation_binds_prepared_payload_and_resource_impl() {
         let (directory, account) = active_account();
         let identifiers = [DnsIdentifier::parse("example.com", false).unwrap()];
@@ -2069,6 +2259,11 @@ mod tests {
     #[test]
     fn account_rollover_uses_nested_new_and_old_key_signatures() {
         run_order_test(account_rollover_uses_nested_new_and_old_key_signatures_impl);
+    }
+
+    #[test]
+    fn uncertain_rollover_resolves_with_new_use_only_key() {
+        run_order_test(uncertain_rollover_resolves_with_new_use_only_key_impl);
     }
 
     #[test]

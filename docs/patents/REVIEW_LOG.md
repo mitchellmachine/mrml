@@ -11524,3 +11524,12 @@ certificate-key JWS route, exact reason policy, bounded request and response
 handling, and authoritative `alreadyRevoked` replay resolution. It preserves
 ambiguous transport outcomes in the existing recoverable revocation lifecycle
 and adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Authoritative ambiguous account-action recovery
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment resolves ordinary RFC 8555
+contact-update, deactivation, and account-key-rollover ambiguity through an
+exact account POST-as-GET authenticated by the explicitly selected old or new
+use-only key route. It binds the authoritative representation to the prepared
+or committed generation and adds no recorded re-review-trigger mechanism.
