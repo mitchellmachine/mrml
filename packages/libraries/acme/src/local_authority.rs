@@ -20,6 +20,7 @@ pub const LOCAL_RENEWAL_INFO_CERTIFICATE_URL: &str =
 pub const LOCAL_KEY_CHANGE_URL: &str = "https://local-ca.invalid/acme/key-change";
 const DIRECTORY: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
 const DIRECTORY_EAB: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","externalAccountRequired":true,"website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
+const DIRECTORY_PROFILE_CHANGED: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"shortlived":"https://local-ca.invalid/profiles/shortlived"}}}"#;
 const LOCAL_EAB_KEY_IDENTIFIER: &str = "local-eab-key";
 const ACCOUNT: &str =
     r#"{"status":"valid","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
@@ -83,6 +84,7 @@ pub enum LocalAuthorityFault {
     StaleAuthorizationOnce,
     ContradictoryOrderOnce,
     MalformedCertificateOnce,
+    ProfileAdvertisementChanges,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityError {
@@ -174,6 +176,18 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
     ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
         let url = r.url.as_str();
         if r.method == AcmeHttpMethod::Get && url == LOCAL_DIRECTORY_URL {
+            let directory = if self.fault == LocalAuthorityFault::ProfileAdvertisementChanges {
+                if self.fault_used {
+                    DIRECTORY_PROFILE_CHANGED
+                } else {
+                    self.fault_used = true;
+                    DIRECTORY
+                }
+            } else if self.require_eab {
+                DIRECTORY_EAB
+            } else {
+                DIRECTORY
+            };
             return reply(
                 out,
                 200,
@@ -181,11 +195,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 None,
                 None,
                 Some("application/json"),
-                if self.require_eab {
-                    DIRECTORY_EAB
-                } else {
-                    DIRECTORY
-                },
+                directory,
             );
         }
         if r.method == AcmeHttpMethod::Get && url == LOCAL_RENEWAL_INFO_CERTIFICATE_URL {
@@ -1378,5 +1388,40 @@ mod tests {
                 .windows(4)
                 .any(|w| w == b"A===")
         );
+    }
+
+    #[test]
+    fn profile_advertisement_change_creates_distinct_generation_bound_identity() {
+        let directory_url = url(LOCAL_DIRECTORY_URL);
+        let mut exchange = AcmeExchange::new(1, directory_url);
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, key());
+        authority.inject(LocalAuthorityFault::ProfileAdvertisementChanges);
+        let mut response = [0u8; 65_536];
+        let first = fetch_directory(
+            &directory_url,
+            1,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let classic = first.profiles().next().unwrap().profile;
+        assert_eq!(classic.name(), "classic");
+        assert_eq!(classic.directory_generation(), 1);
+
+        exchange.replace_directory(2, directory_url);
+        let second = fetch_directory(
+            &directory_url,
+            2,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let shortlived = second.profiles().next().unwrap().profile;
+        assert_eq!(shortlived.name(), "shortlived");
+        assert_eq!(shortlived.directory_generation(), 2);
+        assert!(classic != shortlived);
+        assert!(!second.profiles().any(|profile| profile.profile == classic));
     }
 }

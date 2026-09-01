@@ -11783,3 +11783,10 @@ tested certificate generation and use-only signing configuration to new hosted
 TLS connections while retaining the prior generation for bounded drain and
 rollback. It does not select among identities from SNI or implement the
 recorded MultiTLS re-review trigger.
+
+# 2026-09-01 — Deterministic ACME profile-advertisement change
+
+Patent review: **NOT_TRIGGERED**. This increment changes the test authority's
+advertised profile catalog between exact directory generations and proves the
+client does not preserve a disappeared profile identity across that boundary.
+It introduces no certificate protocol mechanism or recorded re-review trigger.
