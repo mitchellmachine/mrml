@@ -817,15 +817,48 @@ impl Http2ServerConnection {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(), HttpError> {
+        self.respond_head(stream_id, status, headers, body.is_empty())?;
+        for chunk in body.chunks(MAX_FRAME) {
+            self.respond_data(stream_id, chunk, false)?;
+        }
+        if !body.is_empty() {
+            self.finish_response(stream_id)?;
+        }
+        Ok(())
+    }
+    /// Send response headers before any response body bytes.
+    pub fn respond_head(
+        &mut self,
+        stream_id: u32,
+        status: u16,
+        headers: &[(&str, &str)],
+        end_stream: bool,
+    ) -> Result<(), HttpError> {
         self.stream
             .write_all(
                 &self
                     .protocol
-                    .response(stream_id, status, headers, body.is_empty())?,
+                    .response(stream_id, status, headers, end_stream)?,
             )
-            .map_err(|_| HttpError::Tls)?;
-        for (index, chunk) in body.chunks(MAX_FRAME).enumerate() {
-            let final_chunk = (index + 1) * MAX_FRAME >= body.len();
+            .map_err(|_| HttpError::Tls)
+    }
+    /// Send one bounded response DATA fragment. Larger caller buffers are
+    /// split into protocol-sized frames without collecting the whole body.
+    pub fn respond_data(
+        &mut self,
+        stream_id: u32,
+        bytes: &[u8],
+        end_stream: bool,
+    ) -> Result<(), HttpError> {
+        if bytes.is_empty() {
+            if end_stream {
+                return self.finish_response(stream_id);
+            }
+            return Ok(());
+        }
+        let chunks = bytes.chunks(MAX_FRAME);
+        let chunk_count = chunks.len();
+        for (index, chunk) in chunks.enumerate() {
             let mut payload = Vector::new();
             payload
                 .try_extend_from_slice(chunk)
@@ -834,7 +867,11 @@ impl Http2ServerConnection {
                 .write_all(
                     &Http2Frame {
                         kind: Http2FrameKind::Data,
-                        flags: if final_chunk { 1 } else { 0 },
+                        flags: if end_stream && index + 1 == chunk_count {
+                            1
+                        } else {
+                            0
+                        },
                         stream_id,
                         payload,
                     }
@@ -843,6 +880,20 @@ impl Http2ServerConnection {
                 .map_err(|_| HttpError::Tls)?;
         }
         Ok(())
+    }
+    /// Close a response body without manufacturing application bytes.
+    pub fn finish_response(&mut self, stream_id: u32) -> Result<(), HttpError> {
+        self.stream
+            .write_all(
+                &Http2Frame {
+                    kind: Http2FrameKind::Data,
+                    flags: 1,
+                    stream_id,
+                    payload: Vector::new(),
+                }
+                .encode()?,
+            )
+            .map_err(|_| HttpError::Tls)
     }
 }
 fn take(headers: &mut Vector<Header>, name: &str) -> Result<Text, HttpError> {
@@ -1063,7 +1114,10 @@ mod tests {
             let (id, request) = server.next_request().unwrap();
             assert_eq!(request.method, "GET");
             assert_eq!(request.target, "/loopback");
-            server.respond(id, 200, &[], b"http2 loopback").unwrap();
+            server.respond_head(id, 200, &[], false).unwrap();
+            server.respond_data(id, b"http2 ", false).unwrap();
+            server.respond_data(id, b"loopback", false).unwrap();
+            server.finish_response(id).unwrap();
             let _ = server.next_request();
         }) else {
             panic!("failed to start HTTP/2 loopback server");
