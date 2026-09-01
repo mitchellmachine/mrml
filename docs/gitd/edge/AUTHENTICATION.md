@@ -28,9 +28,20 @@ It authenticates before invoking `repository_generation` or the streaming
 backend, so an unauthorized receive consumes no body and creates no quarantine
 state. Missing authentication configuration fails closed.
 
-Durable authenticated token-record storage, one-shot administration commands,
-and deployment configuration loading remain daemon responsibilities and are not
-claimed by this module.
+The HTTP library now provides a bounded canonical token-record envelope. It
+sorts records by repository and verifier, rejects duplicates, retains only HMAC
+verifiers and metadata, revalidates every record MAC on decode, and authenticates
+the exact complete file with a distinct pepper-bound HMAC. Truncation, trailing
+bytes, mutation, wrong peppers, malformed metadata, and noncanonical order fail
+closed. Hosted no-symlink file loading, atomic administration updates, and daemon
+composition remain separate responsibilities.
+
+Focused hosted Linux evidence:
+
+- `./target/debug/mrml test org.mrml.library.http --target linux`: 64 tests
+  passed, including record-store canonicalization, authorization after reopen,
+  mutation/truncation/wrong-pepper rejection, and the existing edge ordering
+  that authenticates before receive-body consumption.
 
 Patent review: **NOT_TRIGGERED**. This is conventional random bearer-token,
 keyed-verifier, authenticated-record, scope, expiry, and revocation handling; no

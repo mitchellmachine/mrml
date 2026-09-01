@@ -9,6 +9,10 @@ const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = TOKEN_BYTES * 2;
 const MAX_LABEL_BYTES: usize = 96;
 const RECORD_VERSION: u8 = 1;
+const TOKEN_STORE_MAGIC: &[u8; 8] = b"MRMLTRV1";
+const TOKEN_STORE_TAG_BYTES: usize = 32;
+const MAX_TOKEN_RECORDS: usize = 1_000_000;
+const MAX_TOKEN_STORE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepositoryProfile {
@@ -288,6 +292,133 @@ impl TokenAuthority {
             &[b"mrml-git-token-record-v1", &canonical],
         ))
     }
+
+    pub fn encode_records(
+        &self,
+        records: &[TokenRecord],
+    ) -> Result<Vector<u8>, AuthenticationError> {
+        if records.len() > MAX_TOKEN_RECORDS {
+            return Err(AuthenticationError::Resource);
+        }
+        let mut order: Vector<usize> = (0..records.len()).collect();
+        order.sort_unstable_by(|left, right| {
+            (&records[*left].repository, &records[*left].verifier)
+                .cmp(&(&records[*right].repository, &records[*right].verifier))
+        });
+        for pair in order.windows(2) {
+            if records[pair[0]].repository == records[pair[1]].repository
+                && records[pair[0]].verifier == records[pair[1]].verifier
+            {
+                return Err(AuthenticationError::InvalidConfiguration);
+            }
+        }
+        let mut output = Vector::new();
+        output
+            .try_reserve_exact(12 + records.len().saturating_mul(128))
+            .map_err(|_| AuthenticationError::Resource)?;
+        output.extend(*TOKEN_STORE_MAGIC);
+        output.extend(
+            u32::try_from(records.len())
+                .map_err(|_| AuthenticationError::Resource)?
+                .to_be_bytes(),
+        );
+        for index in order {
+            let record = &records[index];
+            if !constant_time_equal(&self.record_integrity(record)?, &record.integrity) {
+                return Err(AuthenticationError::InvalidConfiguration);
+            }
+            append_field(&mut output, record.repository.as_str().as_bytes())?;
+            output.push(record.scopes.0);
+            output.extend(record.valid_from.to_be_bytes());
+            output.extend(record.expires_at.to_be_bytes());
+            output.extend(record.revocation_generation.to_be_bytes());
+            append_field(&mut output, record.label.as_bytes())?;
+            output.extend(record.verifier);
+            output.extend(record.integrity);
+            if output.len() > MAX_TOKEN_STORE_BYTES - TOKEN_STORE_TAG_BYTES {
+                return Err(AuthenticationError::Resource);
+            }
+        }
+        let tag = hmac_sha256(&self.pepper, &[b"mrml-git-token-store-v1", &output]);
+        output.extend(tag);
+        Ok(output)
+    }
+
+    pub fn decode_records(&self, input: &[u8]) -> Result<Vector<TokenRecord>, AuthenticationError> {
+        if input.len() < 12 + TOKEN_STORE_TAG_BYTES || input.len() > MAX_TOKEN_STORE_BYTES {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        let authenticated_length = input.len() - TOKEN_STORE_TAG_BYTES;
+        let expected = hmac_sha256(
+            &self.pepper,
+            &[b"mrml-git-token-store-v1", &input[..authenticated_length]],
+        );
+        let supplied: &[u8; 32] = input[authenticated_length..]
+            .try_into()
+            .map_err(|_| AuthenticationError::InvalidConfiguration)?;
+        if !constant_time_equal(&expected, supplied) || &input[..8] != TOKEN_STORE_MAGIC {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        let count = u32::from_be_bytes(
+            input[8..12]
+                .try_into()
+                .map_err(|_| AuthenticationError::InvalidConfiguration)?,
+        ) as usize;
+        if count > MAX_TOKEN_RECORDS {
+            return Err(AuthenticationError::Resource);
+        }
+        let mut at = 12usize;
+        let mut records = Vector::new();
+        records
+            .try_reserve_exact(count)
+            .map_err(|_| AuthenticationError::Resource)?;
+        for _ in 0..count {
+            let repository = read_field(input, &mut at, authenticated_length)?;
+            let repository = core::str::from_utf8(repository)
+                .ok()
+                .and_then(|value| RepositoryIdentity::parse(value).ok())
+                .ok_or(AuthenticationError::InvalidConfiguration)?;
+            let scopes = AccessScopes(read_byte(input, &mut at, authenticated_length)?);
+            let valid_from = read_u64(input, &mut at, authenticated_length)?;
+            let expires_at = read_u64(input, &mut at, authenticated_length)?;
+            let revocation_generation = read_u64(input, &mut at, authenticated_length)?;
+            let label = read_field(input, &mut at, authenticated_length)?;
+            let label = core::str::from_utf8(label)
+                .map_err(|_| AuthenticationError::InvalidConfiguration)?;
+            let verifier = read_array32(input, &mut at, authenticated_length)?;
+            let integrity = read_array32(input, &mut at, authenticated_length)?;
+            if scopes.0 == 0
+                || scopes.0 & !7 != 0
+                || valid_from >= expires_at
+                || revocation_generation == 0
+                || label.is_empty()
+                || label.len() > MAX_LABEL_BYTES
+                || label.bytes().any(|byte| !(b' '..=b'~').contains(&byte))
+                || verifier == [0; 32]
+            {
+                return Err(AuthenticationError::InvalidConfiguration);
+            }
+            let record = TokenRecord {
+                repository,
+                scopes,
+                valid_from,
+                expires_at,
+                revocation_generation,
+                label: label.into(),
+                verifier,
+                integrity,
+            };
+            if !constant_time_equal(&self.record_integrity(&record)?, &record.integrity) {
+                return Err(AuthenticationError::InvalidConfiguration);
+            }
+            records.push(record);
+        }
+        if at != authenticated_length {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        validate_record_order(&records)?;
+        Ok(records)
+    }
 }
 
 impl fmt::Debug for TokenAuthority {
@@ -333,6 +464,83 @@ fn append_field(output: &mut Vector<u8>, value: &[u8]) -> Result<(), Authenticat
     output
         .try_extend_from_slice(value)
         .map_err(|_| AuthenticationError::Resource)
+}
+
+fn validate_record_order(records: &[TokenRecord]) -> Result<(), AuthenticationError> {
+    for pair in records.windows(2) {
+        let left = (&pair[0].repository, &pair[0].verifier);
+        let right = (&pair[1].repository, &pair[1].verifier);
+        if left >= right {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+    }
+    Ok(())
+}
+
+fn read_field<'a>(
+    input: &'a [u8],
+    at: &mut usize,
+    end: usize,
+) -> Result<&'a [u8], AuthenticationError> {
+    let length = usize::from(read_u16(input, at, end)?);
+    let next = at
+        .checked_add(length)
+        .ok_or(AuthenticationError::InvalidConfiguration)?;
+    if next > end {
+        return Err(AuthenticationError::InvalidConfiguration);
+    }
+    let value = &input[*at..next];
+    *at = next;
+    Ok(value)
+}
+
+fn read_byte(input: &[u8], at: &mut usize, end: usize) -> Result<u8, AuthenticationError> {
+    if *at >= end {
+        return Err(AuthenticationError::InvalidConfiguration);
+    }
+    let value = input[*at];
+    *at += 1;
+    Ok(value)
+}
+
+fn read_u16(input: &[u8], at: &mut usize, end: usize) -> Result<u16, AuthenticationError> {
+    let next = at
+        .checked_add(2)
+        .ok_or(AuthenticationError::InvalidConfiguration)?;
+    let bytes = input
+        .get(*at..next.min(end))
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(AuthenticationError::InvalidConfiguration)?;
+    *at = next;
+    Ok(u16::from_be_bytes(bytes))
+}
+
+fn read_u64(input: &[u8], at: &mut usize, end: usize) -> Result<u64, AuthenticationError> {
+    let next = at
+        .checked_add(8)
+        .ok_or(AuthenticationError::InvalidConfiguration)?;
+    if next > end {
+        return Err(AuthenticationError::InvalidConfiguration);
+    }
+    let bytes = input[*at..next]
+        .try_into()
+        .map_err(|_| AuthenticationError::InvalidConfiguration)?;
+    *at = next;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+fn read_array32(input: &[u8], at: &mut usize, end: usize) -> Result<[u8; 32], AuthenticationError> {
+    let next = at
+        .checked_add(32)
+        .ok_or(AuthenticationError::InvalidConfiguration)?;
+    if next > end {
+        return Err(AuthenticationError::InvalidConfiguration);
+    }
+    let value = input[*at..next]
+        .try_into()
+        .map_err(|_| AuthenticationError::InvalidConfiguration)?;
+    *at = next;
+    Ok(value)
 }
 
 fn decode_token(value: &str) -> Result<[u8; TOKEN_BYTES], AuthenticationError> {
@@ -496,5 +704,64 @@ mod tests {
             ),
             Err(AuthenticationError::Denied)
         );
+    }
+
+    #[test]
+    fn canonical_token_store_round_trips_and_tampering_fails_closed() {
+        let authority = TokenAuthority::new([0x31; 32]).unwrap();
+        let repository = RepositoryIdentity::parse("owner/stored").unwrap();
+        let (mut token, record) = authority
+            .issue(
+                repository.clone(),
+                AccessScopes::READ,
+                10,
+                20,
+                4,
+                "stored token",
+            )
+            .unwrap();
+        let (_, earlier_record) = authority
+            .issue(
+                RepositoryIdentity::parse("owner/aaa").unwrap(),
+                AccessScopes::READ,
+                10,
+                20,
+                4,
+                "sort predecessor",
+            )
+            .unwrap();
+        let encoded = authority.encode_records(&[record, earlier_record]).unwrap();
+        let decoded = authority.decode_records(&encoded).unwrap();
+        assert_eq!(decoded.len(), 2);
+        let headers = authorization(&token.reveal_once().unwrap());
+        assert_eq!(
+            authority.authorize(
+                &headers,
+                &repository,
+                RepositoryAction::Read,
+                RepositoryProfile::Private,
+                15,
+                4,
+                &decoded,
+            ),
+            Ok(AuthenticatedAccess::Token)
+        );
+
+        let mut tampered = encoded.clone();
+        tampered[20] ^= 1;
+        assert!(authority.decode_records(&tampered).is_err());
+        assert!(
+            authority
+                .decode_records(&encoded[..encoded.len() - 1])
+                .is_err()
+        );
+        assert!(
+            TokenAuthority::new([0x32; 32])
+                .unwrap()
+                .decode_records(&encoded)
+                .is_err()
+        );
+        let empty = authority.encode_records(&[]).unwrap();
+        assert!(authority.decode_records(&empty).unwrap().is_empty());
     }
 }
