@@ -60,14 +60,15 @@ pub use identifier::{DnsIdentifier, IdentifierError, MAX_DNS_NAME};
 pub use jose::{
     AcmeJwsSigner, ApprovedAcmeJwsDigest, ApprovedEabMac, Es256Signature, ExternalAccountMac,
     JoseError, JwkThumbprint, P256Jwk, ProtectedKey, write_external_account_binding,
-    write_flattened_jws,
+    write_flattened_jws, write_key_change_inner_jws,
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
 pub use operation::{
-    AccountCreateBuffers, AccountRecoveryError, AccountUpdateError, AccountUpdateFailure,
-    AuthorizationFetchError, AuthorizationResource, ChallengeSubmission, ChallengeSubmitError,
-    CreateAccountError, FinalizeError, FinalizeFailure, OrderCreateBuffers, OrderCreateError,
-    OrderCreateFailure, PrepareOrderError, PreparedOrderCreation, execute_prepared_account_create,
+    AccountCreateBuffers, AccountRecoveryError, AccountRolloverError, AccountRolloverFailure,
+    AccountUpdateError, AccountUpdateFailure, AuthorizationFetchError, AuthorizationResource,
+    ChallengeSubmission, ChallengeSubmitError, CreateAccountError, FinalizeError, FinalizeFailure,
+    OrderCreateBuffers, OrderCreateError, OrderCreateFailure, PrepareOrderError,
+    PreparedOrderCreation, execute_prepared_account_create, execute_prepared_account_rollover,
     execute_prepared_account_update, execute_prepared_finalize, execute_prepared_order_create,
     fetch_authorization, prepare_order_creation, recover_uncertain_account_creation,
     trigger_published_challenge,

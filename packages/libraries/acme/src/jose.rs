@@ -1,5 +1,5 @@
-use crate::{encode_base64url, AcmeUrl, ReplayNonce};
-use mrml_crypto::{p256_public_key_is_valid, Sha256};
+use crate::{AcmeUrl, ReplayNonce, encode_base64url};
+use mrml_crypto::{Sha256, p256_public_key_is_valid};
 
 pub const MAX_JWS_PAYLOAD: usize = 16 * 1024;
 const MAX_PROTECTED_JSON: usize = 2300;
@@ -238,6 +238,78 @@ pub fn write_flattened_jws<'a>(
     Ok(&output[..len])
 }
 
+pub fn write_key_change_inner_jws<'a>(
+    new_key: &P256Jwk,
+    old_key: &P256Jwk,
+    account_url: &AcmeUrl,
+    key_change_url: &AcmeUrl,
+    directory_generation: u64,
+    account_generation: u64,
+    new_key_signer: &mut impl AcmeJwsSigner,
+    output: &'a mut [u8],
+) -> Result<&'a [u8], JoseError> {
+    let mut new_x = [0u8; 43];
+    let mut new_y = [0u8; 43];
+    let new_x = encode_base64url(&new_key.x, &mut new_x).map_err(|_| JoseError::OutputTooSmall)?;
+    let new_y = encode_base64url(&new_key.y, &mut new_y).map_err(|_| JoseError::OutputTooSmall)?;
+    let mut protected = [0u8; MAX_PROTECTED_JSON];
+    let mut protected_writer = Writer::new(&mut protected);
+    protected_writer
+        .push(b"{\"alg\":\"ES256\",\"jwk\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"")?;
+    protected_writer.push(new_x.as_bytes())?;
+    protected_writer.push(b"\",\"y\":\"")?;
+    protected_writer.push(new_y.as_bytes())?;
+    protected_writer.push(b"\"},\"url\":")?;
+    protected_writer.json_string(key_change_url.as_str())?;
+    protected_writer.push(b"}")?;
+    let protected_len = protected_writer.len;
+
+    let mut old_x = [0u8; 43];
+    let mut old_y = [0u8; 43];
+    let old_x = encode_base64url(&old_key.x, &mut old_x).map_err(|_| JoseError::OutputTooSmall)?;
+    let old_y = encode_base64url(&old_key.y, &mut old_y).map_err(|_| JoseError::OutputTooSmall)?;
+    let mut payload = [0u8; MAX_PROTECTED_JSON];
+    let mut payload_writer = Writer::new(&mut payload);
+    payload_writer.push(b"{\"account\":")?;
+    payload_writer.json_string(account_url.as_str())?;
+    payload_writer.push(b",\"oldKey\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"")?;
+    payload_writer.push(old_x.as_bytes())?;
+    payload_writer.push(b"\",\"y\":\"")?;
+    payload_writer.push(old_y.as_bytes())?;
+    payload_writer.push(b"\"}}")?;
+    let payload_len = payload_writer.len;
+
+    let mut protected64 = [0u8; MAX_PROTECTED_JSON * 2];
+    let protected64 = encode_base64url(&protected[..protected_len], &mut protected64)
+        .map_err(|_| JoseError::OutputTooSmall)?;
+    let mut payload64 = [0u8; MAX_PROTECTED_JSON * 2];
+    let payload64 = encode_base64url(&payload[..payload_len], &mut payload64)
+        .map_err(|_| JoseError::OutputTooSmall)?;
+    let mut digest = Sha256::new();
+    digest.update(protected64.as_bytes());
+    digest.update(b".");
+    digest.update(payload64.as_bytes());
+    let approved = ApprovedAcmeJwsDigest {
+        digest: digest.finalize(),
+        directory_generation,
+        account_generation,
+    };
+    let signature = new_key_signer.sign_acme_jws(&approved)?;
+    let mut signature64 = [0u8; 86];
+    let signature64 = encode_base64url(signature.as_bytes(), &mut signature64)
+        .map_err(|_| JoseError::OutputTooSmall)?;
+    let mut writer = Writer::new(output);
+    writer.push(b"{\"protected\":\"")?;
+    writer.push(protected64.as_bytes())?;
+    writer.push(b"\",\"payload\":\"")?;
+    writer.push(payload64.as_bytes())?;
+    writer.push(b"\",\"signature\":\"")?;
+    writer.push(signature64.as_bytes())?;
+    writer.push(b"\"}")?;
+    let length = writer.len;
+    Ok(&output[..length])
+}
+
 pub fn write_external_account_binding<'a>(
     key_identifier: &str,
     new_account_url: &AcmeUrl,
@@ -418,6 +490,33 @@ mod tests {
         let protected = core::str::from_utf8(protected).unwrap();
         assert!(protected.contains("\"kid\":"));
         assert!(!protected.contains("\"jwk\":"));
+
+        let inner = write_key_change_inner_jws(
+            &jwk,
+            &jwk,
+            &kid,
+            &AcmeUrl::parse("https://ca.example/acme/key-change", false).unwrap(),
+            7,
+            3,
+            &mut signer,
+            &mut out,
+        )
+        .unwrap();
+        let inner = core::str::from_utf8(inner).unwrap();
+        let mut fields = inner.split('"');
+        let protected64 = fields.nth(3).unwrap();
+        let payload64 = fields.nth(3).unwrap();
+        let mut decoded = [0u8; MAX_PROTECTED_JSON];
+        let decoded_protected = crate::decode_base64url(protected64, &mut decoded).unwrap();
+        let decoded_protected = core::str::from_utf8(decoded_protected).unwrap();
+        assert!(decoded_protected.contains("\"jwk\":"));
+        assert!(!decoded_protected.contains("\"nonce\":"));
+        assert!(!decoded_protected.contains("\"kid\":"));
+        let mut decoded = [0u8; MAX_PROTECTED_JSON];
+        let decoded_payload = crate::decode_base64url(payload64, &mut decoded).unwrap();
+        let decoded_payload = core::str::from_utf8(decoded_payload).unwrap();
+        assert!(decoded_payload.contains("\"account\":"));
+        assert!(decoded_payload.contains("\"oldKey\":"));
     }
 
     #[test]

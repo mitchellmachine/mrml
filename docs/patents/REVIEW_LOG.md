@@ -11489,3 +11489,12 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 `onlyReturnExisting` recovery with the exact prepared JWK, contact digest,
 directory generation, same-origin account URL, and authoritative account state.
 It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Nested-JWS ACME account-key rollover
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment implements the ordinary RFC
+8555 nested-JWS key-change request with exact old/new P-256 JWK thumbprints,
+account URL, directory generation, prepared receipt, and separate use-only
+signing routes. It adds no smart-card precomputation machinery or other
+recorded re-review trigger.

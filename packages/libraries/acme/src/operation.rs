@@ -6,7 +6,8 @@ use crate::{
     PreparedAccountAction, PreparedFinalization, PublicationReceipt, ResponseError,
     account_contacts_digest, parse_account_response, parse_authorization_response,
     parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
-    write_finalize_payload, write_new_account_payload, write_new_order_payload,
+    write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
+    write_new_order_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -51,6 +52,23 @@ pub enum AccountRecoveryError<E> {
     MissingLocation,
     Response(ResponseError),
     Lifecycle(AccountError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AccountRolloverError<E> {
+    PreparedMismatch,
+    Jose(crate::JoseError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    Lifecycle(AccountError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AccountRolloverFailure<E> {
+    Definitive(AccountRolloverError<E>),
+    Uncertain(AccountRolloverError<E>),
 }
 
 pub struct AccountCreateBuffers<'a> {
@@ -853,6 +871,119 @@ pub fn recover_uncertain_account_creation<T: AcmeTransport>(
     Ok(account_url)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn execute_prepared_account_rollover<T: AcmeTransport>(
+    lifecycle: &mut AccountLifecycle,
+    receipt: PreparedAccountAction,
+    directory: &AcmeDirectory,
+    old_public_key: &P256Jwk,
+    new_public_key: &P256Jwk,
+    old_key_signer: &mut impl AcmeJwsSigner,
+    new_key_signer: &mut impl AcmeJwsSigner,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    buffers: AccountCreateBuffers<'_>,
+) -> Result<(), AccountRolloverFailure<T::Error>> {
+    if !lifecycle.active
+        || lifecycle.operation != AccountOperation::RolloverPrepared
+        || lifecycle.directory_generation != directory.generation
+        || receipt.action != AccountOperation::RolloverPrepared
+        || receipt.account_generation != lifecycle.generation.checked_add(1).unwrap_or(0)
+        || old_public_key.thumbprint().ok() != receipt.old_key
+        || new_public_key.thumbprint().ok() != receipt.new_key
+        || receipt.old_key != Some(lifecycle.key)
+    {
+        return Err(AccountRolloverFailure::Definitive(
+            AccountRolloverError::PreparedMismatch,
+        ));
+    }
+    let account_url = lifecycle
+        .account_url
+        .as_ref()
+        .ok_or(AccountRolloverFailure::Definitive(
+            AccountRolloverError::PreparedMismatch,
+        ))?;
+    let inner = write_key_change_inner_jws(
+        new_public_key,
+        old_public_key,
+        account_url,
+        &directory.key_change,
+        directory.generation,
+        lifecycle.generation,
+        new_key_signer,
+        buffers.payload,
+    )
+    .map_err(|error| AccountRolloverFailure::Definitive(AccountRolloverError::Jose(error)))?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &directory.key_change,
+        crate::ProtectedKey::Kid(account_url),
+        inner,
+        lifecycle.generation,
+        old_key_signer,
+        buffers.response,
+        buffers.jws,
+    );
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            lifecycle.mark_uncertain().map_err(|lifecycle_error| {
+                AccountRolloverFailure::Uncertain(AccountRolloverError::Lifecycle(lifecycle_error))
+            })?;
+            return Err(AccountRolloverFailure::Uncertain(
+                AccountRolloverError::Post(error),
+            ));
+        }
+    };
+    if let Some(problem) = result.problem {
+        lifecycle.abort_prepared(receipt).map_err(|error| {
+            AccountRolloverFailure::Definitive(AccountRolloverError::Lifecycle(error))
+        })?;
+        return Err(AccountRolloverFailure::Definitive(
+            AccountRolloverError::Server(problem),
+        ));
+    }
+    if result.metadata.status != 200
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        lifecycle.mark_uncertain().map_err(|error| {
+            AccountRolloverFailure::Uncertain(AccountRolloverError::Lifecycle(error))
+        })?;
+        return Err(AccountRolloverFailure::Uncertain(
+            AccountRolloverError::UnexpectedStatus,
+        ));
+    }
+    let body = core::str::from_utf8(&buffers.response[..result.metadata.body_length])
+        .map_err(|_| AccountRolloverError::Response(ResponseError::Malformed));
+    let parsed = match body.and_then(|body| {
+        parse_account_response(body, account_url.origin()).map_err(AccountRolloverError::Response)
+    }) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            lifecycle.mark_uncertain().map_err(|lifecycle_error| {
+                AccountRolloverFailure::Uncertain(AccountRolloverError::Lifecycle(lifecycle_error))
+            })?;
+            return Err(AccountRolloverFailure::Uncertain(error));
+        }
+    };
+    if parsed.status != ParsedAccountStatus::Valid
+        || parsed.contacts_digest != receipt.contact_digest
+    {
+        lifecycle.mark_uncertain().map_err(|error| {
+            AccountRolloverFailure::Uncertain(AccountRolloverError::Lifecycle(error))
+        })?;
+        return Err(AccountRolloverFailure::Uncertain(
+            AccountRolloverError::PreparedMismatch,
+        ));
+    }
+    lifecycle.commit(receipt).map_err(|error| {
+        AccountRolloverFailure::Uncertain(AccountRolloverError::Lifecycle(error))
+    })?;
+    Ok(())
+}
+
 fn uncertain<E>(
     lifecycle: &mut AccountLifecycle,
     error: CreateAccountError<E>,
@@ -1073,6 +1204,19 @@ mod tests {
                     body_length: body.len(),
                 });
             }
+            if request.url.as_str() == "https://ca.example/key-change" {
+                let body = br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#;
+                output[..body.len()].copy_from_slice(body);
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/key-change",
+                    replay_nonce: Some("nonce-key-change"),
+                    retry_after: None,
+                    location: None,
+                    content_type: Some("application/json"),
+                    body_length: body.len(),
+                });
+            }
             let body = br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#;
             output[..body.len()].copy_from_slice(body);
             Ok(AcmeTransportResponse {
@@ -1108,6 +1252,22 @@ mod tests {
                 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f,
                 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68,
                 0x37, 0xbf, 0x51, 0xf5,
+            ],
+        )
+        .unwrap()
+    }
+
+    fn replacement_key() -> P256Jwk {
+        P256Jwk::from_coordinates(
+            [
+                0x7c, 0xf2, 0x7b, 0x18, 0x8d, 0x03, 0x4f, 0x7e, 0x8a, 0x52, 0x38, 0x03, 0x04, 0xb5,
+                0x1a, 0xc3, 0xc0, 0x89, 0x69, 0xe2, 0x77, 0xf2, 0x1b, 0x35, 0xa6, 0x0b, 0x48, 0xfc,
+                0x47, 0x66, 0x99, 0x78,
+            ],
+            [
+                0x07, 0x77, 0x55, 0x10, 0xdb, 0x8e, 0xd0, 0x40, 0x29, 0x3d, 0x9a, 0xc6, 0x9f, 0x74,
+                0x30, 0xdb, 0xba, 0x7d, 0xad, 0xe6, 0x3c, 0xe9, 0x82, 0x29, 0x9e, 0x04, 0xb7, 0x9d,
+                0x22, 0x78, 0x73, 0xd1,
             ],
         )
         .unwrap()
@@ -1276,6 +1436,40 @@ mod tests {
             )
             .unwrap();
         (directory, lifecycle)
+    }
+
+    fn account_rollover_uses_nested_new_and_old_key_signatures_impl() {
+        let (directory, mut account) = active_account();
+        let old_key = key();
+        let new_key = replacement_key();
+        let receipt = account.prepare_rollover(&new_key, 5).unwrap();
+        let origin = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let mut exchange = crate::AcmeExchange::new(directory.generation, origin);
+        let mut transport = Transport { fail_post: false };
+        let mut old_signer = Signer;
+        let mut new_signer = Signer;
+        let mut payload = [0; 8192];
+        let mut response = [0; 2048];
+        let mut jws = [0; 16384];
+        let result = execute_prepared_account_rollover(
+            &mut account,
+            receipt,
+            &directory,
+            &old_key,
+            &new_key,
+            &mut old_signer,
+            &mut new_signer,
+            &mut exchange,
+            &mut transport,
+            AccountCreateBuffers {
+                payload: &mut payload,
+                response: &mut response,
+                jws: &mut jws,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(account.key == new_key.thumbprint().unwrap());
+        assert_eq!(account.generation, 2);
     }
 
     fn order_creation_binds_prepared_payload_and_resource_impl() {
@@ -1500,5 +1694,10 @@ mod tests {
     #[test]
     fn lost_creation_response_recovers_existing_account() {
         run_order_test(lost_creation_response_recovers_existing_account_impl);
+    }
+
+    #[test]
+    fn account_rollover_uses_nested_new_and_old_key_signatures() {
+        run_order_test(account_rollover_uses_nested_new_and_old_key_signatures_impl);
     }
 }
