@@ -8,13 +8,30 @@ library_root="$sysroot/lib/rustlib/x86_64-pc-windows-gnullvm/lib"
 self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
-expected_size=60416
-expected_hash=5aef132dd500c0e849e4736f4dcddef28f3ae939b639df6df840d12823e3d27b
-
-test "$#" -eq 0 || {
-    echo "usage: $0" >&2
+test "$#" -le 1 || {
+    echo "usage: $0 [execute|write]" >&2
     exit 1
 }
+case ${1:-execute} in
+    execute)
+        entry_source=docs/compiler/probes/pinned_instrumented_profile_entry.s
+        expected_size=60416
+        expected_hash=5aef132dd500c0e849e4736f4dcddef28f3ae939b639df6df840d12823e3d27b
+        profile_size=
+        profile_hash=
+        ;;
+    write)
+        entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
+        expected_size=60416
+        expected_hash=a5949787946712c2d9c66a3a6e8c30986aec6ea639c6dc99f2e45ff884534c91
+        profile_size=288
+        profile_hash=437f3ffa93254a22de0098ab99e84cfd52148f7a7d8a92aafa3a91c80581da50
+        ;;
+    *)
+        echo "usage: $0 [execute|write]" >&2
+        exit 1
+        ;;
+esac
 test -x "$driver" || {
     echo "missing release driver: run target/release/mrml build org.mrml.compiler.driver --target linux --release" >&2
     exit 1
@@ -74,7 +91,7 @@ trap 'exit 143' TERM
     docs/compiler/probes/pinned_instrumented_profile.rs \
     -o "$probe/profiled.obj"
 clang --target=x86_64-pc-windows-msvc -c \
-    docs/compiler/probes/pinned_instrumented_profile_entry.s -o "$probe/entry.obj"
+    "$entry_source" -o "$probe/entry.obj"
 clang --target=x86_64-pc-windows-msvc -c \
     docs/compiler/probes/pinned_std_execution_stubs.s -o "$probe/stubs.obj"
 
@@ -96,7 +113,7 @@ test "$actual_hash" = "$expected_hash" || {
 }
 
 set +e
-wine "$probe/probe.exe"
+(cd "$probe" && wine probe.exe)
 execution_status=$?
 set -e
 test "$execution_status" -eq 42 || {
@@ -104,4 +121,21 @@ test "$execution_status" -eq 42 || {
     exit 1
 }
 
-echo "pinned_instrumented_profile_execution size=$actual_size sha256=$actual_hash exit=42 result=PASS"
+if test -n "$profile_size"; then
+    test -f "$probe/profile.profraw" || {
+        echo "profile runtime did not emit profile.profraw" >&2
+        exit 1
+    }
+    actual_profile_size=$(wc -c < "$probe/profile.profraw" | tr -d ' ')
+    actual_profile_hash=$(sha256sum "$probe/profile.profraw" | awk '{print $1}')
+    test "$actual_profile_size" = "$profile_size" || {
+        echo "unexpected raw profile size/hash: $actual_profile_size $actual_profile_hash" >&2
+        exit 1
+    }
+    test "$actual_profile_hash" = "$profile_hash" || {
+        echo "unexpected raw profile hash: $actual_profile_hash" >&2
+        exit 1
+    }
+fi
+
+echo "pinned_instrumented_profile_execution mode=${1:-execute} size=$actual_size sha256=$actual_hash exit=42 result=PASS"
