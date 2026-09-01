@@ -1,6 +1,6 @@
 use crate::bits::{ReverseBitWriter, ReverseBits};
 use crate::fse::{
-    CompressionPath, State as FseState, Table as FseTable, parse_table, serialize_probabilities,
+    parse_table, serialize_probabilities, CompressionPath, State as FseState, Table as FseTable,
 };
 use crate::{Error, Result};
 use mrml_runtime::Vector;
