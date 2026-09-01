@@ -91,6 +91,30 @@ interface-generation change outside this branch's allowed files before the Git
 CLI/service route can expose it. The first-party v6 implementation therefore
 fails closed instead of advertising SHA3-512 prematurely.
 
+Authenticated emergency recovery requires an authority boundary that cannot be
+added inside this branch's existing manifests. The exact integration delta is:
+
+1. define a canonical owner-controlled emergency-policy artifact binding the
+   repository, complete recovery public identities and algorithms (or an exact
+   threshold/quorum), validity, revocation, rotation, and a monotonic emergency
+   policy generation;
+2. add a purpose-separated `EmergencyRecovery` request to the signing/verifier
+   interface and an isolated verifier/key-service operation that accepts the
+   pinned artifact and digest, canonical recovery statement, and signatures;
+3. return an opaque authenticated receipt bound to repository identity, pinned
+   emergency-policy digest/generation, statement digest, exact current and
+   proposed trust/revocation policy digests and generations, and effective time;
+4. provision and store emergency-policy generations and revoked recovery keys
+   rollback-resistently; and
+5. pass only that receipt into `mrml_git`, whose private constructor can then
+   enforce no revocation removal, generation lowering, object-format/ref
+   broadening, checkpoint/cutover movement, or hybrid disablement.
+
+Required integration tests cover wrong policy/statement digests, replay,
+threshold failure, expired/revoked recovery keys, downgrade/broadening, and
+receipt substitution. A boolean verifier or caller-minted digest was rejected
+because it would let untrusted data manufacture recovery authority.
+
 Shared generated assurance inventories may need regeneration after integration
 because three focused package tests were added. This branch is forbidden from
 editing those inventories; run the repository-supported assurance regeneration
