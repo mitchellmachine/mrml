@@ -10,6 +10,82 @@ use mrml_json::Value;
 pub const MAX_ACMED_CONFIG_BYTES: usize = 16 * 1024;
 const ACCOUNT_RECORD_MAGIC: &[u8; 8] = b"MRMLACA1";
 const ACCOUNT_RECORD_HEADER_BYTES: usize = 116;
+const CHANNEL_REQUEST_MAGIC: &[u8; 8] = b"MRMLRID1";
+pub const CHANNEL_REQUEST_RESERVATION: u64 = 1_000_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcmedRequestIdReservation {
+    pub next: u64,
+    pub last: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AcmedChannelRequestCounter {
+    pub account_identity: [u8; 16],
+    pub last_reserved: u64,
+}
+
+impl AcmedChannelRequestCounter {
+    pub fn new(account_identity: [u8; 16]) -> Result<Self, AcmedAccountRecordError> {
+        if account_identity == [0; 16] {
+            return Err(AcmedAccountRecordError::InvalidState);
+        }
+        Ok(Self {
+            account_identity,
+            last_reserved: 0,
+        })
+    }
+
+    pub fn reserve(&mut self) -> Result<AcmedRequestIdReservation, AcmedAccountRecordError> {
+        let next = self
+            .last_reserved
+            .checked_add(1)
+            .ok_or(AcmedAccountRecordError::InvalidState)?;
+        let last = self
+            .last_reserved
+            .checked_add(CHANNEL_REQUEST_RESERVATION)
+            .ok_or(AcmedAccountRecordError::InvalidState)?;
+        self.last_reserved = last;
+        Ok(AcmedRequestIdReservation { next, last })
+    }
+
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, AcmedAccountRecordError> {
+        if output.len() < 32
+            || self.account_identity == [0; 16]
+            || self.last_reserved == 0
+            || self.last_reserved % CHANNEL_REQUEST_RESERVATION != 0
+        {
+            return Err(if output.len() < 32 {
+                AcmedAccountRecordError::OutputTooSmall
+            } else {
+                AcmedAccountRecordError::InvalidState
+            });
+        }
+        output[..32].fill(0);
+        output[..8].copy_from_slice(CHANNEL_REQUEST_MAGIC);
+        output[8..24].copy_from_slice(&self.account_identity);
+        output[24..32].copy_from_slice(&self.last_reserved.to_be_bytes());
+        Ok(32)
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, AcmedAccountRecordError> {
+        if input.len() != 32 || input.get(..8) != Some(CHANNEL_REQUEST_MAGIC) {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        let counter = Self {
+            account_identity: input[8..24]
+                .try_into()
+                .map_err(|_| AcmedAccountRecordError::Malformed)?,
+            last_reserved: read_u64(&input[24..32])?,
+        };
+        let mut canonical = [0u8; 32];
+        counter.encode(&mut canonical)?;
+        if canonical != input {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        Ok(counter)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -573,6 +649,23 @@ mod tests {
         encoded[length - 1] ^= 1;
         let mut correct = HmacSha256DurableAuthenticator::new([0x51; 32]);
         assert!(DurableRecord::decode(&encoded[..length], &mut correct).is_err());
+    }
+
+    #[test]
+    fn channel_request_reservations_advance_across_restart_without_overlap() {
+        let identity = [7; 16];
+        let mut first = AcmedChannelRequestCounter::new(identity).unwrap();
+        let reserved = first.reserve().unwrap();
+        assert_eq!(reserved.next, 1);
+        assert_eq!(reserved.last, CHANNEL_REQUEST_RESERVATION);
+        let mut encoded = [0u8; 32];
+        first.encode(&mut encoded).unwrap();
+        let mut restarted = AcmedChannelRequestCounter::decode(&encoded).unwrap();
+        let after_restart = restarted.reserve().unwrap();
+        assert_eq!(after_restart.next, reserved.last + 1);
+        assert!(after_restart.next > reserved.last);
+        encoded[0] ^= 1;
+        assert!(AcmedChannelRequestCounter::decode(&encoded).is_err());
     }
 
     #[test]

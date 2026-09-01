@@ -1,6 +1,6 @@
 use mrml_acmed::{
-    AcmedAccountPhase, AcmedAccountRecord, AcmedConfig, AcmeDirectoryClass,
-    MAX_ACMED_CONFIG_BYTES, parse_acmed_config,
+    AcmedAccountPhase, AcmedAccountRecord, AcmedChannelRequestCounter, AcmedConfig,
+    AcmedRequestIdReservation, AcmeDirectoryClass, MAX_ACMED_CONFIG_BYTES, parse_acmed_config,
 };
 use mrml_acme::{
     AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
@@ -163,7 +163,12 @@ fn serve(
 ) -> Result<(), &'static str> {
     let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
-    let bootstrap = bootstrap_certd(&config, &capability)?;
+    let reservation = reserve_channel_request_ids(
+        &config,
+        &mut state,
+        &mut state_authenticator,
+    )?;
+    let bootstrap = bootstrap_certd(&config, &capability, reservation.next)?;
     let _account_public_key = bootstrap.account_public_key;
     let _tls_public_key = bootstrap.tls_public_key;
     let _csr = &bootstrap.csr[..bootstrap.csr_length];
@@ -182,6 +187,9 @@ fn serve(
         &mut state_authenticator,
     )?;
     loop {
+        if envelope_writer.next_request_id > reservation.last {
+            return Err("certd channel request ID reservation exhausted");
+        }
         if certd_health(&capability, envelope_writer.next_request_id).is_err() {
             eprintln!("mrml-acmed: certd health degraded");
         }
@@ -191,6 +199,64 @@ fn serve(
             .ok_or("channel request ID exhausted")?;
         std::thread::sleep(Duration::from_secs(config.poll_interval_seconds));
     }
+}
+
+fn reserve_channel_request_ids(
+    config: &AcmedConfig,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<AcmedRequestIdReservation, &'static str> {
+    let object = DurableObjectId(*b"acmed-channel-id");
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let loaded = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot read certd request ID reservation")?;
+    let (previous_generation, mut counter) = if let Some(length) = loaded {
+        let record = DurableRecord::decode(&encoded[..length], authenticator)
+            .map_err(|_| "certd request ID reservation authentication failed")?;
+        if record.namespace != DurableNamespace::PublicState
+            || record.kind != DurableRecordKind::AcmeResource
+            || record.object != object
+            || record.payload().len() != 32
+        {
+            return Err("invalid certd request ID reservation");
+        }
+        let counter = AcmedChannelRequestCounter::decode(record.payload())
+            .map_err(|_| "invalid certd request ID reservation")?;
+        if counter.account_identity != config.account_identity {
+            return Err("certd request ID reservation identity mismatch");
+        }
+        (record.generation, counter)
+    } else {
+        (
+            0,
+            AcmedChannelRequestCounter::new(config.account_identity)
+                .map_err(|_| "invalid certd request ID identity")?,
+        )
+    };
+    let reservation = counter
+        .reserve()
+        .map_err(|_| "certd request ID space exhausted")?;
+    let mut payload = [0u8; 32];
+    let payload_length = counter
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode certd request ID reservation")?;
+    let record = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::AcmeResource,
+        object,
+        previous_generation,
+        &payload[..payload_length],
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate certd request ID reservation")?;
+    let prepared = state
+        .prepare(&record)
+        .map_err(|_| "cannot prepare certd request ID reservation")?;
+    state
+        .commit(prepared)
+        .map_err(|_| "certd request ID reservation commit uncertain")?;
+    Ok(reservation)
 }
 
 fn establish_account(
@@ -593,6 +659,7 @@ fn certd_call(
 fn bootstrap_certd(
     config: &AcmedConfig,
     capability: &CertdChannelCapability,
+    first_request_id: u64,
 ) -> Result<CertdBootstrap, &'static str> {
     let account_request = encode_certd_account_key_request(CertdAccountKeyRequest {
         account_identity: config.account_identity,
@@ -603,7 +670,7 @@ fn bootstrap_certd(
     let mut account_public = [0u8; CERTD_P256_PUBLIC_KEY_BYTES];
     let length = certd_call(
         capability,
-        1,
+        first_request_id,
         CertdChannelOperation::GetAcmeAccountPublicIdentity,
         &account_request,
         &mut account_public,
@@ -622,7 +689,9 @@ fn bootstrap_certd(
     let mut tls_response = [0u8; CERTD_TLS_KEY_RESPONSE_BYTES];
     let length = certd_call(
         capability,
-        2,
+        first_request_id
+            .checked_add(1)
+            .ok_or("channel request ID exhausted")?,
         CertdChannelOperation::CreateTlsKeyGeneration,
         &tls_request,
         &mut tls_response,
@@ -639,7 +708,9 @@ fn bootstrap_certd(
     let mut csr = [0u8; MAX_CSR_BYTES];
     let csr_length = certd_call(
         capability,
-        3,
+        first_request_id
+            .checked_add(2)
+            .ok_or("channel request ID exhausted")?,
         CertdChannelOperation::CreateCertificateSigningRequest,
         &tls_request,
         &mut csr,
@@ -654,7 +725,9 @@ fn bootstrap_certd(
         tls_public_key,
         csr,
         csr_length,
-        next_request_id: 4,
+        next_request_id: first_request_id
+            .checked_add(3)
+            .ok_or("channel request ID exhausted")?,
     })
 }
 
