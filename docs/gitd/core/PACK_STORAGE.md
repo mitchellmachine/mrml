@@ -115,10 +115,28 @@ later durable activation still performs its immediate generation/ref re-read.
 Thin-pack capability advertisement remains disabled pending concurrent receive
 tests and production active-pack-set integration.
 
-Canonical compaction generation switching and exact-key clone/fetch caching
-remain open. Dynamic-Huffman level-9 encoding and direct-window OFS delta
-selection are implemented. No outer Zstandard layer belongs in Git pack
-storage.
+The immutable cache core uses a canonical full key containing object format,
+exact ordered wants and haves, repository generation, pack-profile version, and
+encoder version. Its SHA-256 digest is only a rejection accelerator: a hit also
+requires full-key equality, and cached representation bytes are rehashed on
+every lookup. Inserts cannot overwrite or reinsert a key. This in-memory core
+does not yet claim durable precomputation or filesystem cache recovery.
+
+The reachability compaction core accepts an exact repository/pack-generation
+snapshot and caller-authenticated reachable objects, sorts only by complete
+object ID, applies the fixed level-9/window-250/depth-50 encoder, reparses the
+result, and requires exact object equality. It pauses for active pushes or core
+pressure, rejects estimates over the 4 GiB memory budget, preserves 40 GiB free
+space after the estimated output, and advances exactly one pack generation.
+Its journal admits only planned, staged, stage-synced, activated, and retired
+transitions and classifies crashes without treating an unactivated stage as
+authoritative. The current implementation is a pure state-machine core;
+filesystem staging, fsync, atomic generation activation, and retirement remain
+to be composed and physically tested.
+
+Dynamic-Huffman level-9 encoding, direct-window OFS delta selection, exact-key
+cache semantics, and the generation-safe compaction planner are implemented.
+No outer Zstandard layer belongs in Git pack storage.
 
 Active arrival-pack reads remain fail closed for an immediate authority reason.
 `MRREFS01` authenticates only a scalar `PackGeneration`, and verified receive

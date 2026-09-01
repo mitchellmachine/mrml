@@ -75,3 +75,11 @@ OFS deltas with a maximum chain depth of 50. It has no similarity cache, sketch,
 location/compression-state ranking, distributed mapping, or recipe/chunk-index
 GC. Patent review: `TRIGGERED`, implemented within the preliminary guardrails
 above. Cross-pack recomputation must preserve the same restrictions.
+
+The exact-key cache retains only caller-requested canonical representations and
+looks them up by the full format/wants/haves/generation/profile/encoder tuple.
+The compaction planner selects an authenticated reachability set at one exact
+generation and sorts by complete object ID. Neither mechanism discovers
+similarity, ranks by cache or storage location, maps work to distributed nodes,
+or manages file recipes/chunk indexes. Patent review: `TRIGGERED`, implemented
+within the preliminary guardrails; durable filesystem composition remains open.

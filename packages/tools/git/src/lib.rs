@@ -6,6 +6,8 @@ mod arrival_pack;
 #[cfg(test)]
 mod adversarial;
 mod audit_receipt;
+mod cache_pack;
+mod compaction;
 mod deflate;
 mod detached_commit_proof;
 mod diff;
@@ -41,6 +43,16 @@ pub use arrival_pack::ArrivalPackStore;
 pub use audit_receipt::{
     AuditReceiptDirectory, AuditReceiptError, MAX_AUDIT_RECEIPT_BYTES, encode_audit_receipt,
     parse_audit_receipt,
+};
+pub use cache_pack::{
+    ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES,
+    MAX_PACK_CACHE_KEY_BYTES, MAX_PACK_CACHE_OBJECTS_PER_SIDE, PackCacheError, PackCacheKey,
+};
+pub use compaction::{
+    COMPACTION_DEFLATE_LEVEL, COMPACTION_DELTA_WINDOW, COMPACTION_FREE_RESERVE_BYTES,
+    COMPACTION_MAX_DELTA_DEPTH, COMPACTION_MEMORY_LIMIT_BYTES, COMPACTION_WORKERS,
+    CompactionError, CompactionJournal, CompactionPhase, CompactionProfile, CompactionResources,
+    CompactionResult, CompactionSnapshot, CrashOutcome, compact_reachable,
 };
 pub use detached_commit_proof::{
     DetachedCommitProofRecord, DetachedCommitProofStore, DetachedHybridCommitVerifier,
