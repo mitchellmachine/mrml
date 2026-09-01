@@ -378,6 +378,7 @@ fn encode_z(poly: &Poly, output: &mut [u8]) {
         values[index] = (GAMMA1 - poly[index]) as u32;
     }
     pack_bits(&values, 20, output);
+    volatile_zero(&mut values);
 }
 
 fn decode_z(input: &[u8], output: &mut Poly) -> bool {
@@ -403,6 +404,7 @@ fn encode_w1(vector: &VecK, output: &mut [u8]) {
             4,
             &mut output[row * POLYW1_BYTES..(row + 1) * POLYW1_BYTES],
         );
+        volatile_zero(&mut values);
     }
 }
 
@@ -553,6 +555,7 @@ pub fn ml_dsa_65_keygen(
             value[index] = freeze(value[index] + s2[row][index]);
             (t1[row][index], t0[row][index]) = power2round(value[index]);
         }
+        volatile_zero(&mut value);
     }
     public_key[..32].copy_from_slice(rho);
     for row in 0..K {
@@ -1323,6 +1326,21 @@ mod tests {
         assert_eq!(
             ml_dsa_65_sign(
                 &corrupt_t0,
+                b"git",
+                b"commit payload",
+                &randomizer,
+                &mut signature,
+            ),
+            Err(MlDsaError::InvalidKey)
+        );
+        assert!(signature.iter().all(|byte| *byte == 0));
+
+        let mut noncanonical_eta = secret;
+        noncanonical_eta[128] = 0x0f;
+        signature.fill(0xa5);
+        assert_eq!(
+            ml_dsa_65_sign(
+                &noncanonical_eta,
                 b"git",
                 b"commit payload",
                 &randomizer,
