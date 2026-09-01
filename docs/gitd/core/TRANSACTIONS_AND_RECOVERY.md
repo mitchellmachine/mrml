@@ -141,3 +141,13 @@ the active generation, appends the receipt, and independently reopens and
 validates all four durable artifacts. It is concrete filesystem-ordering
 evidence, not process-kill, power-loss, physical-storage, signed-receipt, or
 production-read-path evidence.
+
+Recovery enumeration re-reads the canonical active-ref file for every bounded
+journal and classifies it using the old repository generation before activation
+or exactly the next generation after activation. A journal whose refs are
+exactly new may reconstruct and immutably append the checksum-protected receipt;
+an existing byte-exact receipt makes that operation idempotent. Pre-activation
+installed objects still require complete history and policy re-verification,
+and any generation/ref divergence remains `ManualUncertain`. This does not yet
+durably advance the recovered journal to a terminal phase or provide the
+required isolated receipt signature.

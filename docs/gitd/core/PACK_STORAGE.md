@@ -29,8 +29,10 @@ strictly sorted full object IDs, duplicates, CRC fields, 32-bit and canonical
 large-offset indirection, exact pack-checksum binding, the trailing index
 checksum, object-count limits, truncation, and trailing data. Construction uses
 deterministic allocation-free heapsort after one bounded entry copy and emits
-the exact repository hash width. This provides the immutable random-access
-index representation; it is not yet connected to quarantine installation.
+the exact repository hash width. Immutable arrival-pack installation now writes
+and reopens this index together with its authenticated pack. The index is not
+yet connected to the normal active pack-set read path or canonical compaction
+generation.
 
 The pack validation pass now retains each object's exact packed start/end
 span, computes the Git index CRC-32 over those original packed bytes, and

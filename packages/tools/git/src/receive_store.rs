@@ -3,7 +3,8 @@
 use crate::{
     ActivationSnapshot, ActiveRefFile, ArrivalPackStore, AuditReceipt, AuditReceiptDirectory,
     DurableFailure, DurableReceiveStore, ObjectFormat, QuarantineTransaction,
-    QuarantineTransactionId, ReceiveJournalDirectory, VerifiedRefTransaction,
+    QuarantineTransactionId, ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord,
+    RecoveryAction, VerifiedRefTransaction, classify_receive_recovery,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -64,6 +65,100 @@ impl LinuxDurableReceiveStore {
 
     pub fn receipts(&self) -> &AuditReceiptDirectory {
         &self.receipts
+    }
+
+    /// Re-reads the exact active ref generation for a durable journal. This is
+    /// deliberately journal-driven: recovery never reconstructs a verified
+    /// transaction or treats object IDs in the journal as fresh authority.
+    pub fn recovery_snapshot(
+        &self,
+        journal: &ReceiveJournalRecord,
+    ) -> Result<ActivationSnapshot, DurableFailure> {
+        let state = self
+            .refs
+            .load()
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        if state.repository != journal.repository {
+            return Err(DurableFailure::StaleLock);
+        }
+        let mut refs = mrml_runtime::Vector::new();
+        refs.try_reserve_exact(journal.updates.len())
+            .map_err(|_| DurableFailure::DiskFull)?;
+        for update in &journal.updates {
+            let value = state
+                .refs
+                .iter()
+                .find(|(name, _)| name == &update.name)
+                .map(|(_, id)| *id);
+            refs.push((update.name.clone(), value));
+        }
+        Ok(ActivationSnapshot {
+            repository_generation: state.repository_generation,
+            trust_generation: state.trust_generation,
+            revocation_generation: state.revocation_generation,
+            refs,
+        })
+    }
+
+    pub fn recovery_actions(
+        &self,
+    ) -> Result<mrml_runtime::Vector<(ReceiveJournalRecord, RecoveryAction)>, ReceiveJournalError>
+    {
+        let journals = self.journals.load_all()?;
+        let mut actions = mrml_runtime::Vector::new();
+        actions
+            .try_reserve_exact(journals.len())
+            .map_err(|_| ReceiveJournalError::Resource)?;
+        for journal in journals {
+            let snapshot = self
+                .recovery_snapshot(&journal)
+                .map_err(|_| ReceiveJournalError::Mismatch)?;
+            let action = classify_receive_recovery(&journal, &snapshot);
+            actions.push((journal, action));
+        }
+        Ok(actions)
+    }
+
+    /// Recovers only the post-activation receipt. Any pre-activation state
+    /// still requires full history/policy re-verification; divergent state is
+    /// never guessed. Existing byte-exact receipts make this idempotent.
+    pub fn recover_audit_receipt(
+        &self,
+        journal: &ReceiveJournalRecord,
+    ) -> Result<AuditReceipt, DurableFailure> {
+        let snapshot = self.recovery_snapshot(journal)?;
+        if classify_receive_recovery(journal, &snapshot) != RecoveryAction::RecoverAuditReceipt {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let mut updates = mrml_runtime::Vector::new();
+        updates
+            .try_reserve_exact(journal.updates.len())
+            .map_err(|_| DurableFailure::DiskFull)?;
+        for update in &journal.updates {
+            updates.push((
+                update.name.clone(),
+                update.expected_old,
+                update.proposed_new,
+            ));
+        }
+        updates.sort_unstable_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+        let receipt = AuditReceipt {
+            transaction: journal.transaction,
+            repository: journal.repository.clone(),
+            repository_generation: journal.repository_generation,
+            activated_repository_generation: snapshot.repository_generation,
+            trust_generation: journal.trust_generation,
+            revocation_generation: journal.revocation_generation,
+            updates,
+        };
+        match self.receipts.load(journal.transaction) {
+            Ok(existing) if existing == receipt => return Ok(receipt),
+            Ok(_) => return Err(DurableFailure::AuditReceipt),
+            Err(crate::AuditReceiptError::Malformed) => {}
+            Err(_) => return Err(DurableFailure::AuditReceipt),
+        }
+        self.receipts.append(&receipt)?;
+        Ok(receipt)
     }
 }
 
@@ -253,6 +348,33 @@ mod tests {
                 &store.active_refs().snapshot_for(&verified).unwrap(),
             ),
             RecoveryAction::MarkComplete
+        );
+        assert_eq!(
+            store.recovery_actions().unwrap()[0].1,
+            RecoveryAction::MarkComplete
+        );
+        let mut activated_journal = final_journal.clone();
+        activated_journal.phase = QuarantinePhase::RefsAtomicallyActivated;
+        let recovery_store = LinuxDurableReceiveStore::open(
+            &path(&root, "journals"),
+            &path(&root, "packs"),
+            &ref_path,
+            &path(&root, "recovery-receipts"),
+            ObjectFormat::Sha256,
+            1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(
+            recovery_store
+                .recover_audit_receipt(&activated_journal)
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(
+            recovery_store
+                .recover_audit_receipt(&activated_journal)
+                .unwrap(),
+            receipt
         );
         ArrivalPackStore::open(&path(&root, "packs"), ObjectFormat::Sha256, 1024 * 1024)
             .unwrap()
