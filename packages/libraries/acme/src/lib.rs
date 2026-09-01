@@ -12,6 +12,7 @@ mod identifier;
 mod jose;
 mod nonce;
 mod order;
+mod problem;
 mod profile;
 mod state;
 mod url;
@@ -53,6 +54,10 @@ pub use order::{
     AuthorizationBinding, AuthorizationState, ChallengeKind, ChallengeState, MAX_AUTHORIZATIONS,
     MAX_CHALLENGES_PER_AUTHORIZATION, MAX_ORDER_IDENTIFIERS, OrderError, OrderLifecycle,
     PreparedFinalization,
+};
+pub use problem::{
+    AcmeProblem, AcmeSubproblem, MAX_PROBLEM_BYTES, MAX_PROBLEM_DETAIL, MAX_PROBLEM_TYPE,
+    MAX_SUBPROBLEMS, ProblemError, ProblemText,
 };
 pub use profile::{CertificateProfile, MAX_PROFILE_NAME, ProfileError};
 pub use state::{AccountState, OrderState, StateError};

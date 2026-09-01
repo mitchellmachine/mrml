@@ -26,6 +26,9 @@ poll retries and deadlines, and one authorization URL per identifier. Stale or
 substituted authorization responses fail closed; wildcard authorization selects
 DNS-01; finalization requires every exact authorization to be valid and uses a
 one-use CSR-digest receipt.
+Typed ACME problem documents and bounded subproblems are parsed with duplicate
+singleton rejection, bounded body/token/depth/text limits, strict HTTP status
+ranges, trailing-data rejection, and explicit `badNonce` classification.
 Challenge publication now has a shared capability-oriented contract binding the
 exact order URL digest, authorization URL digest, identifier, challenge kind,
 token, key-authorization digest, policy generation, activation window, and
@@ -63,7 +66,7 @@ is excluded from ordinary feature profiles because the inherited curve
 arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
-General JOSE response and problem-document parsing, X.509 issuance validation,
+General JOSE response parsing, X.509 issuance validation,
 ACME transport, concrete socket adapters and propagation observation, durable recovery,
 certificate publication, renewal,
 revocation, backup/restore, CLI administration, gitd hot reload, and the MRML

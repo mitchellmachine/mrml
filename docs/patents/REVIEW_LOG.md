@@ -11233,6 +11233,13 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 Host, token, and request-bound checks for RFC 8555 HTTP-01 and no recorded
 re-review-trigger mechanism.
 
+# 2026-09-01 — Typed ACME problem documents
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds a bounded conventional RFC
+8555 problem-document and subproblem parser, including `badNonce`
+classification. It adds no recorded re-review-trigger mechanism.
+
 # 2026-09-01 — Bounded TLS-ALPN-01 certificate and selection
 
 Patent review: **NOT_TRIGGERED** beyond the owner-supplied

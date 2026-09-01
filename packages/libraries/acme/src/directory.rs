@@ -1,7 +1,7 @@
 use crate::{AcmeOrigin, AcmeUrl, CertificateProfile, DnsIdentifier, ProfileError, UrlError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Token<'a> {
+pub(crate) enum Token<'a> {
     Null,
     Bool(bool),
     Number(&'a str),
@@ -14,13 +14,13 @@ enum Token<'a> {
     Comma,
 }
 
-struct Tokens<'a> {
+pub(crate) struct Tokens<'a> {
     source: &'a str,
     position: usize,
 }
 
 impl<'a> Tokens<'a> {
-    const fn new(source: &'a str) -> Self {
+    pub(crate) const fn new(source: &'a str) -> Self {
         Self {
             source,
             position: 0,
