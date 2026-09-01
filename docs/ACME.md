@@ -65,6 +65,15 @@ a verified-chain receipt. The MRML target builds the same policy and verifier
 interface without inheriting a host ambient trust store. Checked-in leaf/root
 fixtures were independently generated with the OpenSSL CLI solely as a test
 oracle; no fixture private key is retained or shipped.
+The identity manager exposes an identity-scoped consumer capability for
+description, bounded chain reads, generation observation, and acquisition of a
+use-only TLS signing route. The route binds identity generation, key identity,
+route generation, and an opaque capability identifier; TLS 1.3
+CertificateVerify approval binds the exact transcript digest and standard
+server context. Deployment persists a prepared candidate before publication,
+requires separate TLS 1.3 and HTTP/3-over-QUIC-v2 test evidence, activates only
+the exact prepared generation, retains the previous generation, and represents
+ambiguous activation until authoritative target re-read resolves it.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -78,8 +87,8 @@ review.
 
 General JOSE response parsing, ACME transport, concrete socket adapters and
 propagation observation, durable recovery, alternate-chain selection,
-certificate publication, renewal,
-revocation, backup/restore, CLI administration, gitd hot reload, and the MRML
+durable identity-state serialization, renewal, revocation, backup/restore, CLI
+administration, concrete gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 Future platform adapters belong inside these logical packages and must not fork

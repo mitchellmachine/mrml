@@ -3,6 +3,7 @@
 mod certificate;
 mod challenge_dns;
 mod challenge_publisher;
+mod identity;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
@@ -15,3 +16,9 @@ pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
 };
 pub use challenge_publisher::DnsChallengePublisher;
+pub use identity::{
+    ActivationReceipt, ApprovedTls13CertificateVerify, DeploymentState, IdentityConsumerCapability,
+    IdentityDeploymentTarget, IdentityError, IdentityManager, PreparedIdentityReceipt,
+    TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
+    TlsKeyIdentity, TlsSigningRoute,
+};

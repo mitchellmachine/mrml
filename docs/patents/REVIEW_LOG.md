@@ -11270,3 +11270,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 chain validation for the already reviewed RFC 5280 scope, binding the exact
 P-256 key, SAN set, purpose, validity, trust roots, CA class, profile, order,
 and policy generation. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Generation-bound TLS identity publication
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary capability-scoped
+certificate-chain publication, use-only TLS signing routes, and
+prepare/test/activate/resolve/retain identity generations. It adds no recorded
+re-review-trigger mechanism.
