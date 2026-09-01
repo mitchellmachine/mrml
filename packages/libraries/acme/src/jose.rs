@@ -104,6 +104,43 @@ pub trait AcmeJwsSigner {
     ) -> Result<Es256Signature, JoseError>;
 }
 
+pub trait AcmeJwsEnvelopeWriter {
+    fn write_acme_jws<'a>(
+        &mut self,
+        key: ProtectedKey<'_>,
+        nonce: &ReplayNonce,
+        url: &AcmeUrl,
+        payload: &[u8],
+        directory_generation: u64,
+        account_generation: u64,
+        output: &'a mut [u8],
+    ) -> Result<&'a [u8], JoseError>;
+}
+
+impl<T: AcmeJwsSigner> AcmeJwsEnvelopeWriter for T {
+    fn write_acme_jws<'a>(
+        &mut self,
+        key: ProtectedKey<'_>,
+        nonce: &ReplayNonce,
+        url: &AcmeUrl,
+        payload: &[u8],
+        directory_generation: u64,
+        account_generation: u64,
+        output: &'a mut [u8],
+    ) -> Result<&'a [u8], JoseError> {
+        write_flattened_jws(
+            key,
+            nonce,
+            url,
+            payload,
+            directory_generation,
+            account_generation,
+            self,
+            output,
+        )
+    }
+}
+
 pub struct ApprovedEabMac {
     protected_and_payload_digest: [u8; 32],
     pub directory_generation: u64,

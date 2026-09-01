@@ -1,14 +1,15 @@
 use crate::{
-    AccountError, AccountLifecycle, AccountOperation, AcmeDirectory, AcmeIdentifier, AcmeJwsSigner,
-    AcmePostError, AcmeProblem, AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError,
-    ChallengeKind, ChallengeLifecycle, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk,
-    ParsedAccountStatus, ParsedAuthorizationResponse, ParsedChallenge, PayloadError,
-    PreparedAccountAction, PreparedFinalization, PreparedTermsTransition, PublicationReceipt,
-    ResponseError, account_contacts_digest, parse_account_response, parse_authorization_response,
-    parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
-    write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
-    write_new_order_identifiers_payload, write_preauthorization_identifier_payload,
-    write_revocation_payload, write_terms_agreement_payload,
+    AccountError, AccountLifecycle, AccountOperation, AcmeDirectory, AcmeIdentifier,
+    AcmeJwsEnvelopeWriter, AcmeJwsSigner, AcmePostError, AcmeProblem, AcmeTransport, AcmeUrl,
+    CertificateProfile, ChallengeError, ChallengeKind, ChallengeLifecycle, JwkThumbprint,
+    OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus, ParsedAuthorizationResponse,
+    ParsedChallenge, PayloadError, PreparedAccountAction, PreparedFinalization,
+    PreparedTermsTransition, PublicationReceipt, ResponseError, account_contacts_digest,
+    parse_account_response, parse_authorization_response, parse_order_response, post_jws,
+    write_account_contacts_payload, write_account_status_payload, write_finalize_payload,
+    write_key_change_inner_jws, write_new_account_payload, write_new_order_identifiers_payload,
+    write_preauthorization_identifier_payload, write_revocation_payload,
+    write_terms_agreement_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -264,7 +265,7 @@ pub fn execute_prepared_preauthorization<T: AcmeTransport>(
     account: &AccountLifecycle,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     payload_scratch: &mut [u8],
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
@@ -401,7 +402,7 @@ pub fn revoke_certificate<T: AcmeTransport>(
     signing_generation: u64,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     payload_scratch: &mut [u8],
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
@@ -502,7 +503,7 @@ pub fn execute_prepared_order_create<T: AcmeTransport>(
     now_unix: u64,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     buffers: OrderCreateBuffers<'_>,
 ) -> Result<OrderLifecycle, OrderCreateFailure<T::Error>> {
     if !account.active
@@ -629,7 +630,7 @@ pub fn fetch_authorization<T: AcmeTransport>(
     order: &mut OrderLifecycle,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
 ) -> Result<ParsedAuthorizationResponse, AuthorizationFetchError<T::Error>> {
@@ -719,7 +720,7 @@ pub fn poll_order<T: AcmeTransport>(
     order: &mut OrderLifecycle,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
 ) -> Result<OrderPollReceipt, OrderPollError<T::Error>> {
@@ -812,7 +813,7 @@ pub fn trigger_published_challenge<T: AcmeTransport>(
     order: &OrderLifecycle,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
 ) -> Result<ChallengeSubmission, ChallengeSubmitError<T::Error>> {
@@ -879,7 +880,7 @@ pub fn execute_prepared_finalize<T: AcmeTransport>(
     order: &mut OrderLifecycle,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     buffers: AccountCreateBuffers<'_>,
 ) -> Result<(), FinalizeFailure<T::Error>> {
     if !account.active
@@ -968,7 +969,7 @@ pub fn execute_prepared_account_create<T: AcmeTransport>(
     public_key: &P256Jwk,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     buffers: AccountCreateBuffers<'_>,
 ) -> Result<AcmeUrl, CreateAccountError<T::Error>> {
     let expected_contacts =
@@ -1055,7 +1056,7 @@ pub fn execute_prepared_account_update<T: AcmeTransport>(
     contacts: Option<&[&str]>,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     buffers: AccountCreateBuffers<'_>,
 ) -> Result<(), AccountUpdateFailure<T::Error>> {
     if !lifecycle.active
@@ -1190,7 +1191,7 @@ pub fn recover_uncertain_account_creation<T: AcmeTransport>(
     public_key: &P256Jwk,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     buffers: AccountCreateBuffers<'_>,
 ) -> Result<AcmeUrl, AccountRecoveryError<T::Error>> {
     if lifecycle.operation != AccountOperation::Uncertain
@@ -1267,7 +1268,7 @@ pub fn resolve_uncertain_account_action<T: AcmeTransport>(
     signing_key: &P256Jwk,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
 ) -> Result<u64, AccountActionResolutionError<T::Error>> {
@@ -1375,7 +1376,7 @@ pub fn execute_prepared_terms_transition<T: AcmeTransport>(
     directory: &AcmeDirectory,
     exchange: &mut crate::AcmeExchange,
     transport: &mut T,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     buffers: AccountCreateBuffers<'_>,
 ) -> Result<(), TermsTransitionFailure<T::Error>> {
     let account_url = lifecycle

@@ -66,7 +66,7 @@ pub use identifier::{
 };
 pub use ip_identifier::{IpIdentifier, IpIdentifierError, MAX_IP_IDENTIFIER_TEXT};
 pub use jose::{
-    AcmeJwsSigner, ApprovedAcmeJwsDigest, ApprovedEabMac, Es256Signature, ExternalAccountMac,
+    AcmeJwsEnvelopeWriter, AcmeJwsSigner, ApprovedAcmeJwsDigest, ApprovedEabMac, Es256Signature, ExternalAccountMac,
     JoseError, JwkThumbprint, MAX_JWS_PAYLOAD, P256Jwk, ProtectedKey, write_external_account_binding,
     write_flattened_jws, write_key_change_inner_jws,
 };

@@ -1,7 +1,7 @@
 use crate::{
-    AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeJwsSigner, AcmeProblem,
+    AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeJwsEnvelopeWriter, AcmeProblem,
     AcmeResponseMetadata, AcmeTransport, AcmeTransportRequest, AcmeUrl, BadNonceRetry, JoseError,
-    ProblemError, ProtectedKey, TransportError, write_flattened_jws,
+    ProblemError, ProtectedKey, TransportError,
 };
 
 pub const MAX_JWS_REQUEST_BYTES: usize = 48 * 1024;
@@ -29,7 +29,7 @@ pub fn post_jws<T: AcmeTransport>(
     key: ProtectedKey<'_>,
     payload: &[u8],
     account_generation: u64,
-    signer: &mut impl AcmeJwsSigner,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
     response_body: &mut [u8],
     jws_scratch: &mut [u8],
 ) -> Result<AcmePostResponse, AcmePostError<T::Error>> {
@@ -42,17 +42,17 @@ pub fn post_jws<T: AcmeTransport>(
             .acquire_nonce(transport, new_nonce_url)
             .map_err(AcmePostError::Transport)?;
         let directory_generation = exchange.directory_generation();
-        let jws = write_flattened_jws(
-            key,
-            &nonce,
-            url,
-            payload,
-            directory_generation,
-            account_generation,
-            signer,
-            jws_scratch,
-        )
-        .map_err(AcmePostError::Jose)?;
+        let jws = signer
+            .write_acme_jws(
+                key,
+                &nonce,
+                url,
+                payload,
+                directory_generation,
+                account_generation,
+                jws_scratch,
+            )
+            .map_err(AcmePostError::Jose)?;
         let jws_len = jws.len();
         let metadata = exchange
             .execute(
@@ -92,7 +92,9 @@ pub fn post_jws<T: AcmeTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AcmeTransportResponse, ApprovedAcmeJwsDigest, Es256Signature};
+    use crate::{
+        AcmeJwsSigner, AcmeTransportResponse, ApprovedAcmeJwsDigest, Es256Signature, ReplayNonce,
+    };
 
     struct Signer {
         calls: usize,
@@ -110,6 +112,34 @@ mod tests {
 
     struct Transport {
         calls: usize,
+    }
+
+    struct EnvelopeOnly {
+        calls: usize,
+        first_nonce: Option<ReplayNonce>,
+    }
+    impl AcmeJwsEnvelopeWriter for EnvelopeOnly {
+        fn write_acme_jws<'a>(
+            &mut self,
+            _key: ProtectedKey<'_>,
+            nonce: &ReplayNonce,
+            _url: &AcmeUrl,
+            _payload: &[u8],
+            directory_generation: u64,
+            account_generation: u64,
+            output: &'a mut [u8],
+        ) -> Result<&'a [u8], JoseError> {
+            assert_eq!(directory_generation, 7);
+            assert_eq!(account_generation, 3);
+            if let Some(first) = self.first_nonce {
+                assert!(first != *nonce);
+            } else {
+                self.first_nonce = Some(*nonce);
+            }
+            self.calls += 1;
+            output[..2].copy_from_slice(b"{}");
+            Ok(&output[..2])
+        }
     }
     impl AcmeTransport for Transport {
         type Error = ();
@@ -179,6 +209,38 @@ mod tests {
         assert!(result.problem.is_none());
         assert_eq!(transport.calls, 3);
         assert_eq!(signer.calls, 2);
+        assert!(jws.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn envelope_only_provider_rebuilds_complete_request_after_bad_nonce() {
+        let directory = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let nonce_url = AcmeUrl::parse("https://ca.example/new-nonce", false).unwrap();
+        let account_url = AcmeUrl::parse("https://ca.example/account/1", false).unwrap();
+        let order_url = AcmeUrl::parse("https://ca.example/new-order", false).unwrap();
+        let mut exchange = AcmeExchange::new(7, directory);
+        let mut transport = Transport { calls: 0 };
+        let mut writer = EnvelopeOnly {
+            calls: 0,
+            first_nonce: None,
+        };
+        let mut response = [0; 1024];
+        let mut jws = [0; 8192];
+        let result = post_jws(
+            &mut exchange,
+            &mut transport,
+            &nonce_url,
+            &order_url,
+            ProtectedKey::Kid(&account_url),
+            b"{}",
+            3,
+            &mut writer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(result.metadata.status, 201);
+        assert_eq!(writer.calls, 2);
         assert!(jws.iter().all(|byte| *byte == 0));
     }
 }
