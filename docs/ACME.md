@@ -457,6 +457,15 @@ million sessions. Supervisor shutdown is explicit, while budget exhaustion or
 provider reconstruction failure is an alertable error rather than a fallback.
 The Linux/Windows platform entry point and real durable catalog/sealed-key
 reconstructor remain required before operational administration can be claimed.
+The catalog half now has a shared bounded reconstructor. An already-authorized
+manifest may name at most 64 canonically ordered namespace/object bindings with
+their exact generation and payload digest. Reconstruction re-reads every record
+through the durable-storage capability and checks the storage receipt, decoded
+record identity, generation, digest, and authentication tag before passing it
+to a provider builder. Missing, duplicated, reordered, stale, or substituted
+records fail closed. The manifest identifies expected state and does not grant
+storage or lifecycle authority. Platform wiring and the owner-selected sealed
+key implementation remain open.
 
 The bounded deterministic security-fuzz harness covers ACME directory,
 problem, account, order, authorization, ARI, URL, and Base64url parsing; X.509

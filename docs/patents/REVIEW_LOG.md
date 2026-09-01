@@ -12113,3 +12113,10 @@ existing lifecycle provider behind fresh supervisor-authorized sessions with a
 fixed run budget. It adds no certificate protocol, signing mechanism,
 validation topology, certificate authority operation, or recorded re-review
 trigger.
+
+# 2026-09-01 — Exact durable certificate catalog reconstruction
+
+Patent review: **NOT_TRIGGERED**. This increment authenticates and exact-matches
+ordinary bounded durable records selected by an already-authorized catalog
+manifest. It adds no certificate protocol, signing mechanism, validation
+topology, certificate authority operation, or recorded re-review trigger.

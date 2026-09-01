@@ -21,6 +21,7 @@ mod dns_propagation;
 mod dns_propagation_hosted;
 mod durable;
 mod durable_capability;
+mod durable_catalog;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod durable_hosted;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -119,6 +120,10 @@ pub use durable::{
     SecretHandle, TransactionState,
 };
 pub use durable_capability::{CapabilityDurableStateStore, CertificateDurableStorageCapability};
+pub use durable_catalog::{
+    DurableCatalogEntry, DurableCatalogError, MAX_DURABLE_CATALOG_RECORDS,
+    reconstruct_durable_catalog,
+};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use durable_hosted::HostedDurableStateStore;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
