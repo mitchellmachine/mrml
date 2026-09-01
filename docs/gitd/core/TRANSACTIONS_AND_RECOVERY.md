@@ -116,3 +116,16 @@ cover reopen, exact one-generation advancement, stale old-generation retry,
 and a simulated crash-stale lock. Windows remains fail-closed pending a runtime
 directory flush primitive. Process-kill at every syscall boundary, power-loss,
 and physical-filesystem atomicity evidence remain open.
+
+`MRRCPT01` is a deterministic receipt transcript binding the transaction and
+repository identities, pre-activation and exactly-next repository generations,
+trust and revocation generations, and a strictly sorted exact old/new ref set.
+It is bounded to 16 KiB and checksum-protected; malformed ordering, mixed hash
+formats, zero/equal IDs, generation skips, corruption, and trailing data fail
+closed. Hosted Linux persists each receipt once as an immutable regular file,
+fsyncs it and the receipt directory, then reopens and compares the exact
+record. Duplicate transaction receipts are rejected. The checksum makes the
+record auditable for accidental/torn-storage detection but is not a signature.
+Receipt signing through isolated key custody and independent signature
+verification remains open; this filesystem store must not be used as the final
+protected-repository receipt authority until that interface is connected.

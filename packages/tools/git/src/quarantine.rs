@@ -123,6 +123,7 @@ pub struct AuditReceipt {
     pub transaction: QuarantineTransactionId,
     pub repository: RepositoryIdentity,
     pub repository_generation: RepositoryGeneration,
+    pub activated_repository_generation: RepositoryGeneration,
     pub trust_generation: TrustGeneration,
     pub revocation_generation: RevocationGeneration,
     pub updates: mrml_runtime::Vector<(crate::FullRefName, crate::ObjectId, crate::ObjectId)>,
@@ -458,10 +459,19 @@ pub fn durably_activate_verified_receive(
             .ok_or(DurableReceiveError::InvalidState)?;
         updates.push((update.name().clone(), old, new));
     }
+    updates.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let activated_repository_generation = RepositoryGeneration(
+        verified
+            .repository_generation()
+            .0
+            .checked_add(1)
+            .ok_or(DurableReceiveError::InvalidState)?,
+    );
     let receipt = AuditReceipt {
         transaction: transaction.id(),
         repository: verified.repository().clone(),
         repository_generation: verified.repository_generation(),
+        activated_repository_generation,
         trust_generation: verified.trust_generation(),
         revocation_generation: verified.revocation_generation(),
         updates,

@@ -3,6 +3,7 @@
 use mrml_runtime::{Text, Vector};
 
 mod arrival_pack;
+mod audit_receipt;
 mod deflate;
 mod diff;
 mod gitd_core;
@@ -27,6 +28,10 @@ mod trust_policy;
 mod verification;
 
 pub use arrival_pack::ArrivalPackStore;
+pub use audit_receipt::{
+    AuditReceiptDirectory, AuditReceiptError, MAX_AUDIT_RECEIPT_BYTES, encode_audit_receipt,
+    parse_audit_receipt,
+};
 pub use diff::FileDiff;
 pub use gitd_core::{
     BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, CommitPage,
