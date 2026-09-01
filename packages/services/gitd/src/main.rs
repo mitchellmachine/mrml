@@ -7,8 +7,8 @@ use mrml_certificate::{CertdChannelCapability, CertdPeerIdentity};
 use mrml_crypto::erase_secret_bytes;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
-    GitAuthorityChannelClient, GitdCertdChannelClient, load_deployment_catalog,
-    load_gitd_authentication, load_gitd_config, validate_storage_layout,
+    GitAuthorityChannelClient, GitdCertdChannelClient, admit_catalog_repository,
+    load_deployment_catalog, load_gitd_authentication, load_gitd_config, validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -30,6 +30,9 @@ fn run() -> Result<(), ()> {
         validate_storage_layout(&config).map_err(|_| ())?;
         let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
         load_gitd_authentication(&config, &catalog).map_err(|_| ())?;
+        for repository in &catalog.repositories {
+            admit_catalog_repository(&config, repository).map_err(|_| ())?;
+        }
         println!("valid");
         return Ok(());
     }
@@ -41,6 +44,9 @@ fn run() -> Result<(), ()> {
         validate_storage_layout(&config).map_err(|_| ())?;
         let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
         load_gitd_authentication(&config, &catalog).map_err(|_| ())?;
+        for repository in &catalog.repositories {
+            admit_catalog_repository(&config, repository).map_err(|_| ())?;
+        }
         let authority_capability =
             load_authority_capability(config.authority_capability.as_path(), config.authority_uid)?;
         let certd_capability =

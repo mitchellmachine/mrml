@@ -39,7 +39,10 @@ digests before reporting success: each path component must be a directory rather
 writable parents are rejected, leaf ownership must exactly match the configured
 Gitd UID/GID, and writable roots must have owner write authority without
 group/world write. The policy root may be owner-read-only. This command does not
-report service readiness; authority and certd authentication remain later
+report service readiness. It also securely loads authentication state and
+admits every catalog repository only after deriving and validating all five
+storage paths, reopening SHA-256 state, and exact-matching repository, trust,
+and revocation generations. Authority and certd authentication remain later
 startup gates.
 
 `deploy/compose/gitd.example.conf` is a non-secret template. Production
@@ -49,10 +52,11 @@ credential or an authorization record.
 
 `mrml-gitd dependencies-health CONFIG SIGNER_IDENTITY_HEX` composes these
 startup gates without binding a listener. It validates configuration and
-storage, securely loads the two separately owned 32-byte capability files,
-erases transient key copies, and authenticates exact health responses from both
-authority and certd using independent configured request sequences. Failure of
-either dependency yields no partial-ready result.
+storage, authentication state, and every admitted catalog repository; securely
+loads the two separately owned 32-byte capability files; erases transient key
+copies; and authenticates exact health responses from both authority and certd
+using independent configured request sequences. Failure of any local or remote
+gate yields no partial-ready result.
 
 The default production identities remain Gitd `21001:21001`, authority
 `21002:21002`, and certd `21003:21003`. The parser permits explicit deployment
