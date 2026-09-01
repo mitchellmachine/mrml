@@ -12,6 +12,13 @@ window-boundary inputs round-trip through the first-party inflater on Linux and
 through the pinned Windows Rust oracle under Wine. Wine is a hosted
 compatibility probe, not Windows-native evidence.
 
+A hosted-Linux functional concurrency test opens the same SHA-256 repository in
+six simultaneous process-local workers and requires every worker to generate a
+byte-identical reachable fetch pack. This exercises deterministic concurrent
+read/generation behavior only. It does not establish multi-process service
+isolation, peak memory, foreground latency under compaction, or production
+throughput.
+
 Dynamic Huffman construction, canonical block selection, lazy level-9 match
 selection, and pack delta selection remain open, so this does not yet satisfy
 the canonical storage profile. The completed profile also requires a

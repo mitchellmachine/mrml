@@ -16,7 +16,7 @@ Executed on 2026-09-01:
 
 - `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
 - `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
-- `./target/debug/mrml test mrml-git --target linux` — PASS, 142 library tests and 2 CLI tests. The suite exercised exact linear protected-history ranges of 1, 100, 1,000, and 5,000 introduced commits and rejected 5,001 at the configured limit; the aggregate build/test invocation took 4.99 seconds wall time (7.13 seconds user, 1.28 seconds system). This is a controlled functional limit test and aggregate suite timing, not an isolated production-performance or peak-memory benchmark.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 143 library tests and 2 CLI tests. The suite exercised exact linear protected-history ranges of 1, 100, 1,000, and 5,000 introduced commits and rejected 5,001 at the configured limit; the aggregate build/test invocation took 4.99 seconds wall time (7.13 seconds user, 1.28 seconds system). It also generated the same exact first-party fetch pack in six simultaneous process-local workers. These are controlled functional limit/concurrency tests and aggregate suite timing, not isolated production-performance or peak-memory benchmarks.
 - `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 15 tests.
 - `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 49 tests, including mandatory pinned NIST ACVP sigGen/sigVer and OpenSSL 3.6.4 differential fixtures.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.openpgp --target windows` — PASS, 15 tests under the pinned Wine-hosted Windows target.
@@ -35,6 +35,7 @@ Implemented and executed in the focused environments:
 - deterministic verification of every introduced commit, including merge-side ancestry, concrete detached hybrid proofs, and protected activation that consumes opaque verified state.
 - bounded protocol-v2 request parsing, `ls-refs`, fetch framing, receive command/report framing, and repository-view boundaries without an external Git server runtime.
 - deterministic bounded hostile-input corpora for Git pack/index/object/transport/trust/journal/ref-state/name/path parsers, OpenPGP packet/armor parsing, and ML-DSA key/signature verification on Linux and the Wine-hosted Windows target.
+- six simultaneous process-local Linux fetch-pack generations from one immutable object graph, all byte-identical to the independently generated expected pack.
 
 Explicit blockers (`REMAINS_OPEN`):
 

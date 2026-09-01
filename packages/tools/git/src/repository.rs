@@ -4164,6 +4164,36 @@ mod tests {
         remove_dir_all(&path).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn six_concurrent_fetch_pack_generations_are_deterministic() {
+        let path = root("concurrent-fetch-pack");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        let tracked = join_path(&path, "tracked");
+        write_file(&tracked, &[b'x'; 64 * 1024]).unwrap();
+        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        let tip = repository
+            .commit("concurrent", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        let expected = repository.pack_reachable(tip).unwrap();
+
+        let mut workers = Vector::new();
+        for _ in 0..6 {
+            let worker_path = path.clone();
+            let worker_expected = expected.clone();
+            let worker = mrml_runtime::spawn_joinable(move || {
+                let worker_repository = Repository::discover(&worker_path).unwrap();
+                assert_eq!(worker_repository.pack_reachable(tip).unwrap(), worker_expected);
+            })
+            .unwrap_or_else(|_| panic!("failed to start fetch-pack generation worker"));
+            workers.push(worker);
+        }
+        for worker in workers {
+            assert!(worker.join());
+        }
+        remove_dir_all(&path).unwrap();
+    }
+
     #[test]
     fn switches_branches_by_materializing_authenticated_tree() {
         let path = root("switch");
