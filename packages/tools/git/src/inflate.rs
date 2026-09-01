@@ -26,25 +26,43 @@ pub enum InflateError {
     TooLarge,
     Checksum,
 }
-struct Bits<'a> {
-    s: &'a [u8],
-    p: usize,
+pub(crate) trait InflateByteReader {
+    fn read_byte(&mut self) -> Result<u8, InflateError>;
+    fn consumed(&self) -> usize;
+}
+
+struct SliceReader<'a> {
+    source: &'a [u8],
+    position: usize,
+}
+
+impl InflateByteReader for SliceReader<'_> {
+    fn read_byte(&mut self) -> Result<u8, InflateError> {
+        let byte = *self
+            .source
+            .get(self.position)
+            .ok_or(InflateError::Truncated)?;
+        self.position += 1;
+        Ok(byte)
+    }
+
+    fn consumed(&self) -> usize {
+        self.position
+    }
+}
+
+struct Bits<'a, R> {
+    reader: &'a mut R,
     v: u64,
     n: u8,
 }
-impl<'a> Bits<'a> {
-    fn new(s: &'a [u8]) -> Self {
-        Self {
-            s,
-            p: 0,
-            v: 0,
-            n: 0,
-        }
+impl<'a, R: InflateByteReader> Bits<'a, R> {
+    fn new(reader: &'a mut R) -> Self {
+        Self { reader, v: 0, n: 0 }
     }
     fn read(&mut self, n: u8) -> Result<usize, InflateError> {
         while self.n < n {
-            let b = *self.s.get(self.p).ok_or(InflateError::Truncated)?;
-            self.p += 1;
+            let b = self.reader.read_byte()?;
             self.v |= (b as u64) << self.n;
             self.n += 8
         }
@@ -96,7 +114,7 @@ impl Huff {
         }
         Ok(Self { count, symbols })
     }
-    fn decode(&self, b: &mut Bits<'_>) -> Result<usize, InflateError> {
+    fn decode<R: InflateByteReader>(&self, b: &mut Bits<'_, R>) -> Result<usize, InflateError> {
         let (mut code, mut first, mut index) = (0, 0, 0);
         for n in 1..=15 {
             code |= b.read(1)?;
@@ -126,44 +144,54 @@ pub fn inflate_zlib(source: &[u8]) -> Result<Vector<u8>, InflateError> {
 }
 
 pub(crate) fn inflate_zlib_prefix(source: &[u8]) -> Result<(Vector<u8>, usize), InflateError> {
-    if source.len() < 6 {
-        return Err(InflateError::Truncated);
-    }
-    let h = u16::from_be_bytes([source[0], source[1]]);
-    if h % 31 != 0 || source[0] & 15 != 8 || source[0] >> 4 > 7 || source[1] & 0x20 != 0 {
-        return Err(InflateError::Header);
-    }
-    let (out, raw_consumed) = inflate_raw(&source[2..])?;
-    let checksum_start = 2usize
-        .checked_add(raw_consumed)
-        .ok_or(InflateError::TooLarge)?;
-    let end = checksum_start
-        .checked_add(4)
-        .ok_or(InflateError::TooLarge)?;
-    let checksum = source
-        .get(checksum_start..end)
-        .ok_or(InflateError::Truncated)?;
-    if adler(&out) != u32::from_be_bytes(checksum.try_into().map_err(|_| InflateError::Truncated)?)
-    {
-        return Err(InflateError::Checksum);
-    }
-    Ok((out, end))
+    let mut reader = SliceReader {
+        source,
+        position: 0,
+    };
+    let output = inflate_zlib_reader(&mut reader, 512 * 1024 * 1024)?;
+    Ok((output, reader.consumed()))
 }
 
-pub(crate) fn inflate_raw(source: &[u8]) -> Result<(Vector<u8>, usize), InflateError> {
-    let mut b = Bits::new(source);
+pub(crate) fn inflate_zlib_reader<R: InflateByteReader>(
+    reader: &mut R,
+    max_output: usize,
+) -> Result<Vector<u8>, InflateError> {
+    let cmf = reader.read_byte()?;
+    let flg = reader.read_byte()?;
+    let h = u16::from_be_bytes([cmf, flg]);
+    if h % 31 != 0 || cmf & 15 != 8 || cmf >> 4 > 7 || flg & 0x20 != 0 {
+        return Err(InflateError::Header);
+    }
+    let out = inflate_raw_reader(reader, max_output)?;
+    let checksum = u32::from_be_bytes([
+        reader.read_byte()?,
+        reader.read_byte()?,
+        reader.read_byte()?,
+        reader.read_byte()?,
+    ]);
+    if adler(&out) != checksum {
+        return Err(InflateError::Checksum);
+    }
+    Ok(out)
+}
+
+fn inflate_raw_reader<R: InflateByteReader>(
+    reader: &mut R,
+    max_output: usize,
+) -> Result<Vector<u8>, InflateError> {
+    let mut b = Bits::new(reader);
     let mut out = Vector::new();
     loop {
         let last = b.read(1)? != 0;
         match b.read(2)? {
-            0 => stored(&mut b, &mut out)?,
+            0 => stored(&mut b, &mut out, max_output)?,
             1 => {
                 let (l, d) = fixed()?;
-                compressed(&mut b, &mut out, &l, &d)?
+                compressed(&mut b, &mut out, &l, &d, max_output)?
             }
             2 => {
                 let (l, d) = dynamic(&mut b)?;
-                compressed(&mut b, &mut out, &l, &d)?
+                compressed(&mut b, &mut out, &l, &d, max_output)?
             }
             _ => return Err(InflateError::Block),
         }
@@ -171,22 +199,26 @@ pub(crate) fn inflate_raw(source: &[u8]) -> Result<(Vector<u8>, usize), InflateE
             break;
         }
     }
-    Ok((out, b.p))
+    Ok(out)
 }
-fn room(out: &Vector<u8>, n: usize) -> Result<(), InflateError> {
+fn room(out: &Vector<u8>, n: usize, max_output: usize) -> Result<(), InflateError> {
     out.len()
         .checked_add(n)
-        .filter(|v| *v <= 512 * 1024 * 1024)
+        .filter(|v| *v <= max_output)
         .map(|_| ())
         .ok_or(InflateError::TooLarge)
 }
-fn stored(b: &mut Bits<'_>, out: &mut Vector<u8>) -> Result<(), InflateError> {
+fn stored<R: InflateByteReader>(
+    b: &mut Bits<'_, R>,
+    out: &mut Vector<u8>,
+    max_output: usize,
+) -> Result<(), InflateError> {
     b.align();
     let n = b.read(16)?;
     if b.read(16)? != (!n & 65535) {
         return Err(InflateError::Block);
     }
-    room(out, n)?;
+    room(out, n, max_output)?;
     for _ in 0..n {
         out.push(b.read(8)? as u8)
     }
@@ -200,7 +232,7 @@ fn fixed() -> Result<(Huff, Huff), InflateError> {
     l[280..].fill(8);
     Ok((Huff::build(&l)?, Huff::build(&[5u8; 32])?))
 }
-fn dynamic(b: &mut Bits<'_>) -> Result<(Huff, Huff), InflateError> {
+fn dynamic<R: InflateByteReader>(b: &mut Bits<'_, R>) -> Result<(Huff, Huff), InflateError> {
     let nl = b.read(5)? + 257;
     let nd = b.read(5)? + 1;
     let nc = b.read(4)? + 4;
@@ -250,15 +282,16 @@ fn repeat(v: &mut Vector<u8>, x: u8, n: usize, total: usize) -> Result<(), Infla
     Ok(())
 }
 fn compressed(
-    b: &mut Bits<'_>,
+    b: &mut Bits<'_, impl InflateByteReader>,
     out: &mut Vector<u8>,
     l: &Huff,
     d: &Huff,
+    max_output: usize,
 ) -> Result<(), InflateError> {
     loop {
         match l.decode(b)? {
             v @ 0..=255 => {
-                room(out, 1)?;
+                room(out, 1, max_output)?;
                 out.push(v as u8)
             }
             256 => return Ok(()),
@@ -273,7 +306,7 @@ fn compressed(
                 if distance == 0 || distance > out.len() {
                     return Err(InflateError::Distance);
                 }
-                room(out, n)?;
+                room(out, n, max_output)?;
                 for _ in 0..n {
                     out.push(out[out.len() - distance])
                 }
@@ -298,6 +331,7 @@ fn adler(s: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deflate::encode_zlib;
     #[test]
     fn decodes_dynamic_huffman_stream() {
         let hex = "789CEDD3DB6DC3301403D055EE04DD49B1E558492CB9969C47A72FD029FA71262041F08C35C7F759A67B5C8EF6AAB1B477DCCE6DEFD19EF988B1E678A49F4FCCEDFA15358DF2CCD12EB73C8D1E475E7A8C23E71E53DBB6327A943AE777F4BE462FD75AEA35C6916ADFDB31624FD33DE6FC1829D67359B654E355EADC5E3D1EA59EEFE8793A8F323E91CEB98CBF6CD5ACE66B1860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106186080010618608001061860800106CBFF61F00B25056C6C";
@@ -319,5 +353,24 @@ mod tests {
         let mut bytes = Vector::from([0x78, 0x01, 1, 0, 0, 0xff, 0xff, 0, 0, 0, 1]);
         bytes[10] ^= 1;
         assert_eq!(inflate_zlib(&bytes), Err(InflateError::Checksum));
+    }
+
+    #[test]
+    fn reader_boundary_reports_exact_consumption_and_enforces_output_limit() {
+        let mut encoded = encode_zlib(b"bounded reader");
+        let exact = encoded.len();
+        encoded.extend(*b"next");
+        let (decoded, consumed) = inflate_zlib_prefix(&encoded).unwrap();
+        assert_eq!(&*decoded, b"bounded reader");
+        assert_eq!(consumed, exact);
+
+        let mut reader = SliceReader {
+            source: &encoded,
+            position: 0,
+        };
+        assert_eq!(
+            inflate_zlib_reader(&mut reader, 3),
+            Err(InflateError::TooLarge)
+        );
     }
 }

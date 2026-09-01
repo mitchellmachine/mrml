@@ -34,6 +34,16 @@ and checksum failure before the compatibility parser allocates the pack. Entry
 inflation and delta resolution are not yet streaming, so this pass alone does
 not satisfy the production receive memory gate.
 
+For direct commit/tree/blob/tag entries, the second pass is now file-backed as
+well: it parses headers bytewise, decodes zlib through a one-byte reader boundary
+with an exact configured output ceiling, retains at most one object, charges
+compressed and expanded bytes as work, hashes the canonical loose-object form,
+and emits exact CRC/offset/index metadata. Installed-directory verification uses
+the same path instead of reloading the pack. OFS and REF delta entries currently
+fail closed with `MissingBase`; scratch-backed base/result storage, depth-50
+resolution, and streaming delta instructions remain required before receive may
+accept or advertise delta/thin packs.
+
 `pack_index.rs` constructs and parses Git pack index v2 for both SHA-1
 compatibility and SHA-256 repositories. It validates monotonic fanout tables,
 strictly sorted full object IDs, duplicates, CRC fields, 32-bit and canonical

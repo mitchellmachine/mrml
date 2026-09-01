@@ -5,11 +5,12 @@ use mrml_runtime::{
     rename_file,
 };
 
-use crate::pack_file::scan_pack_file;
+use crate::pack_file::validate_direct_pack_file;
 use crate::{
-    BoundedRead, DEFAULT_MAX_INCOMING_PACK_BYTES, DurableFailure, GitdCoreError, ObjectFormat,
-    ObjectId, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
-    parse_pack_index_v2, parse_pack_with_index,
+    BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
+    DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
+    QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2,
+    parse_pack_with_index,
 };
 
 pub struct ArrivalPackStore {
@@ -76,50 +77,32 @@ impl ArrivalPackStore {
     ) -> Result<(), GitdCoreError> {
         let directory = self.quarantine_path(transaction.id());
         let incoming = join_path(&directory, "incoming.pack");
-        let scan = scan_pack_file(
+        let max_work = transaction
+            .reservation()
+            .incoming_pack_bytes()
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(transaction.reservation().expanded_object_bytes()))
+            .ok_or(GitdCoreError::Resource)?;
+        let validated = validate_direct_pack_file(
             &incoming,
             self.format,
             transaction.reservation().incoming_pack_bytes(),
             transaction.reservation().object_count(),
-            transaction.reservation().incoming_pack_bytes(),
+            transaction.reservation().expanded_object_bytes(),
+            transaction.reservation().individual_object_bytes(),
+            max_work,
         )
         .map_err(|_| GitdCoreError::ObjectValidation)?;
-        let pack = read_regular_bounded(&incoming, self.max_pack_bytes)
-            .map_err(|_| GitdCoreError::ObjectValidation)?;
-        let (objects, entries) = parse_pack_with_index(&pack, self.format)
-            .map_err(|_| GitdCoreError::ObjectValidation)?;
-        if objects.is_empty()
-            || objects.len() != scan.object_count as usize
-            || pack.len() as u64 != scan.bytes
-            || objects.len() > transaction.reservation().object_count() as usize
+        if validated.objects.is_empty()
+            || validated.largest_object > transaction.reservation().individual_object_bytes()
             || required_tips.is_empty()
             || required_tips.iter().any(|tip| {
-                tip.format() != self.format || !objects.iter().any(|object| object.id == *tip)
+                tip.format() != self.format || !validated.objects.iter().any(|(id, _)| id == tip)
             })
         {
             return Err(GitdCoreError::ObjectValidation);
         }
-        let mut expanded = 0u64;
-        let mut largest = 0u64;
-        for object in &objects {
-            let length = object.contents.len() as u64;
-            expanded = expanded
-                .checked_add(length)
-                .ok_or(GitdCoreError::Resource)?;
-            largest = largest.max(length);
-        }
-        if expanded > transaction.reservation().expanded_object_bytes()
-            || largest > transaction.reservation().individual_object_bytes()
-        {
-            return Err(GitdCoreError::Resource);
-        }
-        let trailer =
-            ObjectId::from_bytes(self.format, &pack[pack.len() - self.format.hash_len()..])
-                .ok_or(GitdCoreError::ObjectValidation)?;
-        if trailer != scan.checksum {
-            return Err(GitdCoreError::ObjectValidation);
-        }
-        let index = build_pack_index_v2(self.format, &entries, trailer)
+        let index = build_pack_index_v2(self.format, &validated.entries, validated.checksum)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
         write_new_synced(&join_path(&directory, "objects.idx"), &index)
             .map_err(|_| GitdCoreError::Storage)?;
@@ -127,9 +110,9 @@ impl ArrivalPackStore {
             .map_err(|_| GitdCoreError::Storage)?;
         sync_pack_directory(&directory).map_err(|_| GitdCoreError::Storage)?;
         transaction
-            .objects_validated(expanded, objects.len() as u32)
+            .objects_validated(validated.expanded_bytes, validated.objects.len() as u32)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
-        self.verify_directory(&directory, objects.len() as u32)
+        self.verify_directory(&directory, validated.objects.len() as u32)
             .map_err(|_| GitdCoreError::ObjectValidation)
     }
 
@@ -235,8 +218,21 @@ impl ArrivalPackStore {
     }
 
     fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
-        let pack =
-            read_regular_bounded(&join_path(directory, "objects.pack"), self.max_pack_bytes)?;
+        let max_work = self
+            .max_pack_bytes
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(DEFAULT_MAX_EXPANDED_OBJECT_BYTES))
+            .ok_or(DurableFailure::DiskFull)?;
+        let validated = validate_direct_pack_file(
+            &join_path(directory, "objects.pack"),
+            self.format,
+            self.max_pack_bytes,
+            object_count,
+            DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
+            DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
+            max_work,
+        )
+        .map_err(|_| DurableFailure::VerifierCrash)?;
         let per_object = u64::try_from(self.format.hash_len())
             .map_err(|_| DurableFailure::DiskFull)?
             .checked_add(16)
@@ -247,17 +243,15 @@ impl ArrivalPackStore {
             .and_then(|value| value.checked_add((self.format.hash_len() * 2) as u64))
             .ok_or(DurableFailure::DiskFull)?;
         let index = read_regular_bounded(&join_path(directory, "objects.idx"), index_limit)?;
-        let (objects, entries) =
-            parse_pack_with_index(&pack, self.format).map_err(|_| DurableFailure::VerifierCrash)?;
-        if objects.len()
+        if validated.objects.len()
             != usize::try_from(object_count).map_err(|_| DurableFailure::VerifierCrash)?
         {
             return Err(DurableFailure::VerifierCrash);
         }
         let parsed = parse_pack_index_v2(self.format, &index, object_count)
             .map_err(|_| DurableFailure::VerifierCrash)?;
-        if parsed.entries().len() != entries.len()
-            || entries.iter().any(|expected| {
+        if parsed.entries().len() != validated.entries.len()
+            || validated.entries.iter().any(|expected| {
                 parsed
                     .find(expected.id)
                     .is_none_or(|actual| actual != expected)
@@ -265,10 +259,7 @@ impl ArrivalPackStore {
         {
             return Err(DurableFailure::VerifierCrash);
         }
-        let trailer =
-            ObjectId::from_bytes(self.format, &pack[pack.len() - self.format.hash_len()..])
-                .ok_or(DurableFailure::VerifierCrash)?;
-        if parsed.pack_checksum() != trailer {
+        if parsed.pack_checksum() != validated.checksum {
             return Err(DurableFailure::VerifierCrash);
         }
         Ok(())
