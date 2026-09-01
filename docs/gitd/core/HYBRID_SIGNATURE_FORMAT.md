@@ -83,8 +83,13 @@ caller outputs before work and volatile-zeroes its expanded seed and temporary
 polynomial state on success and classified sampler failure. Tests cover the
 255-byte context boundary, fail-closed 256-byte rejection with cleared output,
 and noncanonical hint ordering. Official final FIPS 204/correction vectors, a
-complete rejected-attempt intermediate-zeroization review, timing evidence,
-and independent cryptographic review remain open.
+timing evidence and independent cryptographic review remain open. Signing now
+volatile-zeroes every rejected and accepted attempt's sampled `y`, transformed
+vectors, products, low bits, challenge, encoded high bits, and hint working
+state before retry or return. The gamma sampler's temporary serialization is
+also wiped. This is source inspection of explicit stores; it does not prove
+compiler-created copies, registers, caches, swap, hardware traces, or
+constant-time execution are erased or absent.
 
 The test-only independent oracle is OpenSSL 3.6.4, built 2026-08-25, default
 provider `ML-DSA-65`. The pinned differential case uses key-generation seed
@@ -138,6 +143,7 @@ For rejected case 31 they are
 `0a5e13852a9376b1c83297e502c09664c35a4d1a13c7fd0f0feef90ae98834ed`,
 and `532646784cd450f22ad9c7a0f89f4651ac95eaaa9348b2812e6d6ba076d27df5`.
 Fixtures stay test-only and are loaded only when
-`MRML_ACVP_MLDSA65_SIGVER` is configured. The ACVP suite's documented
-zero-hint-row and z-bound coverage gaps still require separate local negative
-regressions.
+`MRML_ACVP_MLDSA65_SIGVER` is configured. Local regressions supplement the
+ACVP suite by proving that equal cumulative hint counts (including all-zero
+hint rows) are accepted by canonical hint decoding and that a coefficient
+exactly at the strict `gamma1 - beta` bound is rejected.

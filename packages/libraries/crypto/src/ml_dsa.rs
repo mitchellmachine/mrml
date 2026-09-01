@@ -382,6 +382,7 @@ fn sample_gamma1(seed: &[u8; 64], nonce: u16) -> Poly {
     state.finalize(&mut bytes);
     let mut output = [0i32; N];
     let _ = decode_z(&bytes, &mut output);
+    volatile_zero(&mut bytes);
     output
 }
 
@@ -647,6 +648,32 @@ fn wipe_signing_state(
     }
 }
 
+fn wipe_attempt_state(
+    y: &mut VecL,
+    y_ntt: &mut VecL,
+    w: &mut VecK,
+    encoded_w1: &mut [u8],
+    ctilde: &mut [u8; CTILDE_BYTES],
+    c: &mut Poly,
+    z: &mut VecL,
+    low: &mut VecK,
+    ct0: &mut VecK,
+) {
+    for vector in [y, y_ntt, z] {
+        for poly in vector {
+            volatile_zero(poly);
+        }
+    }
+    for vector in [w, low, ct0] {
+        for poly in vector {
+            volatile_zero(poly);
+        }
+    }
+    volatile_zero(encoded_w1);
+    volatile_zero(ctilde);
+    volatile_zero(c);
+}
+
 pub fn ml_dsa_65_sign(
     secret_key: &[u8],
     context: &[u8],
@@ -732,6 +759,15 @@ pub fn ml_dsa_65_sign(
             let matrix = match matrix_row(&rho, row) {
                 Ok(matrix) => matrix,
                 Err(error) => {
+                    for poly in &mut y {
+                        volatile_zero(poly);
+                    }
+                    for poly in &mut y_ntt {
+                        volatile_zero(poly);
+                    }
+                    for poly in &mut w {
+                        volatile_zero(poly);
+                    }
                     wipe_signing_state(
                         &mut rho,
                         &mut key,
@@ -758,6 +794,17 @@ pub fn ml_dsa_65_sign(
         let mut c = match challenge(&ctilde) {
             Ok(challenge) => challenge,
             Err(error) => {
+                for poly in &mut y {
+                    volatile_zero(poly);
+                }
+                for poly in &mut y_ntt {
+                    volatile_zero(poly);
+                }
+                for poly in &mut w {
+                    volatile_zero(poly);
+                }
+                volatile_zero(&mut encoded_w1);
+                volatile_zero(&mut ctilde);
                 wipe_signing_state(
                     &mut rho,
                     &mut key,
@@ -789,8 +836,20 @@ pub fn ml_dsa_65_sign(
             if !check_norm(&z[column], GAMMA1 - BETA) {
                 rejected = true;
             }
+            volatile_zero(&mut product);
         }
         if rejected {
+            wipe_attempt_state(
+                &mut y,
+                &mut y_ntt,
+                &mut w,
+                &mut encoded_w1,
+                &mut ctilde,
+                &mut c,
+                &mut z,
+                &mut low,
+                &mut ct0,
+            );
             continue;
         }
         for row in 0..K {
@@ -810,8 +869,20 @@ pub fn ml_dsa_65_sign(
             if !check_norm(&low[row], GAMMA2 - BETA) || !check_norm(&ct0[row], GAMMA2) {
                 rejected = true;
             }
+            volatile_zero(&mut cs2);
         }
         if rejected {
+            wipe_attempt_state(
+                &mut y,
+                &mut y_ntt,
+                &mut w,
+                &mut encoded_w1,
+                &mut ctilde,
+                &mut c,
+                &mut z,
+                &mut low,
+                &mut ct0,
+            );
             continue;
         }
         signature[..CTILDE_BYTES].copy_from_slice(&ctilde);
@@ -843,9 +914,31 @@ pub fn ml_dsa_65_sign(
         }
         if rejected {
             volatile_zero(signature);
+            wipe_attempt_state(
+                &mut y,
+                &mut y_ntt,
+                &mut w,
+                &mut encoded_w1,
+                &mut ctilde,
+                &mut c,
+                &mut z,
+                &mut low,
+                &mut ct0,
+            );
             continue;
         }
         let verified = ml_dsa_65_verify(&public_key, context, message, signature).is_ok();
+        wipe_attempt_state(
+            &mut y,
+            &mut y_ntt,
+            &mut w,
+            &mut encoded_w1,
+            &mut ctilde,
+            &mut c,
+            &mut z,
+            &mut low,
+            &mut ct0,
+        );
         wipe_signing_state(
             &mut rho,
             &mut key,
@@ -1090,6 +1183,37 @@ mod tests {
         assert_eq!(
             ml_dsa_65_verify(&public, b"mrml-oracle", &message, &expected_signature),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn accepts_zero_hint_rows_and_rejects_exact_z_bound() {
+        let zero_hint_signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        let mut ctilde = [0u8; CTILDE_BYTES];
+        let mut z = [[0i32; N]; L];
+        let mut hints = [[false; N]; K];
+        assert!(decode_signature(
+            &zero_hint_signature,
+            &mut ctilde,
+            &mut z,
+            &mut hints
+        ));
+        assert!(hints.iter().flatten().all(|hint| !hint));
+
+        let mut public = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[41u8; 32], &mut public, &mut secret).unwrap();
+        let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(&secret, b"", b"z bound", &[43u8; 32], &mut signature).unwrap();
+        let mut boundary = [0i32; N];
+        boundary[0] = GAMMA1 - BETA;
+        encode_z(
+            &boundary,
+            &mut signature[CTILDE_BYTES..CTILDE_BYTES + POLYZ_BYTES],
+        );
+        assert_eq!(
+            ml_dsa_65_verify(&public, b"", b"z bound", &signature),
+            Err(MlDsaError::InvalidSignature)
         );
     }
 
