@@ -4,6 +4,7 @@ mod backend;
 mod catalog;
 mod certd_rpc;
 mod config;
+mod identity;
 mod startup;
 
 pub use auth_store::{AuthenticationStoreError, load_gitd_authentication};
@@ -16,6 +17,10 @@ pub use catalog::{
 };
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError, GitdIdentitySnapshot};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};
+pub use identity::{
+    GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,
+    validate_identity_snapshot,
+};
 pub use startup::{
     AdmittedRepository, RepositoryAdmissionError, RepositoryRecoveryError,
     RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,

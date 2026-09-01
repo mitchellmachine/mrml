@@ -72,6 +72,12 @@ package = "org.mrml.library.runtime"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_tls"
+compile_name = "mrml-tls"
+package = "org.mrml.library.tls"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_git_authority"
 compile_name = "mrml-git-authority"
 package = "org.mrml.service.git-authority"

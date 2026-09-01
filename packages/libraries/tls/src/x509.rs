@@ -191,6 +191,25 @@ impl<'a> Certificate<'a> {
         }
     }
 
+    /// Verify only the TLS 1.3 server CertificateVerify construction for an
+    /// already hashed handshake transcript. The fixed context is constructed
+    /// here so callers cannot substitute an arbitrary signed message.
+    pub fn verify_tls13_server_certificate_verify(
+        &self,
+        transcript_digest: &[u8; 32],
+        signature_scheme: u16,
+        signature: &[u8],
+    ) -> Result<(), CertificateError> {
+        if signature_scheme != crate::ECDSA_SECP256R1_SHA256 {
+            return Err(CertificateError::UnsupportedAlgorithm);
+        }
+        let mut signed = [0u8; 130];
+        signed[..64].fill(0x20);
+        signed[64..98].copy_from_slice(b"TLS 1.3, server CertificateVerify\0");
+        signed[98..].copy_from_slice(transcript_digest);
+        self.verify_tls_ecdsa(&signed, signature)
+    }
+
     pub(crate) fn verify_tls_pss(
         &self,
         message: &[u8],

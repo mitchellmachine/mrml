@@ -10,7 +10,8 @@ use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
     GitAuthorityChannelClient, GitdCertdChannelClient, admit_catalog_repository,
     load_deployment_catalog, load_gitd_authentication, load_gitd_config,
-    recover_admitted_repository, validate_storage_layout,
+    prove_identity_signing_route, recover_admitted_repository, validate_identity_snapshot,
+    validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -84,6 +85,11 @@ fn run() -> Result<(), ()> {
         .map_err(|_| ())?;
         authority.health().map_err(|_| ())?;
         certd.health().map_err(|_| ())?;
+        let identity = certd
+            .get_identity_snapshot(&config.server_name)
+            .map_err(|_| ())?;
+        let identity = validate_identity_snapshot(identity, None).map_err(|_| ())?;
+        prove_identity_signing_route(&mut certd, &identity, 1).map_err(|_| ())?;
         let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
         for repository in &catalog.repositories {
             let admitted = admit_catalog_repository(&config, repository).map_err(|_| ())?;

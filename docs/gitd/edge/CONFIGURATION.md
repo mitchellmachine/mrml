@@ -57,7 +57,10 @@ loads the two separately owned 32-byte capability files; erases transient key
 copies; and authenticates exact health responses from both authority and certd
 using independent configured request sequences. Failure of any local or remote
 gate yields no partial-ready result. Only after both peers authenticate, it
-enumerates each admitted repository's durable receive journals. Exact-new
+requests the exact configured hostname's certd snapshot, independently verifies
+its chain/hostname/current validity/SPKI/algorithm/publication binding, and
+requires a test CertificateVerify signature to verify under the leaf key. Only
+then does it enumerate each admitted repository's durable receive journals. Exact-new
 protected transactions recover their immutable receipt through the remote
 purpose-separated signing/verifying authority; exact-new nonprotected
 transactions recover the checksum-protected receipt; completed journals are
