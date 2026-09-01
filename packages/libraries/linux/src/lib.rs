@@ -103,6 +103,7 @@ unsafe extern "C" {
     fn close(file: c_int) -> c_int;
     fn fsync(file: c_int) -> c_int;
     fn fstat(file: c_int, status: *mut Stat) -> c_int;
+    fn geteuid() -> u32;
     fn mkdir(path: *const i8, mode: u32) -> c_int;
     fn unlink(path: *const i8) -> c_int;
     fn rmdir(path: *const i8) -> c_int;
@@ -943,6 +944,20 @@ impl NativeFile {
         let mut status = core::mem::MaybeUninit::<Stat>::uninit();
         (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
             && (unsafe { status.assume_init() }.mode & 0o777) == 0o600
+    }
+
+    pub fn has_private_read_permissions(&self) -> bool {
+        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+        if (unsafe { fstat(self.0, status.as_mut_ptr()) }) != 0 {
+            return false;
+        }
+        matches!(unsafe { status.assume_init() }.mode & 0o777, 0o400 | 0o600)
+    }
+
+    pub fn is_owned_by_effective_user(&self) -> bool {
+        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+        (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
+            && unsafe { status.assume_init() }.uid == unsafe { geteuid() }
     }
 
     pub fn open_write(path: &CStr) -> Option<Self> {

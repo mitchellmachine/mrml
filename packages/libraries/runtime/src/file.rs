@@ -515,6 +515,18 @@ impl File {
         Ok(Self { inner, position: 0 })
     }
 
+    /// Checks the already-open descriptor, avoiding a path metadata race.
+    pub fn is_owner_only_secret(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.inner.has_private_read_permissions() && self.inner.is_owned_by_effective_user()
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
+    }
+
     pub fn create(path: &str) -> Result<Self, FileError> {
         #[cfg(windows)]
         {

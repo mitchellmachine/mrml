@@ -14,7 +14,7 @@ use mrml_interface_detached_signing_v1::{
     OpenPgpDigestAlgorithm as InterfaceOpenPgpDigestAlgorithm, OpenPgpGitSigningPurpose,
 };
 use mrml_runtime::{
-    Text, Vector, join_path, mrml_format as format, mrml_println as println, path_is_file,
+    File, Text, Vector, join_path, mrml_format as format, mrml_println as println, path_is_file,
     read_file_bounded, read_file_text_bounded,
 };
 use mrml_ssh::{
@@ -121,7 +121,7 @@ fn help() {
         println!("  mrml-git {}", usage);
     }
     println!(
-        "\nPulls are fast-forward only. OpenPGP signing and verification are in-process; the host seed-file bridge is explicit, and the host adapter exercises the bounded MRML signing-interface codec. Capability-authorized isolated service routing remains planned. Fetch and clone install advertised branch references only; tag references are not installed. No command invokes host Git, GnuPG, or OpenSSH."
+        "\nPulls are fast-forward only. Private-key files are disabled by default and accepted only by the explicit development provider with MRML_GIT_DEVELOPMENT_KEY_FILES=1; production uses narrow signer and credential providers. Capability-authorized isolated service routing remains planned. Fetch and clone install advertised branch references only; tag references are not installed. No command invokes host Git, GnuPG, or OpenSSH."
     );
 }
 
@@ -197,22 +197,80 @@ fn ssh_credentials_paths(
     private_path: &str,
     host_path: &str,
 ) -> Result<(RsaPrivateKey, Vector<u8>)> {
-    let private = read_file_text_bounded(private_path, 64 * 1024)
-        .map_err(|_| anyhow!("cannot read SSH private key"))?;
+    let private = load_development_rsa_key(private_path)?;
     let host = read_file_text_bounded(host_path, 64 * 1024)
         .map_err(|_| anyhow!("cannot read pinned SSH host key"))?;
-    let private = parse_rsa_private_pem(&private)
-        .map_err(|error| anyhow!("invalid SSH private key: {}", error))?;
     let host = parse_rsa_public_line(&host)
         .and_then(|key| encode_rsa_public_key(&key))
         .map_err(|error| anyhow!("invalid SSH host key: {}", error))?;
     Ok((private, host))
 }
+
+fn development_key_files_enabled() -> bool {
+    mrml_runtime::environment_variable("MRML_GIT_DEVELOPMENT_KEY_FILES").as_deref() == Some("1")
+}
+
+#[inline(never)]
+fn erase_secret(bytes: &mut [u8]) {
+    for byte in bytes {
+        unsafe { core::ptr::write_volatile(byte, 0) };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+fn load_development_secret(path: &str, maximum: usize) -> Result<Vector<u8>> {
+    if !development_key_files_enabled() {
+        return Err(anyhow!(
+            "key-file providers are disabled; use a signer or credential provider"
+        ));
+    }
+    let mut file =
+        File::open_regular(path).map_err(|_| anyhow!("cannot open development SSH private key"))?;
+    if !file.is_owner_only_secret() {
+        return Err(anyhow!(
+            "development key must be owned by this user with mode 0400 or 0600"
+        ));
+    }
+    let length = usize::try_from(
+        file.len()
+            .map_err(|_| anyhow!("cannot inspect development key"))?,
+    )
+    .ok()
+    .filter(|length| *length != 0 && *length <= maximum)
+    .ok_or_else(|| anyhow!("development SSH private key has an invalid size"))?;
+    let mut bytes =
+        Vector::with_capacity(length).map_err(|_| anyhow!("cannot allocate key buffer"))?;
+    bytes.resize(length, 0);
+    if file.read_exact(&mut bytes).is_err() {
+        erase_secret(&mut bytes);
+        return Err(anyhow!("cannot read development SSH private key"));
+    }
+    Ok(bytes)
+}
+
+fn load_development_rsa_key(path: &str) -> Result<RsaPrivateKey> {
+    let mut bytes = load_development_secret(path, 64 * 1024)?;
+    let parsed = core::str::from_utf8(&bytes)
+        .map_err(|_| anyhow!("development SSH private key is not text"))
+        .and_then(|text| {
+            parse_rsa_private_pem(text)
+                .map_err(|error| anyhow!("invalid development SSH private key: {}", error))
+        });
+    erase_secret(&mut bytes);
+    parsed
+}
+
 fn ssh_credentials(repository: &Repository) -> Result<(RsaPrivateKey, Vector<u8>)> {
+    let provider = repository
+        .config_value("ssh", "credentialProvider")
+        .map_err(|error| anyhow!("{}", error))?;
+    if provider.as_deref() != Some("development-key-file") {
+        return Err(anyhow!("SSH credential provider is unavailable"));
+    }
     let private = repository
-        .config_value("ssh", "privateKey")
+        .config_value("ssh", "developmentPrivateKeyFile")
         .map_err(|error| anyhow!("{}", error))?
-        .ok_or_else(|| anyhow!("run ssh auth <private-key.pem> <host-public-key> first"))?;
+        .ok_or_else(|| anyhow!("development SSH credential is incomplete"))?;
     let host = repository
         .config_value("ssh", "hostKey")
         .map_err(|error| anyhow!("{}", error))?
@@ -220,14 +278,17 @@ fn ssh_credentials(repository: &Repository) -> Result<(RsaPrivateKey, Vector<u8>
     ssh_credentials_paths(&private, &host)
 }
 fn repository_ssh_signing_key(repository: &Repository) -> Result<RsaPrivateKey> {
+    let provider = repository
+        .config_value("gpg.ssh", "signerProvider")
+        .map_err(|error| anyhow!("{}", error))?;
+    if provider.as_deref() != Some("development-key-file") {
+        return Err(anyhow!("SSH signer provider is unavailable"));
+    }
     let path = repository
-        .config_value("user", "signingkey")
+        .config_value("gpg.ssh", "developmentPrivateKeyFile")
         .map_err(|error| anyhow!("{}", error))?
-        .or_else(|| repository.config_value("ssh", "privateKey").ok().flatten())
-        .ok_or_else(|| anyhow!("run signing configure <private-key.pem> [allowed-signer] first"))?;
-    let text =
-        read_file_text_bounded(&path, 64 * 1024).map_err(|_| anyhow!("cannot read signing key"))?;
-    parse_rsa_private_pem(&text).map_err(|error| anyhow!("invalid signing key: {}", error))
+        .ok_or_else(|| anyhow!("development SSH signer is incomplete"))?;
+    load_development_rsa_key(&path)
 }
 fn repository_ssh_verification_key(repository: &Repository) -> Result<mrml_ssh::RsaPublicKey> {
     let path = repository
@@ -248,13 +309,13 @@ fn repository_signature_format(repository: &Repository) -> Result<GitSignatureFo
             let user_key = repository
                 .config_value("user", "signingkey")
                 .map_err(|error| anyhow!("{}", error))?;
-            let ssh_key = repository
-                .config_value("ssh", "privateKey")
+            let ssh_provider = repository
+                .config_value("gpg.ssh", "signerProvider")
                 .map_err(|error| anyhow!("{}", error))?;
             let ssh_allowed = repository
                 .config_value("gpg.ssh", "allowedSignersFile")
                 .map_err(|error| anyhow!("{}", error))?;
-            if user_key.is_none() && (ssh_key.is_some() || ssh_allowed.is_some()) {
+            if user_key.is_none() && (ssh_provider.is_some() || ssh_allowed.is_some()) {
                 Ok(GitSignatureFormat::Ssh)
             } else {
                 Ok(GitSignatureFormat::OpenPgp)
@@ -290,6 +351,12 @@ fn repository_openpgp_public_key(repository: &Repository) -> Result<Text> {
 }
 
 fn repository_openpgp_seed(repository: &Repository) -> Result<Text> {
+    let provider = repository
+        .config_value("gpg.openpgp", "signerProvider")
+        .map_err(|error| anyhow!("{}", error))?;
+    if provider.as_deref() != Some("development-key-file") {
+        return Err(anyhow!("OpenPGP signer provider is unavailable"));
+    }
     let configured = repository
         .config_value("gpg.openpgp", "privateSeedFile")
         .map_err(|error| anyhow!("{}", error))?
@@ -420,10 +487,15 @@ fn load_openpgp_public_key(repository: &Repository) -> Result<OpenPgpPublicKey> 
 fn load_openpgp_signing_key(repository: &Repository) -> Result<OpenPgpSigningKey> {
     let public = load_openpgp_public_key(repository)?;
     let path = repository_openpgp_seed(repository)?;
-    let mut bytes = read_file_bounded(&path, 32)
-        .map_err(|_| anyhow!("cannot read bounded OpenPGP private seed"))?;
-    OpenPgpSigningKey::from_seed_bytes_and_public_key(&mut bytes, public)
-        .map_err(|error| anyhow!("invalid OpenPGP private seed: {}", error))
+    let mut bytes = load_development_secret(&path, 32)?;
+    if bytes.len() != 32 {
+        erase_secret(&mut bytes);
+        return Err(anyhow!("development OpenPGP seed must be exactly 32 bytes"));
+    }
+    let result = OpenPgpSigningKey::from_seed_bytes_and_public_key(&mut bytes, public)
+        .map_err(|error| anyhow!("invalid OpenPGP private seed: {}", error));
+    erase_secret(&mut bytes);
+    result
 }
 
 fn sign_openpgp(
@@ -854,7 +926,9 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_remote("origin", &tail[0], false)
                 .map_err(|error| anyhow!("{}", error))?;
-            repo.set_config_value("ssh", "privateKey", &private_path)
+            repo.set_config_value("ssh", "credentialProvider", "development-key-file")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("ssh", "developmentPrivateKeyFile", &private_path)
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("ssh", "hostKey", &host_path)
                 .map_err(|error| anyhow!("{}", error))?;
@@ -1046,7 +1120,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let id = native_repository(repository)?
                 .create_branch(&tail[1], true)
                 .map_err(|error| anyhow!("{}", error))?;
-            println!("Switched to a new branch '{}' at {}", tail[1], &id.to_hex()[..12]);
+            println!(
+                "Switched to a new branch '{}' at {}",
+                tail[1],
+                &id.to_hex()[..12]
+            );
             Ok(())
         }
         "checkout" if tail.len() == 1 => {
@@ -1062,7 +1140,11 @@ fn dispatch(cli: &Cli) -> Result<()> {
             let id = native_repository(repository)?
                 .create_branch(&tail[1], true)
                 .map_err(|error| anyhow!("{}", error))?;
-            println!("Switched to a new branch '{}' at {}", tail[1], &id.to_hex()[..12]);
+            println!(
+                "Switched to a new branch '{}' at {}",
+                tail[1],
+                &id.to_hex()[..12]
+            );
             Ok(())
         }
         "upstream" if tail.len() == 1 => {
@@ -1347,15 +1429,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
         "ssh" if tail.len() == 3 && tail[0] == "auth" => {
             checked_positionals(&tail[1..])?;
             let repo = native_repository(repository)?;
-            let private = read_file_text_bounded(&tail[1], 64 * 1024)
-                .map_err(|_| anyhow!("cannot read SSH private key"))?;
-            parse_rsa_private_pem(&private)
-                .map_err(|error| anyhow!("invalid SSH private key: {}", error))?;
+            let _private = load_development_rsa_key(&tail[1])?;
             let host = read_file_text_bounded(&tail[2], 64 * 1024)
                 .map_err(|_| anyhow!("cannot read SSH host key"))?;
             parse_rsa_public_line(&host)
                 .map_err(|error| anyhow!("invalid SSH host key: {}", error))?;
-            repo.set_config_value("ssh", "privateKey", &tail[1])
+            repo.set_config_value("ssh", "credentialProvider", "development-key-file")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("ssh", "developmentPrivateKeyFile", &tail[1])
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("ssh", "hostKey", &tail[2])
                 .map_err(|error| anyhow!("{}", error))?;
@@ -1391,30 +1472,32 @@ fn dispatch(cli: &Cli) -> Result<()> {
         "signing" if tail.len() == 2 && tail[0] == "configure" => {
             checked_positionals(&tail[1..])?;
             let repo = native_repository(repository)?;
-            let text = read_file_text_bounded(&tail[1], 64 * 1024)
-                .map_err(|_| anyhow!("cannot read signing key"))?;
-            parse_rsa_private_pem(&text)
-                .map_err(|error| anyhow!("invalid signing key: {}", error))?;
+            let _private = load_development_rsa_key(&tail[1])?;
             repo.set_config_value("gpg", "format", "ssh")
                 .map_err(|error| anyhow!("{}", error))?;
-            repo.set_config_value("user", "signingkey", &tail[1])
+            repo.set_config_value("user", "signingkey", "development-provider")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.ssh", "signerProvider", "development-key-file")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.ssh", "developmentPrivateKeyFile", &tail[1])
                 .map_err(|error| anyhow!("{}", error))?;
             print_signing_status(repository)
         }
         "signing" if tail.len() == 3 && tail[0] == "configure" => {
             checked_positionals(&tail[1..])?;
             let repo = native_repository(repository)?;
-            let private = read_file_text_bounded(&tail[1], 64 * 1024)
-                .map_err(|_| anyhow!("cannot read signing key"))?;
-            parse_rsa_private_pem(&private)
-                .map_err(|error| anyhow!("invalid signing key: {}", error))?;
+            let _private = load_development_rsa_key(&tail[1])?;
             let allowed = read_file_text_bounded(&tail[2], 64 * 1024)
                 .map_err(|_| anyhow!("cannot read allowed signer"))?;
             parse_rsa_public_line(&allowed)
                 .map_err(|error| anyhow!("invalid allowed signer: {}", error))?;
             repo.set_config_value("gpg", "format", "ssh")
                 .map_err(|error| anyhow!("{}", error))?;
-            repo.set_config_value("user", "signingkey", &tail[1])
+            repo.set_config_value("user", "signingkey", "development-provider")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.ssh", "signerProvider", "development-key-file")
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.ssh", "developmentPrivateKeyFile", &tail[1])
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("gpg.ssh", "allowedSignersFile", &tail[2])
                 .map_err(|error| anyhow!("{}", error))?;
@@ -1470,16 +1553,23 @@ fn dispatch(cli: &Cli) -> Result<()> {
             } else {
                 join_path(&repo.worktree, seed_path)
             };
-            let mut seed_bytes = read_file_bounded(&checked_seed_path, 32)
-                .map_err(|_| anyhow!("cannot read bounded OpenPGP private seed"))?;
-            let _key =
+            let mut seed_bytes = load_development_secret(&checked_seed_path, 32)?;
+            if seed_bytes.len() != 32 {
+                erase_secret(&mut seed_bytes);
+                return Err(anyhow!("development OpenPGP seed must be exactly 32 bytes"));
+            }
+            let key =
                 OpenPgpSigningKey::from_seed_bytes_and_public_key(&mut seed_bytes, parsed_public)
-                    .map_err(|error| anyhow!("invalid OpenPGP private seed: {}", error))?;
+                    .map_err(|error| anyhow!("invalid OpenPGP private seed: {}", error));
+            erase_secret(&mut seed_bytes);
+            let _key = key?;
             repo.set_config_value("gpg", "format", "openpgp")
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("user", "signingkey", &canonical_fingerprint)
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("gpg.openpgp", "privateSeedFile", seed_path)
+                .map_err(|error| anyhow!("{}", error))?;
+            repo.set_config_value("gpg.openpgp", "signerProvider", "development-key-file")
                 .map_err(|error| anyhow!("{}", error))?;
             repo.set_config_value("gpg.openpgp", "publicKeyFile", public_key)
                 .map_err(|error| anyhow!("{}", error))?;
@@ -1608,11 +1698,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
-        "tag"
-            if tail.len() == 4
-                && tail[0] == "-s"
-                && (tail[1] == "-m" || tail[2] == "-m") =>
-        {
+        "tag" if tail.len() == 4 && tail[0] == "-s" && (tail[1] == "-m" || tail[2] == "-m") => {
             let (tag, message) = if tail[1] == "-m" {
                 (&tail[3], &tail[2])
             } else {
@@ -1676,7 +1762,13 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     .read_object(entry.id)
                     .map_err(|error| anyhow!("{}", error))?
                     .kind;
-                println!("{:06o} {} {}\t{}", entry.mode, kind.name(), entry.id, entry.name);
+                println!(
+                    "{:06o} {} {}\t{}",
+                    entry.mode,
+                    kind.name(),
+                    entry.id,
+                    entry.name
+                );
             }
             Ok(())
         }
@@ -1819,15 +1911,55 @@ mod tests {
 
     #[test]
     fn pull_accepts_only_the_exact_fast_forward_spelling() {
-        let values = |parts: &[&str]| parts.iter().map(|part| Text::from(*part)).collect::<Vector<_>>();
+        let values = |parts: &[&str]| {
+            parts
+                .iter()
+                .map(|part| Text::from(*part))
+                .collect::<Vector<_>>()
+        };
         let empty = values(&[]);
         assert_eq!(parse_pull_arguments(&empty).unwrap(), ("origin", None));
         let flag = values(&["--ff-only"]);
         assert_eq!(parse_pull_arguments(&flag).unwrap(), ("origin", None));
         let exact = values(&["--ff-only", "upstream", "main"]);
-        assert_eq!(parse_pull_arguments(&exact).unwrap(), ("upstream", Some("main")));
+        assert_eq!(
+            parse_pull_arguments(&exact).unwrap(),
+            ("upstream", Some("main"))
+        );
         assert!(parse_pull_arguments(&values(&["--rebase"])).is_err());
         assert!(parse_pull_arguments(&values(&["origin", "main", "extra"])).is_err());
+    }
+
+    #[test]
+    fn legacy_private_key_paths_are_not_automatic_credentials_or_signers() {
+        let path = join_path(
+            &temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-git-private-path-{}", process_id()),
+        );
+        let repository = Repository::init(&path).unwrap();
+        repository
+            .set_config_value("ssh", "privateKey", "/secret/legacy.pem")
+            .unwrap();
+        repository
+            .set_config_value("ssh", "hostKey", "/secret/host.pub")
+            .unwrap();
+        repository
+            .set_config_value("user", "signingkey", "/secret/signing.pem")
+            .unwrap();
+        repository
+            .set_config_value("gpg.openpgp", "privateSeedFile", "/secret/seed")
+            .unwrap();
+
+        for error in [
+            ssh_credentials(&repository).unwrap_err(),
+            repository_ssh_signing_key(&repository).unwrap_err(),
+            repository_openpgp_seed(&repository).unwrap_err(),
+        ] {
+            let rendered = format!("{}", error);
+            assert!(!rendered.contains("/secret/"));
+            assert!(rendered.contains("provider"));
+        }
+        remove_dir_all(&path).unwrap();
     }
 
     #[test]
@@ -1883,11 +2015,7 @@ mod tests {
         invoke(&path, "checkout", &["main"]);
         invoke(&path, "branch", &["-d", "checkout-created"]);
         invoke(&path, "remote", &["add", "backup", "host:repository.git"]);
-        invoke(
-            &path,
-            "remote",
-            &["set-url", "backup", "host:updated.git"],
-        );
+        invoke(&path, "remote", &["set-url", "backup", "host:updated.git"]);
         invoke(&path, "tag", &["v1"]);
         invoke(&path, "tag", &[]);
         write_file(&tracked, b"stashed\n").unwrap();
