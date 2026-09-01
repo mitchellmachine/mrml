@@ -22,7 +22,7 @@ const ORDER_READY: &str = r#"{"status":"ready","identifiers":[{"type":"dns","val
 const ORDER_VALID: &str = r#"{"status":"valid","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","certificate":"https://local-ca.invalid/acme/certificate/1","profile":"classic"}"#;
 const AUTH_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
 const AUTH_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
-const CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----\nTUlNRS1CT1VOREVELUxPQ0FMLUNBLUZJWFRVUkU=\n-----END CERTIFICATE-----\n";
+const SYNTHETIC_CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----\nTUlNRS1CT1VOREVELUxPQ0FMLUNBLUZJWFRVUkU=\n-----END CERTIFICATE-----\n";
 const NONCES: [&str; 16] = [
     "local-nonce-01",
     "local-nonce-02",
@@ -88,6 +88,7 @@ pub struct DeterministicAcmeAuthority<V> {
     nonce_live: bool,
     fault: LocalAuthorityFault,
     fault_used: bool,
+    certificate: &'static str,
 }
 impl<V> DeterministicAcmeAuthority<V> {
     pub const fn new(verifier: V, key: P256Jwk) -> Self {
@@ -99,6 +100,7 @@ impl<V> DeterministicAcmeAuthority<V> {
             nonce_live: false,
             fault: LocalAuthorityFault::None,
             fault_used: false,
+            certificate: SYNTHETIC_CERTIFICATE,
         }
     }
     pub const fn state(&self) -> LocalAuthorityState {
@@ -107,6 +109,10 @@ impl<V> DeterministicAcmeAuthority<V> {
     pub fn inject(&mut self, fault: LocalAuthorityFault) {
         self.fault = fault;
         self.fault_used = false
+    }
+    pub fn with_certificate(mut self, pem_chain: &'static str) -> Self {
+        self.certificate = pem_chain;
+        self
     }
     fn issue_nonce(&mut self) -> &'static str {
         self.nonce = (self.nonce + 1) % NONCES.len();
@@ -306,7 +312,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     next,
                     None,
                     Some("application/pem-certificate-chain"),
-                    CERTIFICATE,
+                    self.certificate,
                 )
             }
             LOCAL_REVOKE_URL => {

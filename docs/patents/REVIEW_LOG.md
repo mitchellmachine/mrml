@@ -11675,3 +11675,14 @@ revocation exchanges. It verifies the existing canonical ES256 JWS form and
 does not operate a public certification authority, add route-selected
 multi-vantage validation, proxy private challenges, or introduce another
 recorded re-review trigger.
+
+# 2026-09-01 — Local ACME certificate retrieval and PKIX validation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment connects the deterministic
+authority's ordinary RFC 8555 certificate resource to the already reviewed
+bounded PEM retrieval and RFC 5280 validation path. It checks an independently
+generated fixture's exact P-256 key, DNS SAN, server purpose, validity, chain,
+trust domain, profile, and receipt digests. It adds no new validation route,
+public-CA operation, MultiTLS multiplexing, or other recorded re-review
+trigger.

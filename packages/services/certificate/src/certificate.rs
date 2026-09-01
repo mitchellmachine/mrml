@@ -457,7 +457,10 @@ mod tests {
     use super::*;
     use mrml_acme::{
         AccountPolicy, AcmeHttpMethod, AcmeTransportRequest, AcmeTransportResponse,
-        ApprovedAcmeJwsDigest, Es256Signature, JoseError, account_contacts_digest,
+        ApprovedAcmeJwsDigest, DeterministicAcmeAuthority, Es256Signature, JoseError,
+        LOCAL_ACCOUNT_URL, LOCAL_AUTHORIZATION_URL, LOCAL_CERTIFICATE_URL, LOCAL_CHALLENGE_URL,
+        LOCAL_DIRECTORY_URL, LOCAL_FINALIZE_URL, LOCAL_NEW_ORDER_URL, LOCAL_ORDER_URL,
+        LocalJwsVerifier, OwnerTermsApproval, account_contacts_digest, fetch_directory,
     };
     #[test]
     fn pem_chain_is_bounded_strict_and_digest_ordered() {
@@ -503,6 +506,13 @@ mod tests {
             _: &ApprovedAcmeJwsDigest,
         ) -> Result<Es256Signature, JoseError> {
             Es256Signature::from_raw([1; 64])
+        }
+    }
+
+    struct LocalVerifier;
+    impl LocalJwsVerifier for LocalVerifier {
+        fn verify(&mut self, _: &P256Jwk, digest: &[u8; 32], signature: &[u8; 64]) -> bool {
+            *digest != [0; 32] && *signature == [1; 64]
         }
     }
 
@@ -776,5 +786,175 @@ mod tests {
             verifier.verify(&chain, &wrong),
             Err(CertificateValidationError::IdentifierMismatch)
         ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn local_authority_issuance_retrieves_and_validates_exact_chain() {
+        let directory_url = mrml_acme::AcmeUrl::parse(LOCAL_DIRECTORY_URL, false).unwrap();
+        let mut exchange = AcmeExchange::new(19, directory_url);
+        let account_key = test_key();
+        let mut authority = DeterministicAcmeAuthority::new(LocalVerifier, account_key)
+            .with_certificate(include_str!("../tests/fixtures/local-acme-leaf.pem"));
+        let mut response = [0u8; 65_536];
+        let mut jws = [0u8; 49_152];
+        let directory = fetch_directory(
+            &directory_url,
+            19,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_account,
+            ProtectedKey::Jwk(&account_key),
+            b"{}",
+            0,
+            &mut Signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        let account_url = mrml_acme::AcmeUrl::parse(LOCAL_ACCOUNT_URL, false).unwrap();
+        for (endpoint, payload) in [
+            (
+                LOCAL_NEW_ORDER_URL,
+                br#"{"identifiers":[{"type":"dns","value":"git.example"}],"profile":"classic"}"#
+                    .as_slice(),
+            ),
+            (LOCAL_AUTHORIZATION_URL, b"".as_slice()),
+            (LOCAL_CHALLENGE_URL, b"{}".as_slice()),
+            (LOCAL_ORDER_URL, b"".as_slice()),
+            (LOCAL_FINALIZE_URL, br#"{"csr":"AA"}"#.as_slice()),
+        ] {
+            post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &mrml_acme::AcmeUrl::parse(endpoint, false).unwrap(),
+                ProtectedKey::Kid(&account_url),
+                payload,
+                1,
+                &mut Signer,
+                &mut response,
+                &mut jws,
+            )
+            .unwrap();
+        }
+        let terms = OwnerTermsApproval::new(
+            directory.generation,
+            directory.terms_of_service.as_ref().unwrap(),
+            b"deterministic local terms fixture",
+        );
+        let (mut account, account_receipt) = AccountLifecycle::prepare_create(
+            &directory,
+            AccountPolicy {
+                ca_class: CaClass::Staging,
+                policy_generation: 2,
+                contact_digest: account_contacts_digest(&[]).unwrap(),
+            },
+            &account_key,
+            Some(&terms),
+            false,
+        )
+        .unwrap();
+        account
+            .commit_created(account_receipt, account_url, &directory)
+            .unwrap();
+        let identifier = DnsIdentifier::parse("git.example", false).unwrap();
+        let profile = directory.profiles().next().unwrap().profile;
+        let mut order = OrderLifecycle::create(
+            &directory,
+            account.generation,
+            account.key,
+            mrml_acme::AcmeUrl::parse(LOCAL_ORDER_URL, false).unwrap(),
+            mrml_acme::AcmeUrl::parse(LOCAL_FINALIZE_URL, false).unwrap(),
+            profile,
+            &[identifier],
+            200,
+            3,
+        )
+        .unwrap();
+        order
+            .apply_order_response(1, OrderState::Ready, None, 100)
+            .unwrap();
+        order
+            .apply_order_response(2, OrderState::Processing, None, 100)
+            .unwrap();
+        order
+            .apply_order_response(
+                3,
+                OrderState::Valid,
+                Some(mrml_acme::AcmeUrl::parse(LOCAL_CERTIFICATE_URL, false).unwrap()),
+                100,
+            )
+            .unwrap();
+        let leaf_chain =
+            PemCertificateChain::parse(include_bytes!("../tests/fixtures/local-acme-leaf.pem"))
+                .unwrap();
+        let leaf = mrml_tls::Certificate::parse(leaf_chain.certificate(0).unwrap()).unwrap();
+        let certificate_key = P256Jwk::from_coordinates(
+            [
+                0x5e, 0x25, 0xb1, 0x1e, 0xc2, 0x48, 0x51, 0xba, 0xcc, 0x4d, 0x0f, 0x9d, 0x44, 0x46,
+                0x29, 0x1c, 0xdb, 0x88, 0xa0, 0xba, 0x89, 0xb5, 0xde, 0xcc, 0x20, 0x73, 0x10, 0x35,
+                0xfb, 0xa6, 0x0c, 0x35,
+            ],
+            [
+                0xb5, 0xae, 0xa9, 0xee, 0x46, 0xf8, 0x40, 0xd1, 0xa8, 0x26, 0x5d, 0x7d, 0x8e, 0x75,
+                0xe6, 0x0e, 0xde, 0x83, 0x46, 0x3e, 0x9b, 0x1d, 0xba, 0xde, 0x47, 0x1c, 0xcd, 0x9b,
+                0x3a, 0x51, 0x5a, 0x04,
+            ],
+        )
+        .unwrap();
+        let mut identifiers = [None; MAX_IDENTITY_NAMES];
+        identifiers[0] = Some(identifier);
+        let policy = CertificateValidationPolicy {
+            policy_generation: 8,
+            ca_class: CaClass::Staging,
+            profile,
+            order_url_digest: Sha256::digest(order.order_url.as_str().as_bytes()),
+            expected_key: certificate_key,
+            identifiers,
+            identifier_count: 1,
+            now_unix: leaf.not_before(),
+            maximum_validity_seconds: 366 * 86_400,
+            maximum_chain_length: 3,
+            trust_store_digest: [7; 32],
+        };
+        let root =
+            PemCertificateChain::parse(include_bytes!("../tests/fixtures/local-acme-root.pem"))
+                .unwrap();
+        let roots = [root.certificate(0).unwrap()];
+        let mut verifier = HostedCertificateChainVerifier {
+            ca_class: CaClass::Staging,
+            trust_store_digest: [7; 32],
+            approved_roots: &roots,
+        };
+        let retrieved = retrieve_and_verify_certificate(
+            &directory,
+            &account,
+            &order,
+            &policy,
+            &mut exchange,
+            &mut authority,
+            &mut Signer,
+            &mut verifier,
+            &mut response,
+            &mut jws,
+        );
+        let retrieved = match retrieved {
+            Ok(retrieved) => retrieved,
+            Err(_) => panic!("local authority certificate retrieval failed"),
+        };
+        assert_eq!(retrieved.chain.count(), 1);
+        assert_eq!(retrieved.receipt.leaf_spki_digest, leaf.spki_sha256());
+        assert_eq!(
+            retrieved.receipt.chain_digest,
+            retrieved.chain.chain_digest()
+        );
     }
 }
