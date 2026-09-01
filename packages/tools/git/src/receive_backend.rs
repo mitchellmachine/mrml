@@ -313,8 +313,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        ActiveRefFile, FullRefName, ObjectFormat, PackGeneration, PackObject, RepositoryGeneration,
-        RepositoryIdentity, RevocationGeneration, TrustGeneration, encode_pack_with_format,
+        ActiveRefFile, FullRefName, ObjectFormat, PackGeneration, PackObject, PackSetLimits,
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+        encode_pack_with_format,
     };
 
     struct Reader {
@@ -467,19 +468,34 @@ mod tests {
         )
         .unwrap();
         let identity = RepositoryIdentity::parse("owner/repository").unwrap();
+        let initial_manifest = crate::pack_set::build_pack_set_manifest(
+            identity.clone(),
+            RepositoryGeneration(7),
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            Vector::new(),
+            PackSetLimits {
+                max_packs: 65_536,
+                max_objects: 10_000_000,
+                max_pack_bytes: 8 * 1024 * 1024 * 1024 * 1024,
+                max_index_bytes: 16 * 1024 * 1024 * 1024,
+                max_work_units: 16 * 1024 * 1024 * 1024 * 1024,
+            },
+        )
+        .unwrap();
         let active = ActiveRefState {
             repository: identity.clone(),
             repository_generation: RepositoryGeneration(7),
             trust_generation: TrustGeneration(8),
             revocation_generation: RevocationGeneration(9),
             pack_generation: PackGeneration(1),
-            pack_set_digest: [1; 32],
+            pack_set_digest: initial_manifest.digest().unwrap(),
             object_format: ObjectFormat::Sha256,
             default_branch: FullRefName::parse("refs/heads/main").unwrap(),
             refs: [(FullRefName::parse("refs/heads/main").unwrap(), old)].into(),
         };
         let refs = path(&root, "refs");
-        ActiveRefFile::initialize(&refs, &active).unwrap();
+        ActiveRefFile::initialize_with_pack_set(&refs, &active, &initial_manifest).unwrap();
         let store = LinuxDurableReceiveStore::open(
             &path(&root, "journals"),
             &path(&root, "packs"),

@@ -21,6 +21,30 @@ pub struct ActiveRefFile {
 }
 
 impl ActiveRefFile {
+    #[allow(dead_code)] // used by repository bootstrap once the compositor owns initialization
+    pub(crate) fn initialize_with_pack_set(
+        directory: &str,
+        state: &ActiveRefState,
+        manifest: &PackSetManifest,
+    ) -> Result<Self, DurableFailure> {
+        if manifest.digest().map_err(|_| DurableFailure::VerifierCrash)?
+            != state.pack_set_digest
+            || manifest.repository() != &state.repository
+            || manifest.repository_generation() != state.repository_generation
+            || manifest.pack_generation() != state.pack_generation
+            || manifest.object_format() != state.object_format
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        create_dir_all(directory).map_err(|_| DurableFailure::DiskFull)?;
+        let store = Self::paths(directory)?;
+        if path_exists(&store.active) {
+            return Err(DurableFailure::StaleLock);
+        }
+        store.persist_manifest(manifest, &state.pack_set_digest)?;
+        Self::initialize(directory, state)
+    }
+
     pub fn initialize(directory: &str, state: &ActiveRefState) -> Result<Self, DurableFailure> {
         create_dir_all(directory).map_err(|_| DurableFailure::DiskFull)?;
         let store = Self::paths(directory)?;
@@ -229,20 +253,7 @@ impl ActiveRefFile {
         let manifest_bytes =
             encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
         let manifest_path = self.pack_set_path(&next.pack_set_digest);
-        if path_exists(&manifest_path) {
-            let existing = read_bounded(&manifest_path, MAX_PACK_SET_MANIFEST_BYTES)
-                .map_err(|_| DurableFailure::VerifierCrash)?;
-            if existing != manifest_bytes {
-                return Err(DurableFailure::VerifierCrash);
-            }
-        } else {
-            let mut file = File::create_new(&manifest_path).map_err(|_| DurableFailure::StaleLock)?;
-            file.write_all(&manifest_bytes)
-                .map_err(|_| DurableFailure::ShortWrite)?;
-            file.sync().map_err(|_| DurableFailure::Fsync)?;
-            drop(file);
-            sync_ref_directory(&self.directory)?;
-        }
+        self.persist_manifest_bytes(&manifest_path, &manifest_bytes)?;
         let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
         let mut temporary =
             File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
@@ -277,6 +288,33 @@ impl ActiveRefFile {
         }
         name.push_str(".manifest");
         join_path(&self.directory, &name)
+    }
+
+    #[allow(dead_code)]
+    fn persist_manifest(
+        &self,
+        manifest: &PackSetManifest,
+        digest: &[u8; 32],
+    ) -> Result<(), DurableFailure> {
+        let bytes = encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
+        self.persist_manifest_bytes(&self.pack_set_path(digest), &bytes)
+    }
+
+    fn persist_manifest_bytes(&self, path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
+        if path_exists(path) {
+            let existing = read_bounded(path, MAX_PACK_SET_MANIFEST_BYTES)
+                .map_err(|_| DurableFailure::VerifierCrash)?;
+            if existing != bytes {
+                return Err(DurableFailure::VerifierCrash);
+            }
+            return Ok(());
+        }
+        let mut file = File::create_new(path).map_err(|_| DurableFailure::StaleLock)?;
+        file.write_all(bytes)
+            .map_err(|_| DurableFailure::ShortWrite)?;
+        file.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(file);
+        sync_ref_directory(&self.directory)
     }
 
     fn paths(directory: &str) -> Result<Self, DurableFailure> {

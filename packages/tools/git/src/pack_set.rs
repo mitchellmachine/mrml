@@ -30,7 +30,7 @@ pub enum PackSetError {
     NonCanonical,
 }
 
-#[allow(dead_code)] // constructed by the future atomic pack-generation activation gate
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedPackIndexSummary {
     pub transaction: QuarantineTransactionId,
     pub object_count: u32,
@@ -214,7 +214,7 @@ pub fn parse_pack_set_manifest(
         _ => return Err(PackSetError::Malformed),
     };
     let count = usize::try_from(c.u32()?).map_err(|_| PackSetError::Resource)?;
-    if count == 0 || count > limits.max_packs as usize {
+    if count > limits.max_packs as usize {
         return Err(PackSetError::Resource);
     }
     let mut entries = Vector::new();
@@ -274,7 +274,6 @@ pub fn parse_pack_set_manifest(
 fn validate(m: &PackSetManifest, l: PackSetLimits) -> Result<(), PackSetError> {
     if m.repository_generation.0 == 0
         || m.pack_generation.0 == 0
-        || m.entries.is_empty()
         || m.entries.len() > l.max_packs as usize
     {
         return Err(PackSetError::Resource);

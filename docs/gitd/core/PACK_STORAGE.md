@@ -142,9 +142,14 @@ open only that digest-derived regular file and recheck the digest, repository,
 format, and generations. A manifest not selected by the active record grants
 no read authority.
 
-The receive storage compositor does not yet construct the cumulative manifest
-from installed authenticated indexes or call this transition, and normal
-repository object lookup does not yet consume the selected entries. Those
-remaining gates must reopen exactly the enumerated pack/index files and
+The hosted-Linux durable receive compositor now reopens the installed pack and
+index, derives an authenticated summary, extends the previously selected
+manifest without duplicate objects, and calls this transition. An exact empty
+manifest represents a repository with no arrival packs and gives bootstrap a
+real digest instead of a sentinel. The end-to-end receive test reopens the
+selected next generation and its exact transaction/object membership.
+
+Normal repository object lookup does not yet consume the selected entries. That
+remaining gate must open only the enumerated pack/index files and independently
 revalidate every binding. This mechanism is independent of compaction and does
 not authorize patent-gated delta selection.

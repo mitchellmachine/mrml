@@ -10,9 +10,10 @@ use crate::sha1::GitObjectHasher;
 use crate::{
     BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
     DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
-    PackError, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2,
-    parse_pack_with_index,
+    PackError, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
+    parse_pack_index_v2, parse_pack_with_index,
 };
+use crate::pack_set::AuthenticatedPackIndexSummary;
 
 pub struct ArrivalPackStore {
     quarantine: Text,
@@ -302,7 +303,29 @@ impl ArrivalPackStore {
         self.verify_directory(&self.arrival_path(transaction), object_count)
     }
 
+    pub(crate) fn authenticated_installed_summary(
+        &self,
+        transaction: QuarantineTransactionId,
+        object_count: u32,
+    ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
+        self.summarize_directory(&self.arrival_path(transaction), transaction, object_count)
+    }
+
     fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
+        self.summarize_directory(
+            directory,
+            QuarantineTransactionId([1; 16]),
+            object_count,
+        )
+        .map(|_| ())
+    }
+
+    fn summarize_directory(
+        &self,
+        directory: &str,
+        transaction: QuarantineTransactionId,
+        object_count: u32,
+    ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
         let max_work = self
             .max_pack_bytes
             .checked_mul(2)
@@ -350,7 +373,35 @@ impl ArrivalPackStore {
         if parsed.pack_checksum() != validated.checksum {
             return Err(DurableFailure::VerifierCrash);
         }
-        Ok(())
+        let pack_bytes = File::open_regular(&join_path(directory, "objects.pack"))
+            .and_then(|file| file.len())
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let index_bytes = u64::try_from(index.len()).map_err(|_| DurableFailure::DiskFull)?;
+        let index_checksum = ObjectId::from_bytes(
+            self.format,
+            &index[index.len() - self.format.hash_len()..],
+        )
+        .ok_or(DurableFailure::VerifierCrash)?;
+        let work_units = pack_bytes
+            .checked_add(validated.expanded_bytes)
+            .ok_or(DurableFailure::DiskFull)?;
+        let mut object_ids = Vector::new();
+        object_ids
+            .try_reserve_exact(parsed.entries().len())
+            .map_err(|_| DurableFailure::DiskFull)?;
+        for entry in parsed.entries() {
+            object_ids.push(entry.id);
+        }
+        Ok(AuthenticatedPackIndexSummary {
+            transaction,
+            object_count,
+            pack_checksum: parsed.pack_checksum(),
+            index_checksum,
+            pack_bytes,
+            index_bytes,
+            work_units,
+            object_ids,
+        })
     }
 
     fn quarantine_path(&self, transaction: QuarantineTransactionId) -> Text {

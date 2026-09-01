@@ -5,7 +5,10 @@ use crate::{
     ActiveRefState, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
     ObjectFormat, ObjectId, PackError, QuarantineTransaction, QuarantineTransactionId,
     ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord, RecoveryAction, Repository,
-    VerifiedRefTransaction, classify_receive_recovery,
+    PackGeneration, PackSetLimits, VerifiedRefTransaction, classify_receive_recovery,
+};
+use crate::pack_set::{
+    AuthenticatedPackIndexSummary, build_pack_set_manifest,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -18,6 +21,17 @@ pub struct LinuxDurableReceiveStore {
     refs: ActiveRefFile,
     receipts: AuditReceiptDirectory,
     pending: Option<(QuarantineTransactionId, u32)>,
+    pending_summary: Option<AuthenticatedPackIndexSummary>,
+}
+
+const fn receive_pack_set_limits() -> PackSetLimits {
+    PackSetLimits {
+        max_packs: 65_536,
+        max_objects: 10_000_000,
+        max_pack_bytes: 8 * 1024 * 1024 * 1024 * 1024,
+        max_index_bytes: 16 * 1024 * 1024 * 1024,
+        max_work_units: 16 * 1024 * 1024 * 1024 * 1024,
+    }
 }
 
 impl LinuxDurableReceiveStore {
@@ -87,6 +101,7 @@ impl LinuxDurableReceiveStore {
             refs: ActiveRefFile::open(refs).map_err(|_| DurableFailure::VerifierCrash)?,
             receipts: AuditReceiptDirectory::open(receipts)?,
             pending: None,
+            pending_summary: None,
         })
     }
 
@@ -243,6 +258,12 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
             return Err(DurableFailure::StaleLock);
         }
         self.arrivals.install(transaction, object_count)
+            ?;
+        self.pending_summary = Some(
+            self.arrivals
+                .authenticated_installed_summary(transaction, object_count)?,
+        );
+        Ok(())
     }
 
     fn reread_activation_snapshot(
@@ -256,7 +277,65 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
         &mut self,
         verified: &VerifiedRefTransaction,
     ) -> Result<(), DurableFailure> {
-        self.refs.activate(verified).map(|_| ())
+        let current = self
+            .refs
+            .load()
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let limits = receive_pack_set_limits();
+        let selected = self
+            .refs
+            .load_selected_pack_set(limits)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let pending = self
+            .pending_summary
+            .as_ref()
+            .ok_or(DurableFailure::StaleLock)?;
+        let mut summaries = mrml_runtime::Vector::new();
+        summaries
+            .try_reserve_exact(selected.entries().len().saturating_add(1))
+            .map_err(|_| DurableFailure::DiskFull)?;
+        for entry in selected.entries() {
+            let mut object_ids = mrml_runtime::Vector::new();
+            object_ids
+                .try_extend_from_slice(entry.object_ids())
+                .map_err(|_| DurableFailure::DiskFull)?;
+            summaries.push(AuthenticatedPackIndexSummary {
+                transaction: entry.transaction(),
+                object_count: entry.object_count(),
+                pack_checksum: entry.pack_checksum(),
+                index_checksum: entry.index_checksum(),
+                pack_bytes: entry.pack_bytes(),
+                index_bytes: entry.index_bytes(),
+                work_units: entry.work_units(),
+                object_ids,
+            });
+        }
+        summaries.push(pending.clone());
+        summaries.sort_unstable_by(|left, right| left.transaction.cmp(&right.transaction));
+        let manifest = build_pack_set_manifest(
+            current.repository.clone(),
+            crate::RepositoryGeneration(
+                current
+                    .repository_generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(DurableFailure::DiskFull)?,
+            ),
+            PackGeneration(
+                current
+                    .pack_generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(DurableFailure::DiskFull)?,
+            ),
+            current.object_format,
+            summaries,
+            limits,
+        )
+        .map_err(|_| DurableFailure::VerifierCrash)?;
+        self.refs
+            .activate_with_pack_set(verified, &manifest)
+            .map(|_| ())
     }
 
     fn append_audit_receipt_and_fsync(
@@ -366,7 +445,16 @@ mod tests {
         transaction.history_verified(&verified).unwrap();
 
         let ref_path = path(&root, "refs");
-        ActiveRefFile::initialize(
+        let initial_manifest = build_pack_set_manifest(
+            repository.clone(),
+            RepositoryGeneration(7),
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            mrml_runtime::Vector::new(),
+            receive_pack_set_limits(),
+        )
+        .unwrap();
+        ActiveRefFile::initialize_with_pack_set(
             &ref_path,
             &ActiveRefState {
                 repository,
@@ -374,11 +462,12 @@ mod tests {
                 trust_generation: TrustGeneration(8),
                 revocation_generation: RevocationGeneration(9),
                 pack_generation: PackGeneration(1),
-                pack_set_digest: [1; 32],
+                pack_set_digest: initial_manifest.digest().unwrap(),
                 object_format: ObjectFormat::Sha256,
                 default_branch: FullRefName::parse("refs/heads/main").unwrap(),
                 refs: [(FullRefName::parse("refs/heads/main").unwrap(), old)].into(),
             },
+            &initial_manifest,
         )
         .unwrap();
         let mut store = LinuxDurableReceiveStore::open(
@@ -394,7 +483,16 @@ mod tests {
         let receipt =
             durably_activate_verified_receive(&mut transaction, &verified, &mut store).unwrap();
         assert_eq!(transaction.phase(), QuarantinePhase::AuditReceiptAppended);
-        assert_eq!(store.active_refs().load().unwrap().refs[0].1, new);
+        let active = store.active_refs().load().unwrap();
+        assert_eq!(active.refs[0].1, new);
+        assert_eq!(active.pack_generation, PackGeneration(2));
+        let selected = store
+            .active_refs()
+            .load_selected_pack_set(receive_pack_set_limits())
+            .unwrap();
+        assert_eq!(selected.entries().len(), 1);
+        assert_eq!(selected.entries()[0].transaction(), id);
+        assert_eq!(selected.entries()[0].object_ids(), &[new]);
         assert_eq!(store.receipts().load(id).unwrap(), receipt);
         let final_journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
             .unwrap()
