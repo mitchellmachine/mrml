@@ -37,6 +37,15 @@ and work budgets are charged for the four-byte header and payload before the
 operation can continue. Invalid lengths, noncanonical hexadecimal, truncation,
 and exhausted limits fail without invoking repository mutation.
 
+The protocol-v2 core emits an exact capability advertisement for `ls-refs`,
+`fetch=thin-pack ofs-delta sideband-all`, and the selected SHA-1 or SHA-256
+object format. Its bounded request parser accepts `ls-refs` options and exact-
+width fetch wants/haves for that format. Duplicate flags, malformed client
+capabilities, unknown commands, and unsupported shallow, deepen, filter,
+want-ref, packfile-URI, and future arguments fail closed. These parser tests do
+not constitute a fetch backend: object negotiation, pack generation, side-band
+response production, receive-pack parsing, and activation are still disabled.
+
 Errors distinguish malformed input/identifiers/refs/paths, authorization,
 object validation, ancestry, signature, policy, resources, storage, stale
 generation, unsupported behavior, and uncertain durable outcomes. No private

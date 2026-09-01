@@ -2,7 +2,7 @@
 
 use mrml_runtime::Vector;
 
-use crate::{BoundedRead, BoundedWrite, GitdCoreError, WorkBudget};
+use crate::{BoundedRead, BoundedWrite, GitdCoreError, ObjectFormat, ObjectId, WorkBudget};
 
 /// Git's four-byte hexadecimal length includes the header itself. Although the
 /// wire format can spell `ffff`, protocol payloads are limited to 65,516 bytes.
@@ -14,6 +14,249 @@ pub enum PktLine {
     Flush,
     Delimiter,
     ResponseEnd,
+}
+
+pub const MAX_V2_ARGUMENTS: usize = 8_192;
+pub const MAX_V2_REF_PREFIXES: usize = 256;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProtocolV2Request {
+    LsRefs {
+        peel: bool,
+        symrefs: bool,
+        unborn: bool,
+        prefixes: Vector<Vector<u8>>,
+    },
+    Fetch {
+        wants: Vector<ObjectId>,
+        haves: Vector<ObjectId>,
+        done: bool,
+        thin_pack: bool,
+        ofs_delta: bool,
+        sideband_all: bool,
+    },
+}
+
+/// Advertise only the server-core features implemented by this parser. In
+/// particular, shallow, filter, ref-in-want, packfile-uris and push options are
+/// deliberately absent.
+pub fn write_v2_capability_advertisement(
+    output: &mut dyn BoundedWrite,
+    format: ObjectFormat,
+    budget: &mut ProtocolBudget,
+) -> Result<(), GitdCoreError> {
+    for line in [
+        b"version 2\n".as_slice(),
+        b"ls-refs=unborn\n".as_slice(),
+        b"fetch=thin-pack ofs-delta sideband-all\n".as_slice(),
+    ] {
+        write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
+    }
+    let object_format = match format {
+        ObjectFormat::Sha1 => b"object-format=sha1\n".as_slice(),
+        ObjectFormat::Sha256 => b"object-format=sha256\n".as_slice(),
+    };
+    write_pkt_line(output, &PktLine::Data(copy_bytes(object_format)?), budget)?;
+    write_pkt_line(output, &PktLine::Flush, budget)
+}
+
+/// Parse one protocol-v2 command. The transport must already have selected the
+/// exact repository and object format. Unknown command capabilities and
+/// unsupported arguments fail closed instead of being ignored.
+pub fn read_v2_request(
+    input: &mut dyn BoundedRead,
+    format: ObjectFormat,
+    budget: &mut ProtocolBudget,
+) -> Result<ProtocolV2Request, GitdCoreError> {
+    let command = data_line(read_pkt_line(input, budget)?)?;
+    let command = strip_lf(&command)?;
+    let command_name = command
+        .strip_prefix(b"command=")
+        .ok_or(GitdCoreError::MalformedInput)?;
+
+    let mut capability_count = 0usize;
+    let mut saw_agent = false;
+    let mut saw_object_format = false;
+    loop {
+        match read_pkt_line(input, budget)? {
+            PktLine::Delimiter => break,
+            PktLine::Data(line) => {
+                capability_count = capability_count
+                    .checked_add(1)
+                    .ok_or(GitdCoreError::Resource)?;
+                if capability_count > 16 {
+                    return Err(GitdCoreError::Resource);
+                }
+                let capability = strip_lf(&line)?;
+                if let Some(agent) = capability.strip_prefix(b"agent=") {
+                    if saw_agent
+                        || agent.is_empty()
+                        || agent.len() > 256
+                        || agent.iter().any(|byte| !byte.is_ascii_graphic())
+                    {
+                        return Err(GitdCoreError::MalformedInput);
+                    }
+                    saw_agent = true;
+                } else if let Some(value) = capability.strip_prefix(b"object-format=") {
+                    if saw_object_format
+                        || value
+                            != match format {
+                                ObjectFormat::Sha1 => b"sha1".as_slice(),
+                                ObjectFormat::Sha256 => b"sha256".as_slice(),
+                            }
+                    {
+                        return Err(GitdCoreError::MalformedInput);
+                    }
+                    saw_object_format = true;
+                } else {
+                    return Err(GitdCoreError::Unsupported);
+                }
+            }
+            _ => return Err(GitdCoreError::MalformedInput),
+        }
+    }
+
+    match command_name {
+        b"ls-refs" => read_ls_refs(input, budget),
+        b"fetch" => read_fetch(input, format, budget),
+        _ => Err(GitdCoreError::Unsupported),
+    }
+}
+
+fn read_ls_refs(
+    input: &mut dyn BoundedRead,
+    budget: &mut ProtocolBudget,
+) -> Result<ProtocolV2Request, GitdCoreError> {
+    let mut peel = false;
+    let mut symrefs = false;
+    let mut unborn = false;
+    let mut prefixes = Vector::new();
+    for _ in 0..MAX_V2_ARGUMENTS {
+        let line = match read_pkt_line(input, budget)? {
+            PktLine::Flush => {
+                return Ok(ProtocolV2Request::LsRefs {
+                    peel,
+                    symrefs,
+                    unborn,
+                    prefixes,
+                });
+            }
+            PktLine::Data(line) => line,
+            _ => return Err(GitdCoreError::MalformedInput),
+        };
+        let argument = strip_lf(&line)?;
+        match argument {
+            b"peel" => set_once(&mut peel)?,
+            b"symrefs" => set_once(&mut symrefs)?,
+            b"unborn" => set_once(&mut unborn)?,
+            _ if argument.starts_with(b"ref-prefix ") => {
+                if prefixes.len() >= MAX_V2_REF_PREFIXES {
+                    return Err(GitdCoreError::Resource);
+                }
+                let prefix = &argument[11..];
+                if prefix.is_empty()
+                    || prefix.len() > crate::gitd_core::MAX_REF_NAME_BYTES
+                    || prefix.iter().any(|byte| *byte == 0 || !byte.is_ascii())
+                {
+                    return Err(GitdCoreError::MalformedRef);
+                }
+                prefixes.push(copy_bytes(prefix)?);
+            }
+            _ => return Err(GitdCoreError::Unsupported),
+        }
+    }
+    Err(GitdCoreError::Resource)
+}
+
+fn read_fetch(
+    input: &mut dyn BoundedRead,
+    format: ObjectFormat,
+    budget: &mut ProtocolBudget,
+) -> Result<ProtocolV2Request, GitdCoreError> {
+    let mut wants = Vector::new();
+    let mut haves = Vector::new();
+    let mut done = false;
+    let mut thin_pack = false;
+    let mut ofs_delta = false;
+    let mut sideband_all = false;
+    for _ in 0..MAX_V2_ARGUMENTS {
+        let line = match read_pkt_line(input, budget)? {
+            PktLine::Flush => {
+                if wants.is_empty() {
+                    return Err(GitdCoreError::MalformedInput);
+                }
+                return Ok(ProtocolV2Request::Fetch {
+                    wants,
+                    haves,
+                    done,
+                    thin_pack,
+                    ofs_delta,
+                    sideband_all,
+                });
+            }
+            PktLine::Data(line) => line,
+            _ => return Err(GitdCoreError::MalformedInput),
+        };
+        let argument = strip_lf(&line)?;
+        if let Some(hex) = argument.strip_prefix(b"want ") {
+            wants.push(parse_wire_id(format, hex)?);
+        } else if let Some(hex) = argument.strip_prefix(b"have ") {
+            haves.push(parse_wire_id(format, hex)?);
+        } else {
+            match argument {
+                b"done" => set_once(&mut done)?,
+                b"thin-pack" => set_once(&mut thin_pack)?,
+                b"ofs-delta" => set_once(&mut ofs_delta)?,
+                b"sideband-all" => set_once(&mut sideband_all)?,
+                // Includes shallow/deepen/filter/want-ref/packfile-uris and
+                // every future feature until implemented and tested.
+                _ => return Err(GitdCoreError::Unsupported),
+            }
+        }
+        if wants
+            .len()
+            .checked_add(haves.len())
+            .ok_or(GitdCoreError::Resource)?
+            > MAX_V2_ARGUMENTS
+        {
+            return Err(GitdCoreError::Resource);
+        }
+    }
+    Err(GitdCoreError::Resource)
+}
+
+fn data_line(packet: PktLine) -> Result<Vector<u8>, GitdCoreError> {
+    match packet {
+        PktLine::Data(line) => Ok(line),
+        _ => Err(GitdCoreError::MalformedInput),
+    }
+}
+
+fn strip_lf(line: &[u8]) -> Result<&[u8], GitdCoreError> {
+    line.strip_suffix(b"\n")
+        .filter(|line| !line.contains(&b'\r') && !line.contains(&0))
+        .ok_or(GitdCoreError::MalformedInput)
+}
+
+fn set_once(value: &mut bool) -> Result<(), GitdCoreError> {
+    if *value {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    *value = true;
+    Ok(())
+}
+
+fn parse_wire_id(format: ObjectFormat, bytes: &[u8]) -> Result<ObjectId, GitdCoreError> {
+    let text = core::str::from_utf8(bytes).map_err(|_| GitdCoreError::MalformedInput)?;
+    ObjectId::parse_for(format, text).ok_or(GitdCoreError::MalformedInput)
+}
+
+fn copy_bytes(bytes: &[u8]) -> Result<Vector<u8>, GitdCoreError> {
+    let mut output = Vector::new();
+    output
+        .try_extend_from_slice(bytes)
+        .map_err(|_| GitdCoreError::Resource)?;
+    Ok(output)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -335,6 +578,149 @@ mod tests {
         assert_eq!(
             read_pkt_line(&mut bounded, &mut budget(7)),
             Err(GitdCoreError::Resource)
+        );
+    }
+
+    fn request(lines: &[&[u8]]) -> Reader {
+        let mut writer = Writer {
+            bytes: Vector::new(),
+            limit: 16_384,
+        };
+        let mut output_budget = budget(16_384);
+        for line in lines {
+            if *line == b"DELIM" {
+                write_pkt_line(&mut writer, &PktLine::Delimiter, &mut output_budget).unwrap();
+            } else if *line == b"FLUSH" {
+                write_pkt_line(&mut writer, &PktLine::Flush, &mut output_budget).unwrap();
+            } else {
+                write_pkt_line(
+                    &mut writer,
+                    &PktLine::Data(copy_bytes(line).unwrap()),
+                    &mut output_budget,
+                )
+                .unwrap();
+            }
+        }
+        Reader {
+            bytes: writer.bytes,
+            offset: 0,
+            chunk: 7,
+        }
+    }
+
+    #[test]
+    fn v2_advertisement_is_exact_and_does_not_claim_unsupported_features() {
+        let mut writer = Writer {
+            bytes: Vector::new(),
+            limit: 512,
+        };
+        write_v2_capability_advertisement(&mut writer, ObjectFormat::Sha256, &mut budget(512))
+            .unwrap();
+        let text = core::str::from_utf8(&writer.bytes).unwrap();
+        assert!(text.contains("object-format=sha256"));
+        assert!(text.contains("fetch=thin-pack ofs-delta sideband-all"));
+        assert!(!text.contains("filter"));
+        assert!(!text.contains("shallow"));
+        assert!(!text.contains("packfile-uris"));
+    }
+
+    #[test]
+    fn v2_ls_refs_and_sha256_fetch_are_strictly_parsed() {
+        let mut ls_refs = request(&[
+            b"command=ls-refs\n",
+            b"agent=mrml\n",
+            b"DELIM",
+            b"peel\n",
+            b"symrefs\n",
+            b"ref-prefix refs/heads/\n",
+            b"FLUSH",
+        ]);
+        assert_eq!(
+            read_v2_request(&mut ls_refs, ObjectFormat::Sha256, &mut budget(16_384)),
+            Ok(ProtocolV2Request::LsRefs {
+                peel: true,
+                symrefs: true,
+                unborn: false,
+                prefixes: [Vector::from(*b"refs/heads/")].into(),
+            })
+        );
+
+        let want = b"want 1111111111111111111111111111111111111111111111111111111111111111\n";
+        let have = b"have 2222222222222222222222222222222222222222222222222222222222222222\n";
+        let mut fetch = request(&[
+            b"command=fetch\n",
+            b"DELIM",
+            want,
+            have,
+            b"thin-pack\n",
+            b"ofs-delta\n",
+            b"sideband-all\n",
+            b"done\n",
+            b"FLUSH",
+        ]);
+        let parsed =
+            read_v2_request(&mut fetch, ObjectFormat::Sha256, &mut budget(16_384)).unwrap();
+        let ProtocolV2Request::Fetch {
+            wants,
+            haves,
+            done,
+            thin_pack,
+            ofs_delta,
+            sideband_all,
+        } = parsed
+        else {
+            panic!("expected fetch");
+        };
+        assert_eq!(wants.len(), 1);
+        assert_eq!(haves.len(), 1);
+        assert!(done && thin_pack && ofs_delta && sideband_all);
+    }
+
+    #[test]
+    fn v2_rejects_unadvertised_features_duplicates_and_wrong_object_ids() {
+        for argument in [
+            b"filter blob:none\n".as_slice(),
+            b"deepen 1\n",
+            b"want-ref refs/heads/main\n",
+        ] {
+            let mut reader = request(&[
+                b"command=fetch\n",
+                b"DELIM",
+                b"want 1111111111111111111111111111111111111111111111111111111111111111\n",
+                argument,
+                b"FLUSH",
+            ]);
+            assert_eq!(
+                read_v2_request(&mut reader, ObjectFormat::Sha256, &mut budget(16_384)),
+                Err(GitdCoreError::Unsupported)
+            );
+        }
+
+        let mut duplicate = request(&[
+            b"command=ls-refs\n",
+            b"DELIM",
+            b"peel\n",
+            b"peel\n",
+            b"FLUSH",
+        ]);
+        assert_eq!(
+            read_v2_request(&mut duplicate, ObjectFormat::Sha256, &mut budget(16_384)),
+            Err(GitdCoreError::MalformedInput)
+        );
+
+        let mut sha1_for_sha256 = request(&[
+            b"command=fetch\n",
+            b"DELIM",
+            b"want 1111111111111111111111111111111111111111\n",
+            b"FLUSH",
+        ]);
+        assert_eq!(
+            read_v2_request(
+                &mut sha1_for_sha256,
+                ObjectFormat::Sha256,
+                &mut budget(16_384)
+            ),
+            Err(GitdCoreError::MalformedInput)
         );
     }
 }
