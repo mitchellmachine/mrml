@@ -18,6 +18,24 @@ pub enum AcmeJwsOperation {
     KeyChange = 10,
 }
 
+impl AcmeJwsOperation {
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::NewAccount,
+            2 => Self::AccountUpdate,
+            3 => Self::NewOrder,
+            4 => Self::Authorization,
+            5 => Self::Challenge,
+            6 => Self::Finalize,
+            7 => Self::Order,
+            8 => Self::Certificate,
+            9 => Self::RevokeCertificate,
+            10 => Self::KeyChange,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct ConstrainedAcmeJwsPolicy {
     pub directory_url: AcmeUrl,

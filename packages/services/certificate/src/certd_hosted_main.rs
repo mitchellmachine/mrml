@@ -1,14 +1,15 @@
 use mrml_certificate::{
     AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
     CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
-    CertdChannelRole, CertdConfig, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
-    CertificateP256SigningKey, HmacSha256DurableAuthenticator, HostedP256KeyDescriptor,
-    HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore, HostedSecret,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS,
-    PRODUCTION_SECRET_MODE, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute, UnixCertdListener,
-    decode_certd_account_key_request, decode_certd_channel_request, decode_certd_tls_key_request,
+    CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow,
+    CertdTlsKeyRequest, CertificateP256SigningKey, ConstrainedAcmeJwsPolicy,
+    HmacSha256DurableAuthenticator, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
+    HostedP256KeyStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES,
+    MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE, TlsIdentityId, TlsKeyIdentity,
+    TlsSigningRoute, UnixCertdListener, decode_certd_account_key_request,
+    decode_certd_channel_request, decode_certd_jws_request, decode_certd_tls_key_request,
     encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
-    write_pkcs10_csr,
+    write_constrained_acme_jws, write_pkcs10_csr,
 };
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use std::path::Path;
@@ -192,6 +193,29 @@ fn dispatch_channel_request(
             }
             output[..public.len()].copy_from_slice(&public);
             Ok(public.len())
+        }
+        CertdChannelOperation::SignAcmeJws => {
+            let request = decode_certd_jws_request(
+                payload,
+                state.config.directory_class == CertdDirectoryClass::LocalTest,
+            )
+            .map_err(|_| ())?;
+            let mut account = state.account_key.lock().map_err(|_| ())?;
+            let public = account.public_jwk().map_err(|_| ())?;
+            let jws = write_constrained_acme_jws(
+                ConstrainedAcmeJwsPolicy {
+                    directory_url: state.config.directory_url,
+                    directory_generation: state.config.directory_generation,
+                    account_generation: state.config.account_generation,
+                    account_identity: state.config.account_identity,
+                },
+                request,
+                &public,
+                &mut account,
+                output,
+            )
+            .map_err(|_| ())?;
+            Ok(jws.len())
         }
         CertdChannelOperation::CreateTlsKeyGeneration => {
             let request = decode_certd_tls_key_request(payload).map_err(|_| ())?;

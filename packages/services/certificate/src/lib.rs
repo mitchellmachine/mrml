@@ -11,6 +11,7 @@ mod catalog_lifecycle_provider;
 mod certificate;
 mod certd_channel;
 mod certd_key_protocol;
+mod certd_jws_protocol;
 #[cfg(target_os = "linux")]
 mod certd_config;
 mod constrained_acme_signing;
@@ -118,6 +119,10 @@ pub use certd_key_protocol::{
     CertdTlsKeyRequest, decode_certd_account_key_request, decode_certd_tls_key_request,
     encode_certd_account_key_request, encode_certd_tls_key_request,
     encode_certd_tls_key_response,
+};
+pub use certd_jws_protocol::{
+    CERTD_JWS_REQUEST_HEADER_BYTES, CertdJwsProtocolError, MAX_CERTD_JWS_PAYLOAD_BYTES,
+    decode_certd_jws_request, encode_certd_jws_request,
 };
 #[cfg(target_os = "linux")]
 pub use certd_config::{
