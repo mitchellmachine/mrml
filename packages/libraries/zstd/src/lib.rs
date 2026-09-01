@@ -386,7 +386,7 @@ fn encode_huffman_literals(literals: &[u8]) -> Result<Option<Vector<u8>>> {
         Err(Error::InvalidHuffmanTree) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let tree = table.serialize_direct_tree()?;
+    let tree = table.serialize_tree()?;
     let stream = table.encode_stream(literals)?;
     let compressed_size = tree
         .len()
@@ -899,6 +899,32 @@ mod tests {
             Literals::Decoded(bytes) => assert_eq!(&bytes[..], &literals[..]),
             _ => panic!("expected Huffman literal section"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_zstd_1_5_7_decodes_rfc_profile_when_configured() {
+        let Some(oracle) = mrml_runtime::environment_variable("MRML_ZSTD_ORACLE_1_5_7") else {
+            return;
+        };
+        let input = b"MRML RFC 8878 interoperability probe: abcabcabcabcabcabcabcabc";
+        let encoded = encode_http(input, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        let stem =
+            mrml_runtime::mrml_format!("/tmp/mrml-zstd-oracle-{}", mrml_runtime::process_id());
+        let frame_path = mrml_runtime::mrml_format!("{stem}.zst");
+        mrml_runtime::write_file(&frame_path, &encoded).unwrap();
+        let output = mrml_runtime::Command::new(&oracle)
+            .args(["--decompress", "--stdout", "--quiet"])
+            .arg(&frame_path)
+            .output()
+            .unwrap();
+        mrml_runtime::remove_file(&frame_path).unwrap();
+        assert!(
+            output.status.success(),
+            "pinned zstd rejected MRML frame: {}",
+            core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
+        );
+        assert_eq!(&output.stdout[..], input);
     }
 
     #[test]
