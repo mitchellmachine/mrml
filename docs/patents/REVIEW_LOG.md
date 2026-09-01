@@ -11449,3 +11449,12 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 challenge only after exact order, authorization, identifier, token, account,
 directory, publisher-receipt, and active-lifetime checks. It adds no recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Prepared PKCS#10 order finalization
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment binds ordinary RFC 8555
+finalization to the already reviewed PKCS#10 CSR digest, exact account key,
+finalize URL, identifiers, profile, and prepare receipt, preserving ambiguous
+transport outcomes for authoritative polling. It adds no recorded re-review
+trigger.

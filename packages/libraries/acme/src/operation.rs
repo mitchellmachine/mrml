@@ -3,9 +3,9 @@ use crate::{
     AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError, ChallengeKind, ChallengeLifecycle,
     DnsIdentifier, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus,
     ParsedAuthorizationResponse, ParsedChallenge, PayloadError, PreparedAccountAction,
-    PublicationReceipt, ResponseError, account_contacts_digest, parse_account_response,
-    parse_authorization_response, parse_order_response, post_jws, write_new_account_payload,
-    write_new_order_payload,
+    PreparedFinalization, PublicationReceipt, ResponseError, account_contacts_digest,
+    parse_account_response, parse_authorization_response, parse_order_response, post_jws,
+    write_finalize_payload, write_new_account_payload, write_new_order_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -98,6 +98,23 @@ pub enum ChallengeSubmitError<E> {
 pub struct ChallengeSubmission {
     pub publication: PublicationReceipt,
     pub challenge_url_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum FinalizeError<E> {
+    PreparedMismatch,
+    Payload(PayloadError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    Lifecycle(OrderError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum FinalizeFailure<E> {
+    Definitive(FinalizeError<E>),
+    Uncertain(FinalizeError<E>),
 }
 
 pub struct OrderCreateBuffers<'a> {
@@ -408,6 +425,94 @@ pub fn trigger_published_challenge<T: AcmeTransport>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn execute_prepared_finalize<T: AcmeTransport>(
+    receipt: PreparedFinalization,
+    csr_der: &[u8],
+    identifiers: &[DnsIdentifier],
+    now_unix: u64,
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &mut OrderLifecycle,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    buffers: AccountCreateBuffers<'_>,
+) -> Result<(), FinalizeFailure<T::Error>> {
+    if !account.active
+        || account.generation != order.account_generation
+        || account.key != order.account_key
+        || account.key != receipt.account_key
+        || directory.generation != order.directory_generation
+        || receipt.csr_digest != Sha256::digest(csr_der)
+        || receipt.finalize_url_digest != Sha256::digest(order.finalize_url.as_str().as_bytes())
+        || identifiers.len() != order.identifiers().count()
+        || !identifiers
+            .iter()
+            .zip(order.identifiers())
+            .all(|(provided, expected)| provided == expected)
+    {
+        return Err(FinalizeFailure::Definitive(FinalizeError::PreparedMismatch));
+    }
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(FinalizeFailure::Definitive(FinalizeError::PreparedMismatch))?;
+    let payload = write_finalize_payload(csr_der, buffers.payload)
+        .map_err(|error| FinalizeFailure::Definitive(FinalizeError::Payload(error)))?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &order.finalize_url,
+        crate::ProtectedKey::Kid(account_url),
+        payload.as_bytes(),
+        account.generation,
+        signer,
+        buffers.response,
+        buffers.jws,
+    )
+    .map_err(|error| FinalizeFailure::Uncertain(FinalizeError::Post(error)))?;
+    if let Some(problem) = result.problem {
+        order
+            .abort_finalize(receipt)
+            .map_err(|error| FinalizeFailure::Definitive(FinalizeError::Lifecycle(error)))?;
+        return Err(FinalizeFailure::Definitive(FinalizeError::Server(problem)));
+    }
+    if result.metadata.status != 200 {
+        return Err(FinalizeFailure::Uncertain(FinalizeError::UnexpectedStatus));
+    }
+    let body =
+        core::str::from_utf8(&buffers.response[..result.metadata.body_length]).map_err(|_| {
+            FinalizeFailure::Uncertain(FinalizeError::Response(ResponseError::Malformed))
+        })?;
+    let response = parse_order_response(
+        body,
+        order.order_url.origin(),
+        identifiers,
+        order.profile.name(),
+    )
+    .map_err(|error| FinalizeFailure::Uncertain(FinalizeError::Response(error)))?;
+    if !matches!(
+        response.status,
+        crate::OrderState::Processing | crate::OrderState::Valid
+    ) {
+        return Err(FinalizeFailure::Uncertain(FinalizeError::UnexpectedStatus));
+    }
+    order
+        .commit_finalize(receipt)
+        .map_err(|error| FinalizeFailure::Uncertain(FinalizeError::Lifecycle(error)))?;
+    order
+        .apply_order_response(
+            receipt.order_generation,
+            response.status,
+            response.certificate,
+            now_unix,
+        )
+        .map_err(|error| FinalizeFailure::Uncertain(FinalizeError::Lifecycle(error)))?;
+    Ok(())
+}
+
 pub fn execute_prepared_account_create<T: AcmeTransport>(
     lifecycle: &mut AccountLifecycle,
     receipt: PreparedAccountAction,
@@ -602,6 +707,18 @@ mod tests {
                     status: 200,
                     effective_url: "https://ca.example/challenge/1",
                     replay_nonce: Some("challenge-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    body_length: body.len(),
+                });
+            }
+            if request.url.as_str() == "https://ca.example/order/1/finalize" {
+                let body = br#"{"status":"valid","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":["https://ca.example/authz/1"],"finalize":"https://ca.example/order/1/finalize","certificate":"https://ca.example/certificate/1","profile":"classic"}"#;
+                output[..body.len()].copy_from_slice(body);
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/order/1/finalize",
+                    replay_nonce: Some("finalize-nonce-1"),
                     retry_after: None,
                     location: None,
                     body_length: body.len(),
@@ -880,6 +997,45 @@ mod tests {
             &mut jws,
         );
         assert!(submitted.is_ok());
+        let authorization_digest =
+            Sha256::digest(authorizations[0].unwrap().url.as_str().as_bytes());
+        created
+            .update_authorization(
+                authorization_digest,
+                2,
+                crate::AuthorizationState::Valid,
+                Some(ChallengeKind::Http01),
+                110,
+            )
+            .unwrap();
+        created
+            .apply_order_response(2, crate::OrderState::Ready, None, 110)
+            .unwrap();
+        let csr = [1u8, 2, 3, 4];
+        let finalize = created.prepare_finalize(&csr).unwrap();
+        let finalized = execute_prepared_finalize(
+            finalize,
+            &csr,
+            &identifiers,
+            110,
+            &directory,
+            &account,
+            &mut created,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            AccountCreateBuffers {
+                payload: &mut payload,
+                response: &mut response,
+                jws: &mut jws,
+            },
+        );
+        assert!(finalized.is_ok());
+        assert_eq!(created.state, crate::OrderState::Valid);
+        assert_eq!(
+            created.certificate_url.unwrap().as_str(),
+            "https://ca.example/certificate/1"
+        );
     }
 
     fn order_post_failure_is_explicitly_uncertain_impl() {

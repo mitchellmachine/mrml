@@ -296,6 +296,14 @@ impl OrderLifecycle {
         Ok(())
     }
 
+    pub fn abort_finalize(&mut self, receipt: PreparedFinalization) -> Result<(), OrderError> {
+        if self.prepared != Some(receipt) || self.state != OrderState::Ready {
+            return Err(OrderError::ReceiptMismatch);
+        }
+        self.prepared = None;
+        Ok(())
+    }
+
     fn check_deadline(&self, now_unix: u64) -> Result<(), OrderError> {
         if now_unix > self.deadline_unix {
             Err(OrderError::DeadlineExceeded)
