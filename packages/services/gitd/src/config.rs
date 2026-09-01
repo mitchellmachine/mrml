@@ -17,7 +17,9 @@ pub struct GitdConfig {
     pub receipt_root: PathBuf,
     pub policy_root: PathBuf,
     pub repository_catalog: PathBuf,
+    pub repository_catalog_sha256: [u8; 32],
     pub profile_catalog: PathBuf,
+    pub profile_catalog_sha256: [u8; 32],
     pub token_records: PathBuf,
     pub token_pepper: PathBuf,
     pub authority_socket: PathBuf,
@@ -101,7 +103,9 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
     let mut receipt_root = None;
     let mut policy_root = None;
     let mut repository_catalog = None;
+    let mut repository_catalog_sha256 = None;
     let mut profile_catalog = None;
+    let mut profile_catalog_sha256 = None;
     let mut token_records = None;
     let mut token_pepper = None;
     let mut authority_socket = None;
@@ -152,7 +156,11 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
             "receipt_root" => set!(receipt_root, absolute_path(value)?),
             "policy_root" => set!(policy_root, absolute_path(value)?),
             "repository_catalog" => set!(repository_catalog, absolute_path(value)?),
+            "repository_catalog_sha256" => {
+                set!(repository_catalog_sha256, sha256_digest(value)?)
+            }
             "profile_catalog" => set!(profile_catalog, absolute_path(value)?),
+            "profile_catalog_sha256" => set!(profile_catalog_sha256, sha256_digest(value)?),
             "token_records" => set!(token_records, absolute_path(value)?),
             "token_pepper" => set!(token_pepper, absolute_path(value)?),
             "authority_socket" => set!(authority_socket, absolute_path(value)?),
@@ -200,7 +208,9 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
         receipt_root: required!(receipt_root),
         policy_root: required!(policy_root),
         repository_catalog: required!(repository_catalog),
+        repository_catalog_sha256: required!(repository_catalog_sha256),
         profile_catalog: required!(profile_catalog),
+        profile_catalog_sha256: required!(profile_catalog_sha256),
         token_records: required!(token_records),
         token_pepper: required!(token_pepper),
         authority_socket: required!(authority_socket),
@@ -254,6 +264,34 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
 
 fn is_direct_child(path: &Path, parent: &Path) -> bool {
     path.parent() == Some(parent) && path.file_name().is_some()
+}
+
+fn sha256_digest(value: &str) -> Result<[u8; 32], GitdConfigError> {
+    if value.len() != 64
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    let mut digest = [0u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        let high = hex_nibble(value.as_bytes()[index * 2])?;
+        let low = hex_nibble(value.as_bytes()[index * 2 + 1])?;
+        *byte = high << 4 | low;
+    }
+    if digest == [0; 32] {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    Ok(digest)
+}
+
+fn hex_nibble(value: u8) -> Result<u8, GitdConfigError> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        _ => Err(GitdConfigError::InvalidValue),
+    }
 }
 
 fn number<T: core::str::FromStr>(value: &str) -> Result<T, GitdConfigError> {
@@ -333,7 +371,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
+    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
 
     #[test]
     fn exact_v1_config_parses_with_production_defaults() {
@@ -364,6 +402,17 @@ mod tests {
                     .replace(
                         "repository_root=/mnt/mrml/gitd/repos",
                         "repository_root=repos"
+                    )
+                    .as_bytes()
+            ),
+            Err(GitdConfigError::InvalidValue)
+        );
+        assert_eq!(
+            parse_gitd_config(
+                VALID
+                    .replace(
+                        "repository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111",
+                        "repository_catalog_sha256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     )
                     .as_bytes()
             ),

@@ -22,6 +22,13 @@ TCP/UDP port; and a bounded drain interval. Paths identify deployment objects
 but do not grant authority. Startup must subsequently open and validate each as
 the appropriate capability before admitting traffic.
 
+Both catalogs are bound to mandatory canonical lowercase SHA-256 digests in the
+trusted configuration. Zero, uppercase, truncated, and extended digest forms
+fail parsing. The conspicuous repeated example digests are placeholders and
+must be replaced with the exact deployed catalog digests; a matching digest
+authenticates bytes selected by trusted configuration but does not itself grant
+repository authority.
+
 The hosted loader opens an absolute config path with `O_NOFOLLOW`, requires one
 bounded regular file owned by root or the configured Gitd UID, and rejects
 group/world-writable modes. The native `mrml-gitd validate-config CONFIG`
