@@ -1,23 +1,27 @@
 use crate::{
     DurableAuthenticator, DurableError, DurableNamespace, DurableObjectId, DurableRecord,
-    DurableRecordKind, DurableStateStore, DurableTransaction, ExpiryHealth, RenewalLease,
-    RenewalSchedule, RenewalSource, TransactionState,
+    DurableRecordKind, DurableStateStore, DurableTransaction, ExpiryHealth,
+    PreparedIdentityReceipt, RenewalLease, RenewalSchedule, RenewalSource, TestedIdentityReceipt,
+    TlsKeyIdentity, TlsSigningRoute, TransactionState,
 };
 use mrml_acme::AriCertificateId;
 
 const RENEWAL_PAYLOAD_MAGIC: &[u8; 8] = b"MRMLRENU";
-pub const RENEWAL_PAYLOAD_VERSION: u16 = 1;
+pub const RENEWAL_PAYLOAD_VERSION: u16 = 2;
 const SCHEDULE_BYTES: usize = 174;
-const RENEWAL_PAYLOAD_BYTES: usize = 416;
+const CANDIDATE_BYTES: usize = 177;
+const RENEWAL_PAYLOAD_BYTES: usize = 594;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum DurableRenewalStage {
     LeaseAcquired = 1,
     ReplacementStaged = 2,
-    ActivationUncertain = 3,
-    Active = 4,
-    Aborted = 5,
+    Published = 3,
+    Tested = 4,
+    ActivationUncertain = 5,
+    Active = 6,
+    Aborted = 7,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,7 +45,15 @@ pub struct RenewalJournal {
     pub lease: RenewalLease,
     pub previous: RenewalSchedule,
     pub replacement: Option<RenewalSchedule>,
+    pub candidate: Option<RenewalCandidateBinding>,
     pub record_generation: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct RenewalCandidateBinding {
+    pub route: TlsSigningRoute,
+    pub prepared: PreparedIdentityReceipt,
+    pub target_generation: u64,
 }
 
 pub trait RenewalCheckpointSink {
@@ -94,6 +106,7 @@ impl RenewalJournal {
             lease,
             previous,
             replacement: None,
+            candidate: None,
             record_generation,
         })
     }
@@ -101,6 +114,8 @@ impl RenewalJournal {
     pub fn replacement_staged(
         mut self,
         replacement: RenewalSchedule,
+        route: TlsSigningRoute,
+        prepared: PreparedIdentityReceipt,
     ) -> Result<Self, RenewalJournalError> {
         if self.stage != DurableRenewalStage::LeaseAcquired
             || replacement.identity != self.lease.identity
@@ -113,16 +128,56 @@ impl RenewalJournal {
                     .ok_or(RenewalJournalError::Malformed)?
             || replacement.certificate_id == self.previous.certificate_id
             || replacement.not_after_unix <= self.previous.not_after_unix
+            || route.identity != self.lease.identity
+            || route.identity_generation != replacement.identity_generation
+            || route.key_identity == TlsKeyIdentity([0; 32])
+            || route.route_generation == 0
+            || route.capability_id == [0; 16]
+            || prepared.identity != route.identity
+            || prepared.generation != route.identity_generation
+            || prepared.descriptor_digest == [0; 32]
+            || prepared.chain_digest == [0; 32]
         {
             return Err(RenewalJournalError::ReceiptMismatch);
         }
         self.stage = DurableRenewalStage::ReplacementStaged;
         self.replacement = Some(replacement);
+        self.candidate = Some(RenewalCandidateBinding {
+            route,
+            prepared,
+            target_generation: 0,
+        });
+        Ok(self)
+    }
+
+    pub fn published(mut self, target_generation: u64) -> Result<Self, RenewalJournalError> {
+        if self.stage != DurableRenewalStage::ReplacementStaged || target_generation == 0 {
+            return Err(RenewalJournalError::InvalidStage);
+        }
+        self.candidate
+            .as_mut()
+            .ok_or(RenewalJournalError::Malformed)?
+            .target_generation = target_generation;
+        self.stage = DurableRenewalStage::Published;
+        Ok(self)
+    }
+
+    pub fn tested(mut self, tested: TestedIdentityReceipt) -> Result<Self, RenewalJournalError> {
+        let candidate = self.candidate.ok_or(RenewalJournalError::Malformed)?;
+        if self.stage != DurableRenewalStage::Published
+            || tested.prepared != candidate.prepared
+            || tested.target_generation != candidate.target_generation
+            || !tested.tls13_ok
+            || !tested.http3_quic_v2_ok
+        {
+            return Err(RenewalJournalError::ReceiptMismatch);
+        }
+        self.stage = DurableRenewalStage::Tested;
         Ok(self)
     }
 
     pub fn activation_uncertain(mut self) -> Result<Self, RenewalJournalError> {
-        if self.stage != DurableRenewalStage::ReplacementStaged || self.replacement.is_none() {
+        if self.stage != DurableRenewalStage::Tested || self.candidate.is_none() {
             return Err(RenewalJournalError::InvalidStage);
         }
         self.stage = DurableRenewalStage::ActivationUncertain;
@@ -132,8 +187,8 @@ impl RenewalJournal {
     pub fn active(mut self) -> Result<Self, RenewalJournalError> {
         if !matches!(
             self.stage,
-            DurableRenewalStage::ReplacementStaged | DurableRenewalStage::ActivationUncertain
-        ) || self.replacement.is_none()
+            DurableRenewalStage::Tested | DurableRenewalStage::ActivationUncertain
+        ) || self.candidate.is_none()
         {
             return Err(RenewalJournalError::InvalidStage);
         }
@@ -209,6 +264,10 @@ impl RenewalJournal {
             output[241] = 1;
             encode_schedule(replacement, &mut output[242..416]);
         }
+        if let Some(candidate) = self.candidate {
+            output[416] = 1;
+            encode_candidate(candidate, &mut output[417..594]);
+        }
     }
 
     fn decode_payload(input: &[u8]) -> Result<Self, RenewalJournalError> {
@@ -221,9 +280,11 @@ impl RenewalJournal {
         let stage = match input[10] {
             1 => DurableRenewalStage::LeaseAcquired,
             2 => DurableRenewalStage::ReplacementStaged,
-            3 => DurableRenewalStage::ActivationUncertain,
-            4 => DurableRenewalStage::Active,
-            5 => DurableRenewalStage::Aborted,
+            3 => DurableRenewalStage::Published,
+            4 => DurableRenewalStage::Tested,
+            5 => DurableRenewalStage::ActivationUncertain,
+            6 => DurableRenewalStage::Active,
+            7 => DurableRenewalStage::Aborted,
             _ => return Err(RenewalJournalError::Malformed),
         };
         let record_generation = read_u64(&input[11..19])?;
@@ -234,31 +295,51 @@ impl RenewalJournal {
             1 => Some(decode_schedule(&input[242..416])?),
             _ => return Err(RenewalJournalError::Malformed),
         };
+        let candidate = match input[416] {
+            0 if input[417..594].iter().all(|byte| *byte == 0) => None,
+            1 => Some(decode_candidate(&input[417..594])?),
+            _ => return Err(RenewalJournalError::Malformed),
+        };
         validate_lease_schedule(lease, previous)?;
         let journal = Self {
             stage,
             lease,
             previous,
             replacement,
+            candidate,
             record_generation,
         };
-        match (stage, replacement) {
-            (DurableRenewalStage::LeaseAcquired, None) => Ok(journal),
-            (DurableRenewalStage::Aborted, None) => Ok(journal),
-            (DurableRenewalStage::ReplacementStaged, Some(replacement))
-            | (DurableRenewalStage::ActivationUncertain, Some(replacement))
-            | (DurableRenewalStage::Active, Some(replacement)) => {
+        match (stage, replacement, candidate) {
+            (DurableRenewalStage::LeaseAcquired, None, None) => Ok(journal),
+            (DurableRenewalStage::Aborted, None, None) => Ok(journal),
+            (DurableRenewalStage::ReplacementStaged, Some(replacement), Some(candidate)) => {
                 let staged = Self::lease_acquired(lease, previous, record_generation)?
-                    .replacement_staged(replacement)?;
-                if staged.replacement == journal.replacement {
+                    .replacement_staged(replacement, candidate.route, candidate.prepared)?;
+                if staged.replacement == journal.replacement && candidate.target_generation == 0 {
                     Ok(journal)
                 } else {
                     Err(RenewalJournalError::Malformed)
                 }
             }
-            (DurableRenewalStage::Aborted, Some(replacement)) => {
-                Self::lease_acquired(lease, previous, record_generation)?
-                    .replacement_staged(replacement)?;
+            (DurableRenewalStage::Published, Some(replacement), Some(candidate))
+            | (DurableRenewalStage::Tested, Some(replacement), Some(candidate))
+            | (DurableRenewalStage::ActivationUncertain, Some(replacement), Some(candidate))
+            | (DurableRenewalStage::Active, Some(replacement), Some(candidate)) => {
+                let staged = Self::lease_acquired(lease, previous, record_generation)?
+                    .replacement_staged(replacement, candidate.route, candidate.prepared)?;
+                if candidate.target_generation == 0
+                    || staged.candidate.map(|value| value.route) != Some(candidate.route)
+                {
+                    return Err(RenewalJournalError::Malformed);
+                }
+                Ok(journal)
+            }
+            (DurableRenewalStage::Aborted, Some(replacement), Some(candidate)) => {
+                Self::lease_acquired(lease, previous, record_generation)?.replacement_staged(
+                    replacement,
+                    candidate.route,
+                    candidate.prepared,
+                )?;
                 Ok(journal)
             }
             _ => Err(RenewalJournalError::Malformed),
@@ -393,6 +474,66 @@ fn decode_schedule(input: &[u8]) -> Result<RenewalSchedule, RenewalJournalError>
     })
 }
 
+fn encode_candidate(candidate: RenewalCandidateBinding, output: &mut [u8]) {
+    output.fill(0);
+    output[..16].copy_from_slice(&candidate.route.identity.0);
+    output[16..24].copy_from_slice(&candidate.route.identity_generation.to_be_bytes());
+    output[24..56].copy_from_slice(&candidate.route.key_identity.0);
+    output[56..64].copy_from_slice(&candidate.route.route_generation.to_be_bytes());
+    output[64..80].copy_from_slice(&candidate.route.capability_id);
+    output[80..96].copy_from_slice(&candidate.prepared.identity.0);
+    output[96..104].copy_from_slice(&candidate.prepared.generation.to_be_bytes());
+    output[104..136].copy_from_slice(&candidate.prepared.descriptor_digest);
+    output[136..168].copy_from_slice(&candidate.prepared.chain_digest);
+    output[168..176].copy_from_slice(&candidate.target_generation.to_be_bytes());
+}
+
+fn decode_candidate(input: &[u8]) -> Result<RenewalCandidateBinding, RenewalJournalError> {
+    if input.len() != CANDIDATE_BYTES || input[176] != 0 {
+        return Err(RenewalJournalError::Malformed);
+    }
+    let mut identity = [0; 16];
+    identity.copy_from_slice(&input[..16]);
+    let mut key_identity = [0; 32];
+    key_identity.copy_from_slice(&input[24..56]);
+    let mut capability_id = [0; 16];
+    capability_id.copy_from_slice(&input[64..80]);
+    let mut prepared_identity = [0; 16];
+    prepared_identity.copy_from_slice(&input[80..96]);
+    let mut descriptor_digest = [0; 32];
+    descriptor_digest.copy_from_slice(&input[104..136]);
+    let mut chain_digest = [0; 32];
+    chain_digest.copy_from_slice(&input[136..168]);
+    let route = TlsSigningRoute {
+        identity: crate::TlsIdentityId(identity),
+        identity_generation: read_u64(&input[16..24])?,
+        key_identity: TlsKeyIdentity(key_identity),
+        route_generation: read_u64(&input[56..64])?,
+        capability_id,
+    };
+    let prepared = PreparedIdentityReceipt {
+        identity: crate::TlsIdentityId(prepared_identity),
+        generation: read_u64(&input[96..104])?,
+        descriptor_digest,
+        chain_digest,
+    };
+    if route.identity != prepared.identity
+        || route.identity_generation != prepared.generation
+        || route.key_identity == TlsKeyIdentity([0; 32])
+        || route.route_generation == 0
+        || route.capability_id == [0; 16]
+        || descriptor_digest == [0; 32]
+        || chain_digest == [0; 32]
+    {
+        return Err(RenewalJournalError::Malformed);
+    }
+    Ok(RenewalCandidateBinding {
+        route,
+        prepared,
+        target_generation: read_u64(&input[168..176])?,
+    })
+}
+
 fn read_u16(input: &[u8]) -> Result<u16, RenewalJournalError> {
     Ok(u16::from_be_bytes(
         input
@@ -487,6 +628,23 @@ mod tests {
         }
     }
 
+    fn candidate_binding(generation: u64) -> (TlsSigningRoute, PreparedIdentityReceipt) {
+        let route = TlsSigningRoute {
+            identity: crate::TlsIdentityId([1; 16]),
+            identity_generation: generation,
+            key_identity: TlsKeyIdentity([8; 32]),
+            route_generation: generation,
+            capability_id: [7; 16],
+        };
+        let prepared = PreparedIdentityReceipt {
+            identity: route.identity,
+            generation,
+            descriptor_digest: [5; 32],
+            chain_digest: [6; 32],
+        };
+        (route, prepared)
+    }
+
     #[test]
     fn every_restart_boundary_round_trips_as_one_authenticated_generation() {
         let previous = schedule(1, 1_000, 1);
@@ -499,8 +657,20 @@ mod tests {
             expires_at_unix: 500,
         };
         let leased = RenewalJournal::lease_acquired(lease, previous, 0).unwrap();
-        let staged = leased.replacement_staged(replacement).unwrap();
-        let uncertain = staged.activation_uncertain().unwrap();
+        let (route, prepared) = candidate_binding(2);
+        let staged = leased
+            .replacement_staged(replacement, route, prepared)
+            .unwrap();
+        let published = staged.published(9).unwrap();
+        let tested = published
+            .tested(TestedIdentityReceipt {
+                prepared,
+                target_generation: 9,
+                tls13_ok: true,
+                http3_quic_v2_ok: true,
+            })
+            .unwrap();
+        let uncertain = tested.activation_uncertain().unwrap();
         let active = uncertain.active().unwrap();
         let aborted_before_issue = leased.aborted().unwrap();
         let aborted_candidate = staged.aborted().unwrap();
@@ -508,6 +678,8 @@ mod tests {
         for expected in [
             leased,
             staged,
+            published,
+            tested,
             uncertain,
             active,
             aborted_before_issue,
@@ -523,6 +695,7 @@ mod tests {
             assert!(recovered.lease == expected.lease);
             assert!(recovered.previous == expected.previous);
             assert!(recovered.replacement == expected.replacement);
+            assert!(recovered.candidate == expected.candidate);
             assert_eq!(recovered.record_generation, 1);
         }
     }
@@ -538,9 +711,10 @@ mod tests {
             lease_generation: 4,
             expires_at_unix: 500,
         };
+        let (route, prepared) = candidate_binding(2);
         let journal = RenewalJournal::lease_acquired(lease, previous, 0)
             .unwrap()
-            .replacement_staged(replacement)
+            .replacement_staged(replacement, route, prepared)
             .unwrap();
         assert!(matches!(
             RenewalJournal::lease_acquired(lease, previous, 0)

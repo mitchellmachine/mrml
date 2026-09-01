@@ -11903,3 +11903,12 @@ checkpoints around the existing replacement issuance and activation state
 machine and resolves injected store failures without reissuing or retiring an
 already active key. It introduces no new ACME, TLS, validation-topology, or
 recorded re-review mechanism.
+
+# 2026-09-01 — Receipt-bound renewal publication and test checkpoints
+
+Patent review: **NOT_TRIGGERED**. This increment extends the existing
+authenticated renewal journal with exact local candidate signing-route,
+prepared-identity, publication-generation, and successful handshake-test
+bindings, and records an aborted boundary before destructive candidate cleanup.
+It adds no certificate protocol, validation topology, MultiTLS multiplexing,
+public CA operation, or other recorded re-review trigger.

@@ -190,20 +190,23 @@ schedule, re-reads the authoritative target, and either commits the observed
 new generation or retries the already-tested candidate after proving the old
 generation remained active. A new renewal cannot displace that unresolved
 state. A bounded authenticated renewal-transaction journal now round-trips the
-lease-acquired, replacement-staged, activation-uncertain, and active boundaries,
-including both exact canonical RFC 9773 certificate identifiers and complete
-schedules. Mutated records, skipped stages, wrong objects, and contradictory
-replacement generations fail closed; uncertain store commits advance the
-journal generation only after authoritative re-read. The executor now requires
-a checkpoint sink: it commits the lease before issuance, the replacement
-schedule before publication, activation uncertainty before returning it, and
-the active boundary before committing the manager schedule. Definitive failures
-write an aborted terminal record. Injected store failures before publication
-preserve the old identity and retire the candidate; failures after activation
-are recovered by confirming the already-active generation without reissuance or
-key retirement. Reconstructing the in-memory manager, candidate deployment, and
-failed-candidate cleanup binding after a complete process restart remains
-required.
+lease-acquired, replacement-staged, published, tested, activation-uncertain,
+active, and aborted boundaries. It binds both exact canonical RFC 9773
+certificate identifiers, complete schedules, the use-only signing route, the
+prepared descriptor and chain digests, and the deployment target generation.
+Mutated records, skipped stages, wrong objects, and contradictory replacement
+generations fail closed; uncertain store commits advance the journal generation
+only after authoritative re-read. The executor now requires a checkpoint sink:
+it commits the lease before issuance, the replacement schedule before
+publication, the publication receipt before testing, the successful handshake
+receipt before activation, activation uncertainty before returning it, and the
+active boundary before committing the manager schedule. Definitive failures
+write an aborted terminal record before exact candidate cleanup. Injected store
+failures before publication preserve the old identity and retire the candidate;
+failures after activation are recovered by confirming the already-active
+generation without reissuance or key retirement. Reconstructing the in-memory
+manager and candidate deployment from their authoritative durable records after
+a complete process restart remains required.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact
