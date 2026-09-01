@@ -4,6 +4,7 @@ mod backend;
 mod catalog;
 mod certd_rpc;
 mod config;
+mod http2_stream;
 mod identity;
 mod listener;
 mod startup;
@@ -19,6 +20,7 @@ pub use catalog::{
 };
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError, GitdIdentitySnapshot};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};
+pub use http2_stream::{GitdHttp2StreamError, serve_smart_git_http2};
 pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,
     validate_identity_snapshot,

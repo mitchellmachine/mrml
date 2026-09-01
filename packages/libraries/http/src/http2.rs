@@ -1094,6 +1094,25 @@ impl Http2ServerConnection {
             )
             .map_err(|_| HttpError::Tls)
     }
+    /// Abort one stream after its response has started. The caller supplies an
+    /// RFC 9113 error code; connection-wide failures remain the listener's
+    /// responsibility.
+    pub fn reset_stream(&mut self, stream_id: u32, error_code: u32) -> Result<(), HttpError> {
+        if stream_id == 0 || stream_id > 0x7fff_ffff {
+            return Err(HttpError::InvalidResponse);
+        }
+        self.stream
+            .write_all(
+                &Http2Frame {
+                    kind: Http2FrameKind::RstStream,
+                    flags: 0,
+                    stream_id,
+                    payload: error_code.to_be_bytes().into(),
+                }
+                .encode()?,
+            )
+            .map_err(|_| HttpError::Tls)
+    }
 }
 fn take(headers: &mut Vector<Header>, name: &str) -> Result<Text, HttpError> {
     let pos = headers
