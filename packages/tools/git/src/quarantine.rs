@@ -651,6 +651,13 @@ mod tests {
             reserve_push_disk(QuarantineLimits::default(), forecast),
             Err(QuarantineError::ResourceLimit)
         );
+        forecast.incoming_pack_bytes = DEFAULT_MAX_INCOMING_PACK_BYTES;
+        forecast.ordinary_free_bytes = u64::MAX;
+        let maximum = reserve_push_disk(QuarantineLimits::default(), forecast).unwrap();
+        assert_eq!(
+            maximum.incoming_pack_bytes(),
+            DEFAULT_MAX_INCOMING_PACK_BYTES
+        );
         forecast.incoming_pack_bytes = 1;
         forecast.ordinary_free_bytes = 1;
         assert_eq!(

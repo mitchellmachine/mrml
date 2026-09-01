@@ -36,6 +36,7 @@ Implemented and executed in the focused environments:
 - bounded protocol-v2 request parsing, `ls-refs`, fetch framing, receive command/report framing, and repository-view boundaries without an external Git server runtime.
 - deterministic bounded hostile-input corpora for Git pack/index/object/transport/trust/journal/ref-state/name/path parsers, OpenPGP packet/armor parsing, and ML-DSA key/signature verification on Linux and the Wine-hosted Windows target.
 - six simultaneous process-local Linux fetch-pack generations from one immutable object graph, all byte-identical to the independently generated expected pack.
+- conservative pre-body disk admission at the exact 2 GiB incoming-pack limit and fail-closed rejection at 2 GiB plus one byte, without allocating or consuming a body. This is boundary/admission evidence, not a completed 2 GiB stream or storage-performance run.
 
 Explicit blockers (`REMAINS_OPEN`):
 
