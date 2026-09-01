@@ -1,7 +1,8 @@
 use crate::{
+    BACKUP_TRANSFER_RECEIPT_BYTES, BackupTransferCommand, BackupTransferReceipt,
     CertificateLifecycleAuthorizer, CertificateLifecycleProvider, MAX_MANAGED_STATUS_BYTES,
-    ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId, decode_managed_identity_status,
-    dispatch_lifecycle_call,
+    ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId, decode_backup_transfer_receipt,
+    decode_managed_identity_status, dispatch_lifecycle_call, encode_backup_transfer_command,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
 use mrml_runtime::{NetError, TcpListener, TcpStream};
@@ -24,6 +25,7 @@ pub enum HostedLifecycleTransportError {
     OutputLengthMismatch,
     Protocol(abi::ProtocolError),
     RemoteStatus(abi::StatusError),
+    RemoteBackupStatus(abi::BackupOperationError),
     Status(ManagedStatusCodecError),
     InvalidSessionCapability,
     SessionDenied,
@@ -195,6 +197,53 @@ impl HostedLifecycleClient {
         decode_managed_identity_status(&memory[OUTPUT_AT..OUTPUT_AT + written])
             .map_err(HostedLifecycleTransportError::Status)
     }
+
+    pub fn backup_transfer(
+        &mut self,
+        operation: u32,
+        policy_generation: u64,
+        command: BackupTransferCommand<'_>,
+    ) -> Result<BackupTransferReceipt, HostedLifecycleTransportError> {
+        const OUTPUT_AT: usize = 4096;
+        let mut memory = [0u8; OUTPUT_AT + BACKUP_TRANSFER_RECEIPT_BYTES];
+        let request_length = encode_backup_transfer_command(command, &mut memory[..OUTPUT_AT])
+            .map_err(|_| HostedLifecycleTransportError::InvalidFrame)?;
+        let frame = abi::encode_backup_operation_request(abi::BackupOperationRequest {
+            operation,
+            policy_generation,
+            request: abi::BorrowedReadView::within(0, request_length as u64, memory.len() as u64)
+                .unwrap(),
+            output: abi::BorrowedWriteView::within(
+                OUTPUT_AT as u64,
+                BACKUP_TRANSFER_RECEIPT_BYTES as u64,
+                memory.len() as u64,
+            )
+            .unwrap(),
+        })
+        .map_err(HostedLifecycleTransportError::Protocol)?;
+        let response = self.call(&frame, &mut memory)?;
+        let result = (|| {
+            let response = abi::decode_backup_operation_response(
+                &response,
+                BACKUP_TRANSFER_RECEIPT_BYTES as u64,
+            )
+            .map_err(HostedLifecycleTransportError::Protocol)?
+            .map_err(HostedLifecycleTransportError::RemoteBackupStatus)?;
+            if response.written != BACKUP_TRANSFER_RECEIPT_BYTES as u64 {
+                return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+            }
+            let receipt = decode_backup_transfer_receipt(
+                &memory[OUTPUT_AT..OUTPUT_AT + BACKUP_TRANSFER_RECEIPT_BYTES],
+            )
+            .map_err(|_| HostedLifecycleTransportError::InvalidFrame)?;
+            if response.backup_generation != receipt.transfer_generation {
+                return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+            }
+            Ok(receipt)
+        })();
+        memory.fill(0);
+        result
+    }
 }
 
 /// Server over one connection already authorized and delivered by the host
@@ -297,6 +346,22 @@ mod tests {
         }
     }
 
+    struct BackupAuthorizer;
+    impl CertificateLifecycleAuthorizer for BackupAuthorizer {
+        fn authorize_status(&self, _: u32, _: &[u8]) -> bool {
+            false
+        }
+        fn authorize_account(&self, _: u32, _: u64, _: &[u8]) -> bool {
+            false
+        }
+        fn authorize_identity(&self, _: u32, _: &[u8], _: u64, _: &[u8]) -> bool {
+            false
+        }
+        fn authorize_backup(&self, operation: u32, policy: u64, _: &[u8]) -> bool {
+            operation == abi::BACKUP_VERIFY && policy == 7
+        }
+    }
+
     struct Provider;
     impl CertificateLifecycleProvider for Provider {
         fn status(
@@ -350,12 +415,43 @@ mod tests {
         }
         fn backup_operation(
             &mut self,
-            _: u32,
-            _: u64,
-            _: &[u8],
-            _: &mut [u8],
+            operation: u32,
+            policy_generation: u64,
+            request: &[u8],
+            output: &mut [u8],
         ) -> Result<abi::BackupOperationResponse, abi::BackupOperationError> {
-            unreachable!()
+            let crate::BackupTransferCommand::Begin {
+                purpose: crate::BackupTransferPurpose::VerifyOnly,
+                transfer_generation,
+                policy_generation: command_policy,
+                total_bytes,
+                ..
+            } = crate::decode_backup_transfer_command(request)
+                .map_err(|_| abi::BackupOperationError::InvalidRequest)?
+            else {
+                return Err(abi::BackupOperationError::InvalidRequest);
+            };
+            if operation != abi::BACKUP_VERIFY || policy_generation != 7 || command_policy != 7 {
+                return Err(abi::BackupOperationError::StalePolicy);
+            }
+            crate::encode_backup_transfer_receipt(
+                crate::BackupTransferReceipt {
+                    state: crate::BackupTransferReceiptState::Accepted,
+                    purpose: crate::BackupTransferPurpose::VerifyOnly,
+                    transfer_generation,
+                    policy_generation,
+                    accepted_bytes: 0,
+                    total_bytes: total_bytes as u32,
+                    record_count: 0,
+                    backup_digest: [0; 32],
+                },
+                output,
+            )
+            .map_err(|_| abi::BackupOperationError::OperationFailed)?;
+            Ok(abi::BackupOperationResponse {
+                written: crate::BACKUP_TRANSFER_RECEIPT_BYTES as u64,
+                backup_generation: transfer_generation,
+            })
         }
     }
 
@@ -458,5 +554,39 @@ mod tests {
             HostedLifecycleClient::connect_session([127, 0, 0, 1], port, [0x5a; 32]).unwrap();
         let status = client.identity_status(TlsIdentityId([9; 16])).unwrap();
         assert_eq!(status.policy_generation, 7);
+    }
+
+    #[test]
+    fn typed_backup_call_validates_canonical_receipt_and_generation() {
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let listener = Shared::new(listener);
+        let server_listener = listener.clone();
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let stream = server_listener.accept().unwrap();
+                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+                server.serve_one(&BackupAuthorizer, &mut Provider).unwrap();
+            })
+            .is_ok()
+        );
+        let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
+        let receipt = client
+            .backup_transfer(
+                abi::BACKUP_VERIFY,
+                7,
+                crate::BackupTransferCommand::Begin {
+                    purpose: crate::BackupTransferPurpose::VerifyOnly,
+                    transfer_generation: 13,
+                    policy_generation: 7,
+                    total_bytes: 1024,
+                    expected_digest: [9; 32],
+                },
+            )
+            .unwrap();
+        assert_eq!(receipt.transfer_generation, 13);
+        assert_eq!(receipt.policy_generation, 7);
+        assert_eq!(receipt.state, crate::BackupTransferReceiptState::Accepted);
     }
 }

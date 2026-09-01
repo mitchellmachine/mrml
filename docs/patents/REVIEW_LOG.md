@@ -12042,3 +12042,11 @@ purpose-bound chunk commands to the existing authenticated verification and
 transactional clean-target restore mechanisms and returns ordinary bounded
 receipts. It adds no certificate protocol, signing mechanism, validation
 topology, certificate authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Typed hosted backup transfer client
+
+Patent review: **NOT_TRIGGERED**. This increment composes the existing hosted
+authorized transport, generated lifecycle request codec, purpose-bound backup
+command, and canonical receipt decoder. It adds no certificate protocol,
+signing mechanism, validation topology, certificate authority operation, or
+recorded re-review trigger.

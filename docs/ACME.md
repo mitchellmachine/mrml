@@ -212,8 +212,12 @@ the exact policy generation on every call, returns an 80-byte canonical progress
 or completion receipt, clears verify-only state immediately after reporting its
 authenticated descriptor, and retains restore state only until exact commit or
 cancel. Clean-target and durable authentication failures remain explicit and do
-not fabricate completion. The hosted client and CLI wiring for these commands
-remain required; backup creation/download remains separate and open.
+not fabricate completion. The hosted client now exposes one typed transfer call:
+it constructs the canonical command and generated lifecycle frame, owns the
+nonoverlapping 4096-byte request and 80-byte response views, distinguishes
+remote backup errors, validates the returned transfer generation against the
+canonical receipt, and clears its complete scratch buffer. Administrator CLI
+wiring remains required; backup creation/download remains separate and open.
 RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
 and DER serial contents, including a required leading zero, and are carried in
 the verified-chain receipt. RenewalInfo parsing bounds and validates the exact
