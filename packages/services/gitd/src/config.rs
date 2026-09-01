@@ -1,0 +1,306 @@
+use std::path::{Component, Path, PathBuf};
+
+const MAX_CONFIG_BYTES: usize = 32 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitdConfig {
+    pub server_name: String,
+    pub listen_port: u16,
+    pub repository_root: PathBuf,
+    pub state_root: PathBuf,
+    pub quarantine_root: PathBuf,
+    pub cache_root: PathBuf,
+    pub receipt_root: PathBuf,
+    pub policy_root: PathBuf,
+    pub authority_socket: PathBuf,
+    pub certd_socket: PathBuf,
+    pub authority_capability: PathBuf,
+    pub certd_capability: PathBuf,
+    pub gitd_uid: u32,
+    pub gitd_gid: u32,
+    pub authority_uid: u32,
+    pub authority_gid: u32,
+    pub certd_uid: u32,
+    pub certd_gid: u32,
+    pub next_authority_request_id: u64,
+    pub max_connections: u32,
+    pub max_uploads: u32,
+    pub max_receives: u32,
+    pub max_body_bytes: u64,
+    pub drain_seconds: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitdConfigError {
+    Size,
+    Encoding,
+    Syntax,
+    UnknownField,
+    DuplicateField,
+    MissingField,
+    InvalidValue,
+}
+
+pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
+    if input.is_empty() || input.len() > MAX_CONFIG_BYTES || input.contains(&0) {
+        return Err(GitdConfigError::Size);
+    }
+    let input = core::str::from_utf8(input).map_err(|_| GitdConfigError::Encoding)?;
+    let mut version = None;
+    let mut server_name = None;
+    let mut listen_port = None;
+    let mut repository_root = None;
+    let mut state_root = None;
+    let mut quarantine_root = None;
+    let mut cache_root = None;
+    let mut receipt_root = None;
+    let mut policy_root = None;
+    let mut authority_socket = None;
+    let mut certd_socket = None;
+    let mut authority_capability = None;
+    let mut certd_capability = None;
+    let mut gitd_uid = None;
+    let mut gitd_gid = None;
+    let mut authority_uid = None;
+    let mut authority_gid = None;
+    let mut certd_uid = None;
+    let mut certd_gid = None;
+    let mut next_authority_request_id = None;
+    let mut max_connections = None;
+    let mut max_uploads = None;
+    let mut max_receives = None;
+    let mut max_body_bytes = None;
+    let mut drain_seconds = None;
+
+    for line in input.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.trim() != line {
+            return Err(GitdConfigError::Syntax);
+        }
+        let (key, value) = line.split_once('=').ok_or(GitdConfigError::Syntax)?;
+        if key.is_empty() || value.is_empty() || value.contains('=') {
+            return Err(GitdConfigError::Syntax);
+        }
+        macro_rules! set {
+            ($slot:ident, $value:expr) => {{
+                if $slot.is_some() {
+                    return Err(GitdConfigError::DuplicateField);
+                }
+                $slot = Some($value);
+            }};
+        }
+        match key {
+            "version" => set!(version, number::<u16>(value)?),
+            "server_name" => set!(server_name, parse_server_name(value)?),
+            "listen_port" => set!(listen_port, nonzero_number::<u16>(value)?),
+            "repository_root" => set!(repository_root, absolute_path(value)?),
+            "state_root" => set!(state_root, absolute_path(value)?),
+            "quarantine_root" => set!(quarantine_root, absolute_path(value)?),
+            "cache_root" => set!(cache_root, absolute_path(value)?),
+            "receipt_root" => set!(receipt_root, absolute_path(value)?),
+            "policy_root" => set!(policy_root, absolute_path(value)?),
+            "authority_socket" => set!(authority_socket, absolute_path(value)?),
+            "certd_socket" => set!(certd_socket, absolute_path(value)?),
+            "authority_capability" => set!(authority_capability, absolute_path(value)?),
+            "certd_capability" => set!(certd_capability, absolute_path(value)?),
+            "gitd_uid" => set!(gitd_uid, nonzero_number::<u32>(value)?),
+            "gitd_gid" => set!(gitd_gid, nonzero_number::<u32>(value)?),
+            "authority_uid" => set!(authority_uid, nonzero_number::<u32>(value)?),
+            "authority_gid" => set!(authority_gid, nonzero_number::<u32>(value)?),
+            "certd_uid" => set!(certd_uid, nonzero_number::<u32>(value)?),
+            "certd_gid" => set!(certd_gid, nonzero_number::<u32>(value)?),
+            "next_authority_request_id" => {
+                set!(next_authority_request_id, nonzero_number::<u64>(value)?)
+            }
+            "max_connections" => set!(max_connections, bounded_u32(value, 1, 1_000_000)?),
+            "max_uploads" => set!(max_uploads, bounded_u32(value, 1, 65_536)?),
+            "max_receives" => set!(max_receives, bounded_u32(value, 1, 4_096)?),
+            "max_body_bytes" => set!(
+                max_body_bytes,
+                bounded_u64(value, 1024, 8 * 1024 * 1024 * 1024 * 1024)?
+            ),
+            "drain_seconds" => set!(drain_seconds, bounded_u32(value, 1, 300)?),
+            _ => return Err(GitdConfigError::UnknownField),
+        }
+    }
+    if version != Some(1) {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    macro_rules! required {
+        ($slot:ident) => {
+            $slot.ok_or(GitdConfigError::MissingField)?
+        };
+    }
+    let config = GitdConfig {
+        server_name: required!(server_name),
+        listen_port: required!(listen_port),
+        repository_root: required!(repository_root),
+        state_root: required!(state_root),
+        quarantine_root: required!(quarantine_root),
+        cache_root: required!(cache_root),
+        receipt_root: required!(receipt_root),
+        policy_root: required!(policy_root),
+        authority_socket: required!(authority_socket),
+        certd_socket: required!(certd_socket),
+        authority_capability: required!(authority_capability),
+        certd_capability: required!(certd_capability),
+        gitd_uid: required!(gitd_uid),
+        gitd_gid: required!(gitd_gid),
+        authority_uid: required!(authority_uid),
+        authority_gid: required!(authority_gid),
+        certd_uid: required!(certd_uid),
+        certd_gid: required!(certd_gid),
+        next_authority_request_id: required!(next_authority_request_id),
+        max_connections: required!(max_connections),
+        max_uploads: required!(max_uploads),
+        max_receives: required!(max_receives),
+        max_body_bytes: required!(max_body_bytes),
+        drain_seconds: required!(drain_seconds),
+    };
+    let authoritative = [
+        &config.repository_root,
+        &config.state_root,
+        &config.quarantine_root,
+        &config.cache_root,
+        &config.receipt_root,
+        &config.policy_root,
+    ];
+    for left in 0..authoritative.len() {
+        for right in left + 1..authoritative.len() {
+            if authoritative[left] == authoritative[right]
+                || authoritative[left].starts_with(authoritative[right])
+                || authoritative[right].starts_with(authoritative[left])
+            {
+                return Err(GitdConfigError::InvalidValue);
+            }
+        }
+    }
+    Ok(config)
+}
+
+fn number<T: core::str::FromStr>(value: &str) -> Result<T, GitdConfigError> {
+    if value.starts_with('+') || (value.starts_with('0') && value.len() > 1) {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    value.parse().map_err(|_| GitdConfigError::InvalidValue)
+}
+
+fn nonzero_number<T>(value: &str) -> Result<T, GitdConfigError>
+where
+    T: core::str::FromStr + Default + PartialEq,
+{
+    let parsed = number(value)?;
+    if parsed == T::default() {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    Ok(parsed)
+}
+
+fn bounded_u32(value: &str, minimum: u32, maximum: u32) -> Result<u32, GitdConfigError> {
+    let value = number(value)?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    Ok(value)
+}
+
+fn bounded_u64(value: &str, minimum: u64, maximum: u64) -> Result<u64, GitdConfigError> {
+    let value = number(value)?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    Ok(value)
+}
+
+fn absolute_path(value: &str) -> Result<PathBuf, GitdConfigError> {
+    if value.len() > 4096 || !value.is_ascii() {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    Ok(path.to_path_buf())
+}
+
+fn parse_server_name(value: &str) -> Result<String, GitdConfigError> {
+    if value.is_empty()
+        || value.len() > 253
+        || value.ends_with('.')
+        || value.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
+
+    #[test]
+    fn exact_v1_config_parses_with_production_defaults() {
+        let config = parse_gitd_config(VALID.as_bytes()).unwrap();
+        assert_eq!(config.gitd_uid, 21001);
+        assert_eq!(config.authority_uid, 21002);
+        assert_eq!(config.certd_uid, 21003);
+        assert_eq!(config.listen_port, 8443);
+    }
+
+    #[test]
+    fn unknown_duplicate_missing_relative_and_overlapping_paths_fail() {
+        assert_eq!(
+            parse_gitd_config(format!("{VALID}unknown=value\n").as_bytes()),
+            Err(GitdConfigError::UnknownField)
+        );
+        assert_eq!(
+            parse_gitd_config(format!("{VALID}gitd_uid=21001\n").as_bytes()),
+            Err(GitdConfigError::DuplicateField)
+        );
+        assert_eq!(
+            parse_gitd_config(VALID.replace("version=1\n", "").as_bytes()),
+            Err(GitdConfigError::InvalidValue)
+        );
+        assert_eq!(
+            parse_gitd_config(
+                VALID
+                    .replace(
+                        "repository_root=/mnt/mrml/gitd/repos",
+                        "repository_root=repos"
+                    )
+                    .as_bytes()
+            ),
+            Err(GitdConfigError::InvalidValue)
+        );
+        assert_eq!(
+            parse_gitd_config(
+                VALID
+                    .replace(
+                        "state_root=/mnt/mrml/gitd/state",
+                        "state_root=/mnt/mrml/gitd/repos/state"
+                    )
+                    .as_bytes()
+            ),
+            Err(GitdConfigError::InvalidValue)
+        );
+    }
+}

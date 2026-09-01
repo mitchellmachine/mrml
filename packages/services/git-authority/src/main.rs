@@ -133,6 +133,7 @@ fn serve(
     erase_secret_bytes(&mut receipt_key);
     let listener =
         AuthorityListener::bind(Path::new(socket), 0o660, expected_gitd).map_err(|_| ())?;
+    let mut replay = AuthorityReplayWindow::new();
     loop {
         let mut session = match listener.accept() {
             Ok(session) => session,
@@ -149,7 +150,7 @@ fn serve(
             session.observed_peer(),
             expected_gitd,
             &capability,
-            &mut AuthorityReplayWindow::new(),
+            &mut replay,
         ) {
             Ok(request) => request,
             Err(_) => continue,

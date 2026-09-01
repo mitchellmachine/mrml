@@ -26,7 +26,7 @@ pub enum AuthorityOperation {
 }
 
 impl AuthorityOperation {
-    fn parse(value: u8) -> Option<Self> {
+    pub fn from_code(value: u8) -> Option<Self> {
         Some(match value {
             1 => Self::Health,
             2 => Self::AuthorizeReceive,
@@ -174,7 +174,7 @@ pub fn decode_frame<'a>(
     if kind != expected_kind {
         return Err(AuthorityError::WrongKind);
     }
-    let operation = AuthorityOperation::parse(input[11]).ok_or(AuthorityError::InvalidFrame)?;
+    let operation = AuthorityOperation::from_code(input[11]).ok_or(AuthorityError::InvalidFrame)?;
     let payload_length = u32::from_be_bytes(
         input[20..24]
             .try_into()

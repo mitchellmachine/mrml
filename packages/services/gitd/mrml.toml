@@ -1,0 +1,66 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.gitd"
+kind = "service"
+name = "mrml-gitd"
+profile = "system-service"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+must_run = true
+runtime_class = "microvm-eligible"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_gitd"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-gitd"
+
+[rust]
+crate_name = "mrml_gitd"
+crate_type = "lib"
+source = "packages/services/gitd/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_gitd_hosted"
+output = "mrml-gitd"
+self_extern = true
+source = "packages/services/gitd/src/main.rs"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_git"
+compile_name = "mrml-git"
+package = "org.mrml.tool.git"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_git_authority"
+compile_name = "mrml-git-authority"
+package = "org.mrml.service.git-authority"
+scope = "compile"
+
+[[host_test]]
+targets = ["LINUX"]
+
+[test_policy]
+stack_bytes = 8388608
