@@ -211,6 +211,7 @@ pub enum StorageModuleError {
     Missing,
     NotActive,
     StaleReplacement,
+    StaleRetry,
     CleanupFailed,
     LaunchFailed,
 }
@@ -416,18 +417,36 @@ impl<const N: usize> StorageModuleRegistry<N> {
         Ok(candidate)
     }
 
-    pub fn retry_unavailable<B: StorageModuleBackend>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn retry_unavailable<const C: usize, B: StorageModuleBackend>(
         &mut self,
-        module_object: ObjectId,
+        capabilities: &CapabilitySpace<C>,
+        module_capability: Capability,
+        interface_capability: Capability,
+        provider_capability: Capability,
+        endpoint_capability: Capability,
+        candidate: StorageModuleBinding,
         backend: &mut B,
     ) -> Result<StorageModuleBinding, StorageModuleError> {
+        authorize_binding(
+            capabilities,
+            module_capability,
+            interface_capability,
+            provider_capability,
+            endpoint_capability,
+            candidate,
+        )?;
+        validate_binding(candidate)?;
         let index = self
-            .index(module_object)
+            .index(candidate.module_object)
             .ok_or(StorageModuleError::Missing)?;
-        let candidate = match self.slots[index] {
-            Some(StorageModuleState::Unavailable(candidate)) => candidate,
+        match self.slots[index] {
+            Some(StorageModuleState::Unavailable(expected)) if expected == candidate => {}
+            Some(StorageModuleState::Unavailable(_)) => {
+                return Err(StorageModuleError::StaleRetry);
+            }
             _ => return Err(StorageModuleError::NotActive),
-        };
+        }
         if backend.launch_and_healthcheck(candidate).is_err() {
             return Err(StorageModuleError::LaunchFailed);
         }
@@ -990,10 +1009,48 @@ mod tests {
             Some(StorageModuleState::Unavailable(candidate))
         );
         backend.launch = true;
+        assert!(matches!(
+            registry.retry_unavailable(
+                &new_caps,
+                new_handles[1],
+                new_handles[1],
+                new_handles[2],
+                new_handles[3],
+                candidate,
+                &mut backend,
+            ),
+            Err(StorageModuleError::Capability(_))
+        ));
+        let stale = StorageModuleBinding {
+            binding_generation: candidate.binding_generation + 1,
+            ..candidate
+        };
         assert_eq!(
-            registry.retry_unavailable(old.module_object, &mut backend),
+            registry.retry_unavailable(
+                &new_caps,
+                new_handles[0],
+                new_handles[1],
+                new_handles[2],
+                new_handles[3],
+                stale,
+                &mut backend,
+            ),
+            Err(StorageModuleError::StaleRetry)
+        );
+        assert_eq!(backend.calls, [1, 1]);
+        assert_eq!(
+            registry.retry_unavailable(
+                &new_caps,
+                new_handles[0],
+                new_handles[1],
+                new_handles[2],
+                new_handles[3],
+                candidate,
+                &mut backend,
+            ),
             Ok(candidate)
         );
+        assert_eq!(backend.calls, [1, 2]);
     }
 
     #[test]
