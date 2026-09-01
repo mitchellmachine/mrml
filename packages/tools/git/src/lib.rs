@@ -16,6 +16,7 @@ mod quarantine;
 mod receive_journal;
 mod receive_journal_file;
 mod ref_state;
+mod ref_state_file;
 mod remote;
 mod repository;
 mod sha1;
@@ -73,6 +74,7 @@ pub use ref_state::{
     ActiveRefState, ActiveRefStateError, MAX_ACTIVE_REF_STATE_BYTES, MAX_ACTIVE_REFS,
     apply_verified_ref_transaction, encode_active_ref_state, parse_active_ref_state,
 };
+pub use ref_state_file::ActiveRefFile;
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
     push_ssh,

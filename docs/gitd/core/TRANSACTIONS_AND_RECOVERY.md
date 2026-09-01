@@ -101,6 +101,18 @@ duplicate refs, width/format mismatches, truncation, trailing data, and
 corruption. `apply_verified_ref_transaction` accepts only the private verified
 typestate, rechecks all generations and every old ID, applies the complete set
 to a clone, and advances repository generation exactly once. It never exposes
-a raw protected-ref mutation API. Durable filesystem replacement and reader
-integration for this record are the next open step; the codec/update tests do
-not yet prove crash-atomic activation.
+a raw protected-ref mutation API.
+
+Hosted Linux now has `ActiveRefFile`. Initialization and activation write the
+complete next record to an exclusive temporary regular file, fsync it, rename
+it over the active generation, fsync the directory, and re-read and re-parse
+the exact result. Activation holds an exclusive, fsynced directory lock across
+the authoritative state re-read, verified update, and replacement. This stops
+two pushes from committing against the same old generation. A stale/crash lock
+blocks mutation; pre-rename stale/resource/short-write failures may release the
+live lock, while rename, fsync, or post-rename verification failures retain it
+because the outcome may be durable and uncertain. Focused hosted-Linux tests
+cover reopen, exact one-generation advancement, stale old-generation retry,
+and a simulated crash-stale lock. Windows remains fail-closed pending a runtime
+directory flush primitive. Process-kill at every syscall boundary, power-loss,
+and physical-filesystem atomicity evidence remain open.
