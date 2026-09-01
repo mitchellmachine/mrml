@@ -197,6 +197,16 @@ status contains only the identity and policy generation, current public
 descriptor, renewal schedule, active lease, and staged replacement. This is the
 shared source for lifecycle status responses, CLI listing, authenticated health,
 and diagnostics; it cannot reveal signing capability IDs or mutate state.
+Status uses one versioned canonical bounded binary payload rather than
+frontend-specific reconstruction. It carries the exact typed DNS/IP identifier
+set, advertised profile and directory generation, public chain/SPKI/key
+identities, validity, ARI/fallback schedule, expiry health, active lease, and
+staged replacement. The decoder rejects truncation, trailing bytes, unknown
+flags, unsorted identifiers, malformed profile/certificate identities, and
+cross-identity or cross-policy state. A concrete catalog lifecycle provider
+serves this payload only for an exact 16-byte identity under the existing
+per-call authorizer and delegates all mutating/account/backup operations to a
+separate provider.
 The unattended renewal coordinator acquires one identity-scoped lease, requires
 a fresh use-only candidate key and exact RFC 9773 replacement binding, verifies
 the returned chain receipt, stages the next schedule, publishes and exercises

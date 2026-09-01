@@ -8,8 +8,8 @@ mod tests {
         AcmeUrl, ChallengeToken, DnsIdentifier, RenewalInfo,
     };
     use mrml_certificate::{
-        verify_backup, AuthoritativeChallengeZone, DurableAuthenticator, DurableError,
-        DurableRecord, PemCertificateChain,
+        decode_managed_identity_status, verify_backup, AuthoritativeChallengeZone,
+        DurableAuthenticator, DurableError, DurableRecord, PemCertificateChain,
     };
     use mrml_runtime::{join_path, process_id, remove_file, temporary_directory, write_file, Text};
 
@@ -286,6 +286,7 @@ mod tests {
             let _ = PemCertificateChain::parse(bytes);
             let _ = DurableRecord::decode(bytes, &mut RejectingAuthenticator);
             let _ = verify_backup(bytes, &mut RejectingAuthenticator);
+            let _ = decode_managed_identity_status(bytes);
         });
     }
 

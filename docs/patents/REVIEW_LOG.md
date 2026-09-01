@@ -11979,3 +11979,11 @@ Patent review: **NOT_TRIGGERED**. This increment exposes a bounded read-only
 view of existing local identity and renewal state for administration and health
 reporting. It adds no certificate protocol, validation topology, signing
 mechanism, certificate authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Canonical certificate lifecycle status payload
+
+Patent review: **NOT_TRIGGERED**. This increment serializes and validates the
+existing read-only identity, profile, expiry, and renewal status through the
+existing lifecycle ABI. It adds no certificate protocol, signing mechanism,
+validation topology, certificate authority operation, or recorded re-review
+trigger.

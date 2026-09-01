@@ -2,6 +2,7 @@
 
 mod backup;
 mod caa;
+mod catalog_lifecycle_provider;
 mod certificate;
 mod challenge_dns;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -35,6 +36,7 @@ mod renewal_journal;
 mod revocation;
 mod scheduler;
 mod service_loop;
+mod status;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod tls_signing_adapter;
 
@@ -44,6 +46,9 @@ pub use backup::{
     SealedKeyProvider, BACKUP_VERSION, MAX_BACKUP_BYTES, MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES,
 };
 pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORDS, MAX_CAA_RECORD_BYTES};
+pub use catalog_lifecycle_provider::{
+    CatalogLifecycleProvider, CertificateLifecycleSupplementalProvider,
+};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
 pub use certificate::{
@@ -156,6 +161,10 @@ pub use service_loop::{
     dispatch_signing_call, serve_native_challenge_once, serve_native_identity_once,
     serve_native_lifecycle_once, serve_native_signing_once, CertificateSigningProvider,
     CertificateSigningServiceError,
+};
+pub use status::{
+    decode_managed_identity_status, encode_managed_identity_status, ManagedStatusCodecError,
+    MAX_MANAGED_STATUS_BYTES,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use tls_signing_adapter::IdentityTlsSigningAdapter;
