@@ -38,13 +38,13 @@ pub fn parse_rsa_private_pem(source: &str) -> Result<RsaPrivateKey, ProtocolErro
     {
         return Err(ProtocolError::InvalidPublicKey);
     }
-    Ok(RsaPrivateKey {
-        public: RsaPublicKey {
+    RsaPrivateKey::from_parts(
+        RsaPublicKey {
             modulus: copy(modulus),
             exponent: copy(exponent),
         },
-        private_exponent: copy(private_exponent),
-    })
+        copy(private_exponent),
+    )
 }
 
 pub fn parse_rsa_public_line(source: &str) -> Result<RsaPublicKey, ProtocolError> {
@@ -288,9 +288,8 @@ mod tests {
             encode64(&der)
         );
         let key = parse_rsa_private_pem(&pem).unwrap();
-        assert_eq!(key.public.modulus.len(), 128);
-        assert_eq!(&*key.public.exponent, &[1, 0, 1]);
-        assert_eq!(&*key.private_exponent, &[7]);
+        assert_eq!(key.public_key().modulus.len(), 128);
+        assert_eq!(&*key.public_key().exponent, &[1, 0, 1]);
     }
 
     #[test]

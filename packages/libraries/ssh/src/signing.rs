@@ -13,7 +13,7 @@ pub fn sign_sshsig(
     message: &[u8],
 ) -> Result<Text, ProtocolError> {
     validate_namespace(namespace)?;
-    let public = encode_rsa_public_key(&key.public)?;
+    let public = encode_rsa_public_key(key.public_key())?;
     let signed = signed_data(namespace, message)?;
     let signature = sign_rsa_sha2_256(key, &signed)?;
     let mut envelope = Vector::new();
@@ -94,17 +94,18 @@ mod tests {
             .collect()
     }
     fn key() -> RsaPrivateKey {
-        RsaPrivateKey {
-            public: RsaPublicKey {
+        RsaPrivateKey::from_parts(
+            RsaPublicKey {
                 modulus: decode(
                     "9eff1e540991fee9de7c7ed50d5da16508d610090a52c9aa4c41bc868e93e7cc03a6cc766fb2dab78ba91e4315f6524e355fda2c8a71b372f012d43460c2c425c2ae763d96a20584bc030e3595cc9f2352f51288f8db5d398d55efc566381707b4df848444641093fc5c48ca894db8397b252d00d5d606fe377b09f3609850fb",
                 ),
                 exponent: Vector::from([1, 0, 1]),
             },
-            private_exponent: decode(
+            decode(
                 "2187d1e08d2821e736497102035094a1d70c35d3823ed552b9c43f3aed4499e4b77c6cb0297c418de5c123a5a8330b467d111ad4bbd9a0ab839fa4eaeae108364d4ad3f439916be8a244f8071922b1918cce92b27fe5f6ed24a328b15030b3fb3e300166c651f5f457daef746c4051a7a0f035379dcacf3a164fb4aedd284a11",
             ),
-        }
+        )
+        .unwrap()
     }
     #[test]
     fn git_namespace_signature_round_trips_and_binds_message() {
@@ -112,15 +113,15 @@ mod tests {
         let armor = sign_sshsig(&key, "git", b"commit bytes").unwrap();
         assert!(armor.starts_with("-----BEGIN SSH SIGNATURE-----"));
         assert_eq!(
-            verify_sshsig(&key.public, "git", b"commit bytes", &armor),
+            verify_sshsig(key.public_key(), "git", b"commit bytes", &armor),
             Ok(())
         );
         assert_eq!(
-            verify_sshsig(&key.public, "git", b"other", &armor),
+            verify_sshsig(key.public_key(), "git", b"other", &armor),
             Err(ProtocolError::Authentication)
         );
         assert_eq!(
-            verify_sshsig(&key.public, "file", b"commit bytes", &armor),
+            verify_sshsig(key.public_key(), "file", b"commit bytes", &armor),
             Err(ProtocolError::Authentication)
         );
     }

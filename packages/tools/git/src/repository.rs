@@ -1855,7 +1855,7 @@ impl Repository {
             GitSignatureFormat::Ssh,
             |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
             |payload, armor| {
-                verify_sshsig(&key.public, "git", payload, armor)
+                verify_sshsig(key.public_key(), "git", payload, armor)
                     .map_err(|_| RepositoryError::Signing)
             },
         )
@@ -2468,7 +2468,7 @@ impl Repository {
             GitSignatureFormat::Ssh,
             |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
             |payload, armor| {
-                verify_sshsig(&key.public, "git", payload, armor)
+                verify_sshsig(key.public_key(), "git", payload, armor)
                     .map_err(|_| RepositoryError::Signing)
             },
         )
@@ -3563,17 +3563,18 @@ mod tests {
             .collect()
     }
     fn signing_key() -> RsaPrivateKey {
-        RsaPrivateKey {
-            public: RsaPublicKey {
+        RsaPrivateKey::from_parts(
+            RsaPublicKey {
                 modulus: decode_hex(
                     "9eff1e540991fee9de7c7ed50d5da16508d610090a52c9aa4c41bc868e93e7cc03a6cc766fb2dab78ba91e4315f6524e355fda2c8a71b372f012d43460c2c425c2ae763d96a20584bc030e3595cc9f2352f51288f8db5d398d55efc566381707b4df848444641093fc5c48ca894db8397b252d00d5d606fe377b09f3609850fb",
                 ),
                 exponent: Vector::from([1, 0, 1]),
             },
-            private_exponent: decode_hex(
+            decode_hex(
                 "2187d1e08d2821e736497102035094a1d70c35d3823ed552b9c43f3aed4499e4b77c6cb0297c418de5c123a5a8330b467d111ad4bbd9a0ab839fa4eaeae108364d4ad3f439916be8a244f8071922b1918cce92b27fe5f6ed24a328b15030b3fb3e300166c651f5f457daef746c4051a7a0f035379dcacf3a164fb4aedd284a11",
             ),
-        }
+        )
+        .unwrap()
     }
 
     fn root(name: &str) -> Text {
@@ -3978,15 +3979,19 @@ mod tests {
         let id = repository
             .commit_signed("signed", "Signer", "signer@example.invalid", 7, &key)
             .unwrap();
-        repository.verify_commit_signature(id, &key.public).unwrap();
+        repository
+            .verify_commit_signature(id, key.public_key())
+            .unwrap();
         let object = repository.read_object(id).unwrap();
         assert!(object.contents.windows(7).any(|part| part == b"gpgsig "));
         let tag = repository
             .create_signed_tag("v1", "release", "Signer", "signer@example.invalid", 8, &key)
             .unwrap();
-        repository.verify_tag_signature(tag, &key.public).unwrap();
+        repository
+            .verify_tag_signature(tag, key.public_key())
+            .unwrap();
         assert_eq!(repository.resolve_revision("v1"), Ok(tag));
-        let mut wrong = key.public.clone();
+        let mut wrong = key.public_key().clone();
         wrong.exponent = Vector::from([3]);
         assert_eq!(
             repository.verify_commit_signature(id, &wrong),

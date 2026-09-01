@@ -1,4 +1,6 @@
 use crate::{BinaryReader, BinaryWriter, ProtocolError};
+use core::fmt;
+use core::sync::atomic::{Ordering, compiler_fence};
 use mrml_crypto::{rsa_pkcs1_sha256_sign, rsa_pkcs1_sha256_verify};
 use mrml_runtime::Vector;
 
@@ -8,10 +10,43 @@ pub struct RsaPublicKey {
     pub modulus: Vector<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RsaPrivateKey {
-    pub public: RsaPublicKey,
-    pub private_exponent: Vector<u8>,
+    public: RsaPublicKey,
+    private_exponent: Vector<u8>,
+}
+
+impl RsaPrivateKey {
+    pub fn from_parts(
+        public: RsaPublicKey,
+        private_exponent: Vector<u8>,
+    ) -> Result<Self, ProtocolError> {
+        if public.modulus.is_empty() || private_exponent.is_empty() {
+            return Err(ProtocolError::InvalidPublicKey);
+        }
+        Ok(Self {
+            public,
+            private_exponent,
+        })
+    }
+
+    pub const fn public_key(&self) -> &RsaPublicKey {
+        &self.public
+    }
+}
+
+impl fmt::Debug for RsaPrivateKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RsaPrivateKey(<redacted>)")
+    }
+}
+
+impl Drop for RsaPrivateKey {
+    fn drop(&mut self) {
+        for byte in &mut self.private_exponent {
+            unsafe { core::ptr::write_volatile(byte, 0) };
+        }
+        compiler_fence(Ordering::SeqCst);
+    }
 }
 
 pub fn parse_rsa_public_key(blob: &[u8]) -> Result<RsaPublicKey, ProtocolError> {
@@ -163,22 +198,23 @@ mod tests {
             .collect()
     }
     fn key() -> RsaPrivateKey {
-        RsaPrivateKey {
-            public: RsaPublicKey {
+        RsaPrivateKey::from_parts(
+            RsaPublicKey {
                 modulus: decode(
                     "9eff1e540991fee9de7c7ed50d5da16508d610090a52c9aa4c41bc868e93e7cc03a6cc766fb2dab78ba91e4315f6524e355fda2c8a71b372f012d43460c2c425c2ae763d96a20584bc030e3595cc9f2352f51288f8db5d398d55efc566381707b4df848444641093fc5c48ca894db8397b252d00d5d606fe377b09f3609850fb",
                 ),
                 exponent: Vector::from([1, 0, 1]),
             },
-            private_exponent: decode(
+            decode(
                 "2187d1e08d2821e736497102035094a1d70c35d3823ed552b9c43f3aed4499e4b77c6cb0297c418de5c123a5a8330b467d111ad4bbd9a0ab839fa4eaeae108364d4ad3f439916be8a244f8071922b1918cce92b27fe5f6ed24a328b15030b3fb3e300166c651f5f457daef746c4051a7a0f035379dcacf3a164fb4aedd284a11",
             ),
-        }
+        )
+        .unwrap()
     }
     #[test]
     fn signatures_round_trip_through_ssh_blobs() {
         let key = key();
-        let public = encode_rsa_public_key(&key.public).unwrap();
+        let public = encode_rsa_public_key(key.public_key()).unwrap();
         let signature = sign_rsa_sha2_256(&key, b"message").unwrap();
         assert_eq!(verify_rsa_sha2_256(&public, b"message", &signature), Ok(()));
         assert_eq!(
@@ -193,5 +229,12 @@ mod tests {
         assert_eq!(reader.byte(), Ok(50));
         assert_eq!(reader.text(), Ok("git"));
         assert!(request.len() > 256);
+    }
+
+    #[test]
+    fn private_key_debug_is_redacted() {
+        let rendered = mrml_runtime::mrml_format!("{:?}", key());
+        assert_eq!(rendered, "RsaPrivateKey(<redacted>)");
+        assert!(!rendered.contains("2187d1"));
     }
 }
