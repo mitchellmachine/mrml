@@ -11947,3 +11947,13 @@ capabilities under KVM. It adds test orchestration and corrects capability and
 zero-capacity syscall argument binding; it adds no ACME protocol, validation
 topology, MultiTLS multiplexing, public CA operation, or other recorded
 re-review trigger.
+
+# 2026-09-01 — Exact-route hosted DNS propagation adapter
+
+Patent review: **NOT_TRIGGERED**. This increment performs ordinary bounded DNS
+TXT queries over two independently owner-configured routes and validates exact
+generation-bound observation receipts before the existing DNS-01 state machine
+advances. The routes are fixed owner policy and the adapter cannot select
+validation vantage points or proxy arbitrary queries, so it does not introduce
+route-selected multi-vantage CA validation, challenge proxying, public CA
+operation, or another recorded re-review trigger.

@@ -1,4 +1,4 @@
-use mrml_acme::{DnsIdentifier, encode_base64url};
+use mrml_acme::{encode_base64url, DnsIdentifier};
 
 pub const MAX_DNS_PACKET: usize = 1232;
 pub const MAX_DNS_TXT_RECORDS: usize = 32;
@@ -298,7 +298,7 @@ fn strip_challenge_name(name: &str) -> Option<&str> {
         .and_then(|_| name.get(PREFIX.len()..))
 }
 
-fn decode_name(
+pub(crate) fn decode_name(
     packet: &[u8],
     start: usize,
     output: &mut [u8],
@@ -346,7 +346,7 @@ fn decode_name(
     }
 }
 
-fn encode_name(name: &str, output: &mut [u8]) -> Result<usize, DnsChallengeError> {
+pub(crate) fn encode_name(name: &str, output: &mut [u8]) -> Result<usize, DnsChallengeError> {
     let mut len = 0usize;
     for label in name.trim_end_matches('.').split('.') {
         if label.is_empty() || label.len() > 63 || len + 1 + label.len() >= output.len() {

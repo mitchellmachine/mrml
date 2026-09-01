@@ -114,6 +114,18 @@ exact TXT digest, challenge generation, publisher generation, route generation,
 observation class, and time. Attempts and deadline are bounded; mismatched or
 substituted receipts fail closed. This is fixed owner policy, not route-selected
 multi-vantage CA validation.
+Linux and Windows hosted targets now implement that query contract with a
+bounded first-party DNS-over-TCP adapter. Its configuration contains exactly
+one authoritative endpoint and one recursive-resolver endpoint; each is bound
+to the corresponding nonzero capability identity and route generation. The
+adapter rejects every unconfigured or stale route before network access,
+applies two-second I/O deadlines, emits one exact TXT question, and validates
+the transaction, response flags, single question, answer bound, DNS name
+compression, record lengths, and unpadded Base64url TXT digest before issuing
+an observation receipt. It does not expose arbitrary names, record types, or
+destinations and therefore is not a general DNS proxy. The Linux loopback suite
+executes both independently configured routes against the first-party
+authoritative role (`72 passed; 0 failed`).
 Certificate-chain retrieval has a strict fixed-capacity PEM decoder and a
 shared validation policy/receipt. The hosted first-party X.509 adapter verifies
 the exact P-256 SPKI, exact sorted typed DNS/IP SAN set with no extra
@@ -315,9 +327,8 @@ budget, and never invokes the HTTP redirect-following API. The MRML target does
 not inherit hosted sockets and continues to use the same transport contract
 through capability-bound services.
 
-General JOSE response parsing, MRML HTTPS capability adapters, hosted DNS query
-adapters, revocation transport, sealed-key backup/restore adapters, CLI
-administration, concrete gitd process wiring, and full native-storage/reboot
+MRML HTTPS capability adapters, sealed-key backup/restore platform adapters,
+CLI administration, concrete gitd process wiring, and full native-storage/reboot
 recovery remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 
