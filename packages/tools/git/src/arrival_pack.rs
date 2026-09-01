@@ -6,8 +6,9 @@ use mrml_runtime::{
 };
 
 use crate::{
-    DEFAULT_MAX_INCOMING_PACK_BYTES, DurableFailure, ObjectFormat, ObjectId, QuarantineTransaction,
-    QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2, parse_pack_with_index,
+    BoundedRead, DEFAULT_MAX_INCOMING_PACK_BYTES, DurableFailure, GitdCoreError, ObjectFormat,
+    ObjectId, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
+    parse_pack_index_v2, parse_pack_with_index,
 };
 
 pub struct ArrivalPackStore {
@@ -18,6 +19,106 @@ pub struct ArrivalPackStore {
 }
 
 impl ArrivalPackStore {
+    /// Streams the exact already-admitted body into an isolated transaction
+    /// directory. The directory is not part of normal object lookup and is
+    /// fsynced before the lifecycle advances to `ObjectsQuarantined`.
+    pub fn receive_pack_body(
+        &self,
+        transaction: &mut QuarantineTransaction,
+        input: &mut dyn BoundedRead,
+    ) -> Result<(), GitdCoreError> {
+        let expected = transaction.reservation().incoming_pack_bytes();
+        if expected == 0 || expected > self.max_pack_bytes || input.remaining() != expected {
+            return Err(GitdCoreError::Resource);
+        }
+        let directory = self.quarantine_path(transaction.id());
+        if path_exists(&directory) || path_exists(&self.arrival_path(transaction.id())) {
+            return Err(GitdCoreError::Storage);
+        }
+        create_dir_all(&directory).map_err(|_| GitdCoreError::Storage)?;
+        let incoming = join_path(&directory, "incoming.pack");
+        let mut file = File::create_new(&incoming).map_err(|_| GitdCoreError::Storage)?;
+        let mut remaining = expected;
+        let mut buffer = [0u8; 64 * 1024];
+        while remaining != 0 {
+            let wanted = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| GitdCoreError::Resource)?;
+            let count = input.read(&mut buffer[..wanted])?;
+            if count == 0 || count > wanted {
+                return Err(GitdCoreError::MalformedInput);
+            }
+            file.write_all(&buffer[..count])
+                .map_err(|_| GitdCoreError::Storage)?;
+            remaining = remaining
+                .checked_sub(count as u64)
+                .ok_or(GitdCoreError::Resource)?;
+        }
+        if input.remaining() != 0 {
+            return Err(GitdCoreError::MalformedInput);
+        }
+        file.sync().map_err(|_| GitdCoreError::Storage)?;
+        sync_pack_directory(&directory).map_err(|_| GitdCoreError::Storage)?;
+        sync_pack_directory(&self.quarantine).map_err(|_| GitdCoreError::Storage)?;
+        transaction
+            .objects_quarantined(expected)
+            .map_err(|_| GitdCoreError::ObjectValidation)
+    }
+
+    /// Authenticates and indexes a previously streamed quarantine file, then
+    /// binds its exact resource use into the transaction. This is presently a
+    /// bounded whole-file validation pass; streaming object expansion remains
+    /// a separate acceptance gate.
+    pub fn validate_received_pack(
+        &self,
+        transaction: &mut QuarantineTransaction,
+        required_tips: &[ObjectId],
+    ) -> Result<(), GitdCoreError> {
+        let directory = self.quarantine_path(transaction.id());
+        let incoming = join_path(&directory, "incoming.pack");
+        let pack = read_regular_bounded(&incoming, self.max_pack_bytes)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let (objects, entries) = parse_pack_with_index(&pack, self.format)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if objects.is_empty()
+            || objects.len() > transaction.reservation().object_count() as usize
+            || required_tips.is_empty()
+            || required_tips.iter().any(|tip| {
+                tip.format() != self.format || !objects.iter().any(|object| object.id == *tip)
+            })
+        {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let mut expanded = 0u64;
+        let mut largest = 0u64;
+        for object in &objects {
+            let length = object.contents.len() as u64;
+            expanded = expanded
+                .checked_add(length)
+                .ok_or(GitdCoreError::Resource)?;
+            largest = largest.max(length);
+        }
+        if expanded > transaction.reservation().expanded_object_bytes()
+            || largest > transaction.reservation().individual_object_bytes()
+        {
+            return Err(GitdCoreError::Resource);
+        }
+        let trailer =
+            ObjectId::from_bytes(self.format, &pack[pack.len() - self.format.hash_len()..])
+                .ok_or(GitdCoreError::ObjectValidation)?;
+        let index = build_pack_index_v2(self.format, &entries, trailer)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        write_new_synced(&join_path(&directory, "objects.idx"), &index)
+            .map_err(|_| GitdCoreError::Storage)?;
+        rename_file(&incoming, &join_path(&directory, "objects.pack"))
+            .map_err(|_| GitdCoreError::Storage)?;
+        sync_pack_directory(&directory).map_err(|_| GitdCoreError::Storage)?;
+        transaction
+            .objects_validated(expanded, objects.len() as u32)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        self.verify_directory(&directory, objects.len() as u32)
+            .map_err(|_| GitdCoreError::ObjectValidation)
+    }
+
     pub fn open(
         root: &str,
         format: ObjectFormat,
@@ -226,6 +327,24 @@ mod tests {
         )
     }
 
+    struct Reader {
+        bytes: Vector<u8>,
+        offset: usize,
+    }
+
+    impl BoundedRead for Reader {
+        fn remaining(&self) -> u64 {
+            (self.bytes.len() - self.offset) as u64
+        }
+
+        fn read(&mut self, output: &mut [u8]) -> Result<usize, GitdCoreError> {
+            let count = output.len().min(7).min(self.bytes.len() - self.offset);
+            output[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+            self.offset += count;
+            Ok(count)
+        }
+    }
+
     #[test]
     fn linux_arrival_pack_is_validated_indexed_and_installed_as_one_directory() {
         let root = root();
@@ -264,18 +383,27 @@ mod tests {
             reservation,
         )
         .unwrap();
-        transaction.objects_quarantined(pack.len() as u64).unwrap();
-        transaction.objects_validated(7, 1).unwrap();
         let store = ArrivalPackStore::open(&root, ObjectFormat::Sha256, 1024 * 1024).unwrap();
-        store.stage(&transaction, &[object_id], &pack).unwrap();
+        let mut reader = Reader {
+            bytes: pack,
+            offset: 0,
+        };
+        store
+            .receive_pack_body(&mut transaction, &mut reader)
+            .unwrap();
+        assert!(!path_exists(&store.arrival_path(transaction.id())));
+        store
+            .validate_received_pack(&mut transaction, &[object_id])
+            .unwrap();
+        assert_eq!(transaction.validated_object_count(), Some(1));
         assert!(!path_exists(&store.arrival_path(transaction.id())));
         store.install(transaction.id(), 1).unwrap();
         store.verify_installed(transaction.id(), 1).unwrap();
         assert!(!path_exists(&store.quarantine_path(transaction.id())));
-        assert_eq!(
-            store.stage(&transaction, &[object_id], &pack),
-            Err(DurableFailure::StaleLock)
-        );
+        assert!(matches!(
+            store.receive_pack_body(&mut transaction, &mut reader),
+            Err(GitdCoreError::Resource | GitdCoreError::Storage)
+        ));
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

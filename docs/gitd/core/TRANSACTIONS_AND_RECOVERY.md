@@ -26,11 +26,23 @@ arithmetic overflow, and insufficient space are distinct failures.
 
 `QuarantineTransaction` binds a nonzero transaction ID, exact repository
 identity and repository/trust/revocation generations, the private disk
-reservation, and a `VerifiedRefTransaction`. It permits only the eight required
+reservation, the exact validated object count, and a `VerifiedRefTransaction`.
+The validated count may only attenuate the pre-body maximum. It permits only the eight required
 phases in order. Failures before durable installation become `Aborted`;
 failures after installation/activation and receipt failures become `Uncertain`,
 retaining the exact phase, transaction identity, and cause for recovery. This
 state machine does not itself claim fsync or atomic-rename evidence.
+
+`ArrivalPackStore::receive_pack_body` copies the exact admitted body through
+`BoundedRead` in 64-KiB chunks directly into a transaction-derived, inaccessible
+quarantine directory, fsyncs the file and directories, and only then records
+`ObjectsQuarantined`. `validate_received_pack` authenticates the pack and every
+object, enforces the reserved count/expanded/individual-object ceilings and
+required tips, writes and fsyncs the v2 index, renames the validated pack within
+quarantine, and records the exact count. The validation pass still materializes
+the bounded pack and expanded objects in memory, so the default 2-GiB profile
+remains disabled until parsing and object expansion are fully streaming under
+the memory/work permits.
 
 Immediately before activation, the engine must re-read every old object ID and
 exact repository/trust/revocation generation. Protected refs are fast-forward

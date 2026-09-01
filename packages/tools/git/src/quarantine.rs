@@ -55,6 +55,7 @@ pub struct PushDiskReservation {
     required_bytes: u64,
     incoming_pack_bytes: u64,
     expanded_object_bytes: u64,
+    individual_object_bytes: u64,
     object_count: u32,
     ref_count: u16,
 }
@@ -70,6 +71,14 @@ impl PushDiskReservation {
 
     pub const fn object_count(self) -> u32 {
         self.object_count
+    }
+
+    pub const fn expanded_object_bytes(self) -> u64 {
+        self.expanded_object_bytes
+    }
+
+    pub const fn individual_object_bytes(self) -> u64 {
+        self.individual_object_bytes
     }
 }
 
@@ -199,6 +208,7 @@ pub fn reserve_push_disk(
         required_bytes,
         incoming_pack_bytes: forecast.incoming_pack_bytes,
         expanded_object_bytes: forecast.expanded_object_bytes,
+        individual_object_bytes: forecast.largest_object_bytes,
         object_count: forecast.object_count,
         ref_count: forecast.ref_count,
     })
