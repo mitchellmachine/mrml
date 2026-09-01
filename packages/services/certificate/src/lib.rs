@@ -8,6 +8,7 @@ mod backup_export;
 mod backup_transfer;
 mod caa;
 mod catalog_lifecycle_provider;
+mod certd_candidate_protocol;
 mod certd_channel;
 #[cfg(target_os = "linux")]
 mod certd_channel_unix;
@@ -96,6 +97,10 @@ pub use backup_transfer::{
 pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 pub use catalog_lifecycle_provider::{
     CatalogLifecycleProvider, CertificateLifecycleSupplementalProvider,
+};
+pub use certd_candidate_protocol::{
+    CertdCandidateProtocolError, CertdCandidateRequest, MAX_CERTD_CANDIDATE_CHAIN_BYTES,
+    decode_certd_candidate_request, encode_certd_candidate_request,
 };
 pub use certd_channel::{
     CERTD_CHANNEL_CAPABILITY_BYTES, CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability,

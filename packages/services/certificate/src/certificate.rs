@@ -53,6 +53,44 @@ pub struct PemCertificateChain {
 }
 
 impl PemCertificateChain {
+    pub fn from_der_certificates(
+        certificates: &[&[u8]],
+    ) -> Result<Self, CertificateValidationError> {
+        if certificates.is_empty() || certificates.len() > MAX_CERTIFICATES {
+            return Err(CertificateValidationError::EmptyChain);
+        }
+        let mut chain = Self {
+            bytes: [0; MAX_CERTIFICATE_CHAIN_BYTES],
+            used: 0,
+            ranges: [None; MAX_CERTIFICATES],
+            count: 0,
+        };
+        for certificate in certificates {
+            if certificate.is_empty() || certificate.len() > MAX_CERTIFICATE_DER_BYTES {
+                return Err(CertificateValidationError::Oversized);
+            }
+            let start = usize::from(chain.used);
+            let end = start
+                .checked_add(certificate.len())
+                .ok_or(CertificateValidationError::Oversized)?;
+            if end > usize::from(u16::MAX) {
+                return Err(CertificateValidationError::Oversized);
+            }
+            chain
+                .bytes
+                .get_mut(start..end)
+                .ok_or(CertificateValidationError::Oversized)?
+                .copy_from_slice(certificate);
+            chain.ranges[usize::from(chain.count)] = Some(Range {
+                start: start as u16,
+                len: certificate.len() as u16,
+            });
+            chain.count += 1;
+            chain.used = end as u16;
+        }
+        Ok(chain)
+    }
+
     pub fn parse(pem: &[u8]) -> Result<Self, CertificateValidationError> {
         if pem.len() > MAX_CERTIFICATE_CHAIN_BYTES {
             return Err(CertificateValidationError::Oversized);
