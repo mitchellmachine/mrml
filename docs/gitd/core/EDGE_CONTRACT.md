@@ -55,8 +55,19 @@ candidate and is rejected unless the backend explicitly enabled deletion
 candidates when it advertised `delete-refs`; the client cannot grant that
 authority by echoing the server-only capability. Authorization still belongs
 to a separate policy-specific verified transaction builder. The
-parser cannot activate refs, and receive pack-body quarantine, result framing,
-and end-to-end backend wiring remain open.
+parser cannot activate refs; receive pack-body quarantine and end-to-end
+backend wiring remain open.
+
+The bounded report-status-v2 writer emits the standard `unpack`, ordered `ok`
+or `ng`, and flush packets. Since MRML does not use `proc-receive` rewriting,
+it emits no option lines. Status names must exactly match every requested ref
+in order; an atomic transaction can report all success or all failure, never a
+mixed result. Error text is limited to 512 printable ASCII bytes and cannot
+inject framing. When `side-band-64k` was selected, the complete inner report is
+carried on band 1 in bounded outer packets followed by an outer flush. Golden
+tests round-trip both plain and side-band output through the existing
+first-party client parser. Pack-body quarantine and complete backend wiring
+remain open.
 
 Errors distinguish malformed input/identifiers/refs/paths, authorization,
 object validation, ancestry, signature, policy, resources, storage, stale

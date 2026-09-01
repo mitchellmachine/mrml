@@ -1,6 +1,6 @@
 //! Bounded packet-line framing shared by Smart Git protocol handlers.
 
-use mrml_runtime::Vector;
+use mrml_runtime::{Text, Vector};
 
 use crate::{
     BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, FullRefName,
@@ -49,6 +49,122 @@ pub struct ReceivePackRequest {
     pub delete_refs: bool,
     pub side_band_64k: bool,
     pub ofs_delta: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceiveRefStatus {
+    pub name: FullRefName,
+    pub error: Option<Text>,
+}
+
+/// Emit the standard report-status-v2 result. MRML does not implement
+/// proc-receive rewriting, so no option lines are emitted. Atomic requests may
+/// report either every ref successful or every ref failed, never a mixed state.
+pub fn write_receive_pack_report(
+    output: &mut dyn BoundedWrite,
+    request: &ReceivePackRequest,
+    unpack_error: Option<&str>,
+    statuses: &[ReceiveRefStatus],
+    budget: &mut ProtocolBudget,
+) -> Result<(), GitdCoreError> {
+    if !request.report_status_v2
+        || !request.atomic
+        || statuses.len() != request.candidate.updates.len()
+        || statuses
+            .iter()
+            .zip(&request.candidate.updates)
+            .any(|(status, update)| status.name != update.name)
+    {
+        return Err(GitdCoreError::Policy);
+    }
+    let successes = statuses
+        .iter()
+        .filter(|status| status.error.is_none())
+        .count();
+    if successes != 0 && successes != statuses.len() {
+        return Err(GitdCoreError::Policy);
+    }
+    if unpack_error.is_some() && successes != 0 {
+        return Err(GitdCoreError::Policy);
+    }
+
+    let mut report = Vector::new();
+    let unpack = match unpack_error {
+        None => b"unpack ok\n".as_slice(),
+        Some(error) => {
+            validate_protocol_error(error)?;
+            let mut line = Text::from("unpack ");
+            line.push_str(error);
+            line.push('\n');
+            append_raw_pkt(&mut report, line.as_bytes())?;
+            &[]
+        }
+    };
+    if !unpack.is_empty() {
+        append_raw_pkt(&mut report, unpack)?;
+    }
+    for status in statuses {
+        let mut line = if status.error.is_some() {
+            Text::from("ng ")
+        } else {
+            Text::from("ok ")
+        };
+        line.push_str(status.name.as_str());
+        if let Some(error) = &status.error {
+            validate_protocol_error(error)?;
+            line.push(' ');
+            line.push_str(error);
+        }
+        line.push('\n');
+        append_raw_pkt(&mut report, line.as_bytes())?;
+    }
+    report
+        .try_extend_from_slice(b"0000")
+        .map_err(|_| GitdCoreError::Resource)?;
+
+    if request.side_band_64k {
+        for chunk in report.chunks(MAX_PKT_LINE_BYTES - 5) {
+            let mut payload = Vector::new();
+            payload
+                .try_reserve_exact(chunk.len() + 1)
+                .map_err(|_| GitdCoreError::Resource)?;
+            payload.push(1);
+            payload
+                .try_extend_from_slice(chunk)
+                .map_err(|_| GitdCoreError::Resource)?;
+            write_pkt_line(output, &PktLine::Data(payload), budget)?;
+        }
+        write_pkt_line(output, &PktLine::Flush, budget)
+    } else {
+        write_exact(output, &report, budget)
+    }
+}
+
+fn validate_protocol_error(error: &str) -> Result<(), GitdCoreError> {
+    if error.is_empty()
+        || error == "ok"
+        || error.len() > 512
+        || error.bytes().any(|byte| !(b' '..=b'~').contains(&byte))
+    {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    Ok(())
+}
+
+fn append_raw_pkt(output: &mut Vector<u8>, payload: &[u8]) -> Result<(), GitdCoreError> {
+    let length = payload
+        .len()
+        .checked_add(4)
+        .ok_or(GitdCoreError::Resource)?;
+    if length > MAX_PKT_LINE_BYTES {
+        return Err(GitdCoreError::Resource);
+    }
+    output
+        .try_extend_from_slice(&hex_header(length))
+        .map_err(|_| GitdCoreError::Resource)?;
+    output
+        .try_extend_from_slice(payload)
+        .map_err(|_| GitdCoreError::Resource)
 }
 
 /// Parse the command section of a receive-pack request and stop exactly after
@@ -974,5 +1090,94 @@ mod tests {
             ),
             Err(GitdCoreError::Unsupported)
         );
+    }
+
+    #[test]
+    fn receive_report_v2_round_trips_plain_and_sideband_client_parsers() {
+        let mut commands = request(&[
+            b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main\0report-status-v2 atomic side-band-64k object-format=sha256\n",
+            b"FLUSH",
+        ]);
+        let parsed = receive(&mut commands).unwrap();
+        let statuses = [ReceiveRefStatus {
+            name: FullRefName::parse("refs/heads/main").unwrap(),
+            error: None,
+        }];
+        let mut sideband = Writer {
+            bytes: Vector::new(),
+            limit: 4096,
+        };
+        write_receive_pack_report(&mut sideband, &parsed, None, &statuses, &mut budget(4096))
+            .unwrap();
+        assert_eq!(
+            crate::transport::parse_push_response_mode(&sideband.bytes, "refs/heads/main", true),
+            Ok(())
+        );
+
+        let mut plain_request = parsed;
+        plain_request.side_band_64k = false;
+        let mut plain = Writer {
+            bytes: Vector::new(),
+            limit: 4096,
+        };
+        write_receive_pack_report(
+            &mut plain,
+            &plain_request,
+            None,
+            &statuses,
+            &mut budget(4096),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::transport::parse_push_response_mode(&plain.bytes, "refs/heads/main", false),
+            Ok(())
+        );
+        assert_eq!(
+            &plain.bytes[..],
+            b"000eunpack ok\n0017ok refs/heads/main\n0000"
+        );
+    }
+
+    #[test]
+    fn atomic_report_rejects_mixed_results_and_sanitizes_errors() {
+        let mut commands = request(&[
+            b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
+            b"3333333333333333333333333333333333333333333333333333333333333333 4444444444444444444444444444444444444444444444444444444444444444 refs/heads/next\n",
+            b"FLUSH",
+        ]);
+        let parsed = receive(&mut commands).unwrap();
+        let mixed = [
+            ReceiveRefStatus {
+                name: FullRefName::parse("refs/heads/main").unwrap(),
+                error: None,
+            },
+            ReceiveRefStatus {
+                name: FullRefName::parse("refs/heads/next").unwrap(),
+                error: Some("stale old id".into()),
+            },
+        ];
+        let mut writer = Writer {
+            bytes: Vector::new(),
+            limit: 4096,
+        };
+        assert_eq!(
+            write_receive_pack_report(&mut writer, &parsed, None, &mixed, &mut budget(4096)),
+            Err(GitdCoreError::Policy)
+        );
+        let failed = [
+            ReceiveRefStatus {
+                name: FullRefName::parse("refs/heads/main").unwrap(),
+                error: Some("stale old id\nforged".into()),
+            },
+            ReceiveRefStatus {
+                name: FullRefName::parse("refs/heads/next").unwrap(),
+                error: Some("atomic transaction rejected".into()),
+            },
+        ];
+        assert_eq!(
+            write_receive_pack_report(&mut writer, &parsed, None, &failed, &mut budget(4096)),
+            Err(GitdCoreError::MalformedInput)
+        );
+        assert!(writer.bytes.is_empty());
     }
 }
