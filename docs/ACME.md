@@ -412,9 +412,12 @@ adapter contains no socket, resolver, host trust store, filesystem, or syscall
 dependency, so MRML can supply authenticated HTTPS as a capability without
 forking the ACME state machine.
 
-Sealed-key backup/restore platform adapters,
-mutation-capable CLI administration and live session acquisition, concrete gitd
-process wiring, and full native-storage/reboot recovery remain **PLANNED**. The
+Sealed-key backup creation platform adapters, remaining account and identity
+mutation commands, concrete gitd process wiring, durable daemon session
+issuance, and full native-storage/reboot recovery remain **PLANNED**. Hosted
+backup verification and digest-confirmed clean-target restoration are available
+through both `mrml cert backup verify` and the canonical
+`mrml cert restore [--verify-only]` command forms. The
 shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 

@@ -12066,3 +12066,11 @@ authenticated HTTPS request/response semantics through an exact attenuated
 service capability and validates its generation-bound receipt. It adds no new
 certificate protocol, signing mechanism, validation topology, certificate
 authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Canonical certificate restore command
+
+Patent review: **NOT_TRIGGERED**. This increment exposes the existing bounded
+verify-only and digest-confirmed clean-target restore operations under their
+canonical administration command spelling. It adds no certificate protocol,
+signing mechanism, validation topology, certificate authority operation, or
+recorded re-review trigger.

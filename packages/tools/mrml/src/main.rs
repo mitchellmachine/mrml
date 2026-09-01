@@ -300,7 +300,10 @@ fn print_help() {
         "       mrml cert status (--snapshot FILE | --endpoint 127.0.0.1:PORT --session-capability FILE --identity HEX) [--output human|structured]"
     );
     println!(
-        "       mrml cert backup <verify|restore> --input FILE --policy-generation N --transfer-generation N --endpoint 127.0.0.1:PORT --session-capability FILE [--confirm-digest HEX] [--output human|structured]"
+        "       mrml cert backup verify --input FILE --policy-generation N --transfer-generation N --endpoint 127.0.0.1:PORT --session-capability FILE [--output human|structured]"
+    );
+    println!(
+        "       mrml cert restore [--verify-only] --input FILE --policy-generation N --transfer-generation N --endpoint 127.0.0.1:PORT --session-capability FILE [--confirm-digest HEX] [--output human|structured]"
     );
     println!(
         "       mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o OUTPUT [--release]"
@@ -353,11 +356,23 @@ fn cert_command(args: &[String]) -> Result<(), String> {
         Some("caa") => cert_caa_command(&args[1..]),
         Some("status") => cert_status_command(&args[1..]),
         Some("backup") => cert_backup_command(&args[1..]),
+        Some("restore") => cert_restore_command(&args[1..]),
         Some(operation) => Err(format!(
             "CertificateOperationUnavailable {{ operation: {operation}, status: REMAINS_OPEN }}"
         )),
-        None => Err("CertificateUsageError { expected: caa|status|backup }".into()),
+        None => Err("CertificateUsageError { expected: caa|status|backup|restore }".into()),
     }
+}
+
+fn cert_restore_command(args: &[String]) -> Result<(), String> {
+    let (operation, options) = match args.first().map(String::as_str) {
+        Some("--verify-only") => ("verify", &args[1..]),
+        _ => ("restore", args),
+    };
+    let mut routed = Vec::with_capacity(options.len() + 1);
+    routed.push(operation.to_owned());
+    routed.extend_from_slice(options);
+    cert_backup_command(&routed)
 }
 
 fn cert_status_command(args: &[String]) -> Result<(), String> {
@@ -6540,6 +6555,28 @@ mod tests {
             verify_native_graph(&workspace(vec![missing_output]))
                 .unwrap_err()
                 .contains("MissingComponentOutput")
+        );
+    }
+
+    #[test]
+    fn certificate_restore_routes_verify_only_and_mutating_forms() {
+        let verify = ["--verify-only"].map(str::to_owned);
+        assert_eq!(
+            cert_restore_command(&verify).unwrap_err(),
+            "CertificateBackupInputMissing"
+        );
+        assert_eq!(
+            cert_restore_command(&[]).unwrap_err(),
+            "CertificateBackupInputMissing"
+        );
+    }
+
+    #[test]
+    fn certificate_backup_create_remains_explicitly_unavailable() {
+        let create = ["create"].map(str::to_owned);
+        assert_eq!(
+            cert_backup_command(&create).unwrap_err(),
+            "CertificateBackupOperationInvalid"
         );
     }
 }
