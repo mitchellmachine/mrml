@@ -207,6 +207,15 @@ pub struct SmartGitRequest {
     pub generation: RepositoryGeneration,
     pub operation: SmartGitOperation,
 }
+/// A Smart Git request whose route, authorization, and repository generation
+/// have been validated without consuming or producing body bytes.
+///
+/// The private fields and consuming execution API make this a one-shot
+/// transport prelude rather than a reusable authority token.
+pub struct PreparedSmartGitRequest {
+    request: SmartGitRequest,
+    budget: WorkBudget,
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmartGitResponse {
     pub generation: RepositoryGeneration,
@@ -900,7 +909,12 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         input: &mut dyn BoundedRead,
         output: &mut dyn BoundedWrite,
     ) -> GitdHttpResponse {
-        match self.handle_smart_git_inner(request, input, output) {
+        match self
+            .prepare_smart_git(request, input.remaining(), output.remaining())
+            .and_then(|(prepared, response)| {
+                self.execute_prepared_smart_git(prepared, input, output)?;
+                Ok(response)
+            }) {
             Ok(response) => response,
             Err(
                 BackendError::NotFound
@@ -915,12 +929,14 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         }
     }
 
-    fn handle_smart_git_inner(
-        &mut self,
+    /// Validate a Smart Git request and construct the response headers before
+    /// any request or response body byte crosses the backend boundary.
+    pub fn prepare_smart_git(
+        &self,
         request: &RequestHead,
-        input: &mut dyn BoundedRead,
-        output: &mut dyn BoundedWrite,
-    ) -> Result<GitdHttpResponse, BackendError> {
+        input_remaining: u64,
+        output_remaining: u64,
+    ) -> Result<(PreparedSmartGitRequest, GitdHttpResponse), BackendError> {
         if request.scheme != "https" || single_header(request, "git-protocol")? != Some("version=2")
         {
             return Err(BackendError::Unsupported);
@@ -972,28 +988,19 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             .authorize(&request.headers, &repository, action, now)
             .map_err(|_| BackendError::Private)?;
         let generation = self.backend.repository_generation(&repository)?;
-        let max_input_bytes = SMART_GIT_INPUT_LIMIT.min(input.remaining());
-        let max_output_bytes = SMART_GIT_OUTPUT_LIMIT.min(output.remaining());
-        let result = self.backend.smart_git(
-            SmartGitRequest {
+        let prepared = PreparedSmartGitRequest {
+            request: SmartGitRequest {
                 repository,
                 generation,
                 operation,
             },
-            input,
-            output,
-            WorkBudget {
-                max_input_bytes,
-                max_output_bytes,
+            budget: WorkBudget {
+                max_input_bytes: SMART_GIT_INPUT_LIMIT.min(input_remaining),
+                max_output_bytes: SMART_GIT_OUTPUT_LIMIT.min(output_remaining),
                 max_memory_bytes: SMART_GIT_MEMORY_LIMIT,
                 max_work_units: SMART_GIT_WORK_LIMIT,
             },
-        )?;
-        if result.generation != generation
-            || (operation != SmartGitOperation::ReceivePack && result.refs_activated)
-        {
-            return Err(BackendError::StaleGeneration);
-        }
+        };
         let mut response = self.text(200, response_type, b"", true)?;
         if let Some(index) = response
             .headers
@@ -1004,7 +1011,28 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         }
         set_header(&mut response.headers, "cache-control", "no-store")?;
         set_header(&mut response.headers, "pragma", "no-cache")?;
-        Ok(response)
+        Ok((prepared, response))
+    }
+
+    /// Execute a previously prepared request exactly once against bounded
+    /// transport streams.
+    pub fn execute_prepared_smart_git(
+        &mut self,
+        prepared: PreparedSmartGitRequest,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+    ) -> Result<SmartGitResponse, BackendError> {
+        let generation = prepared.request.generation;
+        let operation = prepared.request.operation;
+        let result = self
+            .backend
+            .smart_git(prepared.request, input, output, prepared.budget)?;
+        if result.generation != generation
+            || (operation != SmartGitOperation::ReceivePack && result.refs_activated)
+        {
+            return Err(BackendError::StaleGeneration);
+        }
+        Ok(result)
     }
     fn handle_inner(&mut self, request: &RequestHead) -> Result<GitdHttpResponse, BackendError> {
         if request.method != "GET" && request.method != "POST" {
@@ -1197,7 +1225,9 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
     ) -> Result<GitdHttpResponse, BackendError> {
         let mut input = EmptySmartGitInput;
         let mut output = BufferedSmartGitOutput::new(SMART_GIT_MEMORY_LIMIT as usize);
-        let mut response = self.handle_smart_git_inner(request, &mut input, &mut output)?;
+        let (prepared, mut response) =
+            self.prepare_smart_git(request, input.remaining(), output.remaining())?;
+        self.execute_prepared_smart_git(prepared, &mut input, &mut output)?;
         response.body = output.bytes;
         set_header(
             &mut response.headers,
@@ -2254,7 +2284,13 @@ mod tests {
             }
             let mut input = EmptySmartGitInput;
             let mut output = BufferedSmartGitOutput::new(1024);
-            let response = server.handle_smart_git(&request, &mut input, &mut output);
+            let (prepared, response) = server
+                .prepare_smart_git(&request, input.remaining(), output.remaining())
+                .unwrap();
+            assert!(output.bytes.is_empty(), "preparation wrote route {target}");
+            server
+                .execute_prepared_smart_git(prepared, &mut input, &mut output)
+                .unwrap();
             assert_eq!(response.status, 200, "route {target}");
             assert!(!output.bytes.is_empty());
             assert!(
