@@ -12136,3 +12136,19 @@ platform, interface-generation, sanitizer, and deterministic certificate test
 commands in continuous integration. It adds no certificate protocol, signing
 mechanism, validation topology, certificate authority operation, or recorded
 re-review trigger.
+
+# 2026-09-01 — Typed hosted account and identity lifecycle calls
+
+Patent review: **NOT_TRIGGERED**. This increment transports already-defined
+bounded lifecycle operations through the existing authorized hosted session and
+validates their generation receipts. It adds no certificate protocol, signing
+mechanism, validation topology, certificate authority operation, or recorded
+re-review trigger.
+
+# 2026-09-01 — Dependency-free certificate frontend bootstrap
+
+Patent review: **NOT_TRIGGERED**. This increment restores the existing build
+system's Cargo stage-zero boundary while retaining certificate administration
+in the Manifest V2 native frontend. It adds no certificate protocol, signing
+mechanism, validation topology, certificate authority operation, or recorded
+re-review trigger.

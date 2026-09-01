@@ -57,6 +57,14 @@ or LLVM remains an evidence-driven migration, never an OS-progress prerequisite.
 object, package, release, and image responsibilities may later be libraries or
 tools; avoid premature process/tool proliferation.
 
+The Cargo bootstrap sets the internal `mrml_stage_zero` cfg on Linux and the
+pinned Windows GNU/LLVM host. Service-backed administration commands are
+excluded only from that dependency-free bootstrap; the Manifest V2 native
+self-build resolves their declared package dependencies and includes them.
+An explicit `RUSTFLAGS` override used for the Wine stack size must repeat the
+stage-zero cfg because Cargo overrides target rustflags rather than merging
+them.
+
 Native artifacts are isolated under `target/mrml-native/`. This deliberately
 does not use `target/mrml/`, because Cargo's Unix stage-zero executable occupies
 the path `target/mrml`; sharing that name makes a clean Linux bootstrap unable

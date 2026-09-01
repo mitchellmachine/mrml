@@ -52,6 +52,7 @@ use certificate_caa::{CaaChallengeMethod, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_C
 use generation::mrml_package_identifier;
 use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
+#[cfg(not(mrml_stage_zero))]
 use mrml_certificate::{
     BackupExportReceipt, BackupTransferReceipt, BackupTransferReceiptState, ExpiryHealth,
     HostedLifecycleClient, MAX_BACKUP_BYTES, MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus,
@@ -355,8 +356,11 @@ fn print_help() {
 fn cert_command(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("caa") => cert_caa_command(&args[1..]),
+        #[cfg(not(mrml_stage_zero))]
         Some("status") => cert_status_command(&args[1..]),
+        #[cfg(not(mrml_stage_zero))]
         Some("backup") => cert_backup_command(&args[1..]),
+        #[cfg(not(mrml_stage_zero))]
         Some("restore") => cert_restore_command(&args[1..]),
         Some(operation) => Err(format!(
             "CertificateOperationUnavailable {{ operation: {operation}, status: REMAINS_OPEN }}"
@@ -365,6 +369,7 @@ fn cert_command(args: &[String]) -> Result<(), String> {
     }
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn cert_restore_command(args: &[String]) -> Result<(), String> {
     let (operation, options) = match args.first().map(String::as_str) {
         Some("--verify-only") => ("verify", &args[1..]),
@@ -376,6 +381,7 @@ fn cert_restore_command(args: &[String]) -> Result<(), String> {
     cert_backup_command(&routed)
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn cert_status_command(args: &[String]) -> Result<(), String> {
     let mut snapshot = None;
     let mut endpoint = None;
@@ -447,6 +453,7 @@ fn cert_status_command(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn read_certificate_status_snapshot(path: &str) -> Result<ManagedIdentityStatus, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("CertificateStatusSnapshotUnreadable {{ detail: {error} }}"))?;
@@ -462,6 +469,7 @@ fn read_certificate_status_snapshot(path: &str) -> Result<ManagedIdentityStatus,
         .map_err(|error| format!("CertificateStatusSnapshotInvalid {{ detail: {error:?} }}"))
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn read_live_certificate_status(
     endpoint: &str,
     capability_path: &str,
@@ -475,6 +483,7 @@ fn read_live_certificate_status(
         .map_err(|error| format!("CertificateStatusSessionFailed {{ detail: {error:?} }}"))
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn connect_certificate_session(
     endpoint: &str,
     capability_path: &str,
@@ -505,6 +514,7 @@ fn connect_certificate_session(
     result.map_err(|error| format!("CertificateSessionFailed {{ detail: {error:?} }}"))
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn cert_backup_command(args: &[String]) -> Result<(), String> {
     let operation = args
         .first()
@@ -666,6 +676,7 @@ fn cert_backup_command(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn render_backup_export_receipt(
     receipt: BackupExportReceipt,
     destination: &str,
@@ -692,6 +703,7 @@ fn render_backup_export_receipt(
     }
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn parse_nonzero_generation(value: &str) -> Result<u64, String> {
     value
         .parse::<u64>()
@@ -700,6 +712,7 @@ fn parse_nonzero_generation(value: &str) -> Result<u64, String> {
         .ok_or_else(|| "CertificateGenerationInvalid".into())
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn render_backup_receipt(receipt: BackupTransferReceipt, output: OutputMode) -> String {
     let state = match receipt.state {
         BackupTransferReceiptState::Accepted => "accepted",
@@ -727,6 +740,7 @@ fn render_backup_receipt(receipt: BackupTransferReceipt, output: OutputMode) -> 
     }
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn render_certificate_status(status: ManagedIdentityStatus, output: OutputMode) -> String {
     use core::fmt::Write as _;
 
@@ -805,6 +819,7 @@ fn render_certificate_status(status: ManagedIdentityStatus, output: OutputMode) 
     output_text
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn expiry_health_name(health: ExpiryHealth) -> &'static str {
     match health {
         ExpiryHealth::Healthy => "healthy",
@@ -814,6 +829,7 @@ fn expiry_health_name(health: ExpiryHealth) -> &'static str {
     }
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn encode_hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -823,6 +839,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     output
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn decode_fixed_hex<const N: usize>(input: &str) -> Option<[u8; N]> {
     if input.len() != N * 2
         || !input
@@ -838,6 +855,7 @@ fn decode_fixed_hex<const N: usize>(input: &str) -> Option<[u8; N]> {
     Some(output)
 }
 
+#[cfg(not(mrml_stage_zero))]
 fn hex_nibble(value: u8) -> Option<u8> {
     match value {
         b'0'..=b'9' => Some(value - b'0'),
@@ -4081,7 +4099,9 @@ fn apply_rust_features(
         .arg("--check-cfg")
         .arg(format!("cfg(feature, values({values}))"))
         .arg("--check-cfg")
-        .arg("cfg(test)");
+        .arg("cfg(test)")
+        .arg("--check-cfg")
+        .arg("cfg(mrml_stage_zero)");
 }
 
 fn apply_rust_compile_env(
@@ -5954,6 +5974,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(mrml_stage_zero))]
     fn certificate_status_snapshot_rendering_is_exact_and_secret_free() {
         let status = ManagedIdentityStatus {
             identity: mrml_certificate::TlsIdentityId([0x2a; 16]),
@@ -5984,6 +6005,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(mrml_stage_zero))]
     fn certificate_backup_receipt_rendering_is_exact() {
         let receipt = BackupTransferReceipt {
             state: BackupTransferReceiptState::Verified,
@@ -6632,6 +6654,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(mrml_stage_zero))]
     fn certificate_restore_routes_verify_only_and_mutating_forms() {
         let verify = ["--verify-only"].map(str::to_owned);
         assert_eq!(
@@ -6645,6 +6668,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(mrml_stage_zero))]
     fn certificate_backup_create_requires_exact_export_inputs() {
         let create = ["create"].map(str::to_owned);
         assert_eq!(
@@ -6654,6 +6678,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(mrml_stage_zero))]
     fn certificate_backup_create_receipt_is_secret_free_and_machine_stable() {
         let receipt = BackupExportReceipt {
             export_generation: 9,

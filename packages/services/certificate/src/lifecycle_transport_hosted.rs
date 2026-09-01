@@ -1,12 +1,12 @@
 use crate::{
-    BACKUP_EXPORT_COMMAND_BYTES, BACKUP_EXPORT_RECEIPT_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES,
-    BackupExportCommand, BackupExportReceipt, BackupTransferCommand, BackupTransferPurpose,
-    BackupTransferReceipt, BackupTransferReceiptState, CertificateLifecycleAuthorizer,
-    CertificateLifecycleProvider, MAX_BACKUP_BYTES, MAX_BACKUP_EXPORT_CHUNK, MAX_BACKUP_WIRE_CHUNK,
-    MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId,
     decode_backup_export_receipt, decode_backup_transfer_receipt, decode_managed_identity_status,
     dispatch_lifecycle_call, encode_backup_export_command, encode_backup_transfer_command,
-    untrusted_backup_container_digest,
+    untrusted_backup_container_digest, BackupExportCommand, BackupExportReceipt,
+    BackupTransferCommand, BackupTransferPurpose, BackupTransferReceipt,
+    BackupTransferReceiptState, CertificateLifecycleAuthorizer, CertificateLifecycleProvider,
+    ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId, BACKUP_EXPORT_COMMAND_BYTES,
+    BACKUP_EXPORT_RECEIPT_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES, MAX_BACKUP_BYTES,
+    MAX_BACKUP_EXPORT_CHUNK, MAX_BACKUP_WIRE_CHUNK, MAX_MANAGED_STATUS_BYTES,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
 use mrml_runtime::{NetError, TcpListener, TcpStream};
@@ -29,6 +29,8 @@ pub enum HostedLifecycleTransportError {
     OutputLengthMismatch,
     Protocol(abi::ProtocolError),
     RemoteStatus(abi::StatusError),
+    RemoteAccountStatus(abi::AccountOperationError),
+    RemoteIdentityStatus(abi::IdentityOperationError),
     RemoteBackupStatus(abi::BackupOperationError),
     Status(ManagedStatusCodecError),
     InvalidSessionCapability,
@@ -200,6 +202,116 @@ impl HostedLifecycleClient {
             .map_err(|_| HostedLifecycleTransportError::OutputLengthMismatch)?;
         decode_managed_identity_status(&memory[OUTPUT_AT..OUTPUT_AT + written])
             .map_err(HostedLifecycleTransportError::Status)
+    }
+
+    pub fn account_operation(
+        &mut self,
+        operation: u32,
+        policy_generation: u64,
+        request: &[u8],
+        output: &mut [u8],
+    ) -> Result<(usize, u64), HostedLifecycleTransportError> {
+        if operation == 0
+            || policy_generation == 0
+            || request.is_empty()
+            || request.len() > 4096
+            || output.is_empty()
+            || output.len() > 4096
+            || request.len() + output.len() > 8192
+        {
+            return Err(HostedLifecycleTransportError::InvalidFrame);
+        }
+        let output_at = request.len();
+        let memory_length = output_at + output.len();
+        let mut memory = [0u8; 8192];
+        memory[..request.len()].copy_from_slice(request);
+        let frame = abi::encode_account_operation_request(abi::AccountOperationRequest {
+            operation,
+            policy_generation,
+            request: abi::BorrowedReadView::within(0, request.len() as u64, memory_length as u64)
+                .unwrap(),
+            output: abi::BorrowedWriteView::within(
+                output_at as u64,
+                output.len() as u64,
+                memory_length as u64,
+            )
+            .unwrap(),
+        })
+        .map_err(HostedLifecycleTransportError::Protocol)?;
+        let result = (|| {
+            let response = self.call(&frame, &mut memory[..memory_length])?;
+            let response = abi::decode_account_operation_response(&response, output.len() as u64)
+                .map_err(HostedLifecycleTransportError::Protocol)?
+                .map_err(HostedLifecycleTransportError::RemoteAccountStatus)?;
+            let written = usize::try_from(response.written)
+                .map_err(|_| HostedLifecycleTransportError::OutputLengthMismatch)?;
+            output[..written].copy_from_slice(&memory[output_at..output_at + written]);
+            Ok((written, response.account_generation))
+        })();
+        memory.fill(0);
+        if result.is_err() {
+            output.fill(0);
+        }
+        result
+    }
+
+    pub fn identity_operation(
+        &mut self,
+        operation: u32,
+        identity: TlsIdentityId,
+        policy_generation: u64,
+        request: &[u8],
+        output: &mut [u8],
+    ) -> Result<(usize, u64), HostedLifecycleTransportError> {
+        const PAYLOAD_AT: usize = 16;
+        if operation == 0
+            || policy_generation == 0
+            || request.is_empty()
+            || request.len() > 8192
+            || output.is_empty()
+            || output.len() > 8192
+            || PAYLOAD_AT + request.len() + output.len() > MAX_HOSTED_LIFECYCLE_MEMORY
+        {
+            return Err(HostedLifecycleTransportError::InvalidFrame);
+        }
+        let output_at = PAYLOAD_AT + request.len();
+        let memory_length = output_at + output.len();
+        let mut memory = [0u8; MAX_HOSTED_LIFECYCLE_MEMORY];
+        memory[..PAYLOAD_AT].copy_from_slice(&identity.0);
+        memory[PAYLOAD_AT..PAYLOAD_AT + request.len()].copy_from_slice(request);
+        let frame = abi::encode_identity_operation_request(abi::IdentityOperationRequest {
+            operation,
+            identity: abi::BorrowedReadView::within(0, 16, memory_length as u64).unwrap(),
+            policy_generation,
+            request: abi::BorrowedReadView::within(
+                PAYLOAD_AT as u64,
+                request.len() as u64,
+                memory_length as u64,
+            )
+            .unwrap(),
+            output: abi::BorrowedWriteView::within(
+                output_at as u64,
+                output.len() as u64,
+                memory_length as u64,
+            )
+            .unwrap(),
+        })
+        .map_err(HostedLifecycleTransportError::Protocol)?;
+        let result = (|| {
+            let response = self.call(&frame, &mut memory[..memory_length])?;
+            let response = abi::decode_identity_operation_response(&response, output.len() as u64)
+                .map_err(HostedLifecycleTransportError::Protocol)?
+                .map_err(HostedLifecycleTransportError::RemoteIdentityStatus)?;
+            let written = usize::try_from(response.written)
+                .map_err(|_| HostedLifecycleTransportError::OutputLengthMismatch)?;
+            output[..written].copy_from_slice(&memory[output_at..output_at + written]);
+            Ok((written, response.identity_generation))
+        })();
+        memory.fill(0);
+        if result.is_err() {
+            output.fill(0);
+        }
+        result
     }
 
     pub fn backup_transfer(
@@ -681,8 +793,17 @@ mod tests {
         fn authorize_account(&self, operation: u32, generation: u64, request: &[u8]) -> bool {
             operation == abi::ACCOUNT_UPDATE && generation == 7 && request == b"exact"
         }
-        fn authorize_identity(&self, _: u32, _: &[u8], _: u64, _: &[u8]) -> bool {
-            false
+        fn authorize_identity(
+            &self,
+            operation: u32,
+            identity: &[u8],
+            generation: u64,
+            request: &[u8],
+        ) -> bool {
+            operation == abi::IDENTITY_RENEW
+                && identity == [9; 16]
+                && generation == 7
+                && request == b"renew"
         }
         fn authorize_backup(&self, _: u32, _: u64, _: &[u8]) -> bool {
             false
@@ -933,9 +1054,13 @@ mod tests {
             _: &[u8],
             _: u64,
             _: &[u8],
-            _: &mut [u8],
+            output: &mut [u8],
         ) -> Result<abi::IdentityOperationResponse, abi::IdentityOperationError> {
-            unreachable!()
+            output[..7].copy_from_slice(b"renewed");
+            Ok(abi::IdentityOperationResponse {
+                written: 7,
+                identity_generation: 9,
+            })
         }
         fn backup_operation(
             &mut self,
@@ -985,14 +1110,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut memory = [0u8; 64];
@@ -1039,14 +1162,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let identity = TlsIdentityId([9; 16]);
@@ -1057,23 +1178,75 @@ mod tests {
     }
 
     #[test]
+    fn typed_account_call_binds_operation_policy_and_bounded_output() {
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let listener = Shared::new(listener);
+        let server_listener = listener.clone();
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
+        let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
+        let mut output = [0u8; 8];
+        assert_eq!(
+            client
+                .account_operation(abi::ACCOUNT_UPDATE, 7, b"exact", &mut output)
+                .unwrap(),
+            (2, 8)
+        );
+        assert_eq!(&output[..2], b"ok");
+    }
+
+    #[test]
+    fn typed_identity_call_binds_identity_operation_and_policy() {
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let listener = Shared::new(listener);
+        let server_listener = listener.clone();
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
+        let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
+        let mut output = [0u8; 8];
+        assert_eq!(
+            client
+                .identity_operation(
+                    abi::IDENTITY_RENEW,
+                    TlsIdentityId([9; 16]),
+                    7,
+                    b"renew",
+                    &mut output,
+                )
+                .unwrap(),
+            (7, 9)
+        );
+        assert_eq!(&output[..7], b"renewed");
+    }
+
+    #[test]
     fn one_use_session_capability_authorizes_live_status_without_address_authority() {
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut capability = HostedLifecycleSessionCapability::new([0x5a; 32]).unwrap();
-                let mut server = capability.accept_one(&server_listener).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-                assert!(matches!(
-                    capability.accept_one(&server_listener),
-                    Err(HostedLifecycleTransportError::SessionDenied)
-                ));
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut capability = HostedLifecycleSessionCapability::new([0x5a; 32]).unwrap();
+            let mut server = capability.accept_one(&server_listener).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+            assert!(matches!(
+                capability.accept_one(&server_listener),
+                Err(HostedLifecycleTransportError::SessionDenied)
+            ));
+        })
+        .is_ok());
         let mut client =
             HostedLifecycleClient::connect_session([127, 0, 0, 1], port, [0x5a; 32]).unwrap();
         let status = client.identity_status(TlsIdentityId([9; 16])).unwrap();
@@ -1086,14 +1259,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&BackupAuthorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&BackupAuthorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let receipt = client
@@ -1122,23 +1293,21 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
-                let mut provider = TransferProvider {
-                    lifecycle: crate::BackupTransferLifecycle::new(&mut storage).unwrap(),
-                    authenticator: TransferAuth,
-                    target: TransferTarget { committed: false },
-                };
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                for _ in 0..5 {
-                    server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
-                }
-                assert!(provider.target.committed);
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
+            let mut provider = TransferProvider {
+                lifecycle: crate::BackupTransferLifecycle::new(&mut storage).unwrap(),
+                authenticator: TransferAuth,
+                target: TransferTarget { committed: false },
+            };
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            for _ in 0..5 {
+                server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
+            }
+            assert!(provider.target.committed);
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let receipt = client
@@ -1156,24 +1325,22 @@ mod tests {
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
         let expected_for_server = expected.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
-                let mut provider = ExportProvider {
-                    lifecycle: crate::BackupExportSession::new(&mut storage).unwrap(),
-                    source: ExportSource {
-                        bytes: expected_for_server,
-                        digest,
-                    },
-                };
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                for _ in 0..3 {
-                    server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
-                }
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
+            let mut provider = ExportProvider {
+                lifecycle: crate::BackupExportSession::new(&mut storage).unwrap(),
+                source: ExportSource {
+                    bytes: expected_for_server,
+                    digest,
+                },
+            };
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            for _ in 0..3 {
+                server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
+            }
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut output = std::vec![0; crate::MAX_BACKUP_BYTES];

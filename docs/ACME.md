@@ -457,6 +457,19 @@ million sessions. Supervisor shutdown is explicit, while budget exhaustion or
 provider reconstruction failure is an alertable error rather than a fallback.
 The Linux/Windows platform entry point and real durable catalog/sealed-key
 reconstructor remain required before operational administration can be claimed.
+The hosted lifecycle client now also carries bounded account and identity
+operations through the canonical ABI. Each call binds its nonzero operation,
+policy generation, and (for identities) exact identity; keeps request and output
+in disjoint borrowed regions; checks the returned generation; and clears all
+scratch plus caller output on failure. This is transport plumbing for typed
+administration operations, not evidence that the still-planned command family
+or production provider wiring exists.
+The Cargo-only bootstrap frontend deliberately compiles with
+`mrml_stage_zero`, so it does not create a package-local dependency bridge to
+`mrml-certd`. The bootstrap retains repository/build commands and the CAA
+helper; its native self-build, produced through the Manifest V2 graph, includes
+the service-backed status and backup administration commands. The same explicit
+stage-zero cfg is used when bootstrapping the Windows frontend under Wine.
 The catalog half now has a shared bounded reconstructor. An already-authorized
 manifest may name at most 64 canonically ordered namespace/object bindings with
 their exact generation and payload digest. Reconstruction re-reads every record

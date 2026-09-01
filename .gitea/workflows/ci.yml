@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update
       - run: sudo apt-get install --yes wine64
-      - run: bash -lc 'source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all RUSTFLAGS="-C link-arg=/stack:16777216" wine cargo.exe +"$MRML_WINE_TOOLCHAIN" build --locked'
+      - run: bash -lc 'source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all RUSTFLAGS="-C link-arg=/stack:16777216 --cfg mrml_stage_zero --check-cfg=cfg(mrml_stage_zero)" wine cargo.exe +"$MRML_WINE_TOOLCHAIN" build --locked'
       - run: bash -lc 'source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.acme --target windows --release'
       - run: bash -lc 'source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.service.certificate --target windows --release'
       - run: bash -lc 'source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.test.security-fuzz --target windows --release'
