@@ -1,7 +1,7 @@
 use mrml_runtime::{Text, Vector};
 use mrml_tls::{TlsClientStream, TlsError, TlsServerStream};
 
-use crate::{valid_header, valid_value, Header, HttpError, RequestHead, ResponseHead};
+use crate::{Header, HttpError, RequestHead, ResponseHead, valid_header, valid_value};
 
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
@@ -907,9 +907,11 @@ mod tests {
             payload: payload.into(),
         };
         assert_eq!(f.encode(), Err(HttpError::BodyTooLarge));
-        assert!(Http2Client::new()
-            .request("GET", "https", "x", "/", &[("Bad", "x")], true)
-            .is_err())
+        assert!(
+            Http2Client::new()
+                .request("GET", "https", "x", "/", &[("Bad", "x")], true)
+                .is_err()
+        )
     }
     #[test]
     fn decodes_rfc_huffman_and_static_index_request() {
@@ -982,14 +984,16 @@ mod tests {
                 payload: Vector::new(),
             })
             .unwrap();
-        assert!(state
-            .receive(&Http2Frame {
-                kind: Http2FrameKind::Data,
-                flags: 0,
-                stream_id: 1,
-                payload: Vector::new(),
-            })
-            .is_err());
+        assert!(
+            state
+                .receive(&Http2Frame {
+                    kind: Http2FrameKind::Data,
+                    flags: 0,
+                    stream_id: 1,
+                    payload: Vector::new(),
+                })
+                .is_err()
+        );
         state
             .receive(&Http2Frame {
                 kind: Http2FrameKind::Continuation,
@@ -998,14 +1002,16 @@ mod tests {
                 payload: Vector::new(),
             })
             .unwrap();
-        assert!(state
-            .receive(&Http2Frame {
-                kind: Http2FrameKind::WindowUpdate,
-                flags: 0,
-                stream_id: 0,
-                payload: [0, 0, 0, 0].into(),
-            })
-            .is_err());
+        assert!(
+            state
+                .receive(&Http2Frame {
+                    kind: Http2FrameKind::WindowUpdate,
+                    flags: 0,
+                    stream_id: 0,
+                    payload: [0, 0, 0, 0].into(),
+                })
+                .is_err()
+        );
     }
 
     #[test]

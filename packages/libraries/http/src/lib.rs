@@ -5,6 +5,7 @@ use mrml_runtime::{Text, Vector};
 use mrml_tls::TlsClientStream;
 
 mod crlset_update;
+mod gitd_edge;
 mod http2;
 mod http3;
 mod huffman;
@@ -15,6 +16,7 @@ pub use crlset_update::{
     CHROMIUM_COMPONENT_UPDATE_URL, CHROMIUM_CRLSET_COMPONENT_ID,
     CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256, ChromiumCrlSetPackage, ChromiumCrlSetUpdater,
 };
+pub use gitd_edge::*;
 pub use http2::{
     HTTP2_CLIENT_PREFACE, Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame,
     Http2FrameKind, Http2Response, Http2Server, Http2ServerConnection,
