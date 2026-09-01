@@ -237,7 +237,7 @@ mod tests {
         }
     }
 
-    fn capabilities(binding: StorageModuleBinding) -> (CapabilitySpace<4>, [Capability; 4]) {
+    fn capabilities(binding: StorageModuleBinding) -> (CapabilitySpace<5>, [Capability; 5]) {
         let mut capabilities = CapabilitySpace::new();
         let handles = [
             capabilities
@@ -251,6 +251,9 @@ mod tests {
                 .unwrap(),
             capabilities
                 .insert(binding.endpoint_object, Rights::SIGNAL)
+                .unwrap(),
+            capabilities
+                .insert(binding.module_object, Rights::INSPECT)
                 .unwrap(),
         ];
         (capabilities, handles)
@@ -348,7 +351,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            registry.state(candidate.module_object),
+            registry
+                .inspect(&new_caps, new_handles[4], candidate.module_object)
+                .unwrap(),
             Some(crate::StorageModuleState::Active(candidate))
         );
         assert_eq!(
@@ -397,8 +402,14 @@ mod tests {
             Err(crate::StorageModuleError::LaunchFailed)
         );
         assert_eq!(
-            registry.state(candidate.module_object),
+            registry
+                .inspect(&new_caps, new_handles[4], candidate.module_object)
+                .unwrap(),
             Some(crate::StorageModuleState::Unavailable(candidate))
+        );
+        assert_eq!(
+            registry.inspect(&new_caps, new_handles[1], candidate.module_object),
+            Err(crate::StorageModuleError::WrongAuthorityObject)
         );
         assert_eq!(
             (supervisor.current, supervisor.cleanups, supervisor.launches),

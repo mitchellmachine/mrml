@@ -2606,7 +2606,9 @@ uncertainty quarantines only the affected slot, while failed launch leaves that
 slot unavailable until explicit retry and never falls back. Retry exact-matches
 the retained candidate generation and requires the same separate module control,
 interface inspection, provider control, and endpoint signal capabilities as
-launch; a guessed module object never authorizes backend execution. Storage passes
+launch; a guessed module object never authorizes backend execution. Public state
+inspection likewise requires exact module `INSPECT`, and raw class enumeration
+remains internal to the registry. Storage passes
 181 tests on Windows and Arch Linux before extraction. The AHCI mechanism is now
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
@@ -2624,8 +2626,8 @@ canonical catalog
 enumeration endpoint, capability-cleanup-gated service loop, and raw userspace
 syscall adapter; installed supervisor execution remains **PLANNED**.
 
-Patent review: **NOT_TRIGGERED**. Exact capability revalidation before retry is
-conventional authorization plumbing for the existing registry. See
+Patent review: **NOT_TRIGGERED**. Exact capability revalidation before retry or
+inspection is conventional authorization plumbing for the existing registry. See
 `docs/patents/REVIEW_LOG.md`.
 
 The service-image block adapter now rejects kernel-returned payload or

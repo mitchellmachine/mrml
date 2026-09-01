@@ -235,7 +235,7 @@ impl<const N: usize> StorageModuleRegistry<N> {
         Self { slots: [None; N] }
     }
 
-    pub fn state(&self, module_object: ObjectId) -> Option<StorageModuleState> {
+    fn state(&self, module_object: ObjectId) -> Option<StorageModuleState> {
         self.slots
             .iter()
             .flatten()
@@ -243,7 +243,8 @@ impl<const N: usize> StorageModuleRegistry<N> {
             .find(|state| state.module_object() == module_object)
     }
 
-    pub fn states_for_class(
+    #[cfg(test)]
+    fn states_for_class(
         &self,
         class: StorageModuleClass,
     ) -> impl Iterator<Item = StorageModuleState> + '_ {
@@ -252,6 +253,21 @@ impl<const N: usize> StorageModuleRegistry<N> {
             .flatten()
             .copied()
             .filter(move |state| state.class() == class)
+    }
+
+    pub fn inspect<const C: usize>(
+        &self,
+        capabilities: &CapabilitySpace<C>,
+        module_capability: Capability,
+        module_object: ObjectId,
+    ) -> Result<Option<StorageModuleState>, StorageModuleError> {
+        let actual = capabilities
+            .authorize_exact(module_capability, Rights::INSPECT)
+            .map_err(StorageModuleError::Capability)?;
+        if actual != module_object {
+            return Err(StorageModuleError::WrongAuthorityObject);
+        }
+        Ok(self.state(module_object))
     }
 
     /// Binds one filesystem volume identity to the exact live block-provider
@@ -477,6 +493,7 @@ impl StorageModuleState {
         }
     }
 
+    #[cfg(test)]
     const fn class(self) -> StorageModuleClass {
         match self {
             Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
@@ -681,7 +698,7 @@ mod tests {
         assert_eq!(backend.calls, [1, 1]);
     }
 
-    fn capabilities(binding: StorageModuleBinding) -> (CapabilitySpace<4>, [Capability; 4]) {
+    fn capabilities(binding: StorageModuleBinding) -> (CapabilitySpace<5>, [Capability; 5]) {
         let mut capabilities = CapabilitySpace::new();
         let handles = [
             capabilities
@@ -695,6 +712,9 @@ mod tests {
                 .unwrap(),
             capabilities
                 .insert(binding.endpoint_object, Rights::SIGNAL)
+                .unwrap(),
+            capabilities
+                .insert(binding.module_object, Rights::INSPECT)
                 .unwrap(),
         ];
         (capabilities, handles)
