@@ -53,9 +53,10 @@ use generation::mrml_package_identifier;
 use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
 use mrml_certificate::{
-    BackupTransferReceipt, BackupTransferReceiptState, ExpiryHealth, HostedLifecycleClient,
-    MAX_BACKUP_BYTES, MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus, RenewalSource,
-    TlsIdentityId, decode_managed_identity_status, untrusted_backup_container_digest,
+    BackupExportReceipt, BackupTransferReceipt, BackupTransferReceiptState, ExpiryHealth,
+    HostedLifecycleClient, MAX_BACKUP_BYTES, MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus,
+    RenewalSource, TlsIdentityId, decode_managed_identity_status,
+    untrusted_backup_container_digest,
 };
 #[path = "../../../libraries/crypto/src/sha3.rs"]
 #[allow(dead_code)]
@@ -300,7 +301,7 @@ fn print_help() {
         "       mrml cert status (--snapshot FILE | --endpoint 127.0.0.1:PORT --session-capability FILE --identity HEX) [--output human|structured]"
     );
     println!(
-        "       mrml cert backup verify --input FILE --policy-generation N --transfer-generation N --endpoint 127.0.0.1:PORT --session-capability FILE [--output human|structured]"
+        "       mrml cert backup <create --output-file FILE|verify --input FILE> --policy-generation N --transfer-generation N --endpoint 127.0.0.1:PORT --session-capability FILE [--output human|structured]"
     );
     println!(
         "       mrml cert restore [--verify-only] --input FILE --policy-generation N --transfer-generation N --endpoint 127.0.0.1:PORT --session-capability FILE [--confirm-digest HEX] [--output human|structured]"
@@ -508,11 +509,12 @@ fn cert_backup_command(args: &[String]) -> Result<(), String> {
     let operation = args
         .first()
         .map(String::as_str)
-        .ok_or("CertificateBackupUsageError { expected: verify|restore }")?;
-    if !matches!(operation, "verify" | "restore") {
+        .ok_or("CertificateBackupUsageError { expected: create|verify|restore }")?;
+    if !matches!(operation, "create" | "verify" | "restore") {
         return Err("CertificateBackupOperationInvalid".into());
     }
     let mut input = None;
+    let mut output_file = None;
     let mut policy_generation = None;
     let mut transfer_generation = None;
     let mut endpoint = None;
@@ -530,6 +532,10 @@ fn cert_backup_command(args: &[String]) -> Result<(), String> {
             "--input" => {
                 index += 1;
                 input = Some(value(index)?);
+            }
+            "--output-file" => {
+                index += 1;
+                output_file = Some(value(index)?);
             }
             "--policy-generation" => {
                 index += 1;
@@ -566,12 +572,53 @@ fn cert_backup_command(args: &[String]) -> Result<(), String> {
         }
         index += 1;
     }
-    let input = input.ok_or("CertificateBackupInputMissing")?;
     let policy_generation = policy_generation.ok_or("CertificateBackupPolicyGenerationMissing")?;
     let transfer_generation =
         transfer_generation.ok_or("CertificateBackupTransferGenerationMissing")?;
     let endpoint = endpoint.ok_or("CertificateBackupEndpointMissing")?;
     let capability = session_capability.ok_or("CertificateBackupSessionCapabilityMissing")?;
+    if operation == "create" {
+        if input.is_some() || confirmed_digest.is_some() {
+            return Err("CertificateBackupCreateUnexpectedInput".into());
+        }
+        let destination = output_file.ok_or("CertificateBackupOutputFileMissing")?;
+        let mut client = connect_certificate_session(endpoint, capability)?;
+        let mut bytes = vec![0u8; MAX_BACKUP_BYTES];
+        let result =
+            client.create_backup_container(policy_generation, transfer_generation, &mut bytes);
+        let (written, receipt) = match result {
+            Ok(value) => value,
+            Err(error) => {
+                bytes.fill(0);
+                return Err(format!(
+                    "CertificateBackupSessionFailed {{ detail: {error:?} }}"
+                ));
+            }
+        };
+        let write_result = (|| {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)
+                .map_err(|error| {
+                    format!("CertificateBackupOutputUnavailable {{ detail: {error} }}")
+                })?;
+            file.write_all(&bytes[..written])
+                .and_then(|()| file.sync_all())
+                .map_err(|error| format!("CertificateBackupOutputFailed {{ detail: {error} }}"))
+        })();
+        bytes.fill(0);
+        write_result?;
+        print!(
+            "{}",
+            render_backup_export_receipt(receipt, destination, output)
+        );
+        return Ok(());
+    }
+    if output_file.is_some() {
+        return Err("CertificateBackupUnexpectedOutputFile".into());
+    }
+    let input = input.ok_or("CertificateBackupInputMissing")?;
     let metadata = fs::metadata(input)
         .map_err(|error| format!("CertificateBackupUnreadable {{ detail: {error} }}"))?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_BACKUP_BYTES as u64 {
@@ -617,6 +664,32 @@ fn cert_backup_command(args: &[String]) -> Result<(), String> {
         .map_err(|error| format!("CertificateBackupSessionFailed {{ detail: {error:?} }}"))?;
     print!("{}", render_backup_receipt(receipt, output));
     Ok(())
+}
+
+fn render_backup_export_receipt(
+    receipt: BackupExportReceipt,
+    destination: &str,
+    output: OutputMode,
+) -> String {
+    match output {
+        OutputMode::Human => format!(
+            "Certificate backup created\n  file: {destination}\n  export generation: {}\n  policy generation: {}\n  records: {}\n  bytes: {}\n  digest: {}\n",
+            receipt.export_generation,
+            receipt.policy_generation,
+            receipt.record_count,
+            receipt.total_bytes,
+            encode_hex(&receipt.backup_digest)
+        ),
+        OutputMode::Structured => format!(
+            "cert-backup|operation=create|status=PASS|export_generation={}|policy_generation={}|records={}|bytes={}|digest={}|file_hex={}\n",
+            receipt.export_generation,
+            receipt.policy_generation,
+            receipt.record_count,
+            receipt.total_bytes,
+            encode_hex(&receipt.backup_digest),
+            encode_hex(destination.as_bytes())
+        ),
+    }
 }
 
 fn parse_nonzero_generation(value: &str) -> Result<u64, String> {
@@ -6563,20 +6636,38 @@ mod tests {
         let verify = ["--verify-only"].map(str::to_owned);
         assert_eq!(
             cert_restore_command(&verify).unwrap_err(),
-            "CertificateBackupInputMissing"
+            "CertificateBackupPolicyGenerationMissing"
         );
         assert_eq!(
             cert_restore_command(&[]).unwrap_err(),
-            "CertificateBackupInputMissing"
+            "CertificateBackupPolicyGenerationMissing"
         );
     }
 
     #[test]
-    fn certificate_backup_create_remains_explicitly_unavailable() {
+    fn certificate_backup_create_requires_exact_export_inputs() {
         let create = ["create"].map(str::to_owned);
         assert_eq!(
             cert_backup_command(&create).unwrap_err(),
-            "CertificateBackupOperationInvalid"
+            "CertificateBackupPolicyGenerationMissing"
         );
+    }
+
+    #[test]
+    fn certificate_backup_create_receipt_is_secret_free_and_machine_stable() {
+        let receipt = BackupExportReceipt {
+            export_generation: 9,
+            policy_generation: 4,
+            offset: 120,
+            total_bytes: 120,
+            record_count: 3,
+            backup_digest: [0xab; 32],
+            finished: true,
+        };
+        let rendered =
+            render_backup_export_receipt(receipt, "backup file.mrcb", OutputMode::Structured);
+        assert!(rendered.contains("operation=create|status=PASS"));
+        assert!(rendered.contains("file_hex=6261636b75702066696c652e6d726362"));
+        assert!(!rendered.contains("backup file"));
     }
 }

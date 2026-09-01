@@ -12098,3 +12098,10 @@ authorized lifecycle transport with the bounded sequential backup export and
 verifies exact generation, length, and digest receipts. It adds no certificate
 protocol, signing mechanism, validation topology, certificate authority
 operation, or recorded re-review trigger.
+
+# 2026-09-01 — Certificate backup creation frontend
+
+Patent review: **NOT_TRIGGERED**. This increment writes the existing verified
+backup export to an explicitly new file and renders its existing receipt. It
+adds no certificate protocol, signing mechanism, validation topology,
+certificate authority operation, or recorded re-review trigger.

@@ -202,7 +202,12 @@ finish return a canonical 72-byte metadata receipt; reads return only the exact
 next container bytes. The typed hosted client downloads through that operation,
 checks every response generation, bounds every chunk to 8192 bytes, recomputes
 the complete container digest before finish, and clears partial output on a
-detected mismatch. CLI file-output wiring remains required.
+detected mismatch. `mrml cert backup create` writes only to a newly created
+destination, never overwrites an existing file, flushes the exact verified
+length, clears its staging memory on every outcome, and emits a canonical
+receipt whose structured form hex-encodes the path rather than permitting
+delimiter injection. A real catalog/sealed-key provider remains required for a
+deployed daemon to authorize this operation.
 Because a complete container may exceed the lifecycle ABI's 4 KiB request
 window, restore input is assembled by a bounded sequential transfer state
 machine rather than by raising that ABI bound. Each upload binds a nonzero
