@@ -2603,7 +2603,11 @@ three independently replaceable AHCI, NVMe, and IDE block-provider slots to
 coexist; cleanup-gates
 replacement; and publishes only after fresh launch and health-check. Cleanup
 uncertainty quarantines only the affected slot, while failed launch leaves that
-slot unavailable until explicit retry and never falls back. Retry exact-matches
+slot unavailable until explicit retry and never falls back. Quarantine retains
+the exact old and candidate generations; an exact module-`CONTROL` retry repeats
+only old-generation cleanup and, on success, advances to unavailable without
+launching. Candidate launch then remains gated by its separate full authority set.
+Retry exact-matches
 the retained candidate generation and requires the same separate module control,
 interface inspection, provider control, and endpoint signal capabilities as
 launch; a guessed module object never authorizes backend execution. Public state
@@ -2630,7 +2634,7 @@ syscall adapter; installed supervisor execution remains **PLANNED**.
 
 Patent review: **NOT_TRIGGERED**. Exact capability revalidation before retry or
 inspection and fixed identity-collision rejection are conventional authorization
-plumbing for the existing registry. See
+and cleanup-recovery plumbing for the existing registry. See
 `docs/patents/REVIEW_LOG.md`.
 
 The service-image block adapter now rejects kernel-returned payload or

@@ -197,7 +197,10 @@ pub enum StorageModuleState {
         old: StorageModuleBinding,
         candidate: StorageModuleBinding,
     },
-    Quarantined(StorageModuleBinding),
+    Quarantined {
+        old: StorageModuleBinding,
+        candidate: StorageModuleBinding,
+    },
     Unavailable(StorageModuleBinding),
 }
 
@@ -212,6 +215,7 @@ pub enum StorageModuleError {
     NotActive,
     StaleReplacement,
     StaleRetry,
+    StaleQuarantine,
     ObjectCollision,
     CleanupFailed,
     LaunchFailed,
@@ -436,7 +440,7 @@ impl<const N: usize> StorageModuleRegistry<N> {
         }
         self.slots[index] = Some(StorageModuleState::Replacing { old, candidate });
         if backend.revoke_cleanup_and_erase(old).is_err() {
-            self.slots[index] = Some(StorageModuleState::Quarantined(old));
+            self.slots[index] = Some(StorageModuleState::Quarantined { old, candidate });
             return Err(StorageModuleError::CleanupFailed);
         }
         if backend.launch_and_healthcheck(candidate).is_err() {
@@ -444,6 +448,40 @@ impl<const N: usize> StorageModuleRegistry<N> {
             return Err(StorageModuleError::LaunchFailed);
         }
         self.slots[index] = Some(StorageModuleState::Active(candidate));
+        Ok(candidate)
+    }
+
+    pub fn retry_quarantined_cleanup<const C: usize, B: StorageModuleBackend>(
+        &mut self,
+        capabilities: &CapabilitySpace<C>,
+        module_capability: Capability,
+        old: StorageModuleBinding,
+        candidate: StorageModuleBinding,
+        backend: &mut B,
+    ) -> Result<StorageModuleBinding, StorageModuleError> {
+        let actual = capabilities
+            .authorize_exact(module_capability, Rights::CONTROL)
+            .map_err(StorageModuleError::Capability)?;
+        if actual != old.module_object || candidate.module_object != old.module_object {
+            return Err(StorageModuleError::WrongAuthorityObject);
+        }
+        let index = self
+            .index(old.module_object)
+            .ok_or(StorageModuleError::Missing)?;
+        match self.slots[index] {
+            Some(StorageModuleState::Quarantined {
+                old: expected_old,
+                candidate: expected_candidate,
+            }) if expected_old == old && expected_candidate == candidate => {}
+            Some(StorageModuleState::Quarantined { .. }) => {
+                return Err(StorageModuleError::StaleQuarantine);
+            }
+            _ => return Err(StorageModuleError::NotActive),
+        }
+        if backend.revoke_cleanup_and_erase(old).is_err() {
+            return Err(StorageModuleError::CleanupFailed);
+        }
+        self.slots[index] = Some(StorageModuleState::Unavailable(candidate));
         Ok(candidate)
     }
 
@@ -500,19 +538,21 @@ impl<const N: usize> Default for StorageModuleRegistry<N> {
 impl StorageModuleState {
     const fn module_object(self) -> ObjectId {
         match self {
-            Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
-                binding.module_object
-            }
-            Self::Replacing { old, .. } => old.module_object,
+            Self::Active(binding) | Self::Unavailable(binding) => binding.module_object,
+            Self::Replacing { old, .. } | Self::Quarantined { old, .. } => old.module_object,
         }
     }
 
     fn conflicts_with(self, candidate: StorageModuleBinding) -> bool {
         match self {
-            Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
+            Self::Active(binding) | Self::Unavailable(binding) => {
                 bindings_conflict(binding, candidate)
             }
             Self::Replacing {
+                old,
+                candidate: next,
+            }
+            | Self::Quarantined {
                 old,
                 candidate: next,
             } => bindings_conflict(old, candidate) || bindings_conflict(next, candidate),
@@ -522,10 +562,8 @@ impl StorageModuleState {
     #[cfg(test)]
     const fn class(self) -> StorageModuleClass {
         match self {
-            Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
-                binding.class
-            }
-            Self::Replacing { old, .. } => old.class,
+            Self::Active(binding) | Self::Unavailable(binding) => binding.class,
+            Self::Replacing { old, .. } | Self::Quarantined { old, .. } => old.class,
         }
     }
 }
@@ -1024,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_uncertainty_quarantines_and_never_launches_candidate() {
+    fn cleanup_uncertainty_retains_exact_quarantine_for_authorized_retry() {
         let old = binding(20, 3, 7, 1);
         let candidate = binding(30, 4, 8, 2);
         let (old_caps, old_handles) = capabilities(old);
@@ -1060,9 +1098,58 @@ mod tests {
         );
         assert_eq!(
             registry.state(old.module_object),
-            Some(StorageModuleState::Quarantined(old))
+            Some(StorageModuleState::Quarantined { old, candidate })
         );
         assert_eq!(backend.calls, [1, 0]);
+        assert!(matches!(
+            registry.retry_quarantined_cleanup(
+                &new_caps,
+                new_handles[1],
+                old,
+                candidate,
+                &mut backend,
+            ),
+            Err(StorageModuleError::Capability(_))
+        ));
+        let stale = StorageModuleBinding {
+            binding_generation: candidate.binding_generation + 1,
+            ..candidate
+        };
+        assert_eq!(
+            registry
+                .retry_quarantined_cleanup(&new_caps, new_handles[0], old, stale, &mut backend,),
+            Err(StorageModuleError::StaleQuarantine)
+        );
+        assert_eq!(backend.calls, [1, 0]);
+        backend.cleanup = true;
+        assert_eq!(
+            registry.retry_quarantined_cleanup(
+                &new_caps,
+                new_handles[0],
+                old,
+                candidate,
+                &mut backend,
+            ),
+            Ok(candidate)
+        );
+        assert_eq!(
+            registry.state(old.module_object),
+            Some(StorageModuleState::Unavailable(candidate))
+        );
+        assert_eq!(backend.calls, [2, 0]);
+        assert_eq!(
+            registry.retry_unavailable(
+                &new_caps,
+                new_handles[0],
+                new_handles[1],
+                new_handles[2],
+                new_handles[3],
+                candidate,
+                &mut backend,
+            ),
+            Ok(candidate)
+        );
+        assert_eq!(backend.calls, [2, 1]);
     }
 
     #[test]
