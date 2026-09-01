@@ -11167,3 +11167,34 @@ TLS-ALPN-01, DNS-01, and ARI transport mechanisms are **TRIGGERED** for targeted
 Canadian claim-level and applicable IETF IPR screening before implementation.
 This entry records no clearance, legal opinion, non-infringement conclusion, or
 permission to cross that gate.
+
+# 2026-09-01 — ACME certificate lifecycle Canada-first review disposition
+
+Review date: **2026-09-01**. Scope: Canada-first claim screen plus applicable
+IETF disclosures. Engineering classification: **REVIEWED_NOT_BLOCKING**.
+Formal legal freedom-to-operate review: **NOT_PERFORMED**. This technical screen
+was supplied and adopted by the owner; it is not legal advice or a patent
+clearance conclusion.
+
+The review covered RFC 8555, RFC 7515, RFC 7517, RFC 7518, RFC 7638, RFC 2986,
+RFC 5280, RFC 7301, RFC 8737, and RFC 9773. Material IETF disclosures reviewed
+were Certicom disclosures 1969 and 1966 (US 6,704,870 and US 7,215,773 and
+foreign families), INEOVATION disclosures 2357/2359 (EP 1,858,224), and the
+identified X.509 disclosures concerning US 6,370,629 and US 6,393,126 and
+foreign applications.
+
+The owner-supplied Canadian findings record CA 2,202,566 C and CA 2,540,787 C
+as expired 2017-04-14; CA 2,640,992 A1, CA 2,287,596 A1, and CA 2,398,415 A1
+as abandoned; and CA 2,305,896 C as expired 2018-10-14. No currently
+enforceable Canadian claim was identified as necessary for the scoped MRML ACME
+client, ordinary P-256/ES256, JWS/JWK, PKCS#10, X.509 issuance validation,
+HTTP-01, DNS-01, TLS-ALPN-01, RFC 9773 ARI, durable certificate activation, or
+gitd reload. Engineering may proceed within that exact scope.
+
+Re-review is required for smart-card precomputed signing-element machinery,
+MultiTLS multiplexing, route-selected multi-vantage CA validation,
+CMPv2-to-ACME or private-network challenge proxying, 5G network-function
+certificate brokerage, operation of an MRML public certification authority,
+material mechanism changes, public/commercial release, or intentional
+distribution or operation outside Canada. Production counsel may independently
+confirm current Canadian dockets and the exact shipping implementation.
