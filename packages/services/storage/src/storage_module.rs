@@ -103,6 +103,9 @@ impl FilesystemBlockAssociationHandoff {
     pub const fn system_generation(self) -> u64 {
         self.dependency.system_generation()
     }
+    pub const fn filesystem_module_object(self) -> u64 {
+        self.dependency.consumer_module_object()
+    }
     pub const fn filesystem_provider_generation(self) -> u64 {
         self.dependency.consumer_provider_generation()
     }

@@ -2,6 +2,7 @@ use crate::{
     FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES, FilesystemBlockAssociation,
     FilesystemBlockAssociationHandoff,
 };
+use mrml_interface_storage_filesystem_v3::{FilesystemProviderReady, ProtocolError};
 use mrml_kernel::arch::x86_64::TrapDisposition;
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, CleanedSupervisedConstructedService,
@@ -14,8 +15,8 @@ use mrml_kernel::{
     NativeComponentServiceCopyReadTransferError,
     NativeComponentServiceCopyReadTransferRetirementMappingError,
     NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferTeardown,
-    NativeComponentServiceCopyReadTransferTeardownError, ObjectId, RestartPolicy, Rights,
-    ServiceError, ServiceId, ServiceSupervisor, SupervisedConstructedServiceCleanupFailure,
+    NativeComponentServiceCopyReadTransferTeardownError, ObjectId, ReceivedMessage, RestartPolicy,
+    Rights, ServiceError, ServiceId, ServiceSupervisor, SupervisedConstructedServiceCleanupFailure,
     SupervisedConstructedServiceDispatchFailure, SupervisedConstructedServiceFault,
     SupervisedConstructedServiceFaultCleanupFailure,
     SupervisedConstructedServiceFaultDispatchFailure, SupervisedConstructedServiceRetirement,
@@ -34,6 +35,8 @@ use mrml_kernel::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesystemProviderLaunchReceipt<I> {
     provider_object: ObjectId,
+    filesystem_module_object: ObjectId,
+    block_endpoint_object: ObjectId,
     association_generation: u64,
     filesystem_provider_generation: u64,
     block_provider_generation: u64,
@@ -44,6 +47,14 @@ pub struct FilesystemProviderLaunchReceipt<I> {
 impl<I> FilesystemProviderLaunchReceipt<I> {
     pub const fn provider_object(&self) -> ObjectId {
         self.provider_object
+    }
+
+    pub const fn filesystem_module_object(&self) -> ObjectId {
+        self.filesystem_module_object
+    }
+
+    pub const fn block_endpoint_object(&self) -> ObjectId {
+        self.block_endpoint_object
     }
 
     pub const fn association_generation(&self) -> u64 {
@@ -202,6 +213,140 @@ impl NativeFilesystemProviderInstance {
 pub struct ActiveNativeFilesystemProvider {
     receipt: FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance>,
     binding: SupervisedServiceTask,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ReadyNativeFilesystemProvider {
+    active: ActiveNativeFilesystemProvider,
+    ready_sequence: u64,
+}
+
+impl ReadyNativeFilesystemProvider {
+    pub const fn service(&self) -> ServiceId {
+        self.active.service()
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.active.task()
+    }
+
+    pub const fn ready_sequence(&self) -> u64 {
+        self.ready_sequence
+    }
+
+    pub const fn receipt(
+        &self,
+    ) -> &FilesystemProviderLaunchReceipt<NativeFilesystemProviderInstance> {
+        self.active.receipt()
+    }
+
+    pub fn into_active(self) -> ActiveNativeFilesystemProvider {
+        self.active
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFilesystemProviderReadyError {
+    WrongSender,
+    TransferredCapabilities,
+    Protocol(ProtocolError),
+    WrongFilesystemModule,
+    WrongFilesystemProviderGeneration,
+    WrongBlockProviderGeneration,
+    WrongSystemGeneration,
+    WrongAssociationGeneration,
+    WrongBlockEndpoint,
+}
+
+pub struct NativeFilesystemProviderReadyFailure {
+    active: ActiveNativeFilesystemProvider,
+    received: ReceivedMessage,
+    error: NativeFilesystemProviderReadyError,
+}
+
+impl core::fmt::Debug for NativeFilesystemProviderReadyFailure {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("NativeFilesystemProviderReadyFailure")
+            .field("active", &self.active)
+            .field("sender", &self.received.sender())
+            .field("sequence", &self.received.sequence())
+            .field("payload_length", &self.received.message().payload().len())
+            .field(
+                "capability_count",
+                &self.received.message().capability_count(),
+            )
+            .field("error", &self.error)
+            .finish()
+    }
+}
+
+impl NativeFilesystemProviderReadyFailure {
+    pub const fn error(&self) -> NativeFilesystemProviderReadyError {
+        self.error
+    }
+
+    pub fn into_parts(self) -> (ActiveNativeFilesystemProvider, ReceivedMessage) {
+        (self.active, self.received)
+    }
+}
+
+pub fn accept_native_filesystem_provider_ready(
+    active: ActiveNativeFilesystemProvider,
+    received: ReceivedMessage,
+) -> Result<ReadyNativeFilesystemProvider, NativeFilesystemProviderReadyFailure> {
+    let result = validate_native_filesystem_provider_ready(
+        active.receipt(),
+        active.task(),
+        received.sender(),
+        received.message(),
+    );
+    match result {
+        Ok(()) => Ok(ReadyNativeFilesystemProvider {
+            active,
+            ready_sequence: received.sequence(),
+        }),
+        Err(error) => Err(NativeFilesystemProviderReadyFailure {
+            active,
+            received,
+            error,
+        }),
+    }
+}
+
+fn validate_native_filesystem_provider_ready<I>(
+    receipt: &FilesystemProviderLaunchReceipt<I>,
+    expected_task: TaskId,
+    sender: TaskId,
+    message: &mrml_kernel::Message,
+) -> Result<(), NativeFilesystemProviderReadyError> {
+    if sender != expected_task {
+        return Err(NativeFilesystemProviderReadyError::WrongSender);
+    }
+    message
+        .authorize_no_capabilities()
+        .map_err(|_| NativeFilesystemProviderReadyError::TransferredCapabilities)?;
+    let ready = FilesystemProviderReady::decode(message.payload())
+        .map_err(NativeFilesystemProviderReadyError::Protocol)?;
+    if ready.module_object() != receipt.filesystem_module_object.0 {
+        return Err(NativeFilesystemProviderReadyError::WrongFilesystemModule);
+    }
+    if ready.provider_generation() != receipt.filesystem_provider_generation {
+        return Err(NativeFilesystemProviderReadyError::WrongFilesystemProviderGeneration);
+    }
+    if ready.block_provider_generation() != receipt.block_provider_generation {
+        return Err(NativeFilesystemProviderReadyError::WrongBlockProviderGeneration);
+    }
+    if ready.system_generation() != receipt.system_generation {
+        return Err(NativeFilesystemProviderReadyError::WrongSystemGeneration);
+    }
+    if ready.association_generation() != receipt.association_generation {
+        return Err(NativeFilesystemProviderReadyError::WrongAssociationGeneration);
+    }
+    if ready.block_endpoint_object() != receipt.block_endpoint_object.0 {
+        return Err(NativeFilesystemProviderReadyError::WrongBlockEndpoint);
+    }
+    Ok(())
 }
 
 impl ActiveNativeFilesystemProvider {
@@ -1914,6 +2059,8 @@ fn receipt<I>(
 ) -> FilesystemProviderLaunchReceipt<I> {
     FilesystemProviderLaunchReceipt {
         provider_object,
+        filesystem_module_object: ObjectId(handoff.filesystem_module_object()),
+        block_endpoint_object: ObjectId(handoff.block_endpoint_object()),
         association_generation: handoff.association_generation(),
         filesystem_provider_generation: handoff.filesystem_provider_generation(),
         block_provider_generation: handoff.block_provider_generation(),
@@ -2311,11 +2458,95 @@ mod tests {
             Ok(association.handoff())
         );
         assert_eq!(receipt.association_generation(), 12);
+        assert_eq!(receipt.filesystem_module_object(), ObjectId(41));
+        assert_eq!(receipt.block_endpoint_object(), ObjectId(21));
         assert_eq!(receipt.filesystem_provider_generation(), 5);
         assert_eq!(receipt.block_provider_generation(), 7);
         assert_eq!(receipt.system_generation(), 9);
         assert_eq!(*receipt.instance(), 0xfeed);
         assert_eq!(receipt.into_instance(), 0xfeed);
+    }
+
+    #[test]
+    fn native_ready_admission_exact_matches_sender_receipt_and_zero_authority() {
+        let association = association();
+        let receipt = receipt(
+            association.filesystem_binding.provider_object,
+            association.handoff(),
+            0_u8,
+        );
+        let expected = TaskId::from_token((2_u64 << 32) | 3);
+        let ready = FilesystemProviderReady::new(41, 5, 7, 9, 12, 21).unwrap();
+        let message = mrml_kernel::Message::new(&ready.encode(), &[]).unwrap();
+        assert_eq!(
+            validate_native_filesystem_provider_ready(&receipt, expected, expected, &message),
+            Ok(())
+        );
+        assert_eq!(
+            validate_native_filesystem_provider_ready(
+                &receipt,
+                expected,
+                TaskId::from_token((3_u64 << 32) | 3),
+                &message,
+            ),
+            Err(NativeFilesystemProviderReadyError::WrongSender)
+        );
+        let authority = Capability::from_token((4_u64 << 32) | 5);
+        let with_authority = mrml_kernel::Message::new(&ready.encode(), &[authority]).unwrap();
+        assert_eq!(
+            validate_native_filesystem_provider_ready(
+                &receipt,
+                expected,
+                expected,
+                &with_authority,
+            ),
+            Err(NativeFilesystemProviderReadyError::TransferredCapabilities)
+        );
+        let malformed = mrml_kernel::Message::new(&ready.encode()[..103], &[]).unwrap();
+        assert_eq!(
+            validate_native_filesystem_provider_ready(&receipt, expected, expected, &malformed),
+            Err(NativeFilesystemProviderReadyError::Protocol(
+                ProtocolError::InvalidResponse
+            ))
+        );
+        let substitutions = [
+            (
+                FilesystemProviderReady::new(42, 5, 7, 9, 12, 21).unwrap(),
+                NativeFilesystemProviderReadyError::WrongFilesystemModule,
+            ),
+            (
+                FilesystemProviderReady::new(41, 6, 7, 9, 12, 21).unwrap(),
+                NativeFilesystemProviderReadyError::WrongFilesystemProviderGeneration,
+            ),
+            (
+                FilesystemProviderReady::new(41, 5, 8, 9, 12, 21).unwrap(),
+                NativeFilesystemProviderReadyError::WrongBlockProviderGeneration,
+            ),
+            (
+                FilesystemProviderReady::new(41, 5, 7, 10, 12, 21).unwrap(),
+                NativeFilesystemProviderReadyError::WrongSystemGeneration,
+            ),
+            (
+                FilesystemProviderReady::new(41, 5, 7, 9, 13, 21).unwrap(),
+                NativeFilesystemProviderReadyError::WrongAssociationGeneration,
+            ),
+            (
+                FilesystemProviderReady::new(41, 5, 7, 9, 12, 22).unwrap(),
+                NativeFilesystemProviderReadyError::WrongBlockEndpoint,
+            ),
+        ];
+        for (substituted, expected_error) in substitutions {
+            let substituted = mrml_kernel::Message::new(&substituted.encode(), &[]).unwrap();
+            assert_eq!(
+                validate_native_filesystem_provider_ready(
+                    &receipt,
+                    expected,
+                    expected,
+                    &substituted,
+                ),
+                Err(expected_error)
+            );
+        }
     }
 
     #[test]
