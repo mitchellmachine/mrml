@@ -1,7 +1,7 @@
 use crate::ComponentProvider;
 use mrml_interface_zstd_v3::{
-    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, ProtocolError, ZstdTransport,
-    decode_decompress_request, decode_decompress_response,
+    decode_decompress_request, decode_decompress_response, ProtocolError, ZstdTransport,
+    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES,
 };
 use mrml_kernel::Capability;
 
@@ -211,8 +211,8 @@ impl ZstdServiceLoop {
 mod tests {
     use super::*;
     use mrml_interface_zstd_v3::{
-        BorrowedReadView, BorrowedWriteView, DecompressError, decode_decompress_response,
-        encode_decompress_request,
+        decode_decompress_response, encode_decompress_request, BorrowedReadView, BorrowedWriteView,
+        DecompressError,
     };
 
     const TOKEN: u64 = (7_u64 << 32) | 3;
@@ -292,7 +292,11 @@ mod tests {
                 return Err(());
             }
             self.releases += 1;
-            if self.fail_release { Err(()) } else { Ok(()) }
+            if self.fail_release {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
     }
 
