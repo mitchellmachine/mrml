@@ -1,12 +1,14 @@
 //! Purpose-separated authenticated audit receipts for protected receive.
 
 use mrml_crypto::Sha256;
-use mrml_runtime::{File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory};
+use mrml_runtime::{
+    File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
+};
 
 use crate::{
-    ActivationSnapshot, AuditReceipt, DurableFailure, DurableReceiveStore, LinuxDurableReceiveStore,
-    QuarantineTransaction, QuarantineTransactionId, VerifiedRefTransaction, encode_audit_receipt,
-    parse_audit_receipt,
+    ActivationSnapshot, AuditReceipt, DurableFailure, DurableReceiveStore,
+    LinuxDurableReceiveStore, QuarantineTransaction, QuarantineTransactionId,
+    VerifiedRefTransaction, encode_audit_receipt, parse_audit_receipt,
 };
 
 const MAGIC: &[u8; 8] = b"MRARCP01";
@@ -270,9 +272,17 @@ fn parse_authenticated(input: &[u8]) -> Result<AuthenticatedAuditReceipt, Durabl
     })
 }
 
-fn take<'a>(input: &'a [u8], cursor: &mut usize, length: usize) -> Result<&'a [u8], DurableFailure> {
-    let end = cursor.checked_add(length).ok_or(DurableFailure::AuditReceipt)?;
-    let bytes = input.get(*cursor..end).ok_or(DurableFailure::AuditReceipt)?;
+fn take<'a>(
+    input: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<&'a [u8], DurableFailure> {
+    let end = cursor
+        .checked_add(length)
+        .ok_or(DurableFailure::AuditReceipt)?;
+    let bytes = input
+        .get(*cursor..end)
+        .ok_or(DurableFailure::AuditReceipt)?;
     *cursor = end;
     Ok(bytes)
 }
@@ -317,7 +327,10 @@ mod tests {
 
         fn sign(&mut self, transcript: &[u8], output: &mut [u8]) -> Result<usize, ()> {
             let signature = Sha256::digest(transcript);
-            output.get_mut(..signature.len()).ok_or(())?.copy_from_slice(&signature);
+            output
+                .get_mut(..signature.len())
+                .ok_or(())?
+                .copy_from_slice(&signature);
             Ok(signature.len())
         }
 
@@ -350,7 +363,9 @@ mod tests {
         let receipt = fixture();
         let canonical = encode_audit_receipt(&receipt).unwrap();
         let signed_transcript = transcript(&canonical).unwrap();
-        let mut authority = DigestAuthority { identity: [7u8; 64] };
+        let mut authority = DigestAuthority {
+            identity: [7u8; 64],
+        };
         let mut signature = [0u8; 32];
         authority.sign(&signed_transcript, &mut signature).unwrap();
         let encoded = encode_authenticated(&canonical, authority.identity, &signature).unwrap();
@@ -391,10 +406,15 @@ mod tests {
         let _ = mrml_runtime::remove_dir_all(&root);
         let directory = AuthenticatedAuditReceiptDirectory::open(&root).unwrap();
         let receipt = fixture();
-        let mut authority = DigestAuthority { identity: [7u8; 64] };
+        let mut authority = DigestAuthority {
+            identity: [7u8; 64],
+        };
         directory.append(&receipt, &mut authority).unwrap();
         assert_eq!(
-            directory.load(receipt.transaction, &authority).unwrap().receipt,
+            directory
+                .load(receipt.transaction, &authority)
+                .unwrap()
+                .receipt,
             receipt
         );
         assert_eq!(

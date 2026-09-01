@@ -8,10 +8,9 @@ use crate::{
     ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
     QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, Repository,
     SignaturePurpose, SmartGitOperation, SmartGitRequest, VerifiedCommitProof,
-    VerifiedRefTransaction, WorkBudget,
-    build_verified_fast_forward_transaction, read_receive_pack_commands,
-    reserve_push_disk_before_body, verify_protected_introduced_history,
-    durably_activate_verified_receive,
+    VerifiedRefTransaction, WorkBudget, build_verified_fast_forward_transaction,
+    durably_activate_verified_receive, read_receive_pack_commands, reserve_push_disk_before_body,
+    verify_protected_introduced_history,
 };
 
 /// Verification-only authority. Implementations receive public policy/key state
@@ -482,18 +481,18 @@ mod tests {
         let mut store = store;
         let mut authority = ReceiptAuthority;
         let receipt = {
-            let mut authenticated = crate::AuthenticatedReceiveStore::new(
-                &mut store,
-                &signed_receipts,
-                &mut authority,
-            )
-            .unwrap();
+            let mut authenticated =
+                crate::AuthenticatedReceiveStore::new(&mut store, &signed_receipts, &mut authority)
+                    .unwrap();
             activate_prepared_protected_receive(prepared, &mut authenticated).unwrap()
         };
         let activated = store.active_refs().load().unwrap();
         assert_eq!(activated.repository_generation, RepositoryGeneration(8));
         assert_eq!(activated.refs[0].1, new);
-        assert_eq!(receipt.activated_repository_generation, RepositoryGeneration(8));
+        assert_eq!(
+            receipt.activated_repository_generation,
+            RepositoryGeneration(8)
+        );
         let signed = crate::AuthenticatedAuditReceiptDirectory::open(&signed_receipts)
             .unwrap()
             .load(receipt.transaction, &authority)
