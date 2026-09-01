@@ -64,12 +64,13 @@ pub use jose::{
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
 pub use operation::{
-    AccountCreateBuffers, AccountUpdateError, AccountUpdateFailure, AuthorizationFetchError,
-    AuthorizationResource, ChallengeSubmission, ChallengeSubmitError, CreateAccountError,
-    FinalizeError, FinalizeFailure, OrderCreateBuffers, OrderCreateError, OrderCreateFailure,
-    PrepareOrderError, PreparedOrderCreation, execute_prepared_account_create,
+    AccountCreateBuffers, AccountRecoveryError, AccountUpdateError, AccountUpdateFailure,
+    AuthorizationFetchError, AuthorizationResource, ChallengeSubmission, ChallengeSubmitError,
+    CreateAccountError, FinalizeError, FinalizeFailure, OrderCreateBuffers, OrderCreateError,
+    OrderCreateFailure, PrepareOrderError, PreparedOrderCreation, execute_prepared_account_create,
     execute_prepared_account_update, execute_prepared_finalize, execute_prepared_order_create,
-    fetch_authorization, prepare_order_creation, trigger_published_challenge,
+    fetch_authorization, prepare_order_creation, recover_uncertain_account_creation,
+    trigger_published_challenge,
 };
 pub use order::{
     AuthorizationBinding, AuthorizationState, ChallengeKind, ChallengeState, MAX_AUTHORIZATIONS,

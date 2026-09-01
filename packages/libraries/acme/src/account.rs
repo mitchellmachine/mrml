@@ -261,6 +261,38 @@ impl AccountLifecycle {
         Ok(())
     }
 
+    pub fn abort_uncertain(&mut self, receipt: PreparedAccountAction) -> Result<(), AccountError> {
+        if self.operation != AccountOperation::Uncertain || self.prepared != Some(receipt) {
+            return Err(AccountError::ReceiptMismatch);
+        }
+        self.operation = AccountOperation::None;
+        self.prepared = None;
+        Ok(())
+    }
+
+    pub fn resolve_created_authoritative(
+        &mut self,
+        receipt: PreparedAccountAction,
+        account_url: AcmeUrl,
+        directory: &AcmeDirectory,
+        contact_digest: [u8; 32],
+    ) -> Result<(), AccountError> {
+        if self.operation != AccountOperation::Uncertain
+            || self.prepared != Some(receipt)
+            || receipt.action != AccountOperation::CreatePrepared
+            || receipt.account_generation != 1
+            || receipt.new_key != Some(self.key)
+            || receipt.contact_digest != contact_digest
+        {
+            return Err(AccountError::ResolutionMismatch);
+        }
+        account_url
+            .require_origin(directory.new_account.origin())
+            .map_err(|_| AccountError::AccountUrlPolicy)?;
+        self.account_url = Some(account_url);
+        self.resolve_authoritative(1, true, self.key, contact_digest)
+    }
+
     pub fn resolve_authoritative(
         &mut self,
         authoritative_generation: u64,

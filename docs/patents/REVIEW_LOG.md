@@ -11481,3 +11481,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 contact update and account deactivation requests bound to exact prepared
 receipts, account/directory generations, response state, and contact digest.
 It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Lost account-creation response recovery
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment uses ordinary RFC 8555
+`onlyReturnExisting` recovery with the exact prepared JWK, contact digest,
+directory generation, same-origin account URL, and authoritative account state.
+It adds no recorded re-review-trigger mechanism.

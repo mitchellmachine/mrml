@@ -41,6 +41,18 @@ pub enum AccountUpdateFailure<E> {
     Uncertain(AccountUpdateError<E>),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AccountRecoveryError<E> {
+    PreparedMismatch,
+    Payload(PayloadError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    MissingLocation,
+    Response(ResponseError),
+    Lifecycle(AccountError),
+}
+
 pub struct AccountCreateBuffers<'a> {
     pub payload: &'a mut [u8],
     pub response: &'a mut [u8],
@@ -767,6 +779,80 @@ pub fn execute_prepared_account_update<T: AcmeTransport>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn recover_uncertain_account_creation<T: AcmeTransport>(
+    lifecycle: &mut AccountLifecycle,
+    receipt: PreparedAccountAction,
+    directory: &AcmeDirectory,
+    contacts: &[&str],
+    public_key: &P256Jwk,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    buffers: AccountCreateBuffers<'_>,
+) -> Result<AcmeUrl, AccountRecoveryError<T::Error>> {
+    if lifecycle.operation != AccountOperation::Uncertain
+        || lifecycle.account_url.is_some()
+        || receipt.action != AccountOperation::CreatePrepared
+        || receipt.directory_generation != directory.generation
+        || public_key.thumbprint().ok() != receipt.new_key
+        || account_contacts_digest(contacts).ok() != Some(receipt.contact_digest)
+    {
+        return Err(AccountRecoveryError::PreparedMismatch);
+    }
+    let payload = write_new_account_payload(
+        contacts,
+        directory.terms_of_service.is_some(),
+        true,
+        None,
+        buffers.payload,
+    )
+    .map_err(AccountRecoveryError::Payload)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &directory.new_account,
+        crate::ProtectedKey::Jwk(public_key),
+        payload.as_bytes(),
+        0,
+        signer,
+        buffers.response,
+        buffers.jws,
+    )
+    .map_err(AccountRecoveryError::Post)?;
+    if let Some(problem) = result.problem {
+        if problem.problem_type.as_str() == "urn:ietf:params:acme:error:accountDoesNotExist" {
+            lifecycle
+                .abort_uncertain(receipt)
+                .map_err(AccountRecoveryError::Lifecycle)?;
+        }
+        return Err(AccountRecoveryError::Server(problem));
+    }
+    if result.metadata.status != 200
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        return Err(AccountRecoveryError::UnexpectedStatus);
+    }
+    let account_url = result
+        .metadata
+        .location
+        .ok_or(AccountRecoveryError::MissingLocation)?;
+    let body = core::str::from_utf8(&buffers.response[..result.metadata.body_length])
+        .map_err(|_| AccountRecoveryError::Response(ResponseError::Malformed))?;
+    let parsed = parse_account_response(body, directory.new_account.origin())
+        .map_err(AccountRecoveryError::Response)?;
+    if parsed.status != ParsedAccountStatus::Valid
+        || parsed.contacts_digest != receipt.contact_digest
+    {
+        return Err(AccountRecoveryError::PreparedMismatch);
+    }
+    lifecycle
+        .resolve_created_authoritative(receipt, account_url, directory, parsed.contacts_digest)
+        .map_err(AccountRecoveryError::Lifecycle)?;
+    Ok(account_url)
+}
+
 fn uncertain<E>(
     lifecycle: &mut AccountLifecycle,
     error: CreateAccountError<E>,
@@ -799,6 +885,49 @@ mod tests {
 
     struct Transport {
         fail_post: bool,
+    }
+
+    struct RecoveryTransport {
+        calls: usize,
+    }
+    impl AcmeTransport for RecoveryTransport {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            self.calls += 1;
+            if request.method == AcmeHttpMethod::Head {
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some(if self.calls == 1 {
+                        "recovery-nonce-1"
+                    } else {
+                        "recovery-nonce-2"
+                    }),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                });
+            }
+            if self.calls == 2 {
+                return Err(());
+            }
+            let body = br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#;
+            output[..body.len()].copy_from_slice(body);
+            Ok(AcmeTransportResponse {
+                status: 200,
+                effective_url: "https://ca.example/new-account",
+                replay_nonce: Some("recovery-nonce-3"),
+                retry_after: None,
+                location: Some("https://ca.example/account/1"),
+                content_type: Some("application/json"),
+                body_length: body.len(),
+            })
+        }
     }
 
     struct OrderTransport {
@@ -1088,6 +1217,55 @@ mod tests {
         assert_eq!(lifecycle.operation, AccountOperation::Uncertain);
     }
 
+    fn lost_creation_response_recovers_existing_account_impl() {
+        let (directory, key, mut lifecycle, receipt) = prepared();
+        let origin = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let mut exchange = crate::AcmeExchange::new(directory.generation, origin);
+        let mut transport = RecoveryTransport { calls: 0 };
+        let mut signer = Signer;
+        let mut payload = [0; 2048];
+        let mut response = [0; 2048];
+        let mut jws = [0; 8192];
+        assert!(
+            execute_prepared_account_create(
+                &mut lifecycle,
+                receipt,
+                &directory,
+                &["mailto:owner@example.com"],
+                None,
+                &key,
+                &mut exchange,
+                &mut transport,
+                &mut signer,
+                AccountCreateBuffers {
+                    payload: &mut payload,
+                    response: &mut response,
+                    jws: &mut jws,
+                },
+            )
+            .is_err()
+        );
+        let recovered = recover_uncertain_account_creation(
+            &mut lifecycle,
+            receipt,
+            &directory,
+            &["mailto:owner@example.com"],
+            &key,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            AccountCreateBuffers {
+                payload: &mut payload,
+                response: &mut response,
+                jws: &mut jws,
+            },
+        );
+        assert!(recovered.is_ok());
+        assert!(lifecycle.active);
+        assert_eq!(lifecycle.generation, 1);
+        assert_eq!(lifecycle.operation, AccountOperation::None);
+    }
+
     fn active_account() -> (AcmeDirectory, AccountLifecycle) {
         let (directory, _, mut lifecycle, receipt) = prepared();
         lifecycle
@@ -1317,5 +1495,10 @@ mod tests {
     #[test]
     fn creation_binds_signed_response_location_and_contacts() {
         run_order_test(creation_binds_signed_response_location_and_contacts_impl);
+    }
+
+    #[test]
+    fn lost_creation_response_recovers_existing_account() {
+        run_order_test(lost_creation_response_recovers_existing_account_impl);
     }
 }
