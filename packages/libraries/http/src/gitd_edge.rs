@@ -1258,9 +1258,10 @@ pub fn render_markdown(
     }
     let mut output = Text::new();
     let mut in_code = false;
-    let mut list = false;
+    let mut list: Option<&str> = None;
     let mut heading_ids: Vector<Text> = Vector::new();
-    for line in source.lines() {
+    let mut lines = source.lines().peekable();
+    while let Some(line) = lines.next() {
         if line.starts_with("```") {
             if in_code {
                 output.push_str("</code></pre>");
@@ -1282,11 +1283,38 @@ pub fn render_markdown(
             output.push('\n');
             continue;
         }
+        if line.contains('|')
+            && let Some(separator) = lines.peek()
+            && table_separator(separator)?
+        {
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
+            }
+            lines.next();
+            output.push_str("<div class=\"table-scroll\" tabindex=\"0\"><table><thead>");
+            render_table_row(&mut output, line, "th", repository, object)?;
+            output.push_str("</thead><tbody>");
+            while let Some(row) = lines.peek().copied() {
+                if row.trim().is_empty() || !row.contains('|') {
+                    break;
+                }
+                lines.next();
+                render_table_row(&mut output, row, "td", repository, object)?;
+            }
+            output.push_str("</tbody></table></div>");
+            if output.len() > MAX_RENDERED {
+                return Err(BackendError::ResourceLimit);
+            }
+            continue;
+        }
         let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
         if hashes > 0 && hashes <= MAX_HEADING_DEPTH && line.as_bytes().get(hashes) == Some(&b' ') {
-            if list {
-                output.push_str("</ul>");
-                list = false;
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
             }
             let raw_text = &line[hashes + 1..];
             let text = inline_markdown(raw_text, repository, object)?;
@@ -1296,23 +1324,73 @@ pub fn render_markdown(
                 heading_id,
                 text
             ));
+        } else if matches!(line.trim(), "---" | "***" | "___") {
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
+            }
+            output.push_str("<hr>");
+        } else if let Some(quote) = line.strip_prefix("> ") {
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
+            }
+            output.push_str("<blockquote><p>");
+            output.push_str(&inline_markdown(quote, repository, object)?);
+            output.push_str("</p></blockquote>");
         } else if let Some(item) = line.strip_prefix("- ") {
-            if !list {
+            if list != Some("ul") {
+                if let Some(tag) = list.take() {
+                    output.push_str("</");
+                    output.push_str(tag);
+                    output.push('>');
+                }
                 output.push_str("<ul>");
-                list = true;
+                list = Some("ul");
+            }
+            output.push_str("<li>");
+            if let Some(task) = item.strip_prefix("[ ] ") {
+                output
+                    .push_str("<input type=\"checkbox\" disabled aria-label=\"Incomplete task\"> ");
+                output.push_str(&inline_markdown(task, repository, object)?);
+            } else if let Some(task) = item
+                .strip_prefix("[x] ")
+                .or_else(|| item.strip_prefix("[X] "))
+            {
+                output.push_str(
+                    "<input type=\"checkbox\" checked disabled aria-label=\"Completed task\"> ",
+                );
+                output.push_str(&inline_markdown(task, repository, object)?);
+            } else {
+                output.push_str(&inline_markdown(item, repository, object)?);
+            }
+            output.push_str("</li>");
+        } else if let Some(item) = ordered_list_item(line) {
+            if list != Some("ol") {
+                if let Some(tag) = list.take() {
+                    output.push_str("</");
+                    output.push_str(tag);
+                    output.push('>');
+                }
+                output.push_str("<ol>");
+                list = Some("ol");
             }
             output.push_str("<li>");
             output.push_str(&inline_markdown(item, repository, object)?);
             output.push_str("</li>");
         } else if line.trim().is_empty() {
-            if list {
-                output.push_str("</ul>");
-                list = false;
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
             }
         } else {
-            if list {
-                output.push_str("</ul>");
-                list = false;
+            if let Some(tag) = list.take() {
+                output.push_str("</");
+                output.push_str(tag);
+                output.push('>');
             }
             output.push_str("<p>");
             output.push_str(&inline_markdown(line, repository, object)?);
@@ -1325,10 +1403,60 @@ pub fn render_markdown(
     if in_code {
         output.push_str("</code></pre>");
     }
-    if list {
-        output.push_str("</ul>");
+    if let Some(tag) = list {
+        output.push_str("</");
+        output.push_str(tag);
+        output.push('>');
     }
     Ok(output)
+}
+
+fn table_separator(line: &str) -> Result<bool, BackendError> {
+    let trimmed = line.trim().trim_matches('|');
+    let mut columns = 0usize;
+    for cell in trimmed.split('|') {
+        columns += 1;
+        if columns > 64 {
+            return Err(BackendError::ResourceLimit);
+        }
+        let cell = cell.trim().trim_matches(':');
+        if cell.len() < 3 || !cell.bytes().all(|byte| byte == b'-') {
+            return Ok(false);
+        }
+    }
+    Ok(columns > 0)
+}
+
+fn render_table_row(
+    output: &mut Text,
+    line: &str,
+    cell_tag: &str,
+    repository: &RepositoryIdentity,
+    object: &ObjectId,
+) -> Result<(), BackendError> {
+    output.push_str("<tr>");
+    let mut columns = 0usize;
+    for cell in line.trim().trim_matches('|').split('|') {
+        columns += 1;
+        if columns > 64 {
+            return Err(BackendError::ResourceLimit);
+        }
+        output.push('<');
+        output.push_str(cell_tag);
+        output.push('>');
+        output.push_str(&inline_markdown(cell.trim(), repository, object)?);
+        output.push_str("</");
+        output.push_str(cell_tag);
+        output.push('>');
+    }
+    output.push_str("</tr>");
+    Ok(())
+}
+
+fn ordered_list_item(line: &str) -> Option<&str> {
+    let dot = line.find(". ")?;
+    (dot > 0 && dot <= 9 && line[..dot].bytes().all(|byte| byte.is_ascii_digit()))
+        .then_some(&line[dot + 2..])
 }
 
 fn inline_markdown(
@@ -1338,7 +1466,40 @@ fn inline_markdown(
 ) -> Result<Text, BackendError> {
     let mut output = Text::new();
     let mut at = 0;
-    while at < input.len() {
+    'inline: while at < input.len() {
+        for (marker, open, close) in [
+            ("**", "<strong>", "</strong>"),
+            ("__", "<strong>", "</strong>"),
+            ("~~", "<del>", "</del>"),
+            ("*", "<em>", "</em>"),
+            ("_", "<em>", "</em>"),
+        ] {
+            if input[at..].starts_with(marker)
+                && let Some(end) = input[at + marker.len()..].find(marker)
+                && end > 0
+            {
+                let end = at + marker.len() + end;
+                output.push_str(open);
+                output.push_str(&escape(&input[at + marker.len()..end]));
+                output.push_str(close);
+                at = end + marker.len();
+                continue 'inline;
+            }
+        }
+        if input[at..].starts_with("<http")
+            && let Some(end) = input[at + 1..].find('>')
+        {
+            let end = at + 1 + end;
+            let url = &input[at + 1..end];
+            let resolved = safe_link(url, repository, object)?;
+            output.push_str("<a rel=\"nofollow noopener noreferrer\" href=\"");
+            output.push_str(&escape(resolved.as_str()));
+            output.push_str("\">");
+            output.push_str(&escape(url));
+            output.push_str("</a>");
+            at = end + 1;
+            continue;
+        }
         if input[at..].starts_with("![")
             && let Some(close) = input[at + 2..].find(']')
             && input.as_bytes().get(at + close + 3) == Some(&b'(')
@@ -1411,6 +1572,12 @@ fn inline_markdown(
             (None, None) => input.len(),
         };
         let next = next_image.map_or(next, |image| core::cmp::min(image, next));
+        let mut next = next;
+        for marker in ["**", "__", "~~", "*", "_", "<http"] {
+            if let Some(found) = input[at..].find(marker) {
+                next = core::cmp::min(next, at + found);
+            }
+        }
         let end = if next == at { at + 1 } else { next };
         output.push_str(&escape(&input[at..end]));
         at = end;
@@ -1431,6 +1598,11 @@ fn markdown_language(language: &str) -> Option<&'static str> {
         "typescript" | "ts" => Some("typescript"),
         "c" => Some("c"),
         "cpp" | "c++" => Some("cpp"),
+        "asm" | "assembly" | "s" => Some("assembly"),
+        "yaml" | "yml" => Some("yaml"),
+        "powershell" | "ps1" => Some("powershell"),
+        "python" | "py" => Some("python"),
+        "diff" | "patch" => Some("diff"),
         _ => None,
     }
 }
@@ -1958,6 +2130,47 @@ mod tests {
         assert!(images.contains("class=\"external-image\""));
         assert!(images.contains("href=\"https://example.test/pixel.png\""));
         assert!(images.contains("(external image)</a>"));
+        let profile = render_markdown(
+            b"**strong** *emphasis* ~~removed~~ <https://example.test/doc>\n\n> quoted\n\n---\n\n1. first\n2. second\n\n- [ ] pending\n- [x] complete",
+            &repository,
+            &oid(1),
+        )
+        .unwrap();
+        for expected in [
+            "<strong>strong</strong>",
+            "<em>emphasis</em>",
+            "<del>removed</del>",
+            "href=\"https://example.test/doc\"",
+            "<blockquote><p>quoted</p></blockquote>",
+            "<hr>",
+            "<ol><li>first</li><li>second</li></ol>",
+            "aria-label=\"Incomplete task\"",
+            "aria-label=\"Completed task\"",
+        ] {
+            assert!(profile.contains(expected), "missing {expected}: {profile}");
+        }
+        let table = render_markdown(
+            b"| Name | State |\n| --- | --- |\n| edge | **ready** |",
+            &repository,
+            &oid(1),
+        )
+        .unwrap();
+        assert!(table.contains("<div class=\"table-scroll\" tabindex=\"0\"><table>"));
+        assert!(table.contains("<th>Name</th><th>State</th>"));
+        assert!(table.contains("<td>edge</td><td><strong>ready</strong></td>"));
+        let mut wide_header = Text::new();
+        let mut wide_separator = Text::new();
+        for _ in 0..65 {
+            wide_header.push_str("|x");
+            wide_separator.push_str("|---");
+        }
+        wide_header.push_str("|\n");
+        wide_header.push_str(&wide_separator);
+        wide_header.push('|');
+        assert_eq!(
+            render_markdown(wide_header.as_bytes(), &repository, &oid(1)),
+            Err(BackendError::ResourceLimit)
+        );
         for unsafe_url in [
             "javascript:alert(1)",
             "data:text/html,x",
