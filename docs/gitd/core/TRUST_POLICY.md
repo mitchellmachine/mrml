@@ -159,3 +159,12 @@ now consume a caller-provisioned bounded proof store through its verifier
 boundary. Durable proof-record storage and its authorization policy remain open;
 records gain no authority merely by being stored. Production durable proof
 records and canonical policy/key-service retrieval remain integration gates.
+
+The repository's hybrid commit constructor now requires both verification
+callbacks alongside the two signing callbacks. It verifies the outer OpenPGP
+signature over the payload containing the exact ML-DSA armor and verifies the
+ML-DSA signature over the base commit payload before writing the object or
+moving the branch ref. A verifier failure leaves the prior branch head exact;
+the object writer then independently reopens and rehashes successful bytes.
+The installed CLI still needs protected-policy/key-service composition before
+it can select this constructor automatically.

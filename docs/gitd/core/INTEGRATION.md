@@ -61,6 +61,14 @@ Destructive reset modes, detached checkout, pathspec-rich forms, unreachable
 object enumeration, and the remaining explicitly listed command gaps stay fail
 closed until their native semantics are implemented and tested.
 
+The public hybrid commit constructor no longer accepts signing callbacks alone:
+it requires independent OpenPGP and ML-DSA verification callbacks and runs both
+against the exact nested payloads before writing or moving the local branch.
+The installed `git commit -S` path still selects the configured conventional
+SSH or OpenPGP profile. Automatically selecting the mandatory hybrid path for a
+protected repository requires the out-of-scope canonical policy/key-service
+integration; absent that state, no protected-policy claim is made.
+
 Standard branch semantics are now exact for the bounded forms: `git branch
 NAME` creates without switching, `git branch -d NAME` deletes under the native
 branch checks, and `git switch -c NAME` / `git checkout -b NAME` create and

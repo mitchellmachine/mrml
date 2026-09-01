@@ -110,6 +110,8 @@ enum CommitSigning<'a> {
     Hybrid(
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        &'a mut dyn FnMut(&[u8], &str) -> Result<(), RepositoryError>,
+        &'a mut dyn FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     ),
 }
 
@@ -2478,7 +2480,7 @@ impl Repository {
     /// Create a commit whose canonical payload is signed first with ML-DSA-65,
     /// then covered (including that first signature) by an OpenPGP signature.
     /// Stock Git can verify the outer OpenPGP signature; MRML requires both.
-    pub fn commit_hybrid_signed_with<M, P>(
+    pub fn commit_hybrid_signed_with<M, P, PV, MV>(
         &self,
         message: &str,
         name: &str,
@@ -2486,10 +2488,14 @@ impl Repository {
         timestamp: u64,
         mut ml_dsa_signer: M,
         mut openpgp_signer: P,
+        mut openpgp_verifier: PV,
+        mut ml_dsa_verifier: MV,
     ) -> Result<ObjectId, RepositoryError>
     where
         M: FnMut(&[u8]) -> Result<Text, RepositoryError>,
         P: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        PV: FnMut(&[u8], &str) -> Result<(), RepositoryError>,
+        MV: FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     {
         self.commit_internal(
             message,
@@ -2499,6 +2505,8 @@ impl Repository {
             Some(CommitSigning::Hybrid(
                 &mut ml_dsa_signer,
                 &mut openpgp_signer,
+                &mut openpgp_verifier,
+                &mut ml_dsa_verifier,
             )),
         )
     }
@@ -2557,7 +2565,12 @@ impl Repository {
                 CommitSigning::Single(signature_format, signer) => {
                     (signature_format, signer(unsigned.as_bytes())?)
                 }
-                CommitSigning::Hybrid(ml_dsa_signer, openpgp_signer) => {
+                CommitSigning::Hybrid(
+                    ml_dsa_signer,
+                    openpgp_signer,
+                    openpgp_verifier,
+                    ml_dsa_verifier,
+                ) => {
                     let ml_dsa = ml_dsa_signer(unsigned.as_bytes())?;
                     validate_ml_dsa_armor(&ml_dsa)?;
                     append_multiline_header(&mut contents, "mrml-mldsa65", &ml_dsa);
@@ -2565,10 +2578,11 @@ impl Repository {
                     outer_payload.push('\n');
                     outer_payload.push_str(message.trim());
                     outer_payload.push('\n');
-                    (
-                        GitSignatureFormat::OpenPgp,
-                        openpgp_signer(outer_payload.as_bytes())?,
-                    )
+                    let openpgp = openpgp_signer(outer_payload.as_bytes())?;
+                    validate_signature_armor(&openpgp, GitSignatureFormat::OpenPgp)?;
+                    openpgp_verifier(outer_payload.as_bytes(), &openpgp)?;
+                    ml_dsa_verifier(unsigned.as_bytes(), &ml_dsa)?;
+                    (GitSignatureFormat::OpenPgp, openpgp)
                 }
             };
             validate_signature_armor(&armor, signature_format)?;
@@ -4022,6 +4036,19 @@ mod tests {
                         );
                         Ok(pgp.into())
                     },
+                    |payload, found| {
+                        assert!(
+                            payload
+                                .windows(b"mrml-mldsa65 ".len())
+                                .any(|part| part == b"mrml-mldsa65 ")
+                        );
+                        assert_eq!(found, pgp);
+                        Ok(())
+                    },
+                    |payload, armor| {
+                        verify_ml_dsa_65_git_payload(&public, payload, armor)
+                            .map_err(|_| RepositoryError::Signing)
+                    },
                 )
                 .unwrap();
             repository
@@ -4042,6 +4069,28 @@ mod tests {
                     },
                 )
                 .unwrap();
+            write_file(&join_path(&path, "tracked"), b"hybrid-failed").unwrap();
+            repository.stage(&Vector::from(["tracked".into()])).unwrap();
+            assert_eq!(
+                repository.commit_hybrid_signed_with(
+                    "must not activate",
+                    "Signer",
+                    "signer@example.invalid",
+                    10,
+                    |payload| {
+                        sign_ml_dsa_65_git_payload(&secret, payload, &[38u8; 32])
+                            .map_err(|_| RepositoryError::Signing)
+                    },
+                    |_| Ok(pgp.into()),
+                    |_, _| Err(RepositoryError::Signing),
+                    |payload, armor| {
+                        verify_ml_dsa_65_git_payload(&public, payload, armor)
+                            .map_err(|_| RepositoryError::Signing)
+                    },
+                ),
+                Err(RepositoryError::Signing)
+            );
+            assert_eq!(repository.head().unwrap(), Some(id));
             remove_dir_all(&path).unwrap();
         }
     }
