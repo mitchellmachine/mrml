@@ -1,6 +1,7 @@
 use crate::{
-    ActivationReceipt, IdentityDeploymentTarget, IdentityError, IdentityTlsSigningAdapter,
-    PemCertificateChain, PreparedIdentityReceipt, TestedIdentityReceipt, TlsCertificateSigningKey,
+    ActivationReceipt, CandidateDeploymentRetirementReceipt, CandidateDeploymentRetirementTarget,
+    IdentityDeploymentTarget, IdentityError, IdentityTlsSigningAdapter, PemCertificateChain,
+    PreparedIdentityReceipt, TestedIdentityReceipt, TlsCertificateSigningKey,
     TlsIdentityDescriptor, TlsIdentityId, TlsSigningRoute,
 };
 use mrml_runtime::{Shared, SpinMutex};
@@ -12,6 +13,24 @@ pub struct PublishedTlsIdentity {
     pub generation: u64,
     pub descriptor_digest: [u8; 32],
     pub config: Shared<TlsServerConfig>,
+}
+
+impl<R, T> CandidateDeploymentRetirementTarget for HostedTlsIdentityDeploymentTarget<R, T> {
+    fn retire_candidate_deployment(
+        &mut self,
+        prepared: PreparedIdentityReceipt,
+        target_generation: u64,
+    ) -> Result<CandidateDeploymentRetirementReceipt, IdentityError> {
+        let candidate = self.candidate.as_ref().ok_or(IdentityError::InvalidState)?;
+        if candidate.prepared != prepared || candidate.target_generation != target_generation {
+            return Err(IdentityError::ReceiptMismatch);
+        }
+        self.candidate = None;
+        Ok(CandidateDeploymentRetirementReceipt {
+            prepared,
+            target_generation,
+        })
+    }
 }
 
 #[derive(Clone)]

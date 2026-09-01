@@ -29,8 +29,7 @@ owner policy explicitly enables them for the selected CA/profile generation.
 DNS-only prepared operations cannot be replayed with that permission changed.
 IP authorizations accept only HTTP-01; DNS-01 and TLS-ALPN-01 fail closed.
 The in-service TLS activation descriptor also carries the exact typed set and
-binds identifier kind and binary value into its generation receipt. Automated
-issuance-to-activation orchestration remains incomplete.
+binds identifier kind and binary value into its generation receipt.
 Failed candidate cleanup is receipt-bound to the exact identity generation,
 key identity, and signing-route generation. A mismatched retirement receipt
 leaves the candidate recorded, and activation-uncertain candidates cannot be
@@ -180,6 +179,18 @@ persists replacement relationships. Its fallback derives timing from the
 certificate's actual lifetime, applies jittered exponential backoff and
 Retry-After, and exposes healthy, warning, critical, and expired states without
 assuming a 90-day profile.
+The unattended renewal coordinator acquires one identity-scoped lease, requires
+a fresh use-only candidate key and exact RFC 9773 replacement binding, verifies
+the returned chain receipt, stages the next schedule, publishes and exercises
+TLS 1.3 plus HTTP/3/QUIC v2 candidate handshakes, and only then activates and
+commits the new identity generation. Failed tests remove the exact candidate
+deployment and retire only its candidate key; the prior active identity and
+schedule remain unchanged. Activation uncertainty retains the lease and staged
+schedule, re-reads the authoritative target, and either commits the observed
+new generation or retries the already-tested candidate after proving the old
+generation remained active. A new renewal cannot displace that unresolved
+state. Durable encoding and restart reconstruction of the complete renewal
+coordinator remain required.
 Revocation is a separate generation-bound lifecycle. It binds the exact
 identity generation, ARI certificate identifier, chain digest, permitted RFC
 reason, owner preview or narrowly authorized automatic cause, and the exact
@@ -245,7 +256,7 @@ through capability-bound services.
 
 General JOSE response parsing, MRML HTTPS capability adapters, hosted DNS query
 adapters, lifecycle-specific state codecs and recovery wiring,
-renewal execution, revocation transport,
+durable renewal-executor reconstruction, revocation transport,
 sealed-key backup/restore adapters, CLI administration, interface dispatch/service loop, concrete
 gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must

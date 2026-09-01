@@ -13,6 +13,7 @@ pub enum CertificateManagerError {
     RenewalNotDue,
     RenewalInProgress,
     LeaseMismatch,
+    ReplacementMismatch,
     ArithmeticOverflow,
 }
 
@@ -34,6 +35,7 @@ pub struct CertificateManager {
     identities: [Option<IdentityManager>; MAX_MANAGED_IDENTITIES],
     schedules: [Option<RenewalSchedule>; MAX_MANAGED_IDENTITIES],
     leases: [Option<RenewalLease>; MAX_MANAGED_IDENTITIES],
+    pending_schedules: [Option<RenewalSchedule>; MAX_MANAGED_IDENTITIES],
     count: u8,
 }
 
@@ -43,6 +45,7 @@ impl CertificateManager {
             identities: [const { None }; MAX_MANAGED_IDENTITIES],
             schedules: [None; MAX_MANAGED_IDENTITIES],
             leases: [None; MAX_MANAGED_IDENTITIES],
+            pending_schedules: [None; MAX_MANAGED_IDENTITIES],
             count: 0,
         }
     }
@@ -121,6 +124,7 @@ impl CertificateManager {
         self.identities[index] = None;
         self.schedules[index] = None;
         self.leases[index] = None;
+        self.pending_schedules[index] = None;
         self.count -= 1;
         Ok(())
     }
@@ -136,7 +140,7 @@ impl CertificateManager {
         {
             return Err(CertificateManagerError::ScheduleMismatch);
         }
-        if self.leases[index].is_some() {
+        if self.leases[index].is_some() || self.pending_schedules[index].is_some() {
             return Err(CertificateManagerError::RenewalInProgress);
         }
         self.schedules[index] = Some(schedule);
@@ -165,7 +169,9 @@ impl CertificateManager {
         if schedule.renew_at_unix > now_unix {
             return Err(CertificateManagerError::RenewalNotDue);
         }
-        if self.leases[index].is_some_and(|lease| lease.expires_at_unix > now_unix) {
+        if self.pending_schedules[index].is_some()
+            || self.leases[index].is_some_and(|lease| lease.expires_at_unix > now_unix)
+        {
             return Err(CertificateManagerError::RenewalInProgress);
         }
         let lease = RenewalLease {
@@ -178,6 +184,7 @@ impl CertificateManager {
                 .ok_or(CertificateManagerError::ArithmeticOverflow)?,
         };
         self.leases[index] = Some(lease);
+        self.pending_schedules[index] = None;
         Ok(lease)
     }
 
@@ -186,6 +193,58 @@ impl CertificateManager {
         if self.leases[index] != Some(lease) {
             return Err(CertificateManagerError::LeaseMismatch);
         }
+        self.leases[index] = None;
+        self.pending_schedules[index] = None;
+        Ok(())
+    }
+
+    pub fn stage_renewal_replacement(
+        &mut self,
+        lease: RenewalLease,
+        replacement: RenewalSchedule,
+    ) -> Result<(), CertificateManagerError> {
+        let index = self.index(lease.identity)?;
+        let previous = self.schedules[index].ok_or(CertificateManagerError::ScheduleMismatch)?;
+        if self.leases[index] != Some(lease)
+            || previous.identity != lease.identity
+            || previous.identity_generation != lease.identity_generation
+            || previous.policy_generation != lease.policy_generation
+            || replacement.identity != lease.identity
+            || replacement.policy_generation != lease.policy_generation
+            || replacement.identity_generation
+                != lease
+                    .identity_generation
+                    .checked_add(1)
+                    .ok_or(CertificateManagerError::ArithmeticOverflow)?
+            || replacement.certificate_id == previous.certificate_id
+            || replacement.not_after_unix <= previous.not_after_unix
+        {
+            return Err(CertificateManagerError::ReplacementMismatch);
+        }
+        self.pending_schedules[index] = Some(replacement);
+        Ok(())
+    }
+
+    pub fn staged_renewal_replacement(
+        &self,
+        lease: RenewalLease,
+    ) -> Result<RenewalSchedule, CertificateManagerError> {
+        let index = self.index(lease.identity)?;
+        if self.leases[index] != Some(lease) {
+            return Err(CertificateManagerError::LeaseMismatch);
+        }
+        self.pending_schedules[index].ok_or(CertificateManagerError::ReplacementMismatch)
+    }
+
+    pub fn commit_renewal(&mut self, lease: RenewalLease) -> Result<(), CertificateManagerError> {
+        let index = self.index(lease.identity)?;
+        if self.leases[index] != Some(lease) {
+            return Err(CertificateManagerError::LeaseMismatch);
+        }
+        let replacement =
+            self.pending_schedules[index].ok_or(CertificateManagerError::ReplacementMismatch)?;
+        self.schedules[index] = Some(replacement);
+        self.pending_schedules[index] = None;
         self.leases[index] = None;
         Ok(())
     }
@@ -310,5 +369,36 @@ mod tests {
         registry.begin_renewal(identity, 50, 1, 10).unwrap();
         let recovered = registry.begin_renewal(identity, 60, 2, 10).unwrap();
         assert_eq!(recovered.lease_generation, 2);
+    }
+
+    #[test]
+    fn renewal_commit_requires_exact_new_identity_and_certificate_generation() {
+        let mut registry = CertificateManager::new();
+        let identity = TlsIdentityId([7; 16]);
+        registry.enroll(identity, 4).unwrap();
+        let prior = schedule(identity, 50);
+        registry.install_renewal_schedule(prior).unwrap();
+        let lease = registry.begin_renewal(identity, 50, 1, 10).unwrap();
+        let mut replacement = schedule(identity, 500);
+        replacement.identity_generation = 3;
+        replacement.certificate_id = AriCertificateId::derive(&[3], &[4]).unwrap();
+        replacement.not_after_unix = prior.not_after_unix + 1000;
+        let mut substituted = replacement;
+        substituted.identity_generation = 4;
+        assert_eq!(
+            registry.stage_renewal_replacement(lease, substituted),
+            Err(CertificateManagerError::ReplacementMismatch)
+        );
+        assert!(registry.renewal_schedule(identity).unwrap() == prior);
+        registry
+            .stage_renewal_replacement(lease, replacement)
+            .unwrap();
+        assert!(registry.staged_renewal_replacement(lease).unwrap() == replacement);
+        registry.commit_renewal(lease).unwrap();
+        assert!(registry.renewal_schedule(identity).unwrap() == replacement);
+        assert_eq!(
+            registry.finish_renewal(lease),
+            Err(CertificateManagerError::LeaseMismatch)
+        );
     }
 }

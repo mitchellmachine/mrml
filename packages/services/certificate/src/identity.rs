@@ -183,6 +183,20 @@ pub trait CandidateKeyRetirementTarget {
     ) -> Result<CandidateKeyRetirementReceipt, IdentityError>;
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct CandidateDeploymentRetirementReceipt {
+    pub prepared: PreparedIdentityReceipt,
+    pub target_generation: u64,
+}
+
+pub trait CandidateDeploymentRetirementTarget {
+    fn retire_candidate_deployment(
+        &mut self,
+        prepared: PreparedIdentityReceipt,
+        target_generation: u64,
+    ) -> Result<CandidateDeploymentRetirementReceipt, IdentityError>;
+}
+
 struct IdentityGeneration {
     descriptor: TlsIdentityDescriptor,
     chain: PemCertificateChain,
@@ -243,6 +257,10 @@ impl IdentityManager {
 
     pub const fn has_deployment_state(&self) -> bool {
         self.active.is_some() || self.candidate.is_some() || self.retained.is_some()
+    }
+
+    pub(crate) fn active_descriptor(&self) -> Option<TlsIdentityDescriptor> {
+        self.active.as_ref().map(|active| active.descriptor)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -388,6 +406,25 @@ impl IdentityManager {
         }
     }
 
+    pub fn retry_tested_activation(
+        &mut self,
+        target: &mut impl IdentityDeploymentTarget,
+    ) -> Result<ActivationReceipt, IdentityError> {
+        let candidate = self.candidate.as_ref().ok_or(IdentityError::InvalidState)?;
+        if candidate.state != DeploymentState::Tested || candidate.target_generation == 0 {
+            return Err(IdentityError::InvalidState);
+        }
+        self.activate(
+            TestedIdentityReceipt {
+                prepared: candidate.prepared,
+                target_generation: candidate.target_generation,
+                tls13_ok: true,
+                http3_quic_v2_ok: true,
+            },
+            target,
+        )
+    }
+
     pub fn resolve_activation(
         &mut self,
         target: &mut impl IdentityDeploymentTarget,
@@ -425,7 +462,8 @@ impl IdentityManager {
     pub fn abort_candidate(
         &mut self,
         prepared: PreparedIdentityReceipt,
-        target: &mut impl CandidateKeyRetirementTarget,
+        deployment: &mut impl CandidateDeploymentRetirementTarget,
+        keys: &mut impl CandidateKeyRetirementTarget,
     ) -> Result<CandidateKeyRetirementReceipt, IdentityError> {
         let candidate = self.candidate.as_ref().ok_or(IdentityError::InvalidState)?;
         if candidate.prepared != prepared || candidate.state == DeploymentState::ActivationUncertain
@@ -433,7 +471,16 @@ impl IdentityManager {
             return Err(IdentityError::InvalidState);
         }
         let route = candidate.route;
-        let receipt = target.retire_candidate_key(route)?;
+        if candidate.target_generation != 0 {
+            let deployment_receipt =
+                deployment.retire_candidate_deployment(prepared, candidate.target_generation)?;
+            if deployment_receipt.prepared != prepared
+                || deployment_receipt.target_generation != candidate.target_generation
+            {
+                return Err(IdentityError::ReceiptMismatch);
+            }
+        }
+        let receipt = keys.retire_candidate_key(route)?;
         if receipt.identity != route.identity
             || receipt.identity_generation != route.identity_generation
             || receipt.key_identity != route.key_identity
@@ -564,6 +611,19 @@ mod tests {
     }
     struct Retirer {
         substitute: bool,
+    }
+    struct DeploymentRetirer;
+    impl CandidateDeploymentRetirementTarget for DeploymentRetirer {
+        fn retire_candidate_deployment(
+            &mut self,
+            prepared: PreparedIdentityReceipt,
+            target_generation: u64,
+        ) -> Result<CandidateDeploymentRetirementReceipt, IdentityError> {
+            Ok(CandidateDeploymentRetirementReceipt {
+                prepared,
+                target_generation,
+            })
+        }
     }
     impl CandidateKeyRetirementTarget for Retirer {
         fn retire_candidate_key(
@@ -731,13 +791,21 @@ mod tests {
             .unwrap();
         assert_eq!(
             manager
-                .abort_candidate(prepared, &mut Retirer { substitute: true })
+                .abort_candidate(
+                    prepared,
+                    &mut DeploymentRetirer,
+                    &mut Retirer { substitute: true },
+                )
                 .err(),
             Some(IdentityError::ReceiptMismatch)
         );
         assert!(manager.candidate.is_some());
         let receipt = manager
-            .abort_candidate(prepared, &mut Retirer { substitute: false })
+            .abort_candidate(
+                prepared,
+                &mut DeploymentRetirer,
+                &mut Retirer { substitute: false },
+            )
             .unwrap();
         assert!(receipt.key_identity == TlsKeyIdentity([5; 32]));
         assert!(manager.candidate.is_none());

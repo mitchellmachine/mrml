@@ -11876,3 +11876,13 @@ for a failed candidate certificate key, requiring an exact identity, candidate
 generation, key identity, and route-generation receipt and refusing cleanup
 while activation is uncertain. It adds no certificate protocol or recorded
 re-review trigger.
+
+# 2026-09-01 — Unattended replacement issuance and activation coordinator
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment composes the already reviewed
+ordinary ACME replacement, fresh use-only key, certificate verification,
+candidate handshake testing, generation activation, retry scheduling, and
+authoritative uncertain-result resolution mechanisms. It introduces no
+MultiTLS multiplexing, route-selected multi-vantage validation, challenge
+proxying, public CA operation, or other recorded re-review trigger.

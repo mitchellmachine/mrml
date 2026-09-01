@@ -23,6 +23,7 @@ mod lifecycle_service;
 mod manager;
 mod native_service;
 mod p256_signer;
+mod renewal_executor;
 mod revocation;
 mod scheduler;
 mod service_loop;
@@ -89,7 +90,8 @@ pub use hot_reload::{
     HostedTlsIdentityPublication, PublishedTlsIdentity,
 };
 pub use identity::{
-    ActivationReceipt, ApprovedTls13CertificateVerify, CandidateKeyRetirementReceipt,
+    ActivationReceipt, ApprovedTls13CertificateVerify, CandidateDeploymentRetirementReceipt,
+    CandidateDeploymentRetirementTarget, CandidateKeyRetirementReceipt,
     CandidateKeyRetirementTarget, DeploymentState, IdentityConsumerCapability,
     IdentityDeploymentTarget, IdentityError, IdentityManager, PreparedIdentityReceipt,
     TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
@@ -110,6 +112,10 @@ pub use native_service::{
     MAX_CERTIFICATE_SHARED_BYTES, ReceivedCertificateCall,
 };
 pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
+pub use renewal_executor::{
+    IssuedRenewalCandidate, RenewalExecutionError, RenewalIssuer, RenewalRecoveryError,
+    execute_due_renewal, resolve_uncertain_renewal,
+};
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
     PreparedRevocation, RevocationAuthentication, RevocationAuthority, RevocationAuthorization,
