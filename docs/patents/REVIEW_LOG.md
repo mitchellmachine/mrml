@@ -11597,3 +11597,12 @@ generation-bound request and response codecs for describing a TLS identity,
 reading its certificate chain, requesting its use-only signing route, and
 polling its generation and health. It adds no TLS multiplexing, signing
 algorithm, validation route, or other recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Canonical ACME challenge publication codec
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds conventional bounded,
+generation-bound codecs for prepare, activate, remove, and authoritative-state
+operations over the already reviewed HTTP-01, DNS-01, and TLS-ALPN-01
+publishers. It adds no MultiTLS multiplexing, challenge proxy, route-selected
+multi-vantage validation, or other recorded re-review trigger.
