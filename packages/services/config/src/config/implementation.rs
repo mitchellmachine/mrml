@@ -211,11 +211,7 @@ impl<Guest> ConfigurationMicrovmFactory for AdmittedConfigurationGuestFactory<Gu
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConfigurationMicrovmEndpoint {
     launch_generation: u64,
-    domain: ObjectId,
-    interface: ObjectId,
-    interface_generation: u32,
-    provider_generation: u64,
-    policy_generation: u64,
+    spec: IsolationServiceSpec,
 }
 
 impl ConfigurationMicrovmEndpoint {
@@ -223,24 +219,40 @@ impl ConfigurationMicrovmEndpoint {
         self.launch_generation
     }
 
+    pub const fn spec(self) -> IsolationServiceSpec {
+        self.spec
+    }
+
     pub const fn domain(self) -> ObjectId {
-        self.domain
+        self.spec.domain()
     }
 
     pub const fn interface(self) -> ObjectId {
-        self.interface
+        self.spec.interface()
     }
 
     pub const fn interface_generation(self) -> u32 {
-        self.interface_generation
+        self.spec.interface_generation()
     }
 
     pub const fn provider_generation(self) -> u64 {
-        self.provider_generation
+        self.spec.provider_generation()
+    }
+
+    pub const fn system_generation(self) -> u64 {
+        self.spec.system_generation()
     }
 
     pub const fn policy_generation(self) -> u64 {
-        self.policy_generation
+        self.spec.policy_generation()
+    }
+
+    pub const fn class(self) -> mrml_kernel::TotalMicrovmClass {
+        self.spec.class()
+    }
+
+    pub const fn placement(self) -> IsolationPlacement {
+        self.spec.placement()
     }
 }
 
@@ -333,11 +345,7 @@ impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
         })?;
         let endpoint = ConfigurationMicrovmEndpoint {
             launch_generation: self.next_generation,
-            domain: spec.domain(),
-            interface: spec.interface(),
-            interface_generation: spec.interface_generation(),
-            provider_generation: spec.provider_generation(),
-            policy_generation: spec.policy_generation(),
+            spec,
         };
         self.active = Some((endpoint, guest));
         self.next_generation = next_generation;
@@ -402,10 +410,7 @@ impl<Native, Microvm> ConfigurationPlacementBackend<Native, Microvm> {
 pub struct NativeConfigurationEndpoint {
     service: ServiceId,
     task: TaskId,
-    domain: ObjectId,
-    interface: ObjectId,
-    interface_generation: u32,
-    provider_generation: u64,
+    spec: IsolationServiceSpec,
 }
 
 impl NativeConfigurationEndpoint {
@@ -417,20 +422,40 @@ impl NativeConfigurationEndpoint {
         self.task
     }
 
+    pub const fn spec(self) -> IsolationServiceSpec {
+        self.spec
+    }
+
     pub const fn domain(self) -> ObjectId {
-        self.domain
+        self.spec.domain()
     }
 
     pub const fn interface(self) -> ObjectId {
-        self.interface
+        self.spec.interface()
     }
 
     pub const fn interface_generation(self) -> u32 {
-        self.interface_generation
+        self.spec.interface_generation()
     }
 
     pub const fn provider_generation(self) -> u64 {
-        self.provider_generation
+        self.spec.provider_generation()
+    }
+
+    pub const fn system_generation(self) -> u64 {
+        self.spec.system_generation()
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.spec.policy_generation()
+    }
+
+    pub const fn class(self) -> mrml_kernel::TotalMicrovmClass {
+        self.spec.class()
+    }
+
+    pub const fn placement(self) -> IsolationPlacement {
+        self.spec.placement()
     }
 }
 
@@ -549,10 +574,7 @@ impl<
         let endpoint = NativeConfigurationEndpoint {
             service,
             task,
-            domain: spec.domain(),
-            interface: spec.interface(),
-            interface_generation: spec.interface_generation(),
-            provider_generation: spec.provider_generation(),
+            spec,
         };
         self.active = Some(endpoint);
         Ok(endpoint)

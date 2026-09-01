@@ -612,6 +612,60 @@ mod tests {
         .unwrap()
     }
 
+    fn endpoint_binding_substitutions(spec: IsolationServiceSpec) -> [IsolationServiceSpec; 4] {
+        let replacement_placement = match spec.placement() {
+            IsolationPlacement::NativeService => IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm => IsolationPlacement::NativeService,
+            _ => unreachable!("configuration placement is always isolated"),
+        };
+        [
+            IsolationServiceSpec::new(
+                spec.domain(),
+                spec.interface(),
+                spec.interface_generation(),
+                spec.provider_generation(),
+                spec.system_generation() + 1,
+                spec.policy_generation(),
+                spec.class(),
+                spec.placement(),
+            )
+            .unwrap(),
+            IsolationServiceSpec::new(
+                spec.domain(),
+                spec.interface(),
+                spec.interface_generation(),
+                spec.provider_generation(),
+                spec.system_generation(),
+                spec.policy_generation() + 1,
+                spec.class(),
+                spec.placement(),
+            )
+            .unwrap(),
+            IsolationServiceSpec::new(
+                spec.domain(),
+                spec.interface(),
+                spec.interface_generation(),
+                spec.provider_generation(),
+                spec.system_generation(),
+                spec.policy_generation(),
+                TotalMicrovmClass::BootOnly,
+                spec.placement(),
+            )
+            .unwrap(),
+            IsolationServiceSpec::new(
+                spec.domain(),
+                spec.interface(),
+                spec.interface_generation(),
+                spec.provider_generation(),
+                spec.system_generation(),
+                spec.policy_generation(),
+                spec.class(),
+                replacement_placement,
+            )
+            .unwrap(),
+        ]
+    }
+
     #[test]
     fn configuration_backend_preserves_binding_across_both_placements() {
         let mut native_admission =
@@ -716,11 +770,34 @@ mod tests {
         assert_eq!(endpoint.interface(), routed.interface());
         assert_eq!(endpoint.interface_generation(), 1);
         assert_eq!(endpoint.provider_generation(), 11);
+        assert_eq!(endpoint.system_generation(), SYSTEM_GENERATION);
         assert_eq!(endpoint.policy_generation(), 5);
+        assert_eq!(endpoint.class(), TotalMicrovmClass::MicrovmEligible);
+        assert_eq!(endpoint.placement(), IsolationPlacement::Microvm);
+        assert_eq!(
+            endpoint.spec(),
+            configuration_service_spec(IsolationPlacement::Microvm)
+        );
         assert_eq!(
             backend.microvm.active_guest(endpoint),
             Ok(&configuration_service_spec(IsolationPlacement::Microvm))
         );
+
+        for substituted in endpoint_binding_substitutions(endpoint.spec()) {
+            let mut wrong = endpoint;
+            wrong.spec = substituted;
+            assert_eq!(
+                backend.microvm.active_guest(wrong),
+                Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+            );
+            assert_eq!(
+                backend.revoke(&ConfigurationServiceEndpoint::Microvm(wrong)),
+                Err(ConfigurationPlacementError::Microvm(
+                    PreparedMicrovmConfigurationError::WrongEndpoint
+                ))
+            );
+        }
+        assert_eq!(backend.microvm.factory().destructions, 0);
 
         let mut wrong = endpoint;
         wrong.launch_generation += 1;
@@ -842,6 +919,25 @@ mod tests {
         };
         assert_eq!(endpoint.domain(), ObjectId(0x434f_4e46_4947));
         assert_eq!(endpoint.interface(), routed.interface());
+        assert_eq!(
+            endpoint.spec(),
+            configuration_service_spec(IsolationPlacement::NativeService)
+        );
+        assert_eq!(endpoint.system_generation(), SYSTEM_GENERATION);
+        assert_eq!(endpoint.policy_generation(), 5);
+        assert_eq!(endpoint.class(), TotalMicrovmClass::MicrovmEligible);
+        assert_eq!(endpoint.placement(), IsolationPlacement::NativeService);
+        for substituted in endpoint_binding_substitutions(endpoint.spec()) {
+            let mut wrong = endpoint;
+            wrong.spec = substituted;
+            assert_eq!(
+                backend.revoke(&ConfigurationServiceEndpoint::Native(wrong)),
+                Err(ConfigurationPlacementError::Native(
+                    NativeConfigurationLaunchError::WrongEndpoint
+                ))
+            );
+        }
+        assert_eq!(backend.native.eraser().attempts, 0);
         assert!(matches!(
             backend.revoke(routed.endpoint()),
             Err(ConfigurationPlacementError::Native(
