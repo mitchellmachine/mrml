@@ -10,18 +10,19 @@ Baseline commit:
 `cf1f75755e6961737d6c1972959aac9a8dcea061ec26b7f7e43b20ab261868c2`.
 
 Final core implementation commit before this evidence record:
-`8a15e18b1d816cec99a472111b23888c8da5509c941db55735f633716acb91b7`.
+`75c5818decf177f756a0b7306ebc0b3359850ec71db7e567e4eaac5cf1a36988`.
 
 Executed on 2026-09-01:
 
 - `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
 - `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
-- `./target/debug/mrml test mrml-git --target linux` — PASS, 153 library tests and 2 CLI tests. The suite exercised exact linear protected-history ranges of 1, 100, 1,000, and 5,000 introduced commits and rejected 5,001 at the configured limit. It also generated the same exact first-party fetch pack in six simultaneous process-local workers. These are controlled functional limit/concurrency tests, not production-performance or peak-memory benchmarks.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 174 library tests and 2 CLI tests. The suite exercised exact linear protected-history ranges of 1, 100, 1,000, and 5,000 introduced commits and rejected 5,001 at the configured limit. It also generated the same exact first-party fetch pack in six simultaneous process-local workers and ran three simultaneous ref transactions with one same-repository winner, one stale rejection, and one independent-repository success. These are controlled functional limit/concurrency tests, not multiprocess, production-performance, or peak-memory benchmarks.
 - `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 15 tests.
 - `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 49 tests, including mandatory pinned NIST ACVP sigGen/sigVer and OpenSSL 3.6.4 differential fixtures.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.openpgp --target windows` — PASS, 15 tests under the pinned Wine-hosted Windows target.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.crypto --target windows` — PASS, 49 tests with the same mandatory ML-DSA fixtures and mutation corpus under the pinned Wine-hosted Windows target.
-- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 140 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. Exact functional range, canonical validity/retirement, key-revocation, legacy-v4 ledger, pack-set manifest/binding, generalized artifact proof, verified-summary, annotated-tag, metadata, and pre-ref signature-verification failure cases passed. This is Wine-hosted Windows-target compatibility evidence, not native Windows or production-performance evidence.
+- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 153 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. Exact functional range, canonical validity/retirement, key-revocation, legacy-v4 ledger, pack-set manifest/binding, dynamic level-9 compression, bounded deltas, cache/compaction core, generalized artifact proof, verified-summary, annotated-tag, metadata, and pre-ref signature-verification failure cases passed. This is Wine-hosted Windows-target compatibility evidence, not native Windows or production-performance evidence.
+- `cargo clippy --all-targets -- -D warnings` — PASS.
 - `cargo fmt --all -- --check` — PASS.
 - `git diff --check` — PASS before this evidence file.
 - `./target/debug/mrml assurance check` — FAIL: `UnsafeBoundaryUnadmitted { path: docs/compiler/probes/pinned_std_thread_tls_execution.rs }`. This path is outside Agent A's permitted files and arrived through concurrent main integration; it was not hidden or modified here.
@@ -32,13 +33,15 @@ Implemented and executed in the focused environments:
 - purpose-separated `MRML-GIT-HYBRID-V1` AND verification and bounded trust transitions.
 - ML-DSA self-verification, runtime entropy wrappers, malformed-key rejection, and volatile clearing of reviewed secret-derived intermediates.
 - exact conventional SSH/OpenPGP commit and annotated-tag signature verification before local branch/tag ref mutation, with failure preserving the old head and absent tag ref.
-- bounded Git object/pack/index parsing, deterministic fixed-Huffman LZ77 DEFLATE, file-backed quarantine validation, OFS/REF delta resolution, authenticated thin-base completion, arrival packs, disk reservation, journals, atomic ref generations, recovery classification, and authenticated audit receipts.
+- bounded Git object/pack/index parsing, deterministic dynamic-Huffman level-9 LZ77 DEFLATE, fixed-window/depth OFS delta selection, file-backed quarantine validation, OFS/REF delta resolution, authenticated thin-base completion, arrival packs, disk reservation, journals, atomic ref generations, recovery classification, and authenticated audit receipts.
 - deterministic verification of every introduced commit, including merge-side ancestry, concrete detached hybrid proofs, and protected activation that consumes opaque verified state.
 - canonical monotonic pair-validity/retirement state, authenticated purpose-separated key revocations, and generation-bound verification summaries derived only from opaque verified commit proofs.
 - canonical full-fingerprint legacy-v4 validity/retirement/revocation policy state; policy membership alone remains inert and cannot bypass graph classification.
 - bounded checkpoint/cutover graph classification with a valid conventional-v4 signature bound to exact commit bytes, complete fingerprint, trusted signing time, repository, and generations; every non-checkpoint-ancestry commit still requires hybrid evidence.
 - canonical bounded pack-set manifests and an `MRREFS02` transition that atomically binds the exact manifest digest while advancing repository and pack generations; hosted receive cumulatively persists the selected set and reauthenticates exact selected arrival objects for subsequent thin bases.
 - sequential protected receive history traversal over prior selected arrivals; the focused test prepares a second commit whose parent exists only in the first activated arrival generation.
+- a transport-neutral `ReceivePackCore` composing request parsing, reservation, quarantine, complete-history verification, authenticated durable activation, receipt persistence, and report-status-v2 with injected verification-only and receipt authorities.
+- exact selected-arrival composition for repository queries and upload-pack, with installed but unselected arrivals remaining invisible; hosted-Linux immutable exact-key pack caching, generation-safe compaction activation, and non-destructive local `git gc`/`git repack` pack/index installation.
 - bounded annotated-tag pages/details and verified metadata descriptors for exact source-manifest, source-lock, and build-receipt blobs without assuming ambient host paths or unsigned filename authority.
 - bounded protocol-v2 request parsing, `ls-refs`, fetch framing, receive command/report framing, and repository-view boundaries without an external Git server runtime.
 - deterministic bounded hostile-input corpora for Git pack/index/object/transport/trust/journal/ref-state/name/path parsers, OpenPGP packet/armor parsing, and ML-DSA key/signature verification on Linux and the Wine-hosted Windows target.
@@ -47,17 +50,17 @@ Implemented and executed in the focused environments:
 
 Explicit blockers (`REMAINS_OPEN`):
 
-- Dynamic-Huffman level-9 canonical encoding, bounded delta selection, cross-pack recomputation, pack caching, and compaction await the required mechanism-level Canadian patent review and CIPO verification recorded in `PATENT_SCREEN.md`; they were not bypassed.
+- The constrained compression, delta, exact-key cache, and reachability-compaction mechanisms remain inside the user-supplied `PATENT_REVIEW_PRELIMINARY_CLEAR_WITH_GUARDRAILS` screen recorded in `PATENT_SCREEN.md`. This is not a formal freedom-to-operate opinion; production sign-off by qualified Canadian patent counsel and shared review-log integration remain open.
 - The normal installed-as-`git` commit/tag paths do not yet use the complete protected detached-proof transaction end to end. Pull now authenticates and fully traverses its isolated candidate before installation and accepts the exact `--ff-only` spelling, but production trust-policy proof retrieval remains open.
-- Production durable detached-proof storage/key-service integration, general repository-view/upload-pack composition over selected arrival objects, canonical compaction generation switching, and concurrent thin receive tests remain open.
+- Production durable detached-proof storage/key-service integration, cache population policy, concurrent thin receive tests, and multiprocess receive serialization remain open.
 - Authenticated emergency-recovery execution remains open; normal rotation and canonical key revocation cannot substitute for that separately pinned authority.
 - Itemized FIPS 204 errata mapping, constant-time timing evidence, and independent cryptographic/security review remain open. The checked-in mandatory NIST ACVP and independent OpenSSL interoperability fixtures pass on Linux and the Wine-hosted Windows target.
 - Native Windows directory durability, process-kill fault injection at every durable boundary, power-loss/physical-storage evidence, coverage-guided sanitizer/fuzz campaigns beyond the deterministic mutation corpus, multiprocess/distributed concurrency and peak-memory benchmarks, and production performance measurements remain open. Exact functional history-limit cases and process-local thread concurrency are covered, but do not satisfy those broader evidence requirements.
-- Repository-specific release metadata discovery conventions, richer standard command forms, complete upload-pack negotiation/caching, and production receive-pack edge composition remain partial. Exact annotated tags and caller-selected verified source-manifest/source-lock/build-receipt blobs are available without filename-based authority. Unsupported capability paths remain fail closed and are not advertised.
+- Repository-specific release metadata discovery conventions, richer standard command forms, complete upload-pack negotiation/caching, and integration of the receive core with Agent B's production edge adapter remain partial. Exact annotated tags and caller-selected verified source-manifest/source-lock/build-receipt blobs are available without filename-based authority. Unsupported capability paths remain fail closed and are not advertised.
 - Assurance remains red for the unrelated unadmitted compiler probe identified above.
 
-Patent review: implemented delta decoding/thin completion and conventional
-typed transaction/proof mechanisms are `NOT_TRIGGERED`; the compression and
-storage-selection mechanisms listed above remain `TRIGGERED`/`REMAINS_OPEN` as
-described in `docs/gitd/core/PATENT_SCREEN.md`. No patent-clearance claim is
-made.
+Patent review: conventional typed transaction/proof mechanisms are
+`NOT_TRIGGERED`. Compression, bounded delta selection, exact-key caching, and
+reachability compaction are `TRIGGERED` and implemented within the supplied
+preliminary guardrails in `docs/gitd/core/PATENT_SCREEN.md`. Production counsel
+sign-off remains open; no patent-clearance claim is made.
