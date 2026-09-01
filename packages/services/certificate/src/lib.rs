@@ -16,6 +16,7 @@ mod durable;
 mod identity;
 mod identity_service;
 mod lifecycle_service;
+mod manager;
 mod native_service;
 mod p256_signer;
 mod revocation;
@@ -83,6 +84,7 @@ pub use lifecycle_service::{
     CertificateLifecycleAuthorizer, CertificateLifecycleProvider, LifecycleDispatchError,
     dispatch_lifecycle_call,
 };
+pub use manager::{CertificateManager, CertificateManagerError, MAX_MANAGED_IDENTITIES};
 pub use native_service::{
     CertificateNativeRoute, CertificateNativeServiceError, CertificateNativeServiceLoop,
     CertificateNativeSyscalls, CertificateRawSyscall, CertificateSyscallFrame,

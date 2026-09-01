@@ -208,6 +208,18 @@ impl IdentityManager {
         }
     }
 
+    pub const fn identity(&self) -> TlsIdentityId {
+        self.identity
+    }
+
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
+    }
+
+    pub const fn has_deployment_state(&self) -> bool {
+        self.active.is_some() || self.candidate.is_some() || self.retained.is_some()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_candidate(
         &mut self,

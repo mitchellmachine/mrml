@@ -11752,3 +11752,11 @@ Patent review: **NOT_TRIGGERED**. This increment adds test-only bounded fault
 responses for rate limiting with Retry-After, stale authorization state,
 contradictory order regression, and malformed certificate-chain content. It
 introduces no certificate protocol mechanism or recorded re-review trigger.
+
+# 2026-09-01 — Bounded multi-identity certificate registry
+
+Patent review: **NOT_TRIGGERED**. This increment registers independent,
+capability-selected certificate identity state machines in a fixed-capacity
+service collection. It does not select identities from SNI, multiplex multiple
+TLS identities on one listener, or implement the recorded MultiTLS re-review
+trigger.
