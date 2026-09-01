@@ -22,6 +22,8 @@ pub struct GitdConfig {
     pub profile_catalog_sha256: [u8; 32],
     pub token_records: PathBuf,
     pub token_pepper: PathBuf,
+    pub quic_retry_key: PathBuf,
+    pub quic_retry_generation: u64,
     pub authority_socket: PathBuf,
     pub certd_socket: PathBuf,
     pub authority_capability: PathBuf,
@@ -108,6 +110,8 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
     let mut profile_catalog_sha256 = None;
     let mut token_records = None;
     let mut token_pepper = None;
+    let mut quic_retry_key = None;
+    let mut quic_retry_generation = None;
     let mut authority_socket = None;
     let mut certd_socket = None;
     let mut authority_capability = None;
@@ -163,6 +167,10 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
             "profile_catalog_sha256" => set!(profile_catalog_sha256, sha256_digest(value)?),
             "token_records" => set!(token_records, absolute_path(value)?),
             "token_pepper" => set!(token_pepper, absolute_path(value)?),
+            "quic_retry_key" => set!(quic_retry_key, absolute_path(value)?),
+            "quic_retry_generation" => {
+                set!(quic_retry_generation, nonzero_number::<u64>(value)?)
+            }
             "authority_socket" => set!(authority_socket, absolute_path(value)?),
             "certd_socket" => set!(certd_socket, absolute_path(value)?),
             "authority_capability" => set!(authority_capability, absolute_path(value)?),
@@ -213,6 +221,8 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
         profile_catalog_sha256: required!(profile_catalog_sha256),
         token_records: required!(token_records),
         token_pepper: required!(token_pepper),
+        quic_retry_key: required!(quic_retry_key),
+        quic_retry_generation: required!(quic_retry_generation),
         authority_socket: required!(authority_socket),
         certd_socket: required!(certd_socket),
         authority_capability: required!(authority_capability),
@@ -253,9 +263,13 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
         || !is_direct_child(&config.profile_catalog, &config.policy_root)
         || !is_direct_child(&config.token_records, &config.state_root)
         || config.token_pepper.parent() != Some(Path::new("/run/secrets"))
+        || config.quic_retry_key.parent() != Some(Path::new("/run/secrets"))
         || config.repository_catalog == config.profile_catalog
         || config.token_pepper == config.authority_capability
         || config.token_pepper == config.certd_capability
+        || config.quic_retry_key == config.token_pepper
+        || config.quic_retry_key == config.authority_capability
+        || config.quic_retry_key == config.certd_capability
     {
         return Err(GitdConfigError::InvalidValue);
     }
@@ -371,7 +385,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
+    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nquic_retry_key=/run/secrets/gitd-quic-retry-key\nquic_retry_generation=1\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
 
     #[test]
     fn exact_v1_config_parses_with_production_defaults() {

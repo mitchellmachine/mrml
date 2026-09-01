@@ -16,8 +16,9 @@ limits, and overlapping authoritative/cache roots fail startup.
 The configuration identifies separate repository, state, quarantine, cache,
 receipt, and policy roots; an exact repository catalog and protection-profile
 catalog directly under the policy root; authenticated token records directly
-under the state root; a token-verifier pepper restricted to `/run/secrets`;
-authority and certd sockets and capability files; the Gitd, authority, and certd
+under the state root; a token-verifier pepper and distinct QUIC retry key
+restricted to `/run/secrets`; a nonzero retry generation; authority and certd
+sockets and capability files; the Gitd, authority, and certd
 numeric identities; nonzero persisted next authority and certd request
 identifiers; connection/upload/receive/body limits; one unprivileged shared
 TCP/UDP port; and a bounded drain interval. Paths identify deployment objects
@@ -66,6 +67,12 @@ purpose-separated signing/verifying authority; exact-new nonprotected
 transactions recover the checksum-protected receipt; completed journals are
 accepted. Pre-activation re-verification and divergent/uncertain state still
 fail this gate closed rather than being guessed or silently discarded.
+
+The QUIC retry secret is exactly 16 nonzero bytes in a nonsymlink regular file
+owned by Gitd with mode `0400` or `0600`. Its configured path must differ from
+the token pepper and both channel capabilities. It initializes only the
+address-validation token manager; it is never an authentication token,
+repository capability, certd capability, or authority key.
 
 The default production identities remain Gitd `21001:21001`, authority
 `21002:21002`, and certd `21003:21003`. The parser permits explicit deployment

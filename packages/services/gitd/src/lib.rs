@@ -23,7 +23,7 @@ pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,
     validate_identity_snapshot,
 };
-pub use listener::{GitdBoundListeners, GitdListenerError};
+pub use listener::{GitdBoundListeners, GitdListenerError, load_quic_retry_key};
 pub use startup::{
     AdmittedRepository, RepositoryAdmissionError, RepositoryRecoveryError,
     RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,

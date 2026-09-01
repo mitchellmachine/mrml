@@ -31,9 +31,17 @@ ceiling, binds TCP, resolves the actual port (supporting isolated ephemeral test
 binds), and binds the QUIC endpoint to that same port; any port/UDP/QUIC failure
 drops the partial TCP listener and returns no bundle. A hosted loopback test
 proved simultaneous TCP/UDP ownership and over-limit refusal. This is a socket
-capability primitive, not readiness evidence: retry/admission keys, HTTP/2 and
-HTTP/3 accept loops, request dispatch, drain, and public-host binding remain to
+capability primitive, not readiness evidence: HTTP/2 and HTTP/3 accept loops,
+request dispatch, drain, and public-host binding remain to
 be composed after all startup gates.
+
+Before UDP admission, the endpoint receives a distinct generated retry key and
+nonzero generation. Gitd configures a 30-second one-use retry-token manager,
+bounded half-open/per-IPv4/memory admission, and the shared resource controller
+from that secret. The secure loader accepts only one exact 16-byte, Gitd-owned,
+nonsymlink regular file with private owner-only mode. Hosted tests prove the
+valid file and reject group-readable mode. Retry state does not grant repository
+or application authority.
 
 `build-offline-git-bundle.sh` is the offline release recipe for those two
 images. It requires a canonical version and new absolute output, exact local
