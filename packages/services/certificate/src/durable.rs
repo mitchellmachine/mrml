@@ -46,6 +46,9 @@ pub enum DurableRecordKind {
     AccountSealedKey = 13,
     CertificateSealedKey = 14,
     RenewalTransaction = 15,
+    AcmeOperation = 16,
+    AcmeResource = 17,
+    DnsPublication = 18,
 }
 
 impl DurableRecordKind {
@@ -78,6 +81,9 @@ impl DurableRecordKind {
             13 => Self::AccountSealedKey,
             14 => Self::CertificateSealedKey,
             15 => Self::RenewalTransaction,
+            16 => Self::AcmeOperation,
+            17 => Self::AcmeResource,
+            18 => Self::DnsPublication,
             _ => return None,
         })
     }

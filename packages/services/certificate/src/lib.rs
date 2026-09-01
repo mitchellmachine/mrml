@@ -2,6 +2,7 @@
 #![feature(peer_credentials_unix_socket)]
 
 mod administration;
+mod acme_operation_journal;
 mod backup;
 mod backup_export;
 mod backup_transfer;
@@ -61,6 +62,10 @@ pub use administration::{
     ADMINISTRATION_HEADER_BYTES, AdministrationClass, AdministrationCodecError,
     AdministrationRequest, CanonicalAdministrationProvider, MAX_ADMINISTRATION_PAYLOAD_BYTES,
     decode_administration_request, encode_administration_request,
+};
+pub use acme_operation_journal::{
+    ACME_OPERATION_JOURNAL_BYTES, AcmeOperationJournal, AcmeOperationJournalError,
+    AcmeOperationStage,
 };
 pub use backup::{
     BACKUP_VERSION, BackupDescriptor, BackupError, BackupRestoreTarget, MAX_BACKUP_BYTES,
