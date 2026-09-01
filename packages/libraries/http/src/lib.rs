@@ -33,7 +33,10 @@ pub use quic::{
     QuicTransportParameters, QuicVersion, SentPacket, ShortPacket, initial_token,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
-pub use quic_retry::{QuicRetryKey, QuicRetryPurpose, QuicRetryTokenManager};
+pub use quic_retry::{
+    QuicAdmissionController, QuicAdmissionDecision, QuicRetryKey, QuicRetryPurpose,
+    QuicRetryTokenManager,
+};
 
 const MAX_HEADER: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -13,6 +13,145 @@ const MAX_TOKEN_LENGTH: usize =
 const MAX_CONSUMED_TOKENS: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuicAdmissionDecision {
+    Admit { permit: u64 },
+    Retry,
+    Reject,
+}
+
+#[derive(Clone, Copy)]
+struct HalfOpenAdmission {
+    permit: u64,
+    peer: SocketAddress,
+    expires_at: u64,
+    memory_bytes: u64,
+}
+
+/// Fixed-capacity admission accounting used before a QUIC handshake allocates
+/// connection state. The current runtime address type is IPv4-only; an endpoint
+/// must not claim IPv6 /64 admission support until that address ABI is extended.
+pub struct QuicAdmissionController {
+    half_open: Vector<HalfOpenAdmission>,
+    max_half_open: usize,
+    max_per_ip: usize,
+    max_memory_bytes: u64,
+    used_memory_bytes: u64,
+    handshake_lifetime_seconds: u64,
+    next_permit: u64,
+    retry_threshold: usize,
+}
+
+impl QuicAdmissionController {
+    pub fn new(
+        max_half_open: usize,
+        max_per_ip: usize,
+        max_memory_bytes: u64,
+        handshake_lifetime_seconds: u64,
+        retry_threshold: usize,
+    ) -> Result<Self, QuicError> {
+        if max_half_open == 0
+            || max_per_ip == 0
+            || max_memory_bytes == 0
+            || handshake_lifetime_seconds == 0
+            || retry_threshold > max_half_open
+        {
+            return Err(QuicError::Limit);
+        }
+        Ok(Self {
+            half_open: Vector::new(),
+            max_half_open,
+            max_per_ip,
+            max_memory_bytes,
+            used_memory_bytes: 0,
+            handshake_lifetime_seconds,
+            next_permit: 1,
+            retry_threshold,
+        })
+    }
+
+    pub fn begin(
+        &mut self,
+        peer: SocketAddress,
+        now: u64,
+        estimated_memory_bytes: u64,
+        address_validated: bool,
+    ) -> QuicAdmissionDecision {
+        self.reap(now);
+        if estimated_memory_bytes == 0
+            || self.half_open.len() >= self.max_half_open
+            || self
+                .used_memory_bytes
+                .checked_add(estimated_memory_bytes)
+                .is_none_or(|total| total > self.max_memory_bytes)
+            || self
+                .half_open
+                .iter()
+                .filter(|entry| entry.peer.ip == peer.ip)
+                .count()
+                >= self.max_per_ip
+        {
+            return QuicAdmissionDecision::Reject;
+        }
+        if !address_validated && self.half_open.len() >= self.retry_threshold {
+            return QuicAdmissionDecision::Retry;
+        }
+        let permit = self.next_permit;
+        let Some(next_permit) = self.next_permit.checked_add(1) else {
+            return QuicAdmissionDecision::Reject;
+        };
+        let Some(expires_at) = now.checked_add(self.handshake_lifetime_seconds) else {
+            return QuicAdmissionDecision::Reject;
+        };
+        if self
+            .half_open
+            .try_push(HalfOpenAdmission {
+                permit,
+                peer,
+                expires_at,
+                memory_bytes: estimated_memory_bytes,
+            })
+            .is_err()
+        {
+            return QuicAdmissionDecision::Reject;
+        }
+        self.next_permit = next_permit;
+        self.used_memory_bytes += estimated_memory_bytes;
+        QuicAdmissionDecision::Admit { permit }
+    }
+
+    pub fn release(&mut self, permit: u64) -> Result<(), QuicError> {
+        let index = self
+            .half_open
+            .iter()
+            .position(|entry| entry.permit == permit)
+            .ok_or(QuicError::ProtocolViolation)?;
+        let entry = self.half_open.remove(index);
+        self.used_memory_bytes -= entry.memory_bytes;
+        Ok(())
+    }
+
+    pub fn reap(&mut self, now: u64) {
+        let mut index = 0;
+        while index < self.half_open.len() {
+            if self.half_open[index].expires_at < now {
+                let entry = self.half_open.remove(index);
+                self.used_memory_bytes -= entry.memory_bytes;
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    pub fn half_open_count(&self) -> usize {
+        self.half_open.len()
+    }
+
+    pub fn used_memory_bytes(&self) -> u64 {
+        self.used_memory_bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum QuicRetryPurpose {
     AddressValidation = 1,
@@ -381,5 +520,54 @@ mod tests {
             ),
             Err(QuicError::Crypto)
         );
+    }
+
+    #[test]
+    fn admission_is_fixed_capacity_per_ip_and_adaptive_retry() {
+        let mut admission = QuicAdmissionController::new(3, 2, 300, 10, 1).unwrap();
+        let first = admission.begin(peer(1), 100, 100, false);
+        assert_eq!(first, QuicAdmissionDecision::Admit { permit: 1 });
+        assert_eq!(
+            admission.begin(peer(2), 100, 100, false),
+            QuicAdmissionDecision::Retry
+        );
+        assert_eq!(
+            admission.begin(peer(2), 100, 100, true),
+            QuicAdmissionDecision::Admit { permit: 2 }
+        );
+        assert_eq!(
+            admission.begin(peer(3), 100, 100, true),
+            QuicAdmissionDecision::Reject
+        );
+        assert_eq!(
+            admission.begin(
+                SocketAddress {
+                    ip: [198, 51, 100, 2],
+                    port: 3
+                },
+                100,
+                100,
+                true
+            ),
+            QuicAdmissionDecision::Admit { permit: 3 }
+        );
+        assert_eq!(admission.used_memory_bytes(), 300);
+        assert_eq!(
+            admission.begin(
+                SocketAddress {
+                    ip: [203, 0, 113, 9],
+                    port: 4
+                },
+                100,
+                1,
+                true
+            ),
+            QuicAdmissionDecision::Reject
+        );
+        admission.release(2).unwrap();
+        assert_eq!(admission.used_memory_bytes(), 200);
+        admission.reap(111);
+        assert_eq!(admission.half_open_count(), 0);
+        assert_eq!(admission.used_memory_bytes(), 0);
     }
 }
