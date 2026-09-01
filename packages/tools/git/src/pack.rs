@@ -22,32 +22,47 @@ pub trait PackStreamOutput {
     fn write(&mut self, bytes: &[u8]) -> Result<(), PackError>;
 }
 
-/// Writes a valid pack without deltas while retaining only one fixed-size
-/// DEFLATE block and the caller-owned object contents. This is the bounded
-/// production profile used when output backpressure matters more than delta
-/// compression ratio.
-pub fn write_pack_without_deltas(
-    objects: &[PackObject],
+pub struct PackStreamEncoder<'a> {
     format: ObjectFormat,
-    output: &mut dyn PackStreamOutput,
-) -> Result<(), PackError> {
-    if objects.len() > MAX_OBJECTS {
-        return Err(PackError::TooManyObjects);
+    expected_objects: usize,
+    written_objects: usize,
+    writer: AuthenticatedPackWriter<'a>,
+}
+
+impl<'a> PackStreamEncoder<'a> {
+    pub fn new(
+        object_count: usize,
+        format: ObjectFormat,
+        output: &'a mut dyn PackStreamOutput,
+    ) -> Result<Self, PackError> {
+        if object_count > MAX_OBJECTS {
+            return Err(PackError::TooManyObjects);
+        }
+        let mut writer = AuthenticatedPackWriter::new(format, output);
+        writer.write(b"PACK")?;
+        writer.write(&2u32.to_be_bytes())?;
+        writer.write(
+            &u32::try_from(object_count)
+                .map_err(|_| PackError::TooManyObjects)?
+                .to_be_bytes(),
+        )?;
+        Ok(Self {
+            format,
+            expected_objects: object_count,
+            written_objects: 0,
+            writer,
+        })
     }
-    let mut writer = AuthenticatedPackWriter::new(format, output);
-    writer.write(b"PACK")?;
-    writer.write(&2u32.to_be_bytes())?;
-    writer.write(
-        &u32::try_from(objects.len())
-            .map_err(|_| PackError::TooManyObjects)?
-            .to_be_bytes(),
-    )?;
-    for object in objects {
+
+    pub fn write_object(&mut self, object: &PackObject) -> Result<(), PackError> {
+        if self.written_objects >= self.expected_objects {
+            return Err(PackError::TooManyObjects);
+        }
         if object.contents.len() > MAX_OBJECT {
             return Err(PackError::TooLarge);
         }
-        if object.id.format() != format
-            || object.id != hash_object(format, object.kind, &object.contents)
+        if object.id.format() != self.format
+            || object.id != hash_object(self.format, object.kind, &object.contents)
         {
             return Err(PackError::ObjectId);
         }
@@ -59,10 +74,34 @@ pub fn write_pack_without_deltas(
         };
         let mut header = Vector::new();
         encode_object_header(kind, object.contents.len(), &mut header);
-        writer.write(&header)?;
-        write_stored_zlib(&object.contents, &mut writer)?;
+        self.writer.write(&header)?;
+        write_stored_zlib(&object.contents, &mut self.writer)?;
+        self.written_objects += 1;
+        Ok(())
     }
-    writer.finish()
+
+    pub fn finish(self) -> Result<(), PackError> {
+        if self.written_objects != self.expected_objects {
+            return Err(PackError::Truncated);
+        }
+        self.writer.finish()
+    }
+}
+
+/// Writes a valid pack without deltas while retaining only one fixed-size
+/// DEFLATE block and the caller-owned object contents. This is the bounded
+/// production profile used when output backpressure matters more than delta
+/// compression ratio.
+pub fn write_pack_without_deltas(
+    objects: &[PackObject],
+    format: ObjectFormat,
+    output: &mut dyn PackStreamOutput,
+) -> Result<(), PackError> {
+    let mut encoder = PackStreamEncoder::new(objects.len(), format, output)?;
+    for object in objects {
+        encoder.write_object(object)?;
+    }
+    encoder.finish()
 }
 
 enum PackHasher {
@@ -886,5 +925,32 @@ mod tests {
             trailer,
             Sha256::digest(&sink.bytes[..sink.bytes.len() - 32])
         );
+    }
+
+    #[test]
+    fn incremental_stream_requires_the_declared_object_count() {
+        let object = PackObject {
+            id: ObjectId::blob(b"bounded"),
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"bounded"),
+        };
+        let mut incomplete = MeasuringSink {
+            bytes: Vector::new(),
+            maximum_write: 0,
+        };
+        let encoder = PackStreamEncoder::new(1, ObjectFormat::Sha1, &mut incomplete).unwrap();
+        assert_eq!(encoder.finish(), Err(PackError::Truncated));
+
+        let mut excessive = MeasuringSink {
+            bytes: Vector::new(),
+            maximum_write: 0,
+        };
+        let mut encoder = PackStreamEncoder::new(1, ObjectFormat::Sha1, &mut excessive).unwrap();
+        encoder.write_object(&object).unwrap();
+        assert_eq!(
+            encoder.write_object(&object),
+            Err(PackError::TooManyObjects)
+        );
+        encoder.finish().unwrap();
     }
 }
