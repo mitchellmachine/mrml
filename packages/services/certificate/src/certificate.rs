@@ -182,6 +182,7 @@ pub struct CertificateValidationPolicy {
     pub allow_ip_identifiers: bool,
     pub now_unix: u64,
     pub maximum_validity_seconds: u64,
+    pub minimum_remaining_lifetime_seconds: u64,
     pub maximum_chain_length: u8,
     pub trust_store_digest: [u8; 32],
 }
@@ -522,6 +523,11 @@ impl CertificateChainVerifier for HostedCertificateChainVerifier<'_> {
         leaf.verify_time(policy.now_unix)
             .map_err(|_| CertificateValidationError::InvalidValidity)?;
         if leaf.not_after().saturating_sub(leaf.not_before()) > policy.maximum_validity_seconds {
+            return Err(CertificateValidationError::InvalidValidity);
+        }
+        if leaf.not_after().saturating_sub(policy.now_unix)
+            < policy.minimum_remaining_lifetime_seconds
+        {
             return Err(CertificateValidationError::InvalidValidity);
         }
         leaf.require_p256_public_key(&policy.expected_key.sec1_uncompressed())
@@ -875,6 +881,7 @@ mod tests {
             allow_ip_identifiers: false,
             now_unix: 100,
             maximum_validity_seconds: 100,
+            minimum_remaining_lifetime_seconds: 1,
             maximum_chain_length: 2,
             trust_store_digest: [8; 32],
         };
@@ -974,6 +981,7 @@ mod tests {
             allow_ip_identifiers: false,
             now_unix: 1,
             maximum_validity_seconds: 1,
+            minimum_remaining_lifetime_seconds: 1,
             maximum_chain_length: 1,
             trust_store_digest: [2; 32],
         };
@@ -1043,6 +1051,7 @@ mod tests {
             allow_ip_identifiers: false,
             now_unix: leaf.not_before(),
             maximum_validity_seconds: 366 * 86_400,
+            minimum_remaining_lifetime_seconds: 3_600,
             maximum_chain_length: 3,
             trust_store_digest: [5; 32],
         };
@@ -1112,6 +1121,7 @@ mod tests {
             allow_ip_identifiers: true,
             now_unix: leaf.not_before(),
             maximum_validity_seconds: 366 * 86_400,
+            minimum_remaining_lifetime_seconds: 3_600,
             maximum_chain_length: 2,
             trust_store_digest: [7; 32],
         };
@@ -1280,6 +1290,7 @@ mod tests {
             allow_ip_identifiers: false,
             now_unix: leaf.not_before(),
             maximum_validity_seconds: 366 * 86_400,
+            minimum_remaining_lifetime_seconds: 3_600,
             maximum_chain_length: 3,
             trust_store_digest: [7; 32],
         };

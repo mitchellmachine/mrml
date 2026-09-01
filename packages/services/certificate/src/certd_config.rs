@@ -25,6 +25,10 @@ pub struct CertdConfig {
     pub identifier_count: u8,
     pub identifier_set_digest: [u8; 32],
     pub wildcard_enabled: bool,
+    pub trust_store_sha256: [u8; 32],
+    pub maximum_validity_seconds: u64,
+    pub minimum_remaining_lifetime_seconds: u64,
+    pub maximum_chain_length: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,7 +51,7 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| CertdConfigError::Malformed)?;
     let object = value.as_object().ok_or(CertdConfigError::Malformed)?;
-    const FIELDS: [&str; 12] = [
+    const FIELDS: [&str; 16] = [
         "directory_url",
         "directory_generation",
         "directory_class",
@@ -60,6 +64,10 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         "identifiers",
         "wildcard_enabled",
         "key_algorithm",
+        "trust_store_sha256",
+        "maximum_validity_seconds",
+        "minimum_remaining_lifetime_seconds",
+        "maximum_chain_length",
     ];
     if object
         .iter()
@@ -127,6 +135,19 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         previous = Some(identifier);
     }
     let identifier_set_digest = certd_identifier_set_digest(&identifiers[..list.len()]);
+    let trust_store_sha256 = digest(text(&value, "trust_store_sha256")?)?;
+    let maximum_validity_seconds = generation(&value, "maximum_validity_seconds")?;
+    let minimum_remaining_lifetime_seconds =
+        generation(&value, "minimum_remaining_lifetime_seconds")?;
+    let maximum_chain_length = u8::try_from(generation(&value, "maximum_chain_length")?)
+        .map_err(|_| CertdConfigError::InvalidGeneration)?;
+    if !(86_400..=34_560_000).contains(&maximum_validity_seconds)
+        || minimum_remaining_lifetime_seconds < 3_600
+        || minimum_remaining_lifetime_seconds >= maximum_validity_seconds
+        || !(1..=8).contains(&maximum_chain_length)
+    {
+        return Err(CertdConfigError::InvalidGeneration);
+    }
     Ok(CertdConfig {
         directory_url,
         directory_generation,
@@ -140,7 +161,33 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         identifier_count: list.len() as u8,
         identifier_set_digest,
         wildcard_enabled,
+        trust_store_sha256,
+        maximum_validity_seconds,
+        minimum_remaining_lifetime_seconds,
+        maximum_chain_length,
     })
+}
+
+fn digest(value: &str) -> Result<[u8; 32], CertdConfigError> {
+    let input = value.as_bytes();
+    if input.len() != 64
+        || input
+            .iter()
+            .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+    {
+        return Err(CertdConfigError::InvalidGeneration);
+    }
+    let mut output = [0u8; 32];
+    for (index, byte) in output.iter_mut().enumerate() {
+        *byte = nibble(input[index * 2])
+            .and_then(|high| nibble(input[index * 2 + 1]).map(|low| high << 4 | low))
+            .ok_or(CertdConfigError::InvalidGeneration)?;
+    }
+    if output == [0; 32] {
+        Err(CertdConfigError::InvalidGeneration)
+    } else {
+        Ok(output)
+    }
 }
 
 pub fn certd_identifier_set_digest(identifiers: &[Option<DnsIdentifier>]) -> [u8; 32] {
@@ -208,7 +255,7 @@ fn nibble(value: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"account_identity":"11111111111111111111111111111111","account_generation":1,"identity":"22222222222222222222222222222222","key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"key_algorithm":"P-256"}"#;
+    const CONFIG: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"account_identity":"11111111111111111111111111111111","account_generation":1,"identity":"22222222222222222222222222222222","key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"key_algorithm":"P-256","trust_store_sha256":"1111111111111111111111111111111111111111111111111111111111111111","maximum_validity_seconds":7776000,"minimum_remaining_lifetime_seconds":604800,"maximum_chain_length":4}"#;
 
     #[test]
     fn exact_policy_derives_stable_identifier_binding() {
@@ -216,6 +263,9 @@ mod tests {
         assert_eq!(config.identifier_count, 2);
         assert_eq!(config.identifiers[0].unwrap().as_str(), "example.com");
         assert_ne!(config.identifier_set_digest, [0; 32]);
+        assert_eq!(config.trust_store_sha256, [0x11; 32]);
+        assert_eq!(config.minimum_remaining_lifetime_seconds, 604_800);
+        assert_eq!(config.maximum_chain_length, 4);
     }
 
     #[test]

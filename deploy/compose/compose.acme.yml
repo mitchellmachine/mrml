@@ -35,6 +35,7 @@ services:
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-gitd.cap.certd:/run/secrets/certd-gitd.cap:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-acmed.cap.certd:/run/secrets/certd-acmed.cap:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/certd.json:/etc/mrml/certd/config.json:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/acme-trust-roots.pem:/etc/mrml/certd/acme-trust-roots.pem:ro"
     healthcheck:
       test: [CMD, /usr/bin/mrml-certd, check-config]
       interval: 30s
