@@ -18,17 +18,19 @@ use mrml_acmed::{
 };
 use mrml_certificate::{
     AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
-    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdChannelCapability,
-    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole,
-    CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest, CloudflareDns01Provider,
-    ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DnsObservationClass,
-    DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy, DurableAuthenticator,
-    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
-    HostedDnsObservationEndpoint, HostedDnsPropagationQuery, HostedDurableStateStore, HostedSecret,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
+    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdCandidateRequest,
+    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
+    CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
+    CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest,
+    DnsObservationClass, DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy,
+    DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
+    DurableStateStore, HostedDnsObservationEndpoint, HostedDnsPropagationQuery,
+    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
     PRODUCTION_SECRET_MODE, UnixCertdSession, decode_certd_channel_request,
-    encode_certd_account_key_request, encode_certd_channel_request, encode_certd_jws_request,
-    encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
+    encode_certd_account_key_request, encode_certd_candidate_request, encode_certd_channel_request,
+    encode_certd_jws_request, encode_certd_tls_key_request, load_durable_authenticator,
+    p256_public_key_is_valid, retrieve_certificate_chain,
 };
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -234,6 +236,9 @@ fn serve(
                 order_durable_generation,
             )?;
         }
+        if order.state == mrml_acme::OrderState::Valid {
+            retrieve_and_stage_certificate(&config, &account, &order, &mut envelope_writer)?;
+        }
         if envelope_writer.next_request_id > reservation.last {
             return Err("certd channel request ID reservation exhausted");
         }
@@ -246,6 +251,79 @@ fn serve(
             .ok_or("channel request ID exhausted")?;
         std::thread::sleep(Duration::from_secs(config.poll_interval_seconds));
     }
+}
+
+fn retrieve_and_stage_certificate(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    signer: &mut CertdEnvelopeWriter<'_>,
+) -> Result<[u8; 32], &'static str> {
+    let count = usize::from(config.identifier_count);
+    let mut identifiers = [None; MAX_CSR_IDENTIFIERS];
+    for (index, identifier) in identifiers.iter_mut().enumerate().take(count) {
+        *identifier = Some(AcmeIdentifier::Dns(
+            config.identifiers[index].ok_or("missing configured identifier")?,
+        ));
+    }
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for certificate retrieval")?;
+    signer.operation = AcmeJwsOperation::Certificate;
+    let mut response = [0u8; MAX_CERTIFICATE_CHAIN_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let chain = retrieve_certificate_chain(
+        &directory,
+        account,
+        order,
+        &identifiers[..count],
+        &mut exchange,
+        &mut transport,
+        signer,
+        &mut response,
+        &mut jws,
+    )
+    .map_err(|_| "cannot retrieve bound ACME certificate chain")?;
+    let chain_digest = chain.chain_digest();
+    let mut request = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
+    let request_length = encode_certd_candidate_request(
+        &CertdCandidateRequest {
+            identity: config.identity,
+            directory_generation: config.directory_generation,
+            account_generation: config.account_generation,
+            key_generation: config.key_generation,
+            policy_generation: config.policy_generation,
+            order_url_digest: mrml_crypto::Sha256::digest(order.order_url.as_str().as_bytes()),
+            profile: config.certificate_profile,
+            chain,
+        },
+        &mut request,
+    )
+    .map_err(|_| "certificate chain exceeds certd candidate channel policy")?;
+    let mut stage_response = [0u8; 32];
+    let response_length = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::StageCertificateCandidate,
+        &request[..request_length],
+        &mut stage_response,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    if response_length != 32 || stage_response != chain_digest {
+        return Err("certd candidate stage receipt mismatch");
+    }
+    Ok(chain_digest)
 }
 
 fn reserve_channel_request_ids(
