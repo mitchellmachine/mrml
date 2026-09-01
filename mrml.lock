@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 182
+compile_edges = 184
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 162
+package_edges = 164
 system_release_edges = 3
 
 [[package]]
@@ -277,9 +277,9 @@ isolation_default = "in-process"
 isolation_minimum = "in-process"
 isolation_maximum = "in-process"
 isolation_supported = ["in-process"]
-compile_dependencies = ["org.mrml.library.crypto"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.http", "org.mrml.library.runtime"]
 
-static_runtime = ["org.mrml.library.crypto"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.http", "org.mrml.library.runtime"]
 boot_bound = []
 system_release_bound = []
 

@@ -37,5 +37,19 @@ package = "org.mrml.library.crypto"
 provider_profile = "core"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_http"
+compile_name = "mrml-http"
+package = "org.mrml.library.http"
+scope = "compile"
+targets = ["WINDOWS", "LINUX"]
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+targets = ["WINDOWS", "LINUX"]
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]

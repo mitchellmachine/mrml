@@ -16,14 +16,14 @@ mod quic_endpoint;
 mod quic_retry;
 
 pub use crlset_update::{
-    CHROMIUM_COMPONENT_UPDATE_URL, CHROMIUM_CRLSET_COMPONENT_ID,
-    CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256, ChromiumCrlSetPackage, ChromiumCrlSetUpdater,
+    ChromiumCrlSetPackage, ChromiumCrlSetUpdater, CHROMIUM_COMPONENT_UPDATE_URL,
+    CHROMIUM_CRLSET_COMPONENT_ID, CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256,
 };
 pub use gitd_edge::*;
 pub use gitd_resource::*;
 pub use http2::{
-    HTTP2_CLIENT_PREFACE, Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame,
-    Http2FrameKind, Http2Response, Http2Server, Http2ServerConnection,
+    Http2Client, Http2ClientConnection, Http2ConnectionState, Http2Frame, Http2FrameKind,
+    Http2Response, Http2Server, Http2ServerConnection, HTTP2_CLIENT_PREFACE,
 };
 pub use http3::{
     Http3Client, Http3ClientConnection, Http3ConnectionState, Http3Frame, Http3FrameKind,
@@ -31,9 +31,9 @@ pub use http3::{
     Http3WorkerPool, PreparedHttp3Response,
 };
 pub use quic::{
-    HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,
-    QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole, QuicStreamAssembler,
-    QuicTransportParameters, QuicVersion, SentPacket, ShortPacket, initial_token,
+    initial_token, HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState,
+    QuicError, QuicFrame, QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole,
+    QuicStreamAssembler, QuicTransportParameters, QuicVersion, SentPacket, ShortPacket,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
 pub use quic_endpoint::{
@@ -385,6 +385,10 @@ impl Client {
         let url = Url::parse(url)?;
         self.request(&url, "GET", headers, true, &[])
     }
+    pub fn head(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, HttpError> {
+        let url = Url::parse(url)?;
+        self.request(&url, "HEAD", headers, true, &[])
+    }
     pub fn post(
         &self,
         url: &str,
@@ -670,11 +674,9 @@ mod tests {
             .get_follow(&url, &[("Range", "bytes=0-1023")], 8)
             .unwrap();
         assert_eq!(response.status, 206);
-        assert!(
-            response
-                .header("content-range")
-                .is_some_and(|value| value.starts_with("bytes 0-1023/"))
-        );
+        assert!(response
+            .header("content-range")
+            .is_some_and(|value| value.starts_with("bytes 0-1023/")));
         assert_eq!(response.read_to_end(2048).unwrap().len(), 1024);
     }
 }

@@ -11317,3 +11317,11 @@ request/response binding, strict same-origin and no-redirect policy, bounded
 response metadata, one-use replay-nonce acquisition, and a finite `badNonce`
 retry counter. It adds no route-selected multi-vantage validation, challenge
 proxy, MultiTLS multiplexing, or other recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Hosted first-party ACME HTTPS adapter
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment connects the reviewed transport
+contract to MRML's existing HTTP/TLS client for Linux and Windows targets,
+without following redirects or introducing a third-party ACME implementation.
+It adds no recorded re-review-trigger mechanism.

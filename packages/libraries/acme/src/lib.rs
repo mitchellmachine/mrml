@@ -12,6 +12,8 @@ mod identifier;
 mod jose;
 mod nonce;
 mod order;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod platform;
 mod problem;
 mod profile;
 mod state;
@@ -59,6 +61,8 @@ pub use order::{
     OrderLifecycle, PreparedFinalization, MAX_AUTHORIZATIONS, MAX_CHALLENGES_PER_AUTHORIZATION,
     MAX_ORDER_IDENTIFIERS,
 };
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use platform::{HostedAcmeTransport, HostedTransportError};
 pub use problem::{
     AcmeProblem, AcmeSubproblem, ProblemError, ProblemText, MAX_PROBLEM_BYTES, MAX_PROBLEM_DETAIL,
     MAX_PROBLEM_TYPE, MAX_SUBPROBLEMS,

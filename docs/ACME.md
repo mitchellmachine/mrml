@@ -123,8 +123,14 @@ URL, forbids redirects, bounds response bodies and Retry-After metadata,
 captures validated replay nonces into the exact directory generation, consumes
 each nonce once, and caps typed `badNonce` retries. Platform HTTPS socket/TLS
 adapters remain separate from this semantic state.
+Linux and Windows now share a hosted adapter over the first-party `mrml-http`
+and `mrml-tls` stack. It emits exact GET, HEAD, or JOSE POST requests, refuses
+duplicate ACME singleton headers, copies response bodies only within the caller
+budget, and never invokes the HTTP redirect-following API. The MRML target does
+not inherit hosted sockets and continues to use the same transport contract
+through capability-bound services.
 
-General JOSE response parsing, concrete ACME socket adapters and
+General JOSE response parsing, MRML HTTPS capability adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
 alternate-chain selection, renewal execution, revocation transport,
 backup/restore, CLI administration, interface dispatch/service loop, concrete
