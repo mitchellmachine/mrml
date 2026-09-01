@@ -13,6 +13,7 @@ mod challenge_tls_alpn_hosted;
 mod dns_propagation;
 mod durable;
 mod identity;
+mod identity_service;
 mod revocation;
 mod scheduler;
 mod service_loop;
@@ -69,6 +70,7 @@ pub use identity::{
     TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
     TlsKeyIdentity, TlsSigningRoute,
 };
+pub use identity_service::{CertificateIdentityProvider, dispatch_identity_call};
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
     PreparedRevocation, RevocationAuthentication, RevocationAuthority, RevocationAuthorization,

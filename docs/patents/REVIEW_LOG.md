@@ -11614,3 +11614,11 @@ generation-bound codecs for status, account, identity, and backup operations.
 The operation value identifies an owner-authorized action but the selected
 service route remains the authority. It adds no certificate brokerage,
 challenge proxy, public-CA operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Bounded TLS identity interface dispatch
+
+Patent review: **NOT_TRIGGERED**. This increment dispatches the conventional
+certificate identity interface to an identity-scoped provider using bounded
+copied identifiers and a disjoint output slice. It validates provider lengths,
+generations, chain counts, and health values and clears failed output. It adds
+no MultiTLS multiplexing or other recorded re-review-trigger mechanism.
