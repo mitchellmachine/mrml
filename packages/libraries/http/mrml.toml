@@ -43,3 +43,9 @@ alias = "mrml_tls"
 compile_name = "mrml-tls"
 package = "org.mrml.library.tls"
 scope = "compile"
+
+[[dependency]]
+alias = "mrml_zstd"
+compile_name = "mrml-zstd"
+package = "org.mrml.zstd"
+scope = "compile"
