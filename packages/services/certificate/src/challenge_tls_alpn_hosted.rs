@@ -1,12 +1,12 @@
 use crate::{ApprovedTls13CertificateVerify, TlsCertificateSigningKey, TlsSigningRoute};
 use mrml_acme::{
-    AcmeIdentifier, ChallengeKind, ChallengePublicationRequest, ACME_TLS_ALPN_PROTOCOL,
+    ACME_TLS_ALPN_PROTOCOL, AcmeIdentifier, ChallengeKind, ChallengePublicationRequest,
 };
 use mrml_crypto::encode_der_signature;
 use mrml_runtime::{NetError, SpinMutex, TcpListener};
 use mrml_tls::{
-    TlsError, TlsServerConfig, TlsServerSigningKey, TlsServerStream, ECDSA_SECP256R1_SHA256,
-    MAX_TLS13_SIGNATURE_BYTES,
+    ECDSA_SECP256R1_SHA256, MAX_TLS13_SIGNATURE_BYTES, TlsError, TlsServerConfig,
+    TlsServerSigningKey, TlsServerStream,
 };
 
 pub const TLS_ALPN01_READ_TIMEOUT_MILLIS: u64 = 2_000;
@@ -422,11 +422,13 @@ mod tests {
         let completed_server = completed.clone();
         let server_error = Shared::new(SpinMutex::new(None));
         let server_error_writer = server_error.clone();
-        assert!(mrml_runtime::spawn_detached(move || {
-            *server_error_writer.lock() = challenge.serve_one(&listener, 15).err();
-            completed_server.store(true, Ordering::SeqCst);
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                *server_error_writer.lock() = challenge.serve_one(&listener, 15).err();
+                completed_server.store(true, Ordering::SeqCst);
+            })
+            .is_ok()
+        );
         let client_result = mrml_tls::TlsClientStream::connect_resolved_for_acme_tls_alpn01(
             "git.example",
             [127, 0, 0, 1],

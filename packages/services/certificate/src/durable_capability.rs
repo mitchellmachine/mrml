@@ -1,6 +1,6 @@
 use crate::{
     CommittedStoreReceipt, DurableError, DurableNamespace, DurableObjectId, DurableRecord,
-    DurableStateStore, PreparedStoreReceipt, MAX_DURABLE_RECORD_BYTES,
+    DurableStateStore, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
 };
 
 pub trait CertificateDurableStorageCapability {
@@ -264,9 +264,11 @@ mod tests {
             DurableTransaction::prepare(&record, &mut store),
             Err(DurableError::ReceiptMismatch)
         ));
-        assert!(store
-            .authoritative(DurableNamespace::PublicState, DurableObjectId([7; 16]))
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .authoritative(DurableNamespace::PublicState, DurableObjectId([7; 16]))
+                .unwrap()
+                .is_none()
+        );
     }
 }

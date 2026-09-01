@@ -553,7 +553,7 @@ fn read_u64(input: &[u8]) -> Result<u64, RenewalJournalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CommittedStoreReceipt, PreparedStoreReceipt, MAX_DURABLE_RECORD_BYTES};
+    use crate::{CommittedStoreReceipt, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt};
     use mrml_crypto::hmac_sha256;
 
     struct Auth([u8; 32]);

@@ -41,49 +41,50 @@ mod status;
 mod tls_signing_adapter;
 
 pub use backup::{
-    create_backup, create_recoverable_backup, prepare_sealed_key_record, restore_backup,
-    restore_sealed_key_record, verify_backup, BackupDescriptor, BackupError, BackupRestoreTarget,
-    SealedKeyProvider, BACKUP_VERSION, MAX_BACKUP_BYTES, MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES,
+    BACKUP_VERSION, BackupDescriptor, BackupError, BackupRestoreTarget, MAX_BACKUP_BYTES,
+    MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES, SealedKeyProvider, create_backup,
+    create_recoverable_backup, prepare_sealed_key_record, restore_backup,
+    restore_sealed_key_record, verify_backup,
 };
-pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORDS, MAX_CAA_RECORD_BYTES};
+pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 pub use catalog_lifecycle_provider::{
     CatalogLifecycleProvider, CertificateLifecycleSupplementalProvider,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
 pub use certificate::{
-    retrieve_and_select_certificate_chain, retrieve_and_verify_certificate, select_alternate_chain,
     AlternateChainPolicy, CertificateChainVerifier, CertificateRetrievalError,
-    CertificateValidationError, CertificateValidationPolicy, PemCertificateChain,
-    RetrievedCertificate, SelectedCertificateChain, VerifiedCertificateReceipt,
-    MAX_ALTERNATE_CHAINS, MAX_CERTIFICATES, MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATE_DER_BYTES,
-    MAX_IDENTITY_NAMES,
+    CertificateValidationError, CertificateValidationPolicy, MAX_ALTERNATE_CHAINS,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATE_DER_BYTES, MAX_CERTIFICATES, MAX_IDENTITY_NAMES,
+    PemCertificateChain, RetrievedCertificate, SelectedCertificateChain,
+    VerifiedCertificateReceipt, retrieve_and_select_certificate_chain,
+    retrieve_and_verify_certificate, select_alternate_chain,
 };
 pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_dns_hosted::{
-    HostedDnsChallengeError, HostedDnsChallengeSockets, DNS_IO_TIMEOUT_MILLIS,
+    DNS_IO_TIMEOUT_MILLIS, HostedDnsChallengeError, HostedDnsChallengeSockets,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_http::{
-    HostedHttp01Challenge, HostedHttp01Error, HTTP01_READ_TIMEOUT_MILLIS,
-    HTTP01_WRITE_TIMEOUT_MILLIS,
+    HTTP01_READ_TIMEOUT_MILLIS, HTTP01_WRITE_TIMEOUT_MILLIS, HostedHttp01Challenge,
+    HostedHttp01Error,
 };
 pub use challenge_publisher::DnsChallengePublisher;
 pub use challenge_service::{
-    dispatch_challenge_call, CertificateChallengeProvider, ChallengeDispatchError,
-    PreparedChallenge,
+    CertificateChallengeProvider, ChallengeDispatchError, PreparedChallenge,
+    dispatch_challenge_call,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_tls_alpn_hosted::{
-    HostedTlsAlpn01Challenge, HostedTlsAlpn01Error, TemporaryTlsAlpnSigningKey,
-    TLS_ALPN01_READ_TIMEOUT_MILLIS, TLS_ALPN01_WRITE_TIMEOUT_MILLIS,
+    HostedTlsAlpn01Challenge, HostedTlsAlpn01Error, TLS_ALPN01_READ_TIMEOUT_MILLIS,
+    TLS_ALPN01_WRITE_TIMEOUT_MILLIS, TemporaryTlsAlpnSigningKey,
 };
 pub use deployment_journal::{
-    commit_or_resolve_deployment, DeploymentJournalError, DurableDeploymentReceipt,
-    DurableDeploymentStage, DEPLOYMENT_PAYLOAD_VERSION,
+    DEPLOYMENT_PAYLOAD_VERSION, DeploymentJournalError, DurableDeploymentReceipt,
+    DurableDeploymentStage, commit_or_resolve_deployment,
 };
 pub use dns_propagation::{
     DnsObservationClass, DnsObservationRoute, DnsPropagationError, DnsPropagationObserver,
@@ -95,10 +96,10 @@ pub use dns_propagation_hosted::{
     HostedDnsObservationEndpoint, HostedDnsPropagationError, HostedDnsPropagationQuery,
 };
 pub use durable::{
-    CommittedStoreReceipt, DurableAuthenticator, DurableError, DurableNamespace, DurableObjectId,
-    DurableRecord, DurableRecordKind, DurableStateStore, DurableTransaction, PreparedStoreReceipt,
-    SecretHandle, TransactionState, DURABLE_RECORD_VERSION, MAX_DURABLE_PAYLOAD,
-    MAX_DURABLE_RECORD_BYTES,
+    CommittedStoreReceipt, DURABLE_RECORD_VERSION, DurableAuthenticator, DurableError,
+    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
+    DurableTransaction, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
+    SecretHandle, TransactionState,
 };
 pub use durable_capability::{CapabilityDurableStateStore, CertificateDurableStorageCapability};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -116,10 +117,10 @@ pub use identity::{
     RecoveredIdentityMaterial, TestedIdentityReceipt, TlsCertificateSigningKey,
     TlsIdentityDescriptor, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
 };
-pub use identity_service::{dispatch_identity_call, CertificateIdentityProvider};
+pub use identity_service::{CertificateIdentityProvider, dispatch_identity_call};
 pub use lifecycle_service::{
-    dispatch_lifecycle_call, CertificateLifecycleAuthorizer, CertificateLifecycleProvider,
-    LifecycleDispatchError,
+    CertificateLifecycleAuthorizer, CertificateLifecycleProvider, LifecycleDispatchError,
+    dispatch_lifecycle_call,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use lifecycle_transport_hosted::{
@@ -127,25 +128,25 @@ pub use lifecycle_transport_hosted::{
     MAX_HOSTED_LIFECYCLE_MEMORY,
 };
 pub use manager::{
-    CertificateManager, CertificateManagerError, ManagedIdentityStatus, RenewalLease,
-    MAX_MANAGED_IDENTITIES,
+    CertificateManager, CertificateManagerError, MAX_MANAGED_IDENTITIES, ManagedIdentityStatus,
+    RenewalLease,
 };
 pub use native_service::{
     CertificateNativeRoute, CertificateNativeServiceError, CertificateNativeServiceLoop,
     CertificateNativeSyscalls, CertificateRawSyscall, CertificateSyscallFrame,
-    CertificateUserspaceSyscallError, CertificateUserspaceSyscalls, ReceivedCertificateCall,
-    MAX_CERTIFICATE_CALL_BYTES, MAX_CERTIFICATE_SHARED_BYTES,
+    CertificateUserspaceSyscallError, CertificateUserspaceSyscalls, MAX_CERTIFICATE_CALL_BYTES,
+    MAX_CERTIFICATE_SHARED_BYTES, ReceivedCertificateCall,
 };
 pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
 pub use renewal_executor::{
-    execute_due_renewal, resolve_uncertain_renewal, validate_recovered_renewal_material,
     IssuedRenewalCandidate, RenewalExecutionError, RenewalIssuer, RenewalRecoveryError,
-    RenewalRecoveryMaterialRole,
+    RenewalRecoveryMaterialRole, execute_due_renewal, resolve_uncertain_renewal,
+    validate_recovered_renewal_material,
 };
 pub use renewal_journal::{
-    commit_or_resolve_renewal, DurableRenewalCheckpointSink, DurableRenewalStage,
+    DurableRenewalCheckpointSink, DurableRenewalStage, RENEWAL_PAYLOAD_VERSION,
     RenewalCandidateBinding, RenewalCheckpointSink, RenewalJournal, RenewalJournalError,
-    RENEWAL_PAYLOAD_VERSION,
+    commit_or_resolve_renewal,
 };
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
@@ -158,13 +159,13 @@ pub use scheduler::{
     ReplacementBinding, SchedulerError,
 };
 pub use service_loop::{
-    dispatch_signing_call, serve_native_challenge_once, serve_native_identity_once,
-    serve_native_lifecycle_once, serve_native_signing_once, CertificateSigningProvider,
-    CertificateSigningServiceError,
+    CertificateSigningProvider, CertificateSigningServiceError, dispatch_signing_call,
+    serve_native_challenge_once, serve_native_identity_once, serve_native_lifecycle_once,
+    serve_native_signing_once,
 };
 pub use status::{
-    decode_managed_identity_status, encode_managed_identity_status, ManagedStatusCodecError,
-    MAX_MANAGED_STATUS_BYTES,
+    MAX_MANAGED_STATUS_BYTES, ManagedStatusCodecError, decode_managed_identity_status,
+    encode_managed_identity_status,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use tls_signing_adapter::IdentityTlsSigningAdapter;

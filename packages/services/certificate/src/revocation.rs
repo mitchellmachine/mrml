@@ -1,8 +1,8 @@
 use crate::{TlsIdentityId, TlsKeyIdentity};
 use mrml_acme::{
-    revoke_certificate, AcmeDirectory, AcmeExchange, AcmeJwsSigner, AcmeTransport, AcmeUrl,
-    AriCertificateId, JwkThumbprint, P256Jwk, ProtectedKey, RevocationOutcome,
-    RevokeCertificateError,
+    AcmeDirectory, AcmeExchange, AcmeJwsSigner, AcmeTransport, AcmeUrl, AriCertificateId,
+    JwkThumbprint, P256Jwk, ProtectedKey, RevocationOutcome, RevokeCertificateError,
+    revoke_certificate,
 };
 use mrml_crypto::Sha256;
 

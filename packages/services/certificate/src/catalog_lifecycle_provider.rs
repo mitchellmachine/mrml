@@ -1,5 +1,5 @@
 use crate::{
-    encode_managed_identity_status, CertificateLifecycleProvider, CertificateManager, TlsIdentityId,
+    CertificateLifecycleProvider, CertificateManager, TlsIdentityId, encode_managed_identity_status,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
 
@@ -124,7 +124,7 @@ impl<P: CertificateLifecycleSupplementalProvider> CertificateLifecycleProvider
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decode_managed_identity_status, MAX_MANAGED_STATUS_BYTES};
+    use crate::{MAX_MANAGED_STATUS_BYTES, decode_managed_identity_status};
 
     struct Supplemental;
     impl CertificateLifecycleSupplementalProvider for Supplemental {

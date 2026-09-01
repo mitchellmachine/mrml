@@ -1,6 +1,6 @@
 use crate::{
-    ExpiryHealth, ManagedIdentityStatus, RenewalLease, RenewalSchedule, RenewalSource,
-    TlsIdentityDescriptor, TlsIdentityId, TlsKeyIdentity, MAX_IDENTITY_NAMES,
+    ExpiryHealth, MAX_IDENTITY_NAMES, ManagedIdentityStatus, RenewalLease, RenewalSchedule,
+    RenewalSource, TlsIdentityDescriptor, TlsIdentityId, TlsKeyIdentity,
 };
 use mrml_acme::{
     AcmeIdentifier, AriCertificateId, CertificateProfile, DnsIdentifier, IpIdentifier,

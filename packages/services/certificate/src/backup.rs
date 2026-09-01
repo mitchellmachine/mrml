@@ -1,6 +1,6 @@
 use crate::{
     DurableAuthenticator, DurableError, DurableNamespace, DurableObjectId, DurableRecord,
-    DurableRecordKind, SecretHandle, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
+    DurableRecordKind, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, SecretHandle,
 };
 use mrml_crypto::Sha256;
 

@@ -134,10 +134,12 @@ mod tests {
         let port = sockets.port();
         let udp_server = sockets.clone();
         let udp_zone = zone.clone();
-        assert!(mrml_runtime::spawn_detached(move || {
-            udp_server.serve_udp_one(&udp_zone, 10).unwrap();
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                udp_server.serve_udp_one(&udp_zone, 10).unwrap();
+            })
+            .is_ok()
+        );
         let udp = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
         udp.set_read_timeout_millis(1000).unwrap();
         udp.send_to(
@@ -155,10 +157,12 @@ mod tests {
 
         let tcp_server = sockets.clone();
         let tcp_zone = zone.clone();
-        assert!(mrml_runtime::spawn_detached(move || {
-            tcp_server.serve_tcp_one(&tcp_zone, 10).unwrap();
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                tcp_server.serve_tcp_one(&tcp_zone, 10).unwrap();
+            })
+            .is_ok()
+        );
         let mut tcp = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         tcp.set_read_timeout_millis(1000).unwrap();
         tcp.write_all(&(query().len() as u16).to_be_bytes())

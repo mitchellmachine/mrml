@@ -1,7 +1,7 @@
 use mrml_acme::{
-    post_jws, AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeIdentifier, AcmeJwsSigner,
-    AcmePostError, AcmeProblem, AcmeResponseType, AcmeTransport, AriCertificateId, CaClass,
-    CertificateProfile, OrderLifecycle, OrderState, P256Jwk, ProtectedKey,
+    AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeIdentifier, AcmeJwsSigner, AcmePostError,
+    AcmeProblem, AcmeResponseType, AcmeTransport, AriCertificateId, CaClass, CertificateProfile,
+    OrderLifecycle, OrderState, P256Jwk, ProtectedKey, post_jws,
 };
 use mrml_crypto::Sha256;
 
@@ -589,12 +589,12 @@ fn pem_value(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use mrml_acme::{
-        account_contacts_digest, fetch_directory, fetch_renewal_info, AccountPolicy,
-        AcmeHttpMethod, AcmeTransportRequest, AcmeTransportResponse, ApprovedAcmeJwsDigest,
-        DeterministicAcmeAuthority, DnsIdentifier, Es256Signature, IpIdentifier, JoseError,
-        LocalJwsVerifier, OwnerTermsApproval, LOCAL_ACCOUNT_URL, LOCAL_AUTHORIZATION_URL,
-        LOCAL_CERTIFICATE_URL, LOCAL_CHALLENGE_URL, LOCAL_DIRECTORY_URL, LOCAL_FINALIZE_URL,
-        LOCAL_NEW_ORDER_URL, LOCAL_ORDER_URL,
+        AccountPolicy, AcmeHttpMethod, AcmeTransportRequest, AcmeTransportResponse,
+        ApprovedAcmeJwsDigest, DeterministicAcmeAuthority, DnsIdentifier, Es256Signature,
+        IpIdentifier, JoseError, LOCAL_ACCOUNT_URL, LOCAL_AUTHORIZATION_URL, LOCAL_CERTIFICATE_URL,
+        LOCAL_CHALLENGE_URL, LOCAL_DIRECTORY_URL, LOCAL_FINALIZE_URL, LOCAL_NEW_ORDER_URL,
+        LOCAL_ORDER_URL, LocalJwsVerifier, OwnerTermsApproval, account_contacts_digest,
+        fetch_directory, fetch_renewal_info,
     };
     #[test]
     fn pem_chain_is_bounded_strict_and_digest_ordered() {
@@ -602,10 +602,12 @@ mod tests {
         assert_eq!(chain.count(), 2);
         assert_eq!(chain.certificate(0), Some(&[1, 2, 3][..]));
         assert_ne!(chain.chain_digest(), [0; 32]);
-        assert!(PemCertificateChain::parse(
-            b"-----BEGIN CERTIFICATE-----\nAQI=AAAA\n-----END CERTIFICATE-----"
-        )
-        .is_err());
+        assert!(
+            PemCertificateChain::parse(
+                b"-----BEGIN CERTIFICATE-----\nAQI=AAAA\n-----END CERTIFICATE-----"
+            )
+            .is_err()
+        );
     }
 
     struct ReceiptVerifier;
