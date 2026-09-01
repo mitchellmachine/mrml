@@ -6,8 +6,9 @@ use mrml_error::{Context, Result, anyhow};
 use mrml_git::{
     Cli, GitSignatureFormat, MergeOutcome, NativeChangeKind, ObjectFormat, OpenPgpDigestAlgorithm,
     OpenPgpFingerprint, OpenPgpPublicKey, OpenPgpSigningKey, OpenPgpVerificationPolicy,
-    RebaseOutcome, Repository, check_ssh, fetch_ssh, inspect_ssh, parse_public_key_ascii, push_ssh,
-    sign_git_payload_via_interface, validate_positional, verify_detached_ascii,
+    RebaseOutcome, Repository, check_ssh, fetch_ssh, inspect_ssh, parse_public_key_ascii,
+    parse_tree_with_format, push_ssh, sign_git_payload_via_interface, validate_positional,
+    verify_detached_ascii,
 };
 use mrml_interface_detached_signing_v1::{
     OpenPgpDigestAlgorithm as InterfaceOpenPgpDigestAlgorithm, OpenPgpGitSigningPurpose,
@@ -1012,6 +1013,14 @@ fn dispatch(cli: &Cli) -> Result<()> {
             println!("Switched to branch '{}' at {}", tail[0], &id.to_hex()[..12]);
             Ok(())
         }
+        "checkout" if tail.len() == 1 => {
+            checked_positionals(tail)?;
+            let id = native_repository(repository)?
+                .switch_branch(&tail[0])
+                .map_err(|error| anyhow!("{}", error))?;
+            println!("Switched to branch '{}' at {}", tail[0], &id.to_hex()[..12]);
+            Ok(())
+        }
         "upstream" if tail.len() == 1 => {
             checked_positionals(tail)?;
             native_repository(repository)?
@@ -1122,7 +1131,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             println!("Aborted cherry-pick; restored {}", &id.to_hex()[..12]);
             Ok(())
         }
-        "stage" => {
+        "stage" | "add" => {
             checked_positionals(require_arguments("stage", tail)?)?;
             native_repository(repository)?
                 .stage(tail)
@@ -1136,6 +1145,20 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .map_err(|error| anyhow!("{}", error))?;
             native_dashboard(repository)
         }
+        "reset" if tail.is_empty() => {
+            let paths = [Text::from(".")];
+            native_repository(repository)?
+                .unstage(&paths)
+                .map_err(|error| anyhow!("{}", error))?;
+            native_dashboard(repository)
+        }
+        "reset" => {
+            checked_positionals(tail)?;
+            native_repository(repository)?
+                .unstage(tail)
+                .map_err(|error| anyhow!("{}", error))?;
+            native_dashboard(repository)
+        }
         "restore" => {
             checked_positionals(require_arguments("restore", tail)?)?;
             native_repository(repository)?
@@ -1144,13 +1167,36 @@ fn dispatch(cli: &Cli) -> Result<()> {
             native_dashboard(repository)
         }
         "commit" => {
-            let (sign, words) = if tail.first().is_some_and(|value| value == "--sign") {
-                (true, &tail[1..])
-            } else {
-                (false, tail)
-            };
-            require_arguments("commit", words)?;
-            let message = join_words(words);
+            let mut sign = false;
+            let mut message = None;
+            let mut legacy_words = Vector::new();
+            let mut index = 0usize;
+            while index < tail.len() {
+                match tail[index].as_str() {
+                    "-S" | "--gpg-sign" | "--sign" => sign = true,
+                    "-m" | "--message" => {
+                        index += 1;
+                        let value = tail
+                            .get(index)
+                            .ok_or_else(|| anyhow!("commit -m requires a message"))?;
+                        if message.replace(value.clone()).is_some() {
+                            return Err(anyhow!("commit accepts one message"));
+                        }
+                    }
+                    value if value.starts_with('-') => {
+                        return Err(anyhow!("unsupported commit option '{}'", value));
+                    }
+                    _ => legacy_words.push(tail[index].clone()),
+                }
+                index += 1;
+            }
+            if message.is_some() && !legacy_words.is_empty() {
+                return Err(anyhow!("commit message cannot mix -m and positional words"));
+            }
+            let message = message.unwrap_or_else(|| join_words(&legacy_words));
+            if message.is_empty() {
+                return Err(anyhow!("commit requires a message"));
+            }
             let timestamp = mrml_runtime::unix_time_seconds()
                 .ok_or_else(|| anyhow!("system time is unavailable"))?;
             let repo = native_repository(repository)?;
@@ -1214,6 +1260,18 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 println!("{}\t{}", name, url);
             }
             Ok(())
+        }
+        "remote" if tail.len() == 3 && tail[0] == "add" => {
+            checked_positionals(&tail[1..])?;
+            native_repository(repository)?
+                .set_remote(&tail[1], &tail[2], false)
+                .map_err(|error| anyhow!("{}", error))
+        }
+        "remote" if tail.len() == 3 && tail[0] == "set-url" => {
+            checked_positionals(&tail[1..])?;
+            native_repository(repository)?
+                .set_remote(&tail[1], &tail[2], true)
+                .map_err(|error| anyhow!("{}", error))
         }
         "ssh" if tail.len() == 3 && tail[0] == "add" => {
             checked_positionals(&tail[1..2])?;
@@ -1428,6 +1486,16 @@ fn dispatch(cli: &Cli) -> Result<()> {
             );
             Ok(())
         }
+        "verify-commit" if tail.len() == 1 => {
+            checked_positionals(tail)?;
+            let repo = native_repository(repository)?;
+            let id = repo
+                .resolve_revision(&tail[0])
+                .map_err(|error| anyhow!("{}", error))?;
+            let format = repository_verify_commit(&repo, id)?;
+            println!("valid {} signature for commit {}", format, id);
+            Ok(())
+        }
         "signing" if tail.len() == 2 && tail[0] == "verify-tag" => {
             checked_positionals(&tail[1..])?;
             let repo = native_repository(repository)?;
@@ -1440,6 +1508,16 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 format!("valid {} signature", format).green().bold(),
                 tail[1]
             );
+            Ok(())
+        }
+        "verify-tag" if tail.len() == 1 => {
+            checked_positionals(tail)?;
+            let repo = native_repository(repository)?;
+            let id = repo
+                .resolve_revision(&tail[0])
+                .map_err(|error| anyhow!("{}", error))?;
+            let format = repository_verify_tag(&repo, id)?;
+            println!("valid {} signature for tag {}", format, tail[0]);
             Ok(())
         }
         "tag" if tail.is_empty() => {
@@ -1484,6 +1562,55 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .ok_or_else(|| anyhow!("system time is unavailable"))?;
             let id = repository_signed_tag(&repo, &tail[0], &message, &name, &email, timestamp)?;
             println!("Signed tag {} at {}", tail[0], &id.to_hex()[..12]);
+            Ok(())
+        }
+        "rev-parse" if tail.len() == 1 => {
+            checked_positionals(tail)?;
+            let id = native_repository(repository)?
+                .resolve_revision(&tail[0])
+                .map_err(|error| anyhow!("{}", error))?;
+            println!("{}", id);
+            Ok(())
+        }
+        "ls-tree" if tail.len() == 1 => {
+            checked_positionals(tail)?;
+            let repo = native_repository(repository)?;
+            let id = repo
+                .resolve_revision(&tail[0])
+                .map_err(|error| anyhow!("{}", error))?;
+            let object = repo.read_object(id).map_err(|error| anyhow!("{}", error))?;
+            let (tree, format) = match object.kind {
+                mrml_git::ObjectKind::Tree => (id, repo.object_format()),
+                mrml_git::ObjectKind::Commit => (
+                    repo.read_commit(id)
+                        .map_err(|error| anyhow!("{}", error))?
+                        .tree,
+                    repo.object_format(),
+                ),
+                _ => return Err(anyhow!("ls-tree requires a tree or commit")),
+            };
+            let object = repo
+                .read_object(tree)
+                .map_err(|error| anyhow!("{}", error))?;
+            for entry in parse_tree_with_format(&object.contents, format)
+                .map_err(|error| anyhow!("{}", error))?
+            {
+                let kind = repo
+                    .read_object(entry.id)
+                    .map_err(|error| anyhow!("{}", error))?
+                    .kind;
+                println!("{:06o} {} {}\t{}", entry.mode, kind.name(), entry.id, entry.name);
+            }
+            Ok(())
+        }
+        "show-ref" if tail.is_empty() => {
+            let repo = native_repository(repository)?;
+            for (name, id) in repo.branches().map_err(|error| anyhow!("{}", error))? {
+                println!("{} refs/heads/{}", id, name);
+            }
+            for (name, id) in repo.tags().map_err(|error| anyhow!("{}", error))? {
+                println!("{} refs/tags/{}", id, name);
+            }
             Ok(())
         }
         "stash" if tail.is_empty() || (tail.len() == 1 && tail[0] == "list") => {
@@ -1572,8 +1699,8 @@ mod tests {
         invoke(&path, "status", &[]);
         let tracked = join_path(&path, "tracked.txt");
         write_file(&tracked, b"base\n").unwrap();
-        invoke(&path, "stage", &["tracked.txt"]);
-        invoke(&path, "commit", &["base"]);
+        invoke(&path, "add", &["tracked.txt"]);
+        invoke(&path, "commit", &["-m", "base"]);
         for (command, arguments) in [
             ("log", &["2"][..]),
             ("show", &["HEAD"][..]),
@@ -1584,16 +1711,25 @@ mod tests {
             ("remote", &[][..]),
             ("signing", &["status"][..]),
             ("stash", &["list"][..]),
+            ("rev-parse", &["HEAD"][..]),
+            ("ls-tree", &["HEAD"][..]),
+            ("show-ref", &[][..]),
         ] {
             invoke(&path, command, arguments);
         }
         write_file(&tracked, b"changed\n").unwrap();
         invoke(&path, "stage", &["tracked.txt"]);
-        invoke(&path, "unstage", &["tracked.txt"]);
+        invoke(&path, "reset", &["tracked.txt"]);
         invoke(&path, "restore", &["tracked.txt"]);
         invoke(&path, "branch", &["feature"]);
-        invoke(&path, "switch", &["main"]);
+        invoke(&path, "checkout", &["main"]);
         invoke(&path, "branch-delete", &["feature"]);
+        invoke(&path, "remote", &["add", "backup", "host:repository.git"]);
+        invoke(
+            &path,
+            "remote",
+            &["set-url", "backup", "host:updated.git"],
+        );
         invoke(&path, "tag", &["v1"]);
         invoke(&path, "tag", &[]);
         write_file(&tracked, b"stashed\n").unwrap();
