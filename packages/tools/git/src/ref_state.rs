@@ -5,10 +5,11 @@ use mrml_runtime::Vector;
 
 use crate::{
     FullRefName, GitdCoreError, ObjectFormat, ObjectId, PackGeneration, RepositoryGeneration,
-    RepositoryIdentity, RevocationGeneration, TrustGeneration, VerifiedRefTransaction,
+    PackSetManifest, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+    VerifiedRefTransaction,
 };
 
-const MAGIC: &[u8; 8] = b"MRREFS01";
+const MAGIC: &[u8; 8] = b"MRREFS02";
 const DIGEST_BYTES: usize = 32;
 pub const MAX_ACTIVE_REF_STATE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ACTIVE_REFS: usize = 65_536;
@@ -20,6 +21,7 @@ pub struct ActiveRefState {
     pub trust_generation: TrustGeneration,
     pub revocation_generation: RevocationGeneration,
     pub pack_generation: PackGeneration,
+    pub pack_set_digest: [u8; 32],
     pub object_format: ObjectFormat,
     pub default_branch: FullRefName,
     pub refs: Vector<(FullRefName, ObjectId)>,
@@ -43,6 +45,7 @@ pub fn encode_active_ref_state(state: &ActiveRefState) -> Result<Vector<u8>, Act
     append_u64(&mut output, state.trust_generation.0)?;
     append_u64(&mut output, state.revocation_generation.0)?;
     append_u64(&mut output, state.pack_generation.0)?;
+    append(&mut output, &state.pack_set_digest)?;
     append(
         &mut output,
         &[match state.object_format {
@@ -86,6 +89,8 @@ pub fn parse_active_ref_state(input: &[u8]) -> Result<ActiveRefState, ActiveRefS
     let trust_generation = TrustGeneration(cursor.nonzero_u64()?);
     let revocation_generation = RevocationGeneration(cursor.nonzero_u64()?);
     let pack_generation = PackGeneration(cursor.nonzero_u64()?);
+    let mut pack_set_digest = [0; 32];
+    pack_set_digest.copy_from_slice(cursor.take(32)?);
     let object_format = match cursor.u8()? {
         1 => ObjectFormat::Sha1,
         2 => ObjectFormat::Sha256,
@@ -117,6 +122,7 @@ pub fn parse_active_ref_state(input: &[u8]) -> Result<ActiveRefState, ActiveRefS
         trust_generation,
         revocation_generation,
         pack_generation,
+        pack_set_digest,
         object_format,
         default_branch,
         refs,
@@ -167,10 +173,41 @@ pub fn apply_verified_ref_transaction(
         trust_generation: current.trust_generation,
         revocation_generation: current.revocation_generation,
         pack_generation: current.pack_generation,
+        pack_set_digest: current.pack_set_digest,
         object_format: current.object_format,
         default_branch: current.default_branch.clone(),
         refs,
     };
+    validate_state(&next)?;
+    Ok(next)
+}
+
+/// Applies one verified ref transaction while atomically selecting the exact
+/// canonical pack set that contains the newly introduced objects. Possession
+/// of a manifest is insufficient: every authority dimension and both next
+/// generations must match exactly.
+pub fn apply_verified_ref_transaction_with_pack_set(
+    current: &ActiveRefState,
+    verified: &VerifiedRefTransaction,
+    manifest: &PackSetManifest,
+) -> Result<ActiveRefState, ActiveRefStateError> {
+    let mut next = apply_verified_ref_transaction(current, verified)?;
+    if manifest.repository() != &current.repository
+        || manifest.object_format() != current.object_format
+        || manifest.repository_generation() != next.repository_generation
+        || manifest.pack_generation().0
+            != current
+                .pack_generation
+                .0
+                .checked_add(1)
+                .ok_or(ActiveRefStateError::Resource)?
+    {
+        return Err(ActiveRefStateError::Stale);
+    }
+    next.pack_generation = manifest.pack_generation();
+    next.pack_set_digest = manifest
+        .digest()
+        .map_err(|_| ActiveRefStateError::Policy)?;
     validate_state(&next)?;
     Ok(next)
 }
@@ -180,6 +217,7 @@ fn validate_state(state: &ActiveRefState) -> Result<(), ActiveRefStateError> {
         || state.trust_generation.0 == 0
         || state.revocation_generation.0 == 0
         || state.pack_generation.0 == 0
+        || state.pack_set_digest == [0; 32]
         || state.refs.is_empty()
         || state.refs.len() > MAX_ACTIVE_REFS
         || !state
@@ -203,9 +241,11 @@ fn validate_state(state: &ActiveRefState) -> Result<(), ActiveRefStateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
     use crate::{
-        CandidateRefTransaction, CandidateRefUpdate, HistoryVerificationLimits,
-        build_verified_fast_forward_transaction, verify_introduced_history,
+        CandidateRefTransaction, CandidateRefUpdate, HistoryVerificationLimits, PackSetLimits,
+        QuarantineTransactionId, build_verified_fast_forward_transaction,
+        verify_introduced_history,
     };
 
     fn fixture() -> (ActiveRefState, VerifiedRefTransaction, ObjectId) {
@@ -248,6 +288,7 @@ mod tests {
             trust_generation: TrustGeneration(8),
             revocation_generation: RevocationGeneration(9),
             pack_generation: PackGeneration(3),
+            pack_set_digest: [5; 32],
             object_format: ObjectFormat::Sha256,
             default_branch: FullRefName::parse("refs/heads/main").unwrap(),
             refs: [
@@ -300,6 +341,71 @@ mod tests {
         stale.trust_generation = TrustGeneration(99);
         assert_eq!(
             apply_verified_ref_transaction(&stale, &verified),
+            Err(ActiveRefStateError::Stale)
+        );
+    }
+
+    #[test]
+    fn pack_set_activation_advances_both_generations_and_binds_digest() {
+        let (state, verified, new) = fixture();
+        let manifest = build_pack_set_manifest(
+            state.repository.clone(),
+            RepositoryGeneration(8),
+            PackGeneration(4),
+            state.object_format,
+            [AuthenticatedPackIndexSummary {
+                transaction: QuarantineTransactionId([1; 16]),
+                object_count: 1,
+                pack_checksum: ObjectId::Sha256([2; 32]),
+                index_checksum: ObjectId::Sha256([3; 32]),
+                pack_bytes: 64,
+                index_bytes: 64,
+                work_units: 1,
+                object_ids: [new].into(),
+            }]
+            .into(),
+            PackSetLimits {
+                max_packs: 1,
+                max_objects: 1,
+                max_pack_bytes: 64,
+                max_index_bytes: 64,
+                max_work_units: 1,
+            },
+        )
+        .unwrap();
+        let next = apply_verified_ref_transaction_with_pack_set(&state, &verified, &manifest)
+            .unwrap();
+        assert_eq!(next.repository_generation, RepositoryGeneration(8));
+        assert_eq!(next.pack_generation, PackGeneration(4));
+        assert_eq!(next.pack_set_digest, manifest.digest().unwrap());
+
+        let stale_manifest = build_pack_set_manifest(
+            state.repository.clone(),
+            RepositoryGeneration(8),
+            PackGeneration(5),
+            state.object_format,
+            [AuthenticatedPackIndexSummary {
+                transaction: QuarantineTransactionId([1; 16]),
+                object_count: 1,
+                pack_checksum: ObjectId::Sha256([2; 32]),
+                index_checksum: ObjectId::Sha256([3; 32]),
+                pack_bytes: 64,
+                index_bytes: 64,
+                work_units: 1,
+                object_ids: [new].into(),
+            }]
+            .into(),
+            PackSetLimits {
+                max_packs: 1,
+                max_objects: 1,
+                max_pack_bytes: 64,
+                max_index_bytes: 64,
+                max_work_units: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            apply_verified_ref_transaction_with_pack_set(&state, &verified, &stale_manifest),
             Err(ActiveRefStateError::Stale)
         );
     }

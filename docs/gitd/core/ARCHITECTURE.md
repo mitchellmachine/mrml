@@ -47,10 +47,11 @@ activated bounded pack-set manifest bound to pack and repository generation;
 only then may a reader open its enumerated regular files and independently
 revalidate pack/index/object identity.
 
-The canonical bounded `MRPKSET1` record now represents that exact ordered
-membership and rejects duplicate object identities, but remains deliberately
-inactive: its digest is not yet part of the atomically replaced active-ref
-record. Parsing or possessing a manifest therefore grants no read authority.
+The canonical bounded `MRPKSET1` record represents that exact ordered
+membership and rejects duplicate object identities. `MRREFS02` binds its exact
+digest while advancing repository and pack generations together; parsing or
+possessing any other manifest grants no read authority. Durable receive-side
+manifest persistence and active lookup remain an explicit incomplete gate.
 
 Repository state now also has a canonical single-record active-ref model with
 distinct repository, trust, revocation, and pack generations. The pure update

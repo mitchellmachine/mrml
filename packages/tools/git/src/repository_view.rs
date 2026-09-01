@@ -1300,6 +1300,7 @@ mod tests {
                 trust_generation: TrustGeneration(5),
                 revocation_generation: RevocationGeneration(6),
                 pack_generation: PackGeneration(1),
+                pack_set_digest: [1; 32],
                 object_format: ObjectFormat::Sha256,
                 default_branch: FullRefName::parse("refs/heads/main").unwrap(),
                 refs: [

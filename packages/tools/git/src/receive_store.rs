@@ -374,6 +374,7 @@ mod tests {
                 trust_generation: TrustGeneration(8),
                 revocation_generation: RevocationGeneration(9),
                 pack_generation: PackGeneration(1),
+                pack_set_digest: [1; 32],
                 object_format: ObjectFormat::Sha256,
                 default_branch: FullRefName::parse("refs/heads/main").unwrap(),
                 refs: [(FullRefName::parse("refs/heads/main").unwrap(), old)].into(),
