@@ -106,6 +106,59 @@ pub enum QuarantineError {
     Terminal,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivationSnapshot {
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub refs: mrml_runtime::Vector<(crate::FullRefName, Option<crate::ObjectId>)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditReceipt {
+    pub transaction: QuarantineTransactionId,
+    pub repository: RepositoryIdentity,
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub updates: mrml_runtime::Vector<(crate::FullRefName, crate::ObjectId, crate::ObjectId)>,
+}
+
+/// Storage authority used only after history has produced a private verified
+/// transaction. Each successful method includes the durability guarantee in
+/// its name; implementations must not return success before that guarantee is
+/// true.
+pub trait DurableReceiveStore {
+    fn persist_journal_and_fsync(
+        &mut self,
+        transaction: &QuarantineTransaction,
+    ) -> Result<(), DurableFailure>;
+    fn install_arrival_pack_and_fsync(
+        &mut self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<(), DurableFailure>;
+    fn reread_activation_snapshot(
+        &mut self,
+        verified: &VerifiedRefTransaction,
+    ) -> Result<ActivationSnapshot, DurableFailure>;
+    fn activate_refs_atomically_and_fsync(
+        &mut self,
+        verified: &VerifiedRefTransaction,
+    ) -> Result<(), DurableFailure>;
+    fn append_audit_receipt_and_fsync(
+        &mut self,
+        receipt: &AuditReceipt,
+    ) -> Result<(), DurableFailure>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DurableReceiveError {
+    InvalidState,
+    StaleAuthority,
+    Aborted(DurableFailure),
+    Uncertain(DurableFailure),
+}
+
 pub fn reserve_push_disk(
     limits: QuarantineLimits,
     forecast: PushStorageForecast,
@@ -189,6 +242,10 @@ impl QuarantineTransaction {
         self.phase
     }
 
+    pub const fn id(&self) -> QuarantineTransactionId {
+        self.id
+    }
+
     pub const fn failure(&self) -> Option<DurableFailure> {
         self.failure
     }
@@ -270,16 +327,16 @@ impl QuarantineTransaction {
     pub fn fail(&mut self, failure: DurableFailure) -> Result<(), QuarantineError> {
         if matches!(
             self.phase,
-            QuarantinePhase::AuditReceiptAppended
-                | QuarantinePhase::Aborted
-                | QuarantinePhase::Uncertain
+            QuarantinePhase::Aborted | QuarantinePhase::Uncertain
         ) {
             return Err(QuarantineError::Terminal);
         }
         self.failure = Some(failure);
         self.phase = if matches!(
             self.phase,
-            QuarantinePhase::ObjectsDurablyInstalled | QuarantinePhase::RefsAtomicallyActivated
+            QuarantinePhase::ObjectsDurablyInstalled
+                | QuarantinePhase::RefsAtomicallyActivated
+                | QuarantinePhase::AuditReceiptAppended
         ) || failure == DurableFailure::AuditReceipt
         {
             QuarantinePhase::Uncertain
@@ -302,6 +359,99 @@ impl QuarantineTransaction {
     }
 }
 
+fn record_failure(
+    transaction: &mut QuarantineTransaction,
+    store: &mut dyn DurableReceiveStore,
+    failure: DurableFailure,
+) -> DurableReceiveError {
+    let _ = transaction.fail(failure);
+    let _ = store.persist_journal_and_fsync(transaction);
+    if transaction.phase() == QuarantinePhase::Uncertain {
+        DurableReceiveError::Uncertain(failure)
+    } else {
+        DurableReceiveError::Aborted(failure)
+    }
+}
+
+pub fn durably_activate_verified_receive(
+    transaction: &mut QuarantineTransaction,
+    verified: &VerifiedRefTransaction,
+    store: &mut dyn DurableReceiveStore,
+) -> Result<AuditReceipt, DurableReceiveError> {
+    transaction
+        .ref_updates_prepared()
+        .map_err(|_| DurableReceiveError::InvalidState)?;
+    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
+        return Err(record_failure(transaction, store, failure));
+    }
+    if let Err(failure) = store.install_arrival_pack_and_fsync(transaction.id()) {
+        return Err(record_failure(transaction, store, failure));
+    }
+    transaction
+        .objects_durably_installed()
+        .map_err(|_| DurableReceiveError::InvalidState)?;
+    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
+        return Err(record_failure(transaction, store, failure));
+    }
+
+    let snapshot = match store.reread_activation_snapshot(verified) {
+        Ok(snapshot) => snapshot,
+        Err(failure) => return Err(record_failure(transaction, store, failure)),
+    };
+    let exact_generations = snapshot.repository_generation == verified.repository_generation()
+        && snapshot.trust_generation == verified.trust_generation()
+        && snapshot.revocation_generation == verified.revocation_generation();
+    let exact_refs = snapshot.refs.len() == verified.updates().len()
+        && verified.updates().iter().all(|update| {
+            snapshot
+                .refs
+                .iter()
+                .any(|(name, value)| name == update.name() && *value == update.expected_old())
+        });
+    if !exact_generations || !exact_refs {
+        let _ = record_failure(transaction, store, DurableFailure::StaleLock);
+        return Err(DurableReceiveError::StaleAuthority);
+    }
+    if let Err(failure) = store.activate_refs_atomically_and_fsync(verified) {
+        return Err(record_failure(transaction, store, failure));
+    }
+    transaction
+        .refs_atomically_activated()
+        .map_err(|_| DurableReceiveError::InvalidState)?;
+    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
+        return Err(record_failure(transaction, store, failure));
+    }
+
+    let mut updates = mrml_runtime::Vector::new();
+    for update in verified.updates() {
+        let old = update
+            .expected_old()
+            .ok_or(DurableReceiveError::InvalidState)?;
+        let new = update
+            .proposed_new()
+            .ok_or(DurableReceiveError::InvalidState)?;
+        updates.push((update.name().clone(), old, new));
+    }
+    let receipt = AuditReceipt {
+        transaction: transaction.id(),
+        repository: verified.repository().clone(),
+        repository_generation: verified.repository_generation(),
+        trust_generation: verified.trust_generation(),
+        revocation_generation: verified.revocation_generation(),
+        updates,
+    };
+    if let Err(failure) = store.append_audit_receipt_and_fsync(&receipt) {
+        return Err(record_failure(transaction, store, failure));
+    }
+    transaction
+        .audit_receipt_appended()
+        .map_err(|_| DurableReceiveError::InvalidState)?;
+    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
+        return Err(record_failure(transaction, store, failure));
+    }
+    Ok(receipt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +460,57 @@ mod tests {
         ObjectId, build_verified_fast_forward_transaction, verify_introduced_history,
     };
     use mrml_runtime::Vector;
+
+    struct MockDurableStore {
+        snapshot: ActivationSnapshot,
+        phases: Vector<QuarantinePhase>,
+        install_count: u8,
+        activation_count: u8,
+        receipt_count: u8,
+        activation_failure: Option<DurableFailure>,
+        receipt_failure: Option<DurableFailure>,
+    }
+
+    impl DurableReceiveStore for MockDurableStore {
+        fn persist_journal_and_fsync(
+            &mut self,
+            transaction: &QuarantineTransaction,
+        ) -> Result<(), DurableFailure> {
+            self.phases.push(transaction.phase());
+            Ok(())
+        }
+
+        fn install_arrival_pack_and_fsync(
+            &mut self,
+            _: QuarantineTransactionId,
+        ) -> Result<(), DurableFailure> {
+            self.install_count += 1;
+            Ok(())
+        }
+
+        fn reread_activation_snapshot(
+            &mut self,
+            _: &VerifiedRefTransaction,
+        ) -> Result<ActivationSnapshot, DurableFailure> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn activate_refs_atomically_and_fsync(
+            &mut self,
+            _: &VerifiedRefTransaction,
+        ) -> Result<(), DurableFailure> {
+            self.activation_count += 1;
+            self.activation_failure.map_or(Ok(()), Err)
+        }
+
+        fn append_audit_receipt_and_fsync(
+            &mut self,
+            _: &AuditReceipt,
+        ) -> Result<(), DurableFailure> {
+            self.receipt_count += 1;
+            self.receipt_failure.map_or(Ok(()), Err)
+        }
+    }
 
     fn reservation(ref_count: u16) -> PushDiskReservation {
         reserve_push_disk(
@@ -415,5 +616,126 @@ mod tests {
         transaction.fail(DurableFailure::Fsync).unwrap();
         assert_eq!(transaction.phase(), QuarantinePhase::Uncertain);
         assert_eq!(transaction.failure(), Some(DurableFailure::Fsync));
+    }
+
+    fn ready_receive() -> (QuarantineTransaction, VerifiedRefTransaction, ObjectId) {
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let old = ObjectId::Sha1([1u8; 20]);
+        let new = ObjectId::Sha1([2u8; 20]);
+        let range = verify_introduced_history(
+            old,
+            new,
+            HistoryVerificationLimits::default(),
+            |id| {
+                Ok(if id == new {
+                    [old].into()
+                } else {
+                    Vector::new()
+                })
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let verified = build_verified_fast_forward_transaction(
+            CandidateRefTransaction {
+                repository: repository.clone(),
+                repository_generation: RepositoryGeneration(3),
+                trust_generation: TrustGeneration(4),
+                revocation_generation: RevocationGeneration(5),
+                updates: [CandidateRefUpdate {
+                    name: FullRefName::parse("refs/heads/main").unwrap(),
+                    expected_old: Some(old),
+                    proposed_new: Some(new),
+                }]
+                .into(),
+            },
+            &[range],
+        )
+        .unwrap();
+        let mut transaction = QuarantineTransaction::begin(
+            QuarantineTransactionId([8u8; 16]),
+            repository,
+            RepositoryGeneration(3),
+            TrustGeneration(4),
+            RevocationGeneration(5),
+            reservation(1),
+        )
+        .unwrap();
+        transaction.objects_quarantined(1024).unwrap();
+        transaction.objects_validated(4096, 2).unwrap();
+        transaction.history_verified(&verified).unwrap();
+        (transaction, verified, old)
+    }
+
+    fn store_for(verified: &VerifiedRefTransaction, old: ObjectId) -> MockDurableStore {
+        MockDurableStore {
+            snapshot: ActivationSnapshot {
+                repository_generation: verified.repository_generation(),
+                trust_generation: verified.trust_generation(),
+                revocation_generation: verified.revocation_generation(),
+                refs: [(verified.updates()[0].name().clone(), Some(old))].into(),
+            },
+            phases: Vector::new(),
+            install_count: 0,
+            activation_count: 0,
+            receipt_count: 0,
+            activation_failure: None,
+            receipt_failure: None,
+        }
+    }
+
+    #[test]
+    fn durable_receive_orders_install_reread_atomic_activation_and_receipt() {
+        let (mut transaction, verified, old) = ready_receive();
+        let mut store = store_for(&verified, old);
+        let receipt =
+            durably_activate_verified_receive(&mut transaction, &verified, &mut store).unwrap();
+        assert_eq!(transaction.phase(), QuarantinePhase::AuditReceiptAppended);
+        assert_eq!(store.install_count, 1);
+        assert_eq!(store.activation_count, 1);
+        assert_eq!(store.receipt_count, 1);
+        assert_eq!(receipt.updates[0].1, old);
+        assert_eq!(
+            &*store.phases,
+            &[
+                QuarantinePhase::RefUpdatesPrepared,
+                QuarantinePhase::ObjectsDurablyInstalled,
+                QuarantinePhase::RefsAtomicallyActivated,
+                QuarantinePhase::AuditReceiptAppended,
+            ]
+        );
+    }
+
+    #[test]
+    fn stale_reread_never_calls_activation_and_activation_failure_is_uncertain() {
+        let (mut transaction, verified, old) = ready_receive();
+        let mut stale = store_for(&verified, old);
+        stale.snapshot.refs[0].1 = Some(ObjectId::Sha1([9u8; 20]));
+        assert_eq!(
+            durably_activate_verified_receive(&mut transaction, &verified, &mut stale),
+            Err(DurableReceiveError::StaleAuthority)
+        );
+        assert_eq!(stale.activation_count, 0);
+        assert_eq!(transaction.phase(), QuarantinePhase::Uncertain);
+
+        let (mut transaction, verified, old) = ready_receive();
+        let mut failing = store_for(&verified, old);
+        failing.activation_failure = Some(DurableFailure::Fsync);
+        assert_eq!(
+            durably_activate_verified_receive(&mut transaction, &verified, &mut failing),
+            Err(DurableReceiveError::Uncertain(DurableFailure::Fsync))
+        );
+        assert_eq!(transaction.phase(), QuarantinePhase::Uncertain);
+        assert_eq!(failing.receipt_count, 0);
+
+        let (mut transaction, verified, old) = ready_receive();
+        let mut receipt_failure = store_for(&verified, old);
+        receipt_failure.receipt_failure = Some(DurableFailure::AuditReceipt);
+        assert_eq!(
+            durably_activate_verified_receive(&mut transaction, &verified, &mut receipt_failure),
+            Err(DurableReceiveError::Uncertain(DurableFailure::AuditReceipt))
+        );
+        assert_eq!(receipt_failure.activation_count, 1);
+        assert_eq!(transaction.phase(), QuarantinePhase::Uncertain);
     }
 }

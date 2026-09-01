@@ -1,7 +1,8 @@
 # Transactions and recovery
 
-Status: **PARTIALLY IMPLEMENTED** as a storage-neutral admission and lifecycle
-core. Durable filesystem activation is not implemented.
+Status: **PARTIALLY IMPLEMENTED** as a storage-neutral admission, lifecycle,
+and ordered durable-receive coordinator. A concrete filesystem backend is not
+implemented.
 
 The required state sequence is candidate received, objects quarantined,
 objects validated, history verified, ref updates prepared, objects durably
@@ -39,6 +40,18 @@ transaction identity and state and is never reported as safely retryable.
 `VerifiedRefUpdate` and `VerifiedRefTransaction` have private fields at the
 public boundary. The fast-forward constructor requires exact verified commit
 ranges. Creation, deletion, history replacement, actual quarantine isolation,
-old-ID re-read, multi-ref atomic persistence, fsync/rename, audit signing, and
-crash recovery remain unavailable until their policy-specific and storage
-verifiers are implemented.
+and audit signing remain unavailable until their policy-specific concrete
+storage implementations exist.
+
+`durably_activate_verified_receive` now makes the storage ordering
+non-bypassable through `DurableReceiveStore`. It persists and fsyncs the
+prepared journal, installs and fsyncs the immutable arrival pack, persists the
+installed phase, re-reads all three authority generations and every expected
+old ref, invokes exactly one atomic activation-and-fsync operation, persists
+activation, appends and fsyncs a bounded typed receipt, then persists
+completion. A stale re-read never calls activation. Activation, post-activation
+journal, receipt, and final-journal failures are retained as uncertain rather
+than reported as retry-safe. Focused mock-backend tests prove ordering, stale
+old-ID rejection, one-call atomic activation, receipt sequencing, and uncertain
+activation failure. These tests prove coordinator behavior only; they are not
+filesystem, power-loss, or physical-storage evidence.

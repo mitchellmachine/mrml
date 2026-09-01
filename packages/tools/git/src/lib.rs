@@ -54,11 +54,12 @@ pub use pack_index::{
     parse_pack_index_v2,
 };
 pub use quarantine::{
-    DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
-    DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DEFAULT_MAX_OBJECTS_PER_PUSH,
-    DEFAULT_MINIMUM_FREE_SPACE_BYTES, DurableFailure, PushDiskReservation, PushStorageForecast,
+    ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
+    DEFAULT_MAX_INCOMING_PACK_BYTES, DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
+    DEFAULT_MAX_OBJECTS_PER_PUSH, DEFAULT_MINIMUM_FREE_SPACE_BYTES, DurableFailure,
+    DurableReceiveError, DurableReceiveStore, PushDiskReservation, PushStorageForecast,
     QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
-    QuarantineTransactionId, reserve_push_disk,
+    QuarantineTransactionId, durably_activate_verified_receive, reserve_push_disk,
 };
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,

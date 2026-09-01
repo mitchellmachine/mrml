@@ -26,10 +26,13 @@ name grants authority. Reads report an exact repository generation and exact
 object IDs. Protected mutation will require a privately constructed
 `VerifiedRefTransaction`.
 
-Only the transport-neutral type and trait boundary is implemented on this
-branch snapshot. Quarantine, trust-policy verification, durable transactions,
-server-side Smart Git, pack indexing, canonical compaction, and repository-view
-implementations remain open and must fail closed until implemented.
+The transport-neutral boundary, trust-policy verification, pack indexing,
+quarantine admission/lifecycle, and ordered durable-receive coordinator are
+implemented. The coordinator accepts only a private `VerifiedRefTransaction`
+and delegates concrete fsync/atomic primitives through a narrow storage trait.
+Concrete filesystem durability and recovery, server-side Smart Git, canonical
+compaction, and repository-view implementations remain open and must fail
+closed until implemented.
 
 Complexity score for the eventual subsystem: high security sensitivity, high
 failure-recovery cost, and multiple independently useful components. The split
@@ -39,4 +42,3 @@ the kernel or grant first-party code hidden authority.
 Patent review: NOT_TRIGGERED for the implemented identifier validation and
 trait boundary. Compression and delta-selection work is separately triggered
 and remains paused as described in [PATENT_SCREEN.md](PATENT_SCREEN.md).
-
