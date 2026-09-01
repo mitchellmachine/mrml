@@ -51,7 +51,8 @@ pub use openpgp_provider::{
     OpenPgpServiceError, describe_public_key_via_interface, sign_git_payload_via_interface,
 };
 pub use pack::{
-    PackError, PackObject, encode_pack, encode_pack_with_format, parse_pack, parse_pack_with_format,
+    PackError, PackObject, encode_pack, encode_pack_with_format, parse_pack,
+    parse_pack_with_format, parse_pack_with_index,
 };
 pub use pack_index::{
     DEFAULT_MAX_PACK_INDEX_OBJECTS, PackIndex, PackIndexEntry, PackIndexError, build_pack_index_v2,

@@ -32,6 +32,14 @@ deterministic allocation-free heapsort after one bounded entry copy and emits
 the exact repository hash width. This provides the immutable random-access
 index representation; it is not yet connected to quarantine installation.
 
+The pack validation pass now retains each object's exact packed start/end
+span, computes the Git index CRC-32 over those original packed bytes, and
+returns `PackIndexEntry` values alongside fully authenticated objects. The
+same pass therefore supplies object IDs, offsets, CRCs, and the authenticated
+pack trailer needed by the first-party v2 index builder without a second
+untrusted parse. A SHA-256 two-object test builds and reparses the index and
+resolves both IDs. Independent `git index-pack` byte comparison remains open.
+
 Thin-pack completion, disk reservation, arrival packs, generation switching,
 caching, and compaction are not implemented by this change. No outer
 Zstandard layer belongs in Git pack storage.

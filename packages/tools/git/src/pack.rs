@@ -1,6 +1,6 @@
 use crate::deflate::encode_zlib;
 use crate::inflate::inflate_zlib_prefix;
-use crate::{ObjectFormat, ObjectId, ObjectKind, encode_loose_object_with_format};
+use crate::{ObjectFormat, ObjectId, ObjectKind, PackIndexEntry, encode_loose_object_with_format};
 use core::fmt;
 use mrml_runtime::Vector;
 
@@ -32,6 +32,7 @@ pub enum PackError {
 
 struct Decoded {
     offset: usize,
+    end: usize,
     object: PackObject,
 }
 
@@ -43,6 +44,7 @@ enum Base {
 
 struct Packed {
     offset: usize,
+    end: usize,
     object_type: u8,
     base: Base,
     inflated: Vector<u8>,
@@ -56,6 +58,13 @@ pub fn parse_pack_with_format(
     source: &[u8],
     format: ObjectFormat,
 ) -> Result<Vector<PackObject>, PackError> {
+    parse_pack_with_index(source, format).map(|(objects, _)| objects)
+}
+
+pub fn parse_pack_with_index(
+    source: &[u8],
+    format: ObjectFormat,
+) -> Result<(Vector<PackObject>, Vector<PackIndexEntry>), PackError> {
     let hash_length = format.hash_len();
     if source.len() < 12 + hash_length {
         return Err(PackError::Truncated);
@@ -137,6 +146,7 @@ pub fn parse_pack_with_format(
         }
         packed.push(Packed {
             offset,
+            end: cursor,
             object_type,
             base,
             inflated,
@@ -181,6 +191,7 @@ pub fn parse_pack_with_format(
             let (id, _) = encode_loose_object_with_format(format, kind, &contents);
             let decoded_object = Decoded {
                 offset: entry.offset,
+                end: entry.end,
                 object: PackObject { id, kind, contents },
             };
             let insertion = decoded
@@ -195,7 +206,39 @@ pub fn parse_pack_with_format(
         }
         remaining = deferred;
     }
-    Ok(decoded.into_iter().map(|entry| entry.object).collect())
+    let mut objects = Vector::new();
+    let mut index = Vector::new();
+    objects
+        .try_reserve_exact(decoded.len())
+        .map_err(|_| PackError::TooLarge)?;
+    index
+        .try_reserve_exact(decoded.len())
+        .map_err(|_| PackError::TooLarge)?;
+    for entry in decoded {
+        let crc32 = crc32(
+            source
+                .get(entry.offset..entry.end)
+                .ok_or(PackError::Truncated)?,
+        );
+        index.push(PackIndexEntry {
+            id: entry.object.id,
+            crc32,
+            offset: u64::try_from(entry.offset).map_err(|_| PackError::TooLarge)?,
+        });
+        objects.push(entry.object);
+    }
+    Ok((objects, index))
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320u32 & (0u32.wrapping_sub(crc & 1)));
+        }
+    }
+    !crc
 }
 
 pub fn encode_pack(objects: &[PackObject]) -> Result<Vector<u8>, PackError> {
@@ -522,6 +565,39 @@ mod tests {
             &[input]
         );
         assert_eq!(parse_pack(&encoded), Err(PackError::Checksum));
+    }
+
+    #[test]
+    fn validated_pack_pass_produces_byte_exact_v2_index_entries() {
+        let inputs = [
+            PackObject {
+                id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"alpha"),
+                kind: ObjectKind::Blob,
+                contents: Vector::from(*b"alpha"),
+            },
+            PackObject {
+                id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"beta beta beta"),
+                kind: ObjectKind::Blob,
+                contents: Vector::from(*b"beta beta beta"),
+            },
+        ];
+        let pack = encode_pack_with_format(&inputs, ObjectFormat::Sha256).unwrap();
+        let (objects, entries) = parse_pack_with_index(&pack, ObjectFormat::Sha256).unwrap();
+        assert_eq!(&objects[..], &inputs);
+        assert_eq!(entries.len(), inputs.len());
+        assert!(entries[0].offset >= 12 && entries[0].offset < entries[1].offset);
+        assert_ne!(entries[0].crc32, entries[1].crc32);
+        let trailer = ObjectId::from_bytes(
+            ObjectFormat::Sha256,
+            &pack[pack.len() - ObjectFormat::Sha256.hash_len()..],
+        )
+        .unwrap();
+        let encoded_index =
+            crate::build_pack_index_v2(ObjectFormat::Sha256, &entries, trailer).unwrap();
+        let parsed = crate::parse_pack_index_v2(ObjectFormat::Sha256, &encoded_index, 2).unwrap();
+        for object in inputs {
+            assert!(parsed.find(object.id).is_some());
+        }
     }
 
     #[test]
