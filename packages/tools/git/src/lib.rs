@@ -22,6 +22,7 @@ mod ref_state;
 mod ref_state_file;
 mod remote;
 mod repository;
+mod repository_view;
 mod sha1;
 mod smart_protocol;
 mod transport;
@@ -93,6 +94,7 @@ pub use repository::{
     BlameLine, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind, RebaseOutcome,
     Repository, RepositoryError,
 };
+pub use repository_view::FilesystemRepositoryView;
 pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,

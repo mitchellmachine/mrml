@@ -1,7 +1,8 @@
 # Gitd edge contract
 
-Status: **IMPLEMENTED** as a transport-neutral Rust API; no production backend
-implementation is claimed.
+Status: **PARTIALLY IMPLEMENTED** as a transport-neutral Rust API with a
+hosted-filesystem repository-view component; no complete production backend is
+claimed.
 
 The public API is exported from `mrml_git` and centered on
 `GitdCoreBackend`. It provides repository generation and summary queries, exact
@@ -29,6 +30,20 @@ than optional IDs being interpreted as ambient authority.
 `BoundedRead` and `BoundedWrite` expose remaining capacity. `WorkBudget`
 separately limits input, output, memory, and work units. Implementations must
 enforce the smaller of transport and backend limits and use checked arithmetic.
+
+`FilesystemRepositoryView` binds one validated `RepositoryIdentity`, one
+canonical first-party object store, and one canonical `ActiveRefFile`. It
+implements bounded repository summaries, full-ref resolution, first-parent
+commit pages, tree-path pages, and exact blob reads. Every page is tagged with
+the active repository generation, and the component re-reads that generation
+after object access; concurrent activation returns `StaleGeneration` instead
+of a mixed-generation result. Cross-repository identities and object-format
+mismatches fail authorization. The hosted-Linux test exercises SHA-256 commit,
+tree, and truncated blob reads without invoking an external Git executable.
+This component does not yet implement rich commit metadata, resumable tree/blob
+pagination, tags/releases/events/archive descriptors, verification summaries,
+or either Smart Git operation, so it is not yet a complete
+`GitdCoreBackend`.
 
 The shared pkt-line codec accepts lowercase hexadecimal canonical framing,
 streams fragmented reads and writes, supports flush/delimiter/response-end
