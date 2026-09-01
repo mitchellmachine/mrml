@@ -12152,3 +12152,16 @@ system's Cargo stage-zero boundary while retaining certificate administration
 in the Manifest V2 native frontend. It adds no certificate protocol, signing
 mechanism, validation topology, certificate authority operation, or recorded
 re-review trigger.
+
+# 2026-09-01 — First-party hosted ACME and certificate-service production work
+
+Patent review: **NOT_TRIGGERED**. The engineering screen is recorded in
+[`ACME_CERTIFICATE_REVIEW_2026-09-01.md`](ACME_CERTIFICATE_REVIEW_2026-09-01.md).
+This work implements ordinary P-256/ES256 use-only custody, ACME JWS/JWK,
+PKCS #10, X.509 lifecycle validation, DNS-01 provider operations, RFC 9773 state,
+authenticated local service channels, durable activation records, and isolated
+container deployment. It does not introduce smart-card precomputed signing
+elements, MultiTLS multiplexing, route-selected multi-vantage CA validation,
+CMPv2/private-network challenge proxying, 5G certificate brokerage, or public
+CA operation. Engineering classification: **REVIEWED_NOT_BLOCKING**; formal
+legal FTO: **NOT_PERFORMED**.
