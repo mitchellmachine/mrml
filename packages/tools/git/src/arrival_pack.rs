@@ -46,6 +46,7 @@ impl ArrivalPackStore {
     pub fn stage(
         &self,
         transaction: &QuarantineTransaction,
+        required_tips: &[ObjectId],
         pack: &[u8],
     ) -> Result<(), DurableFailure> {
         if u64::try_from(pack.len()).map_err(|_| DurableFailure::DiskFull)?
@@ -60,6 +61,13 @@ impl ArrivalPackStore {
         if objects.len()
             != usize::try_from(transaction.reservation().object_count())
                 .map_err(|_| DurableFailure::VerifierCrash)?
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        if required_tips.is_empty()
+            || required_tips.iter().any(|tip| {
+                tip.format() != self.format || !objects.iter().any(|object| object.id == *tip)
+            })
         {
             return Err(DurableFailure::VerifierCrash);
         }
@@ -223,6 +231,7 @@ mod tests {
             kind: crate::ObjectKind::Blob,
             contents: Vector::from(*b"arrival"),
         };
+        let object_id = object.id;
         let pack = encode_pack_with_format(&[object], ObjectFormat::Sha256).unwrap();
         let reservation = reserve_push_disk(
             QuarantineLimits {
@@ -252,13 +261,13 @@ mod tests {
         )
         .unwrap();
         let store = ArrivalPackStore::open(&root, ObjectFormat::Sha256, 1024 * 1024).unwrap();
-        store.stage(&transaction, &pack).unwrap();
+        store.stage(&transaction, &[object_id], &pack).unwrap();
         assert!(!path_exists(&store.arrival_path(transaction.id())));
         store.install(transaction.id(), 1).unwrap();
         store.verify_installed(transaction.id(), 1).unwrap();
         assert!(!path_exists(&store.quarantine_path(transaction.id())));
         assert_eq!(
-            store.stage(&transaction, &pack),
+            store.stage(&transaction, &[object_id], &pack),
             Err(DurableFailure::StaleLock)
         );
         mrml_runtime::remove_dir_all(&root).unwrap();

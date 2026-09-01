@@ -129,3 +129,15 @@ record auditable for accidental/torn-storage detection but is not a signature.
 Receipt signing through isolated key custody and independent signature
 verification remains open; this filesystem store must not be used as the final
 protected-repository receipt authority until that interface is connected.
+
+`LinuxDurableReceiveStore` composes the concrete journal, immutable arrival
+pack/index, active-ref generation, and receipt directories behind the same
+`DurableReceiveStore` ordering interface used by the mock fault tests. Staging
+now requires the exact verified proposed tips to be present in the validated
+arrival pack, preventing an unrelated pack from being activated with a valid
+ref typestate. The end-to-end hosted-Linux test stages and installs a SHA-256
+pack/index, persists each journal phase, re-reads old refs, atomically advances
+the active generation, appends the receipt, and independently reopens and
+validates all four durable artifacts. It is concrete filesystem-ordering
+evidence, not process-kill, power-loss, physical-storage, signed-receipt, or
+production-read-path evidence.
