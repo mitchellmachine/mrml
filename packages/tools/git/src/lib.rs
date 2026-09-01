@@ -98,7 +98,8 @@ pub use quarantine::{
 };
 pub use receive_backend::{
     PreparedProtectedReceive, ProtectedCommitVerifier, activate_prepared_protected_receive,
-    finish_prepared_protected_receive, prepare_protected_receive,
+    finish_prepared_protected_receive, prepare_policy_classified_receive,
+    prepare_protected_receive,
 };
 pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,
@@ -148,6 +149,7 @@ pub use trust_policy::{
     MAX_POLICY_REVOKED_KEYS, MAX_POLICY_LEGACY_V4_KEYS, LegacyV4KeyStatus, PolicyPairStatus,
     TrustPolicyCandidate, TrustPolicyState,
     VerifiedHybridSignature, bind_verified_commit_proof, bind_verified_git_object_proof,
+    bind_verified_legacy_commit_proof,
     canonical_hybrid_transcript, encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
     parse_key_revocation_statement, parse_trust_policy, verify_hybrid_signature,
 };
@@ -156,6 +158,7 @@ pub(crate) use verification::verify_introduced_history;
 pub use verification::{
     DEFAULT_MAX_INTRODUCED_COMMITS, HistoryVerificationError, HistoryVerificationLimits,
     ProtectedHistoryContext, VerifiedCommitProof, VerifiedCommitRange, VerifiedGitObjectProof,
+    VerifiedLegacyCommitProof, verify_policy_classified_history,
     verify_protected_introduced_history,
 };
 

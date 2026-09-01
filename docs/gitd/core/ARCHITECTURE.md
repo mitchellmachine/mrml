@@ -38,15 +38,6 @@ first-party core operations. Production receive-edge composition, active
 pack-set reads, native-Windows directory durability, and canonical compaction
 remain open and fail closed.
 
-Active pack-set reads cannot be derived from the scalar `PackGeneration`: no
-authenticated active-generation record contains the exact ordered arrival
-transaction IDs, object counts, pack checksums, and index checksums. Journals
-and installed directory names are recovery/storage state, not membership
-authority, so normal reads must not scan them. The next gate is an atomically
-activated bounded pack-set manifest bound to pack and repository generation;
-only then may a reader open its enumerated regular files and independently
-revalidate pack/index/object identity.
-
 The canonical bounded `MRPKSET1` record represents that exact ordered
 membership and rejects duplicate object identities. `MRREFS02` binds its exact
 digest while advancing repository and pack generations together; parsing or
@@ -58,6 +49,12 @@ The receive store resolves selected arrival objects only after reauthenticating
 the exact manifest entry and Git object identity, and uses that view for later
 thin receives. General repository-view/upload-pack composition remains an
 explicit incomplete gate.
+
+Protected receive also has a policy-classified path for legacy transition
+history. It proves checkpoint-to-cutover ancestry, admits opaque complete-v4-
+fingerprint evidence only on the checkpoint ancestry, and requires hybrid
+evidence everywhere else. Callers without exact canonical policy state stay on
+the hybrid-only fail-closed path.
 
 Repository state now also has a canonical single-record active-ref model with
 distinct repository, trust, revocation, and pack generations. The pure update

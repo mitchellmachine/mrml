@@ -8,8 +8,9 @@ use mrml_runtime::Vector;
 
 use crate::{
     ObjectFormat, ObjectId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-    SignaturePurpose, TrustGeneration,
+    SignaturePurpose, TrustGeneration, TrustPolicyState,
 };
+use mrml_openpgp::Fingerprint;
 
 pub const DEFAULT_MAX_INTRODUCED_COMMITS: u32 = 5_000;
 
@@ -59,6 +60,22 @@ pub struct VerifiedCommitProof {
     pub(crate) revocation_generation: RevocationGeneration,
     pub(crate) purpose: SignaturePurpose,
     pub(crate) object_format: ObjectFormat,
+}
+
+/// Opaque evidence for one conventional v4 commit whose complete key identity
+/// and trusted signing time were checked by the legacy verifier. Graph policy,
+/// not this proof alone, decides whether legacy evidence is admissible.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedLegacyCommitProof {
+    pub(crate) commit: ObjectId,
+    pub(crate) repository: RepositoryIdentity,
+    pub(crate) repository_generation: RepositoryGeneration,
+    pub(crate) trust_generation: TrustGeneration,
+    pub(crate) revocation_generation: RevocationGeneration,
+    pub(crate) purpose: SignaturePurpose,
+    pub(crate) object_format: ObjectFormat,
+    pub(crate) fingerprint: Fingerprint,
+    pub(crate) signed_at: u64,
 }
 
 /// Opaque evidence for one exactly authenticated Git object. Fields remain
@@ -155,6 +172,102 @@ where
             || proof.object_format != context.object_format
         {
             return Err(HistoryVerificationError::Signature);
+        }
+        Ok(())
+    })?;
+    range.repository = Some(context.repository.clone());
+    range.repository_generation = context.repository_generation;
+    range.trust_generation = context.trust_generation;
+    range.revocation_generation = context.revocation_generation;
+    range.purpose = context.purpose;
+    range.object_format = context.object_format;
+    Ok(range)
+}
+
+/// Verifies an introduced range under the policy's immutable graph cutover.
+/// Only the checkpoint and its ancestors may use legacy-v4 evidence; every
+/// other introduced commit requires a full hybrid proof. The cutover itself
+/// must descend from the checkpoint, preventing unrelated object identifiers
+/// in policy from creating a legacy island.
+pub fn verify_policy_classified_history<R, H, L>(
+    policy: &TrustPolicyState,
+    context: ProtectedHistoryContext<'_>,
+    old: ObjectId,
+    new: ObjectId,
+    limits: HistoryVerificationLimits,
+    mut read_parents: R,
+    mut verify_hybrid: H,
+    mut verify_legacy: L,
+) -> Result<VerifiedCommitRange, HistoryVerificationError>
+where
+    R: FnMut(ObjectId) -> Result<Vector<ObjectId>, HistoryVerificationError>,
+    H: FnMut(ObjectId) -> Result<VerifiedCommitProof, HistoryVerificationError>,
+    L: FnMut(ObjectId) -> Result<VerifiedLegacyCommitProof, HistoryVerificationError>,
+{
+    if policy.repository() != context.repository
+        || policy.generation() != context.trust_generation
+        || policy.revocation_generation() != context.revocation_generation
+    {
+        return Err(HistoryVerificationError::Signature);
+    }
+    let checkpoint = policy
+        .legacy_checkpoint()
+        .ok_or(HistoryVerificationError::Signature)?;
+    let cutover = policy
+        .hybrid_cutover()
+        .ok_or(HistoryVerificationError::Signature)?;
+    if checkpoint.format() != context.object_format
+        || cutover.format() != context.object_format
+        || checkpoint == cutover
+    {
+        return Err(HistoryVerificationError::Signature);
+    }
+    let mut legacy = Vector::new();
+    collect_reachable(
+        checkpoint,
+        limits.max_existing_commits,
+        limits.max_parents_per_commit,
+        &mut read_parents,
+        &mut legacy,
+    )?;
+    let mut cutover_history = Vector::new();
+    collect_reachable(
+        cutover,
+        limits.max_existing_commits,
+        limits.max_parents_per_commit,
+        &mut read_parents,
+        &mut cutover_history,
+    )?;
+    if !cutover_history.contains(&checkpoint) || legacy.contains(&cutover) {
+        return Err(HistoryVerificationError::NotFastForward);
+    }
+
+    let mut range = verify_introduced_history(old, new, limits, &mut read_parents, |id| {
+        if legacy.contains(&id) {
+            let proof = verify_legacy(id)?;
+            if proof.commit != id
+                || proof.repository != *context.repository
+                || proof.repository_generation != context.repository_generation
+                || proof.trust_generation != context.trust_generation
+                || proof.revocation_generation != context.revocation_generation
+                || proof.purpose != SignaturePurpose::GitCommit
+                || proof.object_format != context.object_format
+                || !policy.legacy_v4_authorized_at(proof.fingerprint, proof.signed_at)
+            {
+                return Err(HistoryVerificationError::Signature);
+            }
+        } else {
+            let proof = verify_hybrid(id)?;
+            if proof.commit != id
+                || proof.repository != *context.repository
+                || proof.repository_generation != context.repository_generation
+                || proof.trust_generation != context.trust_generation
+                || proof.revocation_generation != context.revocation_generation
+                || proof.purpose != SignaturePurpose::GitCommit
+                || proof.object_format != context.object_format
+            {
+                return Err(HistoryVerificationError::Signature);
+            }
         }
         Ok(())
     })?;

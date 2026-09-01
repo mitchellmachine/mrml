@@ -8,7 +8,7 @@
 use mrml_crypto::{ML_DSA_65_PUBLIC_KEY_BYTES, Sha3_512, ml_dsa_65_verify};
 use mrml_openpgp::{
     DigestAlgorithmSet, Fingerprint, FingerprintV6, PublicKeyV6, VerificationPolicyV6,
-    verify_detached_v6_ascii,
+    VerifiedSignature, verify_detached_v6_ascii,
 };
 use mrml_runtime::Vector;
 
@@ -1121,6 +1121,12 @@ impl TrustPolicyState {
     pub const fn generation(&self) -> TrustGeneration {
         self.generation
     }
+    pub fn repository(&self) -> &RepositoryIdentity {
+        &self.repository
+    }
+    pub const fn revocation_generation(&self) -> RevocationGeneration {
+        self.revocation_generation
+    }
 
     pub fn active_pairs(&self) -> &[AuthorizedHybridPair] {
         &self.active_pairs
@@ -1135,6 +1141,12 @@ impl TrustPolicyState {
     }
     pub fn revoked_legacy_v4(&self) -> &[Fingerprint] {
         &self.revoked_legacy_v4
+    }
+    pub const fn legacy_checkpoint(&self) -> Option<ObjectId> {
+        self.legacy_checkpoint
+    }
+    pub const fn hybrid_cutover(&self) -> Option<ObjectId> {
+        self.hybrid_cutover
     }
 
     /// Looks up an explicitly policy-pinned complete v4 fingerprint at trusted
@@ -1511,6 +1523,43 @@ pub fn bind_verified_git_object_proof(
     })
 }
 
+/// Binds independently verified conventional-v4 evidence to one exact legacy
+/// commit. This proof alone grants no authority; graph classification is the
+/// only path that may consume it.
+pub fn bind_verified_legacy_commit_proof(
+    policy: &TrustPolicyState,
+    verified: &VerifiedSignature,
+    commit: ObjectId,
+    exact_contents: &[u8],
+    repository: &RepositoryIdentity,
+    repository_generation: RepositoryGeneration,
+    trust_generation: TrustGeneration,
+    revocation_generation: RevocationGeneration,
+    object_format: ObjectFormat,
+) -> Result<crate::VerifiedLegacyCommitProof, HybridPolicyError> {
+    if repository_generation.0 == 0
+        || policy.repository != *repository
+        || policy.generation != trust_generation
+        || policy.revocation_generation != revocation_generation
+        || commit.format() != object_format
+        || hash_git_object(object_format, ObjectKind::Commit, exact_contents) != commit
+        || !policy.legacy_v4_authorized_at(verified.primary_fingerprint, verified.created_at)
+    {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(crate::VerifiedLegacyCommitProof {
+        commit,
+        repository: repository.clone(),
+        repository_generation,
+        trust_generation,
+        revocation_generation,
+        purpose: SignaturePurpose::GitCommit,
+        object_format,
+        fingerprint: verified.primary_fingerprint,
+        signed_at: verified.created_at,
+    })
+}
+
 fn hash_git_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> ObjectId {
     crate::object::encode_loose_object_with_format(format, kind, contents).0
 }
@@ -1579,7 +1628,10 @@ const fn object_type_code(object_type: GitObjectType) -> u8 {
 mod tests {
     use super::*;
     use mrml_crypto::{ML_DSA_65_SECRET_KEY_BYTES, ml_dsa_65_keygen, ml_dsa_65_sign};
-    use mrml_openpgp::{DigestAlgorithm, SigningKeyV6, sign_detached_v6_ascii_with_salt};
+    use mrml_openpgp::{
+        DigestAlgorithm, SigningKey, SigningKeyV6, VerificationPolicy,
+        sign_detached_ascii, sign_detached_v6_ascii_with_salt, verify_detached_ascii,
+    };
 
     #[test]
     fn exact_pair_and_all_context_fields_are_required() {
@@ -2218,10 +2270,24 @@ mod tests {
         };
         // These complete identities share their final 19 bytes. A short-ID or
         // suffix comparison would collide; canonical policy keeps them apart.
-        let first = Fingerprint::from_bytes([1; 20]);
-        let mut second_bytes = [1; 20];
-        second_bytes[0] = 2;
+        let legacy_signing = SigningKey::from_seed([44; 32], 1).unwrap();
+        let first = legacy_signing.public_key().fingerprint();
+        let mut second_bytes = *first.as_bytes();
+        second_bytes[0] = if second_bytes[0] == u8::MAX {
+            u8::MAX - 1
+        } else {
+            second_bytes[0] + 1
+        };
         let second = Fingerprint::from_bytes(second_bytes);
+        let mut legacy_statuses = [
+            LegacyV4KeyStatus::new(first, 10, 100, None).unwrap(),
+            LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
+        ];
+        legacy_statuses.sort_unstable_by(|left, right| {
+            left.fingerprint()
+                .as_bytes()
+                .cmp(right.fingerprint().as_bytes())
+        });
         let initial = TrustPolicyState::establish(TrustPolicyCandidate {
             repository: repository.clone(),
             generation: TrustGeneration(1),
@@ -2236,11 +2302,7 @@ mod tests {
             emergency_policy_digest: None,
             active_pairs: [pair].into(),
             pair_statuses: [PolicyPairStatus::new(pair, 1, 1_000, None).unwrap()].into(),
-            legacy_v4_statuses: [
-                LegacyV4KeyStatus::new(first, 10, 100, None).unwrap(),
-                LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
-            ]
-            .into(),
+            legacy_v4_statuses: legacy_statuses.into(),
             revoked_legacy_v4: Vector::new(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
@@ -2251,6 +2313,150 @@ mod tests {
         assert!(initial.legacy_v4_authorized_at(second, 79));
         assert!(!initial.legacy_v4_authorized_at(second, 80));
         assert_ne!(first, second);
+
+        let old = ObjectId::Sha1([6; 20]);
+        let checkpoint = ObjectId::Sha1([7; 20]);
+        let cutover = ObjectId::Sha1([8; 20]);
+        let tip = ObjectId::Sha1([9; 20]);
+        let context = crate::ProtectedHistoryContext {
+            repository: &repository,
+            repository_generation: RepositoryGeneration(2),
+            trust_generation: TrustGeneration(1),
+            revocation_generation: RevocationGeneration(1),
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha1,
+        };
+        let classified = crate::verify_policy_classified_history(
+            &initial,
+            context,
+            old,
+            tip,
+            crate::HistoryVerificationLimits::default(),
+            |id| {
+                Ok(if id == checkpoint {
+                    [old].into()
+                } else if id == cutover {
+                    [checkpoint].into()
+                } else if id == tip {
+                    [cutover].into()
+                } else {
+                    Vector::new()
+                })
+            },
+            |id| {
+                Ok(crate::VerifiedCommitProof {
+                    commit: id,
+                    repository: repository.clone(),
+                    repository_generation: RepositoryGeneration(2),
+                    trust_generation: TrustGeneration(1),
+                    revocation_generation: RevocationGeneration(1),
+                    purpose: SignaturePurpose::GitCommit,
+                    object_format: ObjectFormat::Sha1,
+                })
+            },
+            |id| {
+                Ok(crate::VerifiedLegacyCommitProof {
+                    commit: id,
+                    repository: repository.clone(),
+                    repository_generation: RepositoryGeneration(2),
+                    trust_generation: TrustGeneration(1),
+                    revocation_generation: RevocationGeneration(1),
+                    purpose: SignaturePurpose::GitCommit,
+                    object_format: ObjectFormat::Sha1,
+                    fingerprint: first,
+                    signed_at: 50,
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(classified.introduced(), &[checkpoint, cutover, tip]);
+
+        let exact_commit = b"tree 0000000000000000000000000000000000000000\nauthor Owner <owner@example.invalid> 50 +0000\n\nlegacy\n";
+        let exact_id = hash_git_object(ObjectFormat::Sha1, ObjectKind::Commit, exact_commit);
+        let mut signature = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+        let signature_len = sign_detached_ascii(
+            &legacy_signing,
+            exact_commit,
+            DigestAlgorithm::Sha512,
+            50,
+            &mut signature,
+        )
+        .unwrap();
+        let mut scratch = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+        let conventional = verify_detached_ascii(
+            &legacy_signing.public_key(),
+            exact_commit,
+            &signature[..signature_len],
+            &VerificationPolicy {
+                expected_primary_fingerprint: first,
+                validation_time: Some(60),
+                key_not_after: Some(100),
+                key_revoked: false,
+                enforce_signature_expiration: true,
+            },
+            &mut scratch,
+        )
+        .unwrap();
+        assert!(
+            bind_verified_legacy_commit_proof(
+                &initial,
+                &conventional,
+                exact_id,
+                exact_commit,
+                &repository,
+                RepositoryGeneration(2),
+                TrustGeneration(1),
+                RevocationGeneration(1),
+                ObjectFormat::Sha1,
+            )
+            .is_ok()
+        );
+        assert!(
+            bind_verified_legacy_commit_proof(
+                &initial,
+                &conventional,
+                exact_id,
+                b"tampered",
+                &repository,
+                RepositoryGeneration(2),
+                TrustGeneration(1),
+                RevocationGeneration(1),
+                ObjectFormat::Sha1,
+            )
+            .is_err()
+        );
+
+        assert_eq!(
+            crate::verify_policy_classified_history(
+                &initial,
+                context,
+                old,
+                checkpoint,
+                crate::HistoryVerificationLimits::default(),
+                |id| {
+                    Ok(if id == checkpoint {
+                        [old].into()
+                    } else if id == cutover {
+                        [checkpoint].into()
+                    } else {
+                        Vector::new()
+                    })
+                },
+                |_| Err(crate::HistoryVerificationError::Signature),
+                |id| Ok(crate::VerifiedLegacyCommitProof {
+                    commit: id,
+                    repository: repository.clone(),
+                    repository_generation: RepositoryGeneration(2),
+                    trust_generation: TrustGeneration(1),
+                    revocation_generation: RevocationGeneration(1),
+                    purpose: SignaturePurpose::GitCommit,
+                    object_format: ObjectFormat::Sha1,
+                    fingerprint: Fingerprint::from_bytes([9; 20]),
+                    signed_at: 50,
+                }),
+            ),
+            Err(crate::HistoryVerificationError::Signature)
+        );
 
         let encoded = encode_trust_policy(&initial).unwrap();
         assert_eq!(&encoded[..8], b"MRMLGTP3");

@@ -128,6 +128,17 @@ generation, trust generation, revocation generation, `GitCommit` purpose, and
 object format. A callback that
 merely returns success cannot construct the proof.
 
+The policy-aware entry point `verify_policy_classified_history` additionally
+proves that the immutable hybrid cutover descends from the legacy checkpoint.
+It computes the bounded checkpoint ancestry and accepts an opaque conventional
+v4 proof only for the checkpoint or one of its ancestors; every other
+introduced commit, including merge-side history, requires the hybrid proof.
+An independently verified v4 signature is bound to exact Git commit bytes,
+complete fingerprint, trusted signing time, repository, and generations before
+it can become that opaque proof. `prepare_policy_classified_receive` composes
+this decision into receive. The existing policy-free entry point remains
+hybrid-only and fail closed.
+
 `DetachedCommitProofStore` is the concrete bounded source for this path. It
 accepts at most 5,000 strictly object-ID-ordered records, rejects duplicates,
 bounds OpenPGP armor, and requires the exact ML-DSA-65 signature width. Stored
@@ -146,5 +157,5 @@ commit/tag path does not yet encode and self-verify the complete
 `MRML-GIT-HYBRID-V1` result before its local ref update. Protected receive can
 now consume a caller-provisioned bounded proof store through its verifier
 boundary. Durable proof-record storage and its authorization policy remain open;
-records gain no authority merely by being stored. End-to-end protected ref
-activation therefore remains unavailable.
+records gain no authority merely by being stored. Production durable proof
+records and canonical policy/key-service retrieval remain integration gates.

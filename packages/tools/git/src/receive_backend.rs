@@ -8,10 +8,11 @@ use crate::{
     Object, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
     QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
     Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
-    VerifiedCommitProof, VerifiedRefTransaction, WorkBudget,
+    TrustPolicyState, VerifiedCommitProof, VerifiedLegacyCommitProof, VerifiedRefTransaction,
+    WorkBudget,
     build_verified_fast_forward_transaction, durably_activate_verified_receive,
-    read_receive_pack_commands, reserve_push_disk_before_body, verify_protected_introduced_history,
-    write_receive_pack_report,
+    read_receive_pack_commands, reserve_push_disk_before_body, verify_policy_classified_history,
+    verify_protected_introduced_history, write_receive_pack_report,
 };
 
 /// Verification-only authority. Implementations receive public policy/key state
@@ -23,6 +24,15 @@ pub trait ProtectedCommitVerifier {
         commit: ObjectId,
         exact_contents: &[u8],
     ) -> Result<VerifiedCommitProof, HistoryVerificationError>;
+
+    fn verify_legacy_commit(
+        &mut self,
+        _: ProtectedHistoryContext<'_>,
+        _: ObjectId,
+        _: &[u8],
+    ) -> Result<VerifiedLegacyCommitProof, HistoryVerificationError> {
+        Err(HistoryVerificationError::Signature)
+    }
 }
 
 /// Opaque preparation result. It cannot activate refs; the signed audit-receipt
@@ -108,6 +118,68 @@ pub fn prepare_protected_receive(
     active_objects: &Repository,
     store: &LinuxDurableReceiveStore,
     verifier: &mut dyn ProtectedCommitVerifier,
+    transaction_id: QuarantineTransactionId,
+    quarantine_limits: QuarantineLimits,
+    history_limits: HistoryVerificationLimits,
+    ordinary_free_bytes: u64,
+    input: &mut dyn crate::BoundedRead,
+    work_budget: WorkBudget,
+) -> Result<PreparedProtectedReceive, GitdCoreError> {
+    prepare_protected_receive_internal(
+        smart_request,
+        active,
+        active_objects,
+        store,
+        verifier,
+        None,
+        transaction_id,
+        quarantine_limits,
+        history_limits,
+        ordinary_free_bytes,
+        input,
+        work_budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_policy_classified_receive(
+    smart_request: SmartGitRequest,
+    active: &ActiveRefState,
+    active_objects: &Repository,
+    store: &LinuxDurableReceiveStore,
+    verifier: &mut dyn ProtectedCommitVerifier,
+    policy: &TrustPolicyState,
+    transaction_id: QuarantineTransactionId,
+    quarantine_limits: QuarantineLimits,
+    history_limits: HistoryVerificationLimits,
+    ordinary_free_bytes: u64,
+    input: &mut dyn crate::BoundedRead,
+    work_budget: WorkBudget,
+) -> Result<PreparedProtectedReceive, GitdCoreError> {
+    prepare_protected_receive_internal(
+        smart_request,
+        active,
+        active_objects,
+        store,
+        verifier,
+        Some(policy),
+        transaction_id,
+        quarantine_limits,
+        history_limits,
+        ordinary_free_bytes,
+        input,
+        work_budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_protected_receive_internal(
+    smart_request: SmartGitRequest,
+    active: &ActiveRefState,
+    active_objects: &Repository,
+    store: &LinuxDurableReceiveStore,
+    verifier: &mut dyn ProtectedCommitVerifier,
+    policy: Option<&TrustPolicyState>,
     transaction_id: QuarantineTransactionId,
     quarantine_limits: QuarantineLimits,
     history_limits: HistoryVerificationLimits,
@@ -232,12 +304,7 @@ pub fn prepare_protected_receive(
     for update in &request.candidate.updates {
         let old = update.expected_old.ok_or(GitdCoreError::Unsupported)?;
         let new = update.proposed_new.ok_or(GitdCoreError::Unsupported)?;
-        let range = verify_protected_introduced_history(
-            context,
-            old,
-            new,
-            history_limits,
-            |id| {
+        let read_parents = |id| {
                 let object = received_or_active(store, transaction_id, active_objects, id)?;
                 if object.kind != ObjectKind::Commit {
                     return Err(HistoryVerificationError::MissingCommit);
@@ -245,15 +312,49 @@ pub fn prepare_protected_receive(
                 crate::Commit::parse_with_format(&object.contents, active.object_format)
                     .map(|commit| commit.parents)
                     .map_err(|_| HistoryVerificationError::MissingCommit)
-            },
-            |id| {
+            };
+        let verifier = core::cell::RefCell::new(&mut *verifier);
+        let range = if let Some(policy) = policy {
+            verify_policy_classified_history(
+                policy,
+                context,
+                old,
+                new,
+                history_limits,
+                read_parents,
+                |id| {
+                    let object = received_or_active(store, transaction_id, active_objects, id)?;
+                    if object.kind != ObjectKind::Commit {
+                        return Err(HistoryVerificationError::MissingCommit);
+                    }
+                    verifier.borrow_mut().verify_commit(context, id, &object.contents)
+                },
+                |id| {
+                    let object = received_or_active(store, transaction_id, active_objects, id)?;
+                    if object.kind != ObjectKind::Commit {
+                        return Err(HistoryVerificationError::MissingCommit);
+                    }
+                    verifier
+                        .borrow_mut()
+                        .verify_legacy_commit(context, id, &object.contents)
+                },
+            )
+        } else {
+            verify_protected_introduced_history(
+                context,
+                old,
+                new,
+                history_limits,
+                read_parents,
+                |id| {
                 let object = received_or_active(store, transaction_id, active_objects, id)?;
                 if object.kind != ObjectKind::Commit {
                     return Err(HistoryVerificationError::MissingCommit);
                 }
-                verifier.verify_commit(context, id, &object.contents)
-            },
-        )
+                    verifier.borrow_mut().verify_commit(context, id, &object.contents)
+                },
+            )
+        }
         .map_err(map_history_error)?;
         ranges.push(range);
     }
