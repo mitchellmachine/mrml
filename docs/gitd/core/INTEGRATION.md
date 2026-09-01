@@ -101,3 +101,9 @@ rechecks the active generation before returning profile/encoder version 1.
 It is a stable cache-generation request descriptor, not evidence that a cached
 or canonical compacted pack exists. Patent review: NOT_TRIGGERED for this typed
 identity descriptor; it performs no compression or delta-selection mechanism.
+
+The view also exposes a bounded coalesced event cursor over repository, trust,
+revocation, and pack generations. It reports exact previous/current snapshots,
+rejects cursors ahead of authoritative state, and never fabricates a historical
+transition log. Edge consumers can invalidate derived views without direct
+filesystem access; authenticated receipts remain the durable audit authority.

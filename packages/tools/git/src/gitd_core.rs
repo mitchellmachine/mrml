@@ -214,6 +214,26 @@ pub struct ImmutablePackDescriptor {
     pub encoder_version: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepositoryEventCursor {
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub pack_generation: PackGeneration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepositoryEvent {
+    pub previous: RepositoryEventCursor,
+    pub current: RepositoryEventCursor,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryEventPage {
+    pub events: Vector<RepositoryEvent>,
+    pub next: RepositoryEventCursor,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositorySummary {
     pub repository_generation: RepositoryGeneration,
@@ -524,6 +544,15 @@ pub trait GitdCoreBackend {
         _repository: &RepositoryIdentity,
         _commit: ObjectId,
     ) -> Result<ImmutablePackDescriptor, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn repository_events_after(
+        &self,
+        _repository: &RepositoryIdentity,
+        _cursor: RepositoryEventCursor,
+        _limits: QueryLimits,
+    ) -> Result<RepositoryEventPage, GitdCoreError> {
         Err(GitdCoreError::Unsupported)
     }
 

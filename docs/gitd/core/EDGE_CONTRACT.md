@@ -52,9 +52,17 @@ validates the complete exact commit closure before returning the repository
 generation, object format, exact commit ID, pack profile version, and encoder
 version; those fields form the cache/production request identity and do not
 claim a pack has already been generated. This component does not yet implement
-release/event descriptors, verification summaries, the
+release descriptors, verification summaries, the
 complete upload-pack profile, or production receive construction, so it is not
 yet a complete production `GitdCoreBackend`.
+
+`repository_events_after` provides bounded cache-invalidation events across
+the repository, trust, revocation, and pack generations. A cursor ahead of any
+authoritative generation fails stale; an unchanged cursor returns no event; a
+changed cursor returns one exact previous-to-current snapshot and a new cursor.
+The method rechecks repository generation before return. This is deliberately
+a coalesced state-change event, not an invented historical audit log; durable
+per-transition audit history remains owned by the authenticated receipt store.
 
 The shared pkt-line codec accepts lowercase hexadecimal canonical framing,
 streams fragmented reads and writes, supports flush/delimiter/response-end

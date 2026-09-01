@@ -5,10 +5,11 @@ use mrml_runtime::Vector;
 use crate::{
     ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitDetails, CommitPage, GitdCoreBackend,
     GitdCoreError, ImmutablePackDescriptor, ObjectId, ObjectKind, PktLine, ProtocolBudget,
-    ProtocolV2Request, QueryLimits,
-    ReadmeCandidate, Repository, RepositoryGeneration, RepositoryIdentity, RepositoryPath,
-    RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse,
-    TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request, write_pkt_line,
+    ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
+    RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
+    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
+    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request,
+    write_pkt_line,
 };
 
 pub struct FilesystemRepositoryView {
@@ -115,6 +116,15 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         commit: ObjectId,
     ) -> Result<ImmutablePackDescriptor, GitdCoreError> {
         Self::immutable_pack_descriptor(self, repository, commit)
+    }
+
+    fn repository_events_after(
+        &self,
+        repository: &RepositoryIdentity,
+        cursor: RepositoryEventCursor,
+        limits: QueryLimits,
+    ) -> Result<RepositoryEventPage, GitdCoreError> {
+        Self::repository_events_after(self, repository, cursor, limits)
     }
 
     fn verification_summary(
@@ -507,6 +517,47 @@ impl FilesystemRepositoryView {
             object_format: before.object_format,
             pack_profile_version: 1,
             encoder_version: 1,
+        })
+    }
+
+    pub fn repository_events_after(
+        &self,
+        repository: &RepositoryIdentity,
+        cursor: RepositoryEventCursor,
+        limits: QueryLimits,
+    ) -> Result<RepositoryEventPage, GitdCoreError> {
+        validate_limits(limits)?;
+        let state = self.load_for(repository)?;
+        let current = RepositoryEventCursor {
+            repository_generation: state.repository_generation,
+            trust_generation: state.trust_generation,
+            revocation_generation: state.revocation_generation,
+            pack_generation: state.pack_generation,
+        };
+        for (previous, next) in [
+            (cursor.repository_generation.0, current.repository_generation.0),
+            (cursor.trust_generation.0, current.trust_generation.0),
+            (cursor.revocation_generation.0, current.revocation_generation.0),
+            (cursor.pack_generation.0, current.pack_generation.0),
+        ] {
+            if previous > next {
+                return Err(GitdCoreError::StaleGeneration);
+            }
+        }
+        let mut events = Vector::new();
+        if cursor != current {
+            if limits.max_entries < 1 || limits.max_bytes < 64 {
+                return Err(GitdCoreError::Resource);
+            }
+            events.push(RepositoryEvent {
+                previous: cursor,
+                current,
+            });
+        }
+        self.ensure_generation(state.repository_generation)?;
+        Ok(RepositoryEventPage {
+            events,
+            next: current,
         })
     }
 
@@ -907,6 +958,33 @@ mod tests {
             GitdCoreBackend::immutable_pack_descriptor(&view, &identity, blob),
             Err(GitdCoreError::ObjectValidation)
         );
+        let previous = RepositoryEventCursor {
+            repository_generation: RepositoryGeneration(3),
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(5),
+            pack_generation: crate::PackGeneration(1),
+        };
+        let events = GitdCoreBackend::repository_events_after(
+            &view,
+            &identity,
+            previous,
+            limits,
+        )
+        .unwrap();
+        assert_eq!(events.events.len(), 1);
+        assert_eq!(events.events[0].previous, previous);
+        assert_eq!(events.next.repository_generation, RepositoryGeneration(4));
+        assert_eq!(events.next.trust_generation, TrustGeneration(5));
+        assert_eq!(events.next.revocation_generation, RevocationGeneration(6));
+        assert!(GitdCoreBackend::repository_events_after(
+            &view,
+            &identity,
+            events.next,
+            limits,
+        )
+        .unwrap()
+        .events
+        .is_empty());
         assert_eq!(
             &*view
                 .read_tree_page(&identity, commit, &RepositoryPath::root(), limits)
