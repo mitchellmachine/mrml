@@ -2,7 +2,9 @@
 
 This package is a dependency-free, deterministic adversarial regression suite.
 It runs structural, splice, poison-byte, truncation, and seeded pseudorandom
-mutations over valid and minimized-invalid GGUF, ZIM, and X.509 DER corpora.
+mutations over valid and minimized-invalid GGUF, ZIM, X.509 DER, ACME JSON,
+URL, Base64url, ARI, HTTP-01, DNS packet/compression, PEM certificate-chain, and
+certificate durable-record corpora.
 Every failure is reproducible from source and suitable for minimization into a
 normal regression test.
 

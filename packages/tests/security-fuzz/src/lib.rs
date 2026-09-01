@@ -2,6 +2,14 @@
 
 #[cfg(test)]
 mod tests {
+    use mrml_acme::{
+        AcmeDirectory, AcmeProblem, AcmeUrl, ChallengeToken, DnsIdentifier, RenewalInfo,
+        decode_base64url, validate_http01_request,
+    };
+    use mrml_certificate::{
+        AuthoritativeChallengeZone, DurableAuthenticator, DurableError, DurableRecord,
+        PemCertificateChain,
+    };
     use mrml_runtime::{Text, join_path, process_id, remove_file, temporary_directory, write_file};
 
     const MAX_CASE_BYTES: usize = 256;
@@ -152,8 +160,7 @@ mod tests {
         version_six[68..72].copy_from_slice(&u32::MAX.to_le_bytes());
         version_six[72..80].copy_from_slice(&81u64.to_le_bytes());
         let zim_magic = mrml_zim::ZIM_MAGIC.to_le_bytes();
-        let minimized_regressions: &[&[u8]] =
-            &[b"", &zim_magic, &version_six[..16], &version_six];
+        let minimized_regressions: &[&[u8]] = &[b"", &zim_magic, &version_six[..16], &version_six];
         let path = corpus_path("zim.bin");
         visit_corpus(minimized_regressions, |bytes| {
             write_file(&path, bytes).unwrap();
@@ -174,6 +181,87 @@ mod tests {
         ];
         visit_corpus(MINIMIZED_REGRESSIONS, |bytes| {
             let _ = mrml_tls::Certificate::parse(bytes);
+        });
+    }
+
+    #[test]
+    fn acme_json_url_base64_and_ari_corpora_never_panic() {
+        let directory_url = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let json: &[&[u8]] = &[
+            b"",
+            b"{}",
+            br#"{"type":"urn:ietf:params:acme:error:badNonce","status":400}"#,
+            br#"{"newNonce":"https://ca.example/nonce","newAccount":"https://ca.example/account","newOrder":"https://ca.example/order"}"#,
+            br#"{"suggestedWindow":{"start":"2030-01-01T00:00:00Z","end":"2030-01-02T00:00:00Z"}}"#,
+        ];
+        visit_corpus(json, |bytes| {
+            if let Ok(text) = core::str::from_utf8(bytes) {
+                let _ = AcmeDirectory::parse(text, &directory_url, 7);
+                let _ = AcmeProblem::parse(text);
+                let _ = RenewalInfo::parse(text, 1_800_000_000, 60);
+                let _ = AcmeUrl::parse(text, false);
+                let mut decoded = [0u8; MAX_CASE_BYTES];
+                let _ = decode_base64url(text, &mut decoded);
+            }
+        });
+    }
+
+    #[test]
+    fn http01_request_corpus_never_panics_or_changes_binding() {
+        let identifier = DnsIdentifier::parse("git.example", false).unwrap();
+        let token = ChallengeToken::parse("fuzz-token").unwrap();
+        let requests: &[&[u8]] = &[
+            b"",
+            b"GET / HTTP/1.1\r\n\r\n",
+            b"GET /.well-known/acme-challenge/fuzz-token HTTP/1.1\r\nHost: git.example\r\n\r\n",
+            b"GET //.well-known/acme-challenge/fuzz-token HTTP/1.1\r\nHost: git.example\r\n\r\n",
+        ];
+        visit_corpus(requests, |bytes| {
+            let _ = validate_http01_request(bytes, &identifier, &token);
+        });
+    }
+
+    #[test]
+    fn dns_packet_and_compression_corpus_never_panics() {
+        let zone = DnsIdentifier::parse("acme.example", false).unwrap();
+        let nameserver = DnsIdentifier::parse("ns.acme.example", false).unwrap();
+        let authority = AuthoritativeChallengeZone::new(zone, nameserver, [192, 0, 2, 1], 1, 1);
+        let packets: &[&[u8]] = &[
+            b"",
+            &[0; 12],
+            &[0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 0x0c, 0, 16, 0, 1],
+            &[
+                0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 0x0e, 0xc0, 0x0c, 0, 16, 0, 1,
+            ],
+        ];
+        visit_corpus(packets, |bytes| {
+            let mut output = [0u8; 512];
+            let _ = authority.answer_udp(bytes, 0, &mut output);
+            let _ = authority.answer_tcp(bytes, 0, &mut output);
+        });
+    }
+
+    #[test]
+    fn pem_chain_and_durable_record_corpora_never_panic() {
+        struct RejectingAuthenticator;
+        impl DurableAuthenticator for RejectingAuthenticator {
+            fn authenticate(&mut self, _: &[u8]) -> Result<[u8; 32], DurableError> {
+                Err(DurableError::AuthenticationFailed)
+            }
+            fn verify(&mut self, _: &[u8], _: &[u8; 32]) -> Result<bool, DurableError> {
+                Ok(false)
+            }
+        }
+
+        let seeds: &[&[u8]] = &[
+            b"",
+            b"MRMLCERT",
+            b"-----BEGIN CERTIFICATE-----\nMAA=\n-----END CERTIFICATE-----\n",
+            b"-----BEGIN CERTIFICATE-----\nA===\n-----END CERTIFICATE-----\n",
+        ];
+        visit_corpus(seeds, |bytes| {
+            let _ = PemCertificateChain::parse(bytes);
+            let _ = DurableRecord::decode(bytes, &mut RejectingAuthenticator);
         });
     }
 

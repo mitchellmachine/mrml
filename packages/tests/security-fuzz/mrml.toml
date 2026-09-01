@@ -27,6 +27,18 @@ crate_type = "lib"
 source = "packages/tests/security-fuzz/src/lib.rs"
 
 [[dependency]]
+alias = "mrml_acme"
+compile_name = "mrml-acme"
+package = "org.mrml.library.acme"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_certificate"
+compile_name = "mrml-certd"
+package = "org.mrml.service.certificate"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"

@@ -11818,3 +11818,11 @@ Patent review: **NOT_TRIGGERED**. This increment retains a bounded set of all
 accepted response nonces for the current directory generation and rejects a
 server response that reintroduces a consumed nonce. Bound exhaustion fails
 closed. It introduces no recorded re-review trigger.
+
+# 2026-09-01 — Certificate parser mutation corpora
+
+Patent review: **NOT_TRIGGERED**. This increment extends the existing bounded,
+deterministic adversarial test harness across ACME JSON, URL and Base64url,
+ARI, HTTP-01, DNS packets and compression pointers, PEM certificate chains,
+and authenticated certificate-state records. It adds test coverage rather than
+a new shipping protocol mechanism and introduces no recorded re-review trigger.
