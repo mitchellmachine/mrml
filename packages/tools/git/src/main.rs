@@ -1004,13 +1004,17 @@ fn dispatch(cli: &Cli) -> Result<()> {
         "branch" if tail.len() == 1 => {
             checked_positionals(tail)?;
             let id = native_repository(repository)?
-                .create_branch(&tail[0], true)
+                .create_branch(&tail[0], false)
                 .map_err(|error| anyhow!("{}", error))?;
-            println!(
-                "Switched to a new branch '{}' at {}",
-                tail[0],
-                &id.to_hex()[..12]
-            );
+            println!("Created branch '{}' at {}", tail[0], &id.to_hex()[..12]);
+            Ok(())
+        }
+        "branch" if tail.len() == 2 && tail[0] == "-d" => {
+            checked_positionals(&tail[1..])?;
+            native_repository(repository)?
+                .delete_branch(&tail[1])
+                .map_err(|error| anyhow!("{}", error))?;
+            println!("Deleted branch {}", tail[1]);
             Ok(())
         }
         "branch-delete" if tail.len() == 1 => {
@@ -1029,12 +1033,28 @@ fn dispatch(cli: &Cli) -> Result<()> {
             println!("Switched to branch '{}' at {}", tail[0], &id.to_hex()[..12]);
             Ok(())
         }
+        "switch" if tail.len() == 2 && tail[0] == "-c" => {
+            checked_positionals(&tail[1..])?;
+            let id = native_repository(repository)?
+                .create_branch(&tail[1], true)
+                .map_err(|error| anyhow!("{}", error))?;
+            println!("Switched to a new branch '{}' at {}", tail[1], &id.to_hex()[..12]);
+            Ok(())
+        }
         "checkout" if tail.len() == 1 => {
             checked_positionals(tail)?;
             let id = native_repository(repository)?
                 .switch_branch(&tail[0])
                 .map_err(|error| anyhow!("{}", error))?;
             println!("Switched to branch '{}' at {}", tail[0], &id.to_hex()[..12]);
+            Ok(())
+        }
+        "checkout" if tail.len() == 2 && tail[0] == "-b" => {
+            checked_positionals(&tail[1..])?;
+            let id = native_repository(repository)?
+                .create_branch(&tail[1], true)
+                .map_err(|error| anyhow!("{}", error))?;
+            println!("Switched to a new branch '{}' at {}", tail[1], &id.to_hex()[..12]);
             Ok(())
         }
         "upstream" if tail.len() == 1 => {
@@ -1580,6 +1600,28 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
+        "tag"
+            if tail.len() == 4
+                && tail[0] == "-s"
+                && (tail[1] == "-m" || tail[2] == "-m") =>
+        {
+            let (tag, message) = if tail[1] == "-m" {
+                (&tail[3], &tail[2])
+            } else {
+                (&tail[1], &tail[3])
+            };
+            checked_positionals(core::slice::from_ref(tag))?;
+            if message.is_empty() || message.starts_with('-') {
+                return Err(anyhow!("tag -s requires a nonempty -m message"));
+            }
+            let repo = native_repository(repository)?;
+            let (name, email) = repository_identity(&repo)?;
+            let timestamp = mrml_runtime::unix_time_seconds()
+                .ok_or_else(|| anyhow!("system time is unavailable"))?;
+            let id = repository_signed_tag(&repo, tag, message, &name, &email, timestamp)?;
+            println!("Signed tag {} at {}", tag, &id.to_hex()[..12]);
+            Ok(())
+        }
         "tag-sign" if tail.len() >= 2 => {
             checked_positionals(&tail[..1])?;
             let message = join_words(&tail[1..]);
@@ -1684,6 +1726,10 @@ fn dispatch(cli: &Cli) -> Result<()> {
             println!("validated {} reachable reference tip(s)", count);
             Ok(())
         }
+        "gc" | "repack" if tail.is_empty() => Err(anyhow!(
+            "{} is unavailable: canonical compaction remains fail-closed pending the required mechanism-level patent review",
+            cli.command
+        )),
         "stash" if tail.is_empty() || (tail.len() == 1 && tail[0] == "list") => {
             for (index, (id, commit)) in native_repository(repository)?
                 .stash_list(256)
@@ -1811,7 +1857,13 @@ mod tests {
         invoke(&path, "restore", &["tracked.txt"]);
         invoke(&path, "branch", &["feature"]);
         invoke(&path, "checkout", &["main"]);
-        invoke(&path, "branch-delete", &["feature"]);
+        invoke(&path, "branch", &["-d", "feature"]);
+        invoke(&path, "switch", &["-c", "switch-created"]);
+        invoke(&path, "switch", &["main"]);
+        invoke(&path, "branch", &["-d", "switch-created"]);
+        invoke(&path, "checkout", &["-b", "checkout-created"]);
+        invoke(&path, "checkout", &["main"]);
+        invoke(&path, "branch", &["-d", "checkout-created"]);
         invoke(&path, "remote", &["add", "backup", "host:repository.git"]);
         invoke(
             &path,
@@ -1825,6 +1877,14 @@ mod tests {
         invoke(&path, "stash", &["pop"]);
         invoke(&path, "mv", &["tracked.txt", "renamed.txt"]);
         invoke(&path, "rm", &["renamed.txt"]);
+        for command in ["gc", "repack"] {
+            assert!(dispatch(&Cli {
+                repository: Some(path.clone()),
+                command: command.into(),
+                arguments: Vector::new(),
+            })
+            .is_err());
+        }
         remove_dir_all(&path).unwrap();
     }
 }

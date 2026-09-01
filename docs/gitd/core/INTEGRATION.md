@@ -23,6 +23,14 @@ Destructive reset modes, detached checkout, pathspec-rich forms, unreachable
 object enumeration, and the remaining explicitly listed command gaps stay fail
 closed until their native semantics are implemented and tested.
 
+Standard branch semantics are now exact for the bounded forms: `git branch
+NAME` creates without switching, `git branch -d NAME` deletes under the native
+branch checks, and `git switch -c NAME` / `git checkout -b NAME` create and
+switch. `git tag -s NAME -m MESSAGE` and `git tag -s -m MESSAGE NAME` route to
+the first-party signed annotated-tag path. `git gc` and `git repack` are
+recognized but return an explicit fail-closed canonical-compaction/patent-review
+error; they never invoke host Git or claim a no-op performed maintenance.
+
 `git cat-file -t`, `-s`, and `-p` are native. Type and size work for every
 authenticated object kind. Pretty mode emits parsed tree entries or exact UTF-8
 commit, tag, and blob contents; binary pretty-printing fails explicitly because
