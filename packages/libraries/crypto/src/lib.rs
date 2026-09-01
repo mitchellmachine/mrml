@@ -66,3 +66,4 @@ pub use sha256::Sha256;
 pub use sha512::{Sha384, Sha512};
 pub use signing_key_cache::{SigningKeyCacheError, UnlockedSigningKeyCache};
 pub use x25519::{x25519, x25519_public, x25519_shared};
+pub use zeroize::erase_secret_bytes;

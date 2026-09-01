@@ -1,4 +1,4 @@
-use crate::Sha256;
+use crate::{zeroize::volatile_zero, Sha256};
 
 pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut normalized = [0u8; 64];
@@ -20,9 +20,14 @@ pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     for part in parts {
         inner.update(part);
     }
-    let inner_digest = inner.finalize();
+    let mut inner_digest = inner.finalize();
     let mut outer = Sha256::new();
     outer.update(&outer_key);
     outer.update(&inner_digest);
-    outer.finalize()
+    let tag = outer.finalize();
+    volatile_zero(&mut normalized);
+    volatile_zero(&mut inner_key);
+    volatile_zero(&mut outer_key);
+    volatile_zero(&mut inner_digest);
+    tag
 }

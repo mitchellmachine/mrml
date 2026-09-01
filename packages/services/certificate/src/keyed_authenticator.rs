@@ -1,8 +1,7 @@
 use crate::{DurableAuthenticator, DurableError};
-use mrml_crypto::Sha256;
+use mrml_crypto::{erase_secret_bytes, hmac_sha256};
 
 pub const DURABLE_AUTHENTICATION_KEY_BYTES: usize = 32;
-const SHA256_BLOCK_BYTES: usize = 64;
 
 /// HMAC-SHA-256 authentication for hosted production certificate records.
 ///
@@ -18,22 +17,7 @@ impl HmacSha256DurableAuthenticator {
     }
 
     fn tag(&self, record: &[u8]) -> [u8; 32] {
-        let mut inner_pad = [0x36; SHA256_BLOCK_BYTES];
-        let mut outer_pad = [0x5c; SHA256_BLOCK_BYTES];
-        for index in 0..self.key.len() {
-            inner_pad[index] ^= self.key[index];
-            outer_pad[index] ^= self.key[index];
-        }
-
-        let mut inner = Sha256::new();
-        inner.update(&inner_pad);
-        inner.update(record);
-        let inner_digest = inner.finalize();
-
-        let mut outer = Sha256::new();
-        outer.update(&outer_pad);
-        outer.update(&inner_digest);
-        outer.finalize()
+        hmac_sha256(&self.key, &[record])
     }
 }
 
@@ -54,7 +38,7 @@ impl DurableAuthenticator for HmacSha256DurableAuthenticator {
 
 impl Drop for HmacSha256DurableAuthenticator {
     fn drop(&mut self) {
-        self.key.fill(0);
+        erase_secret_bytes(&mut self.key);
     }
 }
 

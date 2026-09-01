@@ -1,6 +1,6 @@
 use core::{
     ptr,
-    sync::atomic::{Ordering, compiler_fence},
+    sync::atomic::{compiler_fence, Ordering},
 };
 
 /// Best-effort erasure for owned scalar byte and word buffers.
@@ -18,6 +18,14 @@ pub(crate) fn volatile_zero<T: Copy + Default>(values: &mut [T]) {
         unsafe { ptr::write_volatile(value, T::default()) };
     }
     compiler_fence(Ordering::SeqCst);
+}
+
+/// Best-effort volatile erasure for secret byte buffers owned by callers.
+///
+/// This has the same compiler and hardware limitations documented above and
+/// does not establish a formal erasure guarantee.
+pub fn erase_secret_bytes(values: &mut [u8]) {
+    volatile_zero(values);
 }
 
 #[cfg(test)]

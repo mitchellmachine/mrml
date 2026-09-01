@@ -1,6 +1,7 @@
 extern crate std;
 
 use crate::{HmacSha256DurableAuthenticator, DURABLE_AUTHENTICATION_KEY_BYTES};
+use mrml_crypto::erase_secret_bytes;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -78,7 +79,7 @@ impl HostedSecret {
 
 impl Drop for HostedSecret {
     fn drop(&mut self) {
-        self.bytes.fill(0);
+        erase_secret_bytes(&mut self.bytes);
         self.length = 0;
     }
 }
