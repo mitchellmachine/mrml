@@ -32,11 +32,27 @@ bounded timeout retransmission; flow control; server HANDSHAKE_DONE; and
 PATH_CHALLENGE/PATH_RESPONSE validation before accepting a rebound address.
 Initial datagrams are padded to at least 1200 bytes, and the hybrid TLS
 ClientHello is fragmented across CRYPTO frames when needed.
+Authenticated application packet numbers are classified through bounded receive
+ranges before frame side effects; duplicates and too-old packets are suppressed.
+Sparse stream chunks, gaps, buffered bytes, stream counts, final sizes, and
+connection/per-stream receive credit are bounded before allocation. HTTP/3
+retains request and completed-stream state so one stream delivers at most one
+request.
 Servers accept direct v1 and v2 connections. Clients retain v1 as the
 compatibility default and expose `connect_v2`/`connect_version` for an explicit
 v2 first flight. Missing or inconsistent version information fails closed for
-v2; legacy v1-only peers may omit it. The implementation does not claim Retry,
-0-RTT, compatible-version switching during one handshake, or session tickets.
+v2; legacy v1-only peers may omit it. The implementation does not claim 0-RTT,
+compatible-version switching during one handshake, or session tickets.
+
+Reusable Retry-token and half-open admission primitives are implemented but are
+not yet connected to `QuicServerListener`. Tokens bind the exact IPv4 endpoint,
+original destination connection ID, issue time, purpose, and rotating key
+generation, with bounded replay state. Admission is bounded by global count,
+IPv4 source, memory, and lifetime and can require Retry under pressure. IPv6
+`/64` policy awaits an IPv6-capable runtime address ABI. The one-shot listener
+remains non-production until a persistent connection-ID demultiplexer owns the
+socket. Application traffic closes before conservative per-key packet/byte
+limits; full QUIC key update is not implemented.
 
 All TLS clients request and require a current issuer-signed stapled OCSP
 response by default, so the policy applies equally to HTTP/1.1, HTTP/2, and
