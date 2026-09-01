@@ -206,7 +206,7 @@ mod tests {
     use super::*;
     use crate::ZstdServiceLoop;
     use mrml_interface_zstd_v3::{
-        decode_decompress_response, encode_decompress_request, BorrowedReadView, BorrowedWriteView,
+        BorrowedReadView, BorrowedWriteView, decode_decompress_response, encode_decompress_request,
     };
 
     const TOKEN: u64 = (7_u64 << 32) | 3;
