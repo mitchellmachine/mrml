@@ -1,13 +1,12 @@
 #![no_std]
 
 use mrml_acme::{
-    AcmeDirectory, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint,
-    MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_URL_BYTES, OrderState, OwnerTermsApproval,
+    AcmeDirectory, AcmeUrl, CertificateProfile, DnsIdentifier, JwkThumbprint, MAX_AUTHORIZATIONS,
+    MAX_CSR_IDENTIFIERS, MAX_URL_BYTES, OrderState, OwnerTermsApproval,
 };
 use mrml_certificate::{
     Dns01PublicationReceipt, Dns01PublicationRequest, Dns01RecordName, Dns01TxtValue,
-    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, certd_identifier_set_digest,
-    dns01_publication_binding,
+    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, certd_identifier_set_digest, dns01_publication_binding,
 };
 use mrml_crypto::Sha256;
 use mrml_json::Value;
@@ -173,9 +172,7 @@ impl AcmedAccountRecord {
             _ => return Err(AcmedAccountRecordError::Malformed),
         };
         let url_length = usize::from(u16::from_be_bytes([input[10], input[11]]));
-        if url_length > MAX_URL_BYTES
-            || input.len() != ACCOUNT_RECORD_HEADER_BYTES + url_length
-        {
+        if url_length > MAX_URL_BYTES || input.len() != ACCOUNT_RECORD_HEADER_BYTES + url_length {
             return Err(AcmedAccountRecordError::Malformed);
         }
         let directory_generation = read_u64(&input[12..20])?;
@@ -290,9 +287,7 @@ impl AcmedOrderRecord {
         }
         let created = self.phase == AcmedOrderPhase::Created;
         if created
-            != (self.state.is_some()
-                && self.order_url.is_some()
-                && self.finalize_url.is_some())
+            != (self.state.is_some() && self.order_url.is_some() && self.finalize_url.is_some())
             || (!created
                 && (self.certificate_url.is_some()
                     || count != 0
@@ -305,10 +300,12 @@ impl AcmedOrderRecord {
         let finalize = text_url(self.finalize_url.as_ref());
         let certificate = text_url(self.certificate_url.as_ref());
         let mut length = ORDER_RECORD_HEADER_BYTES;
-        for url in [order, finalize, certificate]
-            .into_iter()
-            .chain(self.authorization_urls[..count].iter().flatten().map(AcmeUrl::as_str))
-        {
+        for url in [order, finalize, certificate].into_iter().chain(
+            self.authorization_urls[..count]
+                .iter()
+                .flatten()
+                .map(AcmeUrl::as_str),
+        ) {
             if url.len() > MAX_URL_BYTES {
                 return Err(AcmedOrderRecordError::InvalidState);
             }
@@ -332,17 +329,24 @@ impl AcmedOrderRecord {
         output[84..92].copy_from_slice(&self.deadline_unix.to_be_bytes());
         for (index, url) in [order, finalize, certificate]
             .into_iter()
-            .chain(self.authorization_urls[..count].iter().flatten().map(AcmeUrl::as_str))
+            .chain(
+                self.authorization_urls[..count]
+                    .iter()
+                    .flatten()
+                    .map(AcmeUrl::as_str),
+            )
             .enumerate()
         {
             let start = 92 + index * 2;
             output[start..start + 2].copy_from_slice(&(url.len() as u16).to_be_bytes());
         }
         let mut cursor = ORDER_RECORD_HEADER_BYTES;
-        for url in [order, finalize, certificate]
-            .into_iter()
-            .chain(self.authorization_urls[..count].iter().flatten().map(AcmeUrl::as_str))
-        {
+        for url in [order, finalize, certificate].into_iter().chain(
+            self.authorization_urls[..count]
+                .iter()
+                .flatten()
+                .map(AcmeUrl::as_str),
+        ) {
             output[cursor..cursor + url.len()].copy_from_slice(url.as_bytes());
             cursor += url.len();
         }
@@ -382,7 +386,9 @@ impl AcmedOrderRecord {
         if lengths[3 + count..].iter().any(|length| *length != 0)
             || lengths
                 .iter()
-                .try_fold(ORDER_RECORD_HEADER_BYTES, |sum, value| sum.checked_add(*value))
+                .try_fold(ORDER_RECORD_HEADER_BYTES, |sum, value| {
+                    sum.checked_add(*value)
+                })
                 != Some(input.len())
         {
             return Err(AcmedOrderRecordError::Malformed);
@@ -531,11 +537,7 @@ pub enum AcmedChallengeRecordError {
 
 impl AcmedChallengeRecord {
     pub fn durable_object_id(&self) -> [u8; 16] {
-        challenge_object_id(
-            self.identity,
-            self.authorization_index,
-            self.identifier,
-        )
+        challenge_object_id(self.identity, self.authorization_index, self.identifier)
     }
 
     pub fn publication_receipt(
@@ -564,7 +566,9 @@ impl AcmedChallengeRecord {
             identifier: self.identifier,
             key_authorization_digest: self.key_authorization_digest,
         };
-        if receipt.provider_record_id().map_err(|_| AcmedChallengeRecordError::InvalidState)?
+        if receipt
+            .provider_record_id()
+            .map_err(|_| AcmedChallengeRecordError::InvalidState)?
             .is_empty()
             || dns01_publication_binding(
                 request,
@@ -640,7 +644,13 @@ impl AcmedChallengeRecord {
         output[82..114].copy_from_slice(&self.key_authorization_digest);
         output[114..146].copy_from_slice(&self.provider_binding_digest);
         let mut cursor = CHALLENGE_RECORD_HEADER_BYTES;
-        for value in [identifier, authorization, challenge, token, &self.provider_record_id[..provider_length]] {
+        for value in [
+            identifier,
+            authorization,
+            challenge,
+            token,
+            &self.provider_record_id[..provider_length],
+        ] {
             output[cursor..cursor + value.len()].copy_from_slice(value);
             cursor += value.len();
         }
@@ -677,7 +687,9 @@ impl AcmedChallengeRecord {
         ];
         if lengths
             .iter()
-            .try_fold(CHALLENGE_RECORD_HEADER_BYTES, |sum, value| sum.checked_add(*value))
+            .try_fold(CHALLENGE_RECORD_HEADER_BYTES, |sum, value| {
+                sum.checked_add(*value)
+            })
             != Some(input.len())
         {
             return Err(AcmedChallengeRecordError::Malformed);
@@ -699,16 +711,10 @@ impl AcmedChallengeRecord {
             wildcard_allowed,
         )
         .map_err(|_| AcmedChallengeRecordError::Malformed)?;
-        let authorization_url = decode_challenge_url(
-            next(lengths[1])?,
-            configured_directory,
-            allow_test_http,
-        )?;
-        let challenge_url = decode_challenge_url(
-            next(lengths[2])?,
-            configured_directory,
-            allow_test_http,
-        )?;
+        let authorization_url =
+            decode_challenge_url(next(lengths[1])?, configured_directory, allow_test_http)?;
+        let challenge_url =
+            decode_challenge_url(next(lengths[2])?, configured_directory, allow_test_http)?;
         let token = mrml_acme::ChallengeToken::parse(
             core::str::from_utf8(next(lengths[3])?)
                 .map_err(|_| AcmedChallengeRecordError::Malformed)?,
@@ -788,8 +794,8 @@ fn decode_challenge_url(
     allow_test_http: bool,
 ) -> Result<AcmeUrl, AcmedChallengeRecordError> {
     let text = core::str::from_utf8(input).map_err(|_| AcmedChallengeRecordError::Malformed)?;
-    let url = AcmeUrl::parse(text, allow_test_http)
-        .map_err(|_| AcmedChallengeRecordError::Malformed)?;
+    let url =
+        AcmeUrl::parse(text, allow_test_http).map_err(|_| AcmedChallengeRecordError::Malformed)?;
     url.require_origin(configured_directory.origin())
         .map_err(|_| AcmedChallengeRecordError::PolicyMismatch)?;
     Ok(url)
@@ -862,13 +868,9 @@ impl AcmedConfig {
         ) {
             (None, None, None) => Ok(None),
             (Some(advertised), Some(approved), Some(digest)) if advertised == approved => {
-                OwnerTermsApproval::from_content_digest(
-                    directory.generation,
-                    approved,
-                    digest,
-                )
-                .map(Some)
-                .map_err(|_| AcmedConfigError::InvalidTermsApproval)
+                OwnerTermsApproval::from_content_digest(directory.generation, approved, digest)
+                    .map(Some)
+                    .map_err(|_| AcmedConfigError::InvalidTermsApproval)
             }
             _ => Err(AcmedConfigError::InvalidTermsApproval),
         }
@@ -970,11 +972,9 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     if account_generation == 0 || key_generation == 0 || policy_generation == 0 {
         return Err(AcmedConfigError::InvalidBounds);
     }
-    let certificate_profile = CertificateProfile::parse(
-        text(&value, "certificate_profile")?,
-        directory_generation,
-    )
-    .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    let certificate_profile =
+        CertificateProfile::parse(text(&value, "certificate_profile")?, directory_generation)
+            .map_err(|_| AcmedConfigError::InvalidBounds)?;
     let order_lifetime_seconds = number(&value, "order_lifetime_seconds")?;
     let order_retry_limit = u8::try_from(number(&value, "order_retry_limit")?)
         .map_err(|_| AcmedConfigError::InvalidBounds)?;
@@ -1142,23 +1142,16 @@ mod tests {
         };
         let mut encoded = [0u8; ACCOUNT_RECORD_HEADER_BYTES + MAX_URL_BYTES];
         let length = pending.encode(&mut encoded).unwrap();
-        let decoded = AcmedAccountRecord::decode(
-            &encoded[..length],
-            &config.directory_url,
-            false,
-        )
-        .unwrap();
+        let decoded =
+            AcmedAccountRecord::decode(&encoded[..length], &config.directory_url, false).unwrap();
         assert!(decoded == pending);
         decoded.require_policy(&config).unwrap();
 
         let active = AcmedAccountRecord {
             phase: AcmedAccountPhase::Active,
             account_url: Some(
-                AcmeUrl::parse(
-                    "https://acme-staging-v02.api.letsencrypt.org/acct/1",
-                    false,
-                )
-                .unwrap(),
+                AcmeUrl::parse("https://acme-staging-v02.api.letsencrypt.org/acct/1", false)
+                    .unwrap(),
             ),
             ..pending
         };
@@ -1168,12 +1161,9 @@ mod tests {
                 == active
         );
         encoded[9] = 1;
-        assert!(AcmedAccountRecord::decode(
-            &encoded[..length],
-            &config.directory_url,
-            false,
-        )
-        .is_err());
+        assert!(
+            AcmedAccountRecord::decode(&encoded[..length], &config.directory_url, false,).is_err()
+        );
     }
 
     #[test]
@@ -1278,12 +1268,8 @@ mod tests {
         };
         let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
         let length = pending.encode(&mut encoded).unwrap();
-        let decoded = AcmedOrderRecord::decode(
-            &encoded[..length],
-            &config.directory_url,
-            false,
-        )
-        .unwrap();
+        let decoded =
+            AcmedOrderRecord::decode(&encoded[..length], &config.directory_url, false).unwrap();
         assert!(decoded == pending);
         decoded.require_policy(&config).unwrap();
 
@@ -1343,12 +1329,9 @@ mod tests {
         let mut wrong = HmacSha256DurableAuthenticator::new([0x62; 32]);
         assert!(DurableRecord::decode(&authenticated[..authenticated_length], &mut wrong).is_err());
         encoded[11] = 1;
-        assert!(AcmedOrderRecord::decode(
-            &encoded[..length],
-            &config.directory_url,
-            false,
-        )
-        .is_err());
+        assert!(
+            AcmedOrderRecord::decode(&encoded[..length], &config.directory_url, false,).is_err()
+        );
     }
 
     #[test]
@@ -1420,13 +1403,8 @@ mod tests {
         let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
         let length = selected.encode(&mut encoded).unwrap();
         assert!(
-            AcmedChallengeRecord::decode(
-                &encoded[..length],
-                &config.directory_url,
-                false,
-                false,
-            )
-            .unwrap()
+            AcmedChallengeRecord::decode(&encoded[..length], &config.directory_url, false, false,)
+                .unwrap()
                 == selected
         );
 
@@ -1454,13 +1432,9 @@ mod tests {
             ..selected
         };
         let length = published.encode(&mut encoded).unwrap();
-        let decoded = AcmedChallengeRecord::decode(
-            &encoded[..length],
-            &config.directory_url,
-            false,
-            false,
-        )
-        .unwrap();
+        let decoded =
+            AcmedChallengeRecord::decode(&encoded[..length], &config.directory_url, false, false)
+                .unwrap();
         assert!(decoded == published);
         assert_eq!(
             decoded

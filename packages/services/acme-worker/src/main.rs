@@ -1,31 +1,31 @@
-use mrml_acmed::{
-    AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase, AcmedChallengeRecord,
-    AcmedChannelRequestCounter, AcmedConfig, AcmedOrderPhase, AcmedOrderRecord,
-    AcmedRequestIdReservation, AcmeDirectoryClass, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
-    parse_acmed_config,
-};
 use mrml_acme::{
     AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
-    AcmeIdentifier, AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, CaClass,
-    HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS,
-    AuthorizationState, ChallengeKind, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES,
+    AcmeIdentifier, AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, AuthorizationState,
+    CaClass, ChallengeKind, HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES,
+    MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES,
     MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk, ProtectedKey, ReplayNonce,
     account_contacts_digest, dns01_txt_digest, execute_prepared_account_create,
     execute_prepared_order_create, fetch_authorization, fetch_directory, prepare_order_creation,
     recover_uncertain_account_creation, write_key_authorization,
 };
+use mrml_acmed::{
+    AcmeDirectoryClass, AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase,
+    AcmedChallengeRecord, AcmedChannelRequestCounter, AcmedConfig, AcmedOrderPhase,
+    AcmedOrderRecord, AcmedRequestIdReservation, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
+    parse_acmed_config,
+};
 use mrml_certificate::{
-    CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_RESPONSE_BYTES,
-    AcmeJwsOperation, CertdAccountKeyRequest, CertdChannelCapability, CertdChannelOperation,
-    CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
-    CertdTlsKeyRequest, CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider,
-    Dns01PublicationRequest,
-    DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
-    DurableStateStore, HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
-    MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE,
-    UnixCertdSession, decode_certd_channel_request,
-    encode_certd_account_key_request, encode_certd_channel_request, encode_certd_jws_request,
-    encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
+    AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
+    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdChannelCapability,
+    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole,
+    CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest, CloudflareDns01Provider,
+    ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DurableAuthenticator,
+    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
+    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CSR_BYTES,
+    MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE, UnixCertdSession,
+    decode_certd_channel_request, encode_certd_account_key_request, encode_certd_channel_request,
+    encode_certd_jws_request, encode_certd_tls_key_request, load_durable_authenticator,
+    p256_public_key_is_valid,
 };
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -170,11 +170,7 @@ fn serve(
 ) -> Result<(), &'static str> {
     let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
-    let reservation = reserve_channel_request_ids(
-        &config,
-        &mut state,
-        &mut state_authenticator,
-    )?;
+    let reservation = reserve_channel_request_ids(&config, &mut state, &mut state_authenticator)?;
     let bootstrap = bootstrap_certd(&config, &capability, reservation.next)?;
     let _account_public_key = bootstrap.account_public_key;
     let _tls_public_key = bootstrap.tls_public_key;
@@ -319,8 +315,11 @@ fn establish_account(
     let loaded = load_account_record(config, state, authenticator)?;
     match loaded {
         Some((record, _durable_generation)) if record.phase == AcmedAccountPhase::Active => {
-            record.require_policy(config).map_err(|_| "stale ACME account policy")?;
-            if record.key_thumbprint != public_key.thumbprint().map_err(|_| "invalid account key")?
+            record
+                .require_policy(config)
+                .map_err(|_| "stale ACME account policy")?;
+            if record.key_thumbprint
+                != public_key.thumbprint().map_err(|_| "invalid account key")?
                 || record.contact_digest != contact_digest
             {
                 return Err("ACME account record binding mismatch");
@@ -342,8 +341,11 @@ fn establish_account(
             if config.account_generation != 1 {
                 return Err("initial ACME account recovery requires generation one");
             }
-            record.require_policy(config).map_err(|_| "stale ACME account policy")?;
-            if record.key_thumbprint != public_key.thumbprint().map_err(|_| "invalid account key")?
+            record
+                .require_policy(config)
+                .map_err(|_| "stale ACME account policy")?;
+            if record.key_thumbprint
+                != public_key.thumbprint().map_err(|_| "invalid account key")?
                 || record.contact_digest != contact_digest
             {
                 return Err("ACME account recovery binding mismatch");
@@ -442,14 +444,9 @@ fn create_account(
     authenticator: &mut impl DurableAuthenticator,
     previous_durable_generation: u64,
 ) -> Result<AccountLifecycle, &'static str> {
-    let (mut lifecycle, receipt) = AccountLifecycle::prepare_create(
-        directory,
-        policy,
-        public_key,
-        terms,
-        false,
-    )
-    .map_err(|_| "cannot prepare ACME account creation")?;
+    let (mut lifecycle, receipt) =
+        AccountLifecycle::prepare_create(directory, policy, public_key, terms, false)
+            .map_err(|_| "cannot prepare ACME account creation")?;
     let pending_generation = persist_account_record(
         config,
         state,
@@ -622,7 +619,13 @@ fn establish_order(
     signer: &mut CertdEnvelopeWriter<'_>,
     state: &mut HostedDurableStateStore,
     authenticator: &mut impl DurableAuthenticator,
-) -> Result<(OrderLifecycle, [Option<AuthorizationResource>; MAX_AUTHORIZATIONS]), &'static str> {
+) -> Result<
+    (
+        OrderLifecycle,
+        [Option<AuthorizationResource>; MAX_AUTHORIZATIONS],
+    ),
+    &'static str,
+> {
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock precedes Unix epoch")?
@@ -650,11 +653,15 @@ fn establish_order(
     let identifiers = &identifier_storage[..count];
     match load_order_record(config, state, authenticator)? {
         Some((record, _)) if record.phase == AcmedOrderPhase::RequestMayHaveBeenSent => {
-            record.require_policy(config).map_err(|_| "stale ACME order policy")?;
+            record
+                .require_policy(config)
+                .map_err(|_| "stale ACME order policy")?;
             Err("ACME order response is uncertain; duplicate order creation refused")
         }
         Some((record, _)) if record.phase == AcmedOrderPhase::Created => {
-            record.require_policy(config).map_err(|_| "stale ACME order policy")?;
+            record
+                .require_policy(config)
+                .map_err(|_| "stale ACME order policy")?;
             if usize::from(record.authorization_count) != count {
                 return Err("ACME order authorization count mismatch");
             }
@@ -745,13 +752,8 @@ fn establish_order(
                 authorization_urls: [None; MAX_AUTHORIZATIONS],
                 authorization_count: 0,
             };
-            let pending_generation = persist_order_record(
-                config,
-                state,
-                authenticator,
-                0,
-                &pending,
-            )?;
+            let pending_generation =
+                persist_order_record(config, state, authenticator, 0, &pending)?;
             let mut response = [0u8; MAX_DIRECTORY_BYTES];
             let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
             let mut resources = [None; MAX_AUTHORIZATIONS];
@@ -798,13 +800,7 @@ fn establish_order(
                 authorization_urls,
                 authorization_count: count as u8,
             };
-            persist_order_record(
-                config,
-                state,
-                authenticator,
-                pending_generation,
-                &created,
-            )?;
+            persist_order_record(config, state, authenticator, pending_generation, &created)?;
             Ok((order, resources))
         }
     }
@@ -847,7 +843,9 @@ fn persist_order_record(
     previous_generation: u64,
     order: &AcmedOrderRecord,
 ) -> Result<u64, &'static str> {
-    order.require_policy(config).map_err(|_| "stale ACME order policy")?;
+    order
+        .require_policy(config)
+        .map_err(|_| "stale ACME order policy")?;
     let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
     let length = order
         .encode(&mut payload)
@@ -929,12 +927,9 @@ fn publish_dns_challenges(
             .find(|challenge| challenge.kind == ChallengeKind::Dns01)
             .ok_or("ACME DNS-01 challenge missing")?;
         let mut key_authorization = [0u8; MAX_KEY_AUTHORIZATION];
-        let key_authorization_length = write_key_authorization(
-            &challenge.token,
-            account.key,
-            &mut key_authorization,
-        )
-        .map_err(|_| "cannot construct DNS-01 key authorization")?;
+        let key_authorization_length =
+            write_key_authorization(&challenge.token, account.key, &mut key_authorization)
+                .map_err(|_| "cannot construct DNS-01 key authorization")?;
         let key_authorization_digest =
             dns01_txt_digest(&key_authorization[..key_authorization_length]);
         let object = challenge_object_id(config.identity, index as u8, identifier);
