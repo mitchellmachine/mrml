@@ -435,6 +435,29 @@ impl Repository {
         Ok(())
     }
 
+    pub fn validate_reachable_refs(&self) -> Result<usize, RepositoryError> {
+        let mut tips = Vector::new();
+        for (_, id) in self.branches()? {
+            if !tips.contains(&id) {
+                tips.push(id);
+            }
+        }
+        for (_, id) in self.tags()? {
+            let commit = self.peel_commit(id)?;
+            if !tips.contains(&commit) {
+                tips.push(commit);
+            }
+        }
+        if let Some(head) = self.head()? {
+            let commit = self.peel_commit(head)?;
+            if !tips.contains(&commit) {
+                tips.push(commit);
+            }
+        }
+        self.validate_commit_tips(&tips)?;
+        Ok(tips.len())
+    }
+
     pub fn resolve_revision(&self, revision: &str) -> Result<ObjectId, RepositoryError> {
         if let Some(split) = revision.find(['~', '^']) {
             if split == 0 {
@@ -1333,6 +1356,14 @@ impl Repository {
         self.write_index(&index)
     }
 
+    pub fn unstage_all(&self) -> Result<(), RepositoryError> {
+        let index = match self.head()? {
+            Some(id) => self.tree_index(self.read_commit(id)?.tree)?,
+            None => Index::empty_with_format(self.object_format),
+        };
+        self.write_index(&index)
+    }
+
     pub fn diff(&self, staged: bool, paths: &[Text]) -> Result<Vector<FileDiff>, RepositoryError> {
         for path in paths {
             validate_worktree_path(path)?;
@@ -2220,6 +2251,47 @@ impl Repository {
         write_file(&temporary, &encoded)?;
         mrml_runtime::rename_file(&temporary, &join_path(&self.git_dir, "index"))?;
         Ok(())
+    }
+
+    pub fn remove_paths(&self, paths: &[Text]) -> Result<(), RepositoryError> {
+        if paths.is_empty() {
+            return Err(RepositoryError::InvalidWorktreePath);
+        }
+        let mut checked = Vector::new();
+        checked
+            .try_reserve_exact(paths.len())
+            .map_err(|_| RepositoryError::TooManyFiles)?;
+        let index = self.index()?;
+        for relative in paths {
+            validate_worktree_path(relative)?;
+            let disk = join_path(&self.worktree, relative);
+            if !path_is_file(&disk) || index.entry(relative).is_none() {
+                return Err(RepositoryError::ReferenceMissing);
+            }
+            checked.push(disk);
+        }
+        for disk in checked {
+            mrml_runtime::remove_file(&disk)?;
+        }
+        self.stage(paths)
+    }
+
+    pub fn move_path(&self, source: &str, destination: &str) -> Result<(), RepositoryError> {
+        validate_worktree_path(source)?;
+        validate_worktree_path(destination)?;
+        if source == destination || self.index()?.entry(source).is_none() {
+            return Err(RepositoryError::InvalidWorktreePath);
+        }
+        let source_disk = join_path(&self.worktree, source);
+        let destination_disk = join_path(&self.worktree, destination);
+        if !path_is_file(&source_disk) || path_exists(&destination_disk) {
+            return Err(RepositoryError::AlreadyExists);
+        }
+        if let Some(parent) = parent_path(&destination_disk) {
+            create_dir_all(parent)?;
+        }
+        mrml_runtime::rename_file(&source_disk, &destination_disk)?;
+        self.stage(&[Text::from(source), Text::from(destination)])
     }
 
     pub fn write_tree(&self) -> Result<ObjectId, RepositoryError> {

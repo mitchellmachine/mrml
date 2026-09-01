@@ -1138,6 +1138,20 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 .map_err(|error| anyhow!("{}", error))?;
             native_dashboard(repository)
         }
+        "rm" => {
+            checked_positionals(require_arguments("rm", tail)?)?;
+            native_repository(repository)?
+                .remove_paths(tail)
+                .map_err(|error| anyhow!("{}", error))?;
+            native_dashboard(repository)
+        }
+        "mv" if tail.len() == 2 => {
+            checked_positionals(tail)?;
+            native_repository(repository)?
+                .move_path(&tail[0], &tail[1])
+                .map_err(|error| anyhow!("{}", error))?;
+            native_dashboard(repository)
+        }
         "unstage" => {
             checked_positionals(require_arguments("unstage", tail)?)?;
             native_repository(repository)?
@@ -1146,9 +1160,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
             native_dashboard(repository)
         }
         "reset" if tail.is_empty() => {
-            let paths = [Text::from(".")];
             native_repository(repository)?
-                .unstage(&paths)
+                .unstage_all()
                 .map_err(|error| anyhow!("{}", error))?;
             native_dashboard(repository)
         }
@@ -1613,6 +1626,13 @@ fn dispatch(cli: &Cli) -> Result<()> {
             }
             Ok(())
         }
+        "fsck" if tail.is_empty() => {
+            let count = native_repository(repository)?
+                .validate_reachable_refs()
+                .map_err(|error| anyhow!("{}", error))?;
+            println!("validated {} reachable reference tip(s)", count);
+            Ok(())
+        }
         "stash" if tail.is_empty() || (tail.len() == 1 && tail[0] == "list") => {
             for (index, (id, commit)) in native_repository(repository)?
                 .stash_list(256)
@@ -1714,12 +1734,13 @@ mod tests {
             ("rev-parse", &["HEAD"][..]),
             ("ls-tree", &["HEAD"][..]),
             ("show-ref", &[][..]),
+            ("fsck", &[][..]),
         ] {
             invoke(&path, command, arguments);
         }
         write_file(&tracked, b"changed\n").unwrap();
         invoke(&path, "stage", &["tracked.txt"]);
-        invoke(&path, "reset", &["tracked.txt"]);
+        invoke(&path, "reset", &[]);
         invoke(&path, "restore", &["tracked.txt"]);
         invoke(&path, "branch", &["feature"]);
         invoke(&path, "checkout", &["main"]);
@@ -1735,6 +1756,8 @@ mod tests {
         write_file(&tracked, b"stashed\n").unwrap();
         invoke(&path, "stash", &["push", "checkpoint"]);
         invoke(&path, "stash", &["pop"]);
+        invoke(&path, "mv", &["tracked.txt", "renamed.txt"]);
+        invoke(&path, "rm", &["renamed.txt"]);
         remove_dir_all(&path).unwrap();
     }
 }
