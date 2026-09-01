@@ -21,6 +21,12 @@ itself. Git object-format enforcement remains an independent authenticated
 repository-state check and is never inferred from a `.git` suffix or other
 name.
 
+The filesystem repository backend exposes the exact active
+repository/trust/revocation generation tuple only after reopening authenticated
+active state, and refuses this startup view unless its object format is
+SHA-256. Gitd uses this narrow projection to compare catalog generations; it
+does not infer security state from storage paths or repository labels.
+
 Focused hosted Linux evidence:
 
 - `./target/debug/mrml test org.mrml.service.gitd --target linux`: 9 tests pass,
@@ -28,6 +34,9 @@ Focused hosted Linux evidence:
   unknown-profile rejection, malformed identities, digest substitution,
   symlink refusal, and insecure mode refusal, plus real authority/certd Unix
   exchanges.
+- `./target/debug/mrml test org.mrml.tool.git --target linux`: 194 library and 3
+  CLI tests passed, including exact SHA-256 authority-generation projection from
+  a reopened filesystem repository view.
 
 Patent review: **NOT_TRIGGERED**. Canonical bounded text parsing, SHA-256 byte
 binding, file metadata validation, and deployment-owned ACL/profile lookup are

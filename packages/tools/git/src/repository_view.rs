@@ -748,6 +748,20 @@ impl FilesystemRepositoryView {
         Ok(self.load_state()?.repository_generation)
     }
 
+    pub fn authority_generations(
+        &self,
+    ) -> Result<(RepositoryGeneration, TrustGeneration, RevocationGeneration), GitdCoreError> {
+        let state = self.load_state()?;
+        if state.object_format != crate::ObjectFormat::Sha256 {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        Ok((
+            state.repository_generation,
+            state.trust_generation,
+            state.revocation_generation,
+        ))
+    }
+
     pub fn repository_summary(
         &self,
         repository: &RepositoryIdentity,
@@ -1860,6 +1874,14 @@ mod tests {
                 .unwrap()
                 .with_pack_cache(&cache_path)
                 .unwrap();
+        assert_eq!(
+            view.authority_generations(),
+            Ok((
+                RepositoryGeneration(4),
+                TrustGeneration(5),
+                RevocationGeneration(6)
+            ))
+        );
         let evidence =
             VerificationSummaryEvidence::from_verified_hybrid_commit(&VerifiedCommitProof {
                 commit,
