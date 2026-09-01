@@ -60,6 +60,18 @@ package = "org.mrml.tool.git"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_http"
+compile_name = "mrml-http"
+package = "org.mrml.library.http"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_git_authority"
 compile_name = "mrml-git-authority"
 package = "org.mrml.service.git-authority"

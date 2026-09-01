@@ -33,8 +33,11 @@ sorts records by repository and verifier, rejects duplicates, retains only HMAC
 verifiers and metadata, revalidates every record MAC on decode, and authenticates
 the exact complete file with a distinct pepper-bound HMAC. Truncation, trailing
 bytes, mutation, wrong peppers, malformed metadata, and noncanonical order fail
-closed. Hosted no-symlink file loading, atomic administration updates, and daemon
-composition remain separate responsibilities.
+closed. Gitd now securely loads the 32-byte pepper and bounded token store with
+`O_NOFOLLOW`, exact owner/private-mode checks, and no zero-key fallback, then
+constructs the HTTP edge's repository policies from the authenticated deployment
+catalog. Both native configuration and dependency checks execute this gate.
+Atomic one-shot administration updates remain a separate responsibility.
 
 Focused hosted Linux evidence:
 
@@ -42,6 +45,9 @@ Focused hosted Linux evidence:
   passed, including record-store canonicalization, authorization after reopen,
   mutation/truncation/wrong-pepper rejection, and the existing edge ordering
   that authenticates before receive-body consumption.
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 10 tests
+  passed, including private-mode token/pepper loading, symlink refusal, catalog
+  parsing, authenticated catalog files, and real authority/certd channels.
 
 Patent review: **NOT_TRIGGERED**. This is conventional random bearer-token,
 keyed-verifier, authenticated-record, scope, expiry, and revocation handling; no

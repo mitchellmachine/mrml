@@ -12,7 +12,7 @@ const RECORD_VERSION: u8 = 1;
 const TOKEN_STORE_MAGIC: &[u8; 8] = b"MRMLTRV1";
 const TOKEN_STORE_TAG_BYTES: usize = 32;
 const MAX_TOKEN_RECORDS: usize = 1_000_000;
-const MAX_TOKEN_STORE_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_TOKEN_STORE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepositoryProfile {
