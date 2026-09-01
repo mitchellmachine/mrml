@@ -382,18 +382,7 @@ impl QuicConnection {
                 ..
             } = frame
             {
-                let mut intervals = Vector::new();
-                let mut smallest = largest - first_range;
-                intervals
-                    .try_push((smallest, largest))
-                    .map_err(|_| QuicError::Allocation)?;
-                for (gap, range) in ranges {
-                    let range_largest = smallest - gap - 2;
-                    smallest = range_largest - range;
-                    intervals
-                        .try_push((smallest, range_largest))
-                        .map_err(|_| QuicError::Allocation)?;
-                }
+                let intervals = validated_ack_intervals(largest, first_range, ranges)?;
                 let mut acknowledged_indexes = Vector::new();
                 for (index, pending) in self.sent.iter().enumerate() {
                     if intervals
@@ -459,6 +448,35 @@ impl QuicConnection {
         }
         Ok(frames)
     }
+}
+
+fn validated_ack_intervals(
+    largest: u64,
+    first_range: u64,
+    ranges: &[(u64, u64)],
+) -> Result<Vector<(u64, u64)>, QuicError> {
+    if ranges.len() > 256 {
+        return Err(QuicError::Limit);
+    }
+    let mut intervals = Vector::new();
+    let mut smallest = largest
+        .checked_sub(first_range)
+        .ok_or(QuicError::InvalidFrame)?;
+    intervals
+        .try_push((smallest, largest))
+        .map_err(|_| QuicError::Allocation)?;
+    for &(gap, range) in ranges {
+        let range_largest = smallest
+            .checked_sub(gap.checked_add(2).ok_or(QuicError::Limit)?)
+            .ok_or(QuicError::InvalidFrame)?;
+        smallest = range_largest
+            .checked_sub(range)
+            .ok_or(QuicError::InvalidFrame)?;
+        intervals
+            .try_push((smallest, range_largest))
+            .map_err(|_| QuicError::Allocation)?;
+    }
+    Ok(intervals)
 }
 
 pub struct QuicClientConnection;
@@ -993,6 +1011,30 @@ mod tests {
         assert_eq!(
             validate_key_phase(true, false),
             Err(QuicError::ProtocolViolation)
+        );
+    }
+
+    #[test]
+    fn authenticated_ack_ranges_reject_underflow_without_side_effects() {
+        assert_eq!(
+            validated_ack_intervals(1, 2, &[]),
+            Err(QuicError::InvalidFrame)
+        );
+        assert_eq!(
+            validated_ack_intervals(10, 0, &[(u64::MAX, 0)]),
+            Err(QuicError::Limit)
+        );
+        assert_eq!(
+            validated_ack_intervals(10, 0, &[(9, 0)]),
+            Err(QuicError::InvalidFrame)
+        );
+        assert_eq!(
+            validated_ack_intervals(10, 0, &[(0, 9)]),
+            Err(QuicError::InvalidFrame)
+        );
+        assert_eq!(
+            &validated_ack_intervals(10, 2, &[(1, 3)]).unwrap()[..],
+            &[(8, 10), (2, 5)]
         );
     }
 }

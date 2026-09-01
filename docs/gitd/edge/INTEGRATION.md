@@ -108,3 +108,8 @@ separate length-delimited fields before a domain-labeled SHA-256 digest. The
 hosted Linux HTTP regression covers the previous trust/revocation XOR collision
 and distinct route/path contexts. Static `/projects` also now emits its own
 canonical URL instead of incorrectly canonicalizing to `/`.
+
+ACK recovery now independently uses checked interval construction. The focused
+HTTP suite covers first-range, gap-addition, gap-subtraction, and range
+underflow plus a valid discontiguous interval; malformed authenticated ACK data
+cannot reach subtraction with wrapping or panic semantics.
