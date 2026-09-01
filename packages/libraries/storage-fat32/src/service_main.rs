@@ -3,6 +3,7 @@
 
 use core::arch::{asm, naked_asm};
 use mrml_interface_storage_block_provider_v1::BLOCK_PROVIDER_DEPENDENCY_HANDOFF_BYTES;
+use mrml_interface_storage_filesystem_v3::FilesystemProviderReady;
 use mrml_kernel::{Capability, ObjectId};
 use mrml_storage_fat32::{
     Fat32BlockMountBackend, Fat32BlockReadUserspaceTransport, Fat32DispatchService,
@@ -141,6 +142,15 @@ unsafe extern "sysv64" fn mrml_fat32_service(
         )
     }
     .unwrap_or_else(|_| halt());
+    let ready = FilesystemProviderReady::new(
+        filesystem_module_object,
+        launch_binding.filesystem_provider_generation(),
+        launch_binding.block_provider_generation(),
+        launch_binding.system_generation(),
+        launch_binding.association_generation(),
+        launch_binding.block_endpoint().0,
+    )
+    .unwrap_or_else(|| halt());
     launch_data.fill(0);
     syscalls
         .release_launch_data(launch_data_capability)
@@ -183,7 +193,7 @@ unsafe extern "sysv64" fn mrml_fat32_service(
     let mut capability = [0; 1];
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SHARED_SCRATCH) };
     let mut response = [0; mrml_storage_fat32::FAT32_DISPATCH_RESPONSE_BYTES];
-    unsafe { send_ready(endpoint, caller, provider_generation) };
+    unsafe { send_ready(endpoint, caller, ready) };
     loop {
         service
             .serve_one(
@@ -197,8 +207,8 @@ unsafe extern "sysv64" fn mrml_fat32_service(
     }
 }
 
-unsafe fn send_ready(endpoint: u64, caller: u64, provider_generation: u64) {
-    let payload = provider_generation.to_le_bytes();
+unsafe fn send_ready(endpoint: u64, caller: u64, ready: FilesystemProviderReady) {
+    let payload = ready.encode();
     let mut status = 4_u64;
     unsafe {
         asm!(

@@ -30,8 +30,11 @@ pub const LOOKUP_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const LOOKUP_RESPONSE_BYTES: usize = 16;
 pub const OPEN_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const OPEN_RESPONSE_BYTES: usize = 16;
+pub const FILESYSTEM_PROVIDER_READY_BYTES: usize = 104;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
 const ABI_SCHEMA_VERSION: u16 = 1;
+const READY_MAGIC: [u8; 8] = *b"MRFSRDY\0";
+const READY_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
@@ -39,6 +42,110 @@ pub enum ProtocolError {
     InvalidRequest,
     InvalidResponse,
     Transport,
+}
+
+/// Non-authorizing identity evidence emitted after a filesystem provider has
+/// consumed its launch record and is ready to receive calls. The receiver must
+/// still exact-match the IPC sender and its retained launch receipt; no field
+/// in this record grants authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilesystemProviderReady {
+    module_object: u64,
+    provider_generation: u64,
+    block_provider_generation: u64,
+    system_generation: u64,
+    association_generation: u64,
+    block_endpoint_object: u64,
+}
+
+impl FilesystemProviderReady {
+    pub const fn new(
+        module_object: u64,
+        provider_generation: u64,
+        block_provider_generation: u64,
+        system_generation: u64,
+        association_generation: u64,
+        block_endpoint_object: u64,
+    ) -> Option<Self> {
+        if module_object == 0
+            || provider_generation == 0
+            || block_provider_generation == 0
+            || system_generation == 0
+            || association_generation == 0
+            || block_endpoint_object == 0
+        {
+            return None;
+        }
+        Some(Self {
+            module_object,
+            provider_generation,
+            block_provider_generation,
+            system_generation,
+            association_generation,
+            block_endpoint_object,
+        })
+    }
+
+    pub const fn module_object(self) -> u64 {
+        self.module_object
+    }
+
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+
+    pub const fn block_provider_generation(self) -> u64 {
+        self.block_provider_generation
+    }
+
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
+    }
+
+    pub const fn association_generation(self) -> u64 {
+        self.association_generation
+    }
+
+    pub const fn block_endpoint_object(self) -> u64 {
+        self.block_endpoint_object
+    }
+
+    pub fn encode(self) -> [u8; FILESYSTEM_PROVIDER_READY_BYTES] {
+        let mut bytes = [0; FILESYSTEM_PROVIDER_READY_BYTES];
+        bytes[..8].copy_from_slice(&READY_MAGIC);
+        bytes[8..10].copy_from_slice(&READY_SCHEMA_VERSION.to_le_bytes());
+        bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+        bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+        bytes[56..64].copy_from_slice(&self.module_object.to_le_bytes());
+        bytes[64..72].copy_from_slice(&self.provider_generation.to_le_bytes());
+        bytes[72..80].copy_from_slice(&self.block_provider_generation.to_le_bytes());
+        bytes[80..88].copy_from_slice(&self.system_generation.to_le_bytes());
+        bytes[88..96].copy_from_slice(&self.association_generation.to_le_bytes());
+        bytes[96..104].copy_from_slice(&self.block_endpoint_object.to_le_bytes());
+        bytes
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolError> {
+        if bytes.len() != FILESYSTEM_PROVIDER_READY_BYTES
+            || bytes[..8] != READY_MAGIC
+            || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != READY_SCHEMA_VERSION
+            || bytes[10..16] != [0; 6]
+            || bytes[16..48] != INTERFACE_FINGERPRINT
+            || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+            || bytes[52..56] != [0; 4]
+        {
+            return Err(ProtocolError::InvalidResponse);
+        }
+        Self::new(
+            u64::from_le_bytes(bytes[56..64].try_into().unwrap()),
+            u64::from_le_bytes(bytes[64..72].try_into().unwrap()),
+            u64::from_le_bytes(bytes[72..80].try_into().unwrap()),
+            u64::from_le_bytes(bytes[80..88].try_into().unwrap()),
+            u64::from_le_bytes(bytes[88..96].try_into().unwrap()),
+            u64::from_le_bytes(bytes[96..104].try_into().unwrap()),
+        )
+        .ok_or(ProtocolError::InvalidResponse)
+    }
 }
 
 /// Canonical operation identity recovered from a complete filesystem request.
@@ -1640,6 +1747,45 @@ pub fn decode_format_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ready() -> FilesystemProviderReady {
+        FilesystemProviderReady::new(41, 5, 7, 9, 12, 21).unwrap()
+    }
+
+    #[test]
+    fn filesystem_provider_ready_round_trips_every_exact_identity() {
+        let encoded = ready().encode();
+        assert_eq!(encoded.len(), FILESYSTEM_PROVIDER_READY_BYTES);
+        let decoded = FilesystemProviderReady::decode(&encoded).unwrap();
+        assert_eq!(decoded.module_object(), 41);
+        assert_eq!(decoded.provider_generation(), 5);
+        assert_eq!(decoded.block_provider_generation(), 7);
+        assert_eq!(decoded.system_generation(), 9);
+        assert_eq!(decoded.association_generation(), 12);
+        assert_eq!(decoded.block_endpoint_object(), 21);
+    }
+
+    #[test]
+    fn filesystem_provider_ready_rejects_noncanonical_or_zero_identity() {
+        assert_eq!(
+            FilesystemProviderReady::decode(&ready().encode()[..103]),
+            Err(ProtocolError::InvalidResponse)
+        );
+        for offset in [0, 8, 10, 16, 48, 52] {
+            let mut invalid = ready().encode();
+            invalid[offset] ^= 1;
+            assert_eq!(
+                FilesystemProviderReady::decode(&invalid),
+                Err(ProtocolError::InvalidResponse)
+            );
+        }
+        assert_eq!(FilesystemProviderReady::new(0, 5, 7, 9, 12, 21), None);
+        assert_eq!(FilesystemProviderReady::new(41, 0, 7, 9, 12, 21), None);
+        assert_eq!(FilesystemProviderReady::new(41, 5, 0, 9, 12, 21), None);
+        assert_eq!(FilesystemProviderReady::new(41, 5, 7, 0, 12, 21), None);
+        assert_eq!(FilesystemProviderReady::new(41, 5, 7, 9, 0, 21), None);
+        assert_eq!(FilesystemProviderReady::new(41, 5, 7, 9, 12, 0), None);
+    }
 
     fn framed_request(
         operation: u32,
