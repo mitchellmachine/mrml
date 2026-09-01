@@ -122,7 +122,8 @@ pub use lifecycle_transport_hosted::{
     MAX_HOSTED_LIFECYCLE_MEMORY,
 };
 pub use manager::{
-    CertificateManager, CertificateManagerError, RenewalLease, MAX_MANAGED_IDENTITIES,
+    CertificateManager, CertificateManagerError, ManagedIdentityStatus, RenewalLease,
+    MAX_MANAGED_IDENTITIES,
 };
 pub use native_service::{
     CertificateNativeRoute, CertificateNativeServiceError, CertificateNativeServiceLoop,

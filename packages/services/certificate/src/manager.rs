@@ -1,4 +1,7 @@
-use crate::{DurableRenewalStage, IdentityManager, RenewalJournal, RenewalSchedule, TlsIdentityId};
+use crate::{
+    DurableRenewalStage, IdentityManager, RenewalJournal, RenewalSchedule, TlsIdentityDescriptor,
+    TlsIdentityId,
+};
 
 pub const MAX_MANAGED_IDENTITIES: usize = 16;
 
@@ -25,6 +28,22 @@ pub struct RenewalLease {
     pub policy_generation: u64,
     pub lease_generation: u64,
     pub expires_at_unix: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ManagedIdentityStatus {
+    pub identity: TlsIdentityId,
+    pub policy_generation: u64,
+    pub active: Option<TlsIdentityDescriptor>,
+    pub renewal: Option<RenewalSchedule>,
+    pub renewal_lease: Option<RenewalLease>,
+    pub replacement: Option<RenewalSchedule>,
+}
+
+impl ManagedIdentityStatus {
+    pub const fn renewal_in_progress(&self) -> bool {
+        self.renewal_lease.is_some()
+    }
 }
 
 /// Bounded owner of independent certificate identity state machines.
@@ -57,6 +76,31 @@ impl CertificateManager {
 
     pub const fn is_empty(&self) -> bool {
         self.count == 0
+    }
+
+    pub fn statuses(&self) -> impl Iterator<Item = ManagedIdentityStatus> + '_ {
+        self.identities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, manager)| {
+                manager.as_ref().map(|manager| ManagedIdentityStatus {
+                    identity: manager.identity(),
+                    policy_generation: manager.policy_generation(),
+                    active: manager.active_descriptor(),
+                    renewal: self.schedules[index],
+                    renewal_lease: self.leases[index],
+                    replacement: self.pending_schedules[index],
+                })
+            })
+    }
+
+    pub fn status(
+        &self,
+        identity: TlsIdentityId,
+    ) -> Result<ManagedIdentityStatus, CertificateManagerError> {
+        self.statuses()
+            .find(|status| status.identity == identity)
+            .ok_or(CertificateManagerError::IdentityUnavailable)
     }
 
     pub fn enroll(
@@ -378,6 +422,26 @@ mod tests {
         registry.remove_empty(first).unwrap();
         assert_eq!(registry.len(), 1);
         assert!(registry.get(second).is_ok());
+    }
+
+    #[test]
+    fn status_catalog_is_bounded_exact_and_secret_free() {
+        let mut registry = CertificateManager::new();
+        let first = TlsIdentityId([1; 16]);
+        let second = TlsIdentityId([2; 16]);
+        registry.enroll(first, 4).unwrap();
+        registry.enroll(second, 7).unwrap();
+        assert_eq!(registry.statuses().count(), 2);
+        let first_status = registry.status(first).unwrap();
+        assert!(first_status.identity == first);
+        assert_eq!(first_status.policy_generation, 4);
+        assert!(first_status.active.is_none());
+        assert!(!first_status.renewal_in_progress());
+        assert!(registry.status(second).unwrap().identity == second);
+        assert_eq!(
+            registry.status(TlsIdentityId([3; 16])).err(),
+            Some(CertificateManagerError::IdentityUnavailable)
+        );
     }
 
     #[test]

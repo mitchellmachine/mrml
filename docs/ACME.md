@@ -191,6 +191,12 @@ persists replacement relationships. Its fallback derives timing from the
 certificate's actual lifetime, applies jittered exponential backoff and
 Retry-After, and exposes healthy, warning, critical, and expired states without
 assuming a 90-day profile.
+The manager owns a bounded catalog of sixteen independently scoped identities
+and now exposes a secret-free status iterator plus exact-identity lookup. Each
+status contains only the identity and policy generation, current public
+descriptor, renewal schedule, active lease, and staged replacement. This is the
+shared source for lifecycle status responses, CLI listing, authenticated health,
+and diagnostics; it cannot reveal signing capability IDs or mutate state.
 The unattended renewal coordinator acquires one identity-scoped lease, requires
 a fresh use-only candidate key and exact RFC 9773 replacement binding, verifies
 the returned chain receipt, stages the next schedule, publishes and exercises

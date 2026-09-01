@@ -11972,3 +11972,10 @@ certificate lifecycle ABI over an already supervisor-authorized byte stream,
 with fixed bounds, deadlines, per-operation authorization, and scratch erasure.
 It adds no certificate protocol, validation topology, MultiTLS multiplexing,
 challenge proxy, public CA operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Bounded certificate status catalog
+
+Patent review: **NOT_TRIGGERED**. This increment exposes a bounded read-only
+view of existing local identity and renewal state for administration and health
+reporting. It adds no certificate protocol, validation topology, signing
+mechanism, certificate authority operation, or recorded re-review trigger.
