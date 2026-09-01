@@ -30,10 +30,13 @@ pub use http3::{
 pub use quic::{
     HandshakePacket, InitialPacket, QuicConnectionPhase, QuicConnectionState, QuicError, QuicFrame,
     QuicInitialKeys, QuicPacketSpace, QuicRecovery, QuicRole, QuicStreamAssembler,
-    QuicTransportParameters, QuicVersion, SentPacket, ShortPacket,
+    QuicTransportParameters, QuicVersion, SentPacket, ShortPacket, initial_token,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
-pub use quic_retry::{QuicRetryKey, QuicRetryPurpose, QuicRetryTokenManager};
+pub use quic_retry::{
+    QuicAdmissionController, QuicAdmissionDecision, QuicRetryKey, QuicRetryPurpose,
+    QuicRetryTokenManager,
+};
 
 const MAX_HEADER: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

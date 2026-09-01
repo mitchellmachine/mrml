@@ -12,6 +12,7 @@ const V2_INITIAL_SALT: [u8; 20] = [
     0xf9, 0xbd, 0x2e, 0xd9,
 ];
 const MAX_DATAGRAM: usize = 65_527;
+const MAX_INITIAL_TOKEN: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuicVersion {
@@ -131,6 +132,29 @@ pub fn initial_version_and_destination_id(
     id.try_extend_from_slice(&input[6..6 + length])
         .map_err(|_| QuicError::Allocation)?;
     Ok((version, id))
+}
+
+/// Returns the untrusted token bytes carried by an Initial packet without
+/// allocating or decrypting the packet. Callers must authenticate the token
+/// before using any of its contents or allocating connection state.
+pub fn initial_token(input: &[u8]) -> Result<&[u8], QuicError> {
+    let _ = initial_version_and_destination_id(input)?;
+    let destination_length = input[5] as usize;
+    let mut at = 6usize
+        .checked_add(destination_length)
+        .ok_or(QuicError::Limit)?;
+    let source_length = *input.get(at).ok_or(QuicError::Truncated)? as usize;
+    at += 1;
+    if source_length > 20 || input.len().saturating_sub(at) < source_length {
+        return Err(QuicError::InvalidPacket);
+    }
+    at += source_length;
+    let token_length =
+        usize::try_from(take_varint(input, &mut at)?).map_err(|_| QuicError::Limit)?;
+    if token_length > MAX_INITIAL_TOKEN || input.len().saturating_sub(at) < token_length {
+        return Err(QuicError::InvalidPacket);
+    }
+    Ok(&input[at..at + token_length])
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1726,9 +1750,19 @@ impl InitialPacket {
         version: QuicVersion,
         keys: &QuicInitialKeys,
     ) -> Result<Vector<u8>, QuicError> {
+        self.seal_for_with_token(version, keys, &[])
+    }
+
+    pub fn seal_for_with_token(
+        &self,
+        version: QuicVersion,
+        keys: &QuicInitialKeys,
+        token: &[u8],
+    ) -> Result<Vector<u8>, QuicError> {
         if self.destination_id.len() > 20
             || self.source_id.len() > 20
             || self.payload.len() > MAX_DATAGRAM
+            || token.len() > MAX_INITIAL_TOKEN
         {
             return Err(QuicError::Limit);
         }
@@ -1746,7 +1780,9 @@ impl InitialPacket {
             .map_err(|_| QuicError::Allocation)?;
         out.try_extend_from_slice(&self.source_id)
             .map_err(|_| QuicError::Allocation)?;
-        put_varint(&mut out, 0)?;
+        put_varint(&mut out, token.len() as u64)?;
+        out.try_extend_from_slice(token)
+            .map_err(|_| QuicError::Allocation)?;
         put_varint(&mut out, (pn_len + self.payload.len() + 16) as u64)?;
         let pn_offset = out.len();
         out.try_extend_from_slice(&(self.packet_number as u32).to_be_bytes())
@@ -1830,7 +1866,7 @@ impl InitialPacket {
         at += source_length;
         let token_length =
             usize::try_from(take_varint(input, &mut at)?).map_err(|_| QuicError::Limit)?;
-        if token_length != 0 || input.len().saturating_sub(at) < token_length {
+        if token_length > MAX_INITIAL_TOKEN || input.len().saturating_sub(at) < token_length {
             return Err(QuicError::InvalidPacket);
         }
         at += token_length;
@@ -2222,6 +2258,25 @@ mod tests {
             payload: [1].into(),
         };
         assert!(initial.seal_padded(&initial_keys).unwrap().len() >= 1200);
+        let retry = [0x5a; 64];
+        let wire = initial
+            .seal_for_with_token(QuicVersion::V1, &initial_keys, &retry)
+            .unwrap();
+        assert_eq!(initial_token(&wire).unwrap(), retry);
+        assert_eq!(
+            InitialPacket::open_for(QuicVersion::V1, &wire, &initial_keys, 0)
+                .unwrap()
+                .0,
+            initial
+        );
+        assert_eq!(
+            initial.seal_for_with_token(
+                QuicVersion::V1,
+                &initial_keys,
+                &[0; MAX_INITIAL_TOKEN + 1]
+            ),
+            Err(QuicError::Limit)
+        );
     }
     #[test]
     fn connection_state_enforces_amplification_flow_and_path_validation() {
