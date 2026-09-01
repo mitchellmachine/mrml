@@ -11424,3 +11424,12 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 account receipt, deterministic payload, exact prepared JWK, signed POST,
 same-origin resource response, and confirmed/uncertain lifecycle transitions.
 It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Prepared ACME order-creation operation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment binds an ordinary new-order
+POST to the exact account generation/key, directory generation, profile,
+identifier payload, deadline, and returned resource. Lost or malformed success
+responses are classified as uncertain rather than retried blindly. It adds no
+recorded re-review-trigger mechanism.

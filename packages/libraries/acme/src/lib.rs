@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 mod account;
 mod ari;
 mod base64url;
@@ -60,7 +63,11 @@ pub use jose::{
     write_flattened_jws,
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
-pub use operation::{AccountCreateBuffers, CreateAccountError, execute_prepared_account_create};
+pub use operation::{
+    AccountCreateBuffers, CreateAccountError, OrderCreateBuffers, OrderCreateError,
+    OrderCreateFailure, PrepareOrderError, PreparedOrderCreation, execute_prepared_account_create,
+    execute_prepared_order_create, prepare_order_creation,
+};
 pub use order::{
     AuthorizationBinding, AuthorizationState, ChallengeKind, ChallengeState, MAX_AUTHORIZATIONS,
     MAX_CHALLENGES_PER_AUTHORIZATION, MAX_ORDER_IDENTIFIERS, OrderError, OrderLifecycle,
