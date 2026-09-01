@@ -31,8 +31,47 @@ than optional IDs being interpreted as ambient authority.
 separately limits input, output, memory, and work units. Implementations must
 enforce the smaller of transport and backend limits and use checked arithmetic.
 
+`ReceivePackCore` is the concrete receive-side composition boundary for an
+injected edge transport. Its exact request envelope binds repository
+generation, quarantine/history limits, transaction identity, admitted ordinary
+free space, and work budget. Verification-only `ProtectedCommitVerifier` and
+audit-receipt authorities are injected separately. Its standard and
+policy-classified operations parse the request, reserve before the body,
+quarantine and authenticate objects, verify every introduced commit, durably
+activate the opaque verified transaction, append the authenticated receipt,
+and emit report-status-v2. It owns no signing key and exposes no raw protected-
+ref mutation.
+
 `FilesystemRepositoryView` binds one validated `RepositoryIdentity`, one
-canonical first-party object store, and one canonical `ActiveRefFile`. It
+canonical first-party object store, one canonical `ActiveRefFile`, and an
+optional read-only `VerificationSummaryStore`. Evidence enters that store only
+by conversion from an opaque `VerifiedCommitProof` or generalized
+`VerifiedGitObjectProof`; repository contents, object names, signatures, and
+first-party status cannot manufacture a summary. Generalized evidence covers
+exact verified commits, annotated tags, source manifests, source locks, and
+build receipts under their distinct purposes and required Git object kinds. The
+store is bounded to 5,000 strictly ordered exact records and carries repository
+identity plus repository, trust, and revocation generations.
+
+`verification_summary` exact-matches the requested repository and active
+trust/revocation generations, validates that the requested object exists under
+the active object format, then requires evidence for that exact object and
+active repository generation. It re-reads repository generation before return.
+Missing evidence returns signature failure, stale generations return a typed
+stale result, and cross-repository requests remain unauthorized. The structured
+hybrid result is a projection of previously verified evidence, not a verifier,
+policy decision, signing path, or source of authority.
+
+`read_verified_metadata` resolves a caller-selected path only inside an exact
+Git tree and accepts only the `SourceManifest`, `SourceLock`, or `BuildReceipt`
+purpose. It authenticates the target as a bounded blob, requires an exact
+generation-bound hybrid summary for the same blob and purpose, and returns its
+tree, path, object ID, size, and all authority generations. This avoids
+inventing ambient host paths or canonical filenames where the package/release
+format has not defined one; unsigned or purpose-substituted blobs remain data
+and fail with a signature error.
+
+The view otherwise
 implements bounded repository summaries, full-ref resolution, first-parent
 commit pages, tree-path pages, and exact blob reads. Every page is tagged with
 the active repository generation, and the component re-reads that generation
@@ -45,16 +84,39 @@ checked offsets resume an exact tree enumeration or blob byte range; returned
 continuations remain bound to the rechecked repository generation. Invalid or
 overflowing offsets fail closed. Commit pages have a companion exact-details
 query carrying the authenticated tree, complete bounded parent list, author,
-and message. README resolution checks only `README.md`, `README.txt`,
+and message.
+
+Annotated tags have a separate bounded page/details API. Each result carries
+the active repository generation, full `refs/tags/...` name, exact tag object,
+exact target object and object type, tagger, and message. Parsing requires the
+canonical `object`, `type`, `tag`, and `tagger` header sequence with one value
+each, exact object-format width, and an authenticated target whose actual kind
+matches the declared type. Duplicate, reordered, malformed, foreign-width, or
+type-substituted headers fail closed. Lightweight tag refs are skipped by the
+annotated listing and rejected by annotated details; they are never relabeled
+as signed or annotated objects. Checked offsets and entry/byte limits bound
+pagination, and repository generation is re-read before either page or details
+return.
+
+README resolution checks only `README.md`, `README.txt`,
 `README.rst`, then `README`, in that order, inside the exact Git tree and
 returns a generation-tagged blob descriptor. An immutable-pack descriptor
 validates the complete exact commit closure before returning the repository
 generation, object format, exact commit ID, pack profile version, and encoder
-version; those fields form the cache/production request identity and do not
-claim a pack has already been generated. This component does not yet implement
-release/event descriptors, verification summaries, the
-complete upload-pack profile, or production receive construction, so it is not
-yet a complete production `GitdCoreBackend`.
+version. Those fields form the cache/production request identity. An optional
+durable cache now precomputes, populates, and serves exact ordered
+wants/haves/generation/profile/encoder representations, while later generations
+miss by construction. This component does not yet implement release
+descriptors, durable verification-evidence loading, or the complete upload-pack
+profile, so it is not yet a complete production `GitdCoreBackend`.
+
+`repository_events_after` provides bounded cache-invalidation events across
+the repository, trust, revocation, and pack generations. A cursor ahead of any
+authoritative generation fails stale; an unchanged cursor returns no event; a
+changed cursor returns one exact previous-to-current snapshot and a new cursor.
+The method rechecks repository generation before return. This is deliberately
+a coalesced state-change event, not an invented historical audit log; durable
+per-transition audit history remains owned by the authenticated receipt store.
 
 The shared pkt-line codec accepts lowercase hexadecimal canonical framing,
 streams fragmented reads and writes, supports flush/delimiter/response-end
@@ -71,20 +133,28 @@ capabilities, unknown commands, and unsupported shallow, deepen, filter,
 want-ref, packfile-URI, and future arguments fail closed. Parser coverage is
 separate from the bounded clone backend described below.
 
-`FilesystemRepositoryView` now implements a bounded protocol-v2 clone subset.
+`FilesystemRepositoryView` now implements a bounded protocol-v2 fetch subset.
+When configured with the arrival store, it reads only packs named by the exact
+active `MRPKSET1` manifest; installed but unselected arrivals are invisible.
+Object queries and fetch traversal share this selected view, and the complete
+active state is re-read before success so ref, trust, revocation, repository,
+pack, default-branch, or manifest changes make the operation stale.
 `ls-refs` reads only the exact active ref generation, applies bounded byte
 prefixes, emits the default `HEAD` symref or an explicitly requested unborn
 default, performs bounded annotated-tag peeling when requested, and rechecks the
-generation before its terminal flush. Fetch accepts exactly one advertised active tip, requires `done`,
-rejects haves, thin packs, and `sideband-all`, generates the reachable SHA-1 or
-SHA-256 pack using first-party code, rechecks the generation before output, and
+generation before its terminal flush. Fetch accepts one or more advertised
+active tips, requires `done`, and subtracts the complete authenticated object
+closure of each bounded `have`. Unknown or malformed have objects fail closed.
+It rejects thin packs and `sideband-all`, generates the remaining SHA-1 or
+SHA-256 closure using first-party code, rechecks the generation before output, and
 preflights the complete framed response before emitting the standard `packfile`
 section with mandatory band-1 framing. The golden
 hosted-Linux test reparses that emitted pack and finds the requested commit.
-Incremental wants/haves negotiation, arbitrary reachable wants, thin-pack
-completion, streaming generation without a whole-pack memory allocation, and
-receive-pack backend activation remain open, so the omitted features are not
-advertised.
+Arbitrary non-tip reachable wants, ACK negotiation rounds, thin-pack
+generation, and streaming generation without a whole-pack memory allocation
+remain open, so the omitted features are not advertised. Receive activation is
+provided separately by `ReceivePackCore` with injected verification and receipt
+authorities.
 
 The receive-pack command boundary parses at most 32 exact-width SHA-1 or
 SHA-256 old/new IDs and validated full ref names, requires `report-status-v2`

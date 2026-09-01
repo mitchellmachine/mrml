@@ -161,6 +161,7 @@ pub enum SignaturePurpose {
     BuildReceipt,
     KeyRotation,
     KeyRevocation,
+    EmergencyRecovery,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,6 +179,24 @@ pub struct CommitDetails {
     pub parents: Vector<ObjectId>,
     pub author: Text,
     pub message: Text,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnnotatedTagDetails {
+    pub repository_generation: RepositoryGeneration,
+    pub reference: FullRefName,
+    pub tag: ObjectId,
+    pub target: ObjectId,
+    pub target_type: crate::ObjectKind,
+    pub tagger: Text,
+    pub message: Text,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnnotatedTagPage {
+    pub repository_generation: RepositoryGeneration,
+    pub tags: Vector<AnnotatedTagDetails>,
+    pub next_offset: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -206,12 +225,44 @@ pub struct ReadmeCandidate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedMetadataDescriptor {
+    pub repository_generation: RepositoryGeneration,
+    pub tree: ObjectId,
+    pub path: RepositoryPath,
+    pub blob: ObjectId,
+    pub size: u64,
+    pub purpose: SignaturePurpose,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImmutablePackDescriptor {
     pub repository_generation: RepositoryGeneration,
     pub commit: ObjectId,
     pub object_format: ObjectFormat,
     pub pack_profile_version: u32,
     pub encoder_version: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepositoryEventCursor {
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub pack_generation: PackGeneration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepositoryEvent {
+    pub previous: RepositoryEventCursor,
+    pub current: RepositoryEventCursor,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryEventPage {
+    pub events: Vector<RepositoryEvent>,
+    pub next: RepositoryEventCursor,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -467,6 +518,24 @@ pub trait GitdCoreBackend {
         Err(GitdCoreError::Unsupported)
     }
 
+    fn read_annotated_tag_page(
+        &self,
+        _repository: &RepositoryIdentity,
+        _offset: u64,
+        _limits: QueryLimits,
+    ) -> Result<AnnotatedTagPage, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn read_annotated_tag_details(
+        &self,
+        _repository: &RepositoryIdentity,
+        _reference: &FullRefName,
+        _limits: QueryLimits,
+    ) -> Result<AnnotatedTagDetails, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
     fn read_tree_page(
         &self,
         repository: &RepositoryIdentity,
@@ -519,11 +588,33 @@ pub trait GitdCoreBackend {
         Err(GitdCoreError::Unsupported)
     }
 
+    fn read_verified_metadata(
+        &self,
+        _repository: &RepositoryIdentity,
+        _treeish: ObjectId,
+        _path: &RepositoryPath,
+        _purpose: SignaturePurpose,
+        _policy: TrustGeneration,
+        _revocations: RevocationGeneration,
+        _limits: QueryLimits,
+    ) -> Result<VerifiedMetadataDescriptor, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
     fn immutable_pack_descriptor(
         &self,
         _repository: &RepositoryIdentity,
         _commit: ObjectId,
     ) -> Result<ImmutablePackDescriptor, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn repository_events_after(
+        &self,
+        _repository: &RepositoryIdentity,
+        _cursor: RepositoryEventCursor,
+        _limits: QueryLimits,
+    ) -> Result<RepositoryEventPage, GitdCoreError> {
         Err(GitdCoreError::Unsupported)
     }
 

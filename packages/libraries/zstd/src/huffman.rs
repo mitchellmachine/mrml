@@ -1,5 +1,7 @@
 use crate::bits::{ReverseBitWriter, ReverseBits};
-use crate::fse::{State as FseState, parse_table};
+use crate::fse::{
+    parse_table, serialize_probabilities, CompressionPath, State as FseState, Table as FseTable,
+};
 use crate::{Error, Result};
 use mrml_runtime::Vector;
 
@@ -140,6 +142,101 @@ impl EncoderTable {
             output.push((high << 4) | low);
         }
         Ok(output)
+    }
+
+    fn serialize_fse_tree(&self) -> Result<Vector<u8>> {
+        // The existing bounded decoder retires the two interleaved FSE states
+        // as a pair, so an odd weight count cannot be represented by this
+        // profile. Direct weights remain the deterministic fallback.
+        if self.explicit_weights.len() < 2 || self.explicit_weights.len() & 1 != 0 {
+            return Err(Error::InvalidFseTable);
+        }
+        let mut occurrences = [0u16; MAX_BITS as usize + 1];
+        for weight in &self.explicit_weights {
+            if *weight > MAX_BITS {
+                return Err(Error::InvalidHuffmanTree);
+            }
+            occurrences[*weight as usize] += 1;
+        }
+        let active = occurrences.iter().filter(|count| **count != 0).count();
+        if active < 2 || active > 12 {
+            return Err(Error::InvalidFseTable);
+        }
+
+        // Accuracy 5 is the smallest RFC-defined Huffman-weight FSE table.
+        // A near-uniform normalization keeps every transition at least one bit,
+        // which makes the decoder's bounded two-state termination unambiguous.
+        let mut probabilities = [0i16; MAX_BITS as usize + 1];
+        let base = 32 / active;
+        let mut remainder = 32 % active;
+        for (symbol, count) in occurrences.iter().enumerate() {
+            if *count == 0 {
+                continue;
+            }
+            probabilities[symbol] = (base + usize::from(remainder != 0)) as i16;
+            remainder = remainder.saturating_sub(1);
+        }
+        let last = occurrences
+            .iter()
+            .rposition(|count| *count != 0)
+            .ok_or(Error::InvalidFseTable)?;
+        let probabilities = &probabilities[..=last];
+        let table = FseTable::from_probabilities(probabilities, 5)?;
+        let header = serialize_probabilities(probabilities, 5)?;
+
+        let mut first_symbols = Vector::with_capacity(self.explicit_weights.len() / 2)
+            .map_err(|_| Error::Allocation)?;
+        let mut second_symbols = Vector::with_capacity(self.explicit_weights.len() / 2)
+            .map_err(|_| Error::Allocation)?;
+        for pair in self.explicit_weights.chunks(2) {
+            first_symbols.push(pair[0] as u16);
+            second_symbols.push(pair[1] as u16);
+        }
+        let first = CompressionPath::for_symbols(&table, &first_symbols)?;
+        let second = CompressionPath::for_symbols(&table, &second_symbols)?;
+        let maximum_bits = self
+            .explicit_weights
+            .len()
+            .checked_mul(table.accuracy as usize)
+            .ok_or(Error::BlockTooLarge)?;
+        let mut writer = ReverseBitWriter::new(maximum_bits);
+        writer.write(first.initial() as u32, table.accuracy)?;
+        writer.write(second.initial() as u32, table.accuracy)?;
+        for index in 0..first_symbols.len().saturating_sub(1) {
+            let (value, bits) = first.transition(&table, index)?;
+            writer.write(value, bits)?;
+            let (value, bits) = second.transition(&table, index)?;
+            writer.write(value, bits)?;
+        }
+        let stream = writer.finish()?;
+        let payload_length = header
+            .len()
+            .checked_add(stream.len())
+            .ok_or(Error::BlockTooLarge)?;
+        if payload_length >= 128 {
+            return Err(Error::BlockTooLarge);
+        }
+        let mut output =
+            Vector::with_capacity(payload_length + 1).map_err(|_| Error::Allocation)?;
+        output.push(payload_length as u8);
+        output
+            .try_extend_from_slice(&header)
+            .map_err(|_| Error::Allocation)?;
+        output
+            .try_extend_from_slice(&stream)
+            .map_err(|_| Error::Allocation)?;
+        Ok(output)
+    }
+
+    /// Select the shorter standards-conformant tree representation. Equal-size
+    /// encodings prefer direct weights to keep the simpler form canonical.
+    pub(crate) fn serialize_tree(&self) -> Result<Vector<u8>> {
+        let direct = self.serialize_direct_tree()?;
+        match self.serialize_fse_tree() {
+            Ok(compressed) if compressed.len() < direct.len() => Ok(compressed),
+            Ok(_) | Err(Error::InvalidFseTable | Error::BlockTooLarge) => Ok(direct),
+            Err(error) => Err(error),
+        }
     }
 
     pub(crate) fn encode_stream(&self, input: &[u8]) -> Result<Vector<u8>> {
@@ -407,5 +504,44 @@ mod tests {
             encoder.encode_stream(&[2]),
             Err(Error::InvalidHuffmanStream)
         );
+    }
+
+    #[test]
+    fn canonical_encoder_fse_compresses_weights_and_round_trips_tree() {
+        let mut frequencies = [0u32; 256];
+        for symbol in 0..=96 {
+            frequencies[symbol] = (97 - symbol) as u32;
+        }
+        let encoder = EncoderTable::from_frequencies(&frequencies).unwrap();
+        assert_eq!(encoder.explicit_weights.len(), 96);
+        let compressed = encoder.serialize_fse_tree().unwrap();
+        assert!(compressed[0] < 128);
+        let (decoded, consumed) = parse_tree(&compressed).unwrap();
+        assert_eq!(consumed, compressed.len());
+        assert_eq!(decoded.maximum_bits, encoder.table.maximum_bits);
+        assert_eq!(decoded.lookup.len(), encoder.table.lookup.len());
+        let mut input = Vector::new();
+        for symbol in 0..=96 {
+            input.push(symbol as u8);
+        }
+        let stream = encoder.encode_stream(&input).unwrap();
+        let mut round_trip = Vector::new();
+        decode_stream(&stream, &decoded, input.len(), &mut round_trip).unwrap();
+        assert_eq!(round_trip, input);
+    }
+
+    #[test]
+    fn canonical_encoder_selects_only_strictly_smaller_fse_tree() {
+        let mut frequencies = [0u32; 256];
+        for symbol in 0..=96 {
+            frequencies[symbol] = (symbol % 7 + 1) as u32;
+        }
+        let encoder = EncoderTable::from_frequencies(&frequencies).unwrap();
+        let direct = encoder.serialize_direct_tree().unwrap();
+        let compressed = encoder.serialize_fse_tree().unwrap();
+        let selected = encoder.serialize_tree().unwrap();
+        assert_eq!(selected.len(), direct.len().min(compressed.len()));
+        assert_eq!(selected[0] < 128, compressed.len() < direct.len());
+        parse_tree(&selected).unwrap();
     }
 }

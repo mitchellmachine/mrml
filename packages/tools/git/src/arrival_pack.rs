@@ -6,12 +6,13 @@ use mrml_runtime::{
 };
 
 use crate::pack_file::validate_pack_file_with_bases;
+use crate::pack_set::AuthenticatedPackIndexSummary;
 use crate::sha1::GitObjectHasher;
 use crate::{
     BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
     DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
-    PackError, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2, parse_pack_index_v2,
-    parse_pack_with_index,
+    PackError, PackSetManifest, QuarantineTransaction, QuarantineTransactionId,
+    build_pack_index_v2, parse_pack_index_v2, parse_pack_with_index,
 };
 
 pub struct ArrivalPackStore {
@@ -22,6 +23,59 @@ pub struct ArrivalPackStore {
 }
 
 impl ArrivalPackStore {
+    /// Stages an already independently verified compaction result using the
+    /// same immutable directory format as a received pack. The transaction ID
+    /// is derived by the compaction compositor, never supplied by an edge.
+    #[allow(dead_code)] // invoked by the internal Linux compaction compositor
+    pub(crate) fn stage_compacted_pack(
+        &self,
+        transaction: QuarantineTransactionId,
+        pack: &[u8],
+        expected_ids: &[ObjectId],
+    ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
+        if expected_ids.is_empty()
+            || u64::try_from(pack.len()).map_err(|_| DurableFailure::DiskFull)?
+                > self.max_pack_bytes
+        {
+            return Err(DurableFailure::DiskFull);
+        }
+        let (objects, entries) =
+            parse_pack_with_index(pack, self.format).map_err(|_| DurableFailure::VerifierCrash)?;
+        if objects.len() != expected_ids.len()
+            || objects
+                .iter()
+                .zip(expected_ids)
+                .any(|(object, expected)| object.id != *expected)
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let trailer = ObjectId::from_bytes(
+            self.format,
+            pack.get(pack.len().saturating_sub(self.format.hash_len())..)
+                .ok_or(DurableFailure::VerifierCrash)?,
+        )
+        .ok_or(DurableFailure::VerifierCrash)?;
+        let index = build_pack_index_v2(self.format, &entries, trailer)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let directory = self.quarantine_path(transaction);
+        if path_exists(&directory) || path_exists(&self.arrival_path(transaction)) {
+            return Err(DurableFailure::StaleLock);
+        }
+        create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
+        let scratch = join_path(&directory, "objects");
+        create_dir_all(&scratch).map_err(|_| DurableFailure::DiskFull)?;
+        for object in &objects {
+            write_scratch_object(&scratch, object.id, object.kind, &object.contents)?;
+        }
+        write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
+        write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
+        sync_pack_directory(&scratch)?;
+        sync_pack_directory(&directory)?;
+        sync_pack_directory(&self.quarantine)?;
+        let object_count = u32::try_from(objects.len()).map_err(|_| DurableFailure::DiskFull)?;
+        self.summarize_directory(&directory, transaction, object_count)
+    }
+
     /// Streams the exact already-admitted body into an isolated transaction
     /// directory. The directory is not part of normal object lookup and is
     /// fsynced before the lifecycle advances to `ObjectsQuarantined`.
@@ -269,8 +323,15 @@ impl ArrivalPackStore {
             return Err(DurableFailure::StaleLock);
         }
         create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
+        let scratch = join_path(&directory, "objects");
+        create_dir_all(&scratch).map_err(|_| DurableFailure::DiskFull)?;
+        for object in &objects {
+            write_scratch_object(&scratch, object.id, object.kind, &object.contents)
+                .map_err(|_| DurableFailure::ShortWrite)?;
+        }
         write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
         write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
+        sync_pack_directory(&scratch)?;
         sync_pack_directory(&directory)?;
         sync_pack_directory(&self.quarantine)?;
         self.verify_directory(&directory, transaction.reservation().object_count())?;
@@ -302,7 +363,61 @@ impl ArrivalPackStore {
         self.verify_directory(&self.arrival_path(transaction), object_count)
     }
 
+    pub(crate) fn authenticated_installed_summary(
+        &self,
+        transaction: QuarantineTransactionId,
+        object_count: u32,
+    ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
+        self.summarize_directory(&self.arrival_path(transaction), transaction, object_count)
+    }
+
+    pub(crate) fn read_selected_object(
+        &self,
+        manifest: &PackSetManifest,
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<crate::Object, GitdCoreError> {
+        if manifest.object_format() != self.format || id.format() != self.format || max_bytes == 0 {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let entry = manifest
+            .entries()
+            .iter()
+            .find(|entry| entry.object_ids().binary_search(&id).is_ok())
+            .ok_or(GitdCoreError::ObjectValidation)?;
+        let summary = self
+            .authenticated_installed_summary(entry.transaction(), entry.object_count())
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if summary.pack_checksum != entry.pack_checksum()
+            || summary.index_checksum != entry.index_checksum()
+            || summary.pack_bytes != entry.pack_bytes()
+            || summary.index_bytes != entry.index_bytes()
+            || summary.work_units != entry.work_units()
+            || &*summary.object_ids != entry.object_ids()
+        {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let (kind, contents) = read_scratch_object(
+            &join_path(&self.arrival_path(entry.transaction()), "objects"),
+            id,
+            max_bytes,
+        )
+        .map_err(|_| GitdCoreError::ObjectValidation)?
+        .ok_or(GitdCoreError::ObjectValidation)?;
+        Ok(crate::Object { kind, contents })
+    }
+
     fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
+        self.summarize_directory(directory, QuarantineTransactionId([1; 16]), object_count)
+            .map(|_| ())
+    }
+
+    fn summarize_directory(
+        &self,
+        directory: &str,
+        transaction: QuarantineTransactionId,
+        object_count: u32,
+    ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
         let max_work = self
             .max_pack_bytes
             .checked_mul(2)
@@ -350,7 +465,33 @@ impl ArrivalPackStore {
         if parsed.pack_checksum() != validated.checksum {
             return Err(DurableFailure::VerifierCrash);
         }
-        Ok(())
+        let pack_bytes = File::open_regular(&join_path(directory, "objects.pack"))
+            .and_then(|file| file.len())
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let index_bytes = u64::try_from(index.len()).map_err(|_| DurableFailure::DiskFull)?;
+        let index_checksum =
+            ObjectId::from_bytes(self.format, &index[index.len() - self.format.hash_len()..])
+                .ok_or(DurableFailure::VerifierCrash)?;
+        let work_units = pack_bytes
+            .checked_add(validated.expanded_bytes)
+            .ok_or(DurableFailure::DiskFull)?;
+        let mut object_ids = Vector::new();
+        object_ids
+            .try_reserve_exact(parsed.entries().len())
+            .map_err(|_| DurableFailure::DiskFull)?;
+        for entry in parsed.entries() {
+            object_ids.push(entry.id);
+        }
+        Ok(AuthenticatedPackIndexSummary {
+            transaction,
+            object_count,
+            pack_checksum: parsed.pack_checksum(),
+            index_checksum,
+            pack_bytes,
+            index_bytes,
+            work_units,
+            object_ids,
+        })
     }
 
     fn quarantine_path(&self, transaction: QuarantineTransactionId) -> Text {
@@ -370,11 +511,8 @@ fn read_scratch_object(
     if !path_exists(&path) {
         return Ok(None);
     }
-    let encoded = read_regular_bounded(
-        &path,
-        max_bytes.checked_add(1).ok_or(PackError::TooLarge)?,
-    )
-    .map_err(|_| PackError::MissingBase)?;
+    let encoded = read_regular_bounded(&path, max_bytes.checked_add(1).ok_or(PackError::TooLarge)?)
+        .map_err(|_| PackError::MissingBase)?;
     let (&kind, contents) = encoded.split_first().ok_or(PackError::MissingBase)?;
     let kind = match kind {
         1 => crate::ObjectKind::Commit,

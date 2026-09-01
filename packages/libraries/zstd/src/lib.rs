@@ -15,8 +15,9 @@ mod userspace_syscall_adapter;
 
 use core::fmt;
 use mrml_interface_zstd_v3::{
-    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, DecompressError, ProtocolError,
-    ZstdTransport, decode_decompress_request, encode_decompress_response, encode_output_too_small,
+    decode_decompress_request, encode_decompress_response, encode_output_too_small,
+    DecompressError, ProtocolError, ZstdTransport, DECOMPRESS_REQUEST_BYTES,
+    DECOMPRESS_RESPONSE_BYTES,
 };
 #[cfg(any(windows, unix))]
 use mrml_runtime::Vector;
@@ -372,7 +373,7 @@ fn encode_compressed_candidate(
 
 #[cfg(any(windows, unix))]
 fn encode_huffman_literals(literals: &[u8]) -> Result<Option<Vector<u8>>> {
-    if literals.len() < 2 || literals.len() > 1023 {
+    if literals.len() < 2 || literals.len() > MAX_BLOCK {
         return Ok(None);
     }
     let mut frequencies = [0u32; 256];
@@ -386,28 +387,90 @@ fn encode_huffman_literals(literals: &[u8]) -> Result<Option<Vector<u8>>> {
         Err(Error::InvalidHuffmanTree) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let tree = table.serialize_direct_tree()?;
-    let stream = table.encode_stream(literals)?;
-    let compressed_size = tree
+    let tree = table.serialize_tree()?;
+    let regenerated = literals.len();
+    let one_stream = table.encode_stream(literals)?;
+    let one_size = tree
         .len()
-        .checked_add(stream.len())
+        .checked_add(one_stream.len())
         .ok_or(Error::BlockTooLarge)?;
-    if compressed_size > 1023 {
+    if regenerated <= 1023 && one_size <= 1023 {
+        let packed = 2u32 | (regenerated as u32) << 4 | (one_size as u32) << 14;
+        let mut output = Vector::new();
+        output
+            .try_extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8])
+            .map_err(|_| Error::Allocation)?;
+        output
+            .try_extend_from_slice(&tree)
+            .map_err(|_| Error::Allocation)?;
+        output
+            .try_extend_from_slice(&one_stream)
+            .map_err(|_| Error::Allocation)?;
+        return Ok(Some(output));
+    }
+    if regenerated < 4 {
         return Ok(None);
     }
-    let regenerated = literals.len();
-    let packed =
-        2u32 | ((regenerated as u32 & 0x3ff) << 4) | ((compressed_size as u32 & 0x3ff) << 14);
+
+    let per = regenerated.div_ceil(4);
+    let boundaries = [0, per, per * 2, per * 3, regenerated];
+    let mut streams: [Vector<u8>; 4] = core::array::from_fn(|_| Vector::new());
+    for index in 0..4 {
+        streams[index] =
+            table.encode_stream(&literals[boundaries[index]..boundaries[index + 1]])?;
+    }
+    if streams[..3]
+        .iter()
+        .any(|stream| stream.len() > u16::MAX as usize)
+    {
+        return Ok(None);
+    }
+    let compressed_size = tree
+        .len()
+        .checked_add(6)
+        .and_then(|size| {
+            streams
+                .iter()
+                .try_fold(size, |total, stream| total.checked_add(stream.len()))
+        })
+        .ok_or(Error::BlockTooLarge)?;
+    let (packed, header_bytes) = if regenerated <= 1023 && compressed_size <= 1023 {
+        (
+            6u64 | (regenerated as u64) << 4 | (compressed_size as u64) << 14,
+            3,
+        )
+    } else if regenerated <= 16_383 && compressed_size <= 16_383 {
+        (
+            10u64 | (regenerated as u64) << 4 | (compressed_size as u64) << 18,
+            4,
+        )
+    } else if regenerated <= 0x3ffff && compressed_size <= 0x3ffff {
+        (
+            14u64 | (regenerated as u64) << 4 | (compressed_size as u64) << 22,
+            5,
+        )
+    } else {
+        return Ok(None);
+    };
     let mut output = Vector::new();
-    output
-        .try_extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8])
-        .map_err(|_| Error::Allocation)?;
+    for shift in 0..header_bytes {
+        output
+            .try_push((packed >> (shift * 8)) as u8)
+            .map_err(|_| Error::Allocation)?;
+    }
     output
         .try_extend_from_slice(&tree)
         .map_err(|_| Error::Allocation)?;
-    output
-        .try_extend_from_slice(&stream)
-        .map_err(|_| Error::Allocation)?;
+    for stream in &streams[..3] {
+        output
+            .try_extend_from_slice(&(stream.len() as u16).to_le_bytes())
+            .map_err(|_| Error::Allocation)?;
+    }
+    for stream in streams {
+        output
+            .try_extend_from_slice(&stream)
+            .map_err(|_| Error::Allocation)?;
+    }
     Ok(Some(output))
 }
 
@@ -902,6 +965,141 @@ mod tests {
     }
 
     #[test]
+    fn four_stream_huffman_literals_cover_large_header_formats() {
+        for (length, expected_format) in [(5_000usize, 2u8), (20_000, 3)] {
+            let mut literals = Vector::new();
+            for index in 0..length {
+                literals.push(if index % 11 == 0 { b'b' } else { b'a' });
+            }
+            let encoded = encode_huffman_literals(&literals).unwrap().unwrap();
+            assert_eq!((encoded[0] >> 2) & 3, expected_format);
+            let (decoded, consumed) = parse_literals(&encoded, &mut None).unwrap();
+            assert_eq!(consumed, encoded.len());
+            match decoded {
+                Literals::Decoded(bytes) => assert_eq!(bytes, literals),
+                _ => panic!("expected four-stream Huffman literals"),
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_four_stream_jumps_and_literal_resource_bounds_fail_closed() {
+        let mut literals = Vector::new();
+        literals.try_resize(5_000, b'a').unwrap();
+        for index in (0..literals.len()).step_by(11) {
+            literals[index] = b'b';
+        }
+        let encoded = encode_huffman_literals(&literals).unwrap().unwrap();
+        assert_eq!((encoded[0] >> 2) & 3, 2);
+        let (_, tree_bytes) = huffman::parse_tree(&encoded[4..]).unwrap();
+        let jump = 4 + tree_bytes;
+        let mut malformed = encoded.clone();
+        malformed[jump..jump + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(matches!(
+            parse_literals(&malformed, &mut None),
+            Err(Error::InvalidHuffmanStream)
+        ));
+        assert!(matches!(
+            parse_literals(&encoded[..3], &mut None),
+            Err(Error::InvalidLiteralsSection)
+        ));
+
+        let mut oversized = Vector::new();
+        oversized.try_resize(MAX_BLOCK + 1, b'a').unwrap();
+        assert_eq!(encode_huffman_literals(&oversized), Ok(None));
+    }
+
+    #[test]
+    fn deterministic_profile_corpus_records_bounded_ratios() {
+        let mut html = Vector::new();
+        for _ in 0..1_000 {
+            html.try_extend_from_slice(
+                b"<article><h2>MRML</h2><p>bounded semantic page</p></article>",
+            )
+            .unwrap();
+        }
+        let first = encode_http(&html, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        let second = encode_http(&html, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        assert_eq!(first, second);
+        assert!(first.len() * 100 < html.len() * 20);
+        assert_eq!(decode(&first).unwrap(), html);
+
+        let mut incompressible = Vector::new();
+        let mut state = 0x6d72_6d6cu32;
+        for _ in 0..64 * 1024 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            incompressible.push((state >> 24) as u8);
+        }
+        let encoded = encode_http(&incompressible, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        // Four-byte magic, five-byte single-segment header at this size, and
+        // one three-byte raw block header are the bounded expansion ceiling.
+        assert!(encoded.len() <= incompressible.len() + 12);
+        assert_eq!(decode(&encoded).unwrap(), incompressible);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_zstd_1_5_7_decodes_rfc_profile_when_configured() {
+        let Some(oracle) = mrml_runtime::environment_variable("MRML_ZSTD_ORACLE_1_5_7") else {
+            return;
+        };
+        let input = b"MRML RFC 8878 interoperability probe: abcabcabcabcabcabcabcabc";
+        let encoded = encode_http(input, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        let stem =
+            mrml_runtime::mrml_format!("/tmp/mrml-zstd-oracle-{}", mrml_runtime::process_id());
+        let frame_path = mrml_runtime::mrml_format!("{stem}.zst");
+        mrml_runtime::write_file(&frame_path, &encoded).unwrap();
+        let output = mrml_runtime::Command::new(&oracle)
+            .args(["--decompress", "--stdout", "--quiet"])
+            .arg(&frame_path)
+            .output()
+            .unwrap();
+        mrml_runtime::remove_file(&frame_path).unwrap();
+        assert!(
+            output.status.success(),
+            "pinned zstd rejected MRML frame: {}",
+            core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
+        );
+        assert_eq!(&output.stdout[..], input);
+
+        // Exercise the four-stream Huffman literal layout independently of the
+        // match finder by placing one literal section and zero sequences in a
+        // complete compressed block.
+        let mut large = Vector::new();
+        for index in 0..5_000 {
+            large.push(if index % 11 == 0 { b'b' } else { b'a' });
+        }
+        let mut block = encode_huffman_literals(&large).unwrap().unwrap();
+        block.push(0); // zero sequences
+        let mut frame = Vector::new();
+        frame
+            .try_extend_from_slice(&FRAME_MAGIC.to_le_bytes())
+            .unwrap();
+        frame.push(0x60); // single segment with a two-byte content size
+        frame
+            .try_extend_from_slice(&((large.len() - 256) as u16).to_le_bytes())
+            .unwrap();
+        let header = ((block.len() as u32) << 3) | (2 << 1) | 1;
+        frame
+            .try_extend_from_slice(&[header as u8, (header >> 8) as u8, (header >> 16) as u8])
+            .unwrap();
+        frame.try_extend_from_slice(&block).unwrap();
+        mrml_runtime::write_file(&frame_path, &frame).unwrap();
+        let output = mrml_runtime::Command::new(&oracle)
+            .args(["--decompress", "--stdout", "--quiet"])
+            .arg(&frame_path)
+            .output()
+            .unwrap();
+        mrml_runtime::remove_file(&frame_path).unwrap();
+        assert!(
+            output.status.success(),
+            "pinned zstd rejected four-stream MRML frame: {}",
+            core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
+        );
+        assert_eq!(output.stdout, large);
+    }
+
+    #[test]
     fn allocation_free_target_floor_is_bounded_and_fail_closed() {
         let raw = [
             0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0, b'a', b'b', b'c',
@@ -928,8 +1126,8 @@ mod tests {
     #[test]
     fn abi_three_provider_uses_bounded_views_and_reports_required_output() {
         use mrml_interface_zstd_v3::{
-            BorrowedReadView, BorrowedWriteView, decode_decompress_response,
-            encode_decompress_request,
+            decode_decompress_response, encode_decompress_request, BorrowedReadView,
+            BorrowedWriteView,
         };
 
         let frame = [

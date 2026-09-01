@@ -11,6 +11,7 @@ pub enum GitdPressureMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdWorkClass {
     CachedPage,
+    OpenConnection,
     Handshake,
     LightweightRequest,
     Render,
@@ -77,8 +78,8 @@ pub struct GitdResourceController {
     maximum_sources: usize,
     bucket_capacity: u32,
     refill_per_tick: u32,
-    active: [u32; 8],
-    limits: [u32; 8],
+    active: [u32; 9],
+    limits: [u32; 9],
     recovery_observations: u8,
 }
 
@@ -93,14 +94,18 @@ impl GitdResourceController {
             maximum_sources,
             bucket_capacity: 64,
             refill_per_tick: 8,
-            active: [0; 8],
-            limits: [64, 128, 1_000, 8, 4, 64, 16, 4],
+            active: [0; 9],
+            limits: [64, 8_000, 128, 1_000, 8, 4, 64, 16, 4],
             recovery_observations: 0,
         })
     }
 
     pub fn mode(&self) -> GitdPressureMode {
         self.mode
+    }
+
+    pub fn active_count(&self, class: GitdWorkClass) -> u32 {
+        self.active[class as usize]
     }
 
     pub fn observe(&mut self, snapshot: GitdResourceSnapshot) {
@@ -249,5 +254,35 @@ mod tests {
         assert_eq!(controller.mode(), GitdPressureMode::Recovery);
         controller.observe(healthy);
         assert_eq!(controller.mode(), GitdPressureMode::Normal);
+    }
+
+    #[test]
+    fn configured_concurrency_envelope_is_exact_and_fail_closed() {
+        fn fill(class: GitdWorkClass, expected: usize) {
+            let mut controller = GitdResourceController::new(expected + 1).unwrap();
+            for index in 0..expected {
+                let source = SourceIdentity::ipv4([
+                    10,
+                    ((index >> 8) & 0xff) as u8,
+                    (index & 0xff) as u8,
+                    1,
+                ]);
+                assert!(controller.admit(source, class, 0), "rejected slot {index}");
+            }
+            assert!(!controller.admit(SourceIdentity::ipv4([198, 51, 100, 254]), class, 0));
+            for _ in 0..expected {
+                controller.complete(class);
+            }
+            assert!(controller.admit(SourceIdentity::ipv4([198, 51, 100, 254]), class, 1));
+        }
+
+        fill(GitdWorkClass::OpenConnection, 8_000);
+        fill(GitdWorkClass::Handshake, 128);
+        fill(GitdWorkClass::LightweightRequest, 1_000);
+        fill(GitdWorkClass::CachedPage, 64);
+        fill(GitdWorkClass::Render, 8);
+        fill(GitdWorkClass::Zstd, 4);
+        fill(GitdWorkClass::GitRead, 64);
+        fill(GitdWorkClass::GitPush, 16);
     }
 }

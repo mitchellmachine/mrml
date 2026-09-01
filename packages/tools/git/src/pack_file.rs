@@ -715,7 +715,10 @@ mod tests {
 
     #[test]
     fn file_validator_resolves_ofs_and_forward_ref_deltas() {
-        let root = join_path(&mrml_runtime::temporary_directory(), "mrml-pack-file-deltas");
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            "mrml-pack-file-deltas",
+        );
         let _ = mrml_runtime::remove_dir_all(&root);
         mrml_runtime::create_dir_all(&root).unwrap();
         let format = ObjectFormat::Sha256;
@@ -747,7 +750,9 @@ mod tests {
             4096,
             &mut |id, kind, bytes| {
                 let mut copied = Vector::new();
-                copied.try_extend_from_slice(bytes).map_err(|_| PackError::TooLarge)?;
+                copied
+                    .try_extend_from_slice(bytes)
+                    .map_err(|_| PackError::TooLarge)?;
                 stored_objects.borrow_mut().push((id, kind, copied));
                 Ok(())
             },
@@ -762,10 +767,12 @@ mod tests {
         .unwrap();
         assert_eq!(validated.objects.len(), 2);
         assert!(validated.objects.iter().any(|(id, _)| *id == base_id));
-        assert!(validated
-            .objects
-            .iter()
-            .any(|(id, _)| *id == ObjectId::blob_with_format(format, result)));
+        assert!(
+            validated
+                .objects
+                .iter()
+                .any(|(id, _)| *id == ObjectId::blob_with_format(format, result))
+        );
 
         // OFS delta follows its base and resolves through the same scratch view.
         let mut pack = Vector::from(*b"PACK");
@@ -784,22 +791,31 @@ mod tests {
         let path = join_path(&root, "ofs.pack");
         mrml_runtime::write_file(&path, &pack).unwrap();
         let stored_objects = RefCell::new(Vector::<(ObjectId, ObjectKind, Vector<u8>)>::new());
-        assert!(validate_pack_file_with_bases(
-            &path,
-            format,
-            pack.len() as u64,
-            2,
-            64,
-            64,
-            4096,
-            &mut |id, kind, bytes| {
-                let mut copied = Vector::new();
-                copied.try_extend_from_slice(bytes).map_err(|_| PackError::TooLarge)?;
-                stored_objects.borrow_mut().push((id, kind, copied));
-                Ok(())
-            },
-            |id, _| Ok(stored_objects.borrow().iter().find(|e| e.0 == id).map(|e| (e.1, e.2.clone()))),
-        ).is_ok());
+        assert!(
+            validate_pack_file_with_bases(
+                &path,
+                format,
+                pack.len() as u64,
+                2,
+                64,
+                64,
+                4096,
+                &mut |id, kind, bytes| {
+                    let mut copied = Vector::new();
+                    copied
+                        .try_extend_from_slice(bytes)
+                        .map_err(|_| PackError::TooLarge)?;
+                    stored_objects.borrow_mut().push((id, kind, copied));
+                    Ok(())
+                },
+                |id, _| Ok(stored_objects
+                    .borrow()
+                    .iter()
+                    .find(|e| e.0 == id)
+                    .map(|e| (e.1, e.2.clone()))),
+            )
+            .is_ok()
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 
@@ -823,16 +839,43 @@ mod tests {
         mrml_runtime::write_file(&path, &pack).unwrap();
         let mut sink = |_: ObjectId, _: ObjectKind, _: &[u8]| Ok(());
         assert!(matches!(
-            validate_pack_file_with_bases(&path, format, pack.len() as u64, 1, 64, 64, 4096, &mut sink, |_, _| Ok(None)),
+            validate_pack_file_with_bases(
+                &path,
+                format,
+                pack.len() as u64,
+                1,
+                64,
+                64,
+                4096,
+                &mut sink,
+                |_, _| Ok(None)
+            ),
             Err(PackError::MissingBase)
         ));
-        assert!(validate_pack_file_with_bases(
-            &path, format, pack.len() as u64, 1, 64, 64, 4096, &mut sink,
-            |id, _| Ok((id == base_id).then(|| (ObjectKind::Blob, Vector::from(*base))))
-        ).is_ok());
+        assert!(
+            validate_pack_file_with_bases(
+                &path,
+                format,
+                pack.len() as u64,
+                1,
+                64,
+                64,
+                4096,
+                &mut sink,
+                |id, _| Ok((id == base_id).then(|| (ObjectKind::Blob, Vector::from(*base))))
+            )
+            .is_ok()
+        );
         assert!(matches!(
             validate_pack_file_with_bases(
-                &path, format, pack.len() as u64, 1, 64, 64, 4096, &mut sink,
+                &path,
+                format,
+                pack.len() as u64,
+                1,
+                64,
+                64,
+                4096,
+                &mut sink,
                 |id, _| Ok((id == base_id).then(|| (ObjectKind::Blob, Vector::from(*b"forged"))))
             ),
             Err(PackError::ObjectId)

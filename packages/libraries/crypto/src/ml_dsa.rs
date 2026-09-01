@@ -29,6 +29,9 @@ const POLYETA_BYTES: usize = 128;
 const POLYT0_BYTES: usize = 416;
 const POLYZ_BYTES: usize = 640;
 const POLYW1_BYTES: usize = 128;
+// NIST's 2026-07-31 FIPS 204 potential-updates sheet corrects the minimum
+// allowable internal signing-loop limit from 814 to 821. This larger fixed
+// bound remains deterministic and fail-closed.
 const MAX_REJECTIONS: usize = 4096;
 const QINV: i64 = 58_728_449;
 const MONT: i64 = 4_193_792;
@@ -1129,6 +1132,14 @@ pub fn ml_dsa_65_verify(
 mod tests {
     use super::*;
     use crate::Sha3_256;
+
+    #[test]
+    fn fips204_2026_errata_bounds_are_preserved() {
+        // For ML-DSA-65, (q - 1) / (2 * gamma2) - 1 is 15. The bit mask in
+        // use_hint therefore implements the corrected Algorithm 40 range.
+        assert_eq!((Q - 1) / (2 * GAMMA2) - 1, 15);
+        assert!(MAX_REJECTIONS >= 821);
+    }
 
     fn hex32(value: &str) -> [u8; 32] {
         let mut output = [0u8; 32];

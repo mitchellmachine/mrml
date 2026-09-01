@@ -19,6 +19,37 @@ const MAX_WORKTREE_FILE: usize = 256 * 1024 * 1024;
 const MAX_WORKTREE_ENTRIES: usize = 1_000_000;
 const MAX_DEPTH: usize = 128;
 
+fn append_reachable_children(
+    object: &Object,
+    format: ObjectFormat,
+    pending: &mut Vector<ObjectId>,
+) -> Result<(), RepositoryError> {
+    match object.kind {
+        ObjectKind::Commit => {
+            let commit = Commit::parse_with_format(&object.contents, format)?;
+            pending.push(commit.tree);
+            pending.extend(commit.parents.iter().copied());
+        }
+        ObjectKind::Tree => pending.extend(
+            parse_tree_with_format(&object.contents, format)?
+                .iter()
+                .map(|entry| entry.id),
+        ),
+        ObjectKind::Tag => {
+            let text = core::str::from_utf8(&object.contents)
+                .map_err(|_| RepositoryError::InvalidReference)?;
+            let target = text
+                .lines()
+                .find_map(|line| line.strip_prefix("object "))
+                .and_then(|value| ObjectId::parse_for(format, value))
+                .ok_or(RepositoryError::InvalidReference)?;
+            pending.push(target);
+        }
+        ObjectKind::Blob => {}
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Repository {
     pub worktree: Text,
@@ -75,10 +106,13 @@ enum CommitSigning<'a> {
     Single(
         GitSignatureFormat,
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        &'a mut dyn FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     ),
     Hybrid(
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        &'a mut dyn FnMut(&[u8], &str) -> Result<(), RepositoryError>,
+        &'a mut dyn FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     ),
 }
 
@@ -128,6 +162,12 @@ pub enum RepositoryError {
 }
 
 impl Repository {
+    /// Writes a deterministic pack containing every object reachable from
+    /// local branches, tags, and HEAD. Existing objects and packs are retained.
+    pub fn repack_local(&self) -> Result<crate::LocalRepackResult, RepositoryError> {
+        crate::local_repack::repack(self)
+    }
+
     pub fn discover(start: &str) -> Result<Self, RepositoryError> {
         let resolved = canonical_path(start)?;
         let mut current = if path_is_directory(&resolved) {
@@ -357,40 +397,48 @@ impl Repository {
     }
 
     pub fn pack_reachable(&self, tip: ObjectId) -> Result<Vector<u8>, RepositoryError> {
-        let mut pending = Vector::from([tip]);
+        self.pack_negotiated(&[tip], &[])
+    }
+
+    pub fn pack_negotiated(
+        &self,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+    ) -> Result<Vector<u8>, RepositoryError> {
+        if wants.is_empty()
+            || wants
+                .iter()
+                .chain(haves.iter())
+                .any(|id| id.format() != self.object_format)
+        {
+            return Err(RepositoryError::InvalidReference);
+        }
+        let mut excluded = Vector::new();
+        let mut pending: Vector<ObjectId> = haves.iter().copied().collect();
+        while let Some(id) = pending.pop() {
+            if excluded.contains(&id) {
+                continue;
+            }
+            if excluded.len() >= 1_000_000 {
+                return Err(RepositoryError::TooManyFiles);
+            }
+            let object = self.read_object(id)?;
+            append_reachable_children(&object, self.object_format, &mut pending)?;
+            excluded.push(id);
+        }
+
+        let mut pending: Vector<ObjectId> = wants.iter().copied().collect();
         let mut seen = Vector::new();
         let mut objects = Vector::new();
         while let Some(id) = pending.pop() {
-            if seen.contains(&id) {
+            if excluded.contains(&id) || seen.contains(&id) {
                 continue;
             }
             if seen.len() >= 1_000_000 {
                 return Err(RepositoryError::TooManyFiles);
             }
             let object = self.read_object(id)?;
-            match object.kind {
-                ObjectKind::Commit => {
-                    let commit = Commit::parse_with_format(&object.contents, self.object_format)?;
-                    pending.push(commit.tree);
-                    pending.extend(commit.parents.iter().copied());
-                }
-                ObjectKind::Tree => pending.extend(
-                    parse_tree_with_format(&object.contents, self.object_format)?
-                        .iter()
-                        .map(|entry| entry.id),
-                ),
-                ObjectKind::Tag => {
-                    let text = core::str::from_utf8(&object.contents)
-                        .map_err(|_| RepositoryError::InvalidReference)?;
-                    let target = text
-                        .lines()
-                        .find_map(|line| line.strip_prefix("object "))
-                        .and_then(|value| ObjectId::parse_for(self.object_format, value))
-                        .ok_or(RepositoryError::InvalidReference)?;
-                    pending.push(target);
-                }
-                ObjectKind::Blob => {}
-            }
+            append_reachable_children(&object, self.object_format, &mut pending)?;
             seen.push(id);
             objects.push(PackObject {
                 id,
@@ -1806,10 +1854,14 @@ impl Repository {
             timestamp,
             GitSignatureFormat::Ssh,
             |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
+            |payload, armor| {
+                verify_sshsig(&key.public, "git", payload, armor)
+                    .map_err(|_| RepositoryError::Signing)
+            },
         )
     }
 
-    pub fn create_signed_tag_with<F>(
+    pub fn create_signed_tag_with<F, V>(
         &self,
         name: &str,
         message: &str,
@@ -1818,9 +1870,11 @@ impl Repository {
         timestamp: u64,
         signature_format: GitSignatureFormat,
         signer: F,
+        verifier: V,
     ) -> Result<ObjectId, RepositoryError>
     where
         F: FnOnce(&[u8]) -> Result<Text, RepositoryError>,
+        V: FnOnce(&[u8], &str) -> Result<(), RepositoryError>,
     {
         let reference = mrml_runtime::mrml_format!("refs/tags/{name}");
         validate_reference(&reference)?;
@@ -1840,6 +1894,7 @@ impl Repository {
         unsigned.push('\n');
         let signature = signer(unsigned.as_bytes())?;
         validate_signature_armor(&signature, signature_format)?;
+        verifier(unsigned.as_bytes(), &signature)?;
         let mut contents = unsigned;
         contents.push_str(&signature);
         let id = self.write_object(ObjectKind::Tag, contents.as_bytes())?;
@@ -2412,10 +2467,14 @@ impl Repository {
             timestamp,
             GitSignatureFormat::Ssh,
             |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
+            |payload, armor| {
+                verify_sshsig(&key.public, "git", payload, armor)
+                    .map_err(|_| RepositoryError::Signing)
+            },
         )
     }
 
-    pub fn commit_signed_with<F>(
+    pub fn commit_signed_with<F, V>(
         &self,
         message: &str,
         name: &str,
@@ -2423,23 +2482,29 @@ impl Repository {
         timestamp: u64,
         signature_format: GitSignatureFormat,
         mut signer: F,
+        mut verifier: V,
     ) -> Result<ObjectId, RepositoryError>
     where
         F: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        V: FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     {
         self.commit_internal(
             message,
             name,
             email,
             timestamp,
-            Some(CommitSigning::Single(signature_format, &mut signer)),
+            Some(CommitSigning::Single(
+                signature_format,
+                &mut signer,
+                &mut verifier,
+            )),
         )
     }
 
     /// Create a commit whose canonical payload is signed first with ML-DSA-65,
     /// then covered (including that first signature) by an OpenPGP signature.
     /// Stock Git can verify the outer OpenPGP signature; MRML requires both.
-    pub fn commit_hybrid_signed_with<M, P>(
+    pub fn commit_hybrid_signed_with<M, P, PV, MV>(
         &self,
         message: &str,
         name: &str,
@@ -2447,10 +2512,14 @@ impl Repository {
         timestamp: u64,
         mut ml_dsa_signer: M,
         mut openpgp_signer: P,
+        mut openpgp_verifier: PV,
+        mut ml_dsa_verifier: MV,
     ) -> Result<ObjectId, RepositoryError>
     where
         M: FnMut(&[u8]) -> Result<Text, RepositoryError>,
         P: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        PV: FnMut(&[u8], &str) -> Result<(), RepositoryError>,
+        MV: FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     {
         self.commit_internal(
             message,
@@ -2460,6 +2529,8 @@ impl Repository {
             Some(CommitSigning::Hybrid(
                 &mut ml_dsa_signer,
                 &mut openpgp_signer,
+                &mut openpgp_verifier,
+                &mut ml_dsa_verifier,
             )),
         )
     }
@@ -2515,10 +2586,18 @@ impl Repository {
         unsigned.push('\n');
         if let Some(signer) = signer {
             let (signature_format, armor) = match signer {
-                CommitSigning::Single(signature_format, signer) => {
-                    (signature_format, signer(unsigned.as_bytes())?)
+                CommitSigning::Single(signature_format, signer, verifier) => {
+                    let signature = signer(unsigned.as_bytes())?;
+                    validate_signature_armor(&signature, signature_format)?;
+                    verifier(unsigned.as_bytes(), &signature)?;
+                    (signature_format, signature)
                 }
-                CommitSigning::Hybrid(ml_dsa_signer, openpgp_signer) => {
+                CommitSigning::Hybrid(
+                    ml_dsa_signer,
+                    openpgp_signer,
+                    openpgp_verifier,
+                    ml_dsa_verifier,
+                ) => {
                     let ml_dsa = ml_dsa_signer(unsigned.as_bytes())?;
                     validate_ml_dsa_armor(&ml_dsa)?;
                     append_multiline_header(&mut contents, "mrml-mldsa65", &ml_dsa);
@@ -2526,10 +2605,11 @@ impl Repository {
                     outer_payload.push('\n');
                     outer_payload.push_str(message.trim());
                     outer_payload.push('\n');
-                    (
-                        GitSignatureFormat::OpenPgp,
-                        openpgp_signer(outer_payload.as_bytes())?,
-                    )
+                    let openpgp = openpgp_signer(outer_payload.as_bytes())?;
+                    validate_signature_armor(&openpgp, GitSignatureFormat::OpenPgp)?;
+                    openpgp_verifier(outer_payload.as_bytes(), &openpgp)?;
+                    ml_dsa_verifier(unsigned.as_bytes(), &ml_dsa)?;
+                    (GitSignatureFormat::OpenPgp, openpgp)
                 }
             };
             validate_signature_armor(&armor, signature_format)?;
@@ -3585,7 +3665,9 @@ mod tests {
         let source_path = root("validated-import-source");
         let source = Repository::init_with_format(&source_path, ObjectFormat::Sha256).unwrap();
         write_file(&join_path(&source_path, "tracked"), b"candidate").unwrap();
-        source.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        source
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
         let commit = source
             .commit("candidate", "MRML", "mrml@example.invalid", 1)
             .unwrap();
@@ -3597,9 +3679,14 @@ mod tests {
         destination
             .import_pack_validated_commit_tips(&pack, &[commit])
             .unwrap();
-        assert_eq!(destination.read_commit(commit).unwrap().message, "candidate\n");
+        assert_eq!(
+            destination.read_commit(commit).unwrap().message,
+            "candidate\n"
+        );
 
-        let blob = source.write_object(ObjectKind::Blob, b"not a commit").unwrap();
+        let blob = source
+            .write_object(ObjectKind::Blob, b"not a commit")
+            .unwrap();
         let blob_pack = source.pack_reachable(blob).unwrap();
         let rejected_path = root("rejected-import-destination");
         let rejected = Repository::init_with_format(&rejected_path, ObjectFormat::Sha256).unwrap();
@@ -3629,10 +3716,16 @@ mod tests {
         let hex = id.to_hex();
         let directory = join_path(&join_path(&repository.git_dir, "objects"), &hex[..2]);
         create_dir_all(&directory).unwrap();
-        write_file(&join_path(&directory, &hex[2..]), b"corrupt preexisting object").unwrap();
-        assert!(repository
-            .write_object(ObjectKind::Blob, b"expected contents")
-            .is_err());
+        write_file(
+            &join_path(&directory, &hex[2..]),
+            b"corrupt preexisting object",
+        )
+        .unwrap();
+        assert!(
+            repository
+                .write_object(ObjectKind::Blob, b"expected contents")
+                .is_err()
+        );
         remove_dir_all(&path).unwrap();
     }
 
@@ -3907,6 +4000,53 @@ mod tests {
     }
 
     #[test]
+    fn signature_verification_failure_never_updates_commit_or_tag_refs() {
+        let path = root("signed-ref-verification-failure");
+        let repository = Repository::init(&path).unwrap();
+        write_file(&join_path(&path, "tracked"), b"base").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let base = repository
+            .commit("base", "Signer", "signer@example.invalid", 6)
+            .unwrap();
+        write_file(&join_path(&path, "tracked"), b"changed").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let armor = "-----BEGIN PGP SIGNATURE-----\nZmFrZQ==\n-----END PGP SIGNATURE-----\n";
+        assert_eq!(
+            repository.commit_signed_with(
+                "rejected",
+                "Signer",
+                "signer@example.invalid",
+                7,
+                GitSignatureFormat::OpenPgp,
+                |_| Ok(armor.into()),
+                |_, _| Err(RepositoryError::Signing),
+            ),
+            Err(RepositoryError::Signing)
+        );
+        assert_eq!(repository.head(), Ok(Some(base)));
+        assert_eq!(
+            repository.create_signed_tag_with(
+                "rejected",
+                "rejected",
+                "Signer",
+                "signer@example.invalid",
+                8,
+                GitSignatureFormat::OpenPgp,
+                |_| Ok(armor.into()),
+                |_, _| Err(RepositoryError::Signing),
+            ),
+            Err(RepositoryError::Signing)
+        );
+        assert_eq!(repository.read_reference("refs/tags/rejected"), Ok(None));
+        assert_eq!(repository.head(), Ok(Some(base)));
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
     fn sha256_commit_uses_gpgsig_sha256_and_generic_openpgp_payload() {
         let path = root("signed-sha256-commit");
         let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
@@ -3925,6 +4065,11 @@ mod tests {
                 |payload| {
                     assert!(payload.ends_with(b"\n\nsigned\n"));
                     Ok(armor.into())
+                },
+                |payload, found| {
+                    assert!(payload.ends_with(b"\n\nsigned\n"));
+                    assert_eq!(found, armor);
+                    Ok(())
                 },
             )
             .unwrap();
@@ -3983,6 +4128,19 @@ mod tests {
                         );
                         Ok(pgp.into())
                     },
+                    |payload, found| {
+                        assert!(
+                            payload
+                                .windows(b"mrml-mldsa65 ".len())
+                                .any(|part| part == b"mrml-mldsa65 ")
+                        );
+                        assert_eq!(found, pgp);
+                        Ok(())
+                    },
+                    |payload, armor| {
+                        verify_ml_dsa_65_git_payload(&public, payload, armor)
+                            .map_err(|_| RepositoryError::Signing)
+                    },
                 )
                 .unwrap();
             repository
@@ -4003,6 +4161,28 @@ mod tests {
                     },
                 )
                 .unwrap();
+            write_file(&join_path(&path, "tracked"), b"hybrid-failed").unwrap();
+            repository.stage(&Vector::from(["tracked".into()])).unwrap();
+            assert_eq!(
+                repository.commit_hybrid_signed_with(
+                    "must not activate",
+                    "Signer",
+                    "signer@example.invalid",
+                    10,
+                    |payload| {
+                        sign_ml_dsa_65_git_payload(&secret, payload, &[38u8; 32])
+                            .map_err(|_| RepositoryError::Signing)
+                    },
+                    |_| Ok(pgp.into()),
+                    |_, _| Err(RepositoryError::Signing),
+                    |payload, armor| {
+                        verify_ml_dsa_65_git_payload(&public, payload, armor)
+                            .map_err(|_| RepositoryError::Signing)
+                    },
+                ),
+                Err(RepositoryError::Signing)
+            );
+            assert_eq!(repository.head().unwrap(), Some(id));
             remove_dir_all(&path).unwrap();
         }
     }
@@ -4090,6 +4270,77 @@ mod tests {
                 .any(|(name, _)| name == "topic")
         );
         remove_dir_all(&source_path).unwrap();
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn negotiated_pack_subtracts_complete_have_closure() {
+        let path = root("negotiated-pack");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        let tracked = join_path(&path, "tracked");
+        write_file(&tracked, b"first").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let first = repository
+            .commit("first", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        write_file(&tracked, b"second").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let second = repository
+            .commit("second", "MRML", "mrml@example.invalid", 2)
+            .unwrap();
+
+        let incremental = parse_pack_with_format(
+            &repository.pack_negotiated(&[second], &[first]).unwrap(),
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        assert!(incremental.iter().any(|object| object.id == second));
+        assert!(!incremental.iter().any(|object| object.id == first));
+        let empty = parse_pack_with_format(
+            &repository.pack_negotiated(&[second], &[second]).unwrap(),
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        assert!(empty.is_empty());
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn six_concurrent_fetch_pack_generations_are_deterministic() {
+        let path = root("concurrent-fetch-pack");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        let tracked = join_path(&path, "tracked");
+        write_file(&tracked, &[b'x'; 64 * 1024]).unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let tip = repository
+            .commit("concurrent", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        let expected = repository.pack_reachable(tip).unwrap();
+
+        let mut workers = Vector::new();
+        for _ in 0..6 {
+            let worker_path = path.clone();
+            let worker_expected = expected.clone();
+            let worker = mrml_runtime::spawn_joinable(move || {
+                let worker_repository = Repository::discover(&worker_path).unwrap();
+                assert_eq!(
+                    worker_repository.pack_reachable(tip).unwrap(),
+                    worker_expected
+                );
+            })
+            .unwrap_or_else(|_| panic!("failed to start fetch-pack generation worker"));
+            workers.push(worker);
+        }
+        for worker in workers {
+            assert!(worker.join());
+        }
         remove_dir_all(&path).unwrap();
     }
 

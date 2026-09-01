@@ -4,19 +4,33 @@ Status: **PARTIALLY IMPLEMENTED**. Existing bounded whole-buffer compatibility
 parsing, a constant-memory file authentication scan, and the first-party
 authenticated pack-index v2 module are implemented.
 
-The pack encoder now emits a deterministic first-party zlib stream with one
-fixed-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains retain a
-32 KiB window, inspect no more than 256 candidates at each input position, and
-emit matches no longer than 258 bytes. Empty, incompressible, repetitive, and
-window-boundary inputs round-trip through the first-party inflater on Linux and
-through the pinned Windows Rust oracle under Wine. Wine is a hosted
-compatibility probe, not Windows-native evidence.
+The pack encoder now emits a deterministic first-party zlib level-9 stream with
+one dynamic-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains
+retain a 32 KiB window, inspect no more than 4,096 candidates at each input
+position, and emit matches no longer than 258 bytes. The canonical dynamic
+literal/length, distance, and code-length tables are deterministic fixed
+profile parameters rather than workload-selected codecs. Empty,
+incompressible, repetitive, and window-boundary inputs round-trip through the
+first-party inflater on Linux. A controlled Python zlib probe also decompressed
+a loose object emitted by the first-party encoder. Upstream Git 2.55.0
+`index-pack --stdin --strict -v` accepted a generated two-object pack containing
+the dynamic streams and an OFS delta and resolved that delta. These are
+controlled interoperability oracles, not runtime dependencies.
 
-Dynamic Huffman construction, canonical block selection, lazy level-9 match
-selection, and pack delta selection remain open, so this does not yet satisfy
-the canonical storage profile. The completed profile also requires a
-250-object delta candidate window, maximum delta depth 50, OFS deltas, no reuse
-of lower-compression streams, and recomputed canonical deltas.
+A hosted-Linux functional concurrency test opens the same SHA-256 repository in
+six simultaneous process-local workers and requires every worker to generate a
+byte-identical reachable fetch pack. This exercises deterministic concurrent
+read/generation behavior only. It does not establish multi-process service
+isolation, peak memory, foreground latency under compaction, or production
+throughput.
+
+The pack encoder now applies deterministic same-kind delta selection over the
+exact preceding 250-object window. It constructs Git copy/insert programs with
+fixed hash-chain bounds, ranks candidates by raw delta length then complete
+object ID, caps aggregate comparison work, emits OFS deltas, and never exceeds
+depth 50. Budget exhaustion deterministically falls back to a whole-object
+representation. No lower-compression stream is reused. Cross-pack canonical
+recomputation remains part of the compactor gate.
 
 Receive must stream into an isolated quarantine under checked byte, object,
 expanded-size, delta, memory, and work limits. Whole-repository repacking is not
@@ -98,9 +112,125 @@ before the request. The active ref state is re-read after the body and must
 still byte-match before any base lookup; each returned base is independently
 size-bounded and re-hashed before it enters transaction-private scratch. The
 later durable activation still performs its immediate generation/ref re-read.
-Thin-pack capability advertisement remains disabled pending concurrent receive
-tests and production active-pack-set integration.
+A hosted-Linux test now starts two complete receive compositions from the same
+authenticated active generation and synchronizes them only after both have
+entered their pack bodies. Each body contains one SHA-256 REF delta whose base
+commit is absent from the baseline repository and available only through the
+selected arrival manifest. Both validate against that exact base, but exactly
+one activates generation 8; the other fails closed as stale, storage-failed, or
+uncertain according to how far it progressed, and its candidate remains
+unselected. This is process-local body-overlap and durable-activation
+contention evidence, not multiprocess, power-loss, or production-load evidence.
+Thin-pack capability advertisement remains disabled pending production edge
+integration and broader multiprocess/fault evidence.
 
-Pack-generation switching, clone/fetch caching, dynamic Huffman level-9
-encoding, delta selection, and compaction remain open. No outer Zstandard layer
-belongs in Git pack storage.
+The immutable cache core uses a canonical full key containing object format,
+exact ordered wants and haves, repository generation, pack-profile version, and
+encoder version. Its SHA-256 digest is only a rejection accelerator: a hit also
+requires full-key equality, and cached representation bytes are rehashed on
+every lookup. Inserts cannot overwrite or reinsert a key. This in-memory core
+is paired on Linux with a canonical digest-named immutable file store. Each
+record contains and rechecks the full key, representation length and digest,
+and a terminal whole-record digest; insertion uses a create-new per-key writer
+claim and create-new representation, fsyncs the file and directory, then
+reopens and verifies before success. Concurrent same-key writers never consume
+a partial record: one immutable writer wins and the other canonical producers
+retain their independently generated bytes. A crash-stale writer claim causes
+a safe miss and requires later administrative recovery rather than guessing.
+Regular-file opens reject final symlinks. Other targets fail closed until
+directory synchronization is available.
+
+The repository view now optionally populates and consumes this durable cache
+for protocol-v2 fetch and exposes the same path for bounded precomputation.
+Every lookup binds the object format, exact ordered wants and haves, active
+repository generation, fixed pack-profile version, and encoder version. Wants
+must still be advertised refs. A miss is generated only from the exact selected
+repository view, the complete active state is re-read before insertion and
+again before response, and a later repository generation necessarily misses.
+Focused hosted-Linux tests cover durable reopen, full-key and stale-generation
+misses, immutable insertion, tampering, and six simultaneous same-key writers.
+Bounded precomputation selects the exact active default-branch tip when born,
+every exact `refs/tags/` tip (annotated or lightweight), and caller-supplied
+popular full ref names. Caller names must resolve in the active state; names
+identify candidates but do not authorize objects. The combined input is capped
+at 4,096 refs, sorted canonically, and deduplicated first by name and then by
+complete object ID before one single-want canonical pack is populated per tip.
+Selection never uses storage location, compression state, workload profiles,
+sketches, similarity search, or adaptive ranking. The active state is re-read
+through the existing exact-generation cache path before every insertion and on
+completion.
+Production hit-rate, eviction/retention operations, crash-stale-claim recovery,
+and native-Windows durability evidence remain open.
+
+The reachability compaction core accepts an exact repository/pack-generation
+snapshot and caller-authenticated reachable objects, sorts only by complete
+object ID, applies the fixed level-9/window-250/depth-50 encoder, reparses the
+result, and requires exact object equality. It pauses for active pushes or core
+pressure, rejects estimates over the 4 GiB memory budget, preserves 40 GiB free
+space after the estimated output, and advances exactly one pack generation.
+Its journal admits only planned, staged, stage-synced, activated, and retired
+transitions and classifies crashes without treating an unactivated stage as
+authoritative.
+
+The Linux compaction compositor reparses the generated pack, rebuilds and
+reopens its v2 index, writes exact scratch objects/pack/index into a new
+transaction directory, fsyncs files and directories, installs by directory
+rename, and derives a canonical one-pack `MRPKSET1`. Under the same activation
+lock used by pushes, it re-reads the selected generations, persists the
+manifest, fsyncs and renames `MRREFS02`, and reopens both exact state and
+manifest. Ref, trust, and revocation authority is preserved byte-for-byte while
+repository and pack generations advance once. Old arrivals and the old manifest
+remain retained after activation; a preactivation or stale-generation failure
+leaves the old state selected. This is hosted Linux filesystem evidence, not
+process-kill, power-loss, native-Windows, or physical-storage evidence.
+
+Dynamic-Huffman level-9 encoding, direct-window OFS delta selection, exact-key
+cache semantics, and generation-safe durable Linux compaction activation are implemented.
+No outer Zstandard layer belongs in Git pack storage.
+
+Active arrival-pack reads are authorized only by the exact `MRPKSET1` digest in
+`MRREFS02`; directory entries and transaction-derived names never grant
+membership. The repository view resolves commit, tree, blob, tag, README,
+verified-metadata, and upload-pack traversal through that selected set before
+the baseline object database. Every selected read reauthenticates its bounded
+pack/index pair and Git identity, unselected installed arrivals remain
+invisible, and operations recheck the complete active-ref state before return.
+
+`MRPKSET1` now implements the non-authoritative manifest prerequisite. Its
+private validated construction consumes authenticated index summaries and binds
+repository identity, repository and pack generations, object format, strictly
+ordered unique transaction IDs, nonzero exact counts, pack/index checksums,
+pack/index/work quantities, and each index's strictly ordered object IDs.
+Aggregate pack, object, byte, index-byte, work, and encoded-size limits are
+checked. Cross-pack duplicate object IDs are rejected as ambiguous. The parser
+checks its terminal SHA-256 integrity digest, exact widths, truncation, trailing
+data, canonical order, and byte-exact re-encoding.
+
+`MRREFS02` carries the exact SHA-256 digest of its selected `MRPKSET1`, and the
+checked pack-set transition advances the repository generation and pack
+generation together only when repository identity, object format, and both
+next generations match. `ActiveRefFile::activate_with_pack_set` writes and
+fsyncs the immutable content-addressed manifest before replacing the active
+record; an interrupted pre-selection write is inert. Selected-manifest reads
+open only that digest-derived regular file and recheck the digest, repository,
+format, and generations. A manifest not selected by the active record grants
+no read authority.
+
+The hosted-Linux durable receive compositor now reopens the installed pack and
+index, derives an authenticated summary, extends the previously selected
+manifest without duplicate objects, and calls this transition. An exact empty
+manifest represents a repository with no arrival packs and gives bootstrap a
+real digest instead of a sentinel. The end-to-end receive test reopens the
+selected next generation and its exact transaction/object membership.
+
+The receive store can now resolve an exact object from the selected arrival set:
+it finds the single manifest entry, reauthenticates that installed pack/index
+summary byte-for-byte, opens only the transaction's bounded scratch object, and
+rehashes its Git identity. Thin-pack validation consults this selected view
+before the separately authenticated baseline repository, so sequential receives
+can use prior active arrivals without directory scanning. Protected-history
+traversal uses the same selected view, and the end-to-end receive test prepares
+a second commit whose parent exists only in the first selected arrival. The
+general repository view and upload-pack composition use the same authority and
+have focused selected-versus-unselected coverage. This membership authority
+remains independent of the guarded delta selector and compaction policy.

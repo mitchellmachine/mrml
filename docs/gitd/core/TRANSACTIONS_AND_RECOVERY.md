@@ -63,8 +63,12 @@ and old/new IDs. Every introduced merge-side commit is covered; an unsigned
 intermediate or a no-op verifier cannot mint the range. A concrete bounded
 detached-proof store and hybrid verifier now feed this boundary; stored bytes
 remain untrusted until both signatures, exact contents, and full context verify.
-Creation, deletion, history replacement, durable proof-record storage, and audit
-signing remain unavailable until their policy-specific implementations exist.
+The Linux durable proof directory binds and rechecks the complete repository,
+generation, purpose, format, commit, and signature record after file and
+directory synchronization; it never turns storage into authority. Creation,
+deletion, history replacement, proof-population authorization, native-Windows
+proof durability, and audit signing remain unavailable until their
+policy-specific implementations exist.
 
 `prepare_protected_receive` now composes the pre-activation protected path for
 existing refs: it parses only atomic `report-status-v2` commands, exact-matches
@@ -89,8 +93,12 @@ activation, appends and fsyncs a bounded typed receipt, then persists
 completion. A stale re-read never calls activation. Activation, post-activation
 journal, receipt, and final-journal failures are retained as uncertain rather
 than reported as retry-safe. Focused mock-backend tests prove ordering, stale
-old-ID rejection, one-call atomic activation, receipt sequencing, and uncertain
-activation failure. These tests prove coordinator behavior only; they are not
+old-ID rejection, one-call atomic activation, receipt sequencing, and explicit
+failure injection at the initial journal, arrival install, post-install
+journal, authority reread, activation, post-activation journal, receipt, and
+final-journal boundaries. Pre-install failures are aborted; every failure after
+durable installation remains uncertain and no failure is reported as success.
+These tests prove coordinator behavior only; they are not process-kill,
 filesystem, power-loss, or physical-storage evidence.
 
 The coordinator journal callback now receives both the lifecycle record and
@@ -154,6 +162,38 @@ and a simulated crash-stale lock. Windows remains fail-closed pending a runtime
 directory flush primitive. Process-kill at every syscall boundary, power-loss,
 and physical-filesystem atomicity evidence remain open.
 
+Canonical compaction uses the same active-ref lock and `MRPKSET1`/`MRREFS02`
+authority as receive rather than a parallel selector. The replacement pack and
+index are fully authenticated and durably installed before the next manifest is
+written. Activation re-reads the exact repository and pack generations,
+preserves refs/trust/revocations, advances both repository and pack generations
+once, fsyncs the new active record and directory, and reopens the selected state
+and manifest. A stale or preactivation failure leaves the old record selected;
+successful activation retains the old arrival and manifest for later recovery-
+aware retirement. This is hosted Linux evidence only. Process-kill, power-loss,
+native-Windows directory flush, and physical-storage evidence remain open.
+
+The controlled concurrency tests exercise both process-local workers and real
+hosted-Linux child processes. In each case, two writers target one repository
+and exact expected generation while a third targets a different repository
+identity and storage root. The child processes rendezvous before activation so
+their filesystem transactions overlap. Exactly one same-repository transaction
+succeeds, one fails stale, the independent transaction succeeds, and both
+repositories reopen at exactly their next generation and ref value. This is
+hosted-Linux multiprocess activation-serialization evidence, not distributed,
+production-load, or native-Windows evidence.
+
+A second hosted-Linux concurrency test covers the complete thin-receive path.
+Two workers begin from the same exact active state and are held until both have
+entered their pack bodies. Their distinct one-object SHA-256 thin packs use REF
+deltas against the same commit available only in the selected arrival pack set.
+Both must authenticate and re-hash that selected base; exactly one transaction
+advances the repository and pack generation, while the competing transaction
+fails closed and its installed-or-quarantined candidate is never selected.
+Reopening proves the winner and original base are readable and the loser is
+invisible. The test is process-local and does not claim multiprocess or
+distributed serialization.
+
 `MRRCPT01` is a deterministic receipt transcript binding the transaction and
 repository identities, pre-activation and exactly-next repository generations,
 trust and revocation generations, and a strictly sorted exact old/new ref set.
@@ -179,7 +219,8 @@ uncertain post-activation failure remain distinct results. Hosted-Linux tests
 exercise prepare-through-activation and reopen the authenticated receipt;
 Windows compilation and non-filesystem behavior are exercised under Wine.
 Production key-service integration, native-Windows directory durability,
-process-kill injection, power-loss, and physical-storage evidence remain open.
+process-kill injection at the other durable boundaries, power-loss, and
+physical-storage evidence remain open.
 
 `LinuxDurableReceiveStore` composes the concrete journal, immutable arrival
 pack/index, active-ref generation, and receipt directories behind the same
@@ -190,9 +231,19 @@ ref typestate. The end-to-end hosted-Linux test stages and installs a SHA-256
 pack/index, persists each journal phase, re-reads old refs, atomically advances
 the active generation, appends the receipt, and independently reopens and
 validates all four durable artifacts. A separate protected-path test uses the
-authenticated receipt wrapper and reopens its signature-bound receipt. These
-are concrete filesystem-ordering tests, not process-kill, power-loss,
-physical-storage, production-key-service, or production-read-path evidence.
+authenticated receipt wrapper and reopens its signature-bound receipt.
+
+A hosted-Linux child-process test now exercises one real abrupt-termination
+boundary. The child durably installs the arrival, persists an
+`ObjectsDurablyInstalled` journal, atomically replaces and fsyncs the active ref
+state, signals only after that activation returns, and pauses before advancing
+the journal. The parent sends the runtime's hard process kill, waits for the
+non-successful exit, independently reopens the old-phase journal and exactly
+next ref/pack generation, verifies the selected arrival remains installed, and
+requires recovery classification to be `RecoverAuditReceipt`. This is exact
+evidence for that one post-ref-activation/pre-journal boundary. It is not
+power-loss, physical-storage, production-key-service, production-read-path, or
+kill-at-every-syscall evidence.
 
 Recovery enumeration re-reads the canonical active-ref file for every bounded
 journal and classifies it using the old repository generation before activation

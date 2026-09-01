@@ -1,11 +1,12 @@
 //! Hosted-Linux composition of durable receive storage components.
 
+use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
 use crate::{
-    ActivationSnapshot, ActiveRefFile, ArrivalPackStore, AuditReceipt, AuditReceiptDirectory,
-    ActiveRefState, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
-    ObjectFormat, ObjectId, PackError, QuarantineTransaction, QuarantineTransactionId,
-    ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord, RecoveryAction, Repository,
-    VerifiedRefTransaction, classify_receive_recovery,
+    ActivationSnapshot, ActiveRefFile, ActiveRefState, ArrivalPackStore, AuditReceipt,
+    AuditReceiptDirectory, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
+    ObjectFormat, ObjectId, PackError, PackGeneration, PackSetLimits, QuarantineTransaction,
+    QuarantineTransactionId, ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord,
+    RecoveryAction, Repository, VerifiedRefTransaction, classify_receive_recovery,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -18,6 +19,17 @@ pub struct LinuxDurableReceiveStore {
     refs: ActiveRefFile,
     receipts: AuditReceiptDirectory,
     pending: Option<(QuarantineTransactionId, u32)>,
+    pending_summary: Option<AuthenticatedPackIndexSummary>,
+}
+
+const fn receive_pack_set_limits() -> PackSetLimits {
+    PackSetLimits {
+        max_packs: 65_536,
+        max_objects: 10_000_000,
+        max_pack_bytes: 8 * 1024 * 1024 * 1024 * 1024,
+        max_index_bytes: 16 * 1024 * 1024 * 1024,
+        max_work_units: 16 * 1024 * 1024 * 1024 * 1024,
+    }
 }
 
 impl LinuxDurableReceiveStore {
@@ -36,21 +48,18 @@ impl LinuxDurableReceiveStore {
         expected_active: &ActiveRefState,
         active_objects: &Repository,
     ) -> Result<(), GitdCoreError> {
-        if self
-            .refs
-            .load()
-            .map_err(|_| GitdCoreError::Storage)?
-            != *expected_active
+        if self.refs.load().map_err(|_| GitdCoreError::Storage)? != *expected_active
             || active_objects.object_format() != expected_active.object_format
             || transaction.repository() != &expected_active.repository
             || transaction.repository_generation() != expected_active.repository_generation
         {
             return Err(GitdCoreError::StaleGeneration);
         }
-        self.arrivals.validate_received_pack_with_bases(
-            transaction,
-            required_tips,
-            |id, limit| {
+        self.arrivals
+            .validate_received_pack_with_bases(transaction, required_tips, |id, limit| {
+                if let Ok(object) = self.read_active_arrival_object(id, limit) {
+                    return Ok(Some((object.kind, object.contents)));
+                }
                 let object = match active_objects.read_object(id) {
                     Ok(object) => object,
                     Err(_) => return Ok(None),
@@ -59,8 +68,19 @@ impl LinuxDurableReceiveStore {
                     return Err(PackError::TooLarge);
                 }
                 Ok(Some((object.kind, object.contents)))
-            },
-        )
+            })
+    }
+
+    pub(crate) fn read_active_arrival_object(
+        &self,
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<Object, GitdCoreError> {
+        let manifest = self
+            .refs
+            .load_selected_pack_set(receive_pack_set_limits())
+            .map_err(|_| GitdCoreError::StaleGeneration)?;
+        self.arrivals.read_selected_object(&manifest, id, max_bytes)
     }
 
     pub(crate) fn read_quarantined_object(
@@ -87,6 +107,7 @@ impl LinuxDurableReceiveStore {
             refs: ActiveRefFile::open(refs).map_err(|_| DurableFailure::VerifierCrash)?,
             receipts: AuditReceiptDirectory::open(receipts)?,
             pending: None,
+            pending_summary: None,
         })
     }
 
@@ -242,7 +263,12 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
         if pending != transaction {
             return Err(DurableFailure::StaleLock);
         }
-        self.arrivals.install(transaction, object_count)
+        self.arrivals.install(transaction, object_count)?;
+        self.pending_summary = Some(
+            self.arrivals
+                .authenticated_installed_summary(transaction, object_count)?,
+        );
+        Ok(())
     }
 
     fn reread_activation_snapshot(
@@ -256,7 +282,65 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
         &mut self,
         verified: &VerifiedRefTransaction,
     ) -> Result<(), DurableFailure> {
-        self.refs.activate(verified).map(|_| ())
+        let current = self
+            .refs
+            .load()
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let limits = receive_pack_set_limits();
+        let selected = self
+            .refs
+            .load_selected_pack_set(limits)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let pending = self
+            .pending_summary
+            .as_ref()
+            .ok_or(DurableFailure::StaleLock)?;
+        let mut summaries = mrml_runtime::Vector::new();
+        summaries
+            .try_reserve_exact(selected.entries().len().saturating_add(1))
+            .map_err(|_| DurableFailure::DiskFull)?;
+        for entry in selected.entries() {
+            let mut object_ids = mrml_runtime::Vector::new();
+            object_ids
+                .try_extend_from_slice(entry.object_ids())
+                .map_err(|_| DurableFailure::DiskFull)?;
+            summaries.push(AuthenticatedPackIndexSummary {
+                transaction: entry.transaction(),
+                object_count: entry.object_count(),
+                pack_checksum: entry.pack_checksum(),
+                index_checksum: entry.index_checksum(),
+                pack_bytes: entry.pack_bytes(),
+                index_bytes: entry.index_bytes(),
+                work_units: entry.work_units(),
+                object_ids,
+            });
+        }
+        summaries.push(pending.clone());
+        summaries.sort_unstable_by(|left, right| left.transaction.cmp(&right.transaction));
+        let manifest = build_pack_set_manifest(
+            current.repository.clone(),
+            crate::RepositoryGeneration(
+                current
+                    .repository_generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(DurableFailure::DiskFull)?,
+            ),
+            PackGeneration(
+                current
+                    .pack_generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(DurableFailure::DiskFull)?,
+            ),
+            current.object_format,
+            summaries,
+            limits,
+        )
+        .map_err(|_| DurableFailure::VerifierCrash)?;
+        self.refs
+            .activate_with_pack_set(verified, &manifest)
+            .map(|_| ())
     }
 
     fn append_audit_receipt_and_fsync(
@@ -269,7 +353,9 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use mrml_runtime::{Text, Vector, join_path};
+    #[cfg(target_os = "linux")]
+    use mrml_runtime::Command;
+    use mrml_runtime::{Text, Vector, join_path, path_exists, write_file};
 
     use super::*;
     use crate::{
@@ -284,6 +370,222 @@ mod tests {
 
     fn path(root: &str, child: &str) -> Text {
         join_path(root, child)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn crash_fixture(
+        root: &str,
+    ) -> (
+        QuarantineTransaction,
+        VerifiedRefTransaction,
+        LinuxDurableReceiveStore,
+    ) {
+        let repository = RepositoryIdentity::parse("owner/crash-recovery").unwrap();
+        let old = ObjectId::Sha256([41; 32]);
+        let blob = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"crash boundary"),
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"crash boundary"),
+        };
+        let new = blob.id;
+        let pack = encode_pack_with_format(&[blob], ObjectFormat::Sha256).unwrap();
+        let range = verify_introduced_history(
+            old,
+            new,
+            HistoryVerificationLimits::default(),
+            |id| {
+                Ok(if id == new {
+                    [old].into()
+                } else {
+                    Vector::new()
+                })
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let verified = build_verified_fast_forward_transaction(
+            CandidateRefTransaction {
+                repository: repository.clone(),
+                repository_generation: RepositoryGeneration(7),
+                trust_generation: TrustGeneration(8),
+                revocation_generation: RevocationGeneration(9),
+                updates: [CandidateRefUpdate {
+                    name: FullRefName::parse("refs/heads/main").unwrap(),
+                    expected_old: Some(old),
+                    proposed_new: Some(new),
+                }]
+                .into(),
+            },
+            &[range],
+        )
+        .unwrap();
+        let reservation = reserve_push_disk(
+            QuarantineLimits {
+                minimum_free_space_bytes: 0,
+                ..QuarantineLimits::default()
+            },
+            PushStorageForecast {
+                incoming_pack_bytes: pack.len() as u64,
+                expanded_object_bytes: 14,
+                largest_object_bytes: 14,
+                object_count: 1,
+                ref_count: 1,
+                arrival_index_bytes: 4096,
+                staging_metadata_bytes: 4096,
+                audit_receipt_bytes: 4096,
+                ordinary_free_bytes: 1_000_000,
+            },
+        )
+        .unwrap();
+        let mut transaction = QuarantineTransaction::begin(
+            QuarantineTransactionId([44; 16]),
+            repository.clone(),
+            RepositoryGeneration(7),
+            TrustGeneration(8),
+            RevocationGeneration(9),
+            reservation,
+        )
+        .unwrap();
+        transaction.objects_quarantined(pack.len() as u64).unwrap();
+        transaction.objects_validated(14, 1).unwrap();
+        transaction.history_verified(&verified).unwrap();
+        let ref_path = path(root, "refs");
+        let initial_manifest = build_pack_set_manifest(
+            repository.clone(),
+            RepositoryGeneration(7),
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            Vector::new(),
+            receive_pack_set_limits(),
+        )
+        .unwrap();
+        ActiveRefFile::initialize_with_pack_set(
+            &ref_path,
+            &ActiveRefState {
+                repository,
+                repository_generation: RepositoryGeneration(7),
+                trust_generation: TrustGeneration(8),
+                revocation_generation: RevocationGeneration(9),
+                pack_generation: PackGeneration(1),
+                pack_set_digest: initial_manifest.digest().unwrap(),
+                object_format: ObjectFormat::Sha256,
+                default_branch: FullRefName::parse("refs/heads/main").unwrap(),
+                refs: [(FullRefName::parse("refs/heads/main").unwrap(), old)].into(),
+            },
+            &initial_manifest,
+        )
+        .unwrap();
+        let store = LinuxDurableReceiveStore::open(
+            &path(root, "journals"),
+            &path(root, "packs"),
+            &ref_path,
+            &path(root, "receipts"),
+            ObjectFormat::Sha256,
+            1024 * 1024,
+        )
+        .unwrap();
+        store.stage_pack(&transaction, &verified, &pack).unwrap();
+        (transaction, verified, store)
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn child_process_pauses_after_durable_ref_activation() {
+        if !path_exists("run-crash-helper") {
+            return;
+        }
+        let (mut transaction, verified, mut store) = crash_fixture(".");
+        transaction.ref_updates_prepared().unwrap();
+        store
+            .persist_journal_and_fsync(&transaction, &verified)
+            .unwrap();
+        store
+            .install_arrival_pack_and_fsync(transaction.id())
+            .unwrap();
+        transaction.objects_durably_installed().unwrap();
+        store
+            .persist_journal_and_fsync(&transaction, &verified)
+            .unwrap();
+        let snapshot = store.reread_activation_snapshot(&verified).unwrap();
+        assert_eq!(snapshot.repository_generation, RepositoryGeneration(7));
+        store.activate_refs_atomically_and_fsync(&verified).unwrap();
+        // This marker is deliberately after the ref-state and directory fsync
+        // and before the journal can advance past ObjectsDurablyInstalled.
+        write_file("refs-activated-ready", b"ready").unwrap();
+        loop {
+            mrml_runtime::yield_now();
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn killed_child_after_ref_activation_reopens_as_receipt_recovery() {
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-receive-kill-{}", mrml_runtime::process_id()),
+        );
+        let _ = mrml_runtime::remove_dir_all(&root);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        write_file(&path(&root, "run-crash-helper"), b"run").unwrap();
+        let mut command = Command::new("/proc/self/exe");
+        command
+            .args([
+                "--exact",
+                "receive_store::tests::child_process_pauses_after_durable_ref_activation",
+                "--nocapture",
+            ])
+            .current_dir(&root);
+        let mut child = command.spawn_silent().unwrap();
+        let ready = path(&root, "refs-activated-ready");
+        for _ in 0..1_000_000 {
+            if path_exists(&ready) {
+                break;
+            }
+            assert!(
+                child.try_wait().is_none(),
+                "crash helper exited before boundary"
+            );
+            mrml_runtime::yield_now();
+        }
+        assert!(
+            path_exists(&ready),
+            "crash helper did not reach activation boundary"
+        );
+        assert!(child.kill());
+        assert!(!child.wait().unwrap().success());
+
+        let journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
+            .unwrap()
+            .load(QuarantineTransactionId([44; 16]))
+            .unwrap();
+        assert_eq!(journal.phase, QuarantinePhase::ObjectsDurablyInstalled);
+        let state = ActiveRefFile::open(&path(&root, "refs"))
+            .unwrap()
+            .load()
+            .unwrap();
+        let new = ObjectId::blob_with_format(ObjectFormat::Sha256, b"crash boundary");
+        assert_eq!(state.repository_generation, RepositoryGeneration(8));
+        assert_eq!(state.pack_generation, PackGeneration(2));
+        assert_eq!(state.refs[0].1, new);
+        let snapshot = crate::ActivationSnapshot {
+            repository_generation: state.repository_generation,
+            trust_generation: state.trust_generation,
+            revocation_generation: state.revocation_generation,
+            refs: state
+                .refs
+                .iter()
+                .map(|(name, id)| (name.clone(), Some(*id)))
+                .collect(),
+        };
+        assert_eq!(
+            classify_receive_recovery(&journal, &snapshot),
+            RecoveryAction::RecoverAuditReceipt
+        );
+        assert!(path_exists(&path(
+            &root,
+            "packs/arrivals/2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c"
+        )));
+        mrml_runtime::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -366,7 +668,16 @@ mod tests {
         transaction.history_verified(&verified).unwrap();
 
         let ref_path = path(&root, "refs");
-        ActiveRefFile::initialize(
+        let initial_manifest = build_pack_set_manifest(
+            repository.clone(),
+            RepositoryGeneration(7),
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            mrml_runtime::Vector::new(),
+            receive_pack_set_limits(),
+        )
+        .unwrap();
+        ActiveRefFile::initialize_with_pack_set(
             &ref_path,
             &ActiveRefState {
                 repository,
@@ -374,10 +685,12 @@ mod tests {
                 trust_generation: TrustGeneration(8),
                 revocation_generation: RevocationGeneration(9),
                 pack_generation: PackGeneration(1),
+                pack_set_digest: initial_manifest.digest().unwrap(),
                 object_format: ObjectFormat::Sha256,
                 default_branch: FullRefName::parse("refs/heads/main").unwrap(),
                 refs: [(FullRefName::parse("refs/heads/main").unwrap(), old)].into(),
             },
+            &initial_manifest,
         )
         .unwrap();
         let mut store = LinuxDurableReceiveStore::open(
@@ -393,7 +706,23 @@ mod tests {
         let receipt =
             durably_activate_verified_receive(&mut transaction, &verified, &mut store).unwrap();
         assert_eq!(transaction.phase(), QuarantinePhase::AuditReceiptAppended);
-        assert_eq!(store.active_refs().load().unwrap().refs[0].1, new);
+        let active = store.active_refs().load().unwrap();
+        assert_eq!(active.refs[0].1, new);
+        assert_eq!(active.pack_generation, PackGeneration(2));
+        let selected = store
+            .active_refs()
+            .load_selected_pack_set(receive_pack_set_limits())
+            .unwrap();
+        assert_eq!(selected.entries().len(), 1);
+        assert_eq!(selected.entries()[0].transaction(), id);
+        assert_eq!(selected.entries()[0].object_ids(), &[new]);
+        assert_eq!(
+            store.read_active_arrival_object(new, 1024).unwrap(),
+            Object {
+                kind: ObjectKind::Blob,
+                contents: Vector::from(*b"received"),
+            }
+        );
         assert_eq!(store.receipts().load(id).unwrap(), receipt);
         let final_journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
             .unwrap()

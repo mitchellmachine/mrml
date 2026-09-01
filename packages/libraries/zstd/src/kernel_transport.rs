@@ -1,7 +1,7 @@
 use crate::ComponentProvider;
 use mrml_interface_zstd_v3::{
-    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, ProtocolError, ZstdTransport,
-    decode_decompress_request, decode_decompress_response,
+    decode_decompress_request, decode_decompress_response, ProtocolError, ZstdTransport,
+    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES,
 };
 use mrml_kernel::{
     CapabilitySpace, GuestMemory, IpcSharedBufferBackend, IpcSharedBufferError,
@@ -183,7 +183,7 @@ impl ZstdKernelTransport {
 mod tests {
     use super::*;
     use mrml_interface_zstd_v3::{
-        BorrowedReadView, BorrowedWriteView, DecompressError, encode_decompress_request,
+        encode_decompress_request, BorrowedReadView, BorrowedWriteView, DecompressError,
     };
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{

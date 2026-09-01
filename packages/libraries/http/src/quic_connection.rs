@@ -365,45 +365,7 @@ impl QuicConnection {
         let mut acknowledge = false;
         while at < packet.payload.len() {
             let frame = QuicFrame::decode(&packet.payload, &mut at)?;
-            if let QuicFrame::Stream {
-                id,
-                offset,
-                fin,
-                ref data,
-            } = frame
-            {
-                self.receive_flow.on_stream(id, offset, data.len(), fin)?;
-            }
-            if let QuicFrame::Ack {
-                largest,
-                delay,
-                first_range,
-                ref ranges,
-                ..
-            } = frame
-            {
-                let intervals = validated_ack_intervals(largest, first_range, ranges)?;
-                let mut acknowledged_indexes = Vector::new();
-                for (index, pending) in self.sent.iter().enumerate() {
-                    if intervals
-                        .iter()
-                        .any(|(start, end)| (*start..=*end).contains(&pending.metadata.number))
-                    {
-                        acknowledged_indexes
-                            .try_push(index)
-                            .map_err(|_| QuicError::Allocation)?;
-                    }
-                }
-                for index in acknowledged_indexes.into_iter().rev() {
-                    let acknowledged = self.sent.remove(index);
-                    let ack_delay = delay
-                        .checked_shl(self.peer_ack_delay_exponent as u32)
-                        .unwrap_or(u64::MAX)
-                        .min(self.peer_max_ack_delay_micros);
-                    self.recovery
-                        .on_ack(acknowledged.metadata, self.now_micros(), ack_delay)?;
-                }
-            } else if !matches!(frame, QuicFrame::Padding) {
+            if !matches!(frame, QuicFrame::Padding | QuicFrame::Ack { .. }) {
                 acknowledge = true;
             }
             frames.try_push(frame).map_err(|_| QuicError::Allocation)?;
@@ -430,6 +392,48 @@ impl QuicConnection {
                 .position(|frame| matches!(frame, QuicFrame::PathResponse(_)))
             {
                 frames.remove(index);
+            }
+        }
+        for frame in &frames {
+            if let QuicFrame::Stream {
+                id,
+                offset,
+                fin,
+                data,
+            } = frame
+            {
+                self.receive_flow
+                    .on_stream(*id, *offset, data.len(), *fin)?;
+            }
+            if let QuicFrame::Ack {
+                largest,
+                delay,
+                first_range,
+                ranges,
+                ..
+            } = frame
+            {
+                let intervals = validated_ack_intervals(*largest, *first_range, ranges)?;
+                let mut acknowledged_indexes = Vector::new();
+                for (index, pending) in self.sent.iter().enumerate() {
+                    if intervals
+                        .iter()
+                        .any(|(start, end)| (*start..=*end).contains(&pending.metadata.number))
+                    {
+                        acknowledged_indexes
+                            .try_push(index)
+                            .map_err(|_| QuicError::Allocation)?;
+                    }
+                }
+                for index in acknowledged_indexes.into_iter().rev() {
+                    let acknowledged = self.sent.remove(index);
+                    let ack_delay = delay
+                        .checked_shl(self.peer_ack_delay_exponent as u32)
+                        .unwrap_or(u64::MAX)
+                        .min(self.peer_max_ack_delay_micros);
+                    self.recovery
+                        .on_ack(acknowledged.metadata, self.now_micros(), ack_delay)?;
+                }
             }
         }
         if let Some(challenge) = frames.iter().find_map(|frame| match frame {

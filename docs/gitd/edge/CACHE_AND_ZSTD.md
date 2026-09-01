@@ -50,9 +50,13 @@ RLE, FSE-compressed, and repeat sequence-table selection are implemented with
 deterministic encoded-bit-cost comparison. Canonical Huffman construction is
 bounded to the RFC 11-bit maximum; direct weights and Huffman literal streams
 participate in encoded-size selection, and every compressed candidate is decoded
-and byte-compared before publication. FSE-compressed Huffman weights, an external
-pinned RFC interoperability oracle, and measured maximum-compression corpus
-evidence remain open gates. Git pack bodies remain identity encoded at HTTP
+and byte-compared before publication. FSE-compressed Huffman weights,
+four-stream literals, and every RFC literal-header width are implemented. The
+exact configured Zstandard 1.5.7 CLI oracle decodes ordinary and independently
+assembled four-stream MRML frames. Deterministic compressible and incompressible
+corpus ceilings are tested. Broad level-22 comparison with CPU and peak-memory
+measurements remains an open evidence gate; this bounded greedy profile is not
+claimed equivalent to level 22. Git pack bodies remain identity encoded at HTTP
 representation level unless an explicit measured policy says otherwise.
 
 Patent review: **TRIGGERED**, **REVIEW_COMPLETED**, **CONDITIONAL_PROCEED**, and

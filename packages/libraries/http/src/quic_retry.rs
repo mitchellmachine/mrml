@@ -146,6 +146,10 @@ impl QuicAdmissionController {
         self.half_open.len()
     }
 
+    pub(crate) fn contains_permit(&self, permit: u64) -> bool {
+        self.half_open.iter().any(|entry| entry.permit == permit)
+    }
+
     pub fn used_memory_bytes(&self) -> u64 {
         self.used_memory_bytes
     }
