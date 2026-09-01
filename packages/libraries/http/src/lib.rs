@@ -11,6 +11,7 @@ mod http3;
 mod huffman;
 mod quic;
 mod quic_connection;
+mod quic_retry;
 
 pub use crlset_update::{
     CHROMIUM_COMPONENT_UPDATE_URL, CHROMIUM_CRLSET_COMPONENT_ID,
@@ -32,6 +33,7 @@ pub use quic::{
     QuicTransportParameters, QuicVersion, SentPacket, ShortPacket,
 };
 pub use quic_connection::{QuicClientConnection, QuicConnection, QuicServerListener};
+pub use quic_retry::{QuicRetryKey, QuicRetryPurpose, QuicRetryTokenManager};
 
 const MAX_HEADER: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
