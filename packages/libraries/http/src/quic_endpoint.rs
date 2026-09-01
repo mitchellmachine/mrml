@@ -414,15 +414,32 @@ impl QuicServerEndpoint {
                 .ok_or(QuicError::SocketRead)?
                 .receive_from(&mut datagram)
                 .map_err(|_| QuicError::SocketRead)?;
-            let Some(route) = self.route(&datagram[..amount], peer) else {
-                continue;
-            };
-            let mut bytes = Vector::new();
-            bytes
-                .try_extend_from_slice(&datagram[..amount])
-                .map_err(|_| QuicError::Allocation)?;
-            return Ok(QuicEndpointDatagram { peer, route, bytes });
+            if let Some(datagram) = self.dispatch_datagram(peer, &datagram[..amount])? {
+                return Ok(datagram);
+            }
         }
+    }
+
+    /// Classifies one received datagram for the persistent endpoint reactor.
+    /// Noise is returned as `None`; it cannot terminate the listener or mutate
+    /// another connection. Bytes are copied only after bounded DCID routing has
+    /// selected a connection or a syntactically valid new Initial.
+    pub fn dispatch_datagram(
+        &self,
+        peer: SocketAddress,
+        input: &[u8],
+    ) -> Result<Option<QuicEndpointDatagram>, QuicError> {
+        if input.len() > MAX_DATAGRAM {
+            return Ok(None);
+        }
+        let Some(route) = self.route(input, peer) else {
+            return Ok(None);
+        };
+        let mut bytes = Vector::new();
+        bytes
+            .try_extend_from_slice(input)
+            .map_err(|_| QuicError::Allocation)?;
+        Ok(Some(QuicEndpointDatagram { peer, route, bytes }))
     }
 
     fn route(&self, input: &[u8], peer: SocketAddress) -> Option<QuicEndpointRoute> {
@@ -471,7 +488,12 @@ impl QuicServerEndpoint {
             .iter()
             .find(|connection| connection.handle == entry.connection)?;
         Some(match connection.phase {
-            EndpointConnectionPhase::Handshake => QuicEndpointRoute::Handshake(entry.connection),
+            EndpointConnectionPhase::Handshake => {
+                if peer != connection.validated_peer {
+                    return None;
+                }
+                QuicEndpointRoute::Handshake(entry.connection)
+            }
             EndpointConnectionPhase::Established => QuicEndpointRoute::Established {
                 connection: entry.connection,
                 path: if peer == connection.validated_peer {
@@ -672,5 +694,72 @@ mod tests {
         endpoint.remove_connection(connection).unwrap();
         assert_eq!(endpoint.connection_count(), 0);
         assert_eq!(endpoint.route(&packet, peer(444)), None);
+    }
+
+    #[test]
+    fn persistent_dispatch_isolates_junk_and_interleaved_connections() {
+        let mut endpoint = endpoint(2, 4);
+        let first = QuicConnectionHandle(11);
+        let second = QuicConnectionHandle(12);
+        endpoint
+            .register_handshake(&[1, 1, 1, 1], first, peer(443))
+            .unwrap();
+        endpoint
+            .register_handshake(&[2, 2, 2, 2], second, peer(444))
+            .unwrap();
+
+        for junk in [
+            &[][..],
+            &[0xd0][..],
+            &[0x40, 9, 9, 9, 9, 0xaa][..],
+            &[0x00, 1, 2, 3][..],
+        ] {
+            assert_eq!(endpoint.dispatch_datagram(peer(999), junk), Ok(None));
+        }
+        let first_packet = [0x40, 1, 1, 1, 1, 0xaa];
+        let second_packet = [0x40, 2, 2, 2, 2, 0xbb];
+        assert_eq!(
+            endpoint.dispatch_datagram(peer(999), &first_packet),
+            Ok(None),
+            "an unrelated peer cannot enter an in-progress handshake"
+        );
+        assert_eq!(
+            endpoint
+                .dispatch_datagram(peer(443), &first_packet)
+                .unwrap()
+                .map(|datagram| datagram.route),
+            Some(QuicEndpointRoute::Handshake(first))
+        );
+        assert_eq!(
+            endpoint
+                .dispatch_datagram(peer(444), &second_packet)
+                .unwrap()
+                .map(|datagram| datagram.route),
+            Some(QuicEndpointRoute::Handshake(second))
+        );
+
+        endpoint.mark_established(first).unwrap();
+        endpoint.mark_established(second).unwrap();
+        assert_eq!(
+            endpoint
+                .dispatch_datagram(peer(443), &first_packet)
+                .unwrap()
+                .map(|datagram| datagram.route),
+            Some(QuicEndpointRoute::Established {
+                connection: first,
+                path: QuicPathClassification::Validated,
+            })
+        );
+        assert_eq!(
+            endpoint
+                .dispatch_datagram(peer(444), &second_packet)
+                .unwrap()
+                .map(|datagram| datagram.route),
+            Some(QuicEndpointRoute::Established {
+                connection: second,
+                path: QuicPathClassification::Validated,
+            })
+        );
+        assert_eq!(endpoint.connection_count(), 2);
     }
 }
