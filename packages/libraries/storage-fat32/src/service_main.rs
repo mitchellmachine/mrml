@@ -142,6 +142,9 @@ unsafe extern "sysv64" fn mrml_fat32_service(
     }
     .unwrap_or_else(|_| halt());
     launch_data.fill(0);
+    syscalls
+        .release_launch_data(launch_data_capability)
+        .unwrap_or_else(|_| halt());
     let block = launch_binding.block();
     let logical_block_bytes = block.logical_block_bytes() as usize;
     if logical_block_bytes > SCRATCH_BYTES {

@@ -397,6 +397,26 @@ impl<R: Fat32RawSyscall> Fat32UserspaceSyscalls<R> {
         self.invoke(&mut frame)
     }
 
+    /// Releases the startup-only read capability after the immutable launch
+    /// record has been copied and validated. Retaining the handle would leave
+    /// authority to re-read a resource that the running service no longer
+    /// needs.
+    pub fn release_launch_data(
+        &mut self,
+        capability: Capability,
+    ) -> Result<(), Fat32UserspaceSyscallError> {
+        let mut frame = Fat32SyscallFrame {
+            rax: RELEASE_CAPABILITY,
+            rdi: capability.token(),
+            rsi: 0,
+            rdx: 0,
+            r10: 0,
+            r8: 0,
+            r9: 0,
+        };
+        self.invoke(&mut frame)
+    }
+
     fn invoke(&mut self, frame: &mut Fat32SyscallFrame) -> Result<(), Fat32UserspaceSyscallError> {
         unsafe { self.raw.invoke(frame) };
         if frame.rax == 0 {
@@ -1030,6 +1050,27 @@ mod tests {
         let raw = syscalls.into_raw();
         assert_eq!(output, expected);
         assert_eq!(&raw.operations[..raw.count], &[READ_SHARED_BUFFER]);
+    }
+
+    #[test]
+    fn launch_data_capability_is_released_only_after_the_exact_read() {
+        let raw = Raw {
+            request: [0; PROBE_REQUEST_BYTES],
+            shared: crate::tests::boot_sector(),
+            response: [0; PROBE_RESPONSE_BYTES],
+            operations: [0; 4],
+            count: 0,
+        };
+        let capability = Capability::from_token(TOKEN);
+        let mut syscalls = Fat32UserspaceSyscalls::new(raw, 12, 13).unwrap();
+        let mut output = [0; 144];
+        syscalls.read_launch_data(capability, &mut output).unwrap();
+        syscalls.release_launch_data(capability).unwrap();
+        let raw = syscalls.into_raw();
+        assert_eq!(
+            &raw.operations[..raw.count],
+            &[READ_SHARED_BUFFER, RELEASE_CAPABILITY]
+        );
     }
 
     #[test]
