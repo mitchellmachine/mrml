@@ -65,15 +65,32 @@ pub struct Dns01PublicationRequest {
     pub key_authorization_digest: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Dns01PublicationReceipt {
     pub operation_id: [u8; 16],
     pub generation: u64,
+    pub identifier: DnsIdentifier,
+    pub key_authorization_digest: [u8; 32],
     pub name: Dns01RecordName,
     pub value: Dns01TxtValue,
     pub provider_record_id: [u8; MAX_DNS01_PROVIDER_RECORD_ID_BYTES],
     pub provider_record_id_length: u8,
     pub binding_digest: [u8; 32],
+}
+
+impl core::fmt::Debug for Dns01PublicationReceipt {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Dns01PublicationReceipt")
+            .field("operation_id", &self.operation_id)
+            .field("generation", &self.generation)
+            .field("identifier", &"<canonical-dns-identifier>")
+            .field("name", &self.name)
+            .field("value", &self.value)
+            .field("provider_record_id_length", &self.provider_record_id_length)
+            .field("binding_digest", &self.binding_digest)
+            .finish()
+    }
 }
 
 impl Dns01PublicationReceipt {
@@ -119,6 +136,8 @@ pub fn dns01_publication_binding(
     digest.update(b"MRML DNS-01 provider publication v1");
     digest.update(&request.operation_id);
     digest.update(&request.generation.to_be_bytes());
+    digest.update(request.identifier.as_str().as_bytes());
+    digest.update(&request.key_authorization_digest);
     digest.update(name.as_str().as_bytes());
     digest.update(value.as_str().as_bytes());
     digest.update(provider_record_id.as_bytes());
@@ -173,6 +192,8 @@ mod tests {
             let receipt = Dns01PublicationReceipt {
                 operation_id: request.operation_id,
                 generation: request.generation,
+                identifier: request.identifier,
+                key_authorization_digest: request.key_authorization_digest,
                 name,
                 value,
                 provider_record_id,
@@ -192,16 +213,8 @@ mod tests {
             let expected = Dns01PublicationRequest {
                 operation_id: receipt.operation_id,
                 generation: receipt.generation,
-                identifier: DnsIdentifier::parse(
-                    receipt
-                        .name
-                        .as_str()
-                        .strip_prefix("_acme-challenge.")
-                        .ok_or(Dns01ProviderError::InvalidReceipt)?,
-                    false,
-                )
-                .map_err(|_| Dns01ProviderError::InvalidReceipt)?,
-                key_authorization_digest: [0; 32],
+                identifier: receipt.identifier,
+                key_authorization_digest: receipt.key_authorization_digest,
             };
             let binding = dns01_publication_binding(
                 expected,
@@ -255,6 +268,13 @@ mod tests {
         changed.value.0[0] ^= 1;
         assert_eq!(
             provider.cleanup(changed),
+            Err(Dns01ProviderError::InvalidReceipt)
+        );
+        let mut changed_identifier = receipt;
+        changed_identifier.identifier =
+            DnsIdentifier::parse("other.example.com", false).unwrap();
+        assert_eq!(
+            provider.cleanup(changed_identifier),
             Err(Dns01ProviderError::InvalidReceipt)
         );
         for index in 0..3 {

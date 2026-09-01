@@ -205,8 +205,8 @@ impl Dns01Provider for CloudflareDns01Provider {
         let request = Dns01PublicationRequest {
             operation_id: receipt.operation_id,
             generation: receipt.generation,
-            identifier: self.zone,
-            key_authorization_digest: [0; 32],
+            identifier: receipt.identifier,
+            key_authorization_digest: receipt.key_authorization_digest,
         };
         if receipt.binding_digest
             != dns01_publication_binding(request, receipt.name, receipt.value, record_id)
@@ -318,6 +318,8 @@ fn make_receipt(
     Ok(Dns01PublicationReceipt {
         operation_id: request.operation_id,
         generation: request.generation,
+        identifier: request.identifier,
+        key_authorization_digest: request.key_authorization_digest,
         name,
         value,
         provider_record_id,
