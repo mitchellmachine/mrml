@@ -1,7 +1,7 @@
 use mrml_runtime::{Instant, SocketAddress, TcpStream, UdpSocket, Vector};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
-use crate::quic::initial_version_and_destination_id;
+use crate::quic::{PacketReceiveState, ReceivedPacket, initial_version_and_destination_id};
 use crate::{
     HandshakePacket, InitialPacket, QuicConnectionState, QuicError, QuicFrame, QuicInitialKeys,
     QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, QuicVersion, SentPacket,
@@ -115,7 +115,7 @@ pub struct QuicConnection {
     write_keys: QuicInitialKeys,
     state: QuicConnectionState,
     next_packet_number: u64,
-    expected_packet_number: u64,
+    received_packets: PacketReceiveState,
     recovery: QuicRecovery,
     sent: Vector<PendingPacket>,
     epoch: Instant,
@@ -245,9 +245,29 @@ impl QuicConnection {
             return Ok(core::mem::take(&mut self.pending_frames));
         }
         let mut datagram = [0; 65_527];
-        let (amount, peer) = loop {
+        let (packet, peer, amount) = loop {
             match self.socket.receive_from(&mut datagram) {
-                Ok(value) => break value,
+                Ok((amount, peer)) => {
+                    let packet = match ShortPacket::open(
+                        &datagram[..amount],
+                        self.local_id.len(),
+                        &self.read_keys,
+                        self.received_packets.expected(),
+                    ) {
+                        Ok(packet) if packet.destination_id == self.local_id => packet,
+                        Ok(_)
+                        | Err(
+                            QuicError::Crypto | QuicError::InvalidPacket | QuicError::Truncated,
+                        ) => {
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match self.received_packets.record(packet.packet_number)? {
+                        ReceivedPacket::New => break (packet, peer, amount),
+                        ReceivedPacket::Duplicate | ReceivedPacket::TooOld => continue,
+                    }
+                }
                 Err(_) => {
                     let Some(index) = self.sent.iter().rposition(|packet| packet.attempts < 3)
                     else {
@@ -260,19 +280,6 @@ impl QuicConnection {
             }
         };
         self.state.on_datagram_received(amount)?;
-        let packet = ShortPacket::open(
-            &datagram[..amount],
-            self.local_id.len(),
-            &self.read_keys,
-            self.expected_packet_number,
-        )?;
-        if packet.destination_id != self.local_id {
-            return Err(QuicError::InvalidPacket);
-        }
-        self.expected_packet_number = packet
-            .packet_number
-            .checked_add(1)
-            .ok_or(QuicError::Limit)?;
         let mut frames = Vector::new();
         let mut at = 0;
         let mut acknowledge = false;
@@ -355,13 +362,10 @@ impl QuicConnection {
         }
         if acknowledge {
             let mut acknowledgement = Vector::new();
-            QuicFrame::Ack {
-                largest: packet.packet_number,
-                delay: 0,
-                first_range: 0,
-                ranges: Vector::new(),
-            }
-            .encode(&mut acknowledgement)?;
+            self.received_packets
+                .ack_frame()
+                .ok_or(QuicError::ProtocolViolation)?
+                .encode(&mut acknowledgement)?;
             self.send_payload(acknowledgement, false, 0)?;
         }
         Ok(frames)
@@ -563,7 +567,7 @@ impl QuicClientConnection {
             write_keys: QuicInitialKeys::from_traffic_secret_for(version, &application.client)?,
             state,
             next_packet_number: 0,
-            expected_packet_number: 0,
+            received_packets: PacketReceiveState::new(),
             recovery,
             sent: Vector::new(),
             epoch: Instant::now(),
@@ -828,7 +832,7 @@ impl QuicServerListener {
             )?,
             state,
             next_packet_number: 0,
-            expected_packet_number: 0,
+            received_packets: PacketReceiveState::new(),
             recovery,
             sent: Vector::new(),
             epoch: Instant::now(),
