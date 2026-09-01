@@ -171,6 +171,16 @@ pub struct CommitPage {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitDetails {
+    pub repository_generation: RepositoryGeneration,
+    pub commit: ObjectId,
+    pub tree: ObjectId,
+    pub parents: Vector<ObjectId>,
+    pub author: Text,
+    pub message: Text,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreePage {
     pub repository_generation: RepositoryGeneration,
     pub tree: ObjectId,
@@ -185,6 +195,14 @@ pub struct BlobPage {
     pub offset: u64,
     pub bytes: Vector<u8>,
     pub complete: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadmeCandidate {
+    pub repository_generation: RepositoryGeneration,
+    pub tree: ObjectId,
+    pub path: RepositoryPath,
+    pub blob: ObjectId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -431,6 +449,15 @@ pub trait GitdCoreBackend {
         limits: QueryLimits,
     ) -> Result<CommitPage, GitdCoreError>;
 
+    fn read_commit_details(
+        &self,
+        _repository: &RepositoryIdentity,
+        _commit: ObjectId,
+        _limits: QueryLimits,
+    ) -> Result<CommitDetails, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
     fn read_tree_page(
         &self,
         repository: &RepositoryIdentity,
@@ -473,6 +500,14 @@ pub trait GitdCoreBackend {
             return Err(GitdCoreError::Unsupported);
         }
         self.read_blob_page(repository, treeish, path, limits)
+    }
+
+    fn resolve_readme_candidate(
+        &self,
+        _repository: &RepositoryIdentity,
+        _treeish: ObjectId,
+    ) -> Result<Option<ReadmeCandidate>, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
     }
 
     fn verification_summary(

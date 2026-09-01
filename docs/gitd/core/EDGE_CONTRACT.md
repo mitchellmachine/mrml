@@ -43,10 +43,14 @@ tree, and truncated blob reads without invoking an external Git executable.
 Tree and blob reads also expose backward-compatible `*_at` methods whose
 checked offsets resume an exact tree enumeration or blob byte range; returned
 continuations remain bound to the rechecked repository generation. Invalid or
-overflowing offsets fail closed. This component does not yet implement rich
-commit metadata, tags/releases/events/archive descriptors, verification summaries,
-the complete upload-pack profile, or receive-pack, so it is not yet a complete
-`GitdCoreBackend`.
+overflowing offsets fail closed. Commit pages have a companion exact-details
+query carrying the authenticated tree, complete bounded parent list, author,
+and message. README resolution checks only `README.md`, `README.txt`,
+`README.rst`, then `README`, in that order, inside the exact Git tree and
+returns a generation-tagged blob descriptor. This component does not yet
+implement release/event/archive descriptors, verification summaries, the
+complete upload-pack profile, or production receive construction, so it is not
+yet a complete production `GitdCoreBackend`.
 
 The shared pkt-line codec accepts lowercase hexadecimal canonical framing,
 streams fragmented reads and writes, supports flush/delimiter/response-end

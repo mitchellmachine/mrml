@@ -3,11 +3,11 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdCoreBackend, GitdCoreError,
-    ObjectId, ObjectKind, PktLine, ProtocolBudget, ProtocolV2Request, QueryLimits, Repository,
-    RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
-    RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage,
-    TrustGeneration, VerificationSummary, WorkBudget, read_v2_request, write_pkt_line,
+    ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitDetails, CommitPage, GitdCoreBackend,
+    GitdCoreError, ObjectId, ObjectKind, PktLine, ProtocolBudget, ProtocolV2Request, QueryLimits,
+    ReadmeCandidate, Repository, RepositoryGeneration, RepositoryIdentity, RepositoryPath,
+    RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse,
+    TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request, write_pkt_line,
 };
 
 pub struct FilesystemRepositoryView {
@@ -47,6 +47,15 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         limits: QueryLimits,
     ) -> Result<CommitPage, GitdCoreError> {
         Self::read_commit_page(self, repository, commit, limits)
+    }
+
+    fn read_commit_details(
+        &self,
+        repository: &RepositoryIdentity,
+        commit: ObjectId,
+        limits: QueryLimits,
+    ) -> Result<CommitDetails, GitdCoreError> {
+        Self::read_commit_details(self, repository, commit, limits)
     }
 
     fn read_tree_page(
@@ -89,6 +98,14 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         limits: QueryLimits,
     ) -> Result<BlobPage, GitdCoreError> {
         Self::read_blob_page_at(self, repository, treeish, path, offset, limits)
+    }
+
+    fn resolve_readme_candidate(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+    ) -> Result<Option<ReadmeCandidate>, GitdCoreError> {
+        Self::resolve_readme_candidate(self, repository, treeish)
     }
 
     fn verification_summary(
@@ -379,6 +396,80 @@ impl FilesystemRepositoryView {
             commits,
             next,
         })
+    }
+
+    pub fn read_commit_details(
+        &self,
+        repository: &RepositoryIdentity,
+        commit: ObjectId,
+        limits: QueryLimits,
+    ) -> Result<CommitDetails, GitdCoreError> {
+        validate_limits(limits)?;
+        let before = self.load_for(repository)?;
+        if commit.format() != before.object_format {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let parsed = self
+            .objects
+            .read_commit(commit)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if parsed.parents.len() > limits.max_entries as usize {
+            return Err(GitdCoreError::Resource);
+        }
+        let bytes = parsed
+            .author
+            .len()
+            .checked_add(parsed.message.len())
+            .and_then(|value| {
+                value.checked_add(parsed.parents.len().checked_mul(commit.as_bytes().len())?)
+            })
+            .ok_or(GitdCoreError::Resource)? as u64;
+        if bytes > limits.max_bytes {
+            return Err(GitdCoreError::Resource);
+        }
+        self.ensure_generation(before.repository_generation)?;
+        Ok(CommitDetails {
+            repository_generation: before.repository_generation,
+            commit,
+            tree: parsed.tree,
+            parents: parsed.parents,
+            author: parsed.author,
+            message: parsed.message,
+        })
+    }
+
+    pub fn resolve_readme_candidate(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+    ) -> Result<Option<ReadmeCandidate>, GitdCoreError> {
+        let before = self.load_for(repository)?;
+        let tree = self.tree_id(treeish, before.object_format)?;
+        let index = self
+            .objects
+            .tree_index(tree)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let mut selected = None;
+        for candidate in ["README.md", "README.txt", "README.rst", "README"] {
+            if let Some(entry) = index.entry(candidate) {
+                let object = self
+                    .objects
+                    .read_object(entry.id)
+                    .map_err(|_| GitdCoreError::ObjectValidation)?;
+                if object.kind != ObjectKind::Blob {
+                    return Err(GitdCoreError::ObjectValidation);
+                }
+                selected = Some(ReadmeCandidate {
+                    repository_generation: before.repository_generation,
+                    tree,
+                    path: RepositoryPath::parse(candidate)?,
+                    blob: entry.id,
+                });
+                break;
+            }
+        }
+        self.ensure_generation(before.repository_generation)?;
+        Ok(selected)
     }
 
     pub fn read_tree_page(
@@ -756,6 +847,17 @@ mod tests {
                 .commits,
             &[commit]
         );
+        let details = GitdCoreBackend::read_commit_details(&view, &identity, commit, limits).unwrap();
+        assert_eq!(details.commit, commit);
+        assert_eq!(details.tree, tree);
+        assert!(details.parents.is_empty());
+        assert_eq!(details.message, "initial\n");
+        let readme = GitdCoreBackend::resolve_readme_candidate(&view, &identity, commit)
+            .unwrap()
+            .unwrap();
+        assert_eq!(readme.repository_generation, RepositoryGeneration(4));
+        assert_eq!(readme.path, RepositoryPath::parse("README.md").unwrap());
+        assert_eq!(readme.blob, blob);
         assert_eq!(
             &*view
                 .read_tree_page(&identity, commit, &RepositoryPath::root(), limits)
