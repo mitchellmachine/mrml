@@ -1,6 +1,10 @@
 # MRML-GIT-HYBRID-V1
 
-Status: **PLANNED**. The existing nested signature format is not this profile.
+Status: **PARTIALLY IMPLEMENTED**. The existing nested signature format is not
+this profile. The OpenPGP library now parses the exact RFC 9580 v6 Ed25519
+primary-key packet shape and computes the full 32-byte SHA-256 fingerprint,
+with the RFC Appendix A certificate as a byte-exact vector. V6 detached
+signature parsing and salted verification remain open.
 
 Protected history will require an AND decision over an authorized OpenPGP v6
 Ed25519 signature, an authorized ML-DSA-65 signature, and an authorized binding
@@ -26,4 +30,3 @@ No byte encoding or test vector is declared normative here yet. RFC 9580 v6
 fingerprints/salts and final FIPS 204 ML-DSA-65 require exact positive,
 negative, official, and independent-oracle evidence before this status can be
 promoted.
-

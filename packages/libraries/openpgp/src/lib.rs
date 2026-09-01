@@ -104,6 +104,81 @@ impl Fingerprint {
     }
 }
 
+/// Complete RFC 9580 version 6 fingerprint.
+///
+/// This is intentionally a different type from the legacy 20-byte v4
+/// fingerprint so callers cannot truncate or silently substitute identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FingerprintV6([u8; 32]);
+
+impl FingerprintV6 {
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    pub fn parse_hex(value: &str) -> Result<Self, Error> {
+        let mut bytes = [0u8; 32];
+        let mut nibble = None;
+        let mut written = 0usize;
+        for byte in value.bytes() {
+            if matches!(byte, b' ' | b':') {
+                continue;
+            }
+            let value = hex_value(byte).ok_or(Error::InvalidFingerprint)?;
+            if let Some(high) = nibble.take() {
+                if written == bytes.len() {
+                    return Err(Error::InvalidFingerprint);
+                }
+                bytes[written] = (high << 4) | value;
+                written += 1;
+            } else {
+                nibble = Some(value);
+            }
+        }
+        if nibble.is_some() || written != bytes.len() {
+            return Err(Error::InvalidFingerprint);
+        }
+        Ok(Self(bytes))
+    }
+
+    pub fn write_hex(&self, output: &mut [u8]) -> Result<usize, Error> {
+        if output.len() < 64 {
+            return Err(Error::OutputTooSmall);
+        }
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        for (index, byte) in self.0.iter().copied().enumerate() {
+            output[index * 2] = HEX[(byte >> 4) as usize];
+            output[index * 2 + 1] = HEX[(byte & 0x0f) as usize];
+        }
+        Ok(64)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicKeyV6 {
+    created_at: u32,
+    public: [u8; 32],
+    fingerprint: FingerprintV6,
+}
+
+impl PublicKeyV6 {
+    pub const fn created_at(&self) -> u32 {
+        self.created_at
+    }
+
+    pub const fn public_bytes(&self) -> &[u8; 32] {
+        &self.public
+    }
+
+    pub const fn fingerprint(&self) -> FingerprintV6 {
+        self.fingerprint
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublicKey {
     created_at: u32,
@@ -374,6 +449,78 @@ pub fn parse_public_key_ascii(input: &[u8], scratch: &mut [u8]) -> Result<Public
     }
     let decoded = decode_armor(PUBLIC_KEY_BEGIN, PUBLIC_KEY_END, input, scratch)?;
     parse_public_key_packets(decoded)
+}
+
+/// Parses one RFC 9580 v6 Ed25519 primary key from a transferable public key.
+/// Certificate signatures and subkeys are not treated as authorization here.
+pub fn parse_public_key_v6_ascii(input: &[u8], scratch: &mut [u8]) -> Result<PublicKeyV6, Error> {
+    if input.is_empty() || input.len() > MAX_OPENPGP_PUBLIC_KEY_BYTES {
+        return Err(Error::InputTooLarge);
+    }
+    let decoded = decode_armor(PUBLIC_KEY_BEGIN, PUBLIC_KEY_END, input, scratch)?;
+    let mut offset = 0usize;
+    let mut primary = None;
+    while offset < decoded.len() {
+        let (tag, body, end) = parse_packet(decoded, offset)?;
+        if offset == 0 && tag != 6 {
+            return Err(Error::InvalidPublicKey);
+        }
+        match tag {
+            5 | 7 => return Err(Error::SecretKeyMaterial),
+            6 => {
+                if primary.is_some() {
+                    return Err(Error::AmbiguousKey);
+                }
+                primary = Some(parse_primary_key_v6(body)?);
+            }
+            2 | 13 | 14 | 17 | 21 => {}
+            _ => return Err(Error::InvalidPublicKey),
+        }
+        offset = end;
+    }
+    primary.ok_or(Error::InvalidPublicKey)
+}
+
+fn parse_primary_key_v6(body: &[u8]) -> Result<PublicKeyV6, Error> {
+    // version, creation time, algorithm, material length, Ed25519 public key
+    if body.len() != 42 || body[0] != 6 {
+        return Err(if body.first() == Some(&6) {
+            Error::InvalidPublicKey
+        } else {
+            Error::UnsupportedVersion
+        });
+    }
+    let created_at =
+        u32::from_be_bytes(body[1..5].try_into().map_err(|_| Error::InvalidPublicKey)?);
+    if created_at == 0 {
+        return Err(Error::InvalidTime);
+    }
+    if body[5] != 27 {
+        return Err(Error::UnsupportedAlgorithm);
+    }
+    if u32::from_be_bytes(
+        body[6..10]
+            .try_into()
+            .map_err(|_| Error::InvalidPublicKey)?,
+    ) != 32
+    {
+        return Err(Error::InvalidPublicKey);
+    }
+    let public: [u8; 32] = body[10..42]
+        .try_into()
+        .map_err(|_| Error::InvalidPublicKey)?;
+    if !ed25519_public_is_valid(&public) {
+        return Err(Error::InvalidPublicKey);
+    }
+    let mut fingerprint_input = [0u8; 47];
+    fingerprint_input[0] = 0x9b;
+    fingerprint_input[1..5].copy_from_slice(&42u32.to_be_bytes());
+    fingerprint_input[5..].copy_from_slice(body);
+    Ok(PublicKeyV6 {
+        created_at,
+        public,
+        fingerprint: FingerprintV6(Sha256::digest(&fingerprint_input)),
+    })
 }
 
 pub fn sign_detached_ascii(
@@ -1236,6 +1383,17 @@ Q+47JAY=\n\
 iF4EABYIAAYFAlX5X5UACgkQjP3hIZeWWpr2IgD/VvkMypjiECY3vZg/2xbBMd/S\n\
 ftgr9N3lYG4NdWrtM2YBANCcT6EVJ/A44PV/IgHYLy6iyQMyZfps60iehUuuYbQE\n\
 -----END PGP SIGNATURE-----\n";
+    const RFC_V6_CERTIFICATE: &[u8] = b"-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n\
+xioGY4d/4xsAAAAg+U2nu0jWCmHlZ3BqZYfQMxmZu52JGggkLq2EVD34laPCsQYf\n\
+GwoAAABCBYJjh3/jAwsJBwUVCg4IDAIWAAKbAwIeCSIhBssYbE8GCaaX5NUt+mxy\n\
+KwwfHifBilZwj2Ul7Ce62azJBScJAgcCAAAAAK0oIBA+LX0ifsDm185Ecds2v8lw\n\
+gyU2kCcUmKfvBXbAf6rhRYWzuQOwEn7E/aLwIwRaLsdry0+VcallHhSu4RN6HWaE\n\
+QsiPlR4zxP/TP7mhfVEe7XWPxtnMUMtf15OyA51YBM4qBmOHf+MZAAAAIIaTJINn\n\
++eUBXbki+PSAld2nhJh/LVmFsS+60WyvXkQ1wpsGGBsKAAAALAWCY4d/4wKbDCIh\n\
+BssYbE8GCaaX5NUt+mxyKwwfHifBilZwj2Ul7Ce62azJAAAAAAQBIKbpGG2dWTX8\n\
+j+VjFM21J0hqWlEg+bdiojWnKfA5AQpWUWtnNwDEM0g12vYxoWM8Y81W+bHBw805\n\
+I8kWVkXU6vFOi+HWvv/ira7ofJu16NnoUkhclkUrk0mXubZvyl4GBg==\n\
+-----END PGP PUBLIC KEY BLOCK-----\n";
     const MRML_PUBLIC_KEY: &[u8] =
         include_bytes!("../../../../docs/keys/mrml-commit-signing-key.asc");
     const MRML_SHA256_COMMIT_PAYLOAD: &[u8] =
@@ -1281,6 +1439,44 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
         .unwrap();
         assert_eq!(verified.digest_algorithm, DigestAlgorithm::Sha256);
         assert_eq!(verified.created_at, 0x55f9_5f95);
+    }
+
+    #[test]
+    fn rfc_9580_v6_primary_key_uses_full_sha256_fingerprint() {
+        let expected = FingerprintV6::parse_hex(
+            "CB186C4F0609A697E4D52DFA6C722B0C1F1E27C18A56708F6525EC27BAD9ACC9",
+        )
+        .unwrap();
+        let mut scratch = [0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        let key = parse_public_key_v6_ascii(RFC_V6_CERTIFICATE, &mut scratch).unwrap();
+        assert_eq!(key.created_at(), 0x6387_7fe3);
+        assert_eq!(key.fingerprint(), expected);
+        assert_eq!(
+            key.public_bytes(),
+            &[
+                0xf9, 0x4d, 0xa7, 0xbb, 0x48, 0xd6, 0x0a, 0x61, 0xe5, 0x67, 0x70, 0x6a, 0x65, 0x87,
+                0xd0, 0x33, 0x19, 0x99, 0xbb, 0x9d, 0x89, 0x1a, 0x08, 0x24, 0x2e, 0xad, 0x84, 0x54,
+                0x3d, 0xf8, 0x95, 0xa3,
+            ]
+        );
+    }
+
+    #[test]
+    fn v6_identity_rejects_v4_and_noncanonical_material_lengths() {
+        let mut scratch = [0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        assert_eq!(
+            parse_public_key_v6_ascii(RFC_PUBLIC_KEY, &mut scratch),
+            Err(Error::UnsupportedVersion)
+        );
+
+        let public = [0x55; 32];
+        let mut body = [0u8; 42];
+        body[0] = 6;
+        body[1..5].copy_from_slice(&1u32.to_be_bytes());
+        body[5] = 27;
+        body[6..10].copy_from_slice(&31u32.to_be_bytes());
+        body[10..].copy_from_slice(&public);
+        assert_eq!(parse_primary_key_v6(&body), Err(Error::InvalidPublicKey));
     }
 
     #[test]
