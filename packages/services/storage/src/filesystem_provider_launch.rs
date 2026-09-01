@@ -101,6 +101,7 @@ pub enum NativeFilesystemProviderLaunchSpecError {
     WrongLaunchPolicy,
     WrongAssociationGeneration,
     WrongLaunchDataLength,
+    WrongServiceEndpoint,
     WrongDependencyEndpoint,
 }
 
@@ -143,6 +144,13 @@ impl NativeFilesystemProviderLaunchSpec {
         }
         if attachment.launch_data_bytes() as usize != FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES {
             return Err(NativeFilesystemProviderLaunchSpecError::WrongLaunchDataLength);
+        }
+        if attachment.service_endpoint_object()
+            != association.filesystem_binding.endpoint_object
+            || attachment.service_endpoint_generation()
+                != association.filesystem_binding.binding_generation
+        {
+            return Err(NativeFilesystemProviderLaunchSpecError::WrongServiceEndpoint);
         }
         if attachment.dependency_endpoint_object() != association.block_binding.endpoint_object
             || attachment.dependency_endpoint() != block_endpoint
@@ -1899,7 +1907,6 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
         memory,
         binding,
         local_page_table_root,
-        association.filesystem_binding.endpoint_object,
         supervisor_task_object,
         association.filesystem_binding.module_object,
     )
@@ -2392,7 +2399,7 @@ mod tests {
         association_generation: u64,
         launch_data_bytes: u32,
     ) -> (
-        CapabilitySpace<2>,
+        CapabilitySpace<3>,
         Capability,
         IsolationServiceSpec,
         ComponentServiceLaunchAttachment,
@@ -2409,13 +2416,19 @@ mod tests {
             IsolationPlacement::NativeService,
         )
         .unwrap();
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let data = capabilities
             .insert(ObjectId(0x90), Rights::READ.union(Rights::DELEGATE))
             .unwrap();
         let endpoint = capabilities
             .insert(
                 association.block_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let service_endpoint = capabilities
+            .insert(
+                association.filesystem_binding.endpoint_object,
                 Rights::SIGNAL.union(Rights::DELEGATE),
             )
             .unwrap();
@@ -2426,6 +2439,9 @@ mod tests {
             3,
             launch_data_bytes,
             data,
+            association.filesystem_binding.endpoint_object,
+            association.filesystem_binding.binding_generation,
+            service_endpoint,
             association.block_binding.endpoint_object,
             association.block_binding.binding_generation,
             endpoint,
@@ -2742,7 +2758,7 @@ mod tests {
         let mut page_tables = PageTableArena([0; 512 * 5]);
         let page_table_base =
             mrml_kernel::PhysAddr::new(page_tables.0.as_mut_ptr() as u64).unwrap();
-        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 9>::new(1_000, 1).unwrap();
         let context = |physical, page_table, stack| {
             UserContext::new(
                 mrml_kernel::PhysAddr::new(physical).unwrap(),
@@ -2850,6 +2866,14 @@ mod tests {
                 Rights::SIGNAL.union(Rights::DELEGATE),
             )
             .unwrap();
+        let service_endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(
+                association.filesystem_binding.endpoint_object,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
+            .unwrap();
         let launch_attachment = ComponentServiceLaunchAttachment::new(
             service,
             association.association_generation,
@@ -2857,6 +2881,9 @@ mod tests {
             3,
             FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES as u32,
             launch_data,
+            association.filesystem_binding.endpoint_object,
+            association.filesystem_binding.binding_generation,
+            service_endpoint,
             association.block_binding.endpoint_object,
             association.block_binding.binding_generation,
             endpoint,
@@ -3233,6 +3260,9 @@ mod tests {
                         3,
                         FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES as u32,
                         launch_data,
+                        association.filesystem_binding.endpoint_object,
+                        association.filesystem_binding.binding_generation,
+                        service_endpoint,
                         association.block_binding.endpoint_object,
                         association.block_binding.binding_generation,
                         endpoint,

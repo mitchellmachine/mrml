@@ -323,6 +323,9 @@ pub struct ComponentServiceLaunchAttachment {
     launch_data_generation: u64,
     launch_data_bytes: u32,
     launch_data: Capability,
+    service_endpoint_object: ObjectId,
+    service_endpoint_generation: u64,
+    service_endpoint: Capability,
     dependency_endpoint_object: ObjectId,
     dependency_endpoint_generation: u64,
     dependency_endpoint: Capability,
@@ -335,6 +338,7 @@ pub enum ComponentServiceLaunchAttachmentError {
     InvalidLength,
     Capability(CapabilityError),
     WrongLaunchDataObject,
+    WrongServiceEndpoint,
     WrongDependencyEndpoint,
 }
 
@@ -347,19 +351,26 @@ impl ComponentServiceLaunchAttachment {
         launch_data_generation: u64,
         launch_data_bytes: u32,
         launch_data: Capability,
+        service_endpoint_object: ObjectId,
+        service_endpoint_generation: u64,
+        service_endpoint: Capability,
         dependency_endpoint_object: ObjectId,
         dependency_endpoint_generation: u64,
         dependency_endpoint: Capability,
         capabilities: &CapabilitySpace<C>,
     ) -> Result<Self, ComponentServiceLaunchAttachmentError> {
         if launch_data_object.0 == 0
+            || service_endpoint_object.0 == 0
             || dependency_endpoint_object.0 == 0
             || launch_data_object == dependency_endpoint_object
+            || launch_data_object == service_endpoint_object
+            || service_endpoint_object == dependency_endpoint_object
         {
             return Err(ComponentServiceLaunchAttachmentError::InvalidIdentity);
         }
         if association_generation == 0
             || launch_data_generation == 0
+            || service_endpoint_generation == 0
             || dependency_endpoint_generation == 0
         {
             return Err(ComponentServiceLaunchAttachmentError::InvalidGeneration);
@@ -372,6 +383,15 @@ impl ComponentServiceLaunchAttachment {
             .map_err(ComponentServiceLaunchAttachmentError::Capability)?;
         if actual_data != launch_data_object {
             return Err(ComponentServiceLaunchAttachmentError::WrongLaunchDataObject);
+        }
+        let actual_service_endpoint = capabilities
+            .authorize_exact(
+                service_endpoint,
+                Rights::SIGNAL.union(Rights::DELEGATE),
+            )
+            .map_err(ComponentServiceLaunchAttachmentError::Capability)?;
+        if actual_service_endpoint != service_endpoint_object {
+            return Err(ComponentServiceLaunchAttachmentError::WrongServiceEndpoint);
         }
         let actual_endpoint = capabilities
             .authorize_exact(dependency_endpoint, Rights::SIGNAL.union(Rights::DELEGATE))
@@ -388,6 +408,9 @@ impl ComponentServiceLaunchAttachment {
             launch_data_generation,
             launch_data_bytes,
             launch_data,
+            service_endpoint_object,
+            service_endpoint_generation,
+            service_endpoint,
             dependency_endpoint_object,
             dependency_endpoint_generation,
             dependency_endpoint,
@@ -417,6 +440,15 @@ impl ComponentServiceLaunchAttachment {
     }
     pub const fn launch_data(self) -> Capability {
         self.launch_data
+    }
+    pub const fn service_endpoint_object(self) -> ObjectId {
+        self.service_endpoint_object
+    }
+    pub const fn service_endpoint_generation(self) -> u64 {
+        self.service_endpoint_generation
+    }
+    pub const fn service_endpoint(self) -> Capability {
+        self.service_endpoint
     }
     pub const fn dependency_endpoint_object(self) -> ObjectId {
         self.dependency_endpoint_object
@@ -1090,6 +1122,7 @@ pub fn prepare_component_service_read_transfer_attachment<
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeComponentServiceEntry {
     service_endpoint_object: ObjectId,
+    service_endpoint: Capability,
     supervisor_task_object: ObjectId,
     provider_generation: u64,
     consumer_module_object: ObjectId,
@@ -1104,6 +1137,8 @@ pub enum NativeComponentServiceEntryError {
     AttachmentMismatch,
     LaunchDataCapability(CapabilityError),
     WrongLaunchDataObject,
+    ServiceEndpointCapability(CapabilityError),
+    WrongServiceEndpoint,
     DependencyCapability(CapabilityError),
     WrongDependencyEndpoint,
     LaunchRegistersOccupied,
@@ -1114,17 +1149,17 @@ impl NativeComponentServiceEntry {
     pub fn new<const C: usize>(
         spec: IsolationServiceSpec,
         attachment: ComponentServiceLaunchAttachment,
-        service_endpoint_object: ObjectId,
         supervisor_task_object: ObjectId,
         consumer_module_object: ObjectId,
         launch_data: Capability,
+        service_endpoint: Capability,
         dependency_endpoint: Capability,
         target_capabilities: &CapabilitySpace<C>,
     ) -> Result<Self, NativeComponentServiceEntryError> {
-        if service_endpoint_object.0 == 0
+        if attachment.service_endpoint_object().0 == 0
             || supervisor_task_object.0 == 0
             || consumer_module_object.0 == 0
-            || service_endpoint_object == supervisor_task_object
+            || attachment.service_endpoint_object() == supervisor_task_object
         {
             return Err(NativeComponentServiceEntryError::InvalidIdentity);
         }
@@ -1137,6 +1172,12 @@ impl NativeComponentServiceEntry {
         if actual_data != attachment.launch_data_object() {
             return Err(NativeComponentServiceEntryError::WrongLaunchDataObject);
         }
+        let actual_service_endpoint = target_capabilities
+            .authorize_exact(service_endpoint, Rights::SIGNAL)
+            .map_err(NativeComponentServiceEntryError::ServiceEndpointCapability)?;
+        if actual_service_endpoint != attachment.service_endpoint_object() {
+            return Err(NativeComponentServiceEntryError::WrongServiceEndpoint);
+        }
         let actual_dependency = target_capabilities
             .authorize_exact(dependency_endpoint, Rights::SIGNAL)
             .map_err(NativeComponentServiceEntryError::DependencyCapability)?;
@@ -1144,7 +1185,8 @@ impl NativeComponentServiceEntry {
             return Err(NativeComponentServiceEntryError::WrongDependencyEndpoint);
         }
         Ok(Self {
-            service_endpoint_object,
+            service_endpoint_object: attachment.service_endpoint_object(),
+            service_endpoint,
             supervisor_task_object,
             provider_generation: spec.provider_generation(),
             consumer_module_object,
@@ -1156,6 +1198,10 @@ impl NativeComponentServiceEntry {
 
     pub const fn service_endpoint_object(self) -> ObjectId {
         self.service_endpoint_object
+    }
+
+    pub const fn service_endpoint(self) -> Capability {
+        self.service_endpoint
     }
 
     pub const fn supervisor_task_object(self) -> ObjectId {
@@ -1202,7 +1248,7 @@ impl NativeComponentServiceEntry {
                 context,
             ));
         }
-        context.r13 = self.service_endpoint_object.0;
+        context.r13 = self.service_endpoint.token();
         context.r14 = self.supervisor_task_object.0;
         context.r12 = self.provider_generation;
         context.r15 = self.launch_data.token();
@@ -2273,7 +2319,6 @@ pub fn prepare_native_component_service_task_from_copy_read_transfer_attachment<
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferCopyTaskBinding,
     page_table_root: crate::PhysAddr,
-    service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<NativeComponentServiceCopyReadTransferTask, NativeComponentServiceCopyReadTransferError>
@@ -2307,7 +2352,6 @@ pub fn prepare_native_component_service_task_from_copy_read_transfer_attachment<
         spec,
         launch_attachment,
         transfer,
-        service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
     ) {
@@ -2354,7 +2398,6 @@ pub fn prepare_native_component_service_task_from_mapped_read_transfer_attachmen
     transfer: ComponentServiceReadTransferAttachment,
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferTaskBinding,
-    service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<
@@ -2379,7 +2422,6 @@ pub fn prepare_native_component_service_task_from_mapped_read_transfer_attachmen
         spec,
         launch_attachment,
         transfer,
-        service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
     ) {
@@ -2423,7 +2465,6 @@ pub fn prepare_native_component_service_task_from_mapped_read_transfer<
     launch_attachment: ComponentServiceLaunchAttachment,
     memory: ComponentServiceReadTransferMemoryRoot,
     binding: ComponentServiceReadTransferTaskBinding,
-    service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<
@@ -2460,7 +2501,6 @@ pub fn prepare_native_component_service_task_from_mapped_read_transfer<
         transfer,
         memory,
         binding,
-        service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
     )
@@ -2484,7 +2524,6 @@ pub fn prepare_native_component_service_task_from_read_transfer_root<
     shared_generation: u64,
     shared_bytes: u32,
     shared_root: Capability,
-    service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<NativeComponentServiceReadTransferTask, NativeComponentServiceReadTransferRootError> {
@@ -2505,7 +2544,6 @@ pub fn prepare_native_component_service_task_from_read_transfer_root<
         spec,
         launch_attachment,
         transfer,
-        service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
     ) {
@@ -2541,7 +2579,6 @@ pub fn prepare_native_component_service_task_with_read_transfer<
     spec: IsolationServiceSpec,
     attachment: ComponentServiceLaunchAttachment,
     transfer: ComponentServiceReadTransferAttachment,
-    service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<NativeComponentServiceReadTransferTask, NativeComponentServiceTaskError> {
@@ -2575,6 +2612,7 @@ pub fn prepare_native_component_service_task_with_read_transfer<
             target_task,
             &[
                 (attachment.launch_data(), Rights::READ),
+                (attachment.service_endpoint(), Rights::SIGNAL),
                 (attachment.dependency_endpoint(), Rights::SIGNAL),
                 (transfer.local_read(), Rights::MAP.union(Rights::READ)),
                 (
@@ -2588,26 +2626,29 @@ pub fn prepare_native_component_service_task_with_read_transfer<
     let projected = [
         capabilities
             .next()
-            .expect("four construction projections produce four handles"),
+            .expect("five construction projections produce five handles"),
         capabilities
             .next()
-            .expect("four construction projections produce four handles"),
+            .expect("five construction projections produce five handles"),
         capabilities
             .next()
-            .expect("four construction projections produce four handles"),
+            .expect("five construction projections produce five handles"),
         capabilities
             .next()
-            .expect("four construction projections produce four handles"),
+            .expect("five construction projections produce five handles"),
+        capabilities
+            .next()
+            .expect("five construction projections produce five handles"),
     ];
     debug_assert!(capabilities.next().is_none());
-    let [launch_data, dependency_endpoint, local_read, provider_write] = projected;
+    let [launch_data, service_endpoint, dependency_endpoint, local_read, provider_write] = projected;
     let entry = match NativeComponentServiceEntry::new(
         spec,
         attachment,
-        service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
         launch_data,
+        service_endpoint,
         dependency_endpoint,
         runtime
             .capabilities(target_task)
@@ -2653,10 +2694,14 @@ pub fn prepare_native_component_service_task_with_read_transfer<
     })
 }
 
-fn rollback_native_read_transfer_projection<const TASKS: usize, const CAPABILITIES: usize>(
+fn rollback_native_read_transfer_projection<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+    const PROJECTED: usize,
+>(
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
     target_task: TaskId,
-    projected: [Capability; 4],
+    projected: [Capability; PROJECTED],
     entry: NativeComponentServiceEntryError,
 ) -> Result<NativeComponentServiceReadTransferTask, NativeComponentServiceTaskError> {
     let mut cleanup = None;
@@ -2678,7 +2723,6 @@ pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILIT
     target_task: TaskId,
     spec: IsolationServiceSpec,
     attachment: ComponentServiceLaunchAttachment,
-    service_endpoint_object: ObjectId,
     supervisor_task_object: ObjectId,
     consumer_module_object: ObjectId,
 ) -> Result<NativeComponentServiceTask, NativeComponentServiceTaskError> {
@@ -2694,6 +2738,7 @@ pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILIT
             target_task,
             &[
                 (attachment.launch_data(), Rights::READ),
+                (attachment.service_endpoint(), Rights::SIGNAL),
                 (attachment.dependency_endpoint(), Rights::SIGNAL),
             ],
         )
@@ -2701,18 +2746,21 @@ pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILIT
     let mut projected = projection.capabilities();
     let launch_data = projected
         .next()
-        .expect("two requested construction projections produce two handles");
+        .expect("three requested construction projections produce three handles");
+    let service_endpoint = projected
+        .next()
+        .expect("three requested construction projections produce three handles");
     let dependency_endpoint = projected
         .next()
-        .expect("two requested construction projections produce two handles");
+        .expect("three requested construction projections produce three handles");
     debug_assert!(projected.next().is_none());
     let entry = match NativeComponentServiceEntry::new(
         spec,
         attachment,
-        service_endpoint_object,
         supervisor_task_object,
         consumer_module_object,
         launch_data,
+        service_endpoint,
         dependency_endpoint,
         runtime
             .capabilities(target_task)
@@ -2723,8 +2771,7 @@ pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILIT
             return rollback_native_projection(
                 runtime,
                 target_task,
-                launch_data,
-                dependency_endpoint,
+                [launch_data, service_endpoint, dependency_endpoint],
                 error,
             );
         }
@@ -2735,8 +2782,7 @@ pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILIT
             return rollback_native_projection(
                 runtime,
                 target_task,
-                launch_data,
-                dependency_endpoint,
+                [launch_data, service_endpoint, dependency_endpoint],
                 error,
             );
         }
@@ -2750,29 +2796,32 @@ pub fn prepare_native_component_service_task<const TASKS: usize, const CAPABILIT
     })
 }
 
-fn rollback_native_projection<const TASKS: usize, const CAPABILITIES: usize>(
+fn rollback_native_projection<
+    const TASKS: usize,
+    const CAPABILITIES: usize,
+    const PROJECTED: usize,
+>(
     runtime: &mut TaskRuntime<TASKS, CAPABILITIES>,
     target_task: TaskId,
-    launch_data: Capability,
-    dependency_endpoint: Capability,
+    projected: [Capability; PROJECTED],
     entry: NativeComponentServiceEntryError,
 ) -> Result<NativeComponentServiceTask, NativeComponentServiceTaskError> {
-    let data_cleanup = runtime.revoke_capability(target_task, launch_data).err();
-    let endpoint_cleanup = runtime
-        .revoke_capability(target_task, dependency_endpoint)
-        .err();
-    match data_cleanup.or(endpoint_cleanup) {
+    let mut cleanup = None;
+    for capability in projected {
+        cleanup = cleanup.or(runtime.revoke_capability(target_task, capability).err());
+    }
+    match cleanup {
         Some(cleanup) => Err(NativeComponentServiceTaskError::Rollback { entry, cleanup }),
         None => Err(NativeComponentServiceTaskError::Entry(entry)),
     }
 }
 
 /// Atomic placement boundary for a service whose construction requires one
-/// read-only launch-data object and one separately attenuated dependency
-/// endpoint.
+/// read-only launch-data object, one separately attenuated service endpoint,
+/// and one separately attenuated dependency endpoint.
 ///
-/// Implementations must project both capabilities into the same fresh domain
-/// generation and publish no endpoint or ready signal until both projections
+/// Implementations must project all three capabilities into the same fresh domain
+/// generation and publish no endpoint or ready signal until every projection
 /// and service construction succeed. Failure must revoke and erase all partial
 /// mappings, capabilities, device state, and domain memory.
 pub unsafe trait IsolationAttachedServiceBackend {
@@ -4940,12 +4989,15 @@ mod tests {
                 .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let launch = component_launch(&mut table, spec);
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let data = capabilities
             .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
             .unwrap();
         let endpoint = capabilities
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let service_endpoint = capabilities
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
@@ -4954,6 +5006,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -4978,6 +5033,7 @@ mod tests {
         assert_eq!(attachment.association_generation(), 12);
         assert_eq!(attachment.launch_data_bytes(), 144);
         assert_eq!(attachment.launch_data(), data);
+        assert_eq!(attachment.service_endpoint(), service_endpoint);
         assert_eq!(attachment.dependency_endpoint(), endpoint);
         assert!(table.total_microvm_report().satisfied());
     }
@@ -4985,12 +5041,15 @@ mod tests {
     #[test]
     fn native_entry_uses_only_fresh_target_space_attachment_capabilities() {
         let spec = service_spec(IsolationPlacement::NativeService);
-        let mut source = CapabilitySpace::<2>::new();
+        let mut source = CapabilitySpace::<3>::new();
         let source_data = source
             .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
             .unwrap();
         let source_endpoint = source
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let source_service_endpoint = source
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
@@ -4999,29 +5058,34 @@ mod tests {
             4,
             144,
             source_data,
+            ObjectId(0x90),
+            6,
+            source_service_endpoint,
             ObjectId(0x81),
             7,
             source_endpoint,
             &source,
         )
         .unwrap();
-        let mut target = CapabilitySpace::<3>::new();
+        let mut target = CapabilitySpace::<4>::new();
         let unrelated = target.insert(ObjectId(0x99), Rights::READ).unwrap();
         let target_data = target.insert(ObjectId(0x80), Rights::READ).unwrap();
+        let target_service_endpoint = target.insert(ObjectId(0x90), Rights::SIGNAL).unwrap();
         let target_endpoint = target.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
         let entry = NativeComponentServiceEntry::new(
             spec,
             attachment,
-            ObjectId(0x90),
             ObjectId(0x91),
             ObjectId(0x92),
             target_data,
+            target_service_endpoint,
             target_endpoint,
             &target,
         )
         .unwrap();
         assert_ne!(entry.launch_data(), unrelated);
         assert_eq!(entry.launch_data(), target_data);
+        assert_eq!(entry.service_endpoint(), target_service_endpoint);
         assert_eq!(entry.dependency_endpoint(), target_endpoint);
         assert_eq!(entry.service_endpoint_object(), ObjectId(0x90));
         assert_eq!(entry.supervisor_task_object(), ObjectId(0x91));
@@ -5029,6 +5093,8 @@ mod tests {
         assert_eq!(entry.provider_generation(), spec.provider_generation());
         assert_eq!(entry.launch_data_bytes(), 144);
         assert_ne!(entry.launch_data(), source_data);
+        // Capability tokens are local to a capability space and may reuse the
+        // same slot/generation tuple in distinct source and target spaces.
         assert_ne!(entry.dependency_endpoint(), source_endpoint);
         let context = UserContext::new(
             crate::PhysAddr::new(0x20_0000).unwrap(),
@@ -5037,7 +5103,7 @@ mod tests {
         )
         .unwrap();
         let installed = entry.install(context).unwrap();
-        assert_eq!(installed.r13, 0x90);
+        assert_eq!(installed.r13, target_service_endpoint.token());
         assert_eq!(installed.r14, 0x91);
         assert_eq!(installed.r12, spec.provider_generation());
         assert_eq!(installed.r15, target_data.token());
@@ -5049,12 +5115,15 @@ mod tests {
     #[test]
     fn native_entry_rejects_wrong_target_objects_and_overbroad_rights() {
         let spec = service_spec(IsolationPlacement::NativeService);
-        let mut source = CapabilitySpace::<2>::new();
+        let mut source = CapabilitySpace::<3>::new();
         let source_data = source
             .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
             .unwrap();
         let source_endpoint = source
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let source_service_endpoint = source
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
@@ -5063,47 +5132,56 @@ mod tests {
             4,
             144,
             source_data,
+            ObjectId(0x90),
+            6,
+            source_service_endpoint,
             ObjectId(0x81),
             7,
             source_endpoint,
             &source,
         )
         .unwrap();
-        let mut target = CapabilitySpace::<5>::new();
+        let mut target = CapabilitySpace::<7>::new();
         let wrong_data = target.insert(ObjectId(0x82), Rights::READ).unwrap();
         let overbroad_data = target
             .insert(ObjectId(0x80), Rights::READ.union(Rights::WRITE))
             .unwrap();
         let endpoint = target.insert(ObjectId(0x81), Rights::SIGNAL).unwrap();
+        let service_endpoint = target.insert(ObjectId(0x90), Rights::SIGNAL).unwrap();
+        let wrong_service_endpoint = target.insert(ObjectId(0x84), Rights::SIGNAL).unwrap();
         let wrong_endpoint = target.insert(ObjectId(0x83), Rights::SIGNAL).unwrap();
         let exact_data = target.insert(ObjectId(0x80), Rights::READ).unwrap();
-        let create = |data, dependency| {
+        let create = |data, service, dependency| {
             NativeComponentServiceEntry::new(
                 spec,
                 attachment,
-                ObjectId(0x90),
                 ObjectId(0x91),
                 ObjectId(0x92),
                 data,
+                service,
                 dependency,
                 &target,
             )
         };
         assert_eq!(
-            create(wrong_data, endpoint),
+            create(wrong_data, service_endpoint, endpoint),
             Err(NativeComponentServiceEntryError::WrongLaunchDataObject)
         );
         assert_eq!(
-            create(overbroad_data, endpoint),
+            create(overbroad_data, service_endpoint, endpoint),
             Err(NativeComponentServiceEntryError::LaunchDataCapability(
                 CapabilityError::PermissionDenied
             ))
         );
         assert_eq!(
-            create(exact_data, wrong_endpoint),
+            create(exact_data, wrong_service_endpoint, endpoint),
+            Err(NativeComponentServiceEntryError::WrongServiceEndpoint)
+        );
+        assert_eq!(
+            create(exact_data, service_endpoint, wrong_endpoint),
             Err(NativeComponentServiceEntryError::WrongDependencyEndpoint)
         );
-        let entry = create(exact_data, endpoint).unwrap();
+        let entry = create(exact_data, service_endpoint, endpoint).unwrap();
         let mut occupied = UserContext::new(
             crate::PhysAddr::new(0x20_0000).unwrap(),
             0x40_0000,
@@ -5155,6 +5233,11 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -5162,6 +5245,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -5174,7 +5260,6 @@ mod tests {
             target,
             spec,
             attachment,
-            ObjectId(0x90),
             ObjectId(0x91),
             ObjectId(0x92),
         )
@@ -5182,7 +5267,7 @@ mod tests {
         assert_eq!(prepared.task(), target);
         let entry = prepared.entry();
         let context = runtime.context(target).unwrap();
-        assert_eq!(context.r13, 0x90);
+        assert_eq!(context.r13, entry.service_endpoint().token());
         assert_eq!(context.r14, 0x91);
         assert_eq!(context.r12, spec.provider_generation());
         assert_eq!(context.r15, entry.launch_data().token());
@@ -5271,7 +5356,7 @@ mod tests {
 
     #[test]
     fn read_transfer_memory_reservation_charges_one_exact_shared_page() {
-        let mut runtime = TaskRuntime::<3, 8>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 9>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -5499,6 +5584,11 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let launch = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -5506,6 +5596,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -5520,7 +5613,6 @@ mod tests {
             launch,
             reservation,
             binding,
-            ObjectId(0x90),
             ObjectId(0x91),
             ObjectId(0x92),
         )
@@ -5567,7 +5659,6 @@ mod tests {
                 wrong_generation,
                 reservation,
                 binding,
-                ObjectId(0x90),
                 ObjectId(0x91),
                 ObjectId(0x92),
             ),
@@ -5792,6 +5883,11 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let launch = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -5799,6 +5895,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -5825,7 +5924,6 @@ mod tests {
             root,
             binding,
             crate::PhysAddr::new(0x30_0000).unwrap(),
-            ObjectId(0x90),
             ObjectId(0x91),
             ObjectId(0x92),
         )
@@ -6025,7 +6123,7 @@ mod tests {
     #[test]
     fn native_read_transfer_construction_projects_exact_split_authority() {
         let spec = service_spec(IsolationPlacement::NativeService);
-        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 5>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -6066,6 +6164,9 @@ mod tests {
         let endpoint = source_capabilities
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = source_capabilities
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let local_read = source_capabilities
             .insert(
                 ObjectId(0xa0),
@@ -6085,6 +6186,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -6119,7 +6223,6 @@ mod tests {
                 spec,
                 attachment,
                 stale_provider,
-                ObjectId(0x90),
                 ObjectId(0x91),
                 ObjectId(0x92),
             ),
@@ -6134,7 +6237,6 @@ mod tests {
             spec,
             attachment,
             transfer,
-            ObjectId(0x90),
             ObjectId(0x91),
             ObjectId(0x92),
         )
@@ -6182,7 +6284,7 @@ mod tests {
     #[test]
     fn rooted_read_transfer_construction_rolls_back_both_domains_on_entry_failure() {
         let spec = service_spec(IsolationPlacement::NativeService);
-        let mut runtime = TaskRuntime::<3, 5>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<3, 6>::new(1_000, 1).unwrap();
         let source = runtime
             .create(
                 crate::Priority::NORMAL,
@@ -6223,6 +6325,9 @@ mod tests {
         let endpoint = source_capabilities
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = source_capabilities
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let root_rights = Rights::MAP
             .union(Rights::READ)
             .union(Rights::WRITE)
@@ -6239,6 +6344,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -6257,7 +6365,6 @@ mod tests {
                 9,
                 4096,
                 root,
-                ObjectId(0x90),
                 ObjectId(0x90),
                 ObjectId(0x92),
             ),
@@ -6329,6 +6436,11 @@ mod tests {
             .unwrap()
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         let attachment = ComponentServiceLaunchAttachment::new(
             spec,
             12,
@@ -6336,6 +6448,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
@@ -6349,7 +6464,6 @@ mod tests {
                 target,
                 spec,
                 attachment,
-                ObjectId(0x90),
                 ObjectId(0x90),
                 ObjectId(0x92),
             ),
@@ -6378,7 +6492,7 @@ mod tests {
                 .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let launch = component_launch(&mut table, spec);
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let data = capabilities
             .insert(
                 ObjectId(0x80),
@@ -6388,6 +6502,9 @@ mod tests {
         let endpoint = capabilities
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
+        let service_endpoint = capabilities
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
         assert_eq!(
             ComponentServiceLaunchAttachment::new(
                 spec,
@@ -6396,6 +6513,9 @@ mod tests {
                 4,
                 144,
                 data,
+                ObjectId(0x90),
+                6,
+                service_endpoint,
                 ObjectId(0x81),
                 7,
                 endpoint,
@@ -6406,12 +6526,15 @@ mod tests {
             ))
         );
 
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let data = capabilities
             .insert(ObjectId(0x80), Rights::READ.union(Rights::DELEGATE))
             .unwrap();
         let endpoint = capabilities
             .insert(ObjectId(0x81), Rights::SIGNAL.union(Rights::DELEGATE))
+            .unwrap();
+        let service_endpoint = capabilities
+            .insert(ObjectId(0x90), Rights::SIGNAL.union(Rights::DELEGATE))
             .unwrap();
         let other = IsolationServiceSpec::new(
             ObjectId(0x44),
@@ -6431,6 +6554,9 @@ mod tests {
             4,
             144,
             data,
+            ObjectId(0x90),
+            6,
+            service_endpoint,
             ObjectId(0x81),
             7,
             endpoint,
