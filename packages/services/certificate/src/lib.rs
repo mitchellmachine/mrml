@@ -18,7 +18,9 @@ mod tls_signing_adapter;
 
 pub use backup::{
     BACKUP_VERSION, BackupDescriptor, BackupError, BackupRestoreTarget, MAX_BACKUP_BYTES,
-    MAX_BACKUP_RECORDS, create_backup, restore_backup, verify_backup,
+    MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES, SealedKeyProvider, create_backup,
+    create_recoverable_backup, prepare_sealed_key_record, restore_backup,
+    restore_sealed_key_record, verify_backup,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;

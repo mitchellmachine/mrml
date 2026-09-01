@@ -1,6 +1,6 @@
 use crate::{
     DurableAuthenticator, DurableError, DurableNamespace, DurableObjectId, DurableRecord,
-    MAX_DURABLE_RECORD_BYTES,
+    DurableRecordKind, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, SecretHandle,
 };
 use mrml_crypto::Sha256;
 
@@ -23,6 +23,139 @@ pub enum BackupError {
     TargetNotEmpty,
     TargetUnavailable,
     CommitUncertain,
+    InvalidSealedKey,
+    SealingUnavailable,
+    RestoreBindingMismatch,
+}
+
+const SEALED_KEY_MAGIC: &[u8; 8] = b"MRMLSEAL";
+const SEALED_KEY_VERSION: u16 = 1;
+const SEALED_KEY_HEADER_BYTES: usize = 8 + 2 + 32 + 8 + 32 + 2;
+pub const MAX_SEALED_KEY_BYTES: usize = MAX_DURABLE_PAYLOAD - SEALED_KEY_HEADER_BYTES;
+
+pub trait SealedKeyProvider {
+    /// Produces an opaque provider-specific sealed record. Plain private-key
+    /// bytes never cross this interface.
+    fn seal_key(
+        &mut self,
+        handle: SecretHandle,
+        recovery_policy_digest: [u8; 32],
+        output: &mut [u8],
+    ) -> Result<usize, BackupError>;
+
+    /// Imports an authenticated opaque record into a clean provider and
+    /// returns a new non-exporting handle.
+    fn restore_key(
+        &mut self,
+        expected_identity: [u8; 32],
+        recovery_policy_digest: [u8; 32],
+        sealed: &[u8],
+    ) -> Result<SecretHandle, BackupError>;
+}
+
+pub fn prepare_sealed_key_record(
+    namespace: DurableNamespace,
+    kind: DurableRecordKind,
+    object: DurableObjectId,
+    previous_generation: u64,
+    handle: SecretHandle,
+    recovery_policy_digest: [u8; 32],
+    provider: &mut impl SealedKeyProvider,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<DurableRecord, BackupError> {
+    if !matches!(
+        (namespace, kind),
+        (
+            DurableNamespace::AccountSecretHandles,
+            DurableRecordKind::AccountSealedKey
+        ) | (
+            DurableNamespace::CertificateSecretHandles,
+            DurableRecordKind::CertificateSealedKey
+        )
+    ) || recovery_policy_digest == [0; 32]
+        || handle.identity == [0; 32]
+        || handle.provider_generation == 0
+    {
+        return Err(BackupError::InvalidSealedKey);
+    }
+    let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
+    payload[..8].copy_from_slice(SEALED_KEY_MAGIC);
+    payload[8..10].copy_from_slice(&SEALED_KEY_VERSION.to_be_bytes());
+    payload[10..42].copy_from_slice(&handle.identity);
+    payload[42..50].copy_from_slice(&handle.provider_generation.to_be_bytes());
+    payload[50..82].copy_from_slice(&recovery_policy_digest);
+    let sealed_len = provider.seal_key(
+        handle,
+        recovery_policy_digest,
+        &mut payload[SEALED_KEY_HEADER_BYTES..],
+    )?;
+    if sealed_len == 0 || sealed_len > MAX_SEALED_KEY_BYTES {
+        payload.fill(0);
+        return Err(BackupError::InvalidSealedKey);
+    }
+    payload[82..84].copy_from_slice(&(sealed_len as u16).to_be_bytes());
+    let record = DurableRecord::prepare(
+        namespace,
+        kind,
+        object,
+        previous_generation,
+        &payload[..SEALED_KEY_HEADER_BYTES + sealed_len],
+        authenticator,
+    )?;
+    payload.fill(0);
+    Ok(record)
+}
+
+pub fn restore_sealed_key_record(
+    record: &DurableRecord,
+    expected_recovery_policy_digest: [u8; 32],
+    provider: &mut impl SealedKeyProvider,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<SecretHandle, BackupError> {
+    record.verify(authenticator)?;
+    if !matches!(
+        (record.namespace, record.kind),
+        (
+            DurableNamespace::AccountSecretHandles,
+            DurableRecordKind::AccountSealedKey
+        ) | (
+            DurableNamespace::CertificateSecretHandles,
+            DurableRecordKind::CertificateSealedKey
+        )
+    ) {
+        return Err(BackupError::InvalidSealedKey);
+    }
+    let payload = record.payload();
+    if payload.len() < SEALED_KEY_HEADER_BYTES
+        || payload.get(..8) != Some(SEALED_KEY_MAGIC)
+        || read_u16(payload, 8)? != SEALED_KEY_VERSION
+    {
+        return Err(BackupError::InvalidSealedKey);
+    }
+    let mut identity = [0; 32];
+    identity.copy_from_slice(&payload[10..42]);
+    let provider_generation = read_u64(payload, 42)?;
+    let mut recovery_policy_digest = [0; 32];
+    recovery_policy_digest.copy_from_slice(&payload[50..82]);
+    let sealed_len = usize::from(read_u16(payload, 82)?);
+    if identity == [0; 32]
+        || provider_generation == 0
+        || recovery_policy_digest != expected_recovery_policy_digest
+        || sealed_len == 0
+        || sealed_len > MAX_SEALED_KEY_BYTES
+        || payload.len() != SEALED_KEY_HEADER_BYTES + sealed_len
+    {
+        return Err(BackupError::RestoreBindingMismatch);
+    }
+    let restored = provider.restore_key(
+        identity,
+        recovery_policy_digest,
+        &payload[SEALED_KEY_HEADER_BYTES..],
+    )?;
+    if restored.identity != identity || restored.provider_generation == 0 {
+        return Err(BackupError::RestoreBindingMismatch);
+    }
+    Ok(restored)
 }
 
 impl From<DurableError> for BackupError {
@@ -111,6 +244,60 @@ pub fn create_backup(
         backup_digest: Sha256::digest(&output[..cursor]),
     };
     Ok((cursor, descriptor))
+}
+
+pub fn create_recoverable_backup(
+    policy_generation: u64,
+    records: &[&DurableRecord],
+    output: &mut [u8],
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<(usize, BackupDescriptor), BackupError> {
+    for record in records {
+        let counterpart = match record.kind {
+            DurableRecordKind::AccountKeyHandle => Some(DurableRecordKind::AccountSealedKey),
+            DurableRecordKind::CertificateKeyHandle => {
+                Some(DurableRecordKind::CertificateSealedKey)
+            }
+            DurableRecordKind::AccountSealedKey => Some(DurableRecordKind::AccountKeyHandle),
+            DurableRecordKind::CertificateSealedKey => {
+                Some(DurableRecordKind::CertificateKeyHandle)
+            }
+            _ => None,
+        };
+        let Some(counterpart) = counterpart else {
+            continue;
+        };
+        let identity = sealed_or_handle_identity(record)?;
+        if !records.iter().any(|candidate| {
+            candidate.kind == counterpart
+                && candidate.namespace == record.namespace
+                && sealed_or_handle_identity(candidate).ok() == Some(identity)
+        }) {
+            return Err(BackupError::InvalidSealedKey);
+        }
+    }
+    create_backup(policy_generation, records, output, authenticator)
+}
+
+fn sealed_or_handle_identity(record: &DurableRecord) -> Result<[u8; 32], BackupError> {
+    let payload = record.payload();
+    let source = match record.kind {
+        DurableRecordKind::AccountKeyHandle | DurableRecordKind::CertificateKeyHandle => {
+            payload.get(..32).ok_or(BackupError::InvalidSealedKey)?
+        }
+        DurableRecordKind::AccountSealedKey | DurableRecordKind::CertificateSealedKey
+            if payload.get(..8) == Some(SEALED_KEY_MAGIC) =>
+        {
+            payload.get(10..42).ok_or(BackupError::InvalidSealedKey)?
+        }
+        _ => return Err(BackupError::InvalidSealedKey),
+    };
+    let mut identity = [0; 32];
+    identity.copy_from_slice(source);
+    if identity == [0; 32] {
+        return Err(BackupError::InvalidSealedKey);
+    }
+    Ok(identity)
 }
 
 pub fn verify_backup(
@@ -272,6 +459,43 @@ mod tests {
         committed: bool,
         aborted: bool,
     }
+
+    struct Sealer {
+        next_generation: u64,
+    }
+    impl SealedKeyProvider for Sealer {
+        fn seal_key(
+            &mut self,
+            handle: SecretHandle,
+            recovery_policy_digest: [u8; 32],
+            output: &mut [u8],
+        ) -> Result<usize, BackupError> {
+            let value = Sha256::digest(
+                &[
+                    handle.identity.as_slice(),
+                    &handle.provider_generation.to_be_bytes(),
+                    &recovery_policy_digest,
+                ]
+                .concat(),
+            );
+            output[..32].copy_from_slice(&value);
+            Ok(32)
+        }
+        fn restore_key(
+            &mut self,
+            expected_identity: [u8; 32],
+            _: [u8; 32],
+            sealed: &[u8],
+        ) -> Result<SecretHandle, BackupError> {
+            if sealed.len() != 32 {
+                return Err(BackupError::InvalidSealedKey);
+            }
+            Ok(SecretHandle {
+                identity: expected_identity,
+                provider_generation: self.next_generation,
+            })
+        }
+    }
     impl BackupRestoreTarget for Target {
         fn require_empty(&mut self) -> Result<(), BackupError> {
             self.empty.then_some(()).ok_or(BackupError::TargetNotEmpty)
@@ -345,5 +569,84 @@ mod tests {
             restore_backup(&encoded[..written], &mut auth, &mut nonempty),
             Err(BackupError::TargetNotEmpty)
         ));
+    }
+
+    #[test]
+    fn sealed_account_and_certificate_keys_restore_as_new_nonexporting_handles() {
+        let mut auth = Auth([9; 32]);
+        let policy = Sha256::digest(b"owner recovery policy and destination");
+        let original = SecretHandle {
+            identity: [7; 32],
+            provider_generation: 2,
+        };
+        let mut source = Sealer { next_generation: 9 };
+        let account = prepare_sealed_key_record(
+            DurableNamespace::AccountSecretHandles,
+            DurableRecordKind::AccountSealedKey,
+            DurableObjectId([1; 16]),
+            0,
+            original,
+            policy,
+            &mut source,
+            &mut auth,
+        )
+        .unwrap();
+        let certificate = prepare_sealed_key_record(
+            DurableNamespace::CertificateSecretHandles,
+            DurableRecordKind::CertificateSealedKey,
+            DurableObjectId([2; 16]),
+            0,
+            SecretHandle {
+                identity: [8; 32],
+                provider_generation: 3,
+            },
+            policy,
+            &mut source,
+            &mut auth,
+        )
+        .unwrap();
+        let mut account_handle_payload = [0; 40];
+        account_handle_payload[..32].copy_from_slice(&original.identity);
+        account_handle_payload[32..].copy_from_slice(&original.provider_generation.to_be_bytes());
+        let account_handle = DurableRecord::prepare(
+            DurableNamespace::AccountSecretHandles,
+            DurableRecordKind::AccountKeyHandle,
+            DurableObjectId([3; 16]),
+            0,
+            &account_handle_payload,
+            &mut auth,
+        )
+        .unwrap();
+        let mut certificate_handle_payload = [0; 40];
+        certificate_handle_payload[..32].copy_from_slice(&[8; 32]);
+        certificate_handle_payload[32..].copy_from_slice(&3u64.to_be_bytes());
+        let certificate_handle = DurableRecord::prepare(
+            DurableNamespace::CertificateSecretHandles,
+            DurableRecordKind::CertificateKeyHandle,
+            DurableObjectId([4; 16]),
+            0,
+            &certificate_handle_payload,
+            &mut auth,
+        )
+        .unwrap();
+        let mut encoded = [0; 16 * 1024];
+        assert!(create_recoverable_backup(4, &[&account_handle], &mut encoded, &mut auth).is_err());
+        let (written, _) = create_recoverable_backup(
+            4,
+            &[&account_handle, &account, &certificate_handle, &certificate],
+            &mut encoded,
+            &mut auth,
+        )
+        .unwrap();
+        verify_backup(&encoded[..written], &mut auth).unwrap();
+        let mut destination = Sealer { next_generation: 9 };
+        let restored =
+            restore_sealed_key_record(&account, policy, &mut destination, &mut auth).unwrap();
+        assert_eq!(restored.identity, original.identity);
+        assert_eq!(restored.provider_generation, 9);
+        assert!(restore_sealed_key_record(&account, [1; 32], &mut destination, &mut auth).is_err());
+        assert!(
+            restore_sealed_key_record(&certificate, policy, &mut destination, &mut auth).is_ok()
+        );
     }
 }

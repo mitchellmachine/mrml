@@ -43,13 +43,19 @@ pub enum DurableRecordKind {
     AccountKeyHandle = 10,
     CertificateKeyHandle = 11,
     AuditEvent = 12,
+    AccountSealedKey = 13,
+    CertificateSealedKey = 14,
 }
 
 impl DurableRecordKind {
     const fn required_namespace(self) -> DurableNamespace {
         match self {
-            Self::AccountKeyHandle => DurableNamespace::AccountSecretHandles,
-            Self::CertificateKeyHandle => DurableNamespace::CertificateSecretHandles,
+            Self::AccountKeyHandle | Self::AccountSealedKey => {
+                DurableNamespace::AccountSecretHandles
+            }
+            Self::CertificateKeyHandle | Self::CertificateSealedKey => {
+                DurableNamespace::CertificateSecretHandles
+            }
             Self::AuditEvent => DurableNamespace::Audit,
             _ => DurableNamespace::PublicState,
         }
@@ -68,6 +74,8 @@ impl DurableRecordKind {
             10 => Self::AccountKeyHandle,
             11 => Self::CertificateKeyHandle,
             12 => Self::AuditEvent,
+            13 => Self::AccountSealedKey,
+            14 => Self::CertificateSealedKey,
             _ => return None,
         })
     }

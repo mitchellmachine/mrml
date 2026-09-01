@@ -11551,3 +11551,13 @@ account Terms-of-Service acknowledgement only after fresh owner approval binds
 the exact new directory generation, terms URL, fetched-content digest, account
 key, contacts, and policy generation. Exact retry resolves ambiguous transport
 outcomes. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Provider-sealed certificate-key recovery records
+
+Patent review: **NOT_TRIGGERED**. This increment adds a conventional bounded,
+versioned, authenticated opaque backup envelope around non-exporting account
+and certificate key-provider handles. The provider, not the backup service,
+seals and restores key material under an exact owner recovery-policy digest;
+recoverable backups require a matching sealed record for every secret handle.
+It adds no smart-card precomputed signing-element machinery or other recorded
+re-review-trigger mechanism.
