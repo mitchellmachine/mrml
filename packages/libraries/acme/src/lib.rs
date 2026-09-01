@@ -19,6 +19,7 @@ mod problem;
 mod profile;
 mod response;
 mod state;
+mod transaction;
 mod transport;
 mod url;
 
@@ -80,6 +81,7 @@ pub use response::{
     ParsedChallenge, ParsedOrderResponse, ResponseError,
 };
 pub use state::{AccountState, OrderState, StateError};
+pub use transaction::{post_jws, AcmePostError, AcmePostResponse, MAX_JWS_REQUEST_BYTES};
 pub use transport::{
     AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeResponseMetadata, AcmeTransport,
     AcmeTransportRequest, AcmeTransportResponse, BadNonceRetry, TransportError,

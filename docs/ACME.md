@@ -188,6 +188,12 @@ URL, forbids redirects, bounds response bodies and Retry-After metadata,
 captures validated replay nonces into the exact directory generation, consumes
 each nonce once, and caps typed `badNonce` retries. Platform HTTPS socket/TLS
 adapters remain separate from this semantic state.
+The signed POST transaction composes that contract with JOSE. It acquires or
+consumes one nonce, constructs and signs the exact URL/account/directory-bound
+flattened JWS, performs one authenticated POST, captures the response nonce,
+parses typed error bodies, and rebuilds and re-signs the entire request only for
+`badNonce`. The retry ceiling is two; request scratch is erased after every
+attempt and no consumed nonce is reused.
 Linux and Windows now share a hosted adapter over the first-party `mrml-http`
 and `mrml-tls` stack. It emits exact GET, HEAD, or JOSE POST requests, refuses
 duplicate ACME singleton headers, copies response bodies only within the caller

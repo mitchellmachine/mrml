@@ -81,6 +81,7 @@ impl P256Jwk {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum ProtectedKey<'a> {
     Jwk(&'a P256Jwk),
     Kid(&'a AcmeUrl),

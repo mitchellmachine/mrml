@@ -11400,3 +11400,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 authorization parsing, exact normal/wildcard identifier semantics, and
 same-origin HTTP-01/TLS-ALPN-01/DNS-01 challenge admission. It adds no recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Bounded signed ACME POST transaction
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment composes ordinary RFC 8555 nonce
+acquisition, JWS construction, authenticated POST, problem parsing, response
+nonce capture, and bounded `badNonce` replay. It adds no recorded re-review
+trigger.
