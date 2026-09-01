@@ -332,6 +332,17 @@ CLI administration, concrete gitd process wiring, and full native-storage/reboot
 recovery remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 
+Hosted lifecycle administration now has a bounded transport adapter for a
+preconnected stream supplied by the host supervisor. The adapter does not bind,
+discover, or accept a listener and deliberately treats no address, port,
+pathname, object name, or request field as authority. It carries the canonical
+generated lifecycle frame plus at most 16 KiB of borrowed memory, applies
+two-second read/write deadlines, rejects noncanonical lengths and reserved
+fields, retains the exact per-operation authorizer, and clears server scratch
+after each call. The supervisor-delivered connection remains the route
+capability; a hosted daemon listener/session broker and CLI acquisition path are
+still required before operational administration can be claimed.
+
 The bounded deterministic security-fuzz harness covers ACME directory,
 problem, account, order, authorization, ARI, URL, and Base64url parsing; X.509
 DER and PEM chains; HTTP-01 requests; DNS packets and compression pointers;

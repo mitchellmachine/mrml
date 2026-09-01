@@ -25,6 +25,8 @@ mod hot_reload;
 mod identity;
 mod identity_service;
 mod lifecycle_service;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod lifecycle_transport_hosted;
 mod manager;
 mod native_service;
 mod p256_signer;
@@ -113,6 +115,11 @@ pub use identity_service::{dispatch_identity_call, CertificateIdentityProvider};
 pub use lifecycle_service::{
     dispatch_lifecycle_call, CertificateLifecycleAuthorizer, CertificateLifecycleProvider,
     LifecycleDispatchError,
+};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use lifecycle_transport_hosted::{
+    HostedLifecycleClient, HostedLifecycleServer, HostedLifecycleTransportError,
+    MAX_HOSTED_LIFECYCLE_MEMORY,
 };
 pub use manager::{
     CertificateManager, CertificateManagerError, RenewalLease, MAX_MANAGED_IDENTITIES,
