@@ -11,6 +11,7 @@ mod object;
 mod openpgp_provider;
 mod pack;
 mod pack_index;
+mod quarantine;
 mod remote;
 mod repository;
 mod sha1;
@@ -50,6 +51,13 @@ pub use pack::{
 pub use pack_index::{
     DEFAULT_MAX_PACK_INDEX_OBJECTS, PackIndex, PackIndexEntry, PackIndexError, build_pack_index_v2,
     parse_pack_index_v2,
+};
+pub use quarantine::{
+    DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
+    DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DEFAULT_MAX_OBJECTS_PER_PUSH,
+    DEFAULT_MINIMUM_FREE_SPACE_BYTES, DurableFailure, PushDiskReservation, PushStorageForecast,
+    QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
+    QuarantineTransactionId, reserve_push_disk,
 };
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
