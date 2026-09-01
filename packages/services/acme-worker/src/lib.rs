@@ -505,6 +505,7 @@ pub enum AcmedChallengePhase {
     Accepted = 4,
     CleanupPending = 5,
     Complete = 6,
+    SubmissionMayHaveBeenSent = 7,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -676,6 +677,7 @@ impl AcmedChallengeRecord {
             4 => AcmedChallengePhase::Accepted,
             5 => AcmedChallengePhase::CleanupPending,
             6 => AcmedChallengePhase::Complete,
+            7 => AcmedChallengePhase::SubmissionMayHaveBeenSent,
             _ => return Err(AcmedChallengeRecordError::Malformed),
         };
         let lengths = [
@@ -1510,6 +1512,16 @@ mod tests {
                 .provider_record_id()
                 .unwrap(),
             core::str::from_utf8(provider_id).unwrap()
+        );
+        let uncertain = AcmedChallengeRecord {
+            phase: AcmedChallengePhase::SubmissionMayHaveBeenSent,
+            ..published
+        };
+        let length = uncertain.encode(&mut encoded).unwrap();
+        assert!(
+            AcmedChallengeRecord::decode(&encoded[..length], &config.directory_url, false, false)
+                .unwrap()
+                == uncertain
         );
     }
 

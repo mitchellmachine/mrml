@@ -1,12 +1,13 @@
 use mrml_acme::{
     AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
     AcmeIdentifier, AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, AuthorizationState,
-    CaClass, ChallengeKind, HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES,
-    MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES,
-    MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk, ProtectedKey, ReplayNonce,
-    account_contacts_digest, dns01_txt_digest, execute_prepared_account_create,
-    execute_prepared_order_create, fetch_authorization, fetch_directory, prepare_order_creation,
-    recover_uncertain_account_creation, write_key_authorization,
+    CaClass, ChallengeKind, Dns01ActivationEvidence, HostedAcmeTransport, JoseError,
+    MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES,
+    MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
+    ProtectedKey, ReplayNonce, account_contacts_digest, dns01_txt_digest,
+    execute_prepared_account_create, execute_prepared_order_create, fetch_authorization,
+    fetch_directory, prepare_order_creation, recover_uncertain_account_creation,
+    trigger_propagated_dns01_challenge, write_key_authorization,
 };
 use mrml_acmed::{
     AcmeDirectoryClass, AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase,
@@ -919,11 +920,13 @@ fn publish_dns_challenges(
             &mut jws,
         )
         .map_err(|_| "cannot fetch bound ACME authorization")?;
-        if authorization.status == AuthorizationState::Valid {
-            continue;
-        }
-        if authorization.status != AuthorizationState::Pending {
-            return Err("ACME authorization is not pending or valid");
+        if !matches!(
+            authorization.status,
+            AuthorizationState::Pending
+                | AuthorizationState::Processing
+                | AuthorizationState::Valid
+        ) {
+            return Err("ACME authorization is not pending, processing, or valid");
         }
         let challenge = authorization
             .challenges()
@@ -995,12 +998,30 @@ fn publish_dns_challenges(
                     durable_generation,
                     &published,
                 )?;
-                observe_dns_propagation(
+                let propagated_generation = observe_dns_propagation(
                     config,
                     state,
                     authenticator,
                     published_generation,
                     published,
+                )?;
+                submit_dns_challenge(
+                    config,
+                    account,
+                    order,
+                    resource,
+                    *challenge,
+                    &directory,
+                    &mut exchange,
+                    &mut transport,
+                    signer,
+                    state,
+                    authenticator,
+                    propagated_generation,
+                    AcmedChallengeRecord {
+                        phase: AcmedChallengePhase::Propagated,
+                        ..published
+                    },
                 )?;
             }
             AcmedChallengePhase::Published => {
@@ -1019,13 +1040,174 @@ fn publish_dns_challenges(
                 if observed != expected_receipt {
                     return Err("DNS-01 provider record substitution detected");
                 }
-                observe_dns_propagation(config, state, authenticator, durable_generation, record)?;
+                let propagated_generation = observe_dns_propagation(
+                    config,
+                    state,
+                    authenticator,
+                    durable_generation,
+                    record,
+                )?;
+                submit_dns_challenge(
+                    config,
+                    account,
+                    order,
+                    resource,
+                    *challenge,
+                    &directory,
+                    &mut exchange,
+                    &mut transport,
+                    signer,
+                    state,
+                    authenticator,
+                    propagated_generation,
+                    AcmedChallengeRecord {
+                        phase: AcmedChallengePhase::Propagated,
+                        ..record
+                    },
+                )?;
             }
-            AcmedChallengePhase::Propagated | AcmedChallengePhase::Accepted => {}
+            AcmedChallengePhase::Propagated => {
+                if matches!(
+                    authorization.status,
+                    AuthorizationState::Processing | AuthorizationState::Valid
+                ) {
+                    persist_challenge_record(
+                        config,
+                        state,
+                        authenticator,
+                        durable_generation,
+                        &AcmedChallengeRecord {
+                            phase: AcmedChallengePhase::Accepted,
+                            ..record
+                        },
+                    )?;
+                } else {
+                    submit_dns_challenge(
+                        config,
+                        account,
+                        order,
+                        resource,
+                        *challenge,
+                        &directory,
+                        &mut exchange,
+                        &mut transport,
+                        signer,
+                        state,
+                        authenticator,
+                        durable_generation,
+                        record,
+                    )?;
+                }
+            }
+            AcmedChallengePhase::SubmissionMayHaveBeenSent => {
+                if matches!(
+                    authorization.status,
+                    AuthorizationState::Processing | AuthorizationState::Valid
+                ) {
+                    persist_challenge_record(
+                        config,
+                        state,
+                        authenticator,
+                        durable_generation,
+                        &AcmedChallengeRecord {
+                            phase: AcmedChallengePhase::Accepted,
+                            ..record
+                        },
+                    )?;
+                } else {
+                    submit_dns_challenge(
+                        config,
+                        account,
+                        order,
+                        resource,
+                        *challenge,
+                        &directory,
+                        &mut exchange,
+                        &mut transport,
+                        signer,
+                        state,
+                        authenticator,
+                        durable_generation,
+                        record,
+                    )?;
+                }
+            }
+            AcmedChallengePhase::Accepted => {}
             AcmedChallengePhase::CleanupPending | AcmedChallengePhase::Complete => {}
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_dns_challenge(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    resource: AuthorizationResource,
+    challenge: mrml_acme::ParsedChallenge,
+    directory: &mrml_acme::AcmeDirectory,
+    exchange: &mut AcmeExchange,
+    transport: &mut HostedAcmeTransport,
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    durable_generation: u64,
+    record: AcmedChallengeRecord,
+) -> Result<u64, &'static str> {
+    if !matches!(
+        record.phase,
+        AcmedChallengePhase::Propagated | AcmedChallengePhase::SubmissionMayHaveBeenSent
+    ) {
+        return Err("DNS challenge submission requires propagated evidence");
+    }
+    let uncertain = AcmedChallengeRecord {
+        phase: AcmedChallengePhase::SubmissionMayHaveBeenSent,
+        ..record
+    };
+    let pending_generation = if record.phase == AcmedChallengePhase::Propagated {
+        persist_challenge_record(config, state, authenticator, durable_generation, &uncertain)?
+    } else {
+        durable_generation
+    };
+    signer.operation = AcmeJwsOperation::Challenge;
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let submission = trigger_propagated_dns01_challenge(
+        resource,
+        challenge,
+        Dns01ActivationEvidence {
+            challenge_generation: record.challenge_generation,
+            identifier: record.identifier,
+            key_authorization_digest: record.key_authorization_digest,
+            observed_unix: unix_time()?,
+        },
+        directory,
+        account,
+        order,
+        exchange,
+        transport,
+        signer,
+        &mut response,
+        &mut jws,
+    )
+    .map_err(|_| "ACME DNS challenge submission uncertain")?;
+    if submission.challenge_generation != record.challenge_generation
+        || submission.challenge_url_digest
+            != mrml_crypto::Sha256::digest(record.challenge_url.as_str().as_bytes())
+    {
+        return Err("ACME DNS challenge submission binding mismatch");
+    }
+    persist_challenge_record(
+        config,
+        state,
+        authenticator,
+        pending_generation,
+        &AcmedChallengeRecord {
+            phase: AcmedChallengePhase::Accepted,
+            ..record
+        },
+    )
 }
 
 fn observe_dns_propagation(

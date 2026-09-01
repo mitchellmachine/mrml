@@ -1,15 +1,15 @@
 use crate::{
     AccountError, AccountLifecycle, AccountOperation, AcmeDirectory, AcmeIdentifier,
     AcmeJwsEnvelopeWriter, AcmeJwsSigner, AcmePostError, AcmeProblem, AcmeTransport, AcmeUrl,
-    CertificateProfile, ChallengeError, ChallengeKind, ChallengeLifecycle, JwkThumbprint,
-    OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus, ParsedAuthorizationResponse,
-    ParsedChallenge, PayloadError, PreparedAccountAction, PreparedFinalization,
-    PreparedTermsTransition, PublicationReceipt, ResponseError, account_contacts_digest,
-    parse_account_response, parse_authorization_response, parse_order_response, post_jws,
-    write_account_contacts_payload, write_account_status_payload, write_finalize_payload,
-    write_key_change_inner_jws, write_new_account_payload, write_new_order_identifiers_payload,
-    write_preauthorization_identifier_payload, write_revocation_payload,
-    write_terms_agreement_payload,
+    CertificateProfile, ChallengeError, ChallengeKind, ChallengeLifecycle, DnsIdentifier,
+    JwkThumbprint, OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus,
+    ParsedAuthorizationResponse, ParsedChallenge, PayloadError, PreparedAccountAction,
+    PreparedFinalization, PreparedTermsTransition, PublicationReceipt, ResponseError,
+    account_contacts_digest, parse_account_response, parse_authorization_response,
+    parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
+    write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
+    write_new_order_identifiers_payload, write_preauthorization_identifier_payload,
+    write_revocation_payload, write_terms_agreement_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -375,6 +375,20 @@ pub enum ChallengeSubmitError<E> {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ChallengeSubmission {
     pub publication: PublicationReceipt,
+    pub challenge_url_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct Dns01ActivationEvidence {
+    pub challenge_generation: u64,
+    pub identifier: DnsIdentifier,
+    pub key_authorization_digest: [u8; 32],
+    pub observed_unix: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct Dns01ChallengeSubmission {
+    pub challenge_generation: u64,
     pub challenge_url_digest: [u8; 32],
 }
 
@@ -887,6 +901,73 @@ pub fn trigger_published_challenge<T: AcmeTransport>(
     }
     Ok(ChallengeSubmission {
         publication: publication_receipt,
+        challenge_url_digest: Sha256::digest(challenge.url.as_str().as_bytes()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn trigger_propagated_dns01_challenge<T: AcmeTransport>(
+    resource: AuthorizationResource,
+    challenge: ParsedChallenge,
+    evidence: Dns01ActivationEvidence,
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsEnvelopeWriter,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<Dns01ChallengeSubmission, ChallengeSubmitError<T::Error>> {
+    let authorization_digest = Sha256::digest(resource.url.as_str().as_bytes());
+    let authorization = order
+        .authorization_by_url_digest(authorization_digest)
+        .ok_or(ChallengeSubmitError::ResourceMismatch)?;
+    let mut key_authorization = [0u8; crate::MAX_KEY_AUTHORIZATION];
+    let key_authorization_length =
+        crate::write_key_authorization(&challenge.token, account.key, &mut key_authorization)
+            .map_err(ChallengeSubmitError::Publication)?;
+    if !account.active
+        || resource.directory_generation != directory.generation
+        || resource.account_generation != account.generation
+        || resource.order_url_digest != Sha256::digest(order.order_url.as_str().as_bytes())
+        || authorization.identifier != AcmeIdentifier::Dns(evidence.identifier)
+        || challenge.kind != ChallengeKind::Dns01
+        || evidence.challenge_generation == 0
+        || evidence.key_authorization_digest == [0; 32]
+        || evidence.observed_unix == 0
+        || crate::dns01_txt_digest(&key_authorization[..key_authorization_length])
+            != evidence.key_authorization_digest
+    {
+        return Err(ChallengeSubmitError::ResourceMismatch);
+    }
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(ChallengeSubmitError::ResourceMismatch)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &challenge.url,
+        crate::ProtectedKey::Kid(account_url),
+        b"{}",
+        account.generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(ChallengeSubmitError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(ChallengeSubmitError::Server(problem));
+    }
+    if result.metadata.response_type != crate::AcmeResponseType::Json
+        || result.metadata.status != 200
+    {
+        return Err(ChallengeSubmitError::UnexpectedStatus);
+    }
+    Ok(Dns01ChallengeSubmission {
+        challenge_generation: evidence.challenge_generation,
         challenge_url_digest: Sha256::digest(challenge.url.as_str().as_bytes()),
     })
 }
@@ -2509,6 +2590,71 @@ mod tests {
             created.certificate_url.unwrap().as_str(),
             "https://ca.example/certificate/1"
         );
+    }
+
+    #[test]
+    fn propagated_dns_submission_rejects_substituted_observation_evidence() {
+        let (directory, account) = active_account();
+        let identifier = DnsIdentifier::parse("example.com", false).unwrap();
+        let identifiers = [AcmeIdentifier::Dns(identifier)];
+        let profile = directory.profiles().next().unwrap().profile;
+        let order_url = AcmeUrl::parse("https://ca.example/order/evidence", false).unwrap();
+        let authorization_url = AcmeUrl::parse("https://ca.example/authz/evidence", false).unwrap();
+        let mut order = OrderLifecycle::create(
+            &directory,
+            account.generation,
+            account.key,
+            order_url,
+            AcmeUrl::parse("https://ca.example/order/evidence/finalize", false).unwrap(),
+            profile,
+            &identifiers,
+            false,
+            200,
+            4,
+        )
+        .unwrap();
+        order
+            .bind_authorization(authorization_url, identifier, false, 1)
+            .unwrap();
+        let resource = AuthorizationResource::bind(
+            &order.order_url,
+            authorization_url,
+            directory.generation,
+            account.generation,
+        )
+        .unwrap();
+        let challenge = ParsedChallenge {
+            kind: ChallengeKind::Dns01,
+            url: AcmeUrl::parse("https://ca.example/challenge/evidence", false).unwrap(),
+            status: crate::ChallengeState::Pending,
+            token: crate::ChallengeToken::parse("dns-token").unwrap(),
+        };
+        let mut exchange = crate::AcmeExchange::new(directory.generation, directory.new_order);
+        let mut transport = Transport { fail_post: false };
+        let mut signer = Signer;
+        let mut response = [0; 512];
+        let mut jws = [0; 8192];
+        assert!(matches!(
+            trigger_propagated_dns01_challenge(
+                resource,
+                challenge,
+                Dns01ActivationEvidence {
+                    challenge_generation: 1,
+                    identifier,
+                    key_authorization_digest: [0x55; 32],
+                    observed_unix: 100,
+                },
+                &directory,
+                &account,
+                &order,
+                &mut exchange,
+                &mut transport,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            ),
+            Err(ChallengeSubmitError::ResourceMismatch)
+        ));
     }
 
     fn order_post_failure_is_explicitly_uncertain_impl() {
