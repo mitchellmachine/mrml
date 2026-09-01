@@ -35,6 +35,11 @@ The bounded HTTP-01 request validator accepts only an exact `GET` challenge
 path and exact Host (optionally port 80), rejects percent/query/path ambiguity,
 duplicate Host fields, oversized requests, and excess headers, and compares the
 active token without data-dependent early exit.
+The TLS-ALPN-01 encoder emits a bounded P-256 self-signed certificate with an
+empty subject, one critical dNSName SAN, and the exact critical RFC 8737
+`acmeIdentifier` OCTET STRING. Signing is purpose- and generation-bound. ALPN
+selection rejects `acme-tls/1` unless the exact active SNI is present and never
+falls back to an ordinary production identity.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -47,7 +52,7 @@ arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
 General JOSE response and problem-document parsing, X.509 issuance validation,
-ACME transport, concrete HTTP/TLS-ALPN/DNS publishers, durable recovery,
+ACME transport, concrete socket adapters and the DNS publisher, durable recovery,
 certificate publication, renewal,
 revocation, backup/restore, CLI administration, gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must

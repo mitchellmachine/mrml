@@ -5,6 +5,7 @@ mod ari;
 mod base64url;
 mod challenge;
 mod challenge_http;
+mod challenge_tls_alpn;
 mod csr;
 mod directory;
 mod identifier;
@@ -28,6 +29,11 @@ pub use challenge::{
 };
 pub use challenge_http::{
     Http01Error, MAX_HTTP01_HEADERS, MAX_HTTP01_REQUEST, validate_http01_request,
+};
+pub use challenge_tls_alpn::{
+    ACME_TLS_ALPN_PROTOCOL, ApprovedTlsAlpnCertificateDigest, MAX_TLS_ALPN_CERTIFICATE,
+    TlsAlpnCertificateSigner, TlsAlpnError, TlsAlpnSelection, select_tls_alpn01,
+    write_tls_alpn01_certificate,
 };
 pub use csr::{
     ApprovedCsrDigest, CsrError, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, Pkcs10Signer, write_pkcs10_csr,

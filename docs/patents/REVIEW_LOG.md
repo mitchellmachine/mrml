@@ -11232,3 +11232,10 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment implements ordinary exact-path,
 Host, token, and request-bound checks for RFC 8555 HTTP-01 and no recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Bounded TLS-ALPN-01 certificate and selection
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment implements the ordinary RFC
+8737 P-256 temporary certificate profile and exact ALPN/SNI selection. It adds
+no MultiTLS multiplexing or other recorded re-review trigger.
