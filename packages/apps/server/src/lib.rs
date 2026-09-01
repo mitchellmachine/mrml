@@ -1,12 +1,12 @@
 #![no_std]
 
 use mrml_agent::client::{ChatCompletionRequest, ChatMessage, MrmlClient, StreamEvent};
-use mrml_certificate::HostedTlsIdentityPublication;
+use mrml_certificate::{HostedTlsIdentityPublication, TlsIdentityHealth};
 use mrml_error::Result;
-use mrml_json::{Value, object};
+use mrml_json::{object, Value};
 use mrml_runtime::{
-    Shared, TcpListener, TcpStream, Text, Text as String, Vector, mrml_eprintln as eprintln,
-    mrml_format as format, mrml_println as println,
+    mrml_eprintln as eprintln, mrml_format as format, mrml_println as println, Shared, TcpListener,
+    TcpStream, Text, Text as String, Vector,
 };
 use mrml_terminal_style::Colorize;
 use mrml_tls::{TlsServerConfig, TlsServerStream};
@@ -194,15 +194,20 @@ impl ApiServer {
             };
 
             let client = self.client.clone();
-            let tls = match &self.tls_identity {
+            let (tls, tls_health) = match &self.tls_identity {
                 Some(publication) => match publication.snapshot() {
-                    Some(identity) => Some(identity.config),
+                    Some(identity) => (
+                        Some(identity.config),
+                        Some(TlsIdentityHealth {
+                            descriptor: identity.descriptor,
+                        }),
+                    ),
                     None => {
                         eprintln!("TLS identity unavailable; refusing connection");
                         continue;
                     }
                 },
-                None => self.tls.clone(),
+                None => (self.tls.clone(), None),
             };
             let token = token.clone();
             if mrml_runtime::spawn_detached(move || {
@@ -216,7 +221,7 @@ impl ApiServer {
                     },
                     None => Connection::Plain(socket),
                 };
-                if let Err(e) = handle_connection(connection, client, &token) {
+                if let Err(e) = handle_connection(connection, client, &token, tls_health) {
                     eprintln!("HTTP Handler Error: {}", e);
                 }
             })
@@ -240,13 +245,13 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
 fn authorized(headers: &str, expected: &str) -> bool {
     let mut authorization = None;
     for line in headers.lines().skip(1) {
-        if let Some((name, value)) = line.split_once(':')
-            && name.eq_ignore_ascii_case("authorization")
-        {
-            if authorization.is_some() {
-                return false;
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("authorization") {
+                if authorization.is_some() {
+                    return false;
+                }
+                authorization = Some(value.trim());
             }
-            authorization = Some(value.trim());
         }
     }
     authorization
@@ -258,6 +263,7 @@ fn handle_connection(
     mut socket: Connection,
     client: Shared<MrmlClient>,
     bearer_token: &str,
+    tls_health: Option<TlsIdentityHealth>,
 ) -> Result<()> {
     const MAX_HEADER_BYTES: usize = 64 * 1024;
     const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
@@ -320,6 +326,54 @@ fn handle_connection(
             body
         );
         socket.write_all(resp.as_bytes())?;
+        return Ok(());
+    }
+
+    if method == "GET" && path == "/health/tls-identity" {
+        let Some(health) = tls_health else {
+            socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+            return Ok(());
+        };
+        let descriptor = health.descriptor;
+        let mut identifiers = Vector::new();
+        for identifier in descriptor.identifiers[..usize::from(descriptor.identifier_count)]
+            .iter()
+            .flatten()
+        {
+            let mut scratch = [0u8; 253];
+            let value = identifier
+                .write_value(&mut scratch)
+                .map_err(|_| mrml_error::message("TLS identity contains an invalid identifier"))?;
+            identifiers.push(object([
+                ("type", Value::text(identifier.kind())),
+                ("value", Value::text(value)),
+            ]));
+        }
+        let body = mrml_json::stringify(&object([
+            ("identity", Value::text(hex(&descriptor.identity.0))),
+            ("generation", descriptor.generation.into()),
+            ("policy_generation", descriptor.policy_generation.into()),
+            (
+                "leaf_spki_sha256",
+                Value::text(hex(&descriptor.leaf_spki_digest)),
+            ),
+            ("chain_sha256", Value::text(hex(&descriptor.chain_digest))),
+            ("key_identity", Value::text(hex(&descriptor.key_identity.0))),
+            ("not_before", descriptor.not_before.into()),
+            ("not_after", descriptor.not_after.into()),
+            ("profile", Value::text(descriptor.profile.name())),
+            (
+                "profile_directory_generation",
+                descriptor.profile.directory_generation().into(),
+            ),
+            ("identifiers", Value::Array(identifiers)),
+        ]));
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes())?;
         return Ok(());
     }
 
@@ -466,6 +520,14 @@ fn handle_connection(
     Ok(())
 }
 
+fn hex(bytes: &[u8]) -> Text {
+    let mut output = Text::new();
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
@@ -565,18 +627,14 @@ mod json_tests {
         assert!(
             OpenAiChatRequest::parse(br#"{"messages":[{"role":"root","content":"x"}]}"#).is_err()
         );
-        assert!(
-            OpenAiChatRequest::parse(
-                br#"{"messages":[{"role":"user","content":"x"}],"max_tokens":4294967296}"#
-            )
-            .is_err()
-        );
-        assert!(
-            OpenAiChatRequest::parse(
-                br#"{"messages":[{"role":"user","content":"x"}],"temperature":3}"#
-            )
-            .is_err()
-        );
+        assert!(OpenAiChatRequest::parse(
+            br#"{"messages":[{"role":"user","content":"x"}],"max_tokens":4294967296}"#
+        )
+        .is_err());
+        assert!(OpenAiChatRequest::parse(
+            br#"{"messages":[{"role":"user","content":"x"}],"temperature":3}"#
+        )
+        .is_err());
     }
 
     #[test]
@@ -592,18 +650,17 @@ mod json_tests {
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
         let client = Shared::new(MrmlClient::new("", ""));
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let socket = listener.accept().unwrap();
-                handle_connection(
-                    Connection::Plain(socket),
-                    client,
-                    "01234567890123456789012345678901",
-                )
-                .unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let socket = listener.accept().unwrap();
+            handle_connection(
+                Connection::Plain(socket),
+                client,
+                "01234567890123456789012345678901",
+                None,
+            )
+            .unwrap();
+        })
+        .is_ok());
 
         let mut socket = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         socket

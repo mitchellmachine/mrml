@@ -12,7 +12,23 @@ pub struct PublishedTlsIdentity {
     pub identity: TlsIdentityId,
     pub generation: u64,
     pub descriptor_digest: [u8; 32],
+    pub descriptor: TlsIdentityDescriptor,
     pub config: Shared<TlsServerConfig>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct TlsIdentityHealth {
+    pub descriptor: TlsIdentityDescriptor,
+}
+
+impl TlsIdentityHealth {
+    pub const fn identity(&self) -> TlsIdentityId {
+        self.descriptor.identity
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.descriptor.generation
+    }
 }
 
 impl<R, T> CandidateDeploymentRetirementTarget for HostedTlsIdentityDeploymentTarget<R, T> {
@@ -42,6 +58,12 @@ impl HostedTlsIdentityPublication {
     pub fn snapshot(&self) -> Option<PublishedTlsIdentity> {
         self.active.lock().clone()
     }
+
+    pub fn health(&self) -> Option<TlsIdentityHealth> {
+        self.snapshot().map(|identity| TlsIdentityHealth {
+            descriptor: identity.descriptor,
+        })
+    }
 }
 
 pub trait HostedSigningRouteResolver {
@@ -58,6 +80,7 @@ pub trait HostedCandidateHandshakeTester {
 struct Candidate {
     prepared: PreparedIdentityReceipt,
     target_generation: u64,
+    descriptor: TlsIdentityDescriptor,
     config: Shared<TlsServerConfig>,
 }
 
@@ -143,6 +166,7 @@ impl<R: HostedSigningRouteResolver, T: HostedCandidateHandshakeTester> IdentityD
                 chain_digest: descriptor.chain_digest,
             },
             target_generation: self.target_generation,
+            descriptor: *descriptor,
             config: Shared::new(config),
         });
         Ok(self.target_generation)
@@ -184,6 +208,7 @@ impl<R: HostedSigningRouteResolver, T: HostedCandidateHandshakeTester> IdentityD
             identity: self.identity,
             generation: tested.prepared.generation,
             descriptor_digest: tested.prepared.descriptor_digest,
+            descriptor: candidate.descriptor,
             config: candidate.config.clone(),
         };
         *self.publication.active.lock() = Some(published);
@@ -337,6 +362,12 @@ mod tests {
             let tested = target.test_candidate(prepared, target_generation).unwrap();
             target.activate(tested).unwrap();
             assert_eq!(publication.snapshot().unwrap().generation, generation);
+            let health = publication.health().unwrap();
+            assert!(health.identity() == TlsIdentityId([1; 16]));
+            assert_eq!(health.generation(), generation);
+            assert_eq!(health.descriptor.chain_digest, chain.chain_digest());
+            assert_eq!(health.descriptor.leaf_spki_digest, [2; 32]);
+            assert_eq!(health.descriptor.not_after, 2);
         }
         assert_eq!(target.retained_generation(), Some(1));
         target.retire_retained(1).unwrap();

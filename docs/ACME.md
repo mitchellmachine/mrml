@@ -160,6 +160,14 @@ generations, obtains a raw ES256 signature, and strictly DER-encodes it. The TLS
 server permits only `ecdsa_secp256r1_sha256` on this route and has no private-key
 export path. The legacy RSA PEM constructor remains development-only and its
 public-gitd gate still fails closed.
+Each published hosted generation retains its complete public identity
+descriptor beside the TLS configuration. The current HTTPS server snapshots
+both together for every accepted connection and exposes an authenticated,
+`no-store` local `GET /health/tls-identity` result containing the exact identity
+and policy generations, typed names, leaf SPKI digest, chain digest, key
+identity, validity, and profile/directory generation. A raw-development-PEM or
+unavailable identity returns 503 rather than inventing health. The endpoint
+never exposes a private key, signing route, or ACME management operation.
 TLS ClientHello parsing now admits at most one bounded host-name SNI and a
 server configuration can require one exact normalized name. Missing, malformed,
 duplicate, or substituted SNI fails before certificate signing. This is a

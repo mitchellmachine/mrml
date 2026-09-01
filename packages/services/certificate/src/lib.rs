@@ -106,7 +106,7 @@ pub use durable_hosted::HostedDurableStateStore;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use hot_reload::{
     HostedCandidateHandshakeTester, HostedSigningRouteResolver, HostedTlsIdentityDeploymentTarget,
-    HostedTlsIdentityPublication, PublishedTlsIdentity,
+    HostedTlsIdentityPublication, PublishedTlsIdentity, TlsIdentityHealth,
 };
 pub use identity::{
     ActivationReceipt, ApprovedTls13CertificateVerify, CandidateDeploymentRetirementReceipt,

@@ -1,6 +1,3 @@
-#![no_std]
-#![cfg_attr(not(test), no_main)]
-
 use mrml_agent::{Config, MrmlAgent};
 use mrml_server::ApiServer;
 
@@ -27,4 +24,9 @@ fn application_main() -> mrml_error::Result<()> {
         .run()
 }
 
-mrml_runtime::mrml_entrypoint!(application_main);
+fn main() {
+    if let Err(error) = application_main() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
