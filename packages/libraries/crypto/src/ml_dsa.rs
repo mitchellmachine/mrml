@@ -44,6 +44,7 @@ pub enum MlDsaError {
     InvalidKey,
     InvalidSignature,
     RejectionLimit,
+    SamplingLimit,
 }
 
 fn shake256(parts: &[&[u8]], output: &mut [u8]) {
@@ -157,7 +158,7 @@ fn pointwise_accumulate(left: &[Poly; L], right: &[Poly; L]) -> Poly {
     output
 }
 
-fn matrix_row(rho: &[u8; 32], row: usize) -> [Poly; L] {
+fn matrix_row(rho: &[u8; 32], row: usize) -> Result<[Poly; L], MlDsaError> {
     let mut output = [[0i32; N]; L];
     for column in 0..L {
         let nonce = [column as u8, row as u8];
@@ -179,12 +180,19 @@ fn matrix_row(rho: &[u8; 32], row: usize) -> [Poly; L] {
                 written += 1;
             }
         }
-        debug_assert_eq!(written, N);
+        if written != N {
+            volatile_zero(&mut bytes);
+            for poly in &mut output {
+                volatile_zero(poly);
+            }
+            return Err(MlDsaError::SamplingLimit);
+        }
+        volatile_zero(&mut bytes);
     }
-    output
+    Ok(output)
 }
 
-fn sample_eta(seed: &[u8; 64], nonce: u16) -> Poly {
+fn sample_eta(seed: &[u8; 64], nonce: u16) -> Result<Poly, MlDsaError> {
     let mut bytes = [0u8; 1024];
     let mut state = Shake256::new();
     state.update(seed);
@@ -192,7 +200,7 @@ fn sample_eta(seed: &[u8; 64], nonce: u16) -> Poly {
     state.finalize(&mut bytes);
     let mut output = [0i32; N];
     let mut written = 0usize;
-    for byte in bytes {
+    for byte in &bytes {
         for value in [byte & 0x0f, byte >> 4] {
             if value < 9 && written < N {
                 output[written] = ETA - i32::from(value);
@@ -200,8 +208,12 @@ fn sample_eta(seed: &[u8; 64], nonce: u16) -> Poly {
             }
         }
     }
-    debug_assert_eq!(written, N);
-    output
+    volatile_zero(&mut bytes);
+    if written != N {
+        volatile_zero(&mut output);
+        return Err(MlDsaError::SamplingLimit);
+    }
+    Ok(output)
 }
 
 fn pack_bits(values: &[u32], bits: usize, output: &mut [u8]) {
@@ -373,7 +385,7 @@ fn sample_gamma1(seed: &[u8; 64], nonce: u16) -> Poly {
     output
 }
 
-fn challenge(seed: &[u8; CTILDE_BYTES]) -> Poly {
+fn challenge(seed: &[u8; CTILDE_BYTES]) -> Result<Poly, MlDsaError> {
     let mut bytes = [0u8; 4096];
     Shake256::digest(seed, &mut bytes);
     let mut signs = u64::from_le_bytes(bytes[..8].try_into().unwrap());
@@ -381,7 +393,12 @@ fn challenge(seed: &[u8; CTILDE_BYTES]) -> Poly {
     let mut output = [0i32; N];
     for index in N - TAU..N {
         let selected = loop {
-            let candidate = bytes[cursor] as usize;
+            let Some(&candidate) = bytes.get(cursor) else {
+                volatile_zero(&mut bytes);
+                volatile_zero(&mut output);
+                return Err(MlDsaError::SamplingLimit);
+            };
+            let candidate = candidate as usize;
             cursor += 1;
             if candidate <= index {
                 break candidate;
@@ -391,7 +408,8 @@ fn challenge(seed: &[u8; CTILDE_BYTES]) -> Poly {
         output[selected] = if signs & 1 == 0 { 1 } else { -1 };
         signs >>= 1;
     }
-    output
+    volatile_zero(&mut bytes);
+    Ok(output)
 }
 
 fn message_representative(
@@ -413,6 +431,8 @@ pub fn ml_dsa_65_keygen(
     public_key: &mut [u8],
     secret_key: &mut [u8],
 ) -> Result<(), MlDsaError> {
+    volatile_zero(public_key);
+    volatile_zero(secret_key);
     if public_key.len() != ML_DSA_65_PUBLIC_KEY_BYTES
         || secret_key.len() != ML_DSA_65_SECRET_KEY_BYTES
     {
@@ -427,10 +447,34 @@ pub fn ml_dsa_65_keygen(
     let mut s1 = [[0i32; N]; L];
     let mut s2 = [[0i32; N]; K];
     for index in 0..L {
-        s1[index] = sample_eta(rho_prime, index as u16);
+        match sample_eta(rho_prime, index as u16) {
+            Ok(poly) => s1[index] = poly,
+            Err(error) => {
+                volatile_zero(&mut expanded);
+                for poly in &mut s1 {
+                    volatile_zero(poly);
+                }
+                for poly in &mut s2 {
+                    volatile_zero(poly);
+                }
+                return Err(error);
+            }
+        }
     }
     for index in 0..K {
-        s2[index] = sample_eta(rho_prime, (L + index) as u16);
+        match sample_eta(rho_prime, (L + index) as u16) {
+            Ok(poly) => s2[index] = poly,
+            Err(error) => {
+                volatile_zero(&mut expanded);
+                for poly in &mut s1 {
+                    volatile_zero(poly);
+                }
+                for poly in &mut s2 {
+                    volatile_zero(poly);
+                }
+                return Err(error);
+            }
+        }
     }
     let mut s1_ntt = s1;
     for poly in &mut s1_ntt {
@@ -439,7 +483,23 @@ pub fn ml_dsa_65_keygen(
     let mut t0 = [[0i32; N]; K];
     let mut t1 = [[0i32; N]; K];
     for row in 0..K {
-        let matrix = matrix_row(rho, row);
+        let matrix = match matrix_row(rho, row) {
+            Ok(matrix) => matrix,
+            Err(error) => {
+                volatile_zero(&mut expanded);
+                for vector in [&mut s1[..], &mut s1_ntt[..]] {
+                    for poly in vector {
+                        volatile_zero(poly);
+                    }
+                }
+                for vector in [&mut s2[..], &mut t0[..], &mut t1[..]] {
+                    for poly in vector {
+                        volatile_zero(poly);
+                    }
+                }
+                return Err(error);
+            }
+        };
         let mut value = pointwise_accumulate(&matrix, &s1_ntt);
         inverse_ntt(&mut value);
         for index in 0..N {
@@ -472,7 +532,18 @@ pub fn ml_dsa_65_keygen(
         encode_t0(poly, &mut secret_key[offset..offset + POLYT0_BYTES]);
         offset += POLYT0_BYTES;
     }
-    expanded.fill(0);
+    volatile_zero(&mut expanded);
+    volatile_zero(&mut tr);
+    for vector in [&mut s1[..], &mut s1_ntt[..]] {
+        for poly in vector {
+            volatile_zero(poly);
+        }
+    }
+    for vector in [&mut s2[..], &mut t0[..], &mut t1[..]] {
+        for poly in vector {
+            volatile_zero(poly);
+        }
+    }
     Ok(())
 }
 
@@ -516,14 +587,23 @@ fn public_from_secret_polynomials(
     s1: &VecL,
     s2: &VecK,
     public_key: &mut [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
-) {
+) -> Result<(), MlDsaError> {
     let mut s1_ntt = *s1;
     for poly in &mut s1_ntt {
         ntt(poly);
     }
     public_key[..32].copy_from_slice(rho);
     for row in 0..K {
-        let matrix = matrix_row(rho, row);
+        let matrix = match matrix_row(rho, row) {
+            Ok(matrix) => matrix,
+            Err(error) => {
+                for poly in &mut s1_ntt {
+                    volatile_zero(poly);
+                }
+                volatile_zero(public_key);
+                return Err(error);
+            }
+        };
         let mut value = pointwise_accumulate(&matrix, &s1_ntt);
         inverse_ntt(&mut value);
         let mut t1 = [0i32; N];
@@ -540,6 +620,7 @@ fn public_from_secret_polynomials(
     for poly in &mut s1_ntt {
         volatile_zero(poly);
     }
+    Ok(())
 }
 
 fn wipe_signing_state(
@@ -593,7 +674,14 @@ pub fn ml_dsa_65_sign(
         return Err(MlDsaError::InvalidKey);
     }
     let mut public_key = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
-    public_from_secret_polynomials(&rho, &s1, &s2, &mut public_key);
+    if let Err(error) = public_from_secret_polynomials(&rho, &s1, &s2, &mut public_key) {
+        let mut empty = [0u8; 64];
+        wipe_signing_state(
+            &mut rho, &mut key, &mut tr, &mut empty, &mut s1, &mut s2, &mut t0,
+        );
+        volatile_zero(&mut public_key);
+        return Err(error);
+    }
     let mut expected_tr = [0u8; TR_BYTES];
     Shake256::digest(&public_key, &mut expected_tr);
     let mut tr_difference = 0u8;
@@ -641,7 +729,22 @@ pub fn ml_dsa_65_sign(
         }
         let mut w = [[0i32; N]; K];
         for row in 0..K {
-            let matrix = matrix_row(&rho, row);
+            let matrix = match matrix_row(&rho, row) {
+                Ok(matrix) => matrix,
+                Err(error) => {
+                    wipe_signing_state(
+                        &mut rho,
+                        &mut key,
+                        &mut tr,
+                        &mut rho_prime,
+                        &mut s1,
+                        &mut s2,
+                        &mut t0,
+                    );
+                    volatile_zero(signature);
+                    return Err(error);
+                }
+            };
             w[row] = pointwise_accumulate(&matrix, &y_ntt);
             inverse_ntt(&mut w[row]);
             for value in &mut w[row] {
@@ -652,7 +755,22 @@ pub fn ml_dsa_65_sign(
         encode_w1(&w, &mut encoded_w1);
         let mut ctilde = [0u8; CTILDE_BYTES];
         shake256(&[&mu, &encoded_w1], &mut ctilde);
-        let mut c = challenge(&ctilde);
+        let mut c = match challenge(&ctilde) {
+            Ok(challenge) => challenge,
+            Err(error) => {
+                wipe_signing_state(
+                    &mut rho,
+                    &mut key,
+                    &mut tr,
+                    &mut rho_prime,
+                    &mut s1,
+                    &mut s2,
+                    &mut t0,
+                );
+                volatile_zero(signature);
+                return Err(error);
+            }
+        };
         ntt(&mut c);
         let mut z = y;
         let mut low = [[0i32; N]; K];
@@ -815,14 +933,14 @@ pub fn ml_dsa_65_verify(
     let mut tr = [0u8; TR_BYTES];
     Shake256::digest(public_key, &mut tr);
     let mu = message_representative(&tr, context, message)?;
-    let mut c = challenge(&ctilde);
+    let mut c = challenge(&ctilde)?;
     ntt(&mut c);
     for poly in &mut z {
         ntt(poly);
     }
     let mut w1 = [[0i32; N]; K];
     for row in 0..K {
-        let matrix = matrix_row(rho, row);
+        let matrix = matrix_row(rho, row)?;
         let mut value = pointwise_accumulate(&matrix, &z);
         let mut t1 = [0i32; N];
         decode_t1(
@@ -918,5 +1036,51 @@ mod tests {
             Err(MlDsaError::BufferLength)
         );
         assert_eq!(short_output, [0u8; 17]);
+
+        let mut context_255_signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        let context_255 = [3u8; 255];
+        ml_dsa_65_sign(
+            &secret,
+            &context_255,
+            b"boundary",
+            &randomizer,
+            &mut context_255_signature,
+        )
+        .unwrap();
+        assert_eq!(
+            ml_dsa_65_verify(&public, &context_255, b"boundary", &context_255_signature,),
+            Ok(())
+        );
+        let context_256 = [3u8; 256];
+        context_255_signature.fill(0xa5);
+        assert_eq!(
+            ml_dsa_65_sign(
+                &secret,
+                &context_256,
+                b"boundary",
+                &randomizer,
+                &mut context_255_signature,
+            ),
+            Err(MlDsaError::ContextTooLong)
+        );
+        assert!(context_255_signature.iter().all(|byte| *byte == 0));
+
+        let mut noncanonical_signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(
+            &secret,
+            b"git",
+            b"commit payload",
+            &randomizer,
+            &mut noncanonical_signature,
+        )
+        .unwrap();
+        let hint_start = CTILDE_BYTES + L * POLYZ_BYTES;
+        noncanonical_signature[hint_start] = 9;
+        noncanonical_signature[hint_start + 1] = 8;
+        noncanonical_signature[hint_start + OMEGA] = 2;
+        assert_eq!(
+            ml_dsa_65_verify(&public, b"git", b"commit payload", &noncanonical_signature,),
+            Err(MlDsaError::InvalidSignature)
+        );
     }
 }

@@ -75,6 +75,13 @@ checks the stored public-key transcript hash, and verifies every generated
 signature before returning it. The caller's signature buffer is
 volatile-zeroed before work and on every error path; decoded long-lived secret
 arrays are volatile-zeroed before return. This is source-level output-hygiene
-evidence only. Official final FIPS 204/correction vectors, a pinned independent
-oracle, complete intermediate-zeroization review, timing evidence, and
-independent cryptographic review remain open.
+evidence only. Matrix, eta, and challenge rejection sampling uses finite
+buffers and now fails with a classified `SamplingLimit` error if those buffers
+cannot produce the required coefficients; no release-build debug assertion or
+unchecked challenge cursor is a correctness dependency. Key generation clears
+caller outputs before work and volatile-zeroes its expanded seed and temporary
+polynomial state on success and classified sampler failure. Tests cover the
+255-byte context boundary, fail-closed 256-byte rejection with cleared output,
+and noncanonical hint ordering. Official final FIPS 204/correction vectors, a
+pinned independent oracle, complete rejected-attempt intermediate-zeroization
+review, timing evidence, and independent cryptographic review remain open.
