@@ -11473,3 +11473,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 certificate chain by POST-as-GET only from the exact valid order resource and
 passes it through the already reviewed profile, key, name, purpose, validity,
 trust-root, and chain verifier. It adds no recorded re-review trigger.
+
+# 2026-09-01 — Prepared ACME account update and deactivation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment performs ordinary RFC 8555
+contact update and account deactivation requests bound to exact prepared
+receipts, account/directory generations, response state, and contact digest.
+It adds no recorded re-review-trigger mechanism.

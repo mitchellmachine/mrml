@@ -130,6 +130,35 @@ pub fn account_contacts_digest(contacts: &[&str]) -> Result<[u8; 32], PayloadErr
     Ok(digest.finalize())
 }
 
+pub fn write_account_contacts_payload<'a>(
+    contacts: &[&str],
+    output: &'a mut [u8],
+) -> Result<&'a str, PayloadError> {
+    if contacts.len() > MAX_ACCOUNT_CONTACTS
+        || contacts
+            .iter()
+            .any(|contact| !safe_json_string(contact, MAX_ACCOUNT_CONTACT_BYTES))
+        || contacts
+            .iter()
+            .enumerate()
+            .any(|(index, contact)| contacts[..index].contains(contact))
+    {
+        return Err(PayloadError::InvalidContact);
+    }
+    let mut writer = Writer::new(output)?;
+    writer.push(b"{\"contact\":[")?;
+    for (index, contact) in contacts.iter().enumerate() {
+        if index != 0 {
+            writer.push(b",")?;
+        }
+        writer.push(b"\"")?;
+        writer.push(contact.as_bytes())?;
+        writer.push(b"\"")?;
+    }
+    writer.push(b"]}")?;
+    Ok(writer.finish())
+}
+
 pub fn write_account_status_payload(active: bool, output: &mut [u8]) -> Result<&str, PayloadError> {
     let value = if active {
         b"{\"status\":\"valid\"}".as_slice()

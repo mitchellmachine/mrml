@@ -64,10 +64,11 @@ pub use jose::{
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
 pub use operation::{
-    AccountCreateBuffers, AuthorizationFetchError, AuthorizationResource, ChallengeSubmission,
-    ChallengeSubmitError, CreateAccountError, FinalizeError, FinalizeFailure, OrderCreateBuffers,
-    OrderCreateError, OrderCreateFailure, PrepareOrderError, PreparedOrderCreation,
-    execute_prepared_account_create, execute_prepared_finalize, execute_prepared_order_create,
+    AccountCreateBuffers, AccountUpdateError, AccountUpdateFailure, AuthorizationFetchError,
+    AuthorizationResource, ChallengeSubmission, ChallengeSubmitError, CreateAccountError,
+    FinalizeError, FinalizeFailure, OrderCreateBuffers, OrderCreateError, OrderCreateFailure,
+    PrepareOrderError, PreparedOrderCreation, execute_prepared_account_create,
+    execute_prepared_account_update, execute_prepared_finalize, execute_prepared_order_create,
     fetch_authorization, prepare_order_creation, trigger_published_challenge,
 };
 pub use order::{
@@ -77,8 +78,9 @@ pub use order::{
 };
 pub use payload::{
     MAX_ACCOUNT_CONTACT_BYTES, MAX_ACCOUNT_CONTACTS, MAX_ACME_PAYLOAD_BYTES, PayloadError,
-    account_contacts_digest, write_account_status_payload, write_finalize_payload,
-    write_new_account_payload, write_new_order_payload, write_revocation_payload,
+    account_contacts_digest, write_account_contacts_payload, write_account_status_payload,
+    write_finalize_payload, write_new_account_payload, write_new_order_payload,
+    write_revocation_payload,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use platform::{HostedAcmeTransport, HostedTransportError};

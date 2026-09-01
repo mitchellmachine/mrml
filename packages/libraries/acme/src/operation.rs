@@ -1,10 +1,11 @@
 use crate::{
-    AccountError, AccountLifecycle, AcmeDirectory, AcmeJwsSigner, AcmePostError, AcmeProblem,
-    AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError, ChallengeKind, ChallengeLifecycle,
-    DnsIdentifier, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus,
-    ParsedAuthorizationResponse, ParsedChallenge, PayloadError, PreparedAccountAction,
-    PreparedFinalization, PublicationReceipt, ResponseError, account_contacts_digest,
-    parse_account_response, parse_authorization_response, parse_order_response, post_jws,
+    AccountError, AccountLifecycle, AccountOperation, AcmeDirectory, AcmeJwsSigner, AcmePostError,
+    AcmeProblem, AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError, ChallengeKind,
+    ChallengeLifecycle, DnsIdentifier, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk,
+    ParsedAccountStatus, ParsedAuthorizationResponse, ParsedChallenge, PayloadError,
+    PreparedAccountAction, PreparedFinalization, PublicationReceipt, ResponseError,
+    account_contacts_digest, parse_account_response, parse_authorization_response,
+    parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
     write_finalize_payload, write_new_account_payload, write_new_order_payload,
 };
 use mrml_crypto::Sha256;
@@ -21,6 +22,23 @@ pub enum CreateAccountError<E> {
     AccountNotValid,
     ContactMismatch,
     KeyMismatch,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AccountUpdateError<E> {
+    PreparedMismatch,
+    Payload(PayloadError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    Lifecycle(AccountError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AccountUpdateFailure<E> {
+    Definitive(AccountUpdateError<E>),
+    Uncertain(AccountUpdateError<E>),
 }
 
 pub struct AccountCreateBuffers<'a> {
@@ -615,6 +633,140 @@ pub fn execute_prepared_account_create<T: AcmeTransport>(
     Ok(account_url)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn execute_prepared_account_update<T: AcmeTransport>(
+    lifecycle: &mut AccountLifecycle,
+    receipt: PreparedAccountAction,
+    directory: &AcmeDirectory,
+    contacts: Option<&[&str]>,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    buffers: AccountCreateBuffers<'_>,
+) -> Result<(), AccountUpdateFailure<T::Error>> {
+    if !lifecycle.active
+        || lifecycle.account_url.is_none()
+        || lifecycle.directory_generation != directory.generation
+        || receipt.directory_generation != directory.generation
+        || receipt.account_generation != lifecycle.generation.checked_add(1).unwrap_or(0)
+        || receipt.old_key != Some(lifecycle.key)
+        || receipt.new_key != Some(lifecycle.key)
+            && receipt.action != AccountOperation::DeactivationPrepared
+    {
+        return Err(AccountUpdateFailure::Definitive(
+            AccountUpdateError::PreparedMismatch,
+        ));
+    }
+    let payload = match receipt.action {
+        AccountOperation::ContactUpdatePrepared => {
+            let contacts = contacts.ok_or(AccountUpdateFailure::Definitive(
+                AccountUpdateError::PreparedMismatch,
+            ))?;
+            if account_contacts_digest(contacts).map_err(|error| {
+                AccountUpdateFailure::Definitive(AccountUpdateError::Payload(error))
+            })? != receipt.contact_digest
+            {
+                return Err(AccountUpdateFailure::Definitive(
+                    AccountUpdateError::PreparedMismatch,
+                ));
+            }
+            write_account_contacts_payload(contacts, buffers.payload).map_err(|error| {
+                AccountUpdateFailure::Definitive(AccountUpdateError::Payload(error))
+            })?
+        }
+        AccountOperation::DeactivationPrepared
+            if contacts.is_none() && receipt.new_key.is_none() =>
+        {
+            write_account_status_payload(false, buffers.payload).map_err(|error| {
+                AccountUpdateFailure::Definitive(AccountUpdateError::Payload(error))
+            })?
+        }
+        _ => {
+            return Err(AccountUpdateFailure::Definitive(
+                AccountUpdateError::PreparedMismatch,
+            ));
+        }
+    };
+    let account_url = lifecycle.account_url.as_ref().unwrap();
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        account_url,
+        crate::ProtectedKey::Kid(account_url),
+        payload.as_bytes(),
+        lifecycle.generation,
+        signer,
+        buffers.response,
+        buffers.jws,
+    );
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            lifecycle.mark_uncertain().map_err(|lifecycle_error| {
+                AccountUpdateFailure::Uncertain(AccountUpdateError::Lifecycle(lifecycle_error))
+            })?;
+            return Err(AccountUpdateFailure::Uncertain(AccountUpdateError::Post(
+                error,
+            )));
+        }
+    };
+    if let Some(problem) = result.problem {
+        lifecycle.abort_prepared(receipt).map_err(|error| {
+            AccountUpdateFailure::Definitive(AccountUpdateError::Lifecycle(error))
+        })?;
+        return Err(AccountUpdateFailure::Definitive(
+            AccountUpdateError::Server(problem),
+        ));
+    }
+    if result.metadata.status != 200
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        lifecycle.mark_uncertain().map_err(|error| {
+            AccountUpdateFailure::Uncertain(AccountUpdateError::Lifecycle(error))
+        })?;
+        return Err(AccountUpdateFailure::Uncertain(
+            AccountUpdateError::UnexpectedStatus,
+        ));
+    }
+    let body =
+        core::str::from_utf8(&buffers.response[..result.metadata.body_length]).map_err(|_| {
+            AccountUpdateFailure::Uncertain(AccountUpdateError::Response(ResponseError::Malformed))
+        });
+    let parsed = match body.and_then(|body| {
+        parse_account_response(body, account_url.origin())
+            .map_err(|error| AccountUpdateFailure::Uncertain(AccountUpdateError::Response(error)))
+    }) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            lifecycle.mark_uncertain().map_err(|lifecycle_error| {
+                AccountUpdateFailure::Uncertain(AccountUpdateError::Lifecycle(lifecycle_error))
+            })?;
+            return Err(error);
+        }
+    };
+    let response_matches = match receipt.action {
+        AccountOperation::ContactUpdatePrepared => {
+            parsed.status == ParsedAccountStatus::Valid
+                && parsed.contacts_digest == receipt.contact_digest
+        }
+        AccountOperation::DeactivationPrepared => parsed.status == ParsedAccountStatus::Deactivated,
+        _ => false,
+    };
+    if !response_matches {
+        lifecycle.mark_uncertain().map_err(|error| {
+            AccountUpdateFailure::Uncertain(AccountUpdateError::Lifecycle(error))
+        })?;
+        return Err(AccountUpdateFailure::Uncertain(
+            AccountUpdateError::PreparedMismatch,
+        ));
+    }
+    lifecycle
+        .commit(receipt)
+        .map_err(|error| AccountUpdateFailure::Uncertain(AccountUpdateError::Lifecycle(error)))?;
+    Ok(())
+}
+
 fn uncertain<E>(
     lifecycle: &mut AccountLifecycle,
     error: CreateAccountError<E>,
@@ -779,6 +931,19 @@ mod tests {
             if self.fail_post {
                 return Err(());
             }
+            if request.url.as_str() == "https://ca.example/account/1" {
+                let body = br#"{"status":"deactivated"}"#;
+                output[..body.len()].copy_from_slice(body);
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/account/1",
+                    replay_nonce: Some("nonce-3"),
+                    retry_after: None,
+                    location: None,
+                    content_type: Some("application/json"),
+                    body_length: body.len(),
+                });
+            }
             let body = br#"{"status":"valid","contact":["mailto:owner@example.com"],"orders":"https://ca.example/orders/1"}"#;
             output[..body.len()].copy_from_slice(body);
             Ok(AcmeTransportResponse {
@@ -838,8 +1003,7 @@ mod tests {
         (directory, key, lifecycle, receipt)
     }
 
-    #[test]
-    fn creation_binds_signed_response_location_and_contacts() {
+    fn creation_binds_signed_response_location_and_contacts_impl() {
         let (directory, key, mut lifecycle, receipt) = prepared();
         let origin = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
         let mut exchange = crate::AcmeExchange::new(directory.generation, origin);
@@ -872,6 +1036,24 @@ mod tests {
         assert!(lifecycle.active);
         assert_eq!(lifecycle.generation, 1);
         assert_eq!(lifecycle.operation, AccountOperation::None);
+        let deactivation = lifecycle.prepare_deactivation(5).unwrap();
+        let result = execute_prepared_account_update(
+            &mut lifecycle,
+            deactivation,
+            &directory,
+            None,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            AccountCreateBuffers {
+                payload: &mut payload,
+                response: &mut response,
+                jws: &mut jws,
+            },
+        );
+        assert!(result.is_ok());
+        assert!(!lifecycle.active);
+        assert_eq!(lifecycle.generation, 2);
     }
 
     #[test]
@@ -1130,5 +1312,10 @@ mod tests {
     #[test]
     fn order_post_failure_is_explicitly_uncertain() {
         run_order_test(order_post_failure_is_explicitly_uncertain_impl);
+    }
+
+    #[test]
+    fn creation_binds_signed_response_location_and_contacts() {
+        run_order_test(creation_binds_signed_response_location_and_contacts_impl);
     }
 }
