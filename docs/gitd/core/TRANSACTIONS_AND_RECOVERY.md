@@ -181,6 +181,17 @@ and both repositories reopen at exactly their next generation and ref value.
 This is process-local hosted-Linux transaction serialization evidence, not a
 multi-process kill or distributed-concurrency claim.
 
+A second hosted-Linux concurrency test covers the complete thin-receive path.
+Two workers begin from the same exact active state and are held until both have
+entered their pack bodies. Their distinct one-object SHA-256 thin packs use REF
+deltas against the same commit available only in the selected arrival pack set.
+Both must authenticate and re-hash that selected base; exactly one transaction
+advances the repository and pack generation, while the competing transaction
+fails closed and its installed-or-quarantined candidate is never selected.
+Reopening proves the winner and original base are readable and the loser is
+invisible. The test is process-local and does not claim multiprocess or
+distributed serialization.
+
 `MRRCPT01` is a deterministic receipt transcript binding the transaction and
 repository identities, pre-activation and exactly-next repository generations,
 trust and revocation generations, and a strictly sorted exact old/new ref set.
@@ -217,9 +228,19 @@ ref typestate. The end-to-end hosted-Linux test stages and installs a SHA-256
 pack/index, persists each journal phase, re-reads old refs, atomically advances
 the active generation, appends the receipt, and independently reopens and
 validates all four durable artifacts. A separate protected-path test uses the
-authenticated receipt wrapper and reopens its signature-bound receipt. These
-are concrete filesystem-ordering tests, not process-kill, power-loss,
-physical-storage, production-key-service, or production-read-path evidence.
+authenticated receipt wrapper and reopens its signature-bound receipt.
+
+A hosted-Linux child-process test now exercises one real abrupt-termination
+boundary. The child durably installs the arrival, persists an
+`ObjectsDurablyInstalled` journal, atomically replaces and fsyncs the active ref
+state, signals only after that activation returns, and pauses before advancing
+the journal. The parent sends the runtime's hard process kill, waits for the
+non-successful exit, independently reopens the old-phase journal and exactly
+next ref/pack generation, verifies the selected arrival remains installed, and
+requires recovery classification to be `RecoverAuditReceipt`. This is exact
+evidence for that one post-ref-activation/pre-journal boundary. It is not
+power-loss, physical-storage, production-key-service, production-read-path, or
+kill-at-every-syscall evidence.
 
 Recovery enumeration re-reads the canonical active-ref file for every bounded
 journal and classifies it using the old repository generation before activation

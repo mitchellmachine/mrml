@@ -112,8 +112,17 @@ before the request. The active ref state is re-read after the body and must
 still byte-match before any base lookup; each returned base is independently
 size-bounded and re-hashed before it enters transaction-private scratch. The
 later durable activation still performs its immediate generation/ref re-read.
-Thin-pack capability advertisement remains disabled pending concurrent receive
-tests and production active-pack-set integration.
+A hosted-Linux test now starts two complete receive compositions from the same
+authenticated active generation and synchronizes them only after both have
+entered their pack bodies. Each body contains one SHA-256 REF delta whose base
+commit is absent from the baseline repository and available only through the
+selected arrival manifest. Both validate against that exact base, but exactly
+one activates generation 8; the other fails closed as stale, storage-failed, or
+uncertain according to how far it progressed, and its candidate remains
+unselected. This is process-local body-overlap and durable-activation
+contention evidence, not multiprocess, power-loss, or production-load evidence.
+Thin-pack capability advertisement remains disabled pending production edge
+integration and broader multiprocess/fault evidence.
 
 The immutable cache core uses a canonical full key containing object format,
 exact ordered wants and haves, repository generation, pack-profile version, and

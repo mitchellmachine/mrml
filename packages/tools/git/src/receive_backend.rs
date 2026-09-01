@@ -412,8 +412,9 @@ fn map_durable_error(error: DurableReceiveError) -> GitdCoreError {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use mrml_crypto::Sha256;
-    use mrml_runtime::{Text, Vector, join_path};
+    use mrml_runtime::{Shared, Text, Vector, join_path};
 
     use super::*;
     use crate::{
@@ -525,6 +526,84 @@ mod tests {
             HEX[length & 15],
         ]);
         output.extend(payload.iter().copied());
+    }
+
+    fn encode_pack_header(kind: u8, mut size: usize, output: &mut Vector<u8>) {
+        let mut first = ((kind & 7) << 4) | (size as u8 & 15);
+        size >>= 4;
+        if size != 0 {
+            first |= 0x80;
+        }
+        output.push(first);
+        while size != 0 {
+            let mut byte = (size & 0x7f) as u8;
+            size >>= 7;
+            if size != 0 {
+                byte |= 0x80;
+            }
+            output.push(byte);
+        }
+    }
+
+    fn encode_delta_size(mut size: usize, output: &mut Vector<u8>) {
+        loop {
+            let mut byte = (size & 0x7f) as u8;
+            size >>= 7;
+            if size != 0 {
+                byte |= 0x80;
+            }
+            output.push(byte);
+            if size == 0 {
+                return;
+            }
+        }
+    }
+
+    fn thin_ref_delta_pack(base: ObjectId, base_bytes: &[u8], result: &[u8]) -> Vector<u8> {
+        let mut delta = Vector::new();
+        encode_delta_size(base_bytes.len(), &mut delta);
+        encode_delta_size(result.len(), &mut delta);
+        for chunk in result.chunks(127) {
+            delta.push(chunk.len() as u8);
+            delta.extend(chunk.iter().copied());
+        }
+        let mut pack = Vector::from(*b"PACK");
+        pack.extend(2u32.to_be_bytes());
+        pack.extend(1u32.to_be_bytes());
+        encode_pack_header(7, delta.len(), &mut pack);
+        pack.extend(base.as_bytes().iter().copied());
+        pack.extend(crate::deflate::encode_zlib(&delta));
+        let checksum = ObjectFormat::Sha256.hash_bytes(&pack);
+        pack.extend(checksum.as_bytes().iter().copied());
+        pack
+    }
+
+    struct ConcurrentBodyReader {
+        bytes: Vector<u8>,
+        offset: usize,
+        body_offset: usize,
+        body_started: bool,
+        bodies_ready: Shared<AtomicUsize>,
+    }
+
+    impl crate::BoundedRead for ConcurrentBodyReader {
+        fn remaining(&self) -> u64 {
+            (self.bytes.len() - self.offset) as u64
+        }
+
+        fn read(&mut self, output: &mut [u8]) -> Result<usize, GitdCoreError> {
+            if self.offset >= self.body_offset && !self.body_started {
+                self.body_started = true;
+                self.bodies_ready.fetch_add(1, Ordering::AcqRel);
+                while self.bodies_ready.load(Ordering::Acquire) != 2 {
+                    mrml_runtime::yield_now();
+                }
+            }
+            let count = output.len().min(11).min(self.bytes.len() - self.offset);
+            output[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+            self.offset += count;
+            Ok(count)
+        }
     }
 
     fn path(root: &str, child: &str) -> Text {
@@ -786,6 +865,217 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prepared_later.verified().updates()[0].proposed_new(), Some(newer));
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_thin_receives_share_selected_base_and_only_one_activates() {
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-concurrent-thin-receive-{}", mrml_runtime::process_id()),
+        );
+        let _ = mrml_runtime::remove_dir_all(&root);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let repository_path = path(&root, "repository");
+        let repository = Repository::init_with_format(&repository_path, ObjectFormat::Sha256).unwrap();
+        let tree = repository.write_object(ObjectKind::Tree, &[]).unwrap();
+        let old_contents = mrml_runtime::mrml_format!(
+            "tree {}\nauthor Owner <owner@example.invalid> 1 +0000\n\nselected base\n",
+            tree.to_hex()
+        );
+        let (old, _) = crate::encode_loose_object_with_format(
+            ObjectFormat::Sha256,
+            ObjectKind::Commit,
+            old_contents.as_bytes(),
+        );
+        // The old tip/base is deliberately absent from the baseline repository
+        // and available only through the selected arrival manifest.
+        assert!(repository.read_object(old).is_err());
+
+        let identity = RepositoryIdentity::parse("owner/concurrent").unwrap();
+        let packs = path(&root, "packs");
+        let arrivals = crate::ArrivalPackStore::open(&packs, ObjectFormat::Sha256, 1024 * 1024).unwrap();
+        let seed_id = QuarantineTransactionId([40; 16]);
+        let mut old_bytes = Vector::new();
+        old_bytes.extend(old_contents.as_bytes().iter().copied());
+        let seed_pack = encode_pack_with_format(
+            &[PackObject {
+                id: old,
+                kind: ObjectKind::Commit,
+                contents: old_bytes,
+            }],
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        let seed_summary = arrivals.stage_compacted_pack(seed_id, &seed_pack, &[old]).unwrap();
+        arrivals.install(seed_id, 1).unwrap();
+        let limits = PackSetLimits {
+            max_packs: 65_536,
+            max_objects: 10_000_000,
+            max_pack_bytes: 8 * 1024 * 1024 * 1024 * 1024,
+            max_index_bytes: 16 * 1024 * 1024 * 1024,
+            max_work_units: 16 * 1024 * 1024 * 1024 * 1024,
+        };
+        let initial_manifest = crate::pack_set::build_pack_set_manifest(
+            identity.clone(),
+            RepositoryGeneration(7),
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            Vector::from([seed_summary]),
+            limits,
+        )
+        .unwrap();
+        let active = ActiveRefState {
+            repository: identity.clone(),
+            repository_generation: RepositoryGeneration(7),
+            trust_generation: TrustGeneration(8),
+            revocation_generation: RevocationGeneration(9),
+            pack_generation: PackGeneration(1),
+            pack_set_digest: initial_manifest.digest().unwrap(),
+            object_format: ObjectFormat::Sha256,
+            default_branch: FullRefName::parse("refs/heads/main").unwrap(),
+            refs: [(FullRefName::parse("refs/heads/main").unwrap(), old)].into(),
+        };
+        let refs = path(&root, "refs");
+        ActiveRefFile::initialize_with_pack_set(&refs, &active, &initial_manifest).unwrap();
+
+        let bodies_ready = Shared::new(AtomicUsize::new(0));
+        let successes = Shared::new(AtomicUsize::new(0));
+        let rejected = Shared::new(AtomicUsize::new(0));
+        let unexpected = Shared::new(AtomicUsize::new(0));
+        let mut workers = Vector::new();
+        let mut candidate_ids = Vector::new();
+        for (index, message) in ["candidate alpha", "candidate beta"].iter().enumerate() {
+            let new_contents = mrml_runtime::mrml_format!(
+                "tree {}\nparent {}\nauthor Owner <owner@example.invalid> {} +0000\n\n{}\n",
+                tree.to_hex(), old.to_hex(), index + 2, message
+            );
+            let (new, _) = crate::encode_loose_object_with_format(
+                ObjectFormat::Sha256,
+                ObjectKind::Commit,
+                new_contents.as_bytes(),
+            );
+            candidate_ids.push(new);
+            let thin = thin_ref_delta_pack(old, old_contents.as_bytes(), new_contents.as_bytes());
+            let command = mrml_runtime::mrml_format!(
+                "{} {} refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
+                old.to_hex(), new.to_hex()
+            );
+            let mut bytes = Vector::new();
+            append_packet(&mut bytes, command.as_bytes());
+            bytes.extend(*b"0000");
+            let body_offset = bytes.len();
+            bytes.extend(thin.iter().copied());
+
+            let worker_root = root.clone();
+            let worker_repository = repository_path.clone();
+            let worker_identity = identity.clone();
+            let worker_active = active.clone();
+            let worker_ready = bodies_ready.clone();
+            let worker_successes = successes.clone();
+            let worker_rejected = rejected.clone();
+            let worker_unexpected = unexpected.clone();
+            let worker = mrml_runtime::spawn_joinable(move || {
+                let active_objects = Repository::discover(&worker_repository).unwrap();
+                let mut store = LinuxDurableReceiveStore::open(
+                    &path(&worker_root, "journals"),
+                    &path(&worker_root, "packs"),
+                    &path(&worker_root, "refs"),
+                    &path(&worker_root, "receipts"),
+                    ObjectFormat::Sha256,
+                    1024 * 1024,
+                )
+                .unwrap();
+                let budget = WorkBudget {
+                    max_input_bytes: 2 * 1024 * 1024,
+                    max_output_bytes: 1024 * 1024,
+                    max_memory_bytes: 1024 * 1024,
+                    max_work_units: 8 * 1024 * 1024,
+                };
+                let core = crate::ReceivePackCore {
+                    request: SmartGitRequest {
+                        repository: worker_identity.clone(),
+                        repository_generation: RepositoryGeneration(7),
+                        operation: SmartGitOperation::ReceivePack,
+                        object_format: ObjectFormat::Sha256,
+                    },
+                    transaction: QuarantineTransactionId([41 + index as u8; 16]),
+                    quarantine_limits: QuarantineLimits {
+                        max_incoming_pack_bytes: 1024 * 1024,
+                        max_expanded_object_bytes: 1024 * 1024,
+                        max_individual_object_bytes: 1024 * 1024,
+                        max_objects: 16,
+                        max_refs: 4,
+                        minimum_free_space_bytes: 0,
+                    },
+                    history_limits: HistoryVerificationLimits::default(),
+                    ordinary_free_bytes: 16 * 1024 * 1024,
+                    work_budget: budget,
+                };
+                let mut input = ConcurrentBodyReader {
+                    bytes,
+                    offset: 0,
+                    body_offset,
+                    body_started: false,
+                    bodies_ready: worker_ready,
+                };
+                let mut output = Writer { bytes: Vector::new(), remaining: budget.max_output_bytes };
+                let mut verifier = ExactVerifier {
+                    repository: worker_identity,
+                    generation: RepositoryGeneration(7),
+                    trust: TrustGeneration(8),
+                    revocations: RevocationGeneration(9),
+                    expected: new,
+                };
+                let mut authority = ReceiptAuthority;
+                match core.execute(
+                    &worker_active,
+                    &active_objects,
+                    &mut store,
+                    &mut verifier,
+                    &path(&worker_root, "signed-receipts"),
+                    &mut authority,
+                    &mut input,
+                    &mut output,
+                ) {
+                    Ok(response) if response.refs_activated => {
+                        worker_successes.fetch_add(1, Ordering::AcqRel);
+                    }
+                    Err(GitdCoreError::StaleGeneration | GitdCoreError::Storage | GitdCoreError::UncertainCommit) => {
+                        worker_rejected.fetch_add(1, Ordering::AcqRel);
+                    }
+                    _ => { worker_unexpected.fetch_add(1, Ordering::AcqRel); }
+                }
+            }).unwrap_or_else(|_| panic!("failed to start concurrent thin receive"));
+            workers.push(worker);
+        }
+        for worker in workers {
+            assert!(worker.join());
+        }
+        assert_eq!(bodies_ready.load(Ordering::Acquire), 2);
+        assert_eq!(successes.load(Ordering::Acquire), 1);
+        assert_eq!(rejected.load(Ordering::Acquire), 1);
+        assert_eq!(unexpected.load(Ordering::Acquire), 0);
+        let reopened = LinuxDurableReceiveStore::open(
+            &path(&root, "journals"), &packs, &refs, &path(&root, "receipts"),
+            ObjectFormat::Sha256, 1024 * 1024,
+        ).unwrap();
+        let final_state = reopened.active_refs().load().unwrap();
+        assert_eq!(final_state.repository_generation, RepositoryGeneration(8));
+        assert!(candidate_ids.contains(&final_state.refs[0].1));
+        let winner = reopened
+            .read_active_arrival_object(final_state.refs[0].1, 1024 * 1024)
+            .unwrap();
+        assert_eq!(winner.kind, ObjectKind::Commit);
+        assert_eq!(
+            &reopened
+                .read_active_arrival_object(old, 1024 * 1024)
+                .unwrap()
+                .contents[..],
+            old_contents.as_bytes()
+        );
+        let loser = *candidate_ids.iter().find(|id| **id != final_state.refs[0].1).unwrap();
+        assert!(reopened.read_active_arrival_object(loser, 1024 * 1024).is_err());
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }
