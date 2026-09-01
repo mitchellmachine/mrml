@@ -60,3 +60,6 @@ wrong-peer and replay attempts reject in the focused regression.
 After persistent cache-record integration, HTTP passed 49 tests on hosted Linux
 and 49 Windows-target tests under Wine. Corruption eviction used an in-memory
 `CacheStore`; no filesystem crash or disk-quota evidence was exercised.
+
+After integrating bounded single-flight generation into the HTTP server, HTTP
+passed 50 tests on hosted Linux and 50 Windows-target tests under Wine.

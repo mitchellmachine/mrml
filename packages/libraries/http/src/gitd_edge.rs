@@ -279,6 +279,93 @@ pub struct PersistentRepresentationCache<S: CacheStore> {
     store: S,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RepresentationGenerationPermit {
+    slot: u64,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SingleFlightDecision {
+    Generate(RepresentationGenerationPermit),
+    InProgress,
+}
+
+struct InFlightRepresentation {
+    key: [u8; 32],
+    slot: u64,
+    generation: u64,
+}
+
+/// Bounded single-owner coordinator for cache misses. The HTTP reactor calls
+/// `begin` before dispatching generation and `complete` after atomically
+/// publishing the record. Concurrent misses observe `InProgress` and cannot
+/// start duplicate compression work.
+pub struct RepresentationSingleFlight {
+    entries: Vector<InFlightRepresentation>,
+    maximum_entries: usize,
+    next_slot: u64,
+    next_generation: u64,
+}
+
+impl RepresentationSingleFlight {
+    pub fn new(maximum_entries: usize) -> Result<Self, BackendError> {
+        if maximum_entries == 0 || maximum_entries > 4096 {
+            return Err(BackendError::ResourceLimit);
+        }
+        Ok(Self {
+            entries: Vector::new(),
+            maximum_entries,
+            next_slot: 1,
+            next_generation: 1,
+        })
+    }
+
+    pub fn begin(&mut self, logical_key: &str) -> Result<SingleFlightDecision, BackendError> {
+        let key = cache_storage_key(logical_key)?;
+        if self.entries.iter().any(|entry| entry.key == key) {
+            return Ok(SingleFlightDecision::InProgress);
+        }
+        if self.entries.len() >= self.maximum_entries {
+            return Err(BackendError::ResourceLimit);
+        }
+        let permit = RepresentationGenerationPermit {
+            slot: self.next_slot,
+            generation: self.next_generation,
+        };
+        self.next_slot = self
+            .next_slot
+            .checked_add(1)
+            .ok_or(BackendError::ResourceLimit)?;
+        self.next_generation = self
+            .next_generation
+            .checked_add(1)
+            .ok_or(BackendError::ResourceLimit)?;
+        self.entries
+            .try_push(InFlightRepresentation {
+                key,
+                slot: permit.slot,
+                generation: permit.generation,
+            })
+            .map_err(|_| BackendError::ResourceLimit)?;
+        Ok(SingleFlightDecision::Generate(permit))
+    }
+
+    pub fn complete(&mut self, permit: RepresentationGenerationPermit) -> Result<(), BackendError> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.slot == permit.slot && entry.generation == permit.generation)
+            .ok_or(BackendError::StaleGeneration)?;
+        self.entries.remove(index);
+        Ok(())
+    }
+
+    pub fn active(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 impl<S: CacheStore> PersistentRepresentationCache<S> {
     pub fn new(store: S) -> Self {
         Self { store }
@@ -528,6 +615,7 @@ pub struct GitdHttpResponse {
 pub struct GitdHttp3Server<B: GitdBackend> {
     backend: B,
     cache: MemoryRepresentationCache,
+    flights: RepresentationSingleFlight,
     trust: TrustGeneration,
     revocations: RevocationGeneration,
 }
@@ -537,6 +625,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         Ok(Self {
             backend,
             cache: MemoryRepresentationCache::new(256, cache_bytes)?,
+            flights: RepresentationSingleFlight::new(256)?,
             trust: TrustGeneration(0),
             revocations: RevocationGeneration(0),
         })
@@ -641,100 +730,108 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         if let Some(cached) = self.cache.get(&context) {
             return Ok(representation_response(request, cached, true));
         }
-        let content = match kind {
-            "overview" => mrml_runtime::mrml_format!(
-                "<h1>{}</h1><p>{}</p><nav aria-label=\"Repository\"><a href=\"/{}/tree/{}/\">Files</a> <a href=\"/{}/commits/{}\">Commits</a> <a href=\"/{}/signatures\">Signatures</a></nav>",
-                repository.as_str(),
-                escape(summary.description.as_str()),
-                repository.as_str(),
-                object.hex(),
-                repository.as_str(),
-                object.hex(),
-                repository.as_str()
-            ),
-            "tree" => {
-                let relative = join_path(pieces.get(4..).unwrap_or(&[]));
-                let tree = self.backend.read_tree_page(
-                    &repository,
-                    object.clone(),
-                    &RepositoryPath::parse(relative.as_str())?,
-                    QueryLimits {
-                        max_entries: 256,
-                        max_bytes: 1024 * 1024,
-                    },
-                )?;
-                let mut html: Text = "<h1>Files</h1><ul>".into();
-                for entry in tree.entries {
-                    html.push_str("<li>");
-                    html.push_str(&escape(entry.as_str()));
-                    html.push_str("</li>");
-                }
-                html.push_str("</ul>");
-                html
-            }
-            "blob" => {
-                let relative = join_path(pieces.get(4..).unwrap_or(&[]));
-                let blob = self.backend.read_blob_page(
-                    &repository,
-                    object.clone(),
-                    &RepositoryPath::parse(relative.as_str())?,
-                    QueryLimits {
-                        max_entries: 1,
-                        max_bytes: MAX_MARKDOWN as u64,
-                    },
-                )?;
-                if !blob.complete {
-                    return Err(BackendError::ResourceLimit);
-                }
-                render_markdown(&blob.bytes, &repository, &object)?
-            }
-            "commits" | "commit" => {
-                let commits = self.backend.read_commit_page(
-                    &repository,
-                    object.clone(),
-                    QueryLimits {
-                        max_entries: 100,
-                        max_bytes: 1024 * 1024,
-                    },
-                )?;
-                let mut html: Text = "<h1>Commits</h1><ol>".into();
-                for commit in commits.commits {
-                    html.push_str("<li><code>");
-                    html.push_str(&commit.hex());
-                    html.push_str("</code></li>");
-                }
-                html.push_str("</ol>");
-                html
-            }
-            "branches" | "tags" | "releases" => {
-                let mut html = mrml_runtime::mrml_format!("<h1>{}</h1><ul>", escape(kind));
-                for (name, oid) in summary.refs {
-                    html.push_str("<li><code>");
-                    html.push_str(&escape(name.as_str()));
-                    html.push_str("</code> ");
-                    html.push_str(&oid.hex());
-                    html.push_str("</li>");
-                }
-                html.push_str("</ul>");
-                html
-            }
-            "signatures" => verification_html(&self.backend.verification_summary(
-                &repository,
-                object.clone(),
-                self.trust,
-                self.revocations,
-            )?),
-            _ if kind == "api" || pieces[0] == "api" => return Err(BackendError::NotFound),
-            _ => return Err(BackendError::NotFound),
+        let permit = match self.flights.begin(&context)? {
+            SingleFlightDecision::Generate(permit) => permit,
+            SingleFlightDecision::InProgress => return Err(BackendError::StaleGeneration),
         };
-        let page = document(&repository.as_str(), &content, target, true);
-        let prepared = CachedRepresentation::prepare(page.as_bytes())?;
-        self.cache.insert(&context, prepared)?;
-        Ok(representation_response(
-            request,
-            self.cache.get(&context).ok_or(BackendError::Storage)?,
-            true,
-        ))
+        let result = (|| {
+            let content = match kind {
+                "overview" => mrml_runtime::mrml_format!(
+                    "<h1>{}</h1><p>{}</p><nav aria-label=\"Repository\"><a href=\"/{}/tree/{}/\">Files</a> <a href=\"/{}/commits/{}\">Commits</a> <a href=\"/{}/signatures\">Signatures</a></nav>",
+                    repository.as_str(),
+                    escape(summary.description.as_str()),
+                    repository.as_str(),
+                    object.hex(),
+                    repository.as_str(),
+                    object.hex(),
+                    repository.as_str()
+                ),
+                "tree" => {
+                    let relative = join_path(pieces.get(4..).unwrap_or(&[]));
+                    let tree = self.backend.read_tree_page(
+                        &repository,
+                        object.clone(),
+                        &RepositoryPath::parse(relative.as_str())?,
+                        QueryLimits {
+                            max_entries: 256,
+                            max_bytes: 1024 * 1024,
+                        },
+                    )?;
+                    let mut html: Text = "<h1>Files</h1><ul>".into();
+                    for entry in tree.entries {
+                        html.push_str("<li>");
+                        html.push_str(&escape(entry.as_str()));
+                        html.push_str("</li>");
+                    }
+                    html.push_str("</ul>");
+                    html
+                }
+                "blob" => {
+                    let relative = join_path(pieces.get(4..).unwrap_or(&[]));
+                    let blob = self.backend.read_blob_page(
+                        &repository,
+                        object.clone(),
+                        &RepositoryPath::parse(relative.as_str())?,
+                        QueryLimits {
+                            max_entries: 1,
+                            max_bytes: MAX_MARKDOWN as u64,
+                        },
+                    )?;
+                    if !blob.complete {
+                        return Err(BackendError::ResourceLimit);
+                    }
+                    render_markdown(&blob.bytes, &repository, &object)?
+                }
+                "commits" | "commit" => {
+                    let commits = self.backend.read_commit_page(
+                        &repository,
+                        object.clone(),
+                        QueryLimits {
+                            max_entries: 100,
+                            max_bytes: 1024 * 1024,
+                        },
+                    )?;
+                    let mut html: Text = "<h1>Commits</h1><ol>".into();
+                    for commit in commits.commits {
+                        html.push_str("<li><code>");
+                        html.push_str(&commit.hex());
+                        html.push_str("</code></li>");
+                    }
+                    html.push_str("</ol>");
+                    html
+                }
+                "branches" | "tags" | "releases" => {
+                    let mut html = mrml_runtime::mrml_format!("<h1>{}</h1><ul>", escape(kind));
+                    for (name, oid) in summary.refs {
+                        html.push_str("<li><code>");
+                        html.push_str(&escape(name.as_str()));
+                        html.push_str("</code> ");
+                        html.push_str(&oid.hex());
+                        html.push_str("</li>");
+                    }
+                    html.push_str("</ul>");
+                    html
+                }
+                "signatures" => verification_html(&self.backend.verification_summary(
+                    &repository,
+                    object.clone(),
+                    self.trust,
+                    self.revocations,
+                )?),
+                _ if kind == "api" || pieces[0] == "api" => return Err(BackendError::NotFound),
+                _ => return Err(BackendError::NotFound),
+            };
+            let page = document(&repository.as_str(), &content, target, true);
+            let prepared = CachedRepresentation::prepare(page.as_bytes())?;
+            self.cache.insert(&context, prepared)?;
+            Ok(representation_response(
+                request,
+                self.cache.get(&context).ok_or(BackendError::Storage)?,
+                true,
+            ))
+        })();
+        self.flights.complete(permit)?;
+        result
     }
     fn git_route(
         &mut self,
@@ -1520,6 +1617,23 @@ mod tests {
         let store = cache.into_store();
         assert_eq!(store.removals, 1);
         assert!(store.value.is_empty());
+    }
+
+    #[test]
+    fn single_flight_elects_one_generator_and_rejects_stale_completion() {
+        let mut flights = RepresentationSingleFlight::new(1).unwrap();
+        let SingleFlightDecision::Generate(first) = flights.begin("key-a").unwrap() else {
+            panic!("first miss was not elected")
+        };
+        assert_eq!(flights.begin("key-a"), Ok(SingleFlightDecision::InProgress));
+        assert_eq!(flights.begin("key-b"), Err(BackendError::ResourceLimit));
+        flights.complete(first).unwrap();
+        assert_eq!(flights.active(), 0);
+        assert_eq!(flights.complete(first), Err(BackendError::StaleGeneration));
+        assert!(matches!(
+            flights.begin("key-a"),
+            Ok(SingleFlightDecision::Generate(_))
+        ));
     }
 
     #[test]
