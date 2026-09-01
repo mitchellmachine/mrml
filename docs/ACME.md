@@ -337,8 +337,8 @@ CPL3 under strict Total MicroVM policy with separate exact `MAP|READ` and
 writes `probe.identity` through the write capability, sends the generated
 generation-1 identity ABI request, receives the bounded response, and reads
 `MRMLCERTPROBE1` through the read capability. The runner verifies both task
-cleanup boundaries. The 2026-09-01 run reported `verify=18058us`,
-`prepare=2347us`, `execute=406us`, and `total=40295us`. This is controlled KVM
+cleanup boundaries. The latest 2026-09-01 run from commit `2040869f` reported
+`verify=19342us`, `prepare=4561us`, `execute=433us`, and `total=45394us`. This is controlled KVM
 evidence for signed service launch, authenticated in-service durable-record
 round-trip, capability-mediated shared buffers, and exact identity IPC; it is
 not persistence through the native storage service across a reboot, bare-metal
@@ -430,9 +430,9 @@ adapter contains no socket, resolver, host trust store, filesystem, or syscall
 dependency, so MRML can supply authenticated HTTPS as a capability without
 forking the ACME state machine.
 
-Sealed-key backup creation platform adapters, remaining account and identity
-mutation commands, concrete gitd process wiring, durable daemon session
-issuance, and full native-storage/reboot recovery remain **PLANNED**. Hosted
+Production sealed-key platform selection, remaining account and identity
+mutation commands, concrete gitd process wiring, supervisor-issued daemon
+sessions, and full native-storage/reboot recovery remain **PLANNED**. Hosted
 backup verification and digest-confirmed clean-target restoration are available
 through both `mrml cert backup verify` and the canonical
 `mrml cert restore [--verify-only]` command forms. The
@@ -516,6 +516,34 @@ lanes so their results remain visible even when an unrelated full-repository
 gate fails. Workflow configuration is not execution evidence: a green runner
 result may be recorded only after that exact environment completes, and Wine
 continues to be labelled `WINDOWS_GNULLVM_UNDER_WINE`, never native Windows.
+
+Exact focused final-tree evidence at commit `2040869f` is:
+
+- `mrml test org.mrml.service.certificate --target linux` — **LINUX_NATIVE
+  PASS**, 100/100 tests;
+- the same certificate command through the pinned
+  `nightly-2026-08-29-x86_64-pc-windows-gnullvm` frontend and executable under
+  Wine — **WINDOWS_GNULLVM_UNDER_WINE PASS**, 99/99 tests;
+- `mrml test org.mrml.library.acme --target linux --sanitizer address` —
+  **LINUX_NATIVE AddressSanitizer PASS**, 79/79 tests;
+- `mrml test org.mrml.service.certificate --target linux --sanitizer address`
+  — **LINUX_NATIVE AddressSanitizer PASS**, 100/100 tests;
+- `mrml test org.mrml.test.security-fuzz --target linux --sanitizer address` —
+  **LINUX_NATIVE AddressSanitizer PASS**, 9/9 deterministic hostile-input
+  tests; and
+- the signed `certificate-service-probe` sequence above — **KVM_HOSTED PASS**
+  with exact identity IPC and authenticated in-service durable-record recovery.
+
+`cargo build --locked`, warnings-denied Cargo clippy, manifest check, and lock
+check pass. Repository assurance remains blocked before its workflow check by
+the pre-existing unadmitted compiler thread-local-storage probe
+`docs/compiler/probes/pinned_std_thread_tls_execution.rs`; “TLS” in that probe
+means compiler thread-local storage, not this certificate/TLS feature, so this
+task does not admit it. The attempted full Linux release gate likewise did not
+reach certificate execution: the first default application build stopped after
+pre-existing CUDA PTX warnings. No success is claimed for that incomplete run.
+`git fsck --full --no-reflogs` exits zero for reachable objects and reports
+existing dangling objects, which are preserved.
 
 The owner supplied a Canada-first claim screen and applicable IETF-disclosure
 review dated 2026-09-01 with engineering classification
