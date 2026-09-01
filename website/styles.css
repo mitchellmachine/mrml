@@ -27,6 +27,39 @@ body {
     linear-gradient(180deg, #0d1014, var(--background) 36rem);
 }
 
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  z-index: 10;
+  padding: 0.75rem 1rem;
+  color: var(--accent-dark);
+  background: var(--accent);
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.site-header {
+  width: min(72rem, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.site-header a {
+  margin-right: 1rem;
+  color: var(--text);
+  text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+  outline: 0.2rem solid var(--accent);
+  outline-offset: 0.2rem;
+}
+
 main {
   width: min(72rem, calc(100% - 2rem));
   margin: 0 auto;
@@ -237,6 +270,15 @@ footer {
 
 .policy .contact-card p {
   margin: 0.25rem 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .back-link {

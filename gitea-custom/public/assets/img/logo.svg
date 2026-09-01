@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 14 360 68" role="img" aria-label="MRML">
-  <g fill="#ffca67">
-    <path d="M10 76V20h15l23 30 23-30h15v56H72V42L48 73 24 42v34z"/>
-    <path d="M111 20h27c19 0 29 8 29 24 0 11-5 18-15 22l18 10h-20l-15-8h-10v8h-14V20zm14 13v22h13c10 0 15-3 15-11 0-7-5-11-15-11h-13z"/>
-    <path d="M190 76V20h15l23 30 23-30h15v56h-14V42l-24 31-24-31v34z"/>
-    <path d="M291 20h14v43h45v13h-59z"/>
-  </g>
-</svg>
