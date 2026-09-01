@@ -31,6 +31,10 @@ IP authorizations accept only HTTP-01; DNS-01 and TLS-ALPN-01 fail closed.
 The in-service TLS activation descriptor also carries the exact typed set and
 binds identifier kind and binary value into its generation receipt. Automated
 issuance-to-activation orchestration remains incomplete.
+Failed candidate cleanup is receipt-bound to the exact identity generation,
+key identity, and signing-route generation. A mismatched retirement receipt
+leaves the candidate recorded, and activation-uncertain candidates cannot be
+discarded until authoritative target resolution.
 The bounded payload and PKCS#10 layers can
 encode typed, canonically ordered DNS and IP identifiers without confusing
 their ACME kinds; PKCS#10 encodes IP SAN values as exact 4- or 16-byte address

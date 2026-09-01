@@ -89,7 +89,8 @@ pub use hot_reload::{
     HostedTlsIdentityPublication, PublishedTlsIdentity,
 };
 pub use identity::{
-    ActivationReceipt, ApprovedTls13CertificateVerify, DeploymentState, IdentityConsumerCapability,
+    ActivationReceipt, ApprovedTls13CertificateVerify, CandidateKeyRetirementReceipt,
+    CandidateKeyRetirementTarget, DeploymentState, IdentityConsumerCapability,
     IdentityDeploymentTarget, IdentityError, IdentityManager, PreparedIdentityReceipt,
     TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
     TlsKeyIdentity, TlsSigningRoute,

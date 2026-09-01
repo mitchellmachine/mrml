@@ -11868,3 +11868,11 @@ and IPv6 identifiers into the existing generation-scoped TLS identity
 descriptor and activation receipt. It changes no certificate validation
 topology, TLS multiplexing behavior, CA operation, or other recorded re-review
 trigger.
+
+# 2026-09-01 — Receipt-bound failed-candidate key retirement
+
+Patent review: **NOT_TRIGGERED**. This increment adds local lifecycle cleanup
+for a failed candidate certificate key, requiring an exact identity, candidate
+generation, key identity, and route-generation receipt and refusing cleanup
+while activation is uncertain. It adds no certificate protocol or recorded
+re-review trigger.

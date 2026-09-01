@@ -168,6 +168,21 @@ pub struct ActivationReceipt {
     pub target_generation: u64,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct CandidateKeyRetirementReceipt {
+    pub identity: TlsIdentityId,
+    pub identity_generation: u64,
+    pub key_identity: TlsKeyIdentity,
+    pub route_generation: u64,
+}
+
+pub trait CandidateKeyRetirementTarget {
+    fn retire_candidate_key(
+        &mut self,
+        route: TlsSigningRoute,
+    ) -> Result<CandidateKeyRetirementReceipt, IdentityError>;
+}
+
 struct IdentityGeneration {
     descriptor: TlsIdentityDescriptor,
     chain: PemCertificateChain,
@@ -407,6 +422,29 @@ impl IdentityManager {
         }
     }
 
+    pub fn abort_candidate(
+        &mut self,
+        prepared: PreparedIdentityReceipt,
+        target: &mut impl CandidateKeyRetirementTarget,
+    ) -> Result<CandidateKeyRetirementReceipt, IdentityError> {
+        let candidate = self.candidate.as_ref().ok_or(IdentityError::InvalidState)?;
+        if candidate.prepared != prepared || candidate.state == DeploymentState::ActivationUncertain
+        {
+            return Err(IdentityError::InvalidState);
+        }
+        let route = candidate.route;
+        let receipt = target.retire_candidate_key(route)?;
+        if receipt.identity != route.identity
+            || receipt.identity_generation != route.identity_generation
+            || receipt.key_identity != route.key_identity
+            || receipt.route_generation != route.route_generation
+        {
+            return Err(IdentityError::ReceiptMismatch);
+        }
+        self.candidate = None;
+        Ok(receipt)
+    }
+
     fn commit_activation(
         &mut self,
         receipt: ActivationReceipt,
@@ -524,6 +562,22 @@ mod tests {
         active: Option<(u64, [u8; 32])>,
         uncertain: bool,
     }
+    struct Retirer {
+        substitute: bool,
+    }
+    impl CandidateKeyRetirementTarget for Retirer {
+        fn retire_candidate_key(
+            &mut self,
+            route: TlsSigningRoute,
+        ) -> Result<CandidateKeyRetirementReceipt, IdentityError> {
+            Ok(CandidateKeyRetirementReceipt {
+                identity: route.identity,
+                identity_generation: route.identity_generation,
+                key_identity: route.key_identity,
+                route_generation: route.route_generation + u64::from(self.substitute),
+            })
+        }
+    }
     impl IdentityDeploymentTarget for Target {
         fn prepare(
             &mut self,
@@ -639,5 +693,53 @@ mod tests {
             manager.describe(wrong).err(),
             Some(IdentityError::Unauthorized)
         );
+    }
+
+    #[test]
+    fn candidate_abort_requires_exact_key_retirement_receipt() {
+        let chain = PemCertificateChain::parse(
+            b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----",
+        )
+        .unwrap();
+        let verified = VerifiedCertificateReceipt {
+            policy_generation: 2,
+            ca_class: CaClass::Staging,
+            profile: CertificateProfile::parse("classic", 1).unwrap(),
+            order_url_digest: [1; 32],
+            chain_digest: chain.chain_digest(),
+            leaf_spki_digest: [2; 32],
+            not_before: 1,
+            not_after: 100,
+            trust_store_digest: [3; 32],
+            ari_certificate_id: mrml_acme::AriCertificateId::derive(&[1], &[1]).unwrap(),
+        };
+        let mut manager = IdentityManager::new(TlsIdentityId([4; 16]), 2);
+        let mut identifiers = [None; MAX_IDENTITY_NAMES];
+        identifiers[0] = Some(AcmeIdentifier::Dns(
+            mrml_acme::DnsIdentifier::parse("git.example", false).unwrap(),
+        ));
+        let prepared = manager
+            .prepare_candidate(
+                verified,
+                chain,
+                TlsKeyIdentity([5; 32]),
+                7,
+                [6; 16],
+                identifiers,
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            manager
+                .abort_candidate(prepared, &mut Retirer { substitute: true })
+                .err(),
+            Some(IdentityError::ReceiptMismatch)
+        );
+        assert!(manager.candidate.is_some());
+        let receipt = manager
+            .abort_candidate(prepared, &mut Retirer { substitute: false })
+            .unwrap();
+        assert!(receipt.key_identity == TlsKeyIdentity([5; 32]));
+        assert!(manager.candidate.is_none());
     }
 }
