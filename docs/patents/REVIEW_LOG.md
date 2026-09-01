@@ -11622,3 +11622,12 @@ certificate identity interface to an identity-scoped provider using bounded
 copied identifiers and a disjoint output slice. It validates provider lengths,
 generations, chain counts, and health values and clears failed output. It adds
 no MultiTLS multiplexing or other recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Bounded ACME challenge interface dispatch
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment copies the exact ordinary ACME
+challenge binding before lending a disjoint output slice to the selected typed
+publisher, and validates every returned generation and publication state. It
+adds no challenge proxy, MultiTLS multiplexing, or other recorded re-review
+trigger.

@@ -8,6 +8,7 @@ mod challenge_dns_hosted;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_http;
 mod challenge_publisher;
+mod challenge_service;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_tls_alpn_hosted;
 mod dns_propagation;
@@ -48,6 +49,9 @@ pub use challenge_http::{
     HostedHttp01Error,
 };
 pub use challenge_publisher::DnsChallengePublisher;
+pub use challenge_service::{
+    CertificateChallengeProvider, ChallengeDispatchError, dispatch_challenge_call,
+};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_tls_alpn_hosted::{
     HostedTlsAlpn01Challenge, HostedTlsAlpn01Error, TLS_ALPN01_READ_TIMEOUT_MILLIS,
