@@ -199,6 +199,9 @@ pub enum HttpEncodingProfile {
     /// Deterministic standards-conformant raw/RLE blocks. This profile is a
     /// bounded cache representation floor, not a level-22 equivalence claim.
     BoundedRawRleV1,
+    /// Deterministic bounded RFC 8878 software encoding with raw, RLE, and
+    /// predefined-FSE compressed block candidates selected by exact size.
+    BoundedRfc8878V2,
 }
 
 /// Encode one deterministic Zstandard frame suitable for precomputed HTTP
@@ -209,7 +212,6 @@ pub fn encode_http(input: &[u8], profile: HttpEncodingProfile) -> Result<Vector<
     if input.len() > HTTP_MAX_WINDOW {
         return Err(Error::InputTooLarge);
     }
-    let _ = profile;
     let mut output = Vector::new();
     output
         .try_extend_from_slice(&FRAME_MAGIC.to_le_bytes())
@@ -244,11 +246,28 @@ pub fn encode_http(input: &[u8], profile: HttpEncodingProfile) -> Result<Vector<
     for (index, block) in input.chunks(MAX_BLOCK).enumerate() {
         let last = (index + 1) * MAX_BLOCK >= input.len();
         let rle = block.iter().all(|byte| *byte == block[0]);
-        let header = ((block.len() as u32) << 3) | ((rle as u32) << 1) | last as u32;
+        let compressed = if profile == HttpEncodingProfile::BoundedRfc8878V2 && !rle {
+            encode_compressed_candidate(block)?
+        } else {
+            None
+        };
+        let block_type = if rle {
+            1
+        } else if compressed.is_some() {
+            2
+        } else {
+            0
+        };
+        let payload_size = compressed.as_ref().map_or(block.len(), Vector::len);
+        let header = ((payload_size as u32) << 3) | (block_type << 1) | last as u32;
         output
             .try_extend_from_slice(&[header as u8, (header >> 8) as u8, (header >> 16) as u8])
             .map_err(|_| Error::Allocation)?;
-        if rle {
+        if let Some(compressed) = compressed {
+            output
+                .try_extend_from_slice(&compressed)
+                .map_err(|_| Error::Allocation)?;
+        } else if rle {
             output.try_push(block[0]).map_err(|_| Error::Allocation)?;
         } else {
             output
@@ -256,6 +275,101 @@ pub fn encode_http(input: &[u8], profile: HttpEncodingProfile) -> Result<Vector<
                 .map_err(|_| Error::Allocation)?;
         }
     }
+    Ok(output)
+}
+
+#[cfg(any(windows, unix))]
+fn encode_compressed_candidate(block: &[u8]) -> Result<Option<Vector<u8>>> {
+    const HASH_BITS: usize = 16;
+    const HASH_SIZE: usize = 1 << HASH_BITS;
+    const EMPTY: u32 = u32::MAX;
+    let mut positions = Vector::with_capacity(HASH_SIZE).map_err(|_| Error::Allocation)?;
+    positions.resize(HASH_SIZE, EMPTY);
+    let mut literals = Vector::new();
+    let mut commands = Vector::new();
+    let mut anchor = 0usize;
+    let mut cursor = 0usize;
+    while cursor + 4 <= block.len() {
+        let value = u32::from_le_bytes(block[cursor..cursor + 4].try_into().unwrap());
+        let hash = ((value.wrapping_mul(0x9e37_79b1)) >> (32 - HASH_BITS)) as usize;
+        let previous = positions[hash];
+        positions[hash] = cursor as u32;
+        if previous == EMPTY {
+            cursor += 1;
+            continue;
+        }
+        let previous = previous as usize;
+        if previous >= cursor || block[previous..previous + 4] != block[cursor..cursor + 4] {
+            cursor += 1;
+            continue;
+        }
+        let mut length = 4usize;
+        while cursor + length < block.len() && block[previous + length] == block[cursor + length] {
+            length += 1;
+        }
+        literals
+            .try_extend_from_slice(&block[anchor..cursor])
+            .map_err(|_| Error::Allocation)?;
+        commands.push(sequences::Sequence::new(
+            (cursor - anchor) as u32,
+            length as u32,
+            (cursor - previous) as u32,
+        ));
+        let end = cursor + length;
+        cursor += 1;
+        while cursor + 4 <= end {
+            let value = u32::from_le_bytes(block[cursor..cursor + 4].try_into().unwrap());
+            let hash = ((value.wrapping_mul(0x9e37_79b1)) >> (32 - HASH_BITS)) as usize;
+            positions[hash] = cursor as u32;
+            cursor += 1;
+        }
+        cursor = end;
+        anchor = end;
+    }
+    if commands.is_empty() {
+        return Ok(None);
+    }
+    literals
+        .try_extend_from_slice(&block[anchor..])
+        .map_err(|_| Error::Allocation)?;
+    let mut candidate = encode_raw_literals(&literals)?;
+    candidate
+        .try_extend_from_slice(&sequences::encode_predefined(&commands)?)
+        .map_err(|_| Error::Allocation)?;
+    if candidate.len() < block.len() {
+        Ok(Some(candidate))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(any(windows, unix))]
+fn encode_raw_literals(literals: &[u8]) -> Result<Vector<u8>> {
+    if literals.len() > MAX_BLOCK {
+        return Err(Error::BlockTooLarge);
+    }
+    let size = literals.len();
+    let mut output = Vector::new();
+    if size <= 31 {
+        output
+            .try_push((size as u8) << 3)
+            .map_err(|_| Error::Allocation)?;
+    } else if size <= 4095 {
+        output
+            .try_extend_from_slice(&[4 | ((size as u8 & 15) << 4), (size >> 4) as u8])
+            .map_err(|_| Error::Allocation)?;
+    } else {
+        output
+            .try_extend_from_slice(&[
+                12 | ((size as u8 & 15) << 4),
+                (size >> 4) as u8,
+                (size >> 12) as u8,
+            ])
+            .map_err(|_| Error::Allocation)?;
+    }
+    output
+        .try_extend_from_slice(literals)
+        .map_err(|_| Error::Allocation)?;
     Ok(output)
 }
 
@@ -686,6 +800,21 @@ mod tests {
         let encoded = encode_http(&input, HttpEncodingProfile::BoundedRawRleV1).unwrap();
         assert!(encoded.len() < 32);
         assert_eq!(&decode(&encoded).unwrap()[..], &input);
+    }
+
+    #[test]
+    fn rfc_profile_selects_smaller_predefined_fse_block_deterministically() {
+        let mut input = Vector::new();
+        for _ in 0..4096 {
+            input.try_extend_from_slice(b"mrml-zstd-").unwrap();
+        }
+        let first = encode_http(&input, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        let second = encode_http(&input, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        assert_eq!(first, second);
+        let info = inspect_frame(&first).unwrap();
+        assert_eq!((read_u24(&first, info.header_bytes).unwrap() >> 1) & 3, 2);
+        assert!(first.len() < input.len() / 8);
+        assert_eq!(&decode(&first).unwrap()[..], &input[..]);
     }
 
     #[test]
