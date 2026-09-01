@@ -75,3 +75,10 @@ The supporting `org.mrml.library.runtime` Linux suite passed 44 tests and failed
 and `loopback_listener_exchanges_bytes`) with `BindFailed` in the restricted
 sandbox; its filesystem tests passed. Those network failures are not evidence
 against the cache path.
+
+After adding bounded per-source/work-class resource admission and hysteretic
+pressure modes, the hosted Linux HTTP suite passed 53 tests. The focused tests
+exercise IPv4 identity, IPv6 `/64` aggregation, fixed source-table exhaustion,
+render concurrency exhaustion, the 40 GiB reserve, SIEGE restrictions, and
+three-observation recovery. Reactor integration and production load evidence
+remain open.
