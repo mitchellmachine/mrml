@@ -786,6 +786,10 @@ pub struct Http3ServerConnection {
     connection: QuicConnection,
     protocol: Http3Server,
     state: Http3ConnectionState,
+    unidirectional: Vector<IncomingHttp3Stream>,
+    requests: Vector<IncomingHttp3Stream>,
+    completed_requests: Vector<u64>,
+    ready_request: Option<(u64, RequestHead)>,
 }
 
 /// A response encoded away from the authoritative QUIC connection owner.
@@ -964,7 +968,12 @@ struct IncomingHttp3Stream {
     bytes: QuicStreamAssembler,
     parsed: usize,
     stream_type: Option<u64>,
+    request_state: Http3RequestStreamState,
+    head: Option<RequestHead>,
 }
+
+const MAX_ACTIVE_HTTP3_STREAMS: usize = 256;
+const MAX_COMPLETED_HTTP3_STREAMS: usize = 1024;
 
 fn complete_varint(input: &[u8], at: usize) -> Result<Option<(u64, usize)>, HttpError> {
     let Some(first) = input.get(at) else {
@@ -1012,12 +1021,18 @@ impl Http3ServerConnection {
             connection,
             protocol: Http3Server::new(),
             state: Http3ConnectionState::new(),
+            unidirectional: Vector::new(),
+            requests: Vector::new(),
+            completed_requests: Vector::new(),
+            ready_request: None,
         })
     }
     pub fn next_request(&mut self) -> Result<(u64, RequestHead), HttpError> {
-        let mut unidirectional: Vector<IncomingHttp3Stream> = Vector::new();
-        let mut requests: Vector<IncomingHttp3Stream> = Vector::new();
-        let mut ready_request: Option<(u64, RequestHead)> = None;
+        if self.state.settings_received()
+            && let Some(request) = self.ready_request.take()
+        {
+            return Ok(request);
+        }
         loop {
             for frame in self.connection.receive_frames().map_err(quic_error)? {
                 if let QuicFrame::Stream {
@@ -1028,22 +1043,31 @@ impl Http3ServerConnection {
                 } = frame
                 {
                     if id & 3 == 2 {
-                        let index = if let Some(index) =
-                            unidirectional.iter().position(|stream| stream.id == id)
+                        let index = if let Some(index) = self
+                            .unidirectional
+                            .iter()
+                            .position(|stream| stream.id == id)
                         {
                             index
                         } else {
-                            unidirectional
+                            if self.unidirectional.len() + self.requests.len()
+                                >= MAX_ACTIVE_HTTP3_STREAMS
+                            {
+                                return Err(HttpError::BodyTooLarge);
+                            }
+                            self.unidirectional
                                 .try_push(IncomingHttp3Stream {
                                     id,
                                     bytes: QuicStreamAssembler::new(1024 * 1024),
                                     parsed: 0,
                                     stream_type: None,
+                                    request_state: Http3RequestStreamState::new(),
+                                    head: None,
                                 })
                                 .map_err(|_| HttpError::Allocation)?;
-                            unidirectional.len() - 1
+                            self.unidirectional.len() - 1
                         };
-                        let stream = &mut unidirectional[index];
+                        let stream = &mut self.unidirectional[index];
                         stream
                             .bytes
                             .insert(offset, &data, fin)
@@ -1076,54 +1100,80 @@ impl Http3ServerConnection {
                             return Err(HttpError::InvalidResponse);
                         }
                         if self.state.settings_received()
-                            && let Some(request) = ready_request.take()
+                            && let Some(request) = self.ready_request.take()
                         {
                             return Ok(request);
                         }
                     } else if id & 3 == 0 {
+                        if self.completed_requests.contains(&id) {
+                            return Err(HttpError::InvalidResponse);
+                        }
                         let index = if let Some(index) =
-                            requests.iter().position(|stream| stream.id == id)
+                            self.requests.iter().position(|stream| stream.id == id)
                         {
                             index
                         } else {
-                            requests
+                            if self.unidirectional.len() + self.requests.len()
+                                >= MAX_ACTIVE_HTTP3_STREAMS
+                            {
+                                return Err(HttpError::BodyTooLarge);
+                            }
+                            self.requests
                                 .try_push(IncomingHttp3Stream {
                                     id,
                                     bytes: QuicStreamAssembler::new(16 * 1024 * 1024),
                                     parsed: 0,
                                     stream_type: None,
+                                    request_state: Http3RequestStreamState::new(),
+                                    head: None,
                                 })
                                 .map_err(|_| HttpError::Allocation)?;
-                            requests.len() - 1
+                            self.requests.len() - 1
                         };
-                        let stream = &mut requests[index];
+                        let stream = &mut self.requests[index];
                         stream
                             .bytes
                             .insert(offset, &data, fin)
                             .map_err(quic_error)?;
-                        if !stream.bytes.is_finished() {
-                            continue;
-                        }
-                        let mut request_state = Http3RequestStreamState::new();
-                        let mut head = None;
                         while stream.parsed < stream.bytes.contiguous().len() {
                             let Some((request_frame, used)) =
                                 complete_http3_frame(&stream.bytes.contiguous()[stream.parsed..])?
                             else {
-                                return Err(HttpError::InvalidResponse);
+                                break;
                             };
                             stream.parsed += used;
-                            let finished = stream.parsed == stream.bytes.contiguous().len();
-                            request_state.receive(&request_frame, finished)?;
-                            if request_frame.kind == Http3FrameKind::Headers && head.is_none() {
-                                head = Some(self.protocol.request(&request_frame)?);
+                            let finished = stream.bytes.is_finished()
+                                && stream.parsed == stream.bytes.contiguous().len();
+                            stream.request_state.receive(&request_frame, finished)?;
+                            if request_frame.kind == Http3FrameKind::Headers
+                                && stream.head.is_none()
+                            {
+                                stream.head = Some(self.protocol.request(&request_frame)?);
                             }
                         }
-                        let request = (id, head.ok_or(HttpError::InvalidResponse)?);
+                        if !stream.bytes.is_finished() {
+                            continue;
+                        }
+                        if stream.parsed != stream.bytes.contiguous().len()
+                            || stream.request_state.phase() != Http3StreamPhase::Finished
+                        {
+                            return Err(HttpError::InvalidResponse);
+                        }
+                        let head = stream.head.take().ok_or(HttpError::InvalidResponse)?;
+                        self.requests.remove(index);
+                        if self.completed_requests.len() >= MAX_COMPLETED_HTTP3_STREAMS {
+                            return Err(HttpError::BodyTooLarge);
+                        }
+                        self.completed_requests
+                            .try_push(id)
+                            .map_err(|_| HttpError::Allocation)?;
+                        let request = (id, head);
                         if self.state.settings_received() {
                             return Ok(request);
                         }
-                        ready_request = Some(request);
+                        if self.ready_request.replace(request).is_some() {
+                            return Err(HttpError::BodyTooLarge);
+                        }
                     }
                 }
             }

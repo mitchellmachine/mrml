@@ -274,6 +274,123 @@ pub struct QuicConnectionState {
     pending_path_challenge: Option<[u8; 8]>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct QuicReceiveFlowController {
+    role: QuicRole,
+    max_data: u64,
+    max_bidi_local: u64,
+    max_bidi_remote: u64,
+    max_uni: u64,
+    max_streams_bidi: u64,
+    max_streams_uni: u64,
+    highest_total: u64,
+    streams: Vector<ReceiveStreamState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReceiveStreamState {
+    id: u64,
+    highest: u64,
+    final_size: Option<u64>,
+}
+
+const MAX_TRACKED_RECEIVE_STREAMS: usize = 256;
+
+impl QuicReceiveFlowController {
+    pub(crate) fn new(role: QuicRole, local: &QuicTransportParameters) -> Self {
+        Self {
+            role,
+            max_data: local.initial_max_data,
+            max_bidi_local: local.initial_max_stream_data_bidi_local,
+            max_bidi_remote: local.initial_max_stream_data_bidi_remote,
+            max_uni: local.initial_max_stream_data_uni,
+            max_streams_bidi: local.initial_max_streams_bidi,
+            max_streams_uni: local.initial_max_streams_uni,
+            highest_total: 0,
+            streams: Vector::new(),
+        }
+    }
+
+    pub(crate) fn on_stream(
+        &mut self,
+        id: u64,
+        offset: u64,
+        length: usize,
+        fin: bool,
+    ) -> Result<(), QuicError> {
+        if id >= (1 << 62) {
+            return Err(QuicError::InvalidFrame);
+        }
+        let end = offset
+            .checked_add(length as u64)
+            .ok_or(QuicError::FlowControl)?;
+        let initiator = id & 1;
+        let peer_initiator = if self.role == QuicRole::Server { 0 } else { 1 };
+        let unidirectional = id & 2 != 0;
+        if unidirectional && initiator != peer_initiator {
+            return Err(QuicError::ProtocolViolation);
+        }
+        if initiator == peer_initiator {
+            let ordinal = id / 4 + 1;
+            let stream_limit = if unidirectional {
+                self.max_streams_uni
+            } else {
+                self.max_streams_bidi
+            };
+            if ordinal > stream_limit {
+                return Err(QuicError::FlowControl);
+            }
+        }
+        let per_stream = if unidirectional {
+            self.max_uni
+        } else if initiator == peer_initiator {
+            self.max_bidi_remote
+        } else {
+            self.max_bidi_local
+        };
+        if end > per_stream {
+            return Err(QuicError::FlowControl);
+        }
+
+        let index = if let Some(index) = self.streams.iter().position(|stream| stream.id == id) {
+            index
+        } else {
+            if self.streams.len() >= MAX_TRACKED_RECEIVE_STREAMS {
+                return Err(QuicError::FlowControl);
+            }
+            self.streams
+                .try_push(ReceiveStreamState {
+                    id,
+                    highest: 0,
+                    final_size: None,
+                })
+                .map_err(|_| QuicError::Allocation)?;
+            self.streams.len() - 1
+        };
+        let stream = &mut self.streams[index];
+        if stream.final_size.is_some_and(|size| end > size) {
+            return Err(QuicError::InvalidFrame);
+        }
+        if fin && stream.final_size.is_some_and(|size| size != end) {
+            return Err(QuicError::InvalidFrame);
+        }
+        let added = end.saturating_sub(stream.highest);
+        let total = self
+            .highest_total
+            .checked_add(added)
+            .ok_or(QuicError::FlowControl)?;
+        if total > self.max_data {
+            return Err(QuicError::FlowControl);
+        }
+        self.highest_total = total;
+        stream.highest = stream.highest.max(end);
+        if fin {
+            stream.final_size = Some(end);
+        }
+        Ok(())
+    }
+}
+
 impl QuicConnectionState {
     pub fn new(role: QuicRole, peer: &QuicTransportParameters) -> Self {
         Self {
@@ -1854,6 +1971,38 @@ mod tests {
         );
     }
     #[test]
+    fn exact_authenticated_ciphertext_replay_is_classified_once() {
+        let keys = QuicInitialKeys::from_traffic_secret(&[0x5a; 32]).unwrap();
+        let protected = ShortPacket {
+            destination_id: [1, 2, 3, 4].into(),
+            packet_number: 19,
+            key_phase: false,
+            payload: [0x0e].into(),
+        }
+        .seal(&keys)
+        .unwrap();
+        let mut received = PacketReceiveState::new();
+        let first = ShortPacket::open(&protected, 4, &keys, received.expected()).unwrap();
+        assert_eq!(
+            received.record(first.packet_number),
+            Ok(ReceivedPacket::New)
+        );
+        let replay = ShortPacket::open(&protected, 4, &keys, received.expected()).unwrap();
+        assert_eq!(
+            received.record(replay.packet_number),
+            Ok(ReceivedPacket::Duplicate)
+        );
+
+        let mut forged = protected.clone();
+        let last = forged.len() - 1;
+        forged[last] ^= 1;
+        assert_eq!(
+            ShortPacket::open(&forged, 4, &keys, received.expected()),
+            Err(QuicError::Crypto)
+        );
+        assert_eq!(received.expected(), 20);
+    }
+    #[test]
     fn rfc9369_v2_initial_secrets_and_packet_types() {
         let destination = hex("8394c8f03e515708");
         let client =
@@ -2104,5 +2253,47 @@ mod tests {
         assert_eq!(server.open_bidi_stream(), Err(QuicError::FlowControl));
         server.authorize_stream_send(4).unwrap();
         assert_eq!(server.authorize_stream_send(5), Err(QuicError::FlowControl));
+    }
+    #[test]
+    fn receive_flow_control_enforces_stream_connection_count_and_final_size() {
+        let limits = QuicTransportParameters {
+            initial_max_data: 8,
+            initial_max_stream_data_bidi_remote: 6,
+            initial_max_stream_data_bidi_local: 5,
+            initial_max_stream_data_uni: 4,
+            initial_max_streams_bidi: 1,
+            initial_max_streams_uni: 1,
+            ..QuicTransportParameters::default()
+        };
+        let mut server = QuicReceiveFlowController::new(QuicRole::Server, &limits);
+        server.on_stream(0, 0, 4, false).unwrap();
+        server.on_stream(0, 2, 2, false).unwrap();
+        assert_eq!(server.highest_total, 4);
+        assert_eq!(
+            server.on_stream(0, 6, 1, false),
+            Err(QuicError::FlowControl)
+        );
+        assert_eq!(
+            server.on_stream(4, 0, 1, false),
+            Err(QuicError::FlowControl)
+        );
+        server.on_stream(2, 0, 4, true).unwrap();
+        assert_eq!(server.highest_total, 8);
+        assert_eq!(
+            server.on_stream(2, 0, 3, true),
+            Err(QuicError::InvalidFrame)
+        );
+        assert_eq!(
+            server.on_stream(0, 4, 1, false),
+            Err(QuicError::FlowControl)
+        );
+
+        let mut client = QuicReceiveFlowController::new(QuicRole::Client, &limits);
+        client.on_stream(0, 0, 5, true).unwrap();
+        assert_eq!(client.on_stream(3, 0, 4, true), Err(QuicError::FlowControl));
+        assert_eq!(
+            client.on_stream(2, 0, 1, false),
+            Err(QuicError::ProtocolViolation)
+        );
     }
 }

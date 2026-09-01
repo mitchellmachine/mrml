@@ -1,7 +1,10 @@
 use mrml_runtime::{Instant, SocketAddress, TcpStream, UdpSocket, Vector};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
-use crate::quic::{PacketReceiveState, ReceivedPacket, initial_version_and_destination_id};
+use crate::quic::{
+    PacketReceiveState, QuicReceiveFlowController, ReceivedPacket,
+    initial_version_and_destination_id,
+};
 use crate::{
     HandshakePacket, InitialPacket, QuicConnectionState, QuicError, QuicFrame, QuicInitialKeys,
     QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, QuicVersion, SentPacket,
@@ -116,6 +119,7 @@ pub struct QuicConnection {
     state: QuicConnectionState,
     next_packet_number: u64,
     received_packets: PacketReceiveState,
+    receive_flow: QuicReceiveFlowController,
     recovery: QuicRecovery,
     sent: Vector<PendingPacket>,
     epoch: Instant,
@@ -285,6 +289,15 @@ impl QuicConnection {
         let mut acknowledge = false;
         while at < packet.payload.len() {
             let frame = QuicFrame::decode(&packet.payload, &mut at)?;
+            if let QuicFrame::Stream {
+                id,
+                offset,
+                fin,
+                ref data,
+            } = frame
+            {
+                self.receive_flow.on_stream(id, offset, data.len(), fin)?;
+            }
             if let QuicFrame::Ack {
                 largest,
                 delay,
@@ -568,6 +581,7 @@ impl QuicClientConnection {
             state,
             next_packet_number: 0,
             received_packets: PacketReceiveState::new(),
+            receive_flow: QuicReceiveFlowController::new(QuicRole::Client, &local_parameters),
             recovery,
             sent: Vector::new(),
             epoch: Instant::now(),
@@ -833,6 +847,7 @@ impl QuicServerListener {
             state,
             next_packet_number: 0,
             received_packets: PacketReceiveState::new(),
+            receive_flow: QuicReceiveFlowController::new(QuicRole::Server, &local_parameters),
             recovery,
             sent: Vector::new(),
             epoch: Instant::now(),
