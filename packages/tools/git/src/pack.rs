@@ -1,8 +1,11 @@
 use crate::deflate::encode_zlib;
 use crate::inflate::inflate_zlib_prefix;
 use crate::pack_delta::select_deltas;
-use crate::{ObjectFormat, ObjectId, ObjectKind, PackIndexEntry, encode_loose_object_with_format};
+use crate::{
+    ObjectFormat, ObjectId, ObjectKind, PackIndexEntry, Sha1, encode_loose_object_with_format,
+};
 use core::fmt;
+use mrml_crypto::Sha256;
 use mrml_runtime::Vector;
 
 const MAX_OBJECTS: usize = 1_000_000;
@@ -13,6 +16,155 @@ pub struct PackObject {
     pub id: ObjectId,
     pub kind: ObjectKind,
     pub contents: Vector<u8>,
+}
+
+pub trait PackStreamOutput {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), PackError>;
+}
+
+/// Writes a valid pack without deltas while retaining only one fixed-size
+/// DEFLATE block and the caller-owned object contents. This is the bounded
+/// production profile used when output backpressure matters more than delta
+/// compression ratio.
+pub fn write_pack_without_deltas(
+    objects: &[PackObject],
+    format: ObjectFormat,
+    output: &mut dyn PackStreamOutput,
+) -> Result<(), PackError> {
+    if objects.len() > MAX_OBJECTS {
+        return Err(PackError::TooManyObjects);
+    }
+    let mut writer = AuthenticatedPackWriter::new(format, output);
+    writer.write(b"PACK")?;
+    writer.write(&2u32.to_be_bytes())?;
+    writer.write(
+        &u32::try_from(objects.len())
+            .map_err(|_| PackError::TooManyObjects)?
+            .to_be_bytes(),
+    )?;
+    for object in objects {
+        if object.contents.len() > MAX_OBJECT {
+            return Err(PackError::TooLarge);
+        }
+        if object.id.format() != format
+            || object.id != hash_object(format, object.kind, &object.contents)
+        {
+            return Err(PackError::ObjectId);
+        }
+        let kind = match object.kind {
+            ObjectKind::Commit => 1,
+            ObjectKind::Tree => 2,
+            ObjectKind::Blob => 3,
+            ObjectKind::Tag => 4,
+        };
+        let mut header = Vector::new();
+        encode_object_header(kind, object.contents.len(), &mut header);
+        writer.write(&header)?;
+        write_stored_zlib(&object.contents, &mut writer)?;
+    }
+    writer.finish()
+}
+
+enum PackHasher {
+    Sha1(Sha1),
+    Sha256(Sha256),
+}
+
+impl PackHasher {
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Sha1(hash) => hash.update(bytes),
+            Self::Sha256(hash) => hash.update(bytes),
+        }
+    }
+
+    fn finish(self, output: &mut dyn PackStreamOutput) -> Result<(), PackError> {
+        match self {
+            Self::Sha1(hash) => output.write(&hash.finalize()),
+            Self::Sha256(hash) => output.write(&hash.finalize()),
+        }
+    }
+}
+
+struct AuthenticatedPackWriter<'a> {
+    hash: Option<PackHasher>,
+    output: &'a mut dyn PackStreamOutput,
+}
+
+impl<'a> AuthenticatedPackWriter<'a> {
+    fn new(format: ObjectFormat, output: &'a mut dyn PackStreamOutput) -> Self {
+        Self {
+            hash: Some(match format {
+                ObjectFormat::Sha1 => PackHasher::Sha1(Sha1::new()),
+                ObjectFormat::Sha256 => PackHasher::Sha256(Sha256::new()),
+            }),
+            output,
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), PackError> {
+        self.hash.as_mut().ok_or(PackError::Checksum)?.update(bytes);
+        self.output.write(bytes)
+    }
+
+    fn finish(mut self) -> Result<(), PackError> {
+        self.hash
+            .take()
+            .ok_or(PackError::Checksum)?
+            .finish(self.output)
+    }
+}
+
+fn hash_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> ObjectId {
+    let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
+    match format {
+        ObjectFormat::Sha1 => {
+            let mut hash = Sha1::new();
+            hash.update(header.as_bytes());
+            hash.update(contents);
+            ObjectId::Sha1(hash.finalize())
+        }
+        ObjectFormat::Sha256 => {
+            let mut hash = Sha256::new();
+            hash.update(header.as_bytes());
+            hash.update(contents);
+            ObjectId::Sha256(hash.finalize())
+        }
+    }
+}
+
+fn write_stored_zlib(
+    source: &[u8],
+    output: &mut AuthenticatedPackWriter<'_>,
+) -> Result<(), PackError> {
+    output.write(&[0x78, 0x01])?;
+    let mut offset = 0usize;
+    loop {
+        let length = (source.len() - offset).min(u16::MAX as usize);
+        let final_block = offset + length == source.len();
+        output.write(&[u8::from(final_block)])?;
+        output.write(&(length as u16).to_le_bytes())?;
+        output.write(&(!(length as u16)).to_le_bytes())?;
+        output.write(&source[offset..offset + length])?;
+        offset += length;
+        if final_block {
+            break;
+        }
+    }
+    output.write(&adler32_stream(source).to_be_bytes())
+}
+
+fn adler32_stream(source: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for chunk in source.chunks(5552) {
+        for byte in chunk {
+            a += u32::from(*byte);
+            b += a;
+        }
+        a %= 65_521;
+        b %= 65_521;
+    }
+    b << 16 | a
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -694,6 +846,45 @@ mod tests {
         assert_eq!(
             encode_pack_with_format(&[incorrect], ObjectFormat::Sha256),
             Err(PackError::ObjectId)
+        );
+    }
+
+    struct MeasuringSink {
+        bytes: Vector<u8>,
+        maximum_write: usize,
+    }
+
+    impl PackStreamOutput for MeasuringSink {
+        fn write(&mut self, bytes: &[u8]) -> Result<(), PackError> {
+            self.maximum_write = self.maximum_write.max(bytes.len());
+            self.bytes
+                .try_extend_from_slice(bytes)
+                .map_err(|_| PackError::TooLarge)
+        }
+    }
+
+    #[test]
+    fn no_delta_stream_is_valid_and_uses_fixed_size_writes() {
+        let contents = Vector::from_iter((0..200_000).map(|index| (index % 251) as u8));
+        let object = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, &contents),
+            kind: ObjectKind::Blob,
+            contents,
+        };
+        let mut sink = MeasuringSink {
+            bytes: Vector::new(),
+            maximum_write: 0,
+        };
+        write_pack_without_deltas(&[object.clone()], ObjectFormat::Sha256, &mut sink).unwrap();
+        assert!(sink.maximum_write <= u16::MAX as usize);
+        assert_eq!(
+            parse_pack_with_format(&sink.bytes, ObjectFormat::Sha256).unwrap(),
+            &[object][..]
+        );
+        let trailer = &sink.bytes[sink.bytes.len() - 32..];
+        assert_eq!(
+            trailer,
+            Sha256::digest(&sink.bytes[..sink.bytes.len() - 32])
         );
     }
 }
