@@ -46,10 +46,13 @@ versioned with that selection. Linux and Windows/Wine focused suites exercise
 determinism, compressed selection, decode round trips, cache hits, and all HTTP
 routes.
 
-RLE, FSE-compressed, and repeat sequence-table selection, canonical Huffman
-construction, direct and FSE-compressed Huffman weights, an external pinned
-RFC interoperability oracle, and measured maximum-compression corpus evidence
-remain open gates. Git pack bodies remain identity encoded at HTTP
+RLE, FSE-compressed, and repeat sequence-table selection are implemented with
+deterministic encoded-bit-cost comparison. Canonical Huffman construction is
+bounded to the RFC 11-bit maximum; direct weights and Huffman literal streams
+participate in encoded-size selection, and every compressed candidate is decoded
+and byte-compared before publication. FSE-compressed Huffman weights, an external
+pinned RFC interoperability oracle, and measured maximum-compression corpus
+evidence remain open gates. Git pack bodies remain identity encoded at HTTP
 representation level unless an explicit measured policy says otherwise.
 
 Patent review: **TRIGGERED**, **REVIEW_COMPLETED**, **CONDITIONAL_PROCEED**, and

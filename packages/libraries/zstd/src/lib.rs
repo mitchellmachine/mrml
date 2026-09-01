@@ -336,7 +336,12 @@ fn encode_compressed_candidate(
     literals
         .try_extend_from_slice(&block[anchor..])
         .map_err(|_| Error::Allocation)?;
-    let mut candidate = encode_raw_literals(&literals)?;
+    let raw_literals = encode_raw_literals(&literals)?;
+    let encoded_literals = encode_huffman_literals(&literals)?;
+    let mut candidate = match encoded_literals {
+        Some(encoded) if encoded.len() < raw_literals.len() => encoded,
+        _ => raw_literals,
+    };
     let mut candidate_state = sequence_state.clone();
     candidate
         .try_extend_from_slice(&sequences::encode(&commands, &mut candidate_state)?)
@@ -363,6 +368,47 @@ fn encode_compressed_candidate(
     } else {
         Ok(None)
     }
+}
+
+#[cfg(any(windows, unix))]
+fn encode_huffman_literals(literals: &[u8]) -> Result<Option<Vector<u8>>> {
+    if literals.len() < 2 || literals.len() > 1023 {
+        return Ok(None);
+    }
+    let mut frequencies = [0u32; 256];
+    for symbol in literals {
+        frequencies[*symbol as usize] = frequencies[*symbol as usize]
+            .checked_add(1)
+            .ok_or(Error::BlockTooLarge)?;
+    }
+    let table = match huffman::EncoderTable::from_frequencies(&frequencies) {
+        Ok(table) => table,
+        Err(Error::InvalidHuffmanTree) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let tree = table.serialize_direct_tree()?;
+    let stream = table.encode_stream(literals)?;
+    let compressed_size = tree
+        .len()
+        .checked_add(stream.len())
+        .ok_or(Error::BlockTooLarge)?;
+    if compressed_size > 1023 {
+        return Ok(None);
+    }
+    let regenerated = literals.len();
+    let packed =
+        2u32 | ((regenerated as u32 & 0x3ff) << 4) | ((compressed_size as u32 & 0x3ff) << 14);
+    let mut output = Vector::new();
+    output
+        .try_extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8])
+        .map_err(|_| Error::Allocation)?;
+    output
+        .try_extend_from_slice(&tree)
+        .map_err(|_| Error::Allocation)?;
+    output
+        .try_extend_from_slice(&stream)
+        .map_err(|_| Error::Allocation)?;
+    Ok(Some(output))
 }
 
 #[cfg(any(windows, unix))]
@@ -837,6 +883,22 @@ mod tests {
         assert_eq!((read_u24(&first, info.header_bytes).unwrap() >> 1) & 3, 2);
         assert!(first.len() < input.len() / 8);
         assert_eq!(&decode(&first).unwrap()[..], &input[..]);
+    }
+
+    #[test]
+    fn direct_weight_huffman_literal_section_round_trips() {
+        let mut literals = Vector::new();
+        for index in 0..1000 {
+            literals.push(if index % 13 == 0 { b'b' } else { b'a' });
+        }
+        let encoded = encode_huffman_literals(&literals).unwrap().unwrap();
+        assert!(encoded.len() < encode_raw_literals(&literals).unwrap().len());
+        let (decoded, consumed) = parse_literals(&encoded, &mut None).unwrap();
+        assert_eq!(consumed, encoded.len());
+        match decoded {
+            Literals::Decoded(bytes) => assert_eq!(&bytes[..], &literals[..]),
+            _ => panic!("expected Huffman literal section"),
+        }
     }
 
     #[test]
