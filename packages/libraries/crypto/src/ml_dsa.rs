@@ -280,6 +280,7 @@ fn encode_eta(poly: &Poly, output: &mut [u8]) {
         values[index] = (ETA - poly[index]) as u32;
     }
     pack_bits(&values, 4, output);
+    volatile_zero(&mut values);
 }
 
 fn decode_eta(input: &[u8], output: &mut Poly) -> bool {
@@ -287,10 +288,12 @@ fn decode_eta(input: &[u8], output: &mut Poly) -> bool {
     unpack_bits(input, 4, &mut values);
     for index in 0..N {
         if values[index] > 8 {
+            volatile_zero(&mut values);
             return false;
         }
         output[index] = ETA - values[index] as i32;
     }
+    volatile_zero(&mut values);
     true
 }
 
@@ -316,6 +319,7 @@ fn encode_t0(poly: &Poly, output: &mut [u8]) {
         values[index] = ((1 << (D - 1)) - poly[index]) as u32;
     }
     pack_bits(&values, 13, output);
+    volatile_zero(&mut values);
 }
 
 fn decode_t0(input: &[u8], output: &mut Poly) {
@@ -324,6 +328,7 @@ fn decode_t0(input: &[u8], output: &mut Poly) {
     for index in 0..N {
         output[index] = (1 << (D - 1)) - values[index] as i32;
     }
+    volatile_zero(&mut values);
 }
 
 fn encode_z(poly: &Poly, output: &mut [u8]) {
@@ -587,6 +592,7 @@ fn public_from_secret_polynomials(
     rho: &[u8; 32],
     s1: &VecL,
     s2: &VecK,
+    encoded_t0: &VecK,
     public_key: &mut [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
 ) -> Result<(), MlDsaError> {
     let mut s1_ntt = *s1;
@@ -594,6 +600,7 @@ fn public_from_secret_polynomials(
         ntt(poly);
     }
     public_key[..32].copy_from_slice(rho);
+    let mut t0_difference = 0u32;
     for row in 0..K {
         let matrix = match matrix_row(rho, row) {
             Ok(matrix) => matrix,
@@ -609,7 +616,9 @@ fn public_from_secret_polynomials(
         inverse_ntt(&mut value);
         let mut t1 = [0i32; N];
         for index in 0..N {
-            (t1[index], _) = power2round(freeze(value[index] + s2[row][index]));
+            let (high, low) = power2round(freeze(value[index] + s2[row][index]));
+            t1[index] = high;
+            t0_difference |= (low ^ encoded_t0[row][index]) as u32;
         }
         encode_t1(
             &t1,
@@ -620,6 +629,10 @@ fn public_from_secret_polynomials(
     }
     for poly in &mut s1_ntt {
         volatile_zero(poly);
+    }
+    if t0_difference != 0 {
+        volatile_zero(public_key);
+        return Err(MlDsaError::InvalidKey);
     }
     Ok(())
 }
@@ -701,7 +714,7 @@ pub fn ml_dsa_65_sign(
         return Err(MlDsaError::InvalidKey);
     }
     let mut public_key = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
-    if let Err(error) = public_from_secret_polynomials(&rho, &s1, &s2, &mut public_key) {
+    if let Err(error) = public_from_secret_polynomials(&rho, &s1, &s2, &t0, &mut public_key) {
         let mut empty = [0u8; 64];
         wipe_signing_state(
             &mut rho, &mut key, &mut tr, &mut empty, &mut s1, &mut s2, &mut t0,
@@ -1253,6 +1266,22 @@ mod tests {
         assert_eq!(
             ml_dsa_65_sign(
                 &corrupt_secret,
+                b"git",
+                b"commit payload",
+                &randomizer,
+                &mut signature,
+            ),
+            Err(MlDsaError::InvalidKey)
+        );
+        assert!(signature.iter().all(|byte| *byte == 0));
+
+        let mut corrupt_t0 = secret;
+        let t0_offset = 128 + (L + K) * POLYETA_BYTES;
+        corrupt_t0[t0_offset] ^= 1;
+        signature.fill(0xa5);
+        assert_eq!(
+            ml_dsa_65_sign(
+                &corrupt_t0,
                 b"git",
                 b"commit payload",
                 &randomizer,
