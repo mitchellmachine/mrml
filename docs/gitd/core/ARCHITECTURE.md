@@ -38,6 +38,15 @@ first-party core operations. Production receive-edge composition, active
 pack-set reads, native-Windows directory durability, and canonical compaction
 remain open and fail closed.
 
+Active pack-set reads cannot be derived from the scalar `PackGeneration`: no
+authenticated active-generation record contains the exact ordered arrival
+transaction IDs, object counts, pack checksums, and index checksums. Journals
+and installed directory names are recovery/storage state, not membership
+authority, so normal reads must not scan them. The next gate is an atomically
+activated bounded pack-set manifest bound to pack and repository generation;
+only then may a reader open its enumerated regular files and independently
+revalidate pack/index/object identity.
+
 Repository state now also has a canonical single-record active-ref model with
 distinct repository, trust, revocation, and pack generations. The pure update
 boundary consumes only verified ref typestate and produces one next generation.

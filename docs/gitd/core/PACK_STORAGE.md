@@ -111,3 +111,22 @@ tests and production active-pack-set integration.
 Pack-generation switching, clone/fetch caching, dynamic Huffman level-9
 encoding, delta selection, and compaction remain open. No outer Zstandard layer
 belongs in Git pack storage.
+
+Active arrival-pack reads remain fail closed for an immediate authority reason.
+`MRREFS01` authenticates only a scalar `PackGeneration`, and verified receive
+preserves that value unchanged. No persisted object binds the generation to an
+ordered list of arrival transaction IDs, exact object counts, pack checksums,
+and index checksums. Journals identify individual transactions and counts, and
+each installed index authenticates its own pack checksum, but neither grants
+membership in an active pack set. Directory entries and transaction-derived
+names identify files only; a reader must not scan or promote them into
+authority.
+
+An `ArrivalPackSet` therefore requires an atomically activated bounded manifest
+bound to both `PackGeneration` and repository generation. It must carry
+canonical unique transaction IDs, exact counts and both checksums, and bounded
+aggregate pack/index bytes and work. Only then can a reader reopen exactly
+those regular files, revalidate every index/pack/object binding, reject
+duplicate-object ambiguity, and recheck active generations. This prerequisite
+is independent of compaction and does not authorize patent-gated delta
+selection.
