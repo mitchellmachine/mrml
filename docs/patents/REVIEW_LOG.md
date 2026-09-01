@@ -12120,3 +12120,11 @@ Patent review: **NOT_TRIGGERED**. This increment authenticates and exact-matches
 ordinary bounded durable records selected by an already-authorized catalog
 manifest. It adds no certificate protocol, signing mechanism, validation
 topology, certificate authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Capability-bound sealed-key backup adapter
+
+Patent review: **NOT_TRIGGERED**. This increment validates ordinary opaque
+sealed-key service receipts and returns only non-exporting handles. It adds no
+certificate protocol, signing mechanism, validation topology, certificate
+authority operation, smart-card precomputed signing machinery, or recorded
+re-review trigger.

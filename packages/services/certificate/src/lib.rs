@@ -40,6 +40,7 @@ mod renewal_executor;
 mod renewal_journal;
 mod revocation;
 mod scheduler;
+mod sealed_key_capability;
 mod service_loop;
 mod status;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -185,6 +186,10 @@ pub use revocation::{
 pub use scheduler::{
     ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,
     ReplacementBinding, SchedulerError,
+};
+pub use sealed_key_capability::{
+    CapabilitySealedKeyProvider, RestoreKeyCapabilityReceipt, SealKeyCapabilityReceipt,
+    SealedKeyCapabilityBackend,
 };
 pub use service_loop::{
     CertificateSigningProvider, CertificateSigningServiceError, dispatch_signing_call,

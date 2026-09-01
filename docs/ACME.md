@@ -465,7 +465,16 @@ record identity, generation, digest, and authentication tag before passing it
 to a provider builder. Missing, duplicated, reordered, stale, or substituted
 records fail closed. The manifest identifies expected state and does not grant
 storage or lifecycle authority. Platform wiring and the owner-selected sealed
-key implementation remain open.
+key implementation remain open. The shared sealed-key adapter now projects the
+existing backup contract through an attenuated platform capability with no key
+export operation. Seal receipts must echo the exact opaque key identity,
+provider generation, recovery-policy digest, written length, and sealed-blob
+digest; restore receipts bind the same inputs and return only a new nonzero
+use-only provider handle. Substitution, malformed lengths, unavailable routes,
+or digest mismatches fail closed, and failed seal output is cleared. Linux,
+Windows, and MRML can supply different protected implementations behind this
+one semantic contract without splitting the package. Selecting and wiring an
+actual production platform provider remains an owner/deployment decision.
 
 The bounded deterministic security-fuzz harness covers ACME directory,
 problem, account, order, authorization, ARI, URL, and Base64url parsing; X.509
