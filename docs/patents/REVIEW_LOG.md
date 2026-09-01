@@ -11655,3 +11655,12 @@ budget native service loop over launch-installed route and shared-memory
 capabilities. It accepts no transferred capability, snapshots inputs before
 dispatch, writes back only the changed output span, and erases scratch state.
 It adds no certificate protocol mechanism or recorded re-review trigger.
+
+# 2026-09-01 — MRML-native certificate service probe image
+
+Patent review: **NOT_TRIGGERED**. This increment adds a conventional
+freestanding MRML service executable that restores an authenticated bounded
+fixture record, binds its endpoint, caller, shared-memory capability, route,
+and generation from launch registers, and serves one typed certificate call.
+Signing and challenge authority remain denied in the probe. It adds no new
+certificate mechanism or recorded re-review trigger.

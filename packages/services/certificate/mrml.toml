@@ -60,10 +60,25 @@ environment = "linux"
 kind = "lib"
 name = "mrml_certificate"
 
+[[artifact]]
+kind = "bin"
+name = "mrml-certd-native-probe"
+
 [rust]
 crate_name = "mrml_certificate"
 crate_type = "lib"
 source = "packages/services/certificate/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_certd_native_probe"
+output = "mrml-certd-native-probe"
+self_extern = true
+source = "packages/services/certificate/src/service_main.rs"
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
 
 [[dependency]]
 alias = "mrml_acme"

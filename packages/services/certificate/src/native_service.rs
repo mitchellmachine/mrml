@@ -34,6 +34,179 @@ pub trait CertificateNativeSyscalls {
     -> Result<(), Self::Error>;
     fn send_response(&mut self, response: &[u8; RESPONSE_BYTES]) -> Result<(), Self::Error>;
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertificateSyscallFrame {
+    pub rax: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub r10: u64,
+    pub r8: u64,
+    pub r9: u64,
+}
+pub unsafe trait CertificateRawSyscall {
+    unsafe fn invoke(&mut self, frame: &mut CertificateSyscallFrame);
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CertificateUserspaceSyscallError {
+    InvalidLaunch,
+    Kernel(u64),
+    InvalidKernelReturn,
+}
+pub struct CertificateUserspaceSyscalls<R> {
+    raw: R,
+    endpoint: u64,
+    caller: u64,
+    shared: u64,
+    shared_len: usize,
+    route: CertificateNativeRoute,
+}
+impl<R> CertificateUserspaceSyscalls<R> {
+    pub fn new(
+        raw: R,
+        endpoint: u64,
+        caller: u64,
+        shared: u64,
+        shared_len: usize,
+        route: u64,
+        provider_generation: u64,
+    ) -> Result<Self, CertificateUserspaceSyscallError> {
+        let route = match route {
+            1 => CertificateNativeRoute::Signing,
+            2 => CertificateNativeRoute::Identity,
+            3 => CertificateNativeRoute::Challenge,
+            4 => CertificateNativeRoute::Lifecycle,
+            _ => return Err(CertificateUserspaceSyscallError::InvalidLaunch),
+        };
+        if endpoint == 0
+            || caller == 0
+            || shared == 0
+            || shared_len == 0
+            || shared_len > MAX_CERTIFICATE_SHARED_BYTES
+            || provider_generation == 0
+        {
+            return Err(CertificateUserspaceSyscallError::InvalidLaunch);
+        }
+        Ok(Self {
+            raw,
+            endpoint,
+            caller,
+            shared,
+            shared_len,
+            route,
+        })
+    }
+    pub fn into_raw(self) -> R {
+        self.raw
+    }
+}
+impl<R: CertificateRawSyscall> CertificateNativeSyscalls for CertificateUserspaceSyscalls<R> {
+    type Error = CertificateUserspaceSyscallError;
+    fn receive(
+        &mut self,
+        payload: &mut [u8; MAX_CERTIFICATE_CALL_BYTES],
+    ) -> Result<ReceivedCertificateCall, Self::Error> {
+        let mut capability = 0u64;
+        let mut f = CertificateSyscallFrame {
+            rax: 5,
+            rdi: payload.as_mut_ptr() as u64,
+            rsi: payload.len() as u64,
+            rdx: core::ptr::addr_of_mut!(capability) as u64,
+            r10: 0,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut f) }
+        if f.rax != 0 {
+            return Err(CertificateUserspaceSyscallError::Kernel(f.rax));
+        }
+        let length = usize::try_from(f.rdx)
+            .map_err(|_| CertificateUserspaceSyscallError::InvalidKernelReturn)?;
+        if length == 0 || length > payload.len() || f.r10 != 0 {
+            return Err(CertificateUserspaceSyscallError::InvalidKernelReturn);
+        }
+        Ok(ReceivedCertificateCall {
+            route: self.route,
+            payload_length: length,
+        })
+    }
+    fn read_preinstalled_shared(
+        &mut self,
+        output: &mut [u8; MAX_CERTIFICATE_SHARED_BYTES],
+    ) -> Result<usize, Self::Error> {
+        shared_call(
+            &mut self.raw,
+            7,
+            self.shared,
+            0,
+            &mut output[..self.shared_len],
+        )?;
+        Ok(self.shared_len)
+    }
+    fn write_preinstalled_shared(
+        &mut self,
+        offset: usize,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        let end = offset
+            .checked_add(input.len())
+            .ok_or(CertificateUserspaceSyscallError::InvalidKernelReturn)?;
+        if input.is_empty() || end > self.shared_len {
+            return Err(CertificateUserspaceSyscallError::InvalidKernelReturn);
+        }
+        let mut f = CertificateSyscallFrame {
+            rax: 8,
+            rdi: self.shared,
+            rsi: offset as u64,
+            rdx: input.as_ptr() as u64,
+            r10: input.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut f) }
+        status(f.rax)
+    }
+    fn send_response(&mut self, response: &[u8; RESPONSE_BYTES]) -> Result<(), Self::Error> {
+        let mut f = CertificateSyscallFrame {
+            rax: 4,
+            rdi: self.endpoint,
+            rsi: self.caller,
+            rdx: response.as_ptr() as u64,
+            r10: response.len() as u64,
+            r8: 0,
+            r9: 0,
+        };
+        unsafe { self.raw.invoke(&mut f) }
+        status(f.rax)
+    }
+}
+fn shared_call<R: CertificateRawSyscall>(
+    raw: &mut R,
+    operation: u64,
+    capability: u64,
+    offset: u64,
+    output: &mut [u8],
+) -> Result<(), CertificateUserspaceSyscallError> {
+    let mut f = CertificateSyscallFrame {
+        rax: operation,
+        rdi: capability,
+        rsi: offset,
+        rdx: output.as_mut_ptr() as u64,
+        r10: output.len() as u64,
+        r8: 0,
+        r9: 0,
+    };
+    unsafe { raw.invoke(&mut f) }
+    status(f.rax)
+}
+fn status(value: u64) -> Result<(), CertificateUserspaceSyscallError> {
+    if value == 0 {
+        Ok(())
+    } else {
+        Err(CertificateUserspaceSyscallError::Kernel(value))
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CertificateNativeServiceError<E> {
     Syscall(E),
@@ -359,5 +532,97 @@ mod tests {
             }))
         );
         loop_state.erase();
+    }
+
+    struct Raw {
+        request: [u8; MAX_CERTIFICATE_CALL_BYTES],
+        request_len: usize,
+        shared: [u8; 64],
+        response: [u8; RESPONSE_BYTES],
+    }
+    unsafe impl CertificateRawSyscall for Raw {
+        unsafe fn invoke(&mut self, f: &mut CertificateSyscallFrame) {
+            match f.rax {
+                5 => {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            self.request.as_ptr(),
+                            f.rdi as *mut u8,
+                            self.request_len,
+                        )
+                    };
+                    f.rax = 0;
+                    f.rdx = self.request_len as u64;
+                    f.r10 = 0
+                }
+                7 => {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            self.shared.as_ptr().add(f.rsi as usize),
+                            f.rdx as *mut u8,
+                            f.r10 as usize,
+                        )
+                    };
+                    f.rax = 0
+                }
+                8 => {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            f.rdx as *const u8,
+                            self.shared.as_mut_ptr().add(f.rsi as usize),
+                            f.r10 as usize,
+                        )
+                    };
+                    f.rax = 0
+                }
+                4 => {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            f.rdx as *const u8,
+                            self.response.as_mut_ptr(),
+                            RESPONSE_BYTES,
+                        )
+                    };
+                    f.rax = 0
+                }
+                _ => f.rax = 99,
+            }
+        }
+    }
+    #[test]
+    fn concrete_userspace_adapter_binds_launch_authority() {
+        let raw = Raw {
+            request: [7; MAX_CERTIFICATE_CALL_BYTES],
+            request_len: 96,
+            shared: [3; 64],
+            response: [0; RESPONSE_BYTES],
+        };
+        assert!(matches!(
+            CertificateUserspaceSyscalls::new(raw, 1, 2, 3, 64, 99, 1),
+            Err(CertificateUserspaceSyscallError::InvalidLaunch)
+        ));
+        let raw = Raw {
+            request: [7; MAX_CERTIFICATE_CALL_BYTES],
+            request_len: 96,
+            shared: [3; 64],
+            response: [0; RESPONSE_BYTES],
+        };
+        let mut sys = CertificateUserspaceSyscalls::new(raw, 1, 2, 3, 64, 2, 9).unwrap();
+        let mut payload = [0; MAX_CERTIFICATE_CALL_BYTES];
+        assert_eq!(
+            sys.receive(&mut payload),
+            Ok(ReceivedCertificateCall {
+                route: CertificateNativeRoute::Identity,
+                payload_length: 96
+            })
+        );
+        let mut shared = [0; MAX_CERTIFICATE_SHARED_BYTES];
+        assert_eq!(sys.read_preinstalled_shared(&mut shared), Ok(64));
+        assert_eq!(&shared[..64], &[3; 64]);
+        sys.write_preinstalled_shared(4, b"ok").unwrap();
+        sys.send_response(&[5; RESPONSE_BYTES]).unwrap();
+        let raw = sys.into_raw();
+        assert_eq!(&raw.shared[4..6], b"ok");
+        assert_eq!(raw.response, [5; RESPONSE_BYTES]);
     }
 }

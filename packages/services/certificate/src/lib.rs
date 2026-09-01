@@ -52,7 +52,8 @@ pub use challenge_http::{
 };
 pub use challenge_publisher::DnsChallengePublisher;
 pub use challenge_service::{
-    CertificateChallengeProvider, ChallengeDispatchError, dispatch_challenge_call,
+    CertificateChallengeProvider, ChallengeDispatchError, PreparedChallenge,
+    dispatch_challenge_call,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_tls_alpn_hosted::{
@@ -83,8 +84,9 @@ pub use lifecycle_service::{
 };
 pub use native_service::{
     CertificateNativeRoute, CertificateNativeServiceError, CertificateNativeServiceLoop,
-    CertificateNativeSyscalls, MAX_CERTIFICATE_CALL_BYTES, MAX_CERTIFICATE_SHARED_BYTES,
-    ReceivedCertificateCall,
+    CertificateNativeSyscalls, CertificateRawSyscall, CertificateSyscallFrame,
+    CertificateUserspaceSyscallError, CertificateUserspaceSyscalls, MAX_CERTIFICATE_CALL_BYTES,
+    MAX_CERTIFICATE_SHARED_BYTES, ReceivedCertificateCall,
 };
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
