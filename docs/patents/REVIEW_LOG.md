@@ -11392,3 +11392,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment adds bounded ordinary RFC 8555
 order-response parsing with exact identifier, profile, authorization count, and
 same-origin endpoint binding. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Exact authorization and challenge-response parsing
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds bounded ordinary RFC 8555
+authorization parsing, exact normal/wildcard identifier semantics, and
+same-origin HTTP-01/TLS-ALPN-01/DNS-01 challenge admission. It adds no recorded
+re-review-trigger mechanism.

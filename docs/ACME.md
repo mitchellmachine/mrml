@@ -32,6 +32,13 @@ profile, an exact authorization count, unique same-origin authorization URLs,
 same-origin finalization/certificate endpoints, known status values, singleton
 fields, bounded JSON complexity, and no trailing data. Cross-order or
 cross-origin substitution is rejected before lifecycle mutation.
+Authorization responses likewise require the exact expected DNS identifier,
+including RFC wildcard representation (`wildcard: true` with the base name), a
+known terminal/nonterminal state, and a bounded nonempty set of unique supported
+challenge kinds and URLs. HTTP-01, TLS-ALPN-01, and DNS-01 tokens are strictly
+validated and every URL remains in the admitted CA origin. Unknown challenge
+kinds are ignored only after their bounded object has been safely parsed; they
+cannot displace or impersonate a supported challenge.
 Typed ACME problem documents and bounded subproblems are parsed with duplicate
 singleton rejection, bounded body/token/depth/text limits, strict HTTP status
 ranges, trailing-data rejection, and explicit `badNonce` classification.

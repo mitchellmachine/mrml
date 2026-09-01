@@ -76,8 +76,8 @@ pub use problem::{
 };
 pub use profile::{CertificateProfile, ProfileError, MAX_PROFILE_NAME};
 pub use response::{
-    parse_order_response, ParsedAuthorizationResponse, ParsedChallenge, ParsedOrderResponse,
-    ResponseError,
+    parse_authorization_response, parse_order_response, ParsedAuthorizationResponse,
+    ParsedChallenge, ParsedOrderResponse, ResponseError,
 };
 pub use state::{AccountState, OrderState, StateError};
 pub use transport::{
