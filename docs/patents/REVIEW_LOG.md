@@ -11695,3 +11695,13 @@ authority with ordinary RFC 8555 existing-account lookup, contact update,
 POST-as-GET, and account deactivation transitions. It adds no certificate
 brokerage, smart-card precomputation, public-CA operation, or other recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Certificate-bound ARI retrieval and scheduling
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment implements the ordinary RFC
+9773 renewal-information GET derived from the certificate authority-key
+identifier and DER serial, binds it to the current directory generation and
+approved origin, classifies bounded retry responses, and passes the validated
+window to the existing randomized renewal scheduler. It adds no new
+certificate-validation route or other recorded re-review-trigger mechanism.

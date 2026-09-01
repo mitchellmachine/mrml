@@ -1,5 +1,8 @@
 use crate::directory::{Token, Tokens};
-use crate::{encode_base64url, Base64UrlError};
+use crate::{
+    AcmeContentType, AcmeDirectory, AcmeExchange, AcmeHttpMethod, AcmeResponseType, AcmeTransport,
+    AcmeTransportRequest, AcmeUrl, Base64UrlError, TransportError, encode_base64url,
+};
 
 pub const MAX_ARI_CERTIFICATE_ID: usize = 114;
 pub const MAX_ARI_RESPONSE_BYTES: usize = 8192;
@@ -16,6 +19,19 @@ pub enum AriError {
     Malformed,
     DuplicateField,
     Oversized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AriFetchError<E> {
+    NotAdvertised,
+    DirectoryGenerationMismatch,
+    UrlTooLong,
+    Transport(TransportError<E>),
+    RetryableStatus { status: u16, has_retry_after: bool },
+    UnexpectedStatus,
+    UnexpectedContentType,
+    Encoding,
+    Ari(AriError),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -101,6 +117,74 @@ impl RenewalInfo {
             suggested_window: window.ok_or(AriError::Malformed)?,
         })
     }
+}
+
+pub fn fetch_renewal_info<T: AcmeTransport>(
+    directory: &AcmeDirectory,
+    certificate_id: &AriCertificateId,
+    now: u64,
+    minimum_width: u64,
+    exchange: &mut AcmeExchange,
+    transport: &mut T,
+    response_body: &mut [u8],
+) -> Result<RenewalInfo, AriFetchError<T::Error>> {
+    if exchange.directory_generation() != directory.generation {
+        return Err(AriFetchError::DirectoryGenerationMismatch);
+    }
+    let base = directory
+        .renewal_info
+        .as_ref()
+        .ok_or(AriFetchError::NotAdvertised)?;
+    let mut bytes = [0u8; crate::MAX_URL_BYTES];
+    let separator = usize::from(!base.as_str().ends_with('/'));
+    let length = base
+        .as_str()
+        .len()
+        .checked_add(separator)
+        .and_then(|value| value.checked_add(certificate_id.as_str().len()))
+        .ok_or(AriFetchError::UrlTooLong)?;
+    if length > bytes.len() {
+        return Err(AriFetchError::UrlTooLong);
+    }
+    let base_length = base.as_str().len();
+    bytes[..base_length].copy_from_slice(base.as_str().as_bytes());
+    let mut at = base_length;
+    if separator == 1 {
+        bytes[at] = b'/';
+        at += 1;
+    }
+    bytes[at..length].copy_from_slice(certificate_id.as_str().as_bytes());
+    let text = core::str::from_utf8(&bytes[..length]).map_err(|_| AriFetchError::Encoding)?;
+    let url = AcmeUrl::parse(text, false).map_err(|_| AriFetchError::UrlTooLong)?;
+    url.require_origin(base.origin())
+        .map_err(|_| AriFetchError::UrlTooLong)?;
+    let metadata = exchange
+        .execute(
+            transport,
+            AcmeTransportRequest {
+                method: AcmeHttpMethod::Get,
+                url: &url,
+                content_type: AcmeContentType::Empty,
+                body: &[],
+            },
+            response_body,
+        )
+        .map_err(AriFetchError::Transport)?;
+    if matches!(metadata.status, 429 | 503) {
+        return Err(AriFetchError::RetryableStatus {
+            status: metadata.status,
+            has_retry_after: metadata.has_retry_after,
+        });
+    }
+    if metadata.status != 200 {
+        return Err(AriFetchError::UnexpectedStatus);
+    }
+    if metadata.response_type != AcmeResponseType::Json {
+        return Err(AriFetchError::UnexpectedContentType);
+    }
+    let response = core::str::from_utf8(&response_body[..metadata.body_length])
+        .map_err(|_| AriFetchError::Encoding)?;
+    RenewalInfo::parse(response, now, minimum_width).map_err(AriFetchError::Ari)
 }
 
 struct Cursor<'a> {
@@ -317,6 +401,10 @@ impl RenewalWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        DeterministicAcmeAuthority, LOCAL_DIRECTORY_URL, LocalAuthorityFault, LocalJwsVerifier,
+        P256Jwk,
+    };
     #[test]
     fn rejects_bad_windows_and_selects_inside() {
         assert_eq!(
@@ -351,5 +439,88 @@ mod tests {
             ),
             Err(AriError::DuplicateField)
         );
+    }
+
+    struct Verifier;
+    impl LocalJwsVerifier for Verifier {
+        fn verify(&mut self, _: &P256Jwk, _: &[u8; 32], _: &[u8; 64]) -> bool {
+            false
+        }
+    }
+    #[test]
+    fn fetches_certificate_specific_ari_from_current_directory_generation() {
+        let directory_url = AcmeUrl::parse(LOCAL_DIRECTORY_URL, false).unwrap();
+        let key = P256Jwk::from_coordinates(
+            [
+                0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+                0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45,
+                0xd8, 0x98, 0xc2, 0x96,
+            ],
+            [
+                0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f,
+                0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68,
+                0x37, 0xbf, 0x51, 0xf5,
+            ],
+        )
+        .unwrap();
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, key);
+        let mut exchange = AcmeExchange::new(7, directory_url);
+        let mut response = [0u8; MAX_ARI_RESPONSE_BYTES];
+        let directory = crate::fetch_directory(
+            &directory_url,
+            7,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let id = AriCertificateId::derive(
+            &[
+                0x92, 0x10, 0xe3, 0x57, 0xc1, 0x2d, 0x98, 0xb2, 0x1e, 0x56, 0x3b, 0xe7, 0xe9, 0x53,
+                0xdf, 0xdd, 0xc7, 0xc3, 0x01, 0x15,
+            ],
+            &[2],
+        )
+        .unwrap();
+        authority.inject(LocalAuthorityFault::RateLimitAriOnce);
+        assert!(matches!(
+            fetch_renewal_info(
+                &directory,
+                &id,
+                0,
+                86_400,
+                &mut exchange,
+                &mut authority,
+                &mut response,
+            ),
+            Err(AriFetchError::RetryableStatus {
+                status: 429,
+                has_retry_after: true
+            })
+        ));
+        let info = fetch_renewal_info(
+            &directory,
+            &id,
+            0,
+            86_400,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        assert!(info.suggested_window.end > info.suggested_window.start);
+        exchange.replace_directory(8, directory_url);
+        assert!(matches!(
+            fetch_renewal_info(
+                &directory,
+                &id,
+                0,
+                86_400,
+                &mut exchange,
+                &mut authority,
+                &mut response,
+            ),
+            Err(AriFetchError::DirectoryGenerationMismatch)
+        ));
     }
 }

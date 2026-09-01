@@ -14,11 +14,15 @@ pub const LOCAL_CHALLENGE_URL: &str = "https://local-ca.invalid/acme/challenge/1
 pub const LOCAL_FINALIZE_URL: &str = "https://local-ca.invalid/acme/order/1/finalize";
 pub const LOCAL_CERTIFICATE_URL: &str = "https://local-ca.invalid/acme/certificate/1";
 pub const LOCAL_REVOKE_URL: &str = "https://local-ca.invalid/acme/revoke-cert";
+pub const LOCAL_RENEWAL_INFO_URL: &str = "https://local-ca.invalid/acme/renewal-info";
+pub const LOCAL_RENEWAL_INFO_CERTIFICATE_URL: &str =
+    "https://local-ca.invalid/acme/renewal-info/khDjV8EtmLIeVjvn6VPf3cfDARU.Ag";
 const DIRECTORY: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
 const ACCOUNT: &str =
     r#"{"status":"valid","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
 const ACCOUNT_DEACTIVATED: &str =
     r#"{"status":"deactivated","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
+const RENEWAL_INFO: &str = r#"{"suggestedWindow":{"start":"2026-10-01T00:00:00Z","end":"2026-10-15T00:00:00Z"},"explanationURL":"https://local-ca.invalid/renewal-policy"}"#;
 const ORDER_PENDING: &str = r#"{"status":"pending","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
 const ORDER_READY: &str = r#"{"status":"ready","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
 const ORDER_VALID: &str = r#"{"status":"valid","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","certificate":"https://local-ca.invalid/acme/certificate/1","profile":"classic"}"#;
@@ -59,6 +63,7 @@ pub enum LocalAuthorityFault {
     BadNonceOnce,
     DropResponseOnce,
     DelayOrderOnce,
+    RateLimitAriOnce,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityError {
@@ -141,6 +146,33 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 Some("application/json"),
                 DIRECTORY,
             );
+        }
+        if r.method == AcmeHttpMethod::Get && url == LOCAL_RENEWAL_INFO_CERTIFICATE_URL {
+            if self.fault == LocalAuthorityFault::RateLimitAriOnce && !self.fault_used {
+                self.fault_used = true;
+                return Ok(AcmeTransportResponse {
+                    status: 429,
+                    effective_url: LOCAL_RENEWAL_INFO_CERTIFICATE_URL,
+                    replay_nonce: None,
+                    retry_after: Some("3600"),
+                    location: None,
+                    content_type: Some("application/problem+json"),
+                    body_length: 0,
+                });
+            }
+            if out.len() < RENEWAL_INFO.len() {
+                return Err(LocalAuthorityError::OutputTooSmall);
+            }
+            out[..RENEWAL_INFO.len()].copy_from_slice(RENEWAL_INFO.as_bytes());
+            return Ok(AcmeTransportResponse {
+                status: 200,
+                effective_url: LOCAL_RENEWAL_INFO_CERTIFICATE_URL,
+                replay_nonce: None,
+                retry_after: None,
+                location: None,
+                content_type: Some("application/json"),
+                body_length: RENEWAL_INFO.len(),
+            });
         }
         if r.method == AcmeHttpMethod::Head && url == LOCAL_NEW_NONCE_URL {
             return Ok(AcmeTransportResponse {

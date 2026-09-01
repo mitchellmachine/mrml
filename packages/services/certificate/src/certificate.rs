@@ -461,6 +461,7 @@ mod tests {
         LOCAL_ACCOUNT_URL, LOCAL_AUTHORIZATION_URL, LOCAL_CERTIFICATE_URL, LOCAL_CHALLENGE_URL,
         LOCAL_DIRECTORY_URL, LOCAL_FINALIZE_URL, LOCAL_NEW_ORDER_URL, LOCAL_ORDER_URL,
         LocalJwsVerifier, OwnerTermsApproval, account_contacts_digest, fetch_directory,
+        fetch_renewal_info,
     };
     #[test]
     fn pem_chain_is_bounded_strict_and_digest_ordered() {
@@ -513,6 +514,12 @@ mod tests {
     impl LocalJwsVerifier for LocalVerifier {
         fn verify(&mut self, _: &P256Jwk, digest: &[u8; 32], signature: &[u8; 64]) -> bool {
             *digest != [0; 32] && *signature == [1; 64]
+        }
+    }
+    struct ScheduleEntropy;
+    impl crate::RenewalEntropy for ScheduleEntropy {
+        fn random_u64(&mut self) -> Result<u64, crate::SchedulerError> {
+            Ok(17)
         }
     }
 
@@ -956,5 +963,39 @@ mod tests {
             retrieved.receipt.chain_digest,
             retrieved.chain.chain_digest()
         );
+        let renewal = fetch_renewal_info(
+            &directory,
+            &retrieved.receipt.ari_certificate_id,
+            leaf.not_before(),
+            86_400,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let schedule = crate::RenewalSchedule::from_ari(
+            crate::TlsIdentityId([9; 16]),
+            1,
+            &retrieved.receipt,
+            retrieved.receipt.ari_certificate_id,
+            renewal,
+            crate::RenewalPolicy {
+                generation: 4,
+                fallback_elapsed_numerator: 2,
+                fallback_elapsed_denominator: 3,
+                minimum_renewal_lead_seconds: 86_400,
+                warning_lead_seconds: 14 * 86_400,
+                critical_lead_seconds: 3 * 86_400,
+                initial_backoff_seconds: 60,
+                maximum_backoff_seconds: 86_400,
+                ari_requery_min_seconds: 3_600,
+                ari_requery_max_seconds: 7_200,
+            },
+            leaf.not_before(),
+            &mut ScheduleEntropy,
+        )
+        .unwrap();
+        assert_eq!(schedule.source, crate::RenewalSource::Ari);
+        assert!(schedule.renew_at_unix < retrieved.receipt.not_after);
     }
 }
