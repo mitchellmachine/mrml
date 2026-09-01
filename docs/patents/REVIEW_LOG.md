@@ -11533,3 +11533,12 @@ contact-update, deactivation, and account-key-rollover ambiguity through an
 exact account POST-as-GET authenticated by the explicitly selected old or new
 use-only key route. It binds the authoritative representation to the prepared
 or committed generation and adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Optional ACME preauthorization
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment performs the optional ordinary
+RFC 8555 `newAuthz` transaction only when advertised and explicitly selected,
+binding the DNS identifier, payload digest, resource location, account
+generation, and directory generation. It adds no route-selected multi-vantage
+validation or other recorded re-review-trigger mechanism.

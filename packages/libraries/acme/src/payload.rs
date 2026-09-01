@@ -172,6 +172,17 @@ pub fn write_account_status_payload(active: bool, output: &mut [u8]) -> Result<&
     core::str::from_utf8(&output[..value.len()]).map_err(|_| PayloadError::OutputTooSmall)
 }
 
+pub fn write_preauthorization_payload<'a>(
+    identifier: &DnsIdentifier,
+    output: &'a mut [u8],
+) -> Result<&'a str, PayloadError> {
+    let mut writer = Writer::new(output)?;
+    writer.push(b"{\"identifier\":{\"type\":\"dns\",\"value\":\"")?;
+    writer.push(identifier.as_str().as_bytes())?;
+    writer.push(b"\"}}")?;
+    Ok(writer.finish())
+}
+
 pub fn write_new_order_payload<'a>(
     identifiers: &[DnsIdentifier],
     profile: &CertificateProfile,
@@ -311,5 +322,13 @@ mod tests {
             write_revocation_payload(&[1], Some(2), &mut output),
             Err(PayloadError::InvalidReason)
         ));
+        assert_eq!(
+            write_preauthorization_payload(
+                &DnsIdentifier::parse("git.example", false).unwrap(),
+                &mut output,
+            )
+            .unwrap(),
+            r#"{"identifier":{"type":"dns","value":"git.example"}}"#
+        );
     }
 }

@@ -7,7 +7,7 @@ use crate::{
     account_contacts_digest, parse_account_response, parse_authorization_response,
     parse_order_response, post_jws, write_account_contacts_payload, write_account_status_payload,
     write_finalize_payload, write_key_change_inner_jws, write_new_account_payload,
-    write_new_order_payload, write_revocation_payload,
+    write_new_order_payload, write_preauthorization_payload, write_revocation_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -185,6 +185,128 @@ pub struct AuthorizationResource {
     pub order_url_digest: [u8; 32],
     pub directory_generation: u64,
     pub account_generation: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PreparedPreauthorization {
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub identifier: DnsIdentifier,
+    pub request_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct PreauthorizationResource {
+    pub url: AcmeUrl,
+    pub identifier: DnsIdentifier,
+    pub directory_generation: u64,
+    pub account_generation: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum PreauthorizationError<E> {
+    Unsupported,
+    PreparedMismatch,
+    Payload(PayloadError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    MissingLocation,
+    Response(ResponseError),
+}
+
+pub fn prepare_preauthorization(
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    identifier: DnsIdentifier,
+    payload_scratch: &mut [u8],
+) -> Result<PreparedPreauthorization, PreauthorizationError<core::convert::Infallible>> {
+    if directory.new_authz.is_none() {
+        return Err(PreauthorizationError::Unsupported);
+    }
+    if !account.active || account.directory_generation != directory.generation {
+        return Err(PreauthorizationError::PreparedMismatch);
+    }
+    let payload = write_preauthorization_payload(&identifier, payload_scratch)
+        .map_err(PreauthorizationError::Payload)?;
+    Ok(PreparedPreauthorization {
+        directory_generation: directory.generation,
+        account_generation: account.generation,
+        identifier,
+        request_digest: Sha256::digest(payload.as_bytes()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn execute_prepared_preauthorization<T: AcmeTransport>(
+    prepared: PreparedPreauthorization,
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    payload_scratch: &mut [u8],
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<(PreauthorizationResource, ParsedAuthorizationResponse), PreauthorizationError<T::Error>>
+{
+    if !account.active
+        || prepared.directory_generation != directory.generation
+        || prepared.account_generation != account.generation
+    {
+        return Err(PreauthorizationError::PreparedMismatch);
+    }
+    let endpoint = directory
+        .new_authz
+        .as_ref()
+        .ok_or(PreauthorizationError::Unsupported)?;
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(PreauthorizationError::PreparedMismatch)?;
+    let payload = write_preauthorization_payload(&prepared.identifier, payload_scratch)
+        .map_err(PreauthorizationError::Payload)?;
+    if Sha256::digest(payload.as_bytes()) != prepared.request_digest {
+        return Err(PreauthorizationError::PreparedMismatch);
+    }
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        endpoint,
+        crate::ProtectedKey::Kid(account_url),
+        payload.as_bytes(),
+        account.generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(PreauthorizationError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(PreauthorizationError::Server(problem));
+    }
+    if result.metadata.status != 201
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        return Err(PreauthorizationError::UnexpectedStatus);
+    }
+    let url = result
+        .metadata
+        .location
+        .ok_or(PreauthorizationError::MissingLocation)?;
+    let body = core::str::from_utf8(&response_body[..result.metadata.body_length])
+        .map_err(|_| PreauthorizationError::Response(ResponseError::Malformed))?;
+    let parsed = parse_authorization_response(body, endpoint.origin(), prepared.identifier)
+        .map_err(PreauthorizationError::Response)?;
+    Ok((
+        PreauthorizationResource {
+            url,
+            identifier: prepared.identifier,
+            directory_generation: directory.generation,
+            account_generation: account.generation,
+        },
+        parsed,
+    ))
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -2139,6 +2261,85 @@ mod tests {
         already_revoked: bool,
     }
 
+    struct PreauthorizationTransport {
+        calls: u8,
+    }
+    impl AcmeTransport for PreauthorizationTransport {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            self.calls += 1;
+            if request.method == AcmeHttpMethod::Head {
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some("preauth-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                });
+            }
+            assert_eq!(request.url.as_str(), "https://ca.example/new-authz");
+            let body = br#"{"identifier":{"type":"dns","value":"example.com"},"status":"pending","challenges":[{"type":"dns-01","url":"https://ca.example/challenge/preauth-1","status":"pending","token":"token-preauth"}]}"#;
+            output[..body.len()].copy_from_slice(body);
+            Ok(AcmeTransportResponse {
+                status: 201,
+                effective_url: "https://ca.example/new-authz",
+                replay_nonce: Some("preauth-nonce-2"),
+                retry_after: None,
+                location: Some("https://ca.example/authz/preauth-1"),
+                content_type: Some("application/json"),
+                body_length: body.len(),
+            })
+        }
+    }
+
+    fn optional_preauthorization_is_prepared_and_resource_bound_impl() {
+        let directory_url = AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let directory = AcmeDirectory::parse(
+            r#"{"newNonce":"https://ca.example/new-nonce","newAccount":"https://ca.example/new-account","newOrder":"https://ca.example/new-order","newAuthz":"https://ca.example/new-authz","revokeCert":"https://ca.example/revoke","keyChange":"https://ca.example/key-change"}"#,
+            &directory_url,
+            9,
+        )
+        .unwrap();
+        let (_, account) = active_account();
+        let identifier = DnsIdentifier::parse("example.com", false).unwrap();
+        let mut payload = [0; 1024];
+        let prepared =
+            match prepare_preauthorization(&directory, &account, identifier, &mut payload) {
+                Ok(value) => value,
+                Err(_) => panic!("preauthorization preparation failed"),
+            };
+        let mut exchange = crate::AcmeExchange::new(directory.generation, directory_url);
+        let mut transport = PreauthorizationTransport { calls: 0 };
+        let mut signer = Signer;
+        let mut response = [0; 2048];
+        let mut jws = [0; 8192];
+        let result = execute_prepared_preauthorization(
+            prepared,
+            &directory,
+            &account,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut payload,
+            &mut response,
+            &mut jws,
+        );
+        let (resource, authorization) = match result {
+            Ok(value) => value,
+            Err(_) => panic!("preauthorization failed"),
+        };
+        assert_eq!(resource.url.as_str(), "https://ca.example/authz/preauth-1");
+        assert!(resource.identifier == identifier);
+        assert_eq!(authorization.status, crate::AuthorizationState::Pending);
+        assert_eq!(transport.calls, 2);
+    }
+
     impl AcmeTransport for RevocationTransport {
         type Error = ();
 
@@ -2269,5 +2470,10 @@ mod tests {
     #[test]
     fn revocation_accepts_exact_empty_success_and_authoritative_replay() {
         run_order_test(revocation_accepts_exact_empty_success_and_authoritative_replay_impl);
+    }
+
+    #[test]
+    fn optional_preauthorization_is_prepared_and_resource_bound() {
+        run_order_test(optional_preauthorization_is_prepared_and_resource_bound_impl);
     }
 }
