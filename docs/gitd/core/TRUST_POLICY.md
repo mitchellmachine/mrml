@@ -27,6 +27,15 @@ values, requires strict collection order, rejects trailing bytes, and
 byte-for-byte re-encodes the result before acceptance. Every truncation of the
 golden policy fixture fails closed.
 
+The canonical state now also carries optional exact-format Git object IDs for
+the final legacy checkpoint and hybrid-required cutover, plus an optional
+64-byte digest naming a separately authenticated emergency-recovery policy.
+Hybrid-required state is invalid without a cutover. Checkpoint and cutover IDs
+must be nonzero and use an allowed repository object format. Once established,
+normal rotation cannot move either checkpoint/cutover or replace the emergency
+policy digest; those changes require a distinct future emergency-transition
+typestate rather than piggybacking on daily-key rotation.
+
 Repository policy may narrow an externally pinned owner trust root but cannot
 broaden it: an update cannot add an object format or remove an already
 protected ref. Normal rotation requires `KeyRotation` verification typestates
@@ -35,9 +44,8 @@ active pair at the new generation. A transition cannot lower a generation,
 break the previous-policy digest chain, remove a revocation, reactivate a
 revoked key, or downgrade hybrid-required policy.
 
-Explicit retired-key validity intervals, legacy checkpoint and hybrid-cutover
-object IDs, authenticated emergency
-recovery policy, and canonical key-revocation statement are not yet
+Explicit retired-key validity intervals, authenticated emergency recovery
+execution, and canonical key-revocation statement are not yet
 implemented. The current state therefore cannot activate protected refs.
 
 `verify_introduced_history` now deterministically walks every commit introduced

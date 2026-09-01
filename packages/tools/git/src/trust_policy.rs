@@ -10,8 +10,8 @@ use mrml_openpgp::{FingerprintV6, PublicKeyV6, VerificationPolicyV6, verify_deta
 use mrml_runtime::Vector;
 
 use crate::{
-    FullRefName, ObjectFormat, RepositoryIdentity, RevocationGeneration, SignaturePurpose,
-    TrustGeneration,
+    FullRefName, ObjectFormat, ObjectId, RepositoryIdentity, RevocationGeneration,
+    SignaturePurpose, TrustGeneration,
 };
 
 pub const HYBRID_PROFILE_NAME: &str = "MRML-GIT-HYBRID-V1";
@@ -49,6 +49,8 @@ pub enum HybridPolicyError {
     HybridDowngrade,
     MissingPreviousAuthorization,
     MissingNewAuthorization,
+    CutoverRollback,
+    EmergencyPolicyChanged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +147,9 @@ pub struct TrustPolicyState {
     protected_refs: Vector<FullRefName>,
     allowed_object_formats: u8,
     hybrid_required: bool,
+    legacy_checkpoint: Option<ObjectId>,
+    hybrid_cutover: Option<ObjectId>,
+    emergency_policy_digest: Option<[u8; 64]>,
     active_pairs: Vector<AuthorizedHybridPair>,
     revoked_openpgp: Vector<FingerprintV6>,
     revoked_ml_dsa: Vector<[u8; 64]>,
@@ -159,6 +164,9 @@ pub struct TrustPolicyCandidate {
     pub allow_sha1: bool,
     pub allow_sha256: bool,
     pub hybrid_required: bool,
+    pub legacy_checkpoint: Option<ObjectId>,
+    pub hybrid_cutover: Option<ObjectId>,
+    pub emergency_policy_digest: Option<[u8; 64]>,
     pub active_pairs: Vector<AuthorizedHybridPair>,
     pub revoked_openpgp: Vector<FingerprintV6>,
     pub revoked_ml_dsa: Vector<[u8; 64]>,
@@ -173,6 +181,15 @@ pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, Hybr
     append(&mut output, &policy.revocation_generation.0.to_be_bytes())?;
     output.push(policy.allowed_object_formats);
     output.push(u8::from(policy.hybrid_required));
+    append_optional_object(&mut output, policy.legacy_checkpoint)?;
+    append_optional_object(&mut output, policy.hybrid_cutover)?;
+    match policy.emergency_policy_digest {
+        Some(digest) => {
+            output.push(1);
+            append(&mut output, &digest)?;
+        }
+        None => output.push(0),
+    }
     append_u16(&mut output, policy.protected_refs.len())?;
     append_u16(&mut output, policy.active_pairs.len())?;
     append_u16(&mut output, policy.revoked_openpgp.len())?;
@@ -218,6 +235,17 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
     let hybrid_required = match cursor.u8()? {
         0 => false,
         1 => true,
+        _ => return Err(HybridPolicyError::InvalidPolicy),
+    };
+    let legacy_checkpoint = cursor.optional_object()?;
+    let hybrid_cutover = cursor.optional_object()?;
+    let emergency_policy_digest = match cursor.u8()? {
+        0 => None,
+        1 => {
+            let mut digest = [0u8; 64];
+            digest.copy_from_slice(cursor.take(64)?);
+            Some(digest)
+        }
         _ => return Err(HybridPolicyError::InvalidPolicy),
     };
     let ref_count = usize::from(cursor.u16()?);
@@ -280,6 +308,9 @@ pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicy
         allow_sha1: allowed_object_formats & 1 != 0,
         allow_sha256: allowed_object_formats & 2 != 0,
         hybrid_required,
+        legacy_checkpoint,
+        hybrid_cutover,
+        emergency_policy_digest,
         active_pairs,
         revoked_openpgp,
         revoked_ml_dsa,
@@ -303,6 +334,22 @@ fn append_u16(output: &mut Vector<u8>, value: usize) -> Result<(), HybridPolicyE
 fn append_counted_bytes(output: &mut Vector<u8>, bytes: &[u8]) -> Result<(), HybridPolicyError> {
     append_u16(output, bytes.len())?;
     append(output, bytes)
+}
+
+fn append_optional_object(
+    output: &mut Vector<u8>,
+    object: Option<ObjectId>,
+) -> Result<(), HybridPolicyError> {
+    match object {
+        Some(object) => {
+            output.push(object_format_code(object.format()));
+            append(output, object.as_bytes())
+        }
+        None => {
+            output.push(0);
+            Ok(())
+        }
+    }
 }
 
 struct PolicyCursor<'a> {
@@ -353,6 +400,18 @@ impl<'a> PolicyCursor<'a> {
         self.take(length)
     }
 
+    fn optional_object(&mut self) -> Result<Option<ObjectId>, HybridPolicyError> {
+        let format = match self.u8()? {
+            0 => return Ok(None),
+            1 => ObjectFormat::Sha1,
+            2 => ObjectFormat::Sha256,
+            _ => return Err(HybridPolicyError::InvalidPolicy),
+        };
+        ObjectId::from_bytes(format, self.take(format.hash_len())?)
+            .map(Some)
+            .ok_or(HybridPolicyError::InvalidPolicy)
+    }
+
     const fn is_complete(&self) -> bool {
         self.offset == self.input.len()
     }
@@ -388,6 +447,15 @@ impl TrustPolicyState {
         }
         if self.hybrid_required && !candidate.hybrid_required {
             return Err(HybridPolicyError::HybridDowngrade);
+        }
+        if self.hybrid_cutover.is_some() && candidate.hybrid_cutover != self.hybrid_cutover {
+            return Err(HybridPolicyError::CutoverRollback);
+        }
+        if candidate.legacy_checkpoint != self.legacy_checkpoint {
+            return Err(HybridPolicyError::CutoverRollback);
+        }
+        if candidate.emergency_policy_digest != self.emergency_policy_digest {
+            return Err(HybridPolicyError::EmergencyPolicyChanged);
         }
         if candidate.allowed_format_mask() & !self.allowed_object_formats != 0
             || self
@@ -445,6 +513,15 @@ impl TrustPolicyState {
         hash.update(&self.previous_policy_digest);
         hash.update(&self.revocation_generation.0.to_be_bytes());
         hash.update(&[self.allowed_object_formats, u8::from(self.hybrid_required)]);
+        hash_optional_object(&mut hash, self.legacy_checkpoint);
+        hash_optional_object(&mut hash, self.hybrid_cutover);
+        match self.emergency_policy_digest {
+            Some(digest) => {
+                hash.update(&[1]);
+                hash.update(&digest);
+            }
+            None => hash.update(&[0]),
+        }
         hash.update(&(self.protected_refs.len() as u16).to_be_bytes());
         for reference in &self.protected_refs {
             hash.update(&(reference.as_str().len() as u16).to_be_bytes());
@@ -485,6 +562,9 @@ impl TrustPolicyState {
             protected_refs: candidate.protected_refs,
             allowed_object_formats,
             hybrid_required: candidate.hybrid_required,
+            legacy_checkpoint: candidate.legacy_checkpoint,
+            hybrid_cutover: candidate.hybrid_cutover,
+            emergency_policy_digest: candidate.emergency_policy_digest,
             active_pairs: candidate.active_pairs,
             revoked_openpgp: candidate.revoked_openpgp,
             revoked_ml_dsa: candidate.revoked_ml_dsa,
@@ -514,10 +594,39 @@ fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPoli
             left.as_bytes() < right.as_bytes()
         })
         || !strictly_ordered_by(&candidate.revoked_ml_dsa, |left, right| left < right)
+        || candidate.hybrid_required && candidate.hybrid_cutover.is_none()
+        || candidate.legacy_checkpoint.is_some() && candidate.hybrid_cutover.is_none()
+        || [candidate.legacy_checkpoint, candidate.hybrid_cutover]
+            .into_iter()
+            .flatten()
+            .any(|id| {
+                id.is_zero()
+                    || match id.format() {
+                        ObjectFormat::Sha1 => !candidate.allow_sha1,
+                        ObjectFormat::Sha256 => !candidate.allow_sha256,
+                    }
+            })
     {
         return Err(HybridPolicyError::InvalidPolicy);
     }
     Ok(())
+}
+
+fn hash_optional_object(hash: &mut Sha3_512, object: Option<ObjectId>) {
+    match object {
+        Some(object) => {
+            hash.update(&[1, object_format_code(object.format())]);
+            hash.update(object.as_bytes());
+        }
+        None => hash.update(&[0]),
+    }
+}
+
+const fn object_format_code(format: ObjectFormat) -> u8 {
+    match format {
+        ObjectFormat::Sha1 => 1,
+        ObjectFormat::Sha256 => 2,
+    }
 }
 
 fn strictly_ordered_by<T>(values: &[T], less: impl Fn(&T, &T) -> bool) -> bool {
@@ -863,6 +972,9 @@ mod tests {
             allow_sha1: true,
             allow_sha256: true,
             hybrid_required: true,
+            legacy_checkpoint: Some(ObjectId::Sha256([7u8; 32])),
+            hybrid_cutover: Some(ObjectId::Sha256([8u8; 32])),
+            emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [old_pair].into(),
             revoked_openpgp: Vector::new(),
             revoked_ml_dsa: Vector::new(),
@@ -896,6 +1008,9 @@ mod tests {
             allow_sha1: false,
             allow_sha256: true,
             hybrid_required: true,
+            legacy_checkpoint: Some(ObjectId::Sha256([7u8; 32])),
+            hybrid_cutover: Some(ObjectId::Sha256([8u8; 32])),
+            emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [new_pair].into(),
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
@@ -914,6 +1029,9 @@ mod tests {
             allow_sha1: false,
             allow_sha256: true,
             hybrid_required: false,
+            legacy_checkpoint: Some(ObjectId::Sha256([7u8; 32])),
+            hybrid_cutover: Some(ObjectId::Sha256([8u8; 32])),
+            emergency_policy_digest: Some([9u8; 64]),
             active_pairs: [new_pair].into(),
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
