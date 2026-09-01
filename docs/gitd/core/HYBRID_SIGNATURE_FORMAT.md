@@ -42,6 +42,16 @@ primary-key body is version 6, creation time, algorithm 27, four-byte key
 material length 32, and the exact Ed25519 public bytes. Its SHA3-512 value is an
 MRML public-key digest, never an OpenPGP fingerprint.
 
+Successful verification may be converted into an opaque
+`VerifiedGitObjectProof` only after the exact canonical Git object framing and
+hash also match. `GitCommit` accepts only a commit object,
+`GitAnnotatedTag` only a tag object, and `SourceManifest`, `SourceLock`, and
+`BuildReceipt` only blob objects. The proof additionally carries the exact
+repository identity and repository/trust/revocation generations. Tampered
+payloads, zero or foreign-format IDs, mismatched purpose/object type or Git
+kind, another repository, and zero repository generation fail closed. The
+existing `VerifiedCommitProof` remains the narrower protected-history wrapper.
+
 The transcript therefore binds:
 
 - profile version and one of `GitCommit`, `GitAnnotatedTag`, `SourceManifest`,

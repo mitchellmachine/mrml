@@ -34,8 +34,11 @@ enforce the smaller of transport and backend limits and use checked arithmetic.
 `FilesystemRepositoryView` binds one validated `RepositoryIdentity`, one
 canonical first-party object store, one canonical `ActiveRefFile`, and an
 optional read-only `VerificationSummaryStore`. Evidence enters that store only
-by conversion from an opaque `VerifiedCommitProof`; repository contents, object
-names, signatures, and first-party status cannot manufacture a summary. The
+by conversion from an opaque `VerifiedCommitProof` or generalized
+`VerifiedGitObjectProof`; repository contents, object names, signatures, and
+first-party status cannot manufacture a summary. Generalized evidence covers
+exact verified commits, annotated tags, source manifests, source locks, and
+build receipts under their distinct purposes and required Git object kinds. The
 store is bounded to 5,000 strictly ordered exact records and carries repository
 identity plus repository, trust, and revocation generations.
 

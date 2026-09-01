@@ -12,9 +12,9 @@ use mrml_openpgp::{
 use mrml_runtime::Vector;
 
 use crate::{
-    FullRefName, ObjectFormat, ObjectId, RepositoryIdentity, RevocationGeneration,
-    SignaturePurpose, TrustGeneration,
-    verification::{ProtectedHistoryContext, VerifiedCommitProof},
+    FullRefName, ObjectFormat, ObjectId, ObjectKind, RepositoryGeneration, RepositoryIdentity,
+    RevocationGeneration, SignaturePurpose, TrustGeneration,
+    verification::{ProtectedHistoryContext, VerifiedCommitProof, VerifiedGitObjectProof},
 };
 
 pub const HYBRID_PROFILE_NAME: &str = "MRML-GIT-HYBRID-V1";
@@ -1272,13 +1272,57 @@ pub fn bind_verified_commit_proof(
     })
 }
 
+pub fn bind_verified_git_object_proof(
+    signature: &VerifiedHybridSignature,
+    object: ObjectId,
+    exact_contents: &[u8],
+    repository: &RepositoryIdentity,
+    repository_generation: RepositoryGeneration,
+    trust_generation: TrustGeneration,
+    revocation_generation: RevocationGeneration,
+    object_format: ObjectFormat,
+    object_kind: ObjectKind,
+    purpose: SignaturePurpose,
+) -> Result<VerifiedGitObjectProof, HybridPolicyError> {
+    let expected_type = match (object_kind, purpose) {
+        (ObjectKind::Commit, SignaturePurpose::GitCommit) => GitObjectType::Commit,
+        (ObjectKind::Tag, SignaturePurpose::GitAnnotatedTag) => GitObjectType::AnnotatedTag,
+        (ObjectKind::Blob, SignaturePurpose::SourceManifest) => GitObjectType::SourceManifest,
+        (ObjectKind::Blob, SignaturePurpose::SourceLock) => GitObjectType::SourceLock,
+        (ObjectKind::Blob, SignaturePurpose::BuildReceipt) => GitObjectType::BuildReceipt,
+        _ => return Err(HybridPolicyError::InvalidPurpose),
+    };
+    if object.is_zero()
+        || repository_generation.0 == 0
+        || object.format() != object_format
+        || signature.repository_digest != repository_digest(repository)
+        || signature.payload_digest != Sha3_512::digest(exact_contents)
+        || hash_git_object(object_format, object_kind, exact_contents) != object
+        || signature.trust_generation != trust_generation
+        || signature.revocation_generation != revocation_generation
+        || signature.purpose != purpose
+        || signature.object_type != expected_type
+    {
+        return Err(HybridPolicyError::InvalidPurpose);
+    }
+    Ok(VerifiedGitObjectProof {
+        object,
+        repository: repository.clone(),
+        repository_generation,
+        trust_generation,
+        revocation_generation,
+        purpose,
+        object_format,
+        object_kind,
+    })
+}
+
+fn hash_git_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> ObjectId {
+    crate::object::encode_loose_object_with_format(format, kind, contents).0
+}
+
 fn hash_commit(format: ObjectFormat, contents: &[u8]) -> ObjectId {
-    crate::object::encode_loose_object_with_format(
-        format,
-        crate::object::ObjectKind::Commit,
-        contents,
-    )
-    .0
+    hash_git_object(format, ObjectKind::Commit, contents)
 }
 
 fn openpgp_key_digest(key: &PublicKeyV6) -> [u8; 64] {
@@ -1495,6 +1539,88 @@ mod tests {
                 0xb3, 0x39, 0xbf, 0xf4, 0xef, 0x7a, 0x1b, 0x48,
             ]
         );
+    }
+
+    #[test]
+    fn generalized_object_proofs_bind_exact_kind_purpose_bytes_and_context() {
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let other = RepositoryIdentity::parse("owner/other").unwrap();
+        let openpgp = SigningKeyV6::from_seed([21; 32], 1_700_000_000).unwrap();
+        let public = openpgp.public_key();
+        let mut ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[22; 32], &mut ml_public, &mut ml_secret).unwrap();
+        let pair = AuthorizedHybridPair::bind(&public, &ml_public);
+        let policy = HybridTrustPolicy {
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(8),
+            authorized_pair: pair,
+            validation_time: Some(1_700_000_002),
+            openpgp_not_after: None,
+            enforce_signature_expiration: true,
+        };
+        for (object_type, purpose, kind, payload) in [
+            (GitObjectType::AnnotatedTag, SignaturePurpose::GitAnnotatedTag, ObjectKind::Tag, &b"tag payload"[..]),
+            (GitObjectType::SourceManifest, SignaturePurpose::SourceManifest, ObjectKind::Blob, &b"manifest"[..]),
+            (GitObjectType::SourceLock, SignaturePurpose::SourceLock, ObjectKind::Blob, &b"lock"[..]),
+            (GitObjectType::BuildReceipt, SignaturePurpose::BuildReceipt, ObjectKind::Blob, &b"receipt"[..]),
+        ] {
+            let transcript = canonical_hybrid_transcript(
+                &repository, ObjectFormat::Sha256, object_type, purpose,
+                TrustGeneration(4), pair, payload,
+            ).unwrap();
+            let mut openpgp_signature = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+            let openpgp_len = sign_detached_v6_ascii_with_salt(
+                &openpgp, &transcript, DigestAlgorithm::Sha512, 1_700_000_001,
+                &[23; 32], &mut openpgp_signature,
+            ).unwrap();
+            let mut ml_signature = [0; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES];
+            ml_dsa_65_sign(&ml_secret, ML_DSA_CONTEXT, &transcript, &[24; 32], &mut ml_signature).unwrap();
+            let request = HybridVerificationRequest {
+                repository: &repository,
+                object_format: ObjectFormat::Sha256,
+                object_type,
+                purpose,
+                trust_generation: TrustGeneration(4),
+                revocation_generation: RevocationGeneration(8),
+                payload,
+                openpgp_signature: &openpgp_signature[..openpgp_len],
+                ml_dsa_signature: &ml_signature,
+            };
+            let mut scratch = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+            let verified = verify_hybrid_signature(&policy, &public, &ml_public, &request, &mut scratch).unwrap();
+            let object = hash_git_object(ObjectFormat::Sha256, kind, payload);
+            assert!(bind_verified_git_object_proof(
+                &verified, object, payload, &repository, RepositoryGeneration(3),
+                TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+            ).is_ok());
+            for result in [
+                bind_verified_git_object_proof(
+                    &verified, object, b"tampered", &repository, RepositoryGeneration(3),
+                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+                ),
+                bind_verified_git_object_proof(
+                    &verified, object, payload, &other, RepositoryGeneration(3),
+                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+                ),
+                bind_verified_git_object_proof(
+                    &verified, object, payload, &repository, RepositoryGeneration(0),
+                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind, purpose,
+                ),
+                bind_verified_git_object_proof(
+                    &verified, object, payload, &repository, RepositoryGeneration(3),
+                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256,
+                    ObjectKind::Commit, purpose,
+                ),
+                bind_verified_git_object_proof(
+                    &verified, object, payload, &repository, RepositoryGeneration(3),
+                    TrustGeneration(4), RevocationGeneration(8), ObjectFormat::Sha256, kind,
+                    SignaturePurpose::GitCommit,
+                ),
+            ] {
+                assert_eq!(result, Err(HybridPolicyError::InvalidPurpose));
+            }
+        }
     }
 
     #[test]

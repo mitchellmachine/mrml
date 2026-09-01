@@ -139,15 +139,15 @@ pub use trust_policy::{
     MAX_HYBRID_PAYLOAD_BYTES, MAX_KEY_REVOCATION_REASON_BYTES,
     MAX_KEY_REVOCATION_STATEMENT_BYTES, MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS,
     MAX_POLICY_REVOKED_KEYS, PolicyPairStatus, TrustPolicyCandidate, TrustPolicyState,
-    VerifiedHybridSignature, bind_verified_commit_proof, canonical_hybrid_transcript,
-    encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
+    VerifiedHybridSignature, bind_verified_commit_proof, bind_verified_git_object_proof,
+    canonical_hybrid_transcript, encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
     parse_key_revocation_statement, parse_trust_policy, verify_hybrid_signature,
 };
 #[cfg(test)]
 pub(crate) use verification::verify_introduced_history;
 pub use verification::{
     DEFAULT_MAX_INTRODUCED_COMMITS, HistoryVerificationError, HistoryVerificationLimits,
-    ProtectedHistoryContext, VerifiedCommitProof, VerifiedCommitRange,
+    ProtectedHistoryContext, VerifiedCommitProof, VerifiedCommitRange, VerifiedGitObjectProof,
     verify_protected_introduced_history,
 };
 

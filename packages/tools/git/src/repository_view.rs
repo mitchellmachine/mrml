@@ -10,7 +10,7 @@ use crate::{
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
     RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
     SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request,
-    write_pkt_line, VerifiedCommitProof,
+    write_pkt_line, VerifiedCommitProof, VerifiedGitObjectProof,
 };
 
 pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
@@ -29,6 +29,23 @@ impl VerificationSummaryEvidence {
             repository_generation: proof.repository_generation,
             summary: VerificationSummary {
                 object: proof.commit,
+                trust_generation: proof.trust_generation,
+                revocation_generation: proof.revocation_generation,
+                purpose: proof.purpose,
+                openpgp_authorized: true,
+                ml_dsa_65_authorized: true,
+                exact_pair_authorized: true,
+                hybrid_required: true,
+            },
+        }
+    }
+
+    pub fn from_verified_git_object(proof: &VerifiedGitObjectProof) -> Self {
+        Self {
+            repository: proof.repository.clone(),
+            repository_generation: proof.repository_generation,
+            summary: VerificationSummary {
+                object: proof.object,
                 trust_generation: proof.trust_generation,
                 revocation_generation: proof.revocation_generation,
                 purpose: proof.purpose,
@@ -1220,9 +1237,34 @@ mod tests {
                 object_format: ObjectFormat::Sha256,
             },
         );
-        view = view.with_verification_evidence(
-            VerificationSummaryStore::new([evidence].into()).unwrap(),
+        let tag_evidence = VerificationSummaryEvidence::from_verified_git_object(
+            &VerifiedGitObjectProof {
+                object: tag,
+                repository: identity.clone(),
+                repository_generation: RepositoryGeneration(4),
+                trust_generation: TrustGeneration(5),
+                revocation_generation: RevocationGeneration(6),
+                purpose: crate::SignaturePurpose::GitAnnotatedTag,
+                object_format: ObjectFormat::Sha256,
+                object_kind: ObjectKind::Tag,
+            },
         );
+        assert_eq!(tag_evidence.summary.object, tag);
+        assert_eq!(
+            tag_evidence.summary.purpose,
+            crate::SignaturePurpose::GitAnnotatedTag
+        );
+        let evidence_store = VerificationSummaryStore::new([evidence].into()).unwrap();
+        assert!(evidence_store
+            .exact(
+                &identity,
+                RepositoryGeneration(3),
+                commit,
+                TrustGeneration(5),
+                RevocationGeneration(6),
+            )
+            .is_none());
+        view = view.with_verification_evidence(evidence_store);
         let limits = QueryLimits {
             max_entries: 8,
             max_bytes: 1024,

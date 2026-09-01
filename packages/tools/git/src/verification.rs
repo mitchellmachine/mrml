@@ -61,6 +61,20 @@ pub struct VerifiedCommitProof {
     pub(crate) object_format: ObjectFormat,
 }
 
+/// Opaque evidence for one exactly authenticated Git object. Fields remain
+/// private to the crate so object bytes or identifiers cannot mint authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedGitObjectProof {
+    pub(crate) object: ObjectId,
+    pub(crate) repository: RepositoryIdentity,
+    pub(crate) repository_generation: RepositoryGeneration,
+    pub(crate) trust_generation: TrustGeneration,
+    pub(crate) revocation_generation: RevocationGeneration,
+    pub(crate) purpose: SignaturePurpose,
+    pub(crate) object_format: ObjectFormat,
+    pub(crate) object_kind: crate::ObjectKind,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedCommitRange {
     old: ObjectId,
