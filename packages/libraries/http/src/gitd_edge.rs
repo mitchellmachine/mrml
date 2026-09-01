@@ -272,6 +272,163 @@ pub trait CacheStore {
     fn remove_corrupt(&mut self, key: &[u8]) -> Result<(), BackendError>;
 }
 
+#[cfg(unix)]
+pub struct LinuxFilesystemCacheStore {
+    root: Text,
+    maximum_entries: usize,
+    maximum_bytes: u64,
+    next_temporary: u64,
+}
+
+#[cfg(unix)]
+impl LinuxFilesystemCacheStore {
+    pub fn new(
+        root: &str,
+        maximum_entries: usize,
+        maximum_bytes: u64,
+    ) -> Result<Self, BackendError> {
+        if root.is_empty()
+            || root.len() > 2048
+            || root.as_bytes().contains(&0)
+            || maximum_entries == 0
+            || maximum_entries > 4096
+            || maximum_bytes == 0
+        {
+            return Err(BackendError::ResourceLimit);
+        }
+        mrml_runtime::create_dir_all(root).map_err(|_| BackendError::Storage)?;
+        mrml_runtime::sync_directory(root).map_err(|_| BackendError::Storage)?;
+        Ok(Self {
+            root: root.into(),
+            maximum_entries,
+            maximum_bytes,
+            next_temporary: 1,
+        })
+    }
+
+    fn filename(key: &[u8]) -> Result<Text, BackendError> {
+        if key.len() != 32 {
+            return Err(BackendError::Storage);
+        }
+        let mut name = Text::new();
+        for byte in key {
+            name.push_str(&mrml_runtime::mrml_format!("{byte:02x}"));
+        }
+        name.push_str(".cache");
+        Ok(name)
+    }
+
+    fn path(&self, key: &[u8]) -> Result<Text, BackendError> {
+        Ok(mrml_runtime::join_path(
+            self.root.as_str(),
+            Self::filename(key)?.as_str(),
+        ))
+    }
+
+    fn enforce_quota(&mut self, protected: &str) -> Result<(), BackendError> {
+        let entries =
+            mrml_runtime::read_directory(self.root.as_str()).map_err(|_| BackendError::Storage)?;
+        let mut files: Vector<(Text, u64)> = Vector::new();
+        let mut bytes = 0u64;
+        for entry in entries {
+            if entry.is_directory || entry.is_symlink || !entry.name.ends_with(".cache") {
+                continue;
+            }
+            let path = mrml_runtime::join_path(self.root.as_str(), entry.name.as_str());
+            let length = mrml_runtime::File::open_regular(path.as_str())
+                .and_then(|file| file.len())
+                .map_err(|_| BackendError::Storage)?;
+            bytes = bytes
+                .checked_add(length)
+                .ok_or(BackendError::ResourceLimit)?;
+            files
+                .try_push((path, length))
+                .map_err(|_| BackendError::ResourceLimit)?;
+        }
+        let mut index = 0;
+        while (files.len() > self.maximum_entries || bytes > self.maximum_bytes)
+            && index < files.len()
+        {
+            if files[index].0 != protected {
+                let (path, length) = files.remove(index);
+                mrml_runtime::remove_file(path.as_str()).map_err(|_| BackendError::Storage)?;
+                bytes -= length;
+            } else {
+                index += 1;
+            }
+        }
+        if files.len() > self.maximum_entries || bytes > self.maximum_bytes {
+            return Err(BackendError::ResourceLimit);
+        }
+        mrml_runtime::sync_directory(self.root.as_str()).map_err(|_| BackendError::Storage)
+    }
+}
+
+#[cfg(unix)]
+impl CacheStore for LinuxFilesystemCacheStore {
+    fn read(&mut self, key: &[u8], output: &mut Vector<u8>) -> Result<bool, BackendError> {
+        let path = self.path(key)?;
+        if !mrml_runtime::path_exists(path.as_str()) {
+            return Ok(false);
+        }
+        let mut file =
+            mrml_runtime::File::open_regular(path.as_str()).map_err(|_| BackendError::Storage)?;
+        let length = usize::try_from(file.len().map_err(|_| BackendError::Storage)?)
+            .map_err(|_| BackendError::ResourceLimit)?;
+        if length > MAX_CACHE_RECORD {
+            return Err(BackendError::ResourceLimit);
+        }
+        let mut bytes = Vector::with_capacity(length).map_err(|_| BackendError::ResourceLimit)?;
+        bytes
+            .try_resize(length, 0)
+            .map_err(|_| BackendError::ResourceLimit)?;
+        file.read_exact(&mut bytes)
+            .map_err(|_| BackendError::Storage)?;
+        output
+            .try_extend_from_slice(&bytes)
+            .map_err(|_| BackendError::ResourceLimit)?;
+        Ok(true)
+    }
+
+    fn write_atomic(&mut self, key: &[u8], value: &[u8]) -> Result<(), BackendError> {
+        if value.len() > MAX_CACHE_RECORD || value.len() as u64 > self.maximum_bytes {
+            return Err(BackendError::ResourceLimit);
+        }
+        let target = self.path(key)?;
+        let temporary_name = mrml_runtime::mrml_format!(
+            ".tmp-{}-{}",
+            mrml_runtime::process_id(),
+            self.next_temporary
+        );
+        self.next_temporary = self
+            .next_temporary
+            .checked_add(1)
+            .ok_or(BackendError::ResourceLimit)?;
+        let temporary = mrml_runtime::join_path(self.root.as_str(), temporary_name.as_str());
+        let result = (|| {
+            let mut file = mrml_runtime::File::create_new(temporary.as_str())
+                .map_err(|_| BackendError::Storage)?;
+            file.write_all(value).map_err(|_| BackendError::Storage)?;
+            file.sync().map_err(|_| BackendError::Storage)?;
+            drop(file);
+            mrml_runtime::rename_file(temporary.as_str(), target.as_str())
+                .map_err(|_| BackendError::Storage)?;
+            mrml_runtime::sync_directory(self.root.as_str()).map_err(|_| BackendError::Storage)?;
+            self.enforce_quota(target.as_str())
+        })();
+        if result.is_err() {
+            let _ = mrml_runtime::remove_file(temporary.as_str());
+        }
+        result
+    }
+
+    fn remove_corrupt(&mut self, key: &[u8]) -> Result<(), BackendError> {
+        let path = self.path(key)?;
+        let _ = mrml_runtime::remove_file(path.as_str());
+        mrml_runtime::sync_directory(self.root.as_str()).map_err(|_| BackendError::Storage)
+    }
+}
+
 const CACHE_RECORD_MAGIC: &[u8; 8] = b"MRMLC1\0\0";
 const MAX_CACHE_RECORD: usize = 2 * MAX_RENDERED + 128;
 
@@ -1617,6 +1774,31 @@ mod tests {
         let store = cache.into_store();
         assert_eq!(store.removals, 1);
         assert!(store.value.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_cache_store_syncs_atomic_records_and_enforces_quota() {
+        let root = mrml_runtime::join_path(
+            mrml_runtime::temporary_directory().as_str(),
+            mrml_runtime::mrml_format!("mrml-gitd-cache-{}", mrml_runtime::process_id()).as_str(),
+        );
+        let _ = mrml_runtime::remove_dir_all(root.as_str());
+        let store = LinuxFilesystemCacheStore::new(root.as_str(), 1, 1024 * 1024).unwrap();
+        let mut cache = PersistentRepresentationCache::new(store);
+        let first = CachedRepresentation::prepare(b"first durable page").unwrap();
+        let second = CachedRepresentation::prepare(b"second durable page").unwrap();
+        cache.store("first", &first).unwrap();
+        cache.store("second", &second).unwrap();
+        assert_eq!(cache.load("first").unwrap(), None);
+        assert_eq!(cache.load("second").unwrap(), Some(second));
+        assert!(
+            mrml_runtime::read_directory(root.as_str())
+                .unwrap()
+                .iter()
+                .all(|entry| !entry.name.starts_with(".tmp-"))
+        );
+        mrml_runtime::remove_dir_all(root.as_str()).unwrap();
     }
 
     #[test]
