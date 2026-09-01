@@ -88,3 +88,9 @@ to 54 tests. It creates and syncs a partial temporary record, verifies bounded
 startup cleanup, deletes the exact cache root, then verifies a later atomic store
 recreates it and round-trips the representation. This is controlled filesystem
 testing, not power-loss or physical-media crash evidence.
+
+Repository image handling now has a hosted Linux regression within the 54-test
+HTTP suite: relative images become exact-object `raw.mrml.ca` URLs, remote
+images remain non-fetching labeled links, and traversal, active-data, and
+absolute-host-path forms fail closed. Raw-origin deployment headers are not yet
+public-host evidence.
