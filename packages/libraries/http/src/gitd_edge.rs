@@ -272,6 +272,150 @@ pub trait CacheStore {
     fn remove_corrupt(&mut self, key: &[u8]) -> Result<(), BackendError>;
 }
 
+const CACHE_RECORD_MAGIC: &[u8; 8] = b"MRMLC1\0\0";
+const MAX_CACHE_RECORD: usize = 2 * MAX_RENDERED + 128;
+
+pub struct PersistentRepresentationCache<S: CacheStore> {
+    store: S,
+}
+
+impl<S: CacheStore> PersistentRepresentationCache<S> {
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+
+    pub fn load(
+        &mut self,
+        logical_key: &str,
+    ) -> Result<Option<CachedRepresentation>, BackendError> {
+        let key = cache_storage_key(logical_key)?;
+        let mut record = Vector::new();
+        if !self.store.read(&key, &mut record)? {
+            return Ok(None);
+        }
+        match decode_cache_record(&record) {
+            Ok(value) => Ok(Some(value)),
+            Err(_) => {
+                self.store.remove_corrupt(&key)?;
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn store(
+        &mut self,
+        logical_key: &str,
+        value: &CachedRepresentation,
+    ) -> Result<(), BackendError> {
+        let key = cache_storage_key(logical_key)?;
+        let record = encode_cache_record(value)?;
+        self.store.write_atomic(&key, &record)
+    }
+
+    pub fn into_store(self) -> S {
+        self.store
+    }
+}
+
+fn cache_storage_key(logical_key: &str) -> Result<[u8; 32], BackendError> {
+    if logical_key.is_empty() || logical_key.len() > 4096 {
+        return Err(BackendError::ResourceLimit);
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"mrml-gitd-cache-key-v1\0");
+    hash.update(logical_key.as_bytes());
+    Ok(hash.finalize())
+}
+
+fn encode_cache_record(value: &CachedRepresentation) -> Result<Vector<u8>, BackendError> {
+    if value.identity.len() > MAX_RENDERED || value.zstd.len() > MAX_RENDERED {
+        return Err(BackendError::ResourceLimit);
+    }
+    let total = 8usize
+        .checked_add(8)
+        .and_then(|size| size.checked_add(64))
+        .and_then(|size| size.checked_add(value.identity.len()))
+        .and_then(|size| size.checked_add(value.zstd.len()))
+        .ok_or(BackendError::ResourceLimit)?;
+    if total > MAX_CACHE_RECORD {
+        return Err(BackendError::ResourceLimit);
+    }
+    let mut record = Vector::new();
+    record
+        .try_extend_from_slice(CACHE_RECORD_MAGIC)
+        .map_err(|_| BackendError::ResourceLimit)?;
+    record
+        .try_extend_from_slice(&(value.identity.len() as u32).to_be_bytes())
+        .map_err(|_| BackendError::ResourceLimit)?;
+    record
+        .try_extend_from_slice(&(value.zstd.len() as u32).to_be_bytes())
+        .map_err(|_| BackendError::ResourceLimit)?;
+    record
+        .try_extend_from_slice(&Sha256::digest(&value.identity))
+        .map_err(|_| BackendError::ResourceLimit)?;
+    record
+        .try_extend_from_slice(&Sha256::digest(&value.zstd))
+        .map_err(|_| BackendError::ResourceLimit)?;
+    record
+        .try_extend_from_slice(&value.identity)
+        .map_err(|_| BackendError::ResourceLimit)?;
+    record
+        .try_extend_from_slice(&value.zstd)
+        .map_err(|_| BackendError::ResourceLimit)?;
+    Ok(record)
+}
+
+fn decode_cache_record(record: &[u8]) -> Result<CachedRepresentation, BackendError> {
+    if record.len() < 80 || record.len() > MAX_CACHE_RECORD || &record[..8] != CACHE_RECORD_MAGIC {
+        return Err(BackendError::Storage);
+    }
+    let identity_length = u32::from_be_bytes(
+        record[8..12]
+            .try_into()
+            .map_err(|_| BackendError::Storage)?,
+    ) as usize;
+    let zstd_length = u32::from_be_bytes(
+        record[12..16]
+            .try_into()
+            .map_err(|_| BackendError::Storage)?,
+    ) as usize;
+    if identity_length > MAX_RENDERED || zstd_length > MAX_RENDERED {
+        return Err(BackendError::Storage);
+    }
+    let identity_end = 80usize
+        .checked_add(identity_length)
+        .ok_or(BackendError::Storage)?;
+    let record_end = identity_end
+        .checked_add(zstd_length)
+        .ok_or(BackendError::Storage)?;
+    if record_end != record.len() {
+        return Err(BackendError::Storage);
+    }
+    let identity = &record[80..identity_end];
+    let zstd = &record[identity_end..record_end];
+    if record[16..48] != Sha256::digest(identity) || record[48..80] != Sha256::digest(zstd) {
+        return Err(BackendError::Storage);
+    }
+    let decoded = mrml_zstd::decode(zstd).map_err(|_| BackendError::Storage)?;
+    if &decoded[..] != identity {
+        return Err(BackendError::Storage);
+    }
+    let mut owned_identity = Vector::new();
+    owned_identity
+        .try_extend_from_slice(identity)
+        .map_err(|_| BackendError::ResourceLimit)?;
+    let mut owned_zstd = Vector::new();
+    owned_zstd
+        .try_extend_from_slice(zstd)
+        .map_err(|_| BackendError::ResourceLimit)?;
+    Ok(CachedRepresentation {
+        identity: owned_identity,
+        zstd: owned_zstd,
+        etag_identity: etag(b"identity-v1", identity),
+        etag_zstd: etag(b"zstd-raw-rle-v1", zstd),
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CachedRepresentation {
     pub identity: Vector<u8>,
@@ -1080,6 +1224,44 @@ fn verification_html(summary: &VerificationSummary) -> Text {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct MockCacheStore {
+        key: Vector<u8>,
+        value: Vector<u8>,
+        removals: usize,
+    }
+
+    impl CacheStore for MockCacheStore {
+        fn read(&mut self, key: &[u8], output: &mut Vector<u8>) -> Result<bool, BackendError> {
+            if self.key != key || self.value.is_empty() {
+                return Ok(false);
+            }
+            output
+                .try_extend_from_slice(&self.value)
+                .map_err(|_| BackendError::ResourceLimit)?;
+            Ok(true)
+        }
+
+        fn write_atomic(&mut self, key: &[u8], value: &[u8]) -> Result<(), BackendError> {
+            self.key.clear();
+            self.value.clear();
+            self.key
+                .try_extend_from_slice(key)
+                .map_err(|_| BackendError::ResourceLimit)?;
+            self.value
+                .try_extend_from_slice(value)
+                .map_err(|_| BackendError::ResourceLimit)
+        }
+
+        fn remove_corrupt(&mut self, key: &[u8]) -> Result<(), BackendError> {
+            if self.key == key {
+                self.value.clear();
+            }
+            self.removals += 1;
+            Ok(())
+        }
+    }
+
     struct MockBackend {
         generation: RepositoryGeneration,
     }
@@ -1317,6 +1499,27 @@ mod tests {
         let not_modified = server.handle(&conditional);
         assert_eq!(not_modified.status, 304);
         assert!(not_modified.body.is_empty());
+    }
+
+    #[test]
+    fn persistent_cache_round_trips_and_evicts_corruption() {
+        let representation = CachedRepresentation::prepare(b"bounded persistent page").unwrap();
+        let mut cache = PersistentRepresentationCache::new(MockCacheStore::default());
+        cache
+            .store("repository:generation:object", &representation)
+            .unwrap();
+        assert_eq!(
+            cache.load("repository:generation:object").unwrap(),
+            Some(representation.clone())
+        );
+        let mut store = cache.into_store();
+        let last = store.value.len() - 1;
+        store.value[last] ^= 1;
+        let mut cache = PersistentRepresentationCache::new(store);
+        assert_eq!(cache.load("repository:generation:object").unwrap(), None);
+        let store = cache.into_store();
+        assert_eq!(store.removals, 1);
+        assert!(store.value.is_empty());
     }
 
     #[test]

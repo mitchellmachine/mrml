@@ -56,3 +56,7 @@ fixture or native Windows execution was exercised.
 After endpoint Retry/admission integration, the hosted Linux HTTP suite passed
 48 tests. Token authentication precedes bounded half-open permit creation;
 wrong-peer and replay attempts reject in the focused regression.
+
+After persistent cache-record integration, HTTP passed 49 tests on hosted Linux
+and 49 Windows-target tests under Wine. Corruption eviction used an in-memory
+`CacheStore`; no filesystem crash or disk-quota evidence was exercised.
