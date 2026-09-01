@@ -6,7 +6,7 @@ use crate::quic::{
 use crate::quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryPurpose, QuicRetryTokenManager,
 };
-use crate::{QuicError, QuicVersion};
+use crate::{GitdResourceController, GitdWorkClass, QuicError, QuicVersion, SourceIdentity};
 
 const MAX_DATAGRAM: usize = 65_527;
 const MAX_CONNECTION_ID: usize = 20;
@@ -41,6 +41,17 @@ pub struct QuicEndpointDatagram {
     pub bytes: Vector<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QuicEndpointMetrics {
+    pub datagrams_received: u64,
+    pub bytes_received: u64,
+    pub datagrams_dropped: u64,
+    pub new_initials: u64,
+    pub handshake_datagrams: u64,
+    pub established_datagrams: u64,
+    pub candidate_path_datagrams: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuicInitialAdmission {
     Admit { permit: u64 },
@@ -73,6 +84,7 @@ struct EndpointConnection {
     initial_packets: PacketReceiveState,
     handshake_packets: PacketReceiveState,
     application_packets: PacketReceiveState,
+    resource_connection_admitted: bool,
 }
 
 struct RetiredConnectionId {
@@ -94,6 +106,9 @@ pub struct QuicServerEndpoint {
     maximum_retired_ids: usize,
     admission: Option<QuicAdmissionController>,
     retry_tokens: Option<QuicRetryTokenManager>,
+    resources: Option<GitdResourceController>,
+    resource_handshake_permits: Vector<u64>,
+    metrics: QuicEndpointMetrics,
 }
 
 impl QuicServerEndpoint {
@@ -128,6 +143,9 @@ impl QuicServerEndpoint {
             maximum_retired_ids,
             admission: None,
             retry_tokens: None,
+            resources: None,
+            resource_handshake_permits: Vector::new(),
+            metrics: QuicEndpointMetrics::default(),
         })
     }
 
@@ -138,6 +156,10 @@ impl QuicServerEndpoint {
     ) {
         self.admission = Some(admission);
         self.retry_tokens = Some(retry_tokens);
+    }
+
+    pub fn configure_resource_controller(&mut self, resources: GitdResourceController) {
+        self.resources = Some(resources);
     }
 
     pub fn admit_initial(
@@ -176,7 +198,24 @@ impl QuicServerEndpoint {
             return QuicInitialAdmission::Reject;
         };
         match admission.begin(peer, now, estimated_memory_bytes, validated) {
-            QuicAdmissionDecision::Admit { permit } => QuicInitialAdmission::Admit { permit },
+            QuicAdmissionDecision::Admit { permit } => {
+                if let Some(resources) = &mut self.resources {
+                    if !resources.admit(
+                        SourceIdentity::ipv4(peer.ip),
+                        GitdWorkClass::Handshake,
+                        now,
+                    ) {
+                        let _ = admission.release(permit);
+                        return QuicInitialAdmission::Reject;
+                    }
+                    if self.resource_handshake_permits.try_push(permit).is_err() {
+                        resources.complete(GitdWorkClass::Handshake);
+                        let _ = admission.release(permit);
+                        return QuicInitialAdmission::Reject;
+                    }
+                }
+                QuicInitialAdmission::Admit { permit }
+            }
             QuicAdmissionDecision::Retry => match tokens.issue(
                 peer,
                 &original_destination_id,
@@ -191,10 +230,47 @@ impl QuicServerEndpoint {
     }
 
     pub fn release_handshake_permit(&mut self, permit: u64) -> Result<(), QuicError> {
+        let resource_index = if self.resources.is_some() {
+            Some(
+                self.resource_handshake_permits
+                    .iter()
+                    .position(|candidate| *candidate == permit)
+                    .ok_or(QuicError::ProtocolViolation)?,
+            )
+        } else {
+            None
+        };
         self.admission
             .as_mut()
             .ok_or(QuicError::ProtocolViolation)?
-            .release(permit)
+            .release(permit)?;
+        if let (Some(resources), Some(index)) = (&mut self.resources, resource_index) {
+            self.resource_handshake_permits.remove(index);
+            resources.complete(GitdWorkClass::Handshake);
+        }
+        Ok(())
+    }
+
+    /// Reconciles admission timeouts with resource permits. The endpoint owns
+    /// both ledgers so an abandoned handshake cannot permanently consume a
+    /// reactor work slot.
+    pub fn reap_handshakes(&mut self, now: u64) {
+        let Some(admission) = &mut self.admission else {
+            return;
+        };
+        admission.reap(now);
+        let Some(resources) = &mut self.resources else {
+            return;
+        };
+        let mut index = 0;
+        while index < self.resource_handshake_permits.len() {
+            if admission.contains_permit(self.resource_handshake_permits[index]) {
+                index += 1;
+            } else {
+                self.resource_handshake_permits.remove(index);
+                resources.complete(GitdWorkClass::Handshake);
+            }
+        }
     }
 
     pub fn local_port(&self) -> Result<u16, QuicError> {
@@ -220,12 +296,33 @@ impl QuicServerEndpoint {
     }
 
     pub fn mark_established(&mut self, connection: QuicConnectionHandle) -> Result<(), QuicError> {
-        let entry = self
+        self.mark_established_at(connection, 0)
+    }
+
+    pub fn mark_established_at(
+        &mut self,
+        connection: QuicConnectionHandle,
+        now: u64,
+    ) -> Result<(), QuicError> {
+        let index = self
             .connections
-            .iter_mut()
-            .find(|entry| entry.handle == connection)
+            .iter()
+            .position(|entry| entry.handle == connection)
             .ok_or(QuicError::ConnectionId)?;
-        entry.phase = EndpointConnectionPhase::Established;
+        if self.connections[index].phase == EndpointConnectionPhase::Established {
+            return Ok(());
+        }
+        if let Some(resources) = &mut self.resources {
+            if !resources.admit(
+                SourceIdentity::ipv4(self.connections[index].validated_peer.ip),
+                GitdWorkClass::OpenConnection,
+                now,
+            ) {
+                return Err(QuicError::FlowControl);
+            }
+            self.connections[index].resource_connection_admitted = true;
+        }
+        self.connections[index].phase = EndpointConnectionPhase::Established;
         Ok(())
     }
 
@@ -287,6 +384,9 @@ impl QuicServerEndpoint {
             if self.connections.len() >= self.maximum_connections {
                 return Err(QuicError::Limit);
             }
+            if phase == EndpointConnectionPhase::Established && self.resources.is_some() {
+                return Err(QuicError::ProtocolViolation);
+            }
             self.connections
                 .try_push(EndpointConnection {
                     handle: connection,
@@ -295,6 +395,7 @@ impl QuicServerEndpoint {
                     initial_packets: PacketReceiveState::new(),
                     handshake_packets: PacketReceiveState::new(),
                     application_packets: PacketReceiveState::new(),
+                    resource_connection_admitted: false,
                 })
                 .map_err(|_| QuicError::Allocation)?;
         }
@@ -360,6 +461,11 @@ impl QuicServerEndpoint {
             .iter()
             .position(|entry| entry.handle == connection)
             .ok_or(QuicError::ConnectionId)?;
+        if self.connections[index].resource_connection_admitted
+            && let Some(resources) = &mut self.resources
+        {
+            resources.complete(GitdWorkClass::OpenConnection);
+        }
         self.connections.remove(index);
         let mut id_index = 0;
         while id_index < self.connection_ids.len() {
@@ -374,6 +480,10 @@ impl QuicServerEndpoint {
 
     pub fn connection_count(&self) -> usize {
         self.connections.len()
+    }
+
+    pub fn metrics(&self) -> QuicEndpointMetrics {
+        self.metrics
     }
 
     pub fn retire_connection_id(&mut self, id: &[u8], expires_at: u64) -> Result<(), QuicError> {
@@ -425,16 +535,40 @@ impl QuicServerEndpoint {
     /// another connection. Bytes are copied only after bounded DCID routing has
     /// selected a connection or a syntactically valid new Initial.
     pub fn dispatch_datagram(
-        &self,
+        &mut self,
         peer: SocketAddress,
         input: &[u8],
     ) -> Result<Option<QuicEndpointDatagram>, QuicError> {
+        self.metrics.datagrams_received = self.metrics.datagrams_received.saturating_add(1);
+        self.metrics.bytes_received = self
+            .metrics
+            .bytes_received
+            .saturating_add(input.len() as u64);
         if input.len() > MAX_DATAGRAM {
+            self.metrics.datagrams_dropped = self.metrics.datagrams_dropped.saturating_add(1);
             return Ok(None);
         }
         let Some(route) = self.route(input, peer) else {
+            self.metrics.datagrams_dropped = self.metrics.datagrams_dropped.saturating_add(1);
             return Ok(None);
         };
+        match &route {
+            QuicEndpointRoute::NewInitial { .. } => {
+                self.metrics.new_initials = self.metrics.new_initials.saturating_add(1)
+            }
+            QuicEndpointRoute::Handshake(_) => {
+                self.metrics.handshake_datagrams =
+                    self.metrics.handshake_datagrams.saturating_add(1)
+            }
+            QuicEndpointRoute::Established { path, .. } => {
+                self.metrics.established_datagrams =
+                    self.metrics.established_datagrams.saturating_add(1);
+                if *path == QuicPathClassification::Candidate {
+                    self.metrics.candidate_path_datagrams =
+                        self.metrics.candidate_path_datagrams.saturating_add(1);
+                }
+            }
+        }
         let mut bytes = Vector::new();
         bytes
             .try_extend_from_slice(input)
@@ -543,6 +677,9 @@ mod tests {
             maximum_retired_ids,
             admission: None,
             retry_tokens: None,
+            resources: None,
+            resource_handshake_permits: Vector::new(),
+            metrics: QuicEndpointMetrics::default(),
         }
     }
 
@@ -613,6 +750,7 @@ mod tests {
             )
             .unwrap(),
         );
+        endpoint.configure_resource_controller(GitdResourceController::new(2).unwrap());
         let initial = InitialPacket {
             destination_id: [1, 2, 3, 4].into(),
             source_id: [5, 6, 7, 8].into(),
@@ -640,15 +778,60 @@ mod tests {
             QuicInitialAdmission::Admit { permit: 1 }
         );
         assert_eq!(
+            endpoint
+                .resources
+                .as_ref()
+                .unwrap()
+                .active_count(GitdWorkClass::Handshake),
+            1
+        );
+        assert_eq!(
             endpoint.admit_initial(&retried, peer(443), 101, 1024),
             QuicInitialAdmission::Reject
         );
         endpoint.release_handshake_permit(1).unwrap();
+        assert_eq!(
+            endpoint
+                .resources
+                .as_ref()
+                .unwrap()
+                .active_count(GitdWorkClass::Handshake),
+            0
+        );
+        let token = endpoint
+            .retry_tokens
+            .as_ref()
+            .unwrap()
+            .issue(
+                peer(443),
+                &initial.destination_id,
+                102,
+                QuicRetryPurpose::AddressValidation,
+            )
+            .unwrap();
+        let retried = initial
+            .seal_for_with_token(QuicVersion::V2, &keys, &token)
+            .unwrap();
+        assert_eq!(
+            endpoint.admit_initial(&retried, peer(443), 102, 1024),
+            QuicInitialAdmission::Admit { permit: 2 }
+        );
+        endpoint.reap_handshakes(200);
+        assert_eq!(
+            endpoint
+                .resources
+                .as_ref()
+                .unwrap()
+                .active_count(GitdWorkClass::Handshake),
+            0
+        );
+        assert!(endpoint.resource_handshake_permits.is_empty());
     }
 
     #[test]
     fn endpoint_owns_bounded_connection_lifecycle_and_packet_spaces() {
         let mut endpoint = endpoint(1, 8);
+        endpoint.configure_resource_controller(GitdResourceController::new(2).unwrap());
         let connection = QuicConnectionHandle(7);
         endpoint
             .register_handshake(&[1, 2, 3, 4], connection, peer(443))
@@ -680,6 +863,14 @@ mod tests {
             Err(QuicError::Limit)
         );
         endpoint.mark_established(connection).unwrap();
+        assert_eq!(
+            endpoint
+                .resources
+                .as_ref()
+                .unwrap()
+                .active_count(GitdWorkClass::OpenConnection),
+            1
+        );
         endpoint
             .update_validated_peer(connection, peer(444))
             .unwrap();
@@ -692,6 +883,14 @@ mod tests {
             })
         );
         endpoint.remove_connection(connection).unwrap();
+        assert_eq!(
+            endpoint
+                .resources
+                .as_ref()
+                .unwrap()
+                .active_count(GitdWorkClass::OpenConnection),
+            0
+        );
         assert_eq!(endpoint.connection_count(), 0);
         assert_eq!(endpoint.route(&packet, peer(444)), None);
     }
@@ -742,6 +941,16 @@ mod tests {
         endpoint.mark_established(second).unwrap();
         assert_eq!(
             endpoint
+                .dispatch_datagram(peer(999), &first_packet)
+                .unwrap()
+                .map(|datagram| datagram.route),
+            Some(QuicEndpointRoute::Established {
+                connection: first,
+                path: QuicPathClassification::Candidate,
+            })
+        );
+        assert_eq!(
+            endpoint
                 .dispatch_datagram(peer(443), &first_packet)
                 .unwrap()
                 .map(|datagram| datagram.route),
@@ -761,5 +970,17 @@ mod tests {
             })
         );
         assert_eq!(endpoint.connection_count(), 2);
+        assert_eq!(
+            endpoint.metrics(),
+            QuicEndpointMetrics {
+                datagrams_received: 10,
+                bytes_received: 47,
+                datagrams_dropped: 5,
+                new_initials: 0,
+                handshake_datagrams: 2,
+                established_datagrams: 3,
+                candidate_path_datagrams: 1,
+            }
+        );
     }
 }
