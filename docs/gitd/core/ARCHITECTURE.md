@@ -50,8 +50,10 @@ revalidate pack/index/object identity.
 The canonical bounded `MRPKSET1` record represents that exact ordered
 membership and rejects duplicate object identities. `MRREFS02` binds its exact
 digest while advancing repository and pack generations together; parsing or
-possessing any other manifest grants no read authority. Durable receive-side
-manifest persistence and active lookup remain an explicit incomplete gate.
+possessing any other manifest grants no read authority. The active-ref store
+durably writes and reopens the immutable selected manifest around that atomic
+transition. Receive-side cumulative construction and normal active object
+lookup remain explicit incomplete gates.
 
 Repository state now also has a canonical single-record active-ref model with
 distinct repository, trust, revocation, and pack generations. The pure update

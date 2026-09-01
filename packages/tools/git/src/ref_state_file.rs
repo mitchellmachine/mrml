@@ -7,8 +7,10 @@ use mrml_runtime::{
 
 use crate::{
     ActivationSnapshot, ActiveRefState, ActiveRefStateError, DurableFailure,
-    MAX_ACTIVE_REF_STATE_BYTES, VerifiedRefTransaction, apply_verified_ref_transaction,
-    encode_active_ref_state, parse_active_ref_state,
+    MAX_ACTIVE_REF_STATE_BYTES, MAX_PACK_SET_MANIFEST_BYTES, PackSetLimits, PackSetManifest,
+    VerifiedRefTransaction, apply_verified_ref_transaction,
+    apply_verified_ref_transaction_with_pack_set, encode_active_ref_state,
+    encode_pack_set_manifest, parse_active_ref_state, parse_pack_set_manifest,
 };
 
 pub struct ActiveRefFile {
@@ -125,6 +127,65 @@ impl ActiveRefFile {
         }
     }
 
+    /// Persists an immutable canonical manifest before atomically selecting its
+    /// digest in the active-ref record. A crash before the ref rename can leave
+    /// only an inert content-addressed manifest; a crash after rename is
+    /// classified uncertain and retains the activation lock for recovery.
+    pub fn activate_with_pack_set(
+        &self,
+        verified: &VerifiedRefTransaction,
+        manifest: &PackSetManifest,
+    ) -> Result<ActiveRefState, DurableFailure> {
+        let lock = File::create_new(&self.lock).map_err(|_| DurableFailure::StaleLock)?;
+        lock.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(lock);
+        sync_ref_directory(&self.directory)?;
+
+        let result = self.activate_pack_set_while_locked(verified, manifest);
+        match result {
+            Ok(next) => {
+                remove_file(&self.lock).map_err(|_| DurableFailure::Rename)?;
+                sync_ref_directory(&self.directory)?;
+                Ok(next)
+            }
+            Err(error) => {
+                if matches!(
+                    error,
+                    DurableFailure::StaleLock
+                        | DurableFailure::DiskFull
+                        | DurableFailure::ShortWrite
+                ) {
+                    let _ = remove_file(&self.lock);
+                    let _ = sync_ref_directory(&self.directory);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Opens only the manifest selected by the active record and rechecks its
+    /// digest and every generation/identity dimension.
+    pub fn load_selected_pack_set(
+        &self,
+        limits: PackSetLimits,
+    ) -> Result<PackSetManifest, ActiveRefStateError> {
+        let state = self.load()?;
+        let path = self.pack_set_path(&state.pack_set_digest);
+        let bytes = read_bounded(&path, MAX_PACK_SET_MANIFEST_BYTES)?;
+        let manifest = parse_pack_set_manifest(&bytes, limits)
+            .map_err(|_| ActiveRefStateError::Integrity)?;
+        if manifest.digest().map_err(|_| ActiveRefStateError::Integrity)?
+            != state.pack_set_digest
+            || manifest.repository() != &state.repository
+            || manifest.repository_generation() != state.repository_generation
+            || manifest.pack_generation() != state.pack_generation
+            || manifest.object_format() != state.object_format
+        {
+            return Err(ActiveRefStateError::Stale);
+        }
+        Ok(manifest)
+    }
+
     fn activate_while_locked(
         &self,
         verified: &VerifiedRefTransaction,
@@ -153,6 +214,71 @@ impl ActiveRefFile {
         Ok(next)
     }
 
+    fn activate_pack_set_while_locked(
+        &self,
+        verified: &VerifiedRefTransaction,
+        manifest: &PackSetManifest,
+    ) -> Result<ActiveRefState, DurableFailure> {
+        let current = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
+        let next = apply_verified_ref_transaction_with_pack_set(&current, verified, manifest)
+            .map_err(|error| match error {
+                ActiveRefStateError::Stale => DurableFailure::StaleLock,
+                ActiveRefStateError::Resource => DurableFailure::DiskFull,
+                _ => DurableFailure::VerifierCrash,
+            })?;
+        let manifest_bytes =
+            encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
+        let manifest_path = self.pack_set_path(&next.pack_set_digest);
+        if path_exists(&manifest_path) {
+            let existing = read_bounded(&manifest_path, MAX_PACK_SET_MANIFEST_BYTES)
+                .map_err(|_| DurableFailure::VerifierCrash)?;
+            if existing != manifest_bytes {
+                return Err(DurableFailure::VerifierCrash);
+            }
+        } else {
+            let mut file = File::create_new(&manifest_path).map_err(|_| DurableFailure::StaleLock)?;
+            file.write_all(&manifest_bytes)
+                .map_err(|_| DurableFailure::ShortWrite)?;
+            file.sync().map_err(|_| DurableFailure::Fsync)?;
+            drop(file);
+            sync_ref_directory(&self.directory)?;
+        }
+        let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
+        let mut temporary =
+            File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
+        temporary
+            .write_all(&encoded)
+            .map_err(|_| DurableFailure::ShortWrite)?;
+        temporary.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(temporary);
+        rename_file(&self.temporary, &self.active).map_err(|_| DurableFailure::Rename)?;
+        sync_ref_directory(&self.directory)?;
+        let reread = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
+        if reread != next {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        self.load_selected_pack_set(PackSetLimits {
+            max_packs: u32::MAX,
+            max_objects: u64::MAX,
+            max_pack_bytes: u64::MAX,
+            max_index_bytes: u64::MAX,
+            max_work_units: u64::MAX,
+        })
+        .map_err(|_| DurableFailure::VerifierCrash)?;
+        Ok(next)
+    }
+
+    fn pack_set_path(&self, digest: &[u8; 32]) -> Text {
+        let mut name = Text::from("pack-set-");
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in digest {
+            name.push(char::from(HEX[usize::from(byte >> 4)]));
+            name.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        name.push_str(".manifest");
+        join_path(&self.directory, &name)
+    }
+
     fn paths(directory: &str) -> Result<Self, DurableFailure> {
         let directory = canonical_path(directory).map_err(|_| DurableFailure::Rename)?;
         if !path_is_directory(&directory) {
@@ -165,6 +291,23 @@ impl ActiveRefFile {
             directory,
         })
     }
+}
+
+fn read_bounded(path: &str, maximum: usize) -> Result<Vector<u8>, ActiveRefStateError> {
+    let mut file = File::open_regular(path).map_err(|_| ActiveRefStateError::Malformed)?;
+    let length = usize::try_from(file.len().map_err(|_| ActiveRefStateError::Malformed)?)
+        .map_err(|_| ActiveRefStateError::Resource)?;
+    if length == 0 || length > maximum {
+        return Err(ActiveRefStateError::Resource);
+    }
+    let mut bytes = Vector::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| ActiveRefStateError::Resource)?;
+    bytes.resize(length, 0);
+    file.read_exact(&mut bytes)
+        .map_err(|_| ActiveRefStateError::Malformed)?;
+    Ok(bytes)
 }
 
 #[cfg(unix)]
@@ -180,11 +323,12 @@ fn sync_ref_directory(_: &str) -> Result<(), DurableFailure> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
     use crate::{
         CandidateRefTransaction, CandidateRefUpdate, FullRefName, HistoryVerificationLimits,
-        ObjectFormat, ObjectId, PackGeneration, RepositoryGeneration, RepositoryIdentity,
-        RevocationGeneration, TrustGeneration, build_verified_fast_forward_transaction,
-        verify_introduced_history,
+        ObjectFormat, ObjectId, PackGeneration, PackSetLimits, QuarantineTransactionId,
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+        build_verified_fast_forward_transaction, verify_introduced_history,
     };
 
     fn fixture() -> (ActiveRefState, VerifiedRefTransaction, ObjectId) {
@@ -267,6 +411,56 @@ mod tests {
         mrml_runtime::write_new_file(&store.lock, b"").unwrap();
         assert_eq!(store.activate(&verified), Err(DurableFailure::StaleLock));
         assert_eq!(store.load().unwrap(), state);
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn pack_set_is_durable_before_selection_and_reopens_by_exact_digest() {
+        let root = root("mrml-active-pack-set");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let (state, verified, new) = fixture();
+        let store = ActiveRefFile::initialize(&root, &state).unwrap();
+        let limits = PackSetLimits {
+            max_packs: 1,
+            max_objects: 1,
+            max_pack_bytes: 128,
+            max_index_bytes: 128,
+            max_work_units: 128,
+        };
+        let manifest = build_pack_set_manifest(
+            state.repository.clone(),
+            RepositoryGeneration(8),
+            PackGeneration(2),
+            state.object_format,
+            [AuthenticatedPackIndexSummary {
+                transaction: QuarantineTransactionId([7; 16]),
+                object_count: 1,
+                pack_checksum: ObjectId::Sha256([7; 32]),
+                index_checksum: ObjectId::Sha256([8; 32]),
+                pack_bytes: 64,
+                index_bytes: 64,
+                work_units: 64,
+                object_ids: [new].into(),
+            }]
+            .into(),
+            limits,
+        )
+        .unwrap();
+        let next = store.activate_with_pack_set(&verified, &manifest).unwrap();
+        assert_eq!(next.pack_set_digest, manifest.digest().unwrap());
+        assert_eq!(store.load_selected_pack_set(limits).unwrap(), manifest);
+
+        let selected = store.pack_set_path(&next.pack_set_digest);
+        let mut bytes = read_bounded(&selected, MAX_PACK_SET_MANIFEST_BYTES).unwrap();
+        bytes[16] ^= 1;
+        mrml_runtime::remove_file(&selected).unwrap();
+        let mut file = File::create_new(&selected).unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync().unwrap();
+        assert_eq!(
+            store.load_selected_pack_set(limits),
+            Err(ActiveRefStateError::Integrity)
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 

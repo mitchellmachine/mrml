@@ -132,13 +132,19 @@ checked. Cross-pack duplicate object IDs are rejected as ambiguous. The parser
 checks its terminal SHA-256 integrity digest, exact widths, truncation, trailing
 data, canonical order, and byte-exact re-encoding.
 
-`MRREFS02` now carries the exact SHA-256 digest of its selected `MRPKSET1`, and
-the checked pack-set transition advances the repository generation and pack
+`MRREFS02` carries the exact SHA-256 digest of its selected `MRPKSET1`, and the
+checked pack-set transition advances the repository generation and pack
 generation together only when repository identity, object format, and both
-next generations match. A manifest not selected by that record remains inert.
-The receive storage compositor does not yet persist and supply this manifest,
-so active reads, directory discovery, lookup, and generation switching remain
-disabled. Once that durable compositor gate is complete, a reader may reopen exactly
-the enumerated regular files, revalidate every index/pack/object binding, reject
-duplicate ambiguity, and recheck active generations. This prerequisite is
-independent of compaction and does not authorize patent-gated delta selection.
+next generations match. `ActiveRefFile::activate_with_pack_set` writes and
+fsyncs the immutable content-addressed manifest before replacing the active
+record; an interrupted pre-selection write is inert. Selected-manifest reads
+open only that digest-derived regular file and recheck the digest, repository,
+format, and generations. A manifest not selected by the active record grants
+no read authority.
+
+The receive storage compositor does not yet construct the cumulative manifest
+from installed authenticated indexes or call this transition, and normal
+repository object lookup does not yet consume the selected entries. Those
+remaining gates must reopen exactly the enumerated pack/index files and
+revalidate every binding. This mechanism is independent of compaction and does
+not authorize patent-gated delta selection.
