@@ -13,6 +13,7 @@ mod openpgp_provider;
 mod pack;
 mod pack_index;
 mod quarantine;
+mod receive_journal;
 mod remote;
 mod repository;
 mod sha1;
@@ -60,6 +61,10 @@ pub use quarantine::{
     DurableReceiveError, DurableReceiveStore, PushDiskReservation, PushStorageForecast,
     QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
     QuarantineTransactionId, durably_activate_verified_receive, reserve_push_disk,
+};
+pub use receive_journal::{
+    JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,
+    RecoveryAction, classify_receive_recovery, encode_receive_journal, parse_receive_journal,
 };
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,

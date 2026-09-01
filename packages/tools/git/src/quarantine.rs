@@ -132,6 +132,7 @@ pub trait DurableReceiveStore {
     fn persist_journal_and_fsync(
         &mut self,
         transaction: &QuarantineTransaction,
+        verified: &VerifiedRefTransaction,
     ) -> Result<(), DurableFailure>;
     fn install_arrival_pack_and_fsync(
         &mut self,
@@ -244,6 +245,22 @@ impl QuarantineTransaction {
 
     pub const fn id(&self) -> QuarantineTransactionId {
         self.id
+    }
+
+    pub fn repository(&self) -> &RepositoryIdentity {
+        &self.repository
+    }
+
+    pub const fn repository_generation(&self) -> RepositoryGeneration {
+        self.repository_generation
+    }
+
+    pub const fn trust_generation(&self) -> TrustGeneration {
+        self.trust_generation
+    }
+
+    pub const fn revocation_generation(&self) -> RevocationGeneration {
+        self.revocation_generation
     }
 
     pub const fn failure(&self) -> Option<DurableFailure> {
@@ -361,11 +378,12 @@ impl QuarantineTransaction {
 
 fn record_failure(
     transaction: &mut QuarantineTransaction,
+    verified: &VerifiedRefTransaction,
     store: &mut dyn DurableReceiveStore,
     failure: DurableFailure,
 ) -> DurableReceiveError {
     let _ = transaction.fail(failure);
-    let _ = store.persist_journal_and_fsync(transaction);
+    let _ = store.persist_journal_and_fsync(transaction, verified);
     if transaction.phase() == QuarantinePhase::Uncertain {
         DurableReceiveError::Uncertain(failure)
     } else {
@@ -381,22 +399,22 @@ pub fn durably_activate_verified_receive(
     transaction
         .ref_updates_prepared()
         .map_err(|_| DurableReceiveError::InvalidState)?;
-    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
-        return Err(record_failure(transaction, store, failure));
+    if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
+        return Err(record_failure(transaction, verified, store, failure));
     }
     if let Err(failure) = store.install_arrival_pack_and_fsync(transaction.id()) {
-        return Err(record_failure(transaction, store, failure));
+        return Err(record_failure(transaction, verified, store, failure));
     }
     transaction
         .objects_durably_installed()
         .map_err(|_| DurableReceiveError::InvalidState)?;
-    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
-        return Err(record_failure(transaction, store, failure));
+    if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
+        return Err(record_failure(transaction, verified, store, failure));
     }
 
     let snapshot = match store.reread_activation_snapshot(verified) {
         Ok(snapshot) => snapshot,
-        Err(failure) => return Err(record_failure(transaction, store, failure)),
+        Err(failure) => return Err(record_failure(transaction, verified, store, failure)),
     };
     let exact_generations = snapshot.repository_generation == verified.repository_generation()
         && snapshot.trust_generation == verified.trust_generation()
@@ -409,17 +427,17 @@ pub fn durably_activate_verified_receive(
                 .any(|(name, value)| name == update.name() && *value == update.expected_old())
         });
     if !exact_generations || !exact_refs {
-        let _ = record_failure(transaction, store, DurableFailure::StaleLock);
+        let _ = record_failure(transaction, verified, store, DurableFailure::StaleLock);
         return Err(DurableReceiveError::StaleAuthority);
     }
     if let Err(failure) = store.activate_refs_atomically_and_fsync(verified) {
-        return Err(record_failure(transaction, store, failure));
+        return Err(record_failure(transaction, verified, store, failure));
     }
     transaction
         .refs_atomically_activated()
         .map_err(|_| DurableReceiveError::InvalidState)?;
-    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
-        return Err(record_failure(transaction, store, failure));
+    if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
+        return Err(record_failure(transaction, verified, store, failure));
     }
 
     let mut updates = mrml_runtime::Vector::new();
@@ -441,13 +459,13 @@ pub fn durably_activate_verified_receive(
         updates,
     };
     if let Err(failure) = store.append_audit_receipt_and_fsync(&receipt) {
-        return Err(record_failure(transaction, store, failure));
+        return Err(record_failure(transaction, verified, store, failure));
     }
     transaction
         .audit_receipt_appended()
         .map_err(|_| DurableReceiveError::InvalidState)?;
-    if let Err(failure) = store.persist_journal_and_fsync(transaction) {
-        return Err(record_failure(transaction, store, failure));
+    if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
+        return Err(record_failure(transaction, verified, store, failure));
     }
     Ok(receipt)
 }
@@ -475,6 +493,7 @@ mod tests {
         fn persist_journal_and_fsync(
             &mut self,
             transaction: &QuarantineTransaction,
+            _: &VerifiedRefTransaction,
         ) -> Result<(), DurableFailure> {
             self.phases.push(transaction.phase());
             Ok(())

@@ -55,3 +55,23 @@ than reported as retry-safe. Focused mock-backend tests prove ordering, stale
 old-ID rejection, one-call atomic activation, receipt sequencing, and uncertain
 activation failure. These tests prove coordinator behavior only; they are not
 filesystem, power-loss, or physical-storage evidence.
+
+The coordinator journal callback now receives both the lifecycle record and
+the private verified transaction, preventing an implementation from persisting
+a phase without the exact ref set that phase authorizes. `MRGJNL01` is a
+deterministic, 16-KiB-bounded binary journal record containing the transaction
+and repository identities, all authority generations, phase/failure, and every
+full ref with exact old/new object IDs. A terminal SHA-256 record checksum
+detects torn or accidentally corrupted records; it is not a signature or a
+defense against a storage authority deliberately rewriting the journal.
+
+The bounded parser rejects unknown versions, zero generations/identities,
+invalid or duplicate refs, mixed/zero object IDs, inconsistent terminal state,
+truncation, trailing bytes, and checksum changes. Recovery compares the full
+live generation/ref snapshot to the journal. Exact-old installed state requires
+complete verification again before any activation typestate can be rebuilt;
+exact-new state recovers the audit receipt; an exact-new receipt state can be
+marked complete. Any generation change, partial update, or third ref value is
+`ManualUncertain`. Mock crash-state tests exercise these decisions, but a
+filesystem journal writer, directory fsync, process restart, injected power
+loss, and physical-storage evidence remain open.
