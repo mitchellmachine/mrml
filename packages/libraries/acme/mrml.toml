@@ -30,6 +30,12 @@ crate_name = "mrml_acme"
 crate_type = "lib"
 source = "packages/libraries/acme/src/lib.rs"
 
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
-

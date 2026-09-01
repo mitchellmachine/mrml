@@ -9,13 +9,17 @@ Windows, and Linux targets. It currently provides allocation-free bounded types
 for normalized ASCII DNS identifiers, explicitly authorized wildcards,
 HTTPS ACME endpoint origins, directory-generation-bound one-use nonces,
 directory-generation-bound profile identities, ARI renewal windows, and
-fail-closed account/order transitions. Wine exercises the Windows target; Wine
-is not a separate platform implementation or native-Windows evidence.
+fail-closed account/order transitions. It also implements strict unpadded
+Base64url, P-256 public-point admission, canonical EC JWK thumbprints,
+deterministic ACME protected headers with exactly one of `jwk` or `kid`, raw
+ES256 scalar bounds, purpose-typed signing approval, and flattened JWS output.
+Wine exercises the Windows target; Wine is not a separate platform
+implementation or native-Windows evidence.
 
-Private-key operations, JOSE/JWS/JWK, PKCS#10, X.509 issuance validation, ACME
-transport, accounts, challenges, durable recovery, certificate publication,
-renewal, revocation, backup/restore, CLI administration, gitd hot reload, and
-the MRML certificate service remain **PLANNED**. The shared state machine must
+Private-key operations, JOSE parsing and EAB, PKCS#10, X.509 issuance
+validation, ACME transport, accounts, challenges, durable recovery, certificate
+publication, renewal, revocation, backup/restore, CLI administration, gitd hot
+reload, and the MRML certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 Future platform adapters belong inside these logical packages and must not fork
 their public semantics.

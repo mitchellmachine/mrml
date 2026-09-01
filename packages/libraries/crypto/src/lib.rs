@@ -12,7 +12,6 @@ mod lamport;
 mod ml_dsa;
 #[cfg(feature = "runtime")]
 mod ml_kem;
-#[cfg(feature = "runtime")]
 mod p256;
 #[cfg(feature = "runtime")]
 mod p384;
@@ -49,8 +48,7 @@ pub use ml_kem::{
     MlKem768Ciphertext, MlKem768DecapsulationKey, MlKem768EncapsulationKey, MlKemError,
     ml_kem_768_decapsulate, ml_kem_768_encapsulate, ml_kem_768_keygen,
 };
-#[cfg(feature = "runtime")]
-pub use p256::{P256Error, ecdsa_p256_sha256_verify};
+pub use p256::{P256Error, ecdsa_p256_sha256_verify, p256_public_key_is_valid};
 #[cfg(feature = "runtime")]
 pub use p384::{P384Error, ecdsa_p384_sha384_verify};
 pub use poly1305::poly1305;
