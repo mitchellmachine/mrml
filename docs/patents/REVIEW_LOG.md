@@ -11775,3 +11775,11 @@ Patent review: **NOT_TRIGGERED**. This increment associates an independent ARI
 or fallback schedule and a bounded expiring single-flight renewal lease with
 each capability-selected certificate identity. It adds no certificate protocol
 mechanism, route-selected validation, or recorded re-review trigger.
+
+# 2026-09-01 — Use-only hosted TLS identity publication
+
+Patent review: **NOT_TRIGGERED**. This increment atomically publishes an exact
+tested certificate generation and use-only signing configuration to new hosted
+TLS connections while retaining the prior generation for bounded drain and
+rollback. It does not select among identities from SNI or implement the
+recorded MultiTLS re-review trigger.

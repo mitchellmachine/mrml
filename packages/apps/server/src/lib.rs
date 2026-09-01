@@ -1,6 +1,7 @@
 #![no_std]
 
 use mrml_agent::client::{ChatCompletionRequest, ChatMessage, MrmlClient, StreamEvent};
+use mrml_certificate::HostedTlsIdentityPublication;
 use mrml_error::Result;
 use mrml_json::{Value, object};
 use mrml_runtime::{
@@ -109,6 +110,7 @@ pub struct ApiServer {
     client: Shared<MrmlClient>,
     port: u16,
     tls: Option<Shared<TlsServerConfig>>,
+    tls_identity: Option<HostedTlsIdentityPublication>,
     bearer_token: Option<Shared<Text>>,
 }
 
@@ -118,6 +120,7 @@ impl ApiServer {
             client,
             port,
             tls: None,
+            tls_identity: None,
             bearer_token: None,
         }
     }
@@ -132,11 +135,30 @@ impl ApiServer {
         Ok(self)
     }
 
-    pub fn with_tls_pem(mut self, certificate_pem: &[u8], private_key_pem: &[u8]) -> Result<Self> {
+    pub fn with_development_tls_pem(
+        mut self,
+        certificate_pem: &[u8],
+        private_key_pem: &[u8],
+    ) -> Result<Self> {
+        if self.tls_identity.is_some() {
+            return Err(mrml_error::message(
+                "TLS identity source is already configured",
+            ));
+        }
         self.tls = Some(Shared::new(
             TlsServerConfig::from_pem(certificate_pem, private_key_pem)
                 .map_err(|e| mrml_error::message(format!("{e}")))?,
         ));
+        Ok(self)
+    }
+
+    pub fn with_tls_identity(mut self, publication: HostedTlsIdentityPublication) -> Result<Self> {
+        if self.tls.is_some() {
+            return Err(mrml_error::message(
+                "TLS identity source is already configured",
+            ));
+        }
+        self.tls_identity = Some(publication);
         Ok(self)
     }
 
@@ -150,7 +172,11 @@ impl ApiServer {
             "{}",
             format!(
                 "🌐 OpenAI-Compatible API Server listening on {}://127.0.0.1:{}",
-                if self.tls.is_some() { "https" } else { "http" },
+                if self.tls.is_some() || self.tls_identity.is_some() {
+                    "https"
+                } else {
+                    "http"
+                },
                 self.port
             )
             .bright_green()
@@ -168,7 +194,16 @@ impl ApiServer {
             };
 
             let client = self.client.clone();
-            let tls = self.tls.clone();
+            let tls = match &self.tls_identity {
+                Some(publication) => match publication.snapshot() {
+                    Some(identity) => Some(identity.config),
+                    None => {
+                        eprintln!("TLS identity unavailable; refusing connection");
+                        continue;
+                    }
+                },
+                None => self.tls.clone(),
+            };
             let token = token.clone();
             if mrml_runtime::spawn_detached(move || {
                 let connection = match tls {

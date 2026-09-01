@@ -14,6 +14,8 @@ mod challenge_tls_alpn_hosted;
 mod deployment_journal;
 mod dns_propagation;
 mod durable;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod hot_reload;
 mod identity;
 mod identity_service;
 mod lifecycle_service;
@@ -77,6 +79,11 @@ pub use durable::{
     DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
     DurableTransaction, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
     SecretHandle, TransactionState,
+};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use hot_reload::{
+    HostedCandidateHandshakeTester, HostedSigningRouteResolver, HostedTlsIdentityDeploymentTarget,
+    HostedTlsIdentityPublication, PublishedTlsIdentity,
 };
 pub use identity::{
     ActivationReceipt, ApprovedTls13CertificateVerify, DeploymentState, IdentityConsumerCapability,

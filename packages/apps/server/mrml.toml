@@ -55,6 +55,12 @@ provider_profile = "auto"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_certificate"
+compile_name = "mrml-certd"
+package = "org.mrml.service.certificate"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_error"
 compile_name = "mrml-error"
 package = "org.mrml.library.error"
