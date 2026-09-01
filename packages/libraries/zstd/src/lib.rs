@@ -243,11 +243,12 @@ pub fn encode_http(input: &[u8], profile: HttpEncodingProfile) -> Result<Vector<
             .map_err(|_| Error::Allocation)?;
         return Ok(output);
     }
+    let mut sequence_state = sequences::EncoderState::new();
     for (index, block) in input.chunks(MAX_BLOCK).enumerate() {
         let last = (index + 1) * MAX_BLOCK >= input.len();
         let rle = block.iter().all(|byte| *byte == block[0]);
         let compressed = if profile == HttpEncodingProfile::BoundedRfc8878V2 && !rle {
-            encode_compressed_candidate(block)?
+            encode_compressed_candidate(block, &mut sequence_state)?
         } else {
             None
         };
@@ -279,7 +280,10 @@ pub fn encode_http(input: &[u8], profile: HttpEncodingProfile) -> Result<Vector<
 }
 
 #[cfg(any(windows, unix))]
-fn encode_compressed_candidate(block: &[u8]) -> Result<Option<Vector<u8>>> {
+fn encode_compressed_candidate(
+    block: &[u8],
+    sequence_state: &mut sequences::EncoderState,
+) -> Result<Option<Vector<u8>>> {
     const HASH_BITS: usize = 16;
     const HASH_SIZE: usize = 1 << HASH_BITS;
     const EMPTY: u32 = u32::MAX;
@@ -333,10 +337,12 @@ fn encode_compressed_candidate(block: &[u8]) -> Result<Option<Vector<u8>>> {
         .try_extend_from_slice(&block[anchor..])
         .map_err(|_| Error::Allocation)?;
     let mut candidate = encode_raw_literals(&literals)?;
+    let mut candidate_state = sequence_state.clone();
     candidate
-        .try_extend_from_slice(&sequences::encode_predefined(&commands)?)
+        .try_extend_from_slice(&sequences::encode(&commands, &mut candidate_state)?)
         .map_err(|_| Error::Allocation)?;
     if candidate.len() < block.len() {
+        *sequence_state = candidate_state;
         Ok(Some(candidate))
     } else {
         Ok(None)

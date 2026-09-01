@@ -41,6 +41,23 @@ impl State {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct EncoderState {
+    literal_table: Option<Table>,
+    offset_table: Option<Table>,
+    match_table: Option<Table>,
+}
+
+impl EncoderState {
+    pub(crate) const fn new() -> Self {
+        Self {
+            literal_table: None,
+            offset_table: None,
+            match_table: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Literals,
@@ -223,8 +240,7 @@ fn predefined(kind: Kind) -> Result<Table> {
     }
 }
 
-#[allow(dead_code)] // Selected by the compressed-block encoder once match finding lands.
-pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
+pub(crate) fn encode(sequences: &[Sequence], state: &mut EncoderState) -> Result<Vector<u8>> {
     if sequences.is_empty() {
         let mut output = Vector::new();
         output.try_push(0).map_err(|_| Error::Allocation)?;
@@ -262,11 +278,15 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
         match_extras.push(match_extra);
     }
 
-    let (literal_mode, literal_table, literal_description) =
-        selected_table(&literal_symbols, Kind::Literals)?;
+    let (literal_mode, literal_table, literal_description) = selected_table(
+        &literal_symbols,
+        Kind::Literals,
+        state.literal_table.as_ref(),
+    )?;
     let (offset_mode, offset_table, offset_description) =
-        selected_table(&offset_symbols, Kind::Offset)?;
-    let (match_mode, match_table, match_description) = selected_table(&match_symbols, Kind::Match)?;
+        selected_table(&offset_symbols, Kind::Offset, state.offset_table.as_ref())?;
+    let (match_mode, match_table, match_description) =
+        selected_table(&match_symbols, Kind::Match, state.match_table.as_ref())?;
     let mut output = Vector::new();
     write_sequence_count(sequences.len(), &mut output)?;
     output
@@ -313,10 +333,17 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
     output
         .try_extend_from_slice(&writer.finish()?)
         .map_err(|_| Error::Allocation)?;
+    state.literal_table = Some(literal_table);
+    state.offset_table = Some(offset_table);
+    state.match_table = Some(match_table);
     Ok(output)
 }
 
-fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table, Vector<u8>)> {
+fn selected_table(
+    symbols: &[u16],
+    kind: Kind,
+    previous: Option<&Table>,
+) -> Result<(u8, Table, Vector<u8>)> {
     let first = *symbols.first().ok_or(Error::InvalidSequencesSection)?;
     if symbols.iter().all(|symbol| *symbol == first) {
         let maximum = match kind {
@@ -352,6 +379,10 @@ fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table, Vector<u8>)
         Kind::Offset => 8,
         Kind::Literals | Kind::Match => 9,
     };
+    let mut selected_mode = 0;
+    let mut selected_table = predefined;
+    let mut selected_description = Vector::new();
+    let mut selected_bits = predefined_bits;
     if let Ok((probabilities, accuracy)) = normalize_counts(symbols, maximum_accuracy) {
         let compressed = Table::from_probabilities(&probabilities, accuracy)?;
         let description = serialize_probabilities(&probabilities, accuracy)?;
@@ -364,10 +395,20 @@ fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table, Vector<u8>)
             )
             .ok_or(Error::BlockTooLarge)?;
         if compressed_bits < predefined_bits {
-            return Ok((2, compressed, description));
+            selected_mode = 2;
+            selected_table = compressed;
+            selected_description = description;
+            selected_bits = compressed_bits;
         }
     }
-    Ok((0, predefined, Vector::new()))
+    if let Some(previous) = previous {
+        if let Ok(repeat_bits) = path_bits(previous, symbols) {
+            if repeat_bits < selected_bits {
+                return Ok((3, previous.clone(), Vector::new()));
+            }
+        }
+    }
+    Ok((selected_mode, selected_table, selected_description))
 }
 
 fn path_bits(table: &Table, symbols: &[u16]) -> Result<usize> {
@@ -671,7 +712,7 @@ mod encode_tests {
     #[test]
     fn predefined_sequence_section_round_trips_and_executes() {
         let expected = [Sequence::new(3, 3, 3), Sequence::new(0, 3, 6)];
-        let encoded = encode_predefined(&expected).unwrap();
+        let encoded = encode(&expected, &mut EncoderState::new()).unwrap();
         assert_eq!(encoded[1] & 0x0c, 0x04);
         let decoded = decode(&encoded, &mut State::new()).unwrap();
         assert_eq!(decoded.len(), expected.len());
@@ -687,7 +728,7 @@ mod encode_tests {
 
     #[test]
     fn uniform_code_streams_select_rle_tables() {
-        let encoded = encode_predefined(&[Sequence::new(3, 7, 3)]).unwrap();
+        let encoded = encode(&[Sequence::new(3, 7, 3)], &mut EncoderState::new()).unwrap();
         assert_eq!(encoded[1], 0x54);
         let decoded = decode(&encoded, &mut State::new()).unwrap();
         assert_eq!(decoded.len(), 1);
@@ -708,22 +749,27 @@ mod encode_tests {
                 0
             });
         }
-        let (mode, table, description) = selected_table(&symbols, Kind::Literals).unwrap();
+        let (mode, table, description) = selected_table(&symbols, Kind::Literals, None).unwrap();
         assert_eq!(mode, 2);
         assert!(!description.is_empty());
         let (parsed, consumed) = parse_table(&description, 9, 35).unwrap();
         assert_eq!(consumed, description.len());
         assert_eq!(parsed.entries, table.entries);
+        let (repeat_mode, repeat_table, repeat_description) =
+            selected_table(&symbols, Kind::Literals, Some(&table)).unwrap();
+        assert_eq!(repeat_mode, 3);
+        assert!(repeat_description.is_empty());
+        assert_eq!(repeat_table.entries, table.entries);
     }
 
     #[test]
     fn predefined_sequence_section_rejects_invalid_values() {
         assert!(matches!(
-            encode_predefined(&[Sequence::new(0, 2, 1)]),
+            encode(&[Sequence::new(0, 2, 1)], &mut EncoderState::new()),
             Err(Error::InvalidSequencesSection)
         ));
         assert!(matches!(
-            encode_predefined(&[Sequence::new(0, 3, 0)]),
+            encode(&[Sequence::new(0, 3, 0)], &mut EncoderState::new()),
             Err(Error::InvalidOffset)
         ));
     }
