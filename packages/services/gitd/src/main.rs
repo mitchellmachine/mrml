@@ -5,10 +5,12 @@ use std::path::Path;
 
 use mrml_certificate::{CertdChannelCapability, CertdPeerIdentity};
 use mrml_crypto::erase_secret_bytes;
+use mrml_git::RemoteProtectedReceiveAuthority;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
     GitAuthorityChannelClient, GitdCertdChannelClient, admit_catalog_repository,
-    load_deployment_catalog, load_gitd_authentication, load_gitd_config, validate_storage_layout,
+    load_deployment_catalog, load_gitd_authentication, load_gitd_config,
+    recover_admitted_repository, validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -82,6 +84,12 @@ fn run() -> Result<(), ()> {
         .map_err(|_| ())?;
         authority.health().map_err(|_| ())?;
         certd.health().map_err(|_| ())?;
+        let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
+        for repository in &catalog.repositories {
+            let admitted = admit_catalog_repository(&config, repository).map_err(|_| ())?;
+            recover_admitted_repository(&config, repository, &admitted, &mut receipt_authority)
+                .map_err(|_| ())?;
+        }
         println!("dependencies-ready");
         return Ok(());
     }

@@ -56,7 +56,13 @@ storage, authentication state, and every admitted catalog repository; securely
 loads the two separately owned 32-byte capability files; erases transient key
 copies; and authenticates exact health responses from both authority and certd
 using independent configured request sequences. Failure of any local or remote
-gate yields no partial-ready result.
+gate yields no partial-ready result. Only after both peers authenticate, it
+enumerates each admitted repository's durable receive journals. Exact-new
+protected transactions recover their immutable receipt through the remote
+purpose-separated signing/verifying authority; exact-new nonprotected
+transactions recover the checksum-protected receipt; completed journals are
+accepted. Pre-activation re-verification and divergent/uncertain state still
+fail this gate closed rather than being guessed or silently discarded.
 
 The default production identities remain Gitd `21001:21001`, authority
 `21002:21002`, and certd `21003:21003`. The parser permits explicit deployment

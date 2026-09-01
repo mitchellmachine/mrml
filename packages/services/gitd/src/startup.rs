@@ -2,9 +2,14 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-use mrml_git::FilesystemRepositoryView;
+use mrml_git::{
+    AuditReceiptAuthority, AuthenticatedReceiveStore, FilesystemRepositoryView,
+    LinuxDurableReceiveStore, ObjectFormat, RecoveryAction,
+};
 
-use crate::{DeploymentRepository, GitdConfig, verify_repository_admission};
+use crate::{
+    DeploymentRepository, DeploymentRepositoryProfile, GitdConfig, verify_repository_admission,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StartupValidationError {
@@ -35,6 +40,24 @@ pub enum RepositoryAdmissionError {
     Layout(StartupValidationError),
     Open,
     Generation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryRecoverySummary {
+    pub authenticated_receipts_recovered: u32,
+    pub plain_receipts_recovered: u32,
+    pub completed_journals: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepositoryRecoveryError {
+    Path,
+    Open,
+    Journal,
+    Receipt,
+    PreActivationReverificationRequired,
+    ManualUncertain,
+    Count,
 }
 
 pub fn validate_storage_layout(config: &GitdConfig) -> Result<(), StartupValidationError> {
@@ -94,6 +117,77 @@ pub fn admit_catalog_repository(
     .map_err(|_| RepositoryAdmissionError::Open)?;
     verify_repository_admission(entry, &view).map_err(|_| RepositoryAdmissionError::Generation)?;
     Ok(AdmittedRepository { paths, view })
+}
+
+pub fn recover_admitted_repository(
+    config: &GitdConfig,
+    entry: &DeploymentRepository,
+    admitted: &AdmittedRepository,
+    receipt_authority: &mut dyn AuditReceiptAuthority,
+) -> Result<RepositoryRecoverySummary, RepositoryRecoveryError> {
+    let journals = admitted.paths.state.join("receive-journals");
+    let plain_receipts = admitted.paths.receipts.join("plain");
+    let authenticated_receipts = admitted.paths.receipts.join("authenticated");
+    let mut store = LinuxDurableReceiveStore::open(
+        recovery_path(&journals)?,
+        recovery_path(&admitted.paths.quarantine)?,
+        recovery_path(&admitted.paths.state)?,
+        recovery_path(&plain_receipts)?,
+        ObjectFormat::Sha256,
+        config.max_body_bytes,
+    )
+    .map_err(|_| RepositoryRecoveryError::Open)?;
+    let actions = store
+        .recovery_actions()
+        .map_err(|_| RepositoryRecoveryError::Journal)?;
+    let mut summary = RepositoryRecoverySummary::default();
+    for (journal, action) in actions {
+        match action {
+            RecoveryAction::RecoverAuditReceipt
+                if entry.profile.class == DeploymentRepositoryProfile::Protected =>
+            {
+                let mut authenticated = AuthenticatedReceiveStore::new(
+                    &mut store,
+                    recovery_path(&authenticated_receipts)?,
+                    receipt_authority,
+                )
+                .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                authenticated
+                    .recover_audit_receipt(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                summary.authenticated_receipts_recovered = summary
+                    .authenticated_receipts_recovered
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::RecoverAuditReceipt => {
+                store
+                    .recover_audit_receipt(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                summary.plain_receipts_recovered = summary
+                    .plain_receipts_recovered
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::MarkComplete => {
+                summary.completed_journals = summary
+                    .completed_journals
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::DiscardBeforeActivation | RecoveryAction::ReverifyBeforeActivation => {
+                return Err(RepositoryRecoveryError::PreActivationReverificationRequired);
+            }
+            RecoveryAction::ManualUncertain => {
+                return Err(RepositoryRecoveryError::ManualUncertain);
+            }
+        }
+    }
+    Ok(summary)
+}
+
+fn recovery_path(path: &Path) -> Result<&str, RepositoryRecoveryError> {
+    path.to_str().ok_or(RepositoryRecoveryError::Path)
 }
 
 fn validate_directory(
@@ -159,6 +253,23 @@ mod tests {
         TrustGeneration,
     };
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+    struct TestReceiptAuthority;
+
+    impl AuditReceiptAuthority for TestReceiptAuthority {
+        fn signer_identity(&self) -> [u8; 64] {
+            [9u8; 64]
+        }
+
+        fn sign(&mut self, _: &[u8], output: &mut [u8]) -> Result<usize, ()> {
+            output.get_mut(..32).ok_or(())?.copy_from_slice(&[7u8; 32]);
+            Ok(32)
+        }
+
+        fn verify(&mut self, _: &[u8], signature: &[u8]) -> Result<(), ()> {
+            (signature == [7u8; 32]).then_some(()).ok_or(())
+        }
+    }
 
     #[test]
     fn exact_owned_layout_passes_and_symlink_or_writable_parent_fails() {
@@ -295,6 +406,10 @@ mod tests {
         assert_eq!(
             admitted.paths.receipts,
             config.receipt_root.join("owner/project")
+        );
+        assert_eq!(
+            recover_admitted_repository(&config, &entry, &admitted, &mut TestReceiptAuthority),
+            Ok(RepositoryRecoverySummary::default())
         );
         let mut stale = entry.clone();
         stale.revocation_generation = RevocationGeneration(9);

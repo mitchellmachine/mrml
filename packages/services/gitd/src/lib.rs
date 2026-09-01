@@ -15,6 +15,7 @@ pub use catalog::{
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};
 pub use startup::{
-    AdmittedRepository, RepositoryAdmissionError, RepositoryStoragePaths, StartupValidationError,
-    admit_catalog_repository, validate_storage_layout,
+    AdmittedRepository, RepositoryAdmissionError, RepositoryRecoveryError,
+    RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,
+    admit_catalog_repository, recover_admitted_repository, validate_storage_layout,
 };
