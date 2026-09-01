@@ -23,6 +23,8 @@ mod challenge_tls_alpn_hosted;
 mod deployment_journal;
 mod dns_propagation;
 mod dns01_provider;
+#[cfg(target_os = "linux")]
+mod dns01_cloudflare;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod dns_propagation_hosted;
 mod durable;
@@ -141,6 +143,8 @@ pub use dns01_provider::{
     MAX_DNS01_PROVIDER_RECORD_ID_BYTES, MAX_DNS01_RECORD_NAME_BYTES,
     dns01_publication_binding,
 };
+#[cfg(target_os = "linux")]
+pub use dns01_cloudflare::CloudflareDns01Provider;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use dns_propagation_hosted::{
     HostedDnsObservationEndpoint, HostedDnsPropagationError, HostedDnsPropagationQuery,

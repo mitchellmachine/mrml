@@ -105,6 +105,20 @@ provider_profile = "core"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_http"
+compile_name = "mrml-http"
+package = "org.mrml.library.http"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_json"
+compile_name = "mrml-json"
+package = "org.mrml.library.json"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
 alias = "mrml_tls"
 compile_name = "mrml-tls"
 package = "org.mrml.library.tls"
