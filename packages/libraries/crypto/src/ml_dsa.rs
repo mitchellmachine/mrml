@@ -1,8 +1,9 @@
 //! Original, allocation-free ML-DSA-65 implementation following FIPS 204.
 //!
-//! The API exposes deterministic seed expansion and an explicit 32-byte
-//! per-signature randomizer. Callers that need hedged signing must fill that
-//! randomizer from an approved source. Context strings are bounded by FIPS 204.
+//! Deterministic seed/randomizer entry points exist for conformance vectors and
+//! controlled testing. Production callers should use the runtime-backed random
+//! wrappers, which make a fresh entropy call for each key and signature and
+//! volatile-wipe the temporary entropy. Context strings are bounded by FIPS 204.
 
 use crate::{Shake128, Shake256, zeroize::volatile_zero};
 
@@ -45,6 +46,44 @@ pub enum MlDsaError {
     InvalidSignature,
     RejectionLimit,
     SamplingLimit,
+    Random,
+}
+
+/// Generate an ML-DSA-65 key pair from an independent runtime entropy draw.
+/// The deterministic seed API remains available for KATs and must not share a
+/// caller-provided seed with another signature algorithm.
+pub fn ml_dsa_65_keygen_random(
+    public_key: &mut [u8],
+    secret_key: &mut [u8],
+) -> Result<(), MlDsaError> {
+    let mut seed = [0u8; 32];
+    if mrml_runtime::fill_random(&mut seed).is_err() {
+        volatile_zero(&mut seed);
+        volatile_zero(public_key);
+        volatile_zero(secret_key);
+        return Err(MlDsaError::Random);
+    }
+    let result = ml_dsa_65_keygen(&seed, public_key, secret_key);
+    volatile_zero(&mut seed);
+    result
+}
+
+/// Sign with a fresh independent 256-bit randomizer supplied by the runtime.
+pub fn ml_dsa_65_sign_randomized(
+    secret_key: &[u8],
+    context: &[u8],
+    message: &[u8],
+    signature: &mut [u8],
+) -> Result<(), MlDsaError> {
+    let mut randomizer = [0u8; 32];
+    if mrml_runtime::fill_random(&mut randomizer).is_err() {
+        volatile_zero(&mut randomizer);
+        volatile_zero(signature);
+        return Err(MlDsaError::Random);
+    }
+    let result = ml_dsa_65_sign(secret_key, context, message, &randomizer, signature);
+    volatile_zero(&mut randomizer);
+    result
 }
 
 fn shake256(parts: &[&[u8]], output: &mut [u8]) {
@@ -1349,5 +1388,55 @@ mod tests {
             ml_dsa_65_verify(&public, b"git", b"commit payload", &noncanonical_signature,),
             Err(MlDsaError::InvalidSignature)
         );
+    }
+
+    #[test]
+    fn runtime_entropy_wrappers_generate_distinct_self_verified_results() {
+        let mut public_a = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret_a = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        let mut public_b = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret_b = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen_random(&mut public_a, &mut secret_a).unwrap();
+        ml_dsa_65_keygen_random(&mut public_b, &mut secret_b).unwrap();
+        assert_ne!(public_a, public_b);
+        assert_ne!(secret_a, secret_b);
+
+        let mut signature_a = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        let mut signature_b = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign_randomized(
+            &secret_a,
+            b"mrml-runtime-random",
+            b"independent entropy",
+            &mut signature_a,
+        )
+        .unwrap();
+        ml_dsa_65_sign_randomized(
+            &secret_a,
+            b"mrml-runtime-random",
+            b"independent entropy",
+            &mut signature_b,
+        )
+        .unwrap();
+        assert_ne!(signature_a, signature_b);
+        assert_eq!(
+            ml_dsa_65_verify(
+                &public_a,
+                b"mrml-runtime-random",
+                b"independent entropy",
+                &signature_a,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            ml_dsa_65_verify(
+                &public_a,
+                b"mrml-runtime-random",
+                b"independent entropy",
+                &signature_b,
+            ),
+            Ok(())
+        );
+        volatile_zero(&mut secret_a);
+        volatile_zero(&mut secret_b);
     }
 }

@@ -40,7 +40,8 @@ pub use lamport::{
 };
 pub use ml_dsa::{
     ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES, MlDsaError,
-    ml_dsa_65_keygen, ml_dsa_65_sign, ml_dsa_65_verify,
+    ml_dsa_65_keygen, ml_dsa_65_keygen_random, ml_dsa_65_sign, ml_dsa_65_sign_randomized,
+    ml_dsa_65_verify,
 };
 #[cfg(feature = "runtime")]
 pub use ml_kem::{
@@ -48,9 +49,9 @@ pub use ml_kem::{
     ml_kem_768_decapsulate, ml_kem_768_encapsulate, ml_kem_768_keygen,
 };
 #[cfg(feature = "runtime")]
-pub use p256::{ecdsa_p256_sha256_verify, P256Error};
+pub use p256::{P256Error, ecdsa_p256_sha256_verify};
 #[cfg(feature = "runtime")]
-pub use p384::{ecdsa_p384_sha384_verify, P384Error};
+pub use p384::{P384Error, ecdsa_p384_sha384_verify};
 pub use poly1305::poly1305;
 #[cfg(feature = "runtime")]
 pub use rsa::{
