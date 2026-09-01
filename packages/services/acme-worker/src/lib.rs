@@ -19,6 +19,8 @@ pub const CHANNEL_REQUEST_RESERVATION: u64 = 1_000_000;
 const ORDER_RECORD_MAGIC: &[u8; 8] = b"MRMLAOR1";
 const ORDER_RECORD_HEADER_BYTES: usize = 130;
 const CHALLENGE_RECORD_MAGIC: &[u8; 8] = b"MRMLACH1";
+const FINALIZATION_RECORD_MAGIC: &[u8; 8] = b"MRMLAFN1";
+const FINALIZATION_RECORD_BYTES: usize = 128;
 const CHALLENGE_RECORD_HEADER_BYTES: usize = 146;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -534,6 +536,115 @@ pub enum AcmedChallengeRecordError {
     OutputTooSmall,
     Malformed,
     PolicyMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcmedFinalizationPhase {
+    RequestMayHaveBeenSent = 1,
+    ResponseAuthenticated = 2,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AcmedFinalizationRecord {
+    pub phase: AcmedFinalizationPhase,
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub policy_generation: u64,
+    pub identity: [u8; 16],
+    pub order_url_digest: [u8; 32],
+    pub csr_digest: [u8; 32],
+    pub key_generation: u64,
+}
+
+impl AcmedFinalizationRecord {
+    pub fn object_id(&self) -> [u8; 16] {
+        finalization_object_id(self.identity)
+    }
+
+    pub fn require_policy(&self, config: &AcmedConfig) -> Result<(), AcmedOrderRecordError> {
+        if self.directory_generation != config.directory_generation
+            || self.account_generation != config.account_generation
+            || self.policy_generation != config.policy_generation
+            || self.identity != config.identity
+            || self.key_generation != config.key_generation
+        {
+            Err(AcmedOrderRecordError::PolicyMismatch)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, AcmedOrderRecordError> {
+        if output.len() < FINALIZATION_RECORD_BYTES
+            || self.directory_generation == 0
+            || self.account_generation == 0
+            || self.policy_generation == 0
+            || self.identity == [0; 16]
+            || self.order_url_digest == [0; 32]
+            || self.csr_digest == [0; 32]
+            || self.key_generation == 0
+        {
+            return Err(AcmedOrderRecordError::InvalidState);
+        }
+        output[..FINALIZATION_RECORD_BYTES].fill(0);
+        output[..8].copy_from_slice(FINALIZATION_RECORD_MAGIC);
+        output[8] = self.phase as u8;
+        output[16..24].copy_from_slice(&self.directory_generation.to_be_bytes());
+        output[24..32].copy_from_slice(&self.account_generation.to_be_bytes());
+        output[32..40].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[40..56].copy_from_slice(&self.identity);
+        output[56..88].copy_from_slice(&self.order_url_digest);
+        output[88..120].copy_from_slice(&self.csr_digest);
+        output[120..128].copy_from_slice(&self.key_generation.to_be_bytes());
+        Ok(FINALIZATION_RECORD_BYTES)
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, AcmedOrderRecordError> {
+        if input.len() != FINALIZATION_RECORD_BYTES
+            || input.get(..8) != Some(FINALIZATION_RECORD_MAGIC)
+            || input[9..16].iter().any(|byte| *byte != 0)
+        {
+            return Err(AcmedOrderRecordError::Malformed);
+        }
+        let phase = match input[8] {
+            1 => AcmedFinalizationPhase::RequestMayHaveBeenSent,
+            2 => AcmedFinalizationPhase::ResponseAuthenticated,
+            _ => return Err(AcmedOrderRecordError::Malformed),
+        };
+        let record = Self {
+            phase,
+            directory_generation: read_order_u64(&input[16..24])?,
+            account_generation: read_order_u64(&input[24..32])?,
+            policy_generation: read_order_u64(&input[32..40])?,
+            identity: input[40..56]
+                .try_into()
+                .map_err(|_| AcmedOrderRecordError::Malformed)?,
+            order_url_digest: input[56..88]
+                .try_into()
+                .map_err(|_| AcmedOrderRecordError::Malformed)?,
+            csr_digest: input[88..120]
+                .try_into()
+                .map_err(|_| AcmedOrderRecordError::Malformed)?,
+            key_generation: read_order_u64(&input[120..128])?,
+        };
+        let mut canonical = [0u8; FINALIZATION_RECORD_BYTES];
+        record.encode(&mut canonical)?;
+        if canonical != input {
+            return Err(AcmedOrderRecordError::Malformed);
+        }
+        Ok(record)
+    }
+}
+
+pub fn finalization_object_id(identity: [u8; 16]) -> [u8; 16] {
+    let mut digest = Sha256::new();
+    digest.update(b"MRML acmed finalization object v1\0");
+    digest.update(&identity);
+    let digest = digest.finalize();
+    let mut object = [0u8; 16];
+    object.copy_from_slice(&digest[..16]);
+    object
 }
 
 impl AcmedChallengeRecord {
@@ -1538,6 +1649,31 @@ mod tests {
             challenge_object_id(config.identity, 0, first),
             config.identity
         );
+    }
+
+    #[test]
+    fn finalization_record_binds_csr_order_key_and_policy_exactly() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let record = AcmedFinalizationRecord {
+            phase: AcmedFinalizationPhase::RequestMayHaveBeenSent,
+            directory_generation: config.directory_generation,
+            account_generation: config.account_generation,
+            policy_generation: config.policy_generation,
+            identity: config.identity,
+            order_url_digest: [0x31; 32],
+            csr_digest: [0x41; 32],
+            key_generation: config.key_generation,
+        };
+        record.require_policy(&config).unwrap();
+        assert_ne!(record.object_id(), config.identity);
+        let mut encoded = [0u8; FINALIZATION_RECORD_BYTES];
+        let length = record.encode(&mut encoded).unwrap();
+        assert_eq!(length, FINALIZATION_RECORD_BYTES);
+        assert!(AcmedFinalizationRecord::decode(&encoded).unwrap() == record);
+        encoded[90] ^= 1;
+        assert!(AcmedFinalizationRecord::decode(&encoded).unwrap() != record);
+        encoded[9] = 1;
+        assert!(AcmedFinalizationRecord::decode(&encoded).is_err());
     }
 
     #[test]
