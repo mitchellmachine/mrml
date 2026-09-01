@@ -11465,3 +11465,11 @@ Patent review: **NOT_TRIGGERED**. This increment performs conventional bounded
 HTTP `Content-Type` singleton capture and exact media-type classification for
 JSON, problem JSON, and PEM certificate-chain responses. It adds no protocol
 mechanism outside the reviewed ACME scope and no recorded re-review trigger.
+
+# 2026-09-01 — Exact ACME certificate retrieval and validation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment retrieves an ordinary PEM
+certificate chain by POST-as-GET only from the exact valid order resource and
+passes it through the already reviewed profile, key, name, purpose, validity,
+trust-root, and chain verifier. It adds no recorded re-review trigger.

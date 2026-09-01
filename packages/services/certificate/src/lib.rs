@@ -17,28 +17,29 @@ mod scheduler;
 mod tls_signing_adapter;
 
 pub use backup::{
-    create_backup, restore_backup, verify_backup, BackupDescriptor, BackupError,
-    BackupRestoreTarget, BACKUP_VERSION, MAX_BACKUP_BYTES, MAX_BACKUP_RECORDS,
+    BACKUP_VERSION, BackupDescriptor, BackupError, BackupRestoreTarget, MAX_BACKUP_BYTES,
+    MAX_BACKUP_RECORDS, create_backup, restore_backup, verify_backup,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
 pub use certificate::{
-    select_alternate_chain, AlternateChainPolicy, CertificateChainVerifier,
-    CertificateValidationError, CertificateValidationPolicy, PemCertificateChain,
-    SelectedCertificateChain, VerifiedCertificateReceipt, MAX_ALTERNATE_CHAINS, MAX_CERTIFICATES,
-    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATE_DER_BYTES, MAX_IDENTITY_NAMES,
+    AlternateChainPolicy, CertificateChainVerifier, CertificateRetrievalError,
+    CertificateValidationError, CertificateValidationPolicy, MAX_ALTERNATE_CHAINS,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATE_DER_BYTES, MAX_CERTIFICATES, MAX_IDENTITY_NAMES,
+    PemCertificateChain, RetrievedCertificate, SelectedCertificateChain,
+    VerifiedCertificateReceipt, retrieve_and_verify_certificate, select_alternate_chain,
 };
 pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_dns_hosted::{
-    HostedDnsChallengeError, HostedDnsChallengeSockets, DNS_IO_TIMEOUT_MILLIS,
+    DNS_IO_TIMEOUT_MILLIS, HostedDnsChallengeError, HostedDnsChallengeSockets,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use challenge_http::{
-    HostedHttp01Challenge, HostedHttp01Error, HTTP01_READ_TIMEOUT_MILLIS,
-    HTTP01_WRITE_TIMEOUT_MILLIS,
+    HTTP01_READ_TIMEOUT_MILLIS, HTTP01_WRITE_TIMEOUT_MILLIS, HostedHttp01Challenge,
+    HostedHttp01Error,
 };
 pub use challenge_publisher::DnsChallengePublisher;
 pub use dns_propagation::{
@@ -47,10 +48,10 @@ pub use dns_propagation::{
     DnsTxtObservationRequest, MAX_PROPAGATION_ATTEMPTS,
 };
 pub use durable::{
-    CommittedStoreReceipt, DurableAuthenticator, DurableError, DurableNamespace, DurableObjectId,
-    DurableRecord, DurableRecordKind, DurableStateStore, DurableTransaction, PreparedStoreReceipt,
-    SecretHandle, TransactionState, DURABLE_RECORD_VERSION, MAX_DURABLE_PAYLOAD,
-    MAX_DURABLE_RECORD_BYTES,
+    CommittedStoreReceipt, DURABLE_RECORD_VERSION, DurableAuthenticator, DurableError,
+    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
+    DurableTransaction, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PreparedStoreReceipt,
+    SecretHandle, TransactionState,
 };
 pub use identity::{
     ActivationReceipt, ApprovedTls13CertificateVerify, DeploymentState, IdentityConsumerCapability,

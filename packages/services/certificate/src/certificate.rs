@@ -1,4 +1,8 @@
-use mrml_acme::{AriCertificateId, CaClass, CertificateProfile, DnsIdentifier, P256Jwk};
+use mrml_acme::{
+    AccountLifecycle, AcmeDirectory, AcmeExchange, AcmeJwsSigner, AcmePostError, AcmeProblem,
+    AcmeResponseType, AcmeTransport, AriCertificateId, CaClass, CertificateProfile, DnsIdentifier,
+    OrderLifecycle, OrderState, P256Jwk, ProtectedKey, post_jws,
+};
 use mrml_crypto::Sha256;
 
 pub const MAX_CERTIFICATE_CHAIN_BYTES: usize = 65_536;
@@ -23,6 +27,16 @@ pub enum CertificateValidationError {
     UntrustedChain,
     StagingProductionMismatch,
     AlternateChainNotApproved,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum CertificateRetrievalError<E> {
+    ResourceMismatch,
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    UnexpectedContentType,
+    Validation(CertificateValidationError),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -147,12 +161,83 @@ pub struct VerifiedCertificateReceipt {
     pub ari_certificate_id: AriCertificateId,
 }
 
+pub struct RetrievedCertificate {
+    pub chain: PemCertificateChain,
+    pub receipt: VerifiedCertificateReceipt,
+}
+
 pub trait CertificateChainVerifier {
     fn verify(
         &mut self,
         chain: &PemCertificateChain,
         policy: &CertificateValidationPolicy,
     ) -> Result<VerifiedCertificateReceipt, CertificateValidationError>;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn retrieve_and_verify_certificate<T: AcmeTransport, V: CertificateChainVerifier>(
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    policy: &CertificateValidationPolicy,
+    exchange: &mut AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    verifier: &mut V,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<RetrievedCertificate, CertificateRetrievalError<T::Error>> {
+    let certificate_url = order
+        .certificate_url
+        .as_ref()
+        .ok_or(CertificateRetrievalError::ResourceMismatch)?;
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(CertificateRetrievalError::ResourceMismatch)?;
+    if !account.active
+        || order.state != OrderState::Valid
+        || directory.generation != order.directory_generation
+        || account.generation != order.account_generation
+        || account.key != order.account_key
+        || policy.profile != order.profile
+        || policy.order_url_digest != Sha256::digest(order.order_url.as_str().as_bytes())
+        || usize::from(policy.identifier_count) != order.identifiers().count()
+        || !policy.identifiers[..usize::from(policy.identifier_count)]
+            .iter()
+            .zip(order.identifiers())
+            .all(|(provided, expected)| provided.as_ref() == Some(expected))
+    {
+        return Err(CertificateRetrievalError::ResourceMismatch);
+    }
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        certificate_url,
+        ProtectedKey::Kid(account_url),
+        b"",
+        account.generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(CertificateRetrievalError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(CertificateRetrievalError::Server(problem));
+    }
+    if result.metadata.status != 200 {
+        return Err(CertificateRetrievalError::UnexpectedStatus);
+    }
+    if result.metadata.response_type != AcmeResponseType::PemCertificateChain {
+        return Err(CertificateRetrievalError::UnexpectedContentType);
+    }
+    let chain = PemCertificateChain::parse(&response_body[..result.metadata.body_length])
+        .map_err(CertificateRetrievalError::Validation)?;
+    let receipt = verifier
+        .verify(&chain, policy)
+        .map_err(CertificateRetrievalError::Validation)?;
+    Ok(RetrievedCertificate { chain, receipt })
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -370,16 +455,22 @@ fn pem_value(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_acme::{
+        AccountPolicy, AcmeHttpMethod, AcmeTransportRequest, AcmeTransportResponse,
+        ApprovedAcmeJwsDigest, Es256Signature, JoseError, account_contacts_digest,
+    };
     #[test]
     fn pem_chain_is_bounded_strict_and_digest_ordered() {
         let chain=PemCertificateChain::parse(b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nBAUG\n-----END CERTIFICATE-----\n").unwrap();
         assert_eq!(chain.count(), 2);
         assert_eq!(chain.certificate(0), Some(&[1, 2, 3][..]));
         assert_ne!(chain.chain_digest(), [0; 32]);
-        assert!(PemCertificateChain::parse(
-            b"-----BEGIN CERTIFICATE-----\nAQI=AAAA\n-----END CERTIFICATE-----"
-        )
-        .is_err());
+        assert!(
+            PemCertificateChain::parse(
+                b"-----BEGIN CERTIFICATE-----\nAQI=AAAA\n-----END CERTIFICATE-----"
+            )
+            .is_err()
+        );
     }
 
     struct ReceiptVerifier;
@@ -403,6 +494,167 @@ mod tests {
                 ari_certificate_id: AriCertificateId::derive(&[1], &[1]).unwrap(),
             })
         }
+    }
+
+    struct Signer;
+    impl AcmeJwsSigner for Signer {
+        fn sign_acme_jws(
+            &mut self,
+            _: &ApprovedAcmeJwsDigest,
+        ) -> Result<Es256Signature, JoseError> {
+            Es256Signature::from_raw([1; 64])
+        }
+    }
+
+    struct CertificateTransport;
+    impl AcmeTransport for CertificateTransport {
+        type Error = ();
+        fn exchange(
+            &mut self,
+            request: AcmeTransportRequest<'_>,
+            output: &mut [u8],
+        ) -> Result<AcmeTransportResponse<'_>, Self::Error> {
+            if request.method == AcmeHttpMethod::Head {
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/new-nonce",
+                    replay_nonce: Some("certificate-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    content_type: None,
+                    body_length: 0,
+                });
+            }
+            let pem = b"-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n";
+            output[..pem.len()].copy_from_slice(pem);
+            Ok(AcmeTransportResponse {
+                status: 200,
+                effective_url: "https://ca.example/certificate/1",
+                replay_nonce: Some("certificate-nonce-2"),
+                retry_after: None,
+                location: None,
+                content_type: Some("application/pem-certificate-chain"),
+                body_length: pem.len(),
+            })
+        }
+    }
+
+    fn test_key() -> P256Jwk {
+        P256Jwk::from_coordinates(
+            [
+                0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+                0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45,
+                0xd8, 0x98, 0xc2, 0x96,
+            ],
+            [
+                0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f,
+                0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68,
+                0x37, 0xbf, 0x51, 0xf5,
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn retrieval_requires_exact_pem_resource_and_verification_receipt() {
+        let directory_url =
+            mrml_acme::AcmeUrl::parse("https://ca.example/directory", false).unwrap();
+        let directory = AcmeDirectory::parse(
+            r#"{"newNonce":"https://ca.example/new-nonce","newAccount":"https://ca.example/new-account","newOrder":"https://ca.example/new-order","revokeCert":"https://ca.example/revoke","keyChange":"https://ca.example/key-change","meta":{"profiles":{"classic":"https://docs.example/classic"}}}"#,
+            &directory_url,
+            7,
+        )
+        .unwrap();
+        let key = test_key();
+        let (mut account, account_receipt) = AccountLifecycle::prepare_create(
+            &directory,
+            AccountPolicy {
+                ca_class: CaClass::Staging,
+                policy_generation: 2,
+                contact_digest: account_contacts_digest(&[]).unwrap(),
+            },
+            &key,
+            None,
+            false,
+        )
+        .unwrap();
+        account
+            .commit_created(
+                account_receipt,
+                mrml_acme::AcmeUrl::parse("https://ca.example/account/1", false).unwrap(),
+                &directory,
+            )
+            .unwrap();
+        let identifiers = [DnsIdentifier::parse("example.com", false).unwrap()];
+        let profile = directory.profiles().next().unwrap().profile;
+        let mut order = OrderLifecycle::create(
+            &directory,
+            account.generation,
+            account.key,
+            mrml_acme::AcmeUrl::parse("https://ca.example/order/1", false).unwrap(),
+            mrml_acme::AcmeUrl::parse("https://ca.example/order/1/finalize", false).unwrap(),
+            profile,
+            &identifiers,
+            200,
+            3,
+        )
+        .unwrap();
+        order
+            .apply_order_response(1, OrderState::Ready, None, 100)
+            .unwrap();
+        order
+            .apply_order_response(2, OrderState::Processing, None, 100)
+            .unwrap();
+        order
+            .apply_order_response(
+                3,
+                OrderState::Valid,
+                Some(mrml_acme::AcmeUrl::parse("https://ca.example/certificate/1", false).unwrap()),
+                100,
+            )
+            .unwrap();
+        let mut policy_identifiers = [None; MAX_IDENTITY_NAMES];
+        policy_identifiers[0] = Some(identifiers[0]);
+        let policy = CertificateValidationPolicy {
+            policy_generation: 3,
+            ca_class: CaClass::Staging,
+            profile,
+            order_url_digest: Sha256::digest(order.order_url.as_str().as_bytes()),
+            expected_key: key,
+            identifiers: policy_identifiers,
+            identifier_count: 1,
+            now_unix: 100,
+            maximum_validity_seconds: 100,
+            maximum_chain_length: 2,
+            trust_store_digest: [8; 32],
+        };
+        let mut exchange = AcmeExchange::new(directory.generation, directory_url);
+        let mut transport = CertificateTransport;
+        let mut signer = Signer;
+        let mut verifier = ReceiptVerifier;
+        let mut response = [0; 2048];
+        let mut jws = [0; 8192];
+        let retrieved = retrieve_and_verify_certificate(
+            &directory,
+            &account,
+            &order,
+            &policy,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut verifier,
+            &mut response,
+            &mut jws,
+        );
+        let retrieved = match retrieved {
+            Ok(retrieved) => retrieved,
+            Err(_) => panic!("certificate retrieval failed"),
+        };
+        assert_eq!(retrieved.chain.certificate(0), Some(&[1, 2, 3][..]));
+        assert_eq!(
+            retrieved.receipt.chain_digest,
+            retrieved.chain.chain_digest()
+        );
     }
 
     #[test]
