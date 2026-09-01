@@ -13,6 +13,7 @@ mod pack;
 mod remote;
 mod repository;
 mod sha1;
+mod smart_protocol;
 mod transport;
 
 pub use diff::FileDiff;
@@ -51,6 +52,9 @@ pub use repository::{
     Repository, RepositoryError,
 };
 pub use sha1::{ObjectFormat, ObjectId, Sha1};
+pub use smart_protocol::{
+    MAX_PKT_LINE_BYTES, PktLine, ProtocolBudget, read_pkt_line, write_pkt_line,
+};
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
     extract_pack_response, fetch_request, parse_advertisement, parse_push_response,

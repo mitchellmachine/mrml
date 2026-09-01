@@ -22,6 +22,13 @@ Security-sensitive values use validated types:
 separately limits input, output, memory, and work units. Implementations must
 enforce the smaller of transport and backend limits and use checked arithmetic.
 
+The shared pkt-line codec accepts lowercase hexadecimal canonical framing,
+streams fragmented reads and writes, supports flush/delimiter/response-end
+control packets, and caps total packet length at 65,520 bytes. Input, output,
+and work budgets are charged for the four-byte header and payload before the
+operation can continue. Invalid lengths, noncanonical hexadecimal, truncation,
+and exhausted limits fail without invoking repository mutation.
+
 Errors distinguish malformed input/identifiers/refs/paths, authorization,
 object validation, ancestry, signature, policy, resources, storage, stale
 generation, unsupported behavior, and uncertain durable outcomes. No private
@@ -41,4 +48,3 @@ RepositoryPath       src/../secret        -> malformed path
 The edge must never open repository files. It resolves application routes to a
 repository capability and invokes this interface. Protocol capabilities must
 be advertised only by a backend that completely implements them.
-
