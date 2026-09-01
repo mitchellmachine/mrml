@@ -65,9 +65,10 @@ impl ImmutablePackCacheDirectory {
             return Err(PackCacheFileError::AlreadyExists);
         }
         let result = (|| {
-            let mut file = File::create_new(&path)
-                .map_err(|_| PackCacheFileError::AlreadyExists)?;
-            file.write_all(&encoded).map_err(|_| PackCacheFileError::Io)?;
+            let mut file =
+                File::create_new(&path).map_err(|_| PackCacheFileError::AlreadyExists)?;
+            file.write_all(&encoded)
+                .map_err(|_| PackCacheFileError::Io)?;
             file.sync().map_err(|_| PackCacheFileError::Durability)?;
             drop(file);
             sync_cache_directory(&self.root)?;

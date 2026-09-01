@@ -4,16 +4,15 @@ use mrml_runtime::Vector;
 
 use crate::{
     ActiveRefFile, AnnotatedTagDetails, AnnotatedTagPage, ArrivalPackStore, BlobPage, BoundedRead,
-    BoundedWrite, Commit, CommitDetails, CommitPage, FullRefName, GitdCoreBackend, Index, IndexEntry,
-    GitdCoreError, ImmutablePackDescriptor, ObjectId, ObjectKind, PktLine, ProtocolBudget,
-    ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
+    BoundedWrite, Commit, CommitDetails, CommitPage, FullRefName, GitdCoreBackend, GitdCoreError,
+    ImmutablePackCacheDirectory, ImmutablePackDescriptor, Index, IndexEntry, ObjectId, ObjectKind,
+    PackCacheFileError, PackCacheKey, PackObject, PackSetLimits, PackSetManifest, PktLine,
+    ProtocolBudget, ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
-    ImmutablePackCacheDirectory, PackCacheFileError, PackCacheKey, PackObject, PackSetLimits,
-    PackSetManifest, RepositoryPath, RepositorySummary,
-    RevocationGeneration, SmartGitOperation, SmartGitRequest,
-    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedMetadataDescriptor,
-    WorkBudget, encode_pack_with_format, parse_tree_with_format, read_v2_request, write_pkt_line,
-    VerifiedCommitProof, VerifiedGitObjectProof,
+    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
+    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedCommitProof,
+    VerifiedGitObjectProof, VerifiedMetadataDescriptor, WorkBudget, encode_pack_with_format,
+    parse_tree_with_format, read_v2_request, write_pkt_line,
 };
 
 pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
@@ -78,11 +77,11 @@ pub struct VerificationSummaryStore {
 }
 
 impl VerificationSummaryStore {
-    pub fn new(
-        evidence: Vector<VerificationSummaryEvidence>,
-    ) -> Result<Self, GitdCoreError> {
+    pub fn new(evidence: Vector<VerificationSummaryEvidence>) -> Result<Self, GitdCoreError> {
         if evidence.len() > MAX_VERIFICATION_SUMMARY_EVIDENCE
-            || !evidence.windows(2).all(|pair| evidence_less(&pair[0], &pair[1]))
+            || !evidence
+                .windows(2)
+                .all(|pair| evidence_less(&pair[0], &pair[1]))
         {
             return Err(GitdCoreError::ObjectValidation);
         }
@@ -97,19 +96,33 @@ impl VerificationSummaryStore {
         trust: TrustGeneration,
         revocations: RevocationGeneration,
     ) -> Option<VerificationSummary> {
-        self.evidence.iter().find(|evidence| {
-            &evidence.repository == repository
-                && evidence.repository_generation == repository_generation
-                && evidence.summary.object == object
-                && evidence.summary.trust_generation == trust
-                && evidence.summary.revocation_generation == revocations
-        }).map(|evidence| evidence.summary.clone())
+        self.evidence
+            .iter()
+            .find(|evidence| {
+                &evidence.repository == repository
+                    && evidence.repository_generation == repository_generation
+                    && evidence.summary.object == object
+                    && evidence.summary.trust_generation == trust
+                    && evidence.summary.revocation_generation == revocations
+            })
+            .map(|evidence| evidence.summary.clone())
     }
 }
 
 fn evidence_less(left: &VerificationSummaryEvidence, right: &VerificationSummaryEvidence) -> bool {
-    (&left.repository, left.repository_generation, left.summary.object, left.summary.trust_generation, left.summary.revocation_generation)
-        < (&right.repository, right.repository_generation, right.summary.object, right.summary.trust_generation, right.summary.revocation_generation)
+    (
+        &left.repository,
+        left.repository_generation,
+        left.summary.object,
+        left.summary.trust_generation,
+        left.summary.revocation_generation,
+    ) < (
+        &right.repository,
+        right.repository_generation,
+        right.summary.object,
+        right.summary.trust_generation,
+        right.summary.revocation_generation,
+    )
 }
 
 fn append_reachable_children(
@@ -316,9 +329,16 @@ impl GitdCoreBackend for FilesystemRepositoryView {
             return Err(GitdCoreError::ObjectValidation);
         }
         self.read_object(&state, object)?;
-        let summary = self.verification.exact(
-            repository, state.repository_generation, object, policy, revocations,
-        ).ok_or(GitdCoreError::Signature)?;
+        let summary = self
+            .verification
+            .exact(
+                repository,
+                state.repository_generation,
+                object,
+                policy,
+                revocations,
+            )
+            .ok_or(GitdCoreError::Signature)?;
         self.ensure_exact_generation(&state)?;
         Ok(summary)
     }
@@ -545,9 +565,8 @@ impl FilesystemRepositoryView {
     /// subordinate to the exact active repository generation encoded in every
     /// key; the directory name and a digest-name match never authorize a hit.
     pub fn with_pack_cache(mut self, path: &str) -> Result<Self, GitdCoreError> {
-        self.pack_cache = Some(
-            ImmutablePackCacheDirectory::open(path).map_err(map_pack_cache_error)?,
-        );
+        self.pack_cache =
+            Some(ImmutablePackCacheDirectory::open(path).map_err(map_pack_cache_error)?);
         Ok(self)
     }
 
@@ -964,9 +983,15 @@ impl FilesystemRepositoryView {
             pack_generation: state.pack_generation,
         };
         for (previous, next) in [
-            (cursor.repository_generation.0, current.repository_generation.0),
+            (
+                cursor.repository_generation.0,
+                current.repository_generation.0,
+            ),
             (cursor.trust_generation.0, current.trust_generation.0),
-            (cursor.revocation_generation.0, current.revocation_generation.0),
+            (
+                cursor.revocation_generation.0,
+                current.revocation_generation.0,
+            ),
             (cursor.pack_generation.0, current.pack_generation.0),
         ] {
             if previous > next {
@@ -1148,13 +1173,8 @@ impl FilesystemRepositoryView {
         if object.contents.len() as u64 > limits.max_bytes || limits.max_entries < 1 {
             return Err(GitdCoreError::Resource);
         }
-        let summary = GitdCoreBackend::verification_summary(
-            self,
-            repository,
-            entry.id,
-            policy,
-            revocations,
-        )?;
+        let summary =
+            GitdCoreBackend::verification_summary(self, repository, entry.id, policy, revocations)?;
         if summary.purpose != purpose
             || !summary.openpgp_authorized
             || !summary.ml_dsa_65_authorized
@@ -1196,14 +1216,18 @@ impl FilesystemRepositoryView {
         &self,
         state: &crate::ActiveRefState,
     ) -> Result<Option<PackSetManifest>, GitdCoreError> {
-        let Some(_) = self.arrivals else { return Ok(None) };
+        let Some(_) = self.arrivals else {
+            return Ok(None);
+        };
         let manifest = self
             .refs
             .load_selected_pack_set(SELECTED_PACK_SET_LIMITS)
             .map_err(|_| GitdCoreError::Storage)?;
         if manifest.repository_generation() != state.repository_generation
             || manifest.pack_generation() != state.pack_generation
-            || manifest.digest().map_err(|_| GitdCoreError::ObjectValidation)?
+            || manifest
+                .digest()
+                .map_err(|_| GitdCoreError::ObjectValidation)?
                 != state.pack_set_digest
         {
             return Err(GitdCoreError::StaleGeneration);
@@ -1220,9 +1244,10 @@ impl FilesystemRepositoryView {
             return Err(GitdCoreError::ObjectValidation);
         }
         if let (Some(arrivals), Some(manifest)) = (&self.arrivals, self.selected_pack_set(state)?) {
-            let selected = manifest.entries().iter().any(|entry| {
-                entry.object_ids().binary_search(&id).is_ok()
-            });
+            let selected = manifest
+                .entries()
+                .iter()
+                .any(|entry| entry.object_ids().binary_search(&id).is_ok());
             if selected {
                 return arrivals.read_selected_object(
                     &manifest,
@@ -1231,7 +1256,9 @@ impl FilesystemRepositoryView {
                 );
             }
         }
-        self.objects.read_object(id).map_err(|_| GitdCoreError::ObjectValidation)
+        self.objects
+            .read_object(id)
+            .map_err(|_| GitdCoreError::ObjectValidation)
     }
 
     fn read_commit(
@@ -1265,28 +1292,45 @@ impl FilesystemRepositoryView {
         depth: usize,
         index: &mut Index,
     ) -> Result<(), GitdCoreError> {
-        if depth > 128 { return Err(GitdCoreError::Resource); }
+        if depth > 128 {
+            return Err(GitdCoreError::Resource);
+        }
         let object = self.read_object(state, id)?;
-        if object.kind != ObjectKind::Tree { return Err(GitdCoreError::ObjectValidation); }
+        if object.kind != ObjectKind::Tree {
+            return Err(GitdCoreError::ObjectValidation);
+        }
         for entry in parse_tree_with_format(&object.contents, state.object_format)
             .map_err(|_| GitdCoreError::ObjectValidation)?
         {
-            let path = if prefix.is_empty() { entry.name.clone() }
-                else { mrml_runtime::mrml_format!("{prefix}/{}", entry.name) };
+            let path = if prefix.is_empty() {
+                entry.name.clone()
+            } else {
+                mrml_runtime::mrml_format!("{prefix}/{}", entry.name)
+            };
             if entry.mode == 0o40000 {
                 self.flatten_tree(state, entry.id, &path, depth + 1, index)?;
             } else if matches!(entry.mode, 0o100644 | 0o100755) {
-                if index.entries.len() >= 1_000_000 { return Err(GitdCoreError::Resource); }
+                if index.entries.len() >= 1_000_000 {
+                    return Err(GitdCoreError::Resource);
+                }
                 let blob = self.read_object(state, entry.id)?;
-                if blob.kind != ObjectKind::Blob { return Err(GitdCoreError::ObjectValidation); }
+                if blob.kind != ObjectKind::Blob {
+                    return Err(GitdCoreError::ObjectValidation);
+                }
                 index.upsert(IndexEntry {
                     path,
                     id: entry.id,
                     mode: entry.mode,
-                    size: blob.contents.len().try_into().map_err(|_| GitdCoreError::Resource)?,
+                    size: blob
+                        .contents
+                        .len()
+                        .try_into()
+                        .map_err(|_| GitdCoreError::Resource)?,
                     stage: 0,
                 });
-            } else { return Err(GitdCoreError::ObjectValidation); }
+            } else {
+                return Err(GitdCoreError::ObjectValidation);
+            }
         }
         Ok(())
     }
@@ -1299,12 +1343,16 @@ impl FilesystemRepositoryView {
         let mut pending = Vector::from([(tip, ObjectKind::Commit)]);
         let mut seen = Vector::new();
         while let Some((id, expected)) = pending.pop() {
-            if seen.contains(&id) { continue; }
+            if seen.contains(&id) {
+                continue;
+            }
             if seen.len() >= 1_000_000 || pending.len() > 1_000_000 {
                 return Err(GitdCoreError::Resource);
             }
             let object = self.read_object(state, id)?;
-            if object.kind != expected { return Err(GitdCoreError::ObjectValidation); }
+            if object.kind != expected {
+                return Err(GitdCoreError::ObjectValidation);
+            }
             match object.kind {
                 ObjectKind::Commit => {
                     let commit = Commit::parse_with_format(&object.contents, state.object_format)
@@ -1312,16 +1360,18 @@ impl FilesystemRepositoryView {
                     pending.push((commit.tree, ObjectKind::Tree));
                     pending.extend(commit.parents.iter().map(|id| (*id, ObjectKind::Commit)));
                 }
-                ObjectKind::Tree => for entry in parse_tree_with_format(&object.contents, state.object_format)
-                    .map_err(|_| GitdCoreError::ObjectValidation)?
-                {
-                    let kind = match entry.mode {
-                        0o40000 => ObjectKind::Tree,
-                        0o100644 | 0o100755 | 0o120000 => ObjectKind::Blob,
-                        _ => return Err(GitdCoreError::ObjectValidation),
-                    };
-                    pending.push((entry.id, kind));
-                },
+                ObjectKind::Tree => {
+                    for entry in parse_tree_with_format(&object.contents, state.object_format)
+                        .map_err(|_| GitdCoreError::ObjectValidation)?
+                    {
+                        let kind = match entry.mode {
+                            0o40000 => ObjectKind::Tree,
+                            0o100644 | 0o100755 | 0o120000 => ObjectKind::Blob,
+                            _ => return Err(GitdCoreError::ObjectValidation),
+                        };
+                        pending.push((entry.id, kind));
+                    }
+                }
                 ObjectKind::Blob => {}
                 ObjectKind::Tag => return Err(GitdCoreError::ObjectValidation),
             }
@@ -1339,8 +1389,12 @@ impl FilesystemRepositoryView {
         let mut excluded = Vector::new();
         let mut pending: Vector<ObjectId> = haves.iter().copied().collect();
         while let Some(id) = pending.pop() {
-            if excluded.contains(&id) { continue; }
-            if excluded.len() >= 1_000_000 { return Err(GitdCoreError::Resource); }
+            if excluded.contains(&id) {
+                continue;
+            }
+            if excluded.len() >= 1_000_000 {
+                return Err(GitdCoreError::Resource);
+            }
             let object = self.read_object(state, id)?;
             append_reachable_children(&object, state.object_format, &mut pending)?;
             excluded.push(id);
@@ -1349,12 +1403,20 @@ impl FilesystemRepositoryView {
         let mut seen = Vector::new();
         let mut objects = Vector::new();
         while let Some(id) = pending.pop() {
-            if excluded.contains(&id) || seen.contains(&id) { continue; }
-            if seen.len() >= 1_000_000 { return Err(GitdCoreError::Resource); }
+            if excluded.contains(&id) || seen.contains(&id) {
+                continue;
+            }
+            if seen.len() >= 1_000_000 {
+                return Err(GitdCoreError::Resource);
+            }
             let object = self.read_object(state, id)?;
             append_reachable_children(&object, state.object_format, &mut pending)?;
             seen.push(id);
-            objects.push(PackObject { id, kind: object.kind, contents: object.contents });
+            objects.push(PackObject {
+                id,
+                kind: object.kind,
+                contents: object.contents,
+            });
         }
         encode_pack_with_format(&objects, state.object_format)
             .map_err(|_| GitdCoreError::ObjectValidation)
@@ -1395,7 +1457,10 @@ impl FilesystemRepositoryView {
         Ok(pack)
     }
 
-    fn ensure_exact_generation(&self, expected: &crate::ActiveRefState) -> Result<(), GitdCoreError> {
+    fn ensure_exact_generation(
+        &self,
+        expected: &crate::ActiveRefState,
+    ) -> Result<(), GitdCoreError> {
         let current = self.load_state()?;
         if current == *expected {
             Ok(())
@@ -1422,15 +1487,12 @@ impl FilesystemRepositoryView {
         }
         Ok(state)
     }
-
 }
 
 fn map_pack_cache_error(error: PackCacheFileError) -> GitdCoreError {
     match error {
         PackCacheFileError::Resource => GitdCoreError::Resource,
-        PackCacheFileError::Integrity | PackCacheFileError::Key => {
-            GitdCoreError::ObjectValidation
-        }
+        PackCacheFileError::Integrity | PackCacheFileError::Key => GitdCoreError::ObjectValidation,
         PackCacheFileError::Io
         | PackCacheFileError::AlreadyExists
         | PackCacheFileError::Durability => GitdCoreError::Storage,
@@ -1686,12 +1748,13 @@ mod tests {
             },
         )
         .unwrap();
-        let mut view = FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path)
-            .unwrap()
-            .with_pack_cache(&cache_path)
-            .unwrap();
-        let evidence = VerificationSummaryEvidence::from_verified_hybrid_commit(
-            &VerifiedCommitProof {
+        let mut view =
+            FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path)
+                .unwrap()
+                .with_pack_cache(&cache_path)
+                .unwrap();
+        let evidence =
+            VerificationSummaryEvidence::from_verified_hybrid_commit(&VerifiedCommitProof {
                 commit,
                 repository: identity.clone(),
                 repository_generation: RepositoryGeneration(4),
@@ -1699,10 +1762,9 @@ mod tests {
                 revocation_generation: RevocationGeneration(6),
                 purpose: crate::SignaturePurpose::GitCommit,
                 object_format: ObjectFormat::Sha256,
-            },
-        );
-        let tag_evidence = VerificationSummaryEvidence::from_verified_git_object(
-            &VerifiedGitObjectProof {
+            });
+        let tag_evidence =
+            VerificationSummaryEvidence::from_verified_git_object(&VerifiedGitObjectProof {
                 object: tag,
                 repository: identity.clone(),
                 repository_generation: RepositoryGeneration(4),
@@ -1711,15 +1773,14 @@ mod tests {
                 purpose: crate::SignaturePurpose::GitAnnotatedTag,
                 object_format: ObjectFormat::Sha256,
                 object_kind: ObjectKind::Tag,
-            },
-        );
+            });
         assert_eq!(tag_evidence.summary.object, tag);
         assert_eq!(
             tag_evidence.summary.purpose,
             crate::SignaturePurpose::GitAnnotatedTag
         );
-        let metadata_evidence = VerificationSummaryEvidence::from_verified_git_object(
-            &VerifiedGitObjectProof {
+        let metadata_evidence =
+            VerificationSummaryEvidence::from_verified_git_object(&VerifiedGitObjectProof {
                 object: blob,
                 repository: identity.clone(),
                 repository_generation: RepositoryGeneration(4),
@@ -1728,8 +1789,7 @@ mod tests {
                 purpose: crate::SignaturePurpose::SourceManifest,
                 object_format: ObjectFormat::Sha256,
                 object_kind: ObjectKind::Blob,
-            },
-        );
+            });
         let mut evidence_records = Vector::from([evidence, metadata_evidence]);
         evidence_records.sort_unstable_by(|left, right| {
             if evidence_less(left, right) {
@@ -1739,15 +1799,17 @@ mod tests {
             }
         });
         let evidence_store = VerificationSummaryStore::new(evidence_records).unwrap();
-        assert!(evidence_store
-            .exact(
-                &identity,
-                RepositoryGeneration(3),
-                commit,
-                TrustGeneration(5),
-                RevocationGeneration(6),
-            )
-            .is_none());
+        assert!(
+            evidence_store
+                .exact(
+                    &identity,
+                    RepositoryGeneration(3),
+                    commit,
+                    TrustGeneration(5),
+                    RevocationGeneration(6),
+                )
+                .is_none()
+        );
         view = view.with_verification_evidence(evidence_store);
         let limits = QueryLimits {
             max_entries: 8,
@@ -1772,36 +1834,48 @@ mod tests {
                 .commits,
             &[commit]
         );
-        let details = GitdCoreBackend::read_commit_details(&view, &identity, commit, limits).unwrap();
+        let details =
+            GitdCoreBackend::read_commit_details(&view, &identity, commit, limits).unwrap();
         assert_eq!(details.commit, commit);
         assert_eq!(details.tree, tree);
         assert!(details.parents.is_empty());
         assert_eq!(details.message, "initial\n");
-        let tag_page = GitdCoreBackend::read_annotated_tag_page(&view, &identity, 0, limits)
-            .unwrap();
+        let tag_page =
+            GitdCoreBackend::read_annotated_tag_page(&view, &identity, 0, limits).unwrap();
         assert_eq!(tag_page.repository_generation, RepositoryGeneration(4));
         assert_eq!(tag_page.tags.len(), 2);
         assert_eq!(tag_page.tags[0].reference.as_str(), "refs/tags/v1");
         assert_eq!(tag_page.tags[0].tag, tag);
         assert_eq!(tag_page.tags[0].target, commit);
         assert_eq!(tag_page.tags[0].target_type, ObjectKind::Commit);
-        assert_eq!(tag_page.tags[0].tagger, "Owner <owner@example.invalid> 2 +0000");
+        assert_eq!(
+            tag_page.tags[0].tagger,
+            "Owner <owner@example.invalid> 2 +0000"
+        );
         assert_eq!(tag_page.tags[0].message, "release\n");
         assert_eq!(tag_page.next_offset, None);
         let first_tag = GitdCoreBackend::read_annotated_tag_page(
             &view,
             &identity,
             0,
-            QueryLimits { max_entries: 1, max_bytes: 1024 },
-        ).unwrap();
+            QueryLimits {
+                max_entries: 1,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
         assert_eq!(first_tag.tags.len(), 1);
         assert_eq!(first_tag.next_offset, Some(1));
         let second_tag = GitdCoreBackend::read_annotated_tag_page(
             &view,
             &identity,
             1,
-            QueryLimits { max_entries: 1, max_bytes: 1024 },
-        ).unwrap();
+            QueryLimits {
+                max_entries: 1,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
         assert_eq!(second_tag.tags[0].reference.as_str(), "refs/tags/v2");
         assert_eq!(second_tag.next_offset, None);
         assert_eq!(
@@ -1831,13 +1905,17 @@ mod tests {
                 &view,
                 &identity,
                 0,
-                QueryLimits { max_entries: 1, max_bytes: 8 },
+                QueryLimits {
+                    max_entries: 1,
+                    max_bytes: 8
+                },
             ),
             Err(GitdCoreError::Resource)
         );
         let duplicate = mrml_runtime::mrml_format!(
             "object {}\nobject {}\ntype commit\ntag bad\ntagger Owner <owner@example.invalid> 2 +0000\n\nmessage\n",
-            commit.to_hex(), commit.to_hex()
+            commit.to_hex(),
+            commit.to_hex()
         );
         assert_eq!(
             parse_annotated_tag(
@@ -1898,8 +1976,8 @@ mod tests {
             ),
             Err(GitdCoreError::Signature)
         );
-        let descriptor = GitdCoreBackend::immutable_pack_descriptor(&view, &identity, commit)
-            .unwrap();
+        let descriptor =
+            GitdCoreBackend::immutable_pack_descriptor(&view, &identity, commit).unwrap();
         assert_eq!(descriptor.repository_generation, RepositoryGeneration(4));
         assert_eq!(descriptor.commit, commit);
         assert_eq!(descriptor.object_format, ObjectFormat::Sha256);
@@ -1915,27 +1993,19 @@ mod tests {
             revocation_generation: RevocationGeneration(5),
             pack_generation: crate::PackGeneration(1),
         };
-        let events = GitdCoreBackend::repository_events_after(
-            &view,
-            &identity,
-            previous,
-            limits,
-        )
-        .unwrap();
+        let events =
+            GitdCoreBackend::repository_events_after(&view, &identity, previous, limits).unwrap();
         assert_eq!(events.events.len(), 1);
         assert_eq!(events.events[0].previous, previous);
         assert_eq!(events.next.repository_generation, RepositoryGeneration(4));
         assert_eq!(events.next.trust_generation, TrustGeneration(5));
         assert_eq!(events.next.revocation_generation, RevocationGeneration(6));
-        assert!(GitdCoreBackend::repository_events_after(
-            &view,
-            &identity,
-            events.next,
-            limits,
-        )
-        .unwrap()
-        .events
-        .is_empty());
+        assert!(
+            GitdCoreBackend::repository_events_after(&view, &identity, events.next, limits,)
+                .unwrap()
+                .events
+                .is_empty()
+        );
         assert_eq!(
             &*view
                 .read_tree_page(&identity, commit, &RepositoryPath::root(), limits)
@@ -2020,13 +2090,21 @@ mod tests {
         );
         assert_eq!(
             GitdCoreBackend::verification_summary(
-                &view, &identity, commit, TrustGeneration(4), RevocationGeneration(6),
+                &view,
+                &identity,
+                commit,
+                TrustGeneration(4),
+                RevocationGeneration(6),
             ),
             Err(GitdCoreError::StaleGeneration)
         );
         assert_eq!(
             GitdCoreBackend::verification_summary(
-                &view, &identity, tree, TrustGeneration(5), RevocationGeneration(6),
+                &view,
+                &identity,
+                tree,
+                TrustGeneration(5),
+                RevocationGeneration(6),
             ),
             Err(GitdCoreError::Signature)
         );
@@ -2202,15 +2280,23 @@ mod tests {
         let mut tree_contents = Vector::from(*b"100644 README.md\0");
         tree_contents.extend(blob.id.as_bytes().iter().copied());
         let (tree_id, _) = crate::encode_loose_object_with_format(
-            ObjectFormat::Sha256, ObjectKind::Tree, &tree_contents,
+            ObjectFormat::Sha256,
+            ObjectKind::Tree,
+            &tree_contents,
         );
-        let tree = PackObject { id: tree_id, kind: ObjectKind::Tree, contents: tree_contents };
+        let tree = PackObject {
+            id: tree_id,
+            kind: ObjectKind::Tree,
+            contents: tree_contents,
+        };
         let commit_contents = mrml_runtime::mrml_format!(
             "tree {}\nauthor Owner <owner@example.invalid> 1 +0000\n\narrival\n",
             tree.id.to_hex()
         );
         let (commit_id, _) = crate::encode_loose_object_with_format(
-            ObjectFormat::Sha256, ObjectKind::Commit, commit_contents.as_bytes(),
+            ObjectFormat::Sha256,
+            ObjectKind::Commit,
+            commit_contents.as_bytes(),
         );
         let commit = PackObject {
             id: commit_id,
@@ -2219,7 +2305,8 @@ mod tests {
         };
         let selected = [blob.clone(), tree.clone(), commit.clone()];
         let selected_pack = encode_pack_with_format(&selected, ObjectFormat::Sha256).unwrap();
-        let store = ArrivalPackStore::open(&arrivals_path, ObjectFormat::Sha256, 1024 * 1024).unwrap();
+        let store =
+            ArrivalPackStore::open(&arrivals_path, ObjectFormat::Sha256, 1024 * 1024).unwrap();
         let selected_tx = crate::QuarantineTransactionId([31; 16]);
         let selected_summary = store
             .stage_compacted_pack(selected_tx, &selected_pack, &[blob.id, tree.id, commit.id])
@@ -2231,9 +2318,12 @@ mod tests {
             kind: ObjectKind::Blob,
             contents: Vector::from(*b"installed but unselected"),
         };
-        let hidden_pack = encode_pack_with_format(core::slice::from_ref(&hidden), ObjectFormat::Sha256).unwrap();
+        let hidden_pack =
+            encode_pack_with_format(core::slice::from_ref(&hidden), ObjectFormat::Sha256).unwrap();
         let hidden_tx = crate::QuarantineTransactionId([32; 16]);
-        store.stage_compacted_pack(hidden_tx, &hidden_pack, &[hidden.id]).unwrap();
+        store
+            .stage_compacted_pack(hidden_tx, &hidden_pack, &[hidden.id])
+            .unwrap();
         store.install(hidden_tx, 1).unwrap();
 
         let identity = RepositoryIdentity::parse("owner/selected").unwrap();
@@ -2251,7 +2341,8 @@ mod tests {
             ObjectFormat::Sha256,
             Vector::from([selected_summary]),
             limits,
-        ).unwrap();
+        )
+        .unwrap();
         ActiveRefFile::initialize_with_pack_set(
             &refs_path,
             &ActiveRefState {
@@ -2266,27 +2357,59 @@ mod tests {
                 refs: [(FullRefName::parse("refs/heads/main").unwrap(), commit.id)].into(),
             },
             &manifest,
-        ).unwrap();
+        )
+        .unwrap();
         let mut view = FilesystemRepositoryView::open_with_arrivals(
-            identity.clone(), &repository_path, &refs_path, &arrivals_path, 1024 * 1024,
-        ).unwrap();
-        let query_limits = QueryLimits { max_entries: 8, max_bytes: 1024 };
-        assert_eq!(view.read_commit_details(&identity, commit.id, query_limits).unwrap().tree, tree.id);
+            identity.clone(),
+            &repository_path,
+            &refs_path,
+            &arrivals_path,
+            1024 * 1024,
+        )
+        .unwrap();
+        let query_limits = QueryLimits {
+            max_entries: 8,
+            max_bytes: 1024,
+        };
         assert_eq!(
-            &*view.read_tree_page(&identity, commit.id, &RepositoryPath::root(), query_limits).unwrap().entries,
+            view.read_commit_details(&identity, commit.id, query_limits)
+                .unwrap()
+                .tree,
+            tree.id
+        );
+        assert_eq!(
+            &*view
+                .read_tree_page(&identity, commit.id, &RepositoryPath::root(), query_limits)
+                .unwrap()
+                .entries,
             &[RepositoryPath::parse("README.md").unwrap()]
         );
         assert_eq!(
-            &*view.read_blob_page(&identity, commit.id, &RepositoryPath::parse("README.md").unwrap(), query_limits).unwrap().bytes,
+            &*view
+                .read_blob_page(
+                    &identity,
+                    commit.id,
+                    &RepositoryPath::parse("README.md").unwrap(),
+                    query_limits
+                )
+                .unwrap()
+                .bytes,
             b"arrival readme"
         );
         let state = view.load_state().unwrap();
-        assert_eq!(view.read_object(&state, hidden.id), Err(GitdCoreError::ObjectValidation));
+        assert_eq!(
+            view.read_object(&state, hidden.id),
+            Err(GitdCoreError::ObjectValidation)
+        );
 
         let want = mrml_runtime::mrml_format!("want {}\n", commit.id.to_hex());
         let mut input = protocol_request(&[
-            Some(b"command=fetch\n"), Some(b"object-format=sha256\n"), None,
-            Some(want.as_bytes()), Some(b"done\n"), Some(b"ofs-delta\n"),
+            Some(b"command=fetch\n"),
+            Some(b"object-format=sha256\n"),
+            None,
+            Some(want.as_bytes()),
+            Some(b"done\n"),
+            Some(b"ofs-delta\n"),
         ]);
         let mut output = Writer(Vector::new());
         view.smart_git(
@@ -2296,11 +2419,20 @@ mod tests {
                 operation: SmartGitOperation::UploadPack,
                 object_format: ObjectFormat::Sha256,
             },
-            &mut input, &mut output, work_budget(),
-        ).unwrap();
-        let mut reader = Reader { bytes: output.0, offset: 0 };
+            &mut input,
+            &mut output,
+            work_budget(),
+        )
+        .unwrap();
+        let mut reader = Reader {
+            bytes: output.0,
+            offset: 0,
+        };
         let mut budget = ProtocolBudget::new(work_budget());
-        assert_eq!(crate::read_pkt_line(&mut reader, &mut budget).unwrap(), PktLine::Data(Vector::from(*b"packfile\n")));
+        assert_eq!(
+            crate::read_pkt_line(&mut reader, &mut budget).unwrap(),
+            PktLine::Data(Vector::from(*b"packfile\n"))
+        );
         let mut pack = Vector::new();
         loop {
             match crate::read_pkt_line(&mut reader, &mut budget).unwrap() {

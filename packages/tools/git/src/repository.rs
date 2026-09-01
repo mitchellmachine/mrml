@@ -3665,7 +3665,9 @@ mod tests {
         let source_path = root("validated-import-source");
         let source = Repository::init_with_format(&source_path, ObjectFormat::Sha256).unwrap();
         write_file(&join_path(&source_path, "tracked"), b"candidate").unwrap();
-        source.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        source
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
         let commit = source
             .commit("candidate", "MRML", "mrml@example.invalid", 1)
             .unwrap();
@@ -3677,9 +3679,14 @@ mod tests {
         destination
             .import_pack_validated_commit_tips(&pack, &[commit])
             .unwrap();
-        assert_eq!(destination.read_commit(commit).unwrap().message, "candidate\n");
+        assert_eq!(
+            destination.read_commit(commit).unwrap().message,
+            "candidate\n"
+        );
 
-        let blob = source.write_object(ObjectKind::Blob, b"not a commit").unwrap();
+        let blob = source
+            .write_object(ObjectKind::Blob, b"not a commit")
+            .unwrap();
         let blob_pack = source.pack_reachable(blob).unwrap();
         let rejected_path = root("rejected-import-destination");
         let rejected = Repository::init_with_format(&rejected_path, ObjectFormat::Sha256).unwrap();
@@ -3709,10 +3716,16 @@ mod tests {
         let hex = id.to_hex();
         let directory = join_path(&join_path(&repository.git_dir, "objects"), &hex[..2]);
         create_dir_all(&directory).unwrap();
-        write_file(&join_path(&directory, &hex[2..]), b"corrupt preexisting object").unwrap();
-        assert!(repository
-            .write_object(ObjectKind::Blob, b"expected contents")
-            .is_err());
+        write_file(
+            &join_path(&directory, &hex[2..]),
+            b"corrupt preexisting object",
+        )
+        .unwrap();
+        assert!(
+            repository
+                .write_object(ObjectKind::Blob, b"expected contents")
+                .is_err()
+        );
         remove_dir_all(&path).unwrap();
     }
 
@@ -4266,12 +4279,16 @@ mod tests {
         let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
         let tracked = join_path(&path, "tracked");
         write_file(&tracked, b"first").unwrap();
-        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
         let first = repository
             .commit("first", "MRML", "mrml@example.invalid", 1)
             .unwrap();
         write_file(&tracked, b"second").unwrap();
-        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
         let second = repository
             .commit("second", "MRML", "mrml@example.invalid", 2)
             .unwrap();
@@ -4299,7 +4316,9 @@ mod tests {
         let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
         let tracked = join_path(&path, "tracked");
         write_file(&tracked, &[b'x'; 64 * 1024]).unwrap();
-        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
         let tip = repository
             .commit("concurrent", "MRML", "mrml@example.invalid", 1)
             .unwrap();
@@ -4311,7 +4330,10 @@ mod tests {
             let worker_expected = expected.clone();
             let worker = mrml_runtime::spawn_joinable(move || {
                 let worker_repository = Repository::discover(&worker_path).unwrap();
-                assert_eq!(worker_repository.pack_reachable(tip).unwrap(), worker_expected);
+                assert_eq!(
+                    worker_repository.pack_reachable(tip).unwrap(),
+                    worker_expected
+                );
             })
             .unwrap_or_else(|_| panic!("failed to start fetch-pack generation worker"));
             workers.push(worker);

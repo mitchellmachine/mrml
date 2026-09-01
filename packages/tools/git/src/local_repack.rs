@@ -6,8 +6,8 @@ use mrml_runtime::{File, Vector, join_path, path_is_file, read_file_bounded};
 use crate::{ObjectId, Repository, RepositoryError};
 #[cfg(unix)]
 use crate::{
-    PackObject, build_pack_index_v2,
-    encode_pack_with_format, parse_pack_index_v2, parse_pack_with_index,
+    PackObject, build_pack_index_v2, encode_pack_with_format, parse_pack_index_v2,
+    parse_pack_with_index,
 };
 
 #[cfg(unix)]
@@ -59,7 +59,13 @@ pub(crate) fn repack(repository: &Repository) -> Result<LocalRepackResult, Repos
 
     let reopened_pack = read_file_bounded(&pack_path, MAX_LOCAL_PACK_BYTES)?;
     let reopened_index = read_file_bounded(&index_path, MAX_LOCAL_PACK_BYTES)?;
-    verify_pair(repository, &reopened_pack, &reopened_index, &objects, checksum)?;
+    verify_pair(
+        repository,
+        &reopened_pack,
+        &reopened_index,
+        &objects,
+        checksum,
+    )?;
     Ok(LocalRepackResult {
         pack_checksum: checksum,
         object_count: objects.len(),
@@ -116,12 +122,13 @@ fn verify_pair(
     if parsed != expected {
         return Err(RepositoryError::InvalidReference);
     }
-    let max_objects =
-        u32::try_from(entries.len()).map_err(|_| RepositoryError::TooManyFiles)?;
+    let max_objects = u32::try_from(entries.len()).map_err(|_| RepositoryError::TooManyFiles)?;
     let parsed_index = parse_pack_index_v2(repository.object_format(), index, max_objects)
         .map_err(|_| RepositoryError::InvalidReference)?;
     if parsed_index.pack_checksum() != checksum
-        || entries.iter().any(|entry| parsed_index.find(entry.id) != Some(entry))
+        || entries
+            .iter()
+            .any(|entry| parsed_index.find(entry.id) != Some(entry))
     {
         return Err(RepositoryError::InvalidReference);
     }
@@ -166,10 +173,7 @@ mod tests {
 
         let pack_path = join_path(
             &repository.git_dir,
-            &mrml_runtime::mrml_format!(
-                "objects/pack/pack-{}.pack",
-                first.pack_checksum.to_hex()
-            ),
+            &mrml_runtime::mrml_format!("objects/pack/pack-{}.pack", first.pack_checksum.to_hex()),
         );
         let packed = read_file_bounded(&pack_path, MAX_LOCAL_PACK_BYTES).unwrap();
         let objects = crate::parse_pack_with_format(&packed, repository.object_format()).unwrap();

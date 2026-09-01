@@ -6,14 +6,14 @@ use mrml_runtime::{
 };
 
 use crate::pack_file::validate_pack_file_with_bases;
+use crate::pack_set::AuthenticatedPackIndexSummary;
 use crate::sha1::GitObjectHasher;
 use crate::{
     BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
     DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
-    PackError, PackSetManifest, QuarantineTransaction, QuarantineTransactionId, build_pack_index_v2,
-    parse_pack_index_v2, parse_pack_with_index,
+    PackError, PackSetManifest, QuarantineTransaction, QuarantineTransactionId,
+    build_pack_index_v2, parse_pack_index_v2, parse_pack_with_index,
 };
-use crate::pack_set::AuthenticatedPackIndexSummary;
 
 pub struct ArrivalPackStore {
     quarantine: Text,
@@ -408,12 +408,8 @@ impl ArrivalPackStore {
     }
 
     fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
-        self.summarize_directory(
-            directory,
-            QuarantineTransactionId([1; 16]),
-            object_count,
-        )
-        .map(|_| ())
+        self.summarize_directory(directory, QuarantineTransactionId([1; 16]), object_count)
+            .map(|_| ())
     }
 
     fn summarize_directory(
@@ -473,11 +469,9 @@ impl ArrivalPackStore {
             .and_then(|file| file.len())
             .map_err(|_| DurableFailure::VerifierCrash)?;
         let index_bytes = u64::try_from(index.len()).map_err(|_| DurableFailure::DiskFull)?;
-        let index_checksum = ObjectId::from_bytes(
-            self.format,
-            &index[index.len() - self.format.hash_len()..],
-        )
-        .ok_or(DurableFailure::VerifierCrash)?;
+        let index_checksum =
+            ObjectId::from_bytes(self.format, &index[index.len() - self.format.hash_len()..])
+                .ok_or(DurableFailure::VerifierCrash)?;
         let work_units = pack_bytes
             .checked_add(validated.expanded_bytes)
             .ok_or(DurableFailure::DiskFull)?;
@@ -517,11 +511,8 @@ fn read_scratch_object(
     if !path_exists(&path) {
         return Ok(None);
     }
-    let encoded = read_regular_bounded(
-        &path,
-        max_bytes.checked_add(1).ok_or(PackError::TooLarge)?,
-    )
-    .map_err(|_| PackError::MissingBase)?;
+    let encoded = read_regular_bounded(&path, max_bytes.checked_add(1).ok_or(PackError::TooLarge)?)
+        .map_err(|_| PackError::MissingBase)?;
     let (&kind, contents) = encoded.split_first().ok_or(PackError::MissingBase)?;
     let kind = match kind {
         1 => crate::ObjectKind::Commit,

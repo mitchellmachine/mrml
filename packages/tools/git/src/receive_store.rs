@@ -1,14 +1,12 @@
 //! Hosted-Linux composition of durable receive storage components.
 
+use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
 use crate::{
-    ActivationSnapshot, ActiveRefFile, ArrivalPackStore, AuditReceipt, AuditReceiptDirectory,
-    ActiveRefState, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
-    ObjectFormat, ObjectId, PackError, QuarantineTransaction, QuarantineTransactionId,
-    ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord, RecoveryAction, Repository,
-    PackGeneration, PackSetLimits, VerifiedRefTransaction, classify_receive_recovery,
-};
-use crate::pack_set::{
-    AuthenticatedPackIndexSummary, build_pack_set_manifest,
+    ActivationSnapshot, ActiveRefFile, ActiveRefState, ArrivalPackStore, AuditReceipt,
+    AuditReceiptDirectory, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
+    ObjectFormat, ObjectId, PackError, PackGeneration, PackSetLimits, QuarantineTransaction,
+    QuarantineTransactionId, ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord,
+    RecoveryAction, Repository, VerifiedRefTransaction, classify_receive_recovery,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -50,21 +48,15 @@ impl LinuxDurableReceiveStore {
         expected_active: &ActiveRefState,
         active_objects: &Repository,
     ) -> Result<(), GitdCoreError> {
-        if self
-            .refs
-            .load()
-            .map_err(|_| GitdCoreError::Storage)?
-            != *expected_active
+        if self.refs.load().map_err(|_| GitdCoreError::Storage)? != *expected_active
             || active_objects.object_format() != expected_active.object_format
             || transaction.repository() != &expected_active.repository
             || transaction.repository_generation() != expected_active.repository_generation
         {
             return Err(GitdCoreError::StaleGeneration);
         }
-        self.arrivals.validate_received_pack_with_bases(
-            transaction,
-            required_tips,
-            |id, limit| {
+        self.arrivals
+            .validate_received_pack_with_bases(transaction, required_tips, |id, limit| {
                 if let Ok(object) = self.read_active_arrival_object(id, limit) {
                     return Ok(Some((object.kind, object.contents)));
                 }
@@ -76,8 +68,7 @@ impl LinuxDurableReceiveStore {
                     return Err(PackError::TooLarge);
                 }
                 Ok(Some((object.kind, object.contents)))
-            },
-        )
+            })
     }
 
     pub(crate) fn read_active_arrival_object(
@@ -272,8 +263,7 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
         if pending != transaction {
             return Err(DurableFailure::StaleLock);
         }
-        self.arrivals.install(transaction, object_count)
-            ?;
+        self.arrivals.install(transaction, object_count)?;
         self.pending_summary = Some(
             self.arrivals
                 .authenticated_installed_summary(transaction, object_count)?,
@@ -363,9 +353,9 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use mrml_runtime::{Text, Vector, join_path, path_exists, write_file};
     #[cfg(target_os = "linux")]
     use mrml_runtime::Command;
+    use mrml_runtime::{Text, Vector, join_path, path_exists, write_file};
 
     use super::*;
     use crate::{
@@ -403,7 +393,13 @@ mod tests {
             old,
             new,
             HistoryVerificationLimits::default(),
-            |id| Ok(if id == new { [old].into() } else { Vector::new() }),
+            |id| {
+                Ok(if id == new {
+                    [old].into()
+                } else {
+                    Vector::new()
+                })
+            },
             |_| Ok(()),
         )
         .unwrap();
@@ -500,10 +496,16 @@ mod tests {
         }
         let (mut transaction, verified, mut store) = crash_fixture(".");
         transaction.ref_updates_prepared().unwrap();
-        store.persist_journal_and_fsync(&transaction, &verified).unwrap();
-        store.install_arrival_pack_and_fsync(transaction.id()).unwrap();
+        store
+            .persist_journal_and_fsync(&transaction, &verified)
+            .unwrap();
+        store
+            .install_arrival_pack_and_fsync(transaction.id())
+            .unwrap();
         transaction.objects_durably_installed().unwrap();
-        store.persist_journal_and_fsync(&transaction, &verified).unwrap();
+        store
+            .persist_journal_and_fsync(&transaction, &verified)
+            .unwrap();
         let snapshot = store.reread_activation_snapshot(&verified).unwrap();
         assert_eq!(snapshot.repository_generation, RepositoryGeneration(7));
         store.activate_refs_atomically_and_fsync(&verified).unwrap();
@@ -539,10 +541,16 @@ mod tests {
             if path_exists(&ready) {
                 break;
             }
-            assert!(child.try_wait().is_none(), "crash helper exited before boundary");
+            assert!(
+                child.try_wait().is_none(),
+                "crash helper exited before boundary"
+            );
             mrml_runtime::yield_now();
         }
-        assert!(path_exists(&ready), "crash helper did not reach activation boundary");
+        assert!(
+            path_exists(&ready),
+            "crash helper did not reach activation boundary"
+        );
         assert!(child.kill());
         assert!(!child.wait().unwrap().success());
 

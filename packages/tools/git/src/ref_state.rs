@@ -4,8 +4,8 @@ use mrml_crypto::Sha256;
 use mrml_runtime::Vector;
 
 use crate::{
-    FullRefName, GitdCoreError, ObjectFormat, ObjectId, PackGeneration, RepositoryGeneration,
-    PackSetManifest, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+    FullRefName, GitdCoreError, ObjectFormat, ObjectId, PackGeneration, PackSetManifest,
+    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
     VerifiedRefTransaction,
 };
 
@@ -205,9 +205,7 @@ pub fn apply_verified_ref_transaction_with_pack_set(
         return Err(ActiveRefStateError::Stale);
     }
     next.pack_generation = manifest.pack_generation();
-    next.pack_set_digest = manifest
-        .digest()
-        .map_err(|_| ActiveRefStateError::Policy)?;
+    next.pack_set_digest = manifest.digest().map_err(|_| ActiveRefStateError::Policy)?;
     validate_state(&next)?;
     Ok(next)
 }
@@ -244,9 +242,7 @@ pub(crate) fn apply_compaction_pack_set(
     let mut next = current.clone();
     next.repository_generation = next_repository_generation;
     next.pack_generation = next_pack_generation;
-    next.pack_set_digest = manifest
-        .digest()
-        .map_err(|_| ActiveRefStateError::Policy)?;
+    next.pack_set_digest = manifest.digest().map_err(|_| ActiveRefStateError::Policy)?;
     validate_state(&next)?;
     Ok(next)
 }
@@ -412,8 +408,8 @@ mod tests {
             },
         )
         .unwrap();
-        let next = apply_verified_ref_transaction_with_pack_set(&state, &verified, &manifest)
-            .unwrap();
+        let next =
+            apply_verified_ref_transaction_with_pack_set(&state, &verified, &manifest).unwrap();
         assert_eq!(next.repository_generation, RepositoryGeneration(8));
         assert_eq!(next.pack_generation, PackGeneration(4));
         assert_eq!(next.pack_set_digest, manifest.digest().unwrap());

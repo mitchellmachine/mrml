@@ -21,7 +21,9 @@ pub(crate) struct DeltaSelection {
 
 /// Selects only from the fixed direct-predecessor window. Candidate quality is
 /// ordered solely by raw delta length and then the complete object ID.
-pub(crate) fn select_deltas(objects: &[PackObject]) -> Result<Vector<Option<DeltaSelection>>, PackError> {
+pub(crate) fn select_deltas(
+    objects: &[PackObject],
+) -> Result<Vector<Option<DeltaSelection>>, PackError> {
     select_deltas_with_work(objects, MAX_DELTA_SEARCH_WORK)
 }
 
@@ -31,7 +33,9 @@ fn select_deltas_with_work(
 ) -> Result<Vector<Option<DeltaSelection>>, PackError> {
     let mut selected: Vector<Option<DeltaSelection>> = Vector::new();
     let mut work_remaining = max_work;
-    selected.try_reserve_exact(objects.len()).map_err(|_| PackError::TooLarge)?;
+    selected
+        .try_reserve_exact(objects.len())
+        .map_err(|_| PackError::TooLarge)?;
     for (index, object) in objects.iter().enumerate() {
         let mut best: Option<(usize, ObjectId, Vector<u8>, u8)> = None;
         let start = index.saturating_sub(DELTA_WINDOW);
@@ -44,11 +48,8 @@ fn select_deltas_with_work(
             if base_depth >= MAX_DELTA_DEPTH {
                 continue;
             }
-            let Some(delta) = make_delta(
-                &base.contents,
-                &object.contents,
-                &mut work_remaining,
-            )? else {
+            let Some(delta) = make_delta(&base.contents, &object.contents, &mut work_remaining)?
+            else {
                 break;
             };
             if delta.len() >= object.contents.len() {
@@ -85,7 +86,9 @@ fn make_delta(
 
     let mut heads = [usize::MAX; HASH_BUCKETS];
     let mut previous = Vector::new();
-    previous.try_reserve_exact(base.len()).map_err(|_| PackError::TooLarge)?;
+    previous
+        .try_reserve_exact(base.len())
+        .map_err(|_| PackError::TooLarge)?;
     previous.resize(base.len(), usize::MAX);
     if base.len() >= MIN_MATCH {
         for offset in 0..=base.len() - MIN_MATCH {
@@ -150,9 +153,13 @@ fn put_varint(mut value: usize, output: &mut Vector<u8>) {
     loop {
         let mut byte = (value & 0x7f) as u8;
         value >>= 7;
-        if value != 0 { byte |= 0x80; }
+        if value != 0 {
+            byte |= 0x80;
+        }
         output.push(byte);
-        if value == 0 { break; }
+        if value == 0 {
+            break;
+        }
     }
 }
 
@@ -171,12 +178,20 @@ fn emit_copy(offset: usize, length: usize, output: &mut Vector<u8>) {
     let mut used = 0usize;
     for byte_index in 0..4 {
         let byte = ((offset >> (byte_index * 8)) & 0xff) as u8;
-        if byte != 0 { opcode |= 1 << byte_index; parameters[used] = byte; used += 1; }
+        if byte != 0 {
+            opcode |= 1 << byte_index;
+            parameters[used] = byte;
+            used += 1;
+        }
     }
     if length != 65_536 {
         for byte_index in 0..3 {
             let byte = ((length >> (byte_index * 8)) & 0xff) as u8;
-            if byte != 0 { opcode |= 0x10 << byte_index; parameters[used] = byte; used += 1; }
+            if byte != 0 {
+                opcode |= 0x10 << byte_index;
+                parameters[used] = byte;
+                used += 1;
+            }
         }
     }
     output.push(opcode);
@@ -186,7 +201,7 @@ fn emit_copy(offset: usize, length: usize, output: &mut Vector<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ObjectKind, encode_loose_object_with_format, ObjectFormat};
+    use crate::{ObjectFormat, ObjectKind, encode_loose_object_with_format};
 
     fn blob(bytes: &[u8]) -> PackObject {
         let (id, _) = encode_loose_object_with_format(ObjectFormat::Sha1, ObjectKind::Blob, bytes);
@@ -202,8 +217,17 @@ mod tests {
         let mut tree = blob(b"abcdefgh-2222");
         tree.kind = ObjectKind::Tree;
         let objects = [blob(b"abcdefgh-0000"), blob(b"abcdefgh-1111"), tree];
-        assert_eq!(select_deltas(&objects).unwrap(), select_deltas(&objects).unwrap());
-        assert_eq!(select_deltas(&objects).unwrap()[1].as_ref().unwrap().base_index, 0);
+        assert_eq!(
+            select_deltas(&objects).unwrap(),
+            select_deltas(&objects).unwrap()
+        );
+        assert_eq!(
+            select_deltas(&objects).unwrap()[1]
+                .as_ref()
+                .unwrap()
+                .base_index,
+            0
+        );
         assert!(select_deltas(&objects).unwrap()[2].is_none());
     }
 
@@ -211,8 +235,18 @@ mod tests {
     fn fixed_window_and_depth_are_enforced() {
         let mut objects = Vector::new();
         objects.push(blob(&[b'x'; 256]));
-        for value in 0..=DELTA_WINDOW { objects.push(blob(&[value as u8; 256])); }
-        assert_ne!(select_deltas(&objects).unwrap().last().unwrap().as_ref().map(|d| d.base_index), Some(0));
+        for value in 0..=DELTA_WINDOW {
+            objects.push(blob(&[value as u8; 256]));
+        }
+        assert_ne!(
+            select_deltas(&objects)
+                .unwrap()
+                .last()
+                .unwrap()
+                .as_ref()
+                .map(|d| d.base_index),
+            Some(0)
+        );
 
         let mut chain = Vector::new();
         for index in 0..=MAX_DELTA_DEPTH as usize {
@@ -220,7 +254,13 @@ mod tests {
             bytes[index] = b'b';
             chain.push(blob(&bytes));
         }
-        assert!(select_deltas(&chain).unwrap().iter().flatten().all(|d| d.depth <= MAX_DELTA_DEPTH));
+        assert!(
+            select_deltas(&chain)
+                .unwrap()
+                .iter()
+                .flatten()
+                .all(|d| d.depth <= MAX_DELTA_DEPTH)
+        );
     }
 
     #[test]

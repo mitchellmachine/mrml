@@ -267,7 +267,9 @@ pub fn encode_pack_with_format(
     }
     let deltas = select_deltas(objects)?;
     let mut offsets = Vector::new();
-    offsets.try_reserve_exact(objects.len()).map_err(|_| PackError::TooLarge)?;
+    offsets
+        .try_reserve_exact(objects.len())
+        .map_err(|_| PackError::TooLarge)?;
     for (index, object) in objects.iter().enumerate() {
         let offset = pack.len();
         offsets.push(offset);

@@ -115,28 +115,21 @@ mod tests {
     use super::*;
     use crate::{
         ActiveRefState, CompactionSnapshot, FullRefName, ObjectKind, PackGeneration, PackObject,
-        RepositoryIdentity, RevocationGeneration, TrustGeneration,
-        encode_loose_object_with_format, encode_pack_with_format,
+        RepositoryIdentity, RevocationGeneration, TrustGeneration, encode_loose_object_with_format,
+        encode_pack_with_format,
     };
     use mrml_runtime::{Text, Vector, join_path, path_exists};
 
     fn root(label: &str) -> Text {
         join_path(
             &mrml_runtime::temporary_directory(),
-            &mrml_runtime::mrml_format!(
-                "mrml-compaction-{}-{}",
-                label,
-                mrml_runtime::process_id()
-            ),
+            &mrml_runtime::mrml_format!("mrml-compaction-{}-{}", label, mrml_runtime::process_id()),
         )
     }
 
     fn object(contents: &[u8]) -> PackObject {
-        let (id, _) = encode_loose_object_with_format(
-            ObjectFormat::Sha256,
-            ObjectKind::Blob,
-            contents,
-        );
+        let (id, _) =
+            encode_loose_object_with_format(ObjectFormat::Sha256, ObjectKind::Blob, contents);
         PackObject {
             id,
             kind: ObjectKind::Blob,
@@ -231,20 +224,36 @@ mod tests {
     #[test]
     fn transaction_identity_binds_repository_generations_and_pack() {
         let (id, _) = encode_loose_object_with_format(ObjectFormat::Sha256, ObjectKind::Blob, b"a");
-        let object = PackObject { id, kind: ObjectKind::Blob, contents: Vector::from(*b"a") };
+        let object = PackObject {
+            id,
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"a"),
+        };
         let result = CompactionResult {
-            selected: CompactionSnapshot { repository_generation: RepositoryGeneration(7), pack_generation: PackGeneration(3) },
+            selected: CompactionSnapshot {
+                repository_generation: RepositoryGeneration(7),
+                pack_generation: PackGeneration(3),
+            },
             replacement_pack_generation: PackGeneration(4),
             retained_object_ids: [id].into(),
             pack: encode_pack_with_format(&[object], ObjectFormat::Sha256).unwrap(),
         };
         let digest = Sha256::digest(&result.pack);
         let first = compaction_transaction_id("owner/repo", &result, digest);
-        assert_eq!(first, compaction_transaction_id("owner/repo", &result, digest));
-        assert_ne!(first, compaction_transaction_id("owner/other", &result, digest));
+        assert_eq!(
+            first,
+            compaction_transaction_id("owner/repo", &result, digest)
+        );
+        assert_ne!(
+            first,
+            compaction_transaction_id("owner/other", &result, digest)
+        );
         let mut later = result.clone();
         later.selected.pack_generation = PackGeneration(4);
-        assert_ne!(first, compaction_transaction_id("owner/repo", &later, digest));
+        assert_ne!(
+            first,
+            compaction_transaction_id("owner/repo", &later, digest)
+        );
     }
 
     #[test]

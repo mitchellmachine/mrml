@@ -932,7 +932,8 @@ mod tests {
                 1,
             ),
         ];
-        for (journal_failure_at, install_failure, snapshot_failure, expected, activations) in cases {
+        for (journal_failure_at, install_failure, snapshot_failure, expected, activations) in cases
+        {
             let (mut transaction, verified, old) = ready_receive();
             let mut store = store_for(&verified, old);
             store.journal_failure_at = journal_failure_at;

@@ -216,9 +216,7 @@ impl CompactionJournal {
             CompactionPhase::Planned | CompactionPhase::Staged => {
                 CrashOutcome::KeepSelectedGenerationDiscardStage
             }
-            CompactionPhase::StageSynced => {
-                CrashOutcome::KeepSelectedGenerationRecoverSyncedStage
-            }
+            CompactionPhase::StageSynced => CrashOutcome::KeepSelectedGenerationRecoverSyncedStage,
             CompactionPhase::Activated => CrashOutcome::UseReplacementKeepOldFiles,
             CompactionPhase::Retired => CrashOutcome::UseReplacementRetireOldFiles,
         }
@@ -243,7 +241,8 @@ mod tests {
     use crate::{ObjectKind, encode_loose_object_with_format};
 
     fn object(contents: &[u8]) -> PackObject {
-        let (id, _) = encode_loose_object_with_format(ObjectFormat::Sha256, ObjectKind::Blob, contents);
+        let (id, _) =
+            encode_loose_object_with_format(ObjectFormat::Sha256, ObjectKind::Blob, contents);
         PackObject {
             id,
             kind: ObjectKind::Blob,
@@ -267,57 +266,160 @@ mod tests {
         assert_eq!(CompactionProfile::FIXED.deflate_level, 9);
         assert_eq!(CompactionProfile::FIXED.delta_window, 250);
         assert_eq!(CompactionProfile::FIXED.max_delta_depth, 50);
-        let snapshot = CompactionSnapshot { repository_generation: RepositoryGeneration(7), pack_generation: PackGeneration(11) };
+        let snapshot = CompactionSnapshot {
+            repository_generation: RepositoryGeneration(7),
+            pack_generation: PackGeneration(11),
+        };
         let a = object(b"reachable a");
         let b = object(b"unreachable");
         let c = object(b"reachable c");
-        let first = compact_reachable(snapshot, snapshot, resources(), ObjectFormat::Sha256, &[c.id, a.id], &[b.clone(), a.clone(), c.clone()]).unwrap();
-        let second = compact_reachable(snapshot, snapshot, resources(), ObjectFormat::Sha256, &[a.id, c.id], &[c, b, a]).unwrap();
+        let first = compact_reachable(
+            snapshot,
+            snapshot,
+            resources(),
+            ObjectFormat::Sha256,
+            &[c.id, a.id],
+            &[b.clone(), a.clone(), c.clone()],
+        )
+        .unwrap();
+        let second = compact_reachable(
+            snapshot,
+            snapshot,
+            resources(),
+            ObjectFormat::Sha256,
+            &[a.id, c.id],
+            &[c, b, a],
+        )
+        .unwrap();
         assert_eq!(first, second);
         assert_eq!(first.replacement_pack_generation, PackGeneration(12));
-        assert_eq!(parse_pack_with_format(&first.pack, ObjectFormat::Sha256).unwrap().len(), 2);
+        assert_eq!(
+            parse_pack_with_format(&first.pack, ObjectFormat::Sha256)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
     fn compaction_pauses_and_rejects_stale_activation() {
-        let snapshot = CompactionSnapshot { repository_generation: RepositoryGeneration(7), pack_generation: PackGeneration(11) };
+        let snapshot = CompactionSnapshot {
+            repository_generation: RepositoryGeneration(7),
+            pack_generation: PackGeneration(11),
+        };
         let mut busy = resources();
         busy.push_active = true;
-        assert_eq!(compact_reachable(snapshot, snapshot, busy, ObjectFormat::Sha256, &[], &[]), Err(CompactionError::PushActive));
-        let result = compact_reachable(snapshot, snapshot, resources(), ObjectFormat::Sha256, &[], &[]).unwrap();
+        assert_eq!(
+            compact_reachable(snapshot, snapshot, busy, ObjectFormat::Sha256, &[], &[]),
+            Err(CompactionError::PushActive)
+        );
+        let result = compact_reachable(
+            snapshot,
+            snapshot,
+            resources(),
+            ObjectFormat::Sha256,
+            &[],
+            &[],
+        )
+        .unwrap();
         let mut journal = CompactionJournal::new(&result);
         journal.stage().unwrap();
-        assert_eq!(journal.crash_outcome(), CrashOutcome::KeepSelectedGenerationDiscardStage);
+        assert_eq!(
+            journal.crash_outcome(),
+            CrashOutcome::KeepSelectedGenerationDiscardStage
+        );
         journal.sync_stage().unwrap();
-        assert_eq!(journal.crash_outcome(), CrashOutcome::KeepSelectedGenerationRecoverSyncedStage);
-        let changed = CompactionSnapshot { repository_generation: RepositoryGeneration(8), pack_generation: PackGeneration(12) };
-        assert_eq!(journal.activate(changed), Err(CompactionError::GenerationChanged));
+        assert_eq!(
+            journal.crash_outcome(),
+            CrashOutcome::KeepSelectedGenerationRecoverSyncedStage
+        );
+        let changed = CompactionSnapshot {
+            repository_generation: RepositoryGeneration(8),
+            pack_generation: PackGeneration(12),
+        };
+        assert_eq!(
+            journal.activate(changed),
+            Err(CompactionError::GenerationChanged)
+        );
         journal.activate(snapshot).unwrap();
-        assert_eq!(journal.crash_outcome(), CrashOutcome::UseReplacementKeepOldFiles);
+        assert_eq!(
+            journal.crash_outcome(),
+            CrashOutcome::UseReplacementKeepOldFiles
+        );
         journal.retire().unwrap();
-        assert_eq!(journal.crash_outcome(), CrashOutcome::UseReplacementRetireOldFiles);
+        assert_eq!(
+            journal.crash_outcome(),
+            CrashOutcome::UseReplacementRetireOldFiles
+        );
     }
 
     #[test]
     fn compaction_enforces_reserve_and_exact_reachability() {
-        let snapshot = CompactionSnapshot { repository_generation: RepositoryGeneration(1), pack_generation: PackGeneration(1) };
+        let snapshot = CompactionSnapshot {
+            repository_generation: RepositoryGeneration(1),
+            pack_generation: PackGeneration(1),
+        };
         let a = object(b"a");
         let mut low = resources();
         low.free_bytes -= 1;
-        assert_eq!(compact_reachable(snapshot, snapshot, low, ObjectFormat::Sha256, &[a.id], &[a.clone()]), Err(CompactionError::FreeReserve));
-        assert_eq!(compact_reachable(snapshot, snapshot, resources(), ObjectFormat::Sha256, &[a.id], &[]), Err(CompactionError::MissingReachableObject));
-        assert_eq!(compact_reachable(snapshot, snapshot, resources(), ObjectFormat::Sha256, &[a.id, a.id], &[a]), Err(CompactionError::DuplicateObject));
+        assert_eq!(
+            compact_reachable(
+                snapshot,
+                snapshot,
+                low,
+                ObjectFormat::Sha256,
+                &[a.id],
+                &[a.clone()]
+            ),
+            Err(CompactionError::FreeReserve)
+        );
+        assert_eq!(
+            compact_reachable(
+                snapshot,
+                snapshot,
+                resources(),
+                ObjectFormat::Sha256,
+                &[a.id],
+                &[]
+            ),
+            Err(CompactionError::MissingReachableObject)
+        );
+        assert_eq!(
+            compact_reachable(
+                snapshot,
+                snapshot,
+                resources(),
+                ObjectFormat::Sha256,
+                &[a.id, a.id],
+                &[a]
+            ),
+            Err(CompactionError::DuplicateObject)
+        );
         let mut excessive_memory = resources();
         excessive_memory.estimated_memory_bytes = COMPACTION_MEMORY_LIMIT_BYTES + 1;
         assert_eq!(
-            compact_reachable(snapshot, snapshot, excessive_memory, ObjectFormat::Sha256, &[], &[]),
+            compact_reachable(
+                snapshot,
+                snapshot,
+                excessive_memory,
+                ObjectFormat::Sha256,
+                &[],
+                &[]
+            ),
             Err(CompactionError::MemoryBudget)
         );
         let mut underestimated = resources();
         underestimated.estimated_output_bytes = 0;
         underestimated.free_bytes = COMPACTION_FREE_RESERVE_BYTES;
         assert_eq!(
-            compact_reachable(snapshot, snapshot, underestimated, ObjectFormat::Sha256, &[], &[]),
+            compact_reachable(
+                snapshot,
+                snapshot,
+                underestimated,
+                ObjectFormat::Sha256,
+                &[],
+                &[]
+            ),
             Err(CompactionError::OutputEstimate)
         );
     }
