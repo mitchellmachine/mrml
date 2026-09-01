@@ -2,10 +2,10 @@
 
 use crate::{
     ActivationSnapshot, ActiveRefFile, ArrivalPackStore, AuditReceipt, AuditReceiptDirectory,
-    BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object, ObjectFormat,
-    ObjectId, QuarantineTransaction, QuarantineTransactionId, ReceiveJournalDirectory,
-    ReceiveJournalError, ReceiveJournalRecord, RecoveryAction, VerifiedRefTransaction,
-    classify_receive_recovery,
+    ActiveRefState, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
+    ObjectFormat, ObjectId, PackError, QuarantineTransaction, QuarantineTransactionId,
+    ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord, RecoveryAction, Repository,
+    VerifiedRefTransaction, classify_receive_recovery,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -29,13 +29,38 @@ impl LinuxDurableReceiveStore {
         self.arrivals.receive_pack_body(transaction, input)
     }
 
-    pub(crate) fn validate_received_pack(
+    pub(crate) fn validate_received_pack_with_active_bases(
         &self,
         transaction: &mut QuarantineTransaction,
         required_tips: &[ObjectId],
+        expected_active: &ActiveRefState,
+        active_objects: &Repository,
     ) -> Result<(), GitdCoreError> {
-        self.arrivals
-            .validate_received_pack(transaction, required_tips)
+        if self
+            .refs
+            .load()
+            .map_err(|_| GitdCoreError::Storage)?
+            != *expected_active
+            || active_objects.object_format() != expected_active.object_format
+            || transaction.repository() != &expected_active.repository
+            || transaction.repository_generation() != expected_active.repository_generation
+        {
+            return Err(GitdCoreError::StaleGeneration);
+        }
+        self.arrivals.validate_received_pack_with_bases(
+            transaction,
+            required_tips,
+            |id, limit| {
+                let object = match active_objects.read_object(id) {
+                    Ok(object) => object,
+                    Err(_) => return Ok(None),
+                };
+                if object.contents.len() as u64 > limit {
+                    return Err(PackError::TooLarge);
+                }
+                Ok(Some((object.kind, object.contents)))
+            },
+        )
     }
 
     pub(crate) fn read_quarantined_object(

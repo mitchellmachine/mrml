@@ -166,7 +166,12 @@ pub fn prepare_protected_receive(
     for update in &request.candidate.updates {
         tips.push(update.proposed_new.ok_or(GitdCoreError::Unsupported)?);
     }
-    store.validate_received_pack(&mut transaction, &tips)?;
+    store.validate_received_pack_with_active_bases(
+        &mut transaction,
+        &tips,
+        active,
+        active_objects,
+    )?;
     let validation_work = validation_fixed_work
         .checked_add(
             transaction

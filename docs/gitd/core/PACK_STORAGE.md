@@ -92,6 +92,15 @@ ID/CRC/offset/trailer binding, and rejects re-use of a transaction ID. The
 arrival directory is outside normal active reads until ref generation
 activation. Windows remains fail-closed pending directory flush support.
 
-Thin-pack completion, pack-generation switching, clone/fetch caching, dynamic
-Huffman level-9 encoding, delta selection, and compaction remain open. No outer
-Zstandard layer belongs in Git pack storage.
+Protected receive now supplies thin REF bases only through the repository view
+whose object format and exact active ref/repository generation were checked
+before the request. The active ref state is re-read after the body and must
+still byte-match before any base lookup; each returned base is independently
+size-bounded and re-hashed before it enters transaction-private scratch. The
+later durable activation still performs its immediate generation/ref re-read.
+Thin-pack capability advertisement remains disabled pending concurrent receive
+tests and production active-pack-set integration.
+
+Pack-generation switching, clone/fetch caching, dynamic Huffman level-9
+encoding, delta selection, and compaction remain open. No outer Zstandard layer
+belongs in Git pack storage.
