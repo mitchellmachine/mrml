@@ -833,6 +833,13 @@ pub struct AcmedConfig {
     pub certificate_profile: CertificateProfile,
     pub order_lifetime_seconds: u64,
     pub order_retry_limit: u8,
+    pub authoritative_dns_ipv4: [u8; 4],
+    pub authoritative_dns_port: u16,
+    pub recursive_dns_ipv4: [u8; 4],
+    pub recursive_dns_port: u16,
+    pub propagation_attempts: u8,
+    pub propagation_interval_seconds: u64,
+    pub propagation_timeout_seconds: u64,
     pub identifiers: [Option<DnsIdentifier>; MAX_CSR_IDENTIFIERS],
     pub identifier_count: u8,
     pub identifier_set_digest: [u8; 32],
@@ -883,7 +890,7 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| AcmedConfigError::Malformed)?;
     let object = value.as_object().ok_or(AcmedConfigError::Malformed)?;
-    const FIELDS: [&str; 21] = [
+    const FIELDS: [&str; 28] = [
         "directory_url",
         "directory_generation",
         "directory_class",
@@ -901,6 +908,13 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         "certificate_profile",
         "order_lifetime_seconds",
         "order_retry_limit",
+        "authoritative_dns_ipv4",
+        "authoritative_dns_port",
+        "recursive_dns_ipv4",
+        "recursive_dns_port",
+        "propagation_attempts",
+        "propagation_interval_seconds",
+        "propagation_timeout_seconds",
         "identifiers",
         "wildcard_enabled",
         "poll_interval_seconds",
@@ -981,6 +995,30 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     if !(300..=86_400).contains(&order_lifetime_seconds) || !(1..=16).contains(&order_retry_limit) {
         return Err(AcmedConfigError::InvalidBounds);
     }
+    let authoritative_dns_ipv4 = parse_ipv4(text(&value, "authoritative_dns_ipv4")?)?;
+    let authoritative_dns_port = u16::try_from(number(&value, "authoritative_dns_port")?)
+        .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    let recursive_dns_ipv4 = parse_ipv4(text(&value, "recursive_dns_ipv4")?)?;
+    let recursive_dns_port = u16::try_from(number(&value, "recursive_dns_port")?)
+        .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    let propagation_attempts = u8::try_from(number(&value, "propagation_attempts")?)
+        .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    let propagation_interval_seconds = number(&value, "propagation_interval_seconds")?;
+    let propagation_timeout_seconds = number(&value, "propagation_timeout_seconds")?;
+    if authoritative_dns_port == 0
+        || recursive_dns_port == 0
+        || authoritative_dns_ipv4 == [0; 4]
+        || recursive_dns_ipv4 == [0; 4]
+        || authoritative_dns_ipv4 == recursive_dns_ipv4
+        || !(1..=32).contains(&propagation_attempts)
+        || !(1..=60).contains(&propagation_interval_seconds)
+        || !(30..=3_600).contains(&propagation_timeout_seconds)
+        || propagation_interval_seconds
+            .checked_mul(u64::from(propagation_attempts))
+            .is_none_or(|span| span > propagation_timeout_seconds)
+    {
+        return Err(AcmedConfigError::InvalidBounds);
+    }
     let wildcard_enabled = value
         .get("wildcard_enabled")
         .and_then(Value::as_bool)
@@ -1029,6 +1067,13 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         certificate_profile,
         order_lifetime_seconds,
         order_retry_limit,
+        authoritative_dns_ipv4,
+        authoritative_dns_port,
+        recursive_dns_ipv4,
+        recursive_dns_port,
+        propagation_attempts,
+        propagation_interval_seconds,
+        propagation_timeout_seconds,
         identifiers,
         identifier_count: list.len() as u8,
         identifier_set_digest,
@@ -1052,6 +1097,27 @@ fn parse_identity(value: &str) -> Result<[u8; 16], AcmedConfigError> {
     } else {
         Ok(identity)
     }
+}
+
+fn parse_ipv4(value: &str) -> Result<[u8; 4], AcmedConfigError> {
+    let mut address = [0u8; 4];
+    let mut parts = value.split('.');
+    for octet in &mut address {
+        let part = parts.next().ok_or(AcmedConfigError::InvalidBounds)?;
+        if part.is_empty()
+            || (part.len() > 1 && part.starts_with('0'))
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(AcmedConfigError::InvalidBounds);
+        }
+        *octet = part
+            .parse::<u8>()
+            .map_err(|_| AcmedConfigError::InvalidBounds)?;
+    }
+    if parts.next().is_some() {
+        return Err(AcmedConfigError::InvalidBounds);
+    }
+    Ok(address)
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, AcmedConfigError> {
@@ -1125,7 +1191,7 @@ mod tests {
         HmacSha256DurableAuthenticator, MAX_DURABLE_RECORD_BYTES,
     };
 
-    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"certificate_profile":"classic","order_lifetime_seconds":3600,"order_retry_limit":6,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
+    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"certificate_profile":"classic","order_lifetime_seconds":3600,"order_retry_limit":6,"authoritative_dns_ipv4":"192.0.2.53","authoritative_dns_port":53,"recursive_dns_ipv4":"198.51.100.53","recursive_dns_port":53,"propagation_attempts":12,"propagation_interval_seconds":5,"propagation_timeout_seconds":300,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
 
     #[test]
     fn account_record_round_trips_only_exact_policy_bound_states() {
@@ -1475,6 +1541,11 @@ mod tests {
         assert_eq!(config.certificate_profile.name(), "classic");
         assert_eq!(config.order_lifetime_seconds, 3_600);
         assert_eq!(config.order_retry_limit, 6);
+        assert_eq!(config.authoritative_dns_ipv4, [192, 0, 2, 53]);
+        assert_eq!(config.recursive_dns_ipv4, [198, 51, 100, 53]);
+        assert_eq!(config.propagation_attempts, 12);
+        assert_eq!(config.propagation_interval_seconds, 5);
+        assert_eq!(config.propagation_timeout_seconds, 300);
         assert_ne!(config.identifier_set_digest, [0; 32]);
         assert!(config.approved_terms_url.is_some());
         assert_eq!(config.approved_terms_content_digest, Some([0x11; 32]));
@@ -1525,6 +1596,21 @@ mod tests {
         ));
         assert!(matches!(
             parse_acmed_config(&STAGING.replace("order_retry_limit\":6", "order_retry_limit\":0")),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace("192.0.2.53", "192.00.2.53")),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace("198.51.100.53", "192.0.2.53")),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace(
+                "propagation_timeout_seconds\":300",
+                "propagation_timeout_seconds\":30"
+            )),
             Err(AcmedConfigError::InvalidBounds)
         ));
         assert!(matches!(

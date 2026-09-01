@@ -19,13 +19,14 @@ use mrml_certificate::{
     CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdChannelCapability,
     CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole,
     CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest, CloudflareDns01Provider,
-    ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DurableAuthenticator,
+    ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DnsObservationClass,
+    DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy, DurableAuthenticator,
     DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
-    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CSR_BYTES,
-    MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE, UnixCertdSession,
-    decode_certd_channel_request, encode_certd_account_key_request, encode_certd_channel_request,
-    encode_certd_jws_request, encode_certd_tls_key_request, load_durable_authenticator,
-    p256_public_key_is_valid,
+    HostedDnsObservationEndpoint, HostedDnsPropagationQuery, HostedDurableStateStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
+    PRODUCTION_SECRET_MODE, UnixCertdSession, decode_certd_channel_request,
+    encode_certd_account_key_request, encode_certd_channel_request, encode_certd_jws_request,
+    encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
 };
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -46,6 +47,8 @@ const DNS_TOKEN: &str = "/run/secrets/cloudflare-api-token";
 const CHANNEL_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const CERTD_SOCKET: &str = "/run/mrml/certd-acmed/certd.sock";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
+const AUTHORITATIVE_DNS_ROUTE_CAPABILITY: u64 = 1;
+const RECURSIVE_DNS_ROUTE_CAPABILITY: u64 = 2;
 
 struct CertdEnvelopeWriter<'a> {
     capability: &'a CertdChannelCapability,
@@ -985,17 +988,22 @@ fn publish_dns_challenges(
                 if published.publication_receipt().ok().flatten() != Some(receipt) {
                     return Err("DNS-01 provider receipt binding mismatch");
                 }
-                persist_challenge_record(
+                let published_generation = persist_challenge_record(
                     config,
                     state,
                     authenticator,
                     durable_generation,
                     &published,
                 )?;
+                observe_dns_propagation(
+                    config,
+                    state,
+                    authenticator,
+                    published_generation,
+                    published,
+                )?;
             }
-            AcmedChallengePhase::Published
-            | AcmedChallengePhase::Propagated
-            | AcmedChallengePhase::Accepted => {
+            AcmedChallengePhase::Published => {
                 let expected_receipt = record
                     .publication_receipt()
                     .map_err(|_| "invalid persisted DNS-01 receipt")?
@@ -1011,11 +1019,100 @@ fn publish_dns_challenges(
                 if observed != expected_receipt {
                     return Err("DNS-01 provider record substitution detected");
                 }
+                observe_dns_propagation(config, state, authenticator, durable_generation, record)?;
             }
+            AcmedChallengePhase::Propagated | AcmedChallengePhase::Accepted => {}
             AcmedChallengePhase::CleanupPending | AcmedChallengePhase::Complete => {}
         }
     }
     Ok(())
+}
+
+fn observe_dns_propagation(
+    config: &AcmedConfig,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    durable_generation: u64,
+    record: AcmedChallengeRecord,
+) -> Result<u64, &'static str> {
+    if record.phase != AcmedChallengePhase::Published {
+        return Err("DNS propagation requires a published challenge");
+    }
+    let authoritative_route = DnsObservationRoute {
+        class: DnsObservationClass::Authoritative,
+        capability_id: AUTHORITATIVE_DNS_ROUTE_CAPABILITY,
+        route_generation: config.policy_generation,
+    };
+    let recursive_route = DnsObservationRoute {
+        class: DnsObservationClass::RecursiveResolver,
+        capability_id: RECURSIVE_DNS_ROUTE_CAPABILITY,
+        route_generation: config.policy_generation,
+    };
+    let started_unix = unix_time()?;
+    let deadline_unix = started_unix
+        .checked_add(config.propagation_timeout_seconds)
+        .ok_or("DNS propagation deadline overflow")?;
+    let mut observer = DnsPropagationObserver::new(
+        record.identifier,
+        record.key_authorization_digest,
+        record.challenge_generation,
+        record.challenge_generation,
+        DnsPropagationPolicy {
+            authoritative: authoritative_route,
+            resolver: recursive_route,
+            maximum_attempts: config.propagation_attempts,
+            deadline_unix,
+        },
+    )
+    .map_err(|_| "invalid DNS propagation policy")?;
+    let mut query = HostedDnsPropagationQuery::new(
+        HostedDnsObservationEndpoint {
+            route: authoritative_route,
+            ipv4: config.authoritative_dns_ipv4,
+            port: config.authoritative_dns_port,
+        },
+        HostedDnsObservationEndpoint {
+            route: recursive_route,
+            ipv4: config.recursive_dns_ipv4,
+            port: config.recursive_dns_port,
+        },
+        started_unix,
+    )
+    .map_err(|_| "invalid DNS observation endpoints")?;
+    for attempt in 0..config.propagation_attempts {
+        let now_unix = unix_time()?;
+        query
+            .set_observed_time(now_unix)
+            .map_err(|_| "invalid DNS observation time")?;
+        if observer
+            .poll(now_unix, &mut query)
+            .map_err(|_| "DNS propagation observation failed")?
+            .is_some()
+        {
+            let propagated = AcmedChallengeRecord {
+                phase: AcmedChallengePhase::Propagated,
+                ..record
+            };
+            return persist_challenge_record(
+                config,
+                state,
+                authenticator,
+                durable_generation,
+                &propagated,
+            );
+        }
+        if attempt + 1 < config.propagation_attempts {
+            std::thread::sleep(Duration::from_secs(config.propagation_interval_seconds));
+        }
+    }
+    Err("DNS propagation attempt limit reached")
+}
+
+fn unix_time() -> Result<u64, &'static str> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock precedes Unix epoch")
+        .map(|duration| duration.as_secs())
 }
 
 fn same_challenge_binding(left: &AcmedChallengeRecord, right: &AcmedChallengeRecord) -> bool {
