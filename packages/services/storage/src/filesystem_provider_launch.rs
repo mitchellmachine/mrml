@@ -168,6 +168,7 @@ impl NativeFilesystemProviderLaunchSpec {
 pub enum NativeFilesystemProviderLaunchPreflightError {
     Source(TaskRuntimeError),
     Target(TaskRuntimeError),
+    WrongSupervisorTask,
     TargetNotConstructionPending,
     Capability(CapabilityError),
     WrongEndpointAuthority,
@@ -1808,6 +1809,14 @@ pub fn launch_native_filesystem_provider<const TASKS: usize, const CAPABILITIES:
             ));
         }
     };
+    if supervisor_task_object != ObjectId(source_task.token()) {
+        return Err(reject_native_filesystem_provider_preflight(
+            runtime,
+            source_task,
+            transfer,
+            NativeFilesystemProviderLaunchPreflightError::WrongSupervisorTask,
+        ));
+    }
     match runtime.construction_pending(target_task) {
         Ok(true) => {}
         Ok(false) => {
@@ -2878,8 +2887,37 @@ mod tests {
                 launch_attachment,
                 root,
                 binding,
-                wrong_root,
+                local_mapping.root(),
                 ObjectId(0x91),
+            ),
+            Err(NativeFilesystemProviderLaunchError::Preflight(
+                NativeFilesystemProviderLaunchPreflightError::WrongSupervisorTask
+            ))
+        );
+        let transfer = mrml_kernel::prepare_component_service_read_transfer_attachment(
+            &mut runtime,
+            source,
+            provider,
+            root.shared_object(),
+            root.generation(),
+            root.bytes(),
+            root.root(),
+        )
+        .unwrap();
+        assert_eq!(
+            launch_native_filesystem_provider(
+                &mut runtime,
+                source,
+                target,
+                endpoint,
+                transfer,
+                association,
+                service,
+                launch_attachment,
+                root,
+                binding,
+                wrong_root,
+                ObjectId(source.token()),
             ),
             Err(NativeFilesystemProviderLaunchError::Preflight(
                 NativeFilesystemProviderLaunchPreflightError::WrongPageTableRoot
@@ -2907,7 +2945,7 @@ mod tests {
             root,
             binding,
             local_mapping.root(),
-            ObjectId(0x91),
+            ObjectId(source.token()),
         )
         .unwrap();
         assert_eq!(
@@ -3183,7 +3221,7 @@ mod tests {
                         restart_root,
                         restart_binding,
                         restart_local_mapping.root(),
-                        ObjectId(0x91),
+                        ObjectId(source.token()),
                     )
                     .unwrap();
                     let restarted = restart_and_activate_native_filesystem_provider(
