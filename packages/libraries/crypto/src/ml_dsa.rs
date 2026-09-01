@@ -980,6 +980,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn independently_generated_openssl_vector_when_configured() {
+        let Some(directory) = mrml_runtime::environment_variable("MRML_ML_DSA_65_OPENSSL") else {
+            return;
+        };
+        let read = |name: &str| {
+            mrml_runtime::read_file(&mrml_runtime::join_path(&directory, name)).unwrap()
+        };
+        let expected_public = read("public.raw");
+        let expected_secret = read("secret.raw");
+        let expected_signature = read("signature.bin");
+        let message = read("message.bin");
+        assert_eq!(expected_public.len(), ML_DSA_65_PUBLIC_KEY_BYTES);
+        assert_eq!(expected_secret.len(), ML_DSA_65_SECRET_KEY_BYTES);
+        assert_eq!(expected_signature.len(), ML_DSA_65_SIGNATURE_BYTES);
+
+        let mut seed = [0u8; 32];
+        let mut randomizer = [0u8; 32];
+        for index in 0..32 {
+            seed[index] = index as u8;
+            randomizer[index] = (index + 32) as u8;
+        }
+        let mut public = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&seed, &mut public, &mut secret).unwrap();
+        assert_eq!(&public, &expected_public[..]);
+        assert_eq!(&secret, &expected_secret[..]);
+
+        let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(
+            &secret,
+            b"mrml-oracle",
+            &message,
+            &randomizer,
+            &mut signature,
+        )
+        .unwrap();
+        assert_eq!(&signature, &expected_signature[..]);
+        assert_eq!(
+            ml_dsa_65_verify(&public, b"mrml-oracle", &message, &expected_signature),
+            Ok(())
+        );
+    }
+
+    #[test]
     fn round_trip_and_rejects_tampering() {
         let seed = [7u8; 32];
         let randomizer = [9u8; 32];

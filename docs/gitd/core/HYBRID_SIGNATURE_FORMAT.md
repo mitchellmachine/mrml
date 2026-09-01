@@ -83,5 +83,21 @@ caller outputs before work and volatile-zeroes its expanded seed and temporary
 polynomial state on success and classified sampler failure. Tests cover the
 255-byte context boundary, fail-closed 256-byte rejection with cleared output,
 and noncanonical hint ordering. Official final FIPS 204/correction vectors, a
-pinned independent oracle, complete rejected-attempt intermediate-zeroization
-review, timing evidence, and independent cryptographic review remain open.
+complete rejected-attempt intermediate-zeroization review, timing evidence,
+and independent cryptographic review remain open.
+
+The test-only independent oracle is OpenSSL 3.6.4, built 2026-08-25, default
+provider `ML-DSA-65`. The pinned differential case uses key-generation seed
+`000102...1f`, per-signature test entropy `202122...3f`, context
+`mrml-oracle`, and message `MRML ML-DSA oracle message`. OpenSSL verifies its
+signature, while the environment-gated MRML test requires byte-exact agreement
+for the 1952-byte public key, 4032-byte private key, and 3309-byte signature and
+then verifies the OpenSSL signature independently. Fixture SHA-256 digests are:
+
+- public key: `d666806e11cee19a7c989f7445f90dd419cf4d2d51db8c0fdb4c0f0a542238c9`;
+- private key: `9f1e24f47795fe50040384e3d6183988047170fa2d866406b70fe0a3f8216063`;
+- signature: `74e9f990ff6705244aec107745630ea37b308d0f8172329bb34382e6efc6d710`;
+- message: `446d923689f069cdc13682c7414e211b85bda1cba245a3c363adace52d4316c7`.
+
+This is a pinned hosted-Linux differential probe, not an official NIST ACVP
+vector, validation certificate, constant-time result, or independent audit.
