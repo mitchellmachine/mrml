@@ -342,6 +342,22 @@ fn encode_compressed_candidate(
         .try_extend_from_slice(&sequences::encode(&commands, &mut candidate_state)?)
         .map_err(|_| Error::Allocation)?;
     if candidate.len() < block.len() {
+        // Selection is fail closed: a candidate must pass the independent
+        // decoder path before it can become a cached HTTP representation.
+        let mut verified = Vector::with_capacity(block.len()).map_err(|_| Error::Allocation)?;
+        let mut huffman_table = None;
+        let mut decoder_state = sequences::State::new();
+        if decode_compressed_block(
+            &candidate,
+            &mut verified,
+            &mut huffman_table,
+            &mut decoder_state,
+        )
+        .is_err()
+            || &verified[..] != block
+        {
+            return Ok(None);
+        }
         *sequence_state = candidate_state;
         Ok(Some(candidate))
     } else {
