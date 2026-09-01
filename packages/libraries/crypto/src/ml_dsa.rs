@@ -1138,6 +1138,23 @@ mod tests {
         output
     }
 
+    fn fixture_hex<const N: usize>(value: &str) -> [u8; N] {
+        let mut output = [0u8; N];
+        let mut nybbles = value.bytes().filter(|byte| !byte.is_ascii_whitespace());
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => panic!("non-hex fixture byte"),
+        };
+        for byte in &mut output {
+            *byte = (digit(nybbles.next().expect("short hex fixture")) << 4)
+                | digit(nybbles.next().expect("short hex fixture"));
+        }
+        assert!(nybbles.next().is_none(), "long hex fixture");
+        output
+    }
+
     #[test]
     fn nist_acvp_fips204_keygen_case_26() {
         let seed = hex32("A991FD42B071D49C48AE3E75C647459E0DAAD1E1BA356A04801912D3294BCFF8");
@@ -1155,17 +1172,13 @@ mod tests {
     }
 
     #[test]
-    fn nist_acvp_fips204_siggen_case_41_when_configured() {
-        let Some(directory) = mrml_runtime::environment_variable("MRML_ACVP_MLDSA65_SIGGEN") else {
-            return;
-        };
-        let read = |name: &str| {
-            mrml_runtime::read_file(&mrml_runtime::join_path(&directory, name)).unwrap()
-        };
-        let secret = read("secret.raw");
-        let context = read("context.bin");
-        let message = read("message.bin");
-        let expected = read("signature.bin");
+    fn nist_acvp_fips204_siggen_case_41() {
+        // NIST ACVP-Server internal projection, pinned at
+        // 975de31eb83d87039ec88934fdc47d8c312b892d, ML-DSA-65 tcId 41.
+        let secret = fixture_hex::<ML_DSA_65_SECRET_KEY_BYTES>(include_str!("testdata/nist-acvp-fips204-siggen-41-secret.hex"));
+        let context = fixture_hex::<11>(include_str!("testdata/nist-acvp-fips204-siggen-41-context.hex"));
+        let message = fixture_hex::<1>(include_str!("testdata/nist-acvp-fips204-siggen-41-message.hex"));
+        let expected = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!("testdata/nist-acvp-fips204-siggen-41-signature.hex"));
         assert_eq!(secret.len(), ML_DSA_65_SECRET_KEY_BYTES);
         assert_eq!(expected.len(), ML_DSA_65_SIGNATURE_BYTES);
         let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
@@ -1174,71 +1187,35 @@ mod tests {
     }
 
     #[test]
-    fn nist_acvp_fips204_sigver_cases_when_configured() {
-        let Some(directory) = mrml_runtime::environment_variable("MRML_ACVP_MLDSA65_SIGVER") else {
-            return;
-        };
-        for (case, expected) in [
-            ("sigver-33", Ok(())),
-            ("sigver-31", Err(MlDsaError::InvalidSignature)),
-        ] {
-            let case = mrml_runtime::join_path(&directory, case);
-            let read = |name: &str| {
-                mrml_runtime::read_file(&mrml_runtime::join_path(&case, name)).unwrap()
-            };
-            let public = read("public.raw");
-            let context = read("context.bin");
-            let message = read("message.bin");
-            let signature = read("signature.bin");
-            assert_eq!(public.len(), ML_DSA_65_PUBLIC_KEY_BYTES);
-            assert_eq!(signature.len(), ML_DSA_65_SIGNATURE_BYTES);
-            assert_eq!(
-                ml_dsa_65_verify(&public, &context, &message, &signature),
-                expected
-            );
-        }
+    fn nist_acvp_fips204_sigver_cases() {
+        // Same pinned NIST projection: tcId 33 is valid and tcId 31 is invalid.
+        let valid_public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-33-public.hex"));
+        let valid_context = fixture_hex::<142>(include_str!("testdata/nist-acvp-fips204-sigver-33-context.hex"));
+        let valid_message = fixture_hex::<1481>(include_str!("testdata/nist-acvp-fips204-sigver-33-message.hex"));
+        let valid_signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-33-signature.hex"));
+        assert_eq!(ml_dsa_65_verify(&valid_public, &valid_context, &valid_message, &valid_signature), Ok(()));
+
+        let invalid_public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-31-public.hex"));
+        let invalid_context = fixture_hex::<13>(include_str!("testdata/nist-acvp-fips204-sigver-31-context.hex"));
+        let invalid_message = fixture_hex::<3468>(include_str!("testdata/nist-acvp-fips204-sigver-31-message.hex"));
+        let invalid_signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!("testdata/nist-acvp-fips204-sigver-31-signature.hex"));
+        assert_eq!(ml_dsa_65_verify(&invalid_public, &invalid_context, &invalid_message, &invalid_signature), Err(MlDsaError::InvalidSignature));
     }
 
     #[test]
-    fn independently_generated_openssl_vector_when_configured() {
-        let Some(directory) = mrml_runtime::environment_variable("MRML_ML_DSA_65_OPENSSL") else {
-            return;
-        };
-        let read = |name: &str| {
-            mrml_runtime::read_file(&mrml_runtime::join_path(&directory, name)).unwrap()
-        };
-        let expected_public = read("public.raw");
-        let expected_secret = read("secret.raw");
-        let expected_signature = read("signature.bin");
-        let message = read("message.bin");
-        assert_eq!(expected_public.len(), ML_DSA_65_PUBLIC_KEY_BYTES);
-        assert_eq!(expected_secret.len(), ML_DSA_65_SECRET_KEY_BYTES);
-        assert_eq!(expected_signature.len(), ML_DSA_65_SIGNATURE_BYTES);
-
-        let mut seed = [0u8; 32];
-        let mut randomizer = [0u8; 32];
-        for index in 0..32 {
-            seed[index] = index as u8;
-            randomizer[index] = (index + 32) as u8;
-        }
-        let mut public = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
-        let mut secret = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
-        ml_dsa_65_keygen(&seed, &mut public, &mut secret).unwrap();
-        assert_eq!(&public, &expected_public[..]);
-        assert_eq!(&secret, &expected_secret[..]);
-
-        let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
-        ml_dsa_65_sign(
-            &secret,
-            b"mrml-oracle",
-            &message,
-            &randomizer,
-            &mut signature,
-        )
-        .unwrap();
-        assert_eq!(&signature, &expected_signature[..]);
+    fn verifies_independently_generated_openssl_3_6_4_vector() {
+        // Generated and successfully self-verified by OpenSSL 3.6.4's default
+        // provider using ML-DSA-65 and the exact message below. The SPKI wrapper
+        // is deliberately excluded: this API consumes the FIPS 204 public bytes.
+        let public = fixture_hex::<ML_DSA_65_PUBLIC_KEY_BYTES>(include_str!(
+            "testdata/openssl-3.6.4-mldsa65-public.hex"
+        ));
+        let signature = fixture_hex::<ML_DSA_65_SIGNATURE_BYTES>(include_str!(
+            "testdata/openssl-3.6.4-mldsa65-signature.hex"
+        ));
+        let message = b"MRML OpenSSL 3.6.4 ML-DSA-65 differential oracle\n";
         assert_eq!(
-            ml_dsa_65_verify(&public, b"mrml-oracle", &message, &expected_signature),
+            ml_dsa_65_verify(&public, b"", message, &signature),
             Ok(())
         );
     }
