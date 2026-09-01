@@ -103,6 +103,15 @@ renderer unit fixtures, not assistive-hardware evidence.
 Bounded semantic pipe-table rendering and the 64-column rejection case are also
 covered by that hosted Linux HTTP regression.
 
+The legacy `gitea-custom` templates and theme were removed after confirming the
+first-party static site carries the intended charcoal, amber, and warm-white
+visual language. `python3 website/check_static.py` passes two static pages and
+checks canonical/Open Graph metadata, initial-HTML Organization/WebSite JSON-LD,
+landmarks, skip navigation, local assets, focus/reduced-motion CSS hooks, and
+the absence of executable scripts and legacy Gitea runtime customization. This
+is deterministic markup inspection, not browser, screen-reader, assistive-device,
+contrast-laboratory, or disabled-user evidence.
+
 Cache-key construction now binds every renderer and verification input as
 separate length-delimited fields before a domain-labeled SHA-256 digest. The
 hosted Linux HTTP regression covers the previous trust/revocation XOR collision
