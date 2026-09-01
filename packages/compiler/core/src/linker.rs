@@ -860,6 +860,7 @@ pub enum PeProfileDataFamily {
     Counters,
     Bitmap,
     ValueNodes,
+    Values,
 }
 
 impl PeProfileDataFamily {
@@ -870,7 +871,12 @@ impl PeProfileDataFamily {
             Self::Counters => 2,
             Self::Bitmap => 3,
             Self::ValueNodes => 4,
+            Self::Values => 5,
         }
+    }
+
+    const fn requires_sentinels(self) -> bool {
+        !matches!(self, Self::Values)
     }
 }
 
@@ -3858,12 +3864,17 @@ fn coff_profile_writable_order(name: &str) -> Option<PeProfileDataOrder> {
         (PeProfileDataFamily::Bitmap, suffix)
     } else if let Some(suffix) = name.strip_prefix(".lprfnd$") {
         (PeProfileDataFamily::ValueNodes, suffix)
+    } else if let Some(suffix) = name.strip_prefix(".lprfv$") {
+        (PeProfileDataFamily::Values, suffix)
     } else {
         return None;
     };
     let [suffix] = suffix.as_bytes() else {
         return None;
     };
+    if family == PeProfileDataFamily::Values && *suffix != b'M' {
+        return None;
+    }
     PeProfileDataOrder::new(family, *suffix)
 }
 
@@ -9049,8 +9060,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     }
     let mut profile_indices = [0usize; MAX_LINK_INPUTS];
     let mut profile_count = 0usize;
-    let mut profile_start_counts = [0usize; 5];
-    let mut profile_end_counts = [0usize; 5];
+    let mut profile_start_counts = [0usize; 6];
+    let mut profile_end_counts = [0usize; 6];
     for (index, data) in writable_data.iter().enumerate() {
         let PeDataKind::Profile(order) = data.kind else {
             continue;
@@ -9080,7 +9091,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             .checked_add(1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    for family in 0..5 {
+    for family in 0..6 {
         let present = profile_indices[..profile_count]
             .iter()
             .copied()
@@ -9090,7 +9101,20 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                     PeDataKind::Profile(order) if order.family().index() == family
                 )
             });
-        if present && (profile_start_counts[family] != 1 || profile_end_counts[family] != 1) {
+        let requires_sentinels = profile_indices[..profile_count]
+            .iter()
+            .copied()
+            .find_map(|index| match writable_data[index].kind {
+                PeDataKind::Profile(order) if order.family().index() == family => {
+                    Some(order.family().requires_sentinels())
+                }
+                _ => None,
+            })
+            .unwrap_or(false);
+        if present
+            && requires_sentinels
+            && (profile_start_counts[family] != 1 || profile_end_counts[family] != 1)
+        {
             return Err(LinkerError::UnsupportedCoff);
         }
     }
@@ -15428,6 +15452,10 @@ mod tests {
         assert_eq!(coff_profile_writable_order(".lprfnd$M"), Some(profile_m));
         assert_eq!(coff_profile_writable_order(".lprfnd$Q"), None);
         assert_eq!(coff_profile_writable_order(".lprfnd$MM"), None);
+        let profile_value = PeProfileDataOrder::new(PeProfileDataFamily::Values, b'M').unwrap();
+        assert_eq!(coff_profile_writable_order(".lprfv$M"), Some(profile_value));
+        assert!(!profile_value.family().requires_sentinels());
+        assert_eq!(coff_profile_writable_order(".lprfv$A"), None);
         assert!(coff_is_writable_section(".CRT$XLC"));
         assert!(coff_is_tls_section(".tls"));
         assert_eq!(
@@ -16538,6 +16566,17 @@ mod tests {
             },
             profile("vnodes", b'M', &[0x4d; 16]),
             profile("vnodes_start", b'A', &[0; 24]),
+            PeWritableData {
+                symbol: "values",
+                identity: None,
+                kind: PeDataKind::Profile(
+                    PeProfileDataOrder::new(PeProfileDataFamily::Values, b'M').unwrap(),
+                ),
+                selection: PeWritableComdatSelection::None,
+                initialized: &[0x56; 8],
+                zeroed_size: 0,
+                relocations: &[],
+            },
         ];
         let pe =
             link_x86_64_pe_with_data_and_unwind::<2048, 8192>(&[input], "entry", &[], &writable)
@@ -16550,6 +16589,10 @@ mod tests {
             &[0x4d; 16]
         );
         assert_eq!(&pe.bytes()[writable_raw + 48..writable_raw + 72], &[0; 24]);
+        assert_eq!(
+            &pe.bytes()[writable_raw + 72..writable_raw + 80],
+            &[0x56; 8]
+        );
     }
 
     #[test]
