@@ -29,7 +29,15 @@ legacy checkpoint and hybrid-cutover object IDs, authenticated emergency
 recovery policy, and canonical key-revocation statement are not yet
 implemented. The current state therefore cannot activate protected refs.
 
-Every commit introduced by `old..new`, including merge side ancestry, must be
-verified deterministically. A valid tip cannot hide an invalid intermediate
-commit. Until this range verifier and policy parser exist, protected ref
-activation remains unavailable.
+`verify_introduced_history` now deterministically walks every commit introduced
+by `old..new`, including all merge-side parents, in parent-before-child order.
+It excludes only the authenticated old history, requires the exact old commit
+to be reached for fast-forward acceptance, bounds both existing and introduced
+walks (5,000 introduced commits by default), bounds parents per commit, rejects
+mixed object formats, missing objects, cycles, and verifier failure, and returns
+a private-field `VerifiedCommitRange`. Tests prove that an invalid merge-side
+intermediate cannot hide beneath an otherwise accepted tip.
+
+The range typestate is not yet wired into an atomic `VerifiedRefTransaction`,
+and the policy parser remains open, so protected ref activation remains
+unavailable.

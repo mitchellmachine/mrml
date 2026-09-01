@@ -16,6 +16,7 @@ mod sha1;
 mod smart_protocol;
 mod transport;
 mod trust_policy;
+mod verification;
 
 pub use diff::FileDiff;
 pub use gitd_core::{
@@ -66,6 +67,10 @@ pub use trust_policy::{
     HybridVerificationRequest, MAX_HYBRID_PAYLOAD_BYTES, MAX_POLICY_PAIRS,
     MAX_POLICY_PROTECTED_REFS, MAX_POLICY_REVOKED_KEYS, TrustPolicyCandidate, TrustPolicyState,
     VerifiedHybridSignature, canonical_hybrid_transcript, verify_hybrid_signature,
+};
+pub use verification::{
+    DEFAULT_MAX_INTRODUCED_COMMITS, HistoryVerificationError, HistoryVerificationLimits,
+    VerifiedCommitRange, verify_introduced_history,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
