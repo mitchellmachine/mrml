@@ -27,6 +27,7 @@ mod repository;
 mod repository_view;
 mod sha1;
 mod smart_protocol;
+mod signed_audit_receipt;
 mod transport;
 mod trust_policy;
 mod verification;
@@ -107,6 +108,10 @@ pub use smart_protocol::{
     ProtocolV2Request, ReceivePackRequest, ReceiveRefStatus, read_pkt_line,
     read_receive_pack_commands, read_v2_request, write_pkt_line, write_receive_pack_report,
     write_v2_capability_advertisement,
+};
+pub use signed_audit_receipt::{
+    AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
+    AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
 };
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
