@@ -100,6 +100,14 @@ HTTP(S) autolinks, block quotes, horizontal rules, ordered lists, accessible
 task-list state, and the expanded fixed language-label allowlist. These are
 renderer unit fixtures, not assistive-hardware evidence.
 
+The 2026-09-01 settled edge gates passed `mrml manifest check`, `mrml manifest
+lock --check`, 44 Linux and Wine/Windows Zstandard tests, 56 Linux and 54
+Wine/Windows HTTP tests, 28 Linux TLS tests, and 48 Linux crypto tests. Wine is
+hosted compatibility evidence, not native Windows evidence. `mrml assurance
+check` remains blocked by the pre-existing unadmitted boundary
+`docs/compiler/probes/pinned_std_thread_tls_execution.rs`; the edge work neither
+changes nor suppresses that repository-wide policy failure.
+
 Bounded semantic pipe-table rendering and the 64-column rejection case are also
 covered by that hosted Linux HTTP regression.
 

@@ -30,6 +30,14 @@ the authenticated peer while labeling a different source a candidate path.
 Full reactor-owned protocol state, key update, reordered old-phase handling, and
 IPv6 `/64` admission are **PLANNED**. The runtime address ABI is IPv4-only.
 
+`QuicServerEndpoint` now owns a separately bounded connection table, up to four
+issued connection IDs per connection, the validated peer and lifecycle phase,
+and independent bounded authenticated Initial, Handshake, and Application packet
+histories. Focused Linux and Wine/Windows tests cover quota refusal, packet-space
+isolation, validated-peer updates, and removal of every issued CID. This is an
+endpoint state-machine foundation; it is not public-network, soak, native
+Windows, or production-reactor evidence.
+
 Authenticated ACK ranges are revalidated with checked arithmetic immediately
 before recovery lookup, even though frame decoding performs the same semantic
 validation. Oversized gap arithmetic, first-range underflow, gap underflow, and
