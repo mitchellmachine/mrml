@@ -9,18 +9,25 @@ and the SHA-1 or SHA-256 trailer authenticates the exact bytes accepted by the
 sink. Object identifiers are recomputed before any object is emitted, so a
 mixed-format or mislabeled object fails closed.
 
-This removes the second whole-pack allocation from the bounded production
-profile. The current interface still receives caller-owned `PackObject`
-contents; repository traversal and Smart Git response wiring must be converted
-to a pull source before end-to-end constant-memory or network-backpressure
-claims are warranted. Delta selection remains available through the existing
-in-memory encoder and is deliberately not part of this bounded profile.
+The uncached protocol-v2 upload path now retains only bounded reachable object
+identities, reloads one authenticated object at a time, and writes each encoder
+fragment as a sideband packet through the caller's `BoundedWrite`. The protocol
+output and work budgets therefore apply at every network write, and an object
+larger than the per-request memory budget is rejected. Memory remains linear in
+the number of reachable object identifiers plus the largest individual object;
+it is not independent of object count.
+
+The immutable representation-cache path still uses the existing in-memory
+delta encoder because cache insertion authenticates one canonical complete
+representation. Delta selection is deliberately absent from the uncached
+bounded profile. No constant-memory claim applies to cached pack production.
 
 Focused evidence on hosted Linux:
 
-- `./target/debug/mrml test org.mrml.tool.git --target linux`: 193 library and
+- `./target/debug/mrml test org.mrml.tool.git --target linux`: 194 library and
   3 CLI tests passed, including a 200,000-byte SHA-256 object streamed in fixed
-  writes and reparsed with an independently recomputed trailer.
+  writes, declared-count failure cases, and an uncached protocol-v2 fetch whose
+  sideband pack reparses to the expected commit, tree, and blob graph.
 
 Patent review: **NOT_TRIGGERED**. This increment composes the conventional Git
 pack version 2 format, stored DEFLATE blocks, Adler-32, and existing SHA-1/SHA-256

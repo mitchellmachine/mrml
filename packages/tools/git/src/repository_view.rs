@@ -6,13 +6,14 @@ use crate::{
     ActiveRefFile, AnnotatedTagDetails, AnnotatedTagPage, ArrivalPackStore, BlobPage, BoundedRead,
     BoundedWrite, Commit, CommitDetails, CommitPage, FullRefName, GitdCoreBackend, GitdCoreError,
     ImmutablePackCacheDirectory, ImmutablePackDescriptor, Index, IndexEntry, ObjectId, ObjectKind,
-    PackCacheFileError, PackCacheKey, PackObject, PackSetLimits, PackSetManifest, PktLine,
-    ProtocolBudget, ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
-    RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
-    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
-    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedCommitProof,
-    VerifiedGitObjectProof, VerifiedMetadataDescriptor, WorkBudget, encode_pack_with_format,
-    parse_tree_with_format, read_v2_request, write_pkt_line,
+    PackCacheFileError, PackCacheKey, PackError, PackObject, PackSetLimits, PackSetManifest,
+    PackStreamEncoder, PackStreamOutput, PktLine, ProtocolBudget, ProtocolV2Request, QueryLimits,
+    ReadmeCandidate, Repository, RepositoryEvent, RepositoryEventCursor, RepositoryEventPage,
+    RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
+    RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage,
+    TrustGeneration, VerificationSummary, VerifiedCommitProof, VerifiedGitObjectProof,
+    VerifiedMetadataDescriptor, WorkBudget, encode_pack_with_format, parse_tree_with_format,
+    read_v2_request, write_pkt_line,
 };
 
 pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
@@ -401,23 +402,34 @@ impl GitdCoreBackend for FilesystemRepositoryView {
                 {
                     return Err(GitdCoreError::Authorization);
                 }
-                let pack = self.fetch_pack(&state, &wants, &haves)?;
-                if pack.len() as u64 > budget.max_memory_bytes {
-                    return Err(GitdCoreError::Resource);
-                }
-                self.ensure_exact_generation(&state)?;
-                preflight_pack_response(pack.len(), output, protocol)?;
-                write_data_line(output, b"packfile\n", &mut protocol)?;
-                for chunk in pack.chunks(crate::MAX_PKT_LINE_BYTES - 5) {
-                    let mut payload = Vector::new();
-                    payload
-                        .try_reserve_exact(chunk.len() + 1)
-                        .map_err(|_| GitdCoreError::Resource)?;
-                    payload.push(1);
-                    payload
-                        .try_extend_from_slice(chunk)
-                        .map_err(|_| GitdCoreError::Resource)?;
-                    write_pkt_line(output, &PktLine::Data(payload), &mut protocol)?;
+                if self.pack_cache.is_none() {
+                    self.stream_pack_response(
+                        &state,
+                        &wants,
+                        &haves,
+                        output,
+                        &mut protocol,
+                        budget.max_memory_bytes,
+                    )?;
+                } else {
+                    let pack = self.fetch_pack(&state, &wants, &haves)?;
+                    if pack.len() as u64 > budget.max_memory_bytes {
+                        return Err(GitdCoreError::Resource);
+                    }
+                    self.ensure_exact_generation(&state)?;
+                    preflight_pack_response(pack.len(), output, protocol)?;
+                    write_data_line(output, b"packfile\n", &mut protocol)?;
+                    for chunk in pack.chunks(crate::MAX_PKT_LINE_BYTES - 5) {
+                        let mut payload = Vector::new();
+                        payload
+                            .try_reserve_exact(chunk.len() + 1)
+                            .map_err(|_| GitdCoreError::Resource)?;
+                        payload.push(1);
+                        payload
+                            .try_extend_from_slice(chunk)
+                            .map_err(|_| GitdCoreError::Resource)?;
+                        write_pkt_line(output, &PktLine::Data(payload), &mut protocol)?;
+                    }
                 }
                 write_pkt_line(output, &PktLine::Flush, &mut protocol)?;
             }
@@ -432,6 +444,46 @@ impl GitdCoreBackend for FilesystemRepositoryView {
 }
 
 impl FilesystemRepositoryView {
+    fn stream_pack_response(
+        &self,
+        state: &crate::ActiveRefState,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+        output: &mut dyn BoundedWrite,
+        protocol: &mut ProtocolBudget,
+        max_object_memory: u64,
+    ) -> Result<(), GitdCoreError> {
+        let ids = self.negotiated_object_ids(state, wants, haves)?;
+        self.ensure_exact_generation(state)?;
+        write_data_line(output, b"packfile\n", protocol)?;
+        let mut sideband = SidebandPackWriter::new(output, protocol);
+        let result = (|| {
+            let mut encoder = PackStreamEncoder::new(ids.len(), state.object_format, &mut sideband)
+                .map_err(|_| GitdCoreError::ObjectValidation)?;
+            for id in ids {
+                let object = self.read_object(state, id)?;
+                if object.contents.len() as u64 > max_object_memory {
+                    return Err(GitdCoreError::Resource);
+                }
+                encoder
+                    .write_object(&PackObject {
+                        id,
+                        kind: object.kind,
+                        contents: object.contents,
+                    })
+                    .map_err(|_| GitdCoreError::ObjectValidation)?;
+            }
+            encoder
+                .finish()
+                .map_err(|_| GitdCoreError::ObjectValidation)
+        })();
+        if let Some(error) = sideband.failure {
+            return Err(error);
+        }
+        result?;
+        self.ensure_exact_generation(state)
+    }
+
     fn write_ls_refs(
         &self,
         state: &crate::ActiveRefState,
@@ -1386,6 +1438,26 @@ impl FilesystemRepositoryView {
         wants: &[ObjectId],
         haves: &[ObjectId],
     ) -> Result<Vector<u8>, GitdCoreError> {
+        let ids = self.negotiated_object_ids(state, wants, haves)?;
+        let mut objects = Vector::new();
+        for id in ids {
+            let object = self.read_object(state, id)?;
+            objects.push(PackObject {
+                id,
+                kind: object.kind,
+                contents: object.contents,
+            });
+        }
+        encode_pack_with_format(&objects, state.object_format)
+            .map_err(|_| GitdCoreError::ObjectValidation)
+    }
+
+    fn negotiated_object_ids(
+        &self,
+        state: &crate::ActiveRefState,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+    ) -> Result<Vector<ObjectId>, GitdCoreError> {
         let mut excluded = Vector::new();
         let mut pending: Vector<ObjectId> = haves.iter().copied().collect();
         while let Some(id) = pending.pop() {
@@ -1401,7 +1473,6 @@ impl FilesystemRepositoryView {
         }
         let mut pending: Vector<ObjectId> = wants.iter().copied().collect();
         let mut seen = Vector::new();
-        let mut objects = Vector::new();
         while let Some(id) = pending.pop() {
             if excluded.contains(&id) || seen.contains(&id) {
                 continue;
@@ -1412,14 +1483,8 @@ impl FilesystemRepositoryView {
             let object = self.read_object(state, id)?;
             append_reachable_children(&object, state.object_format, &mut pending)?;
             seen.push(id);
-            objects.push(PackObject {
-                id,
-                kind: object.kind,
-                contents: object.contents,
-            });
         }
-        encode_pack_with_format(&objects, state.object_format)
-            .map_err(|_| GitdCoreError::ObjectValidation)
+        Ok(seen)
     }
 
     fn fetch_pack(
@@ -1593,6 +1658,48 @@ fn write_data_line(
         .try_extend_from_slice(bytes)
         .map_err(|_| GitdCoreError::Resource)?;
     write_pkt_line(output, &PktLine::Data(payload), budget)
+}
+
+struct SidebandPackWriter<'a, 'b> {
+    output: &'a mut dyn BoundedWrite,
+    protocol: &'b mut ProtocolBudget,
+    failure: Option<GitdCoreError>,
+}
+
+impl<'a, 'b> SidebandPackWriter<'a, 'b> {
+    fn new(output: &'a mut dyn BoundedWrite, protocol: &'b mut ProtocolBudget) -> Self {
+        Self {
+            output,
+            protocol,
+            failure: None,
+        }
+    }
+}
+
+impl PackStreamOutput for SidebandPackWriter<'_, '_> {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), PackError> {
+        if self.failure.is_some() {
+            return Err(PackError::TooLarge);
+        }
+        for chunk in bytes.chunks(crate::MAX_PKT_LINE_BYTES - 5) {
+            let mut payload = Vector::new();
+            let result = payload
+                .try_reserve_exact(chunk.len() + 1)
+                .map_err(|_| GitdCoreError::Resource)
+                .and_then(|()| {
+                    payload.push(1);
+                    payload
+                        .try_extend_from_slice(chunk)
+                        .map_err(|_| GitdCoreError::Resource)
+                })
+                .and_then(|()| write_pkt_line(self.output, &PktLine::Data(payload), self.protocol));
+            if let Err(error) = result {
+                self.failure = Some(error);
+                return Err(PackError::TooLarge);
+            }
+        }
+        Ok(())
+    }
 }
 
 fn preflight_pack_response(
@@ -2257,6 +2364,55 @@ mod tests {
             view.precompute_selected_fetch_packs(&identity, &too_many),
             Err(GitdCoreError::Resource)
         );
+
+        let mut streaming_view =
+            FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path).unwrap();
+        let mut streaming_input = protocol_request(&[
+            Some(b"command=fetch\n"),
+            Some(b"object-format=sha256\n"),
+            None,
+            Some(want.as_bytes()),
+            Some(b"done\n"),
+            Some(b"ofs-delta\n"),
+        ]);
+        let mut streaming_output = Writer(Vector::new());
+        streaming_view
+            .smart_git(
+                SmartGitRequest {
+                    repository: identity.clone(),
+                    repository_generation: RepositoryGeneration(4),
+                    operation: SmartGitOperation::UploadPack,
+                    object_format: ObjectFormat::Sha256,
+                },
+                &mut streaming_input,
+                &mut streaming_output,
+                work_budget(),
+            )
+            .unwrap();
+        let mut streaming_reader = Reader {
+            bytes: streaming_output.0,
+            offset: 0,
+        };
+        let mut streaming_budget = ProtocolBudget::new(work_budget());
+        assert_eq!(
+            crate::read_pkt_line(&mut streaming_reader, &mut streaming_budget),
+            Ok(PktLine::Data(Vector::from(*b"packfile\n")))
+        );
+        let mut streamed_pack = Vector::new();
+        loop {
+            match crate::read_pkt_line(&mut streaming_reader, &mut streaming_budget).unwrap() {
+                PktLine::Data(payload) => {
+                    assert_eq!(payload[0], 1);
+                    streamed_pack.extend(payload[1..].iter().copied());
+                }
+                PktLine::Flush => break,
+                _ => panic!("unexpected streaming fetch response packet"),
+            }
+        }
+        let streamed_objects =
+            crate::parse_pack_with_format(&streamed_pack, ObjectFormat::Sha256).unwrap();
+        assert!(streamed_objects.iter().any(|object| object.id == commit));
+        assert!(streamed_objects.iter().any(|object| object.id == blob));
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 
