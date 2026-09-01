@@ -219,6 +219,19 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.library.acme"
+path = "packages/libraries/acme"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.library.agent"
 path = "packages/libraries/agent"
 isolation_default = "in-process"

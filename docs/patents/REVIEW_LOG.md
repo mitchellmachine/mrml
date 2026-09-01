@@ -11151,3 +11151,19 @@ request. No Windows-native, physical-network, Internet-loss, public-release, or
 commercial-release evidence is claimed. Patent review remains **TRIGGERED**
 with **CONDITIONAL_PROCEED**, jurisdiction **CA**, confidence **MEDIUM**, and no
 clearance conclusion.
+# 2026-09-01 — Bounded ACME semantic foundation
+
+Patent review: **NOT_TRIGGERED** for the exact initial semantic-only increment
+in `packages/libraries/acme/src/{ari,identifier,nonce,profile,state,url}.rs`.
+The code performs fixed-capacity ASCII DNS-name normalization, conventional
+HTTPS-origin comparison, directory-generation equality checks, one-use bounded
+nonce ownership, interval validation, and explicit finite-state transition
+checks. It implements no cryptographic algorithm, certificate or CSR encoding,
+ACME/JOSE wire codec, network challenge, DNS server, renewal transport,
+certificate validation, key custody, or deployment mechanism.
+
+The broader requested ACME, JOSE, PKCS#10, X.509, ECDSA signing, HTTP-01,
+TLS-ALPN-01, DNS-01, and ARI transport mechanisms are **TRIGGERED** for targeted
+Canadian claim-level and applicable IETF IPR screening before implementation.
+This entry records no clearance, legal opinion, non-infringement conclusion, or
+permission to cross that gate.

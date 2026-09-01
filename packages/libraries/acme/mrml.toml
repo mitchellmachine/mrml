@@ -1,0 +1,35 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.acme"
+kind = "library"
+name = "mrml-acme"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_acme"
+
+[rust]
+crate_name = "mrml_acme"
+crate_type = "lib"
+source = "packages/libraries/acme/src/lib.rs"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
