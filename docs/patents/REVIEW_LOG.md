@@ -11606,3 +11606,11 @@ generation-bound codecs for prepare, activate, remove, and authoritative-state
 operations over the already reviewed HTTP-01, DNS-01, and TLS-ALPN-01
 publishers. It adds no MultiTLS multiplexing, challenge proxy, route-selected
 multi-vantage validation, or other recorded re-review trigger.
+
+# 2026-09-01 — Canonical certificate lifecycle administration codec
+
+Patent review: **NOT_TRIGGERED**. This increment adds conventional bounded,
+generation-bound codecs for status, account, identity, and backup operations.
+The operation value identifies an owner-authorized action but the selected
+service route remains the authority. It adds no certificate brokerage,
+challenge proxy, public-CA operation, or other recorded re-review trigger.
