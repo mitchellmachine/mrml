@@ -901,6 +901,32 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn external_zstd_1_5_7_decodes_rfc_profile_when_configured() {
+        let Some(oracle) = mrml_runtime::environment_variable("MRML_ZSTD_ORACLE_1_5_7") else {
+            return;
+        };
+        let input = b"MRML RFC 8878 interoperability probe: abcabcabcabcabcabcabcabc";
+        let encoded = encode_http(input, HttpEncodingProfile::BoundedRfc8878V2).unwrap();
+        let stem =
+            mrml_runtime::mrml_format!("/tmp/mrml-zstd-oracle-{}", mrml_runtime::process_id());
+        let frame_path = mrml_runtime::mrml_format!("{stem}.zst");
+        mrml_runtime::write_file(&frame_path, &encoded).unwrap();
+        let output = mrml_runtime::Command::new(&oracle)
+            .args(["--decompress", "--stdout", "--quiet"])
+            .arg(&frame_path)
+            .output()
+            .unwrap();
+        mrml_runtime::remove_file(&frame_path).unwrap();
+        assert!(
+            output.status.success(),
+            "pinned zstd rejected MRML frame: {}",
+            core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
+        );
+        assert_eq!(&output.stdout[..], input);
+    }
+
     #[test]
     fn allocation_free_target_floor_is_bounded_and_fail_closed() {
         let raw = [
