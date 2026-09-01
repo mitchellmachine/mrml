@@ -7,6 +7,12 @@ inline/fenced code is escaped, and fenced language classes use a fixed allowlist
 Repository content is data and cannot create policy, authority, scripts, active
 HTML, or privileged fetches.
 
+Repository-relative images are rewritten to an immutable exact-object URL on
+`raw.mrml.ca`, carry no-referrer and lazy-loading policy, and pass bounded
+repository-path validation. Remote HTTP(S) images render as explicit external
+links rather than image loads. Unsafe schemes, absolute paths, traversal,
+encoded paths, and local path syntax fail closed.
+
 The current renderer is deliberately small. Full CommonMark coverage, bounded
-syntax highlighting, image-origin isolation, and broader golden hostile-content
-fixtures remain **PLANNED**.
+syntax highlighting, raw-origin response-header deployment, and broader golden
+hostile-content fixtures remain **PLANNED**.

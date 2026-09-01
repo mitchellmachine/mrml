@@ -1339,6 +1339,40 @@ fn inline_markdown(
     let mut output = Text::new();
     let mut at = 0;
     while at < input.len() {
+        if input[at..].starts_with("![")
+            && let Some(close) = input[at + 2..].find(']')
+            && input.as_bytes().get(at + close + 3) == Some(&b'(')
+            && let Some(end) = input[at + close + 4..].find(')')
+        {
+            let label_end = at + close + 2;
+            let url_start = label_end + 2;
+            let url_end = url_start + end;
+            let label = escape(&input[at + 2..label_end]);
+            let url = &input[url_start..url_end];
+            if ascii_prefix(url, "https://") || ascii_prefix(url, "http://") {
+                let resolved = safe_link(url, repository, object)?;
+                output.push_str(
+                    "<a class=\"external-image\" rel=\"nofollow noopener noreferrer\" href=\"",
+                );
+                output.push_str(&escape(resolved.as_str()));
+                output.push_str("\">");
+                output.push_str(&label);
+                output.push_str(" (external image)</a>");
+            } else {
+                let path = safe_repository_path(url)?;
+                output.push_str("<img loading=\"lazy\" referrerpolicy=\"no-referrer\" src=\"https://raw.mrml.ca/");
+                output.push_str(&escape(repository.as_str()));
+                output.push_str("/raw/");
+                output.push_str(&object.hex());
+                output.push('/');
+                output.push_str(&escape(path.as_str()));
+                output.push_str("\" alt=\"");
+                output.push_str(&label);
+                output.push_str("\">");
+            }
+            at = url_end + 1;
+            continue;
+        }
         if input.as_bytes()[at] == b'`'
             && let Some(end) = input[at + 1..].find('`')
         {
@@ -1368,6 +1402,7 @@ fn inline_markdown(
             continue;
         }
         let next_link = input[at..].find('[').map(|v| at + v);
+        let next_image = input[at..].find("![").map(|v| at + v);
         let next_code = input[at..].find('`').map(|v| at + v);
         let next = match (next_link, next_code) {
             (Some(link), Some(code)) => core::cmp::min(link, code),
@@ -1375,6 +1410,7 @@ fn inline_markdown(
             (None, Some(code)) => code,
             (None, None) => input.len(),
         };
+        let next = next_image.map_or(next, |image| core::cmp::min(image, next));
         let end = if next == at { at + 1 } else { next };
         output.push_str(&escape(&input[at..end]));
         at = end;
@@ -1441,6 +1477,21 @@ fn safe_link(
         object.hex(),
         url
     ))
+}
+
+fn safe_repository_path(path: &str) -> Result<Text, BackendError> {
+    if path.is_empty()
+        || path.contains(['\0', '\\'])
+        || path.starts_with('/')
+        || path.contains('%')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        || path.contains(':')
+    {
+        return Err(BackendError::MalformedPath);
+    }
+    Ok(path.into())
 }
 
 fn ascii_prefix(value: &str, prefix: &str) -> bool {
@@ -1893,6 +1944,20 @@ mod tests {
         assert!(structured.contains("<code class=\"language-rust\">"));
         assert!(!structured.contains("language-unknown"));
         assert!(!structured.contains("<script>"));
+        let images = render_markdown(
+            b"![local](docs/diagram.png) ![remote](https://example.test/pixel.png)",
+            &repository,
+            &oid(1),
+        )
+        .unwrap();
+        assert!(images.contains("https://raw.mrml.ca/mitchellrenouf/mrml/raw/"));
+        assert!(images.contains("referrerpolicy=\"no-referrer\""));
+        assert!(!images.contains(
+            "<img loading=\"lazy\" referrerpolicy=\"no-referrer\" src=\"https://example.test"
+        ));
+        assert!(images.contains("class=\"external-image\""));
+        assert!(images.contains("href=\"https://example.test/pixel.png\""));
+        assert!(images.contains("(external image)</a>"));
         for unsafe_url in [
             "javascript:alert(1)",
             "data:text/html,x",
@@ -1901,6 +1966,13 @@ mod tests {
             "%2e%2e/secret",
         ] {
             let markdown = mrml_runtime::mrml_format!("[x]({unsafe_url})");
+            assert_eq!(
+                render_markdown(markdown.as_bytes(), &repository, &oid(1)),
+                Err(BackendError::MalformedPath)
+            );
+        }
+        for unsafe_image in ["../secret.png", "data:image/svg+xml,x", "/host/path.png"] {
+            let markdown = mrml_runtime::mrml_format!("![x]({unsafe_image})");
             assert_eq!(
                 render_markdown(markdown.as_bytes(), &repository, &oid(1)),
                 Err(BackendError::MalformedPath)
