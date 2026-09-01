@@ -10,6 +10,7 @@ mod caa;
 mod catalog_lifecycle_provider;
 mod certificate;
 mod certd_channel;
+mod certd_key_protocol;
 #[cfg(target_os = "linux")]
 mod certd_config;
 mod constrained_acme_signing;
@@ -110,6 +111,13 @@ pub use certd_channel::{
     CertdChannelError, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
     CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     decode_certd_channel_request, encode_certd_channel_request,
+};
+pub use certd_key_protocol::{
+    CERTD_ACCOUNT_KEY_REQUEST_BYTES, CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_REQUEST_BYTES,
+    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdKeyProtocolError,
+    CertdTlsKeyRequest, decode_certd_account_key_request, decode_certd_tls_key_request,
+    encode_certd_account_key_request, encode_certd_tls_key_request,
+    encode_certd_tls_key_response,
 };
 #[cfg(target_os = "linux")]
 pub use certd_config::{
@@ -233,6 +241,7 @@ pub use native_service::{
     MAX_CERTIFICATE_SHARED_BYTES, ReceivedCertificateCall,
 };
 pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
+pub use mrml_acme::{MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, write_pkcs10_csr};
 pub use renewal_executor::{
     IssuedRenewalCandidate, RenewalExecutionError, RenewalIssuer, RenewalRecoveryError,
     RenewalRecoveryMaterialRole, execute_due_renewal, resolve_uncertain_renewal,

@@ -1,11 +1,14 @@
 use mrml_certificate::{
-    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability,
-    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdConfig,
-    CertdPeerIdentity, CertdReplayWindow, CertificateP256SigningKey,
-    HmacSha256DurableAuthenticator, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
-    HostedP256KeyStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES,
+    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
+    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
+    CertdChannelRole, CertdConfig, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
+    CertificateP256SigningKey, HmacSha256DurableAuthenticator, HostedP256KeyDescriptor,
+    HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS,
     PRODUCTION_SECRET_MODE, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute, UnixCertdListener,
-    decode_certd_channel_request, encode_certd_channel_request, parse_certd_config,
+    decode_certd_account_key_request, decode_certd_channel_request, decode_certd_tls_key_request,
+    encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
+    write_pkcs10_csr,
 };
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use std::path::Path;
@@ -138,26 +141,125 @@ fn serve_channel(
         ) else {
             continue;
         };
-        if request.operation != CertdChannelOperation::Health || !request.payload.is_empty() {
+        let operation = request.operation;
+        let request_id = request.request_id;
+        let mut response_payload = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
+        let Ok(response_length) =
+            dispatch_channel_request(&state, operation, request.payload, &mut response_payload)
+        else {
             continue;
-        }
-        if state.config.identity == [0; 16]
-            || state.account_key.is_poisoned()
-            || state.certificate_key.is_poisoned()
-        {
-            continue;
-        }
+        };
         let response = CertdChannelRequest {
             role,
-            operation: CertdChannelOperation::Health,
-            request_id: request.request_id,
+            operation,
+            request_id,
             peer: CERTD_PEER,
-            payload: b"ready",
+            payload: &response_payload[..response_length],
         };
         let Ok(written) = encode_certd_channel_request(response, &capability, &mut frame) else {
             continue;
         };
         let _ = session.write_frame(&frame[..written]);
+    }
+}
+
+fn dispatch_channel_request(
+    state: &CertdHostedState,
+    operation: CertdChannelOperation,
+    payload: &[u8],
+    output: &mut [u8],
+) -> Result<usize, ()> {
+    match operation {
+        CertdChannelOperation::Health => {
+            if !payload.is_empty()
+                || state.config.identity == [0; 16]
+                || state.account_key.is_poisoned()
+                || state.certificate_key.is_poisoned()
+                || output.len() < 5
+            {
+                return Err(());
+            }
+            output[..5].copy_from_slice(b"ready");
+            Ok(5)
+        }
+        CertdChannelOperation::GetAcmeAccountPublicIdentity => {
+            let request = decode_certd_account_key_request(payload).map_err(|_| ())?;
+            require_account_request(state.config, request)?;
+            let account = state.account_key.lock().map_err(|_| ())?;
+            let public = account.public_jwk().map_err(|_| ())?.sec1_uncompressed();
+            if output.len() < public.len() {
+                return Err(());
+            }
+            output[..public.len()].copy_from_slice(&public);
+            Ok(public.len())
+        }
+        CertdChannelOperation::CreateTlsKeyGeneration => {
+            let request = decode_certd_tls_key_request(payload).map_err(|_| ())?;
+            require_tls_request(state.config, request)?;
+            let certificate = state.certificate_key.lock().map_err(|_| ())?;
+            let public = certificate
+                .public_jwk()
+                .map_err(|_| ())?
+                .sec1_uncompressed();
+            let response =
+                encode_certd_tls_key_response(public, certificate.route().key_identity.0)
+                    .map_err(|_| ())?;
+            if output.len() < response.len() {
+                return Err(());
+            }
+            output[..response.len()].copy_from_slice(&response);
+            Ok(response.len())
+        }
+        CertdChannelOperation::CreateCertificateSigningRequest => {
+            let request = decode_certd_tls_key_request(payload).map_err(|_| ())?;
+            require_tls_request(state.config, request)?;
+            let count = usize::from(state.config.identifier_count);
+            let first = state.config.identifiers[0].ok_or(())?;
+            let mut identifiers = [first; MAX_CSR_IDENTIFIERS];
+            for (target, source) in identifiers
+                .iter_mut()
+                .zip(state.config.identifiers.iter().take(count))
+            {
+                *target = source.ok_or(())?;
+            }
+            let mut certificate = state.certificate_key.lock().map_err(|_| ())?;
+            let public = certificate.public_jwk().map_err(|_| ())?;
+            let csr = write_pkcs10_csr(
+                &public,
+                &identifiers[..count],
+                state.config.wildcard_enabled,
+                request.key_generation,
+                request.policy_generation,
+                &mut *certificate,
+                output.get_mut(..MAX_CSR_BYTES).ok_or(())?,
+            )
+            .map_err(|_| ())?;
+            Ok(csr.len())
+        }
+        _ => Err(()),
+    }
+}
+
+fn require_account_request(config: CertdConfig, request: CertdAccountKeyRequest) -> Result<(), ()> {
+    if request.account_identity != config.account_identity
+        || request.directory_generation != config.directory_generation
+        || request.account_generation != config.account_generation
+    {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_tls_request(config: CertdConfig, request: CertdTlsKeyRequest) -> Result<(), ()> {
+    if request.identity != config.identity
+        || request.key_generation != config.key_generation
+        || request.policy_generation != config.policy_generation
+        || request.identifier_set_digest != config.identifier_set_digest
+    {
+        Err(())
+    } else {
+        Ok(())
     }
 }
 
