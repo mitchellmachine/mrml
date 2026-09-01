@@ -978,6 +978,31 @@ pub fn ml_dsa_65_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Sha3_256;
+
+    fn hex32(value: &str) -> [u8; 32] {
+        let mut output = [0u8; 32];
+        for (index, byte) in output.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).unwrap();
+        }
+        output
+    }
+
+    #[test]
+    fn nist_acvp_fips204_keygen_case_26() {
+        let seed = hex32("A991FD42B071D49C48AE3E75C647459E0DAAD1E1BA356A04801912D3294BCFF8");
+        let mut public = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&seed, &mut public, &mut secret).unwrap();
+        assert_eq!(
+            Sha3_256::digest(&public),
+            hex32("0083e4d4f562780dd5ef685c88db5afcdac44d1b4be5e4253d0de771100316f3")
+        );
+        assert_eq!(
+            Sha3_256::digest(&secret),
+            hex32("9a6fe5796bc8b61c6eb274cc5905b3d3ce21693c9e7fd32db79b1cff49e93717")
+        );
+    }
 
     #[test]
     fn independently_generated_openssl_vector_when_configured() {

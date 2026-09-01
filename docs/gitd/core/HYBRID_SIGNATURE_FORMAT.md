@@ -101,3 +101,14 @@ then verifies the OpenSSL signature independently. Fixture SHA-256 digests are:
 
 This is a pinned hosted-Linux differential probe, not an official NIST ACVP
 vector, validation certificate, constant-time result, or independent audit.
+
+Official key-generation coverage includes ML-DSA-65 case 26 from NIST's
+`ML-DSA-keyGen-FIPS204` sample at ACVP-Server commit
+`975de31eb83d87039ec88934fdc47d8c312b892d`. The prompt and expected-results
+JSON files have SHA-256 digests
+`43e81ad820e495dbcad086fe27c1008393a8c32100bbbff77c558c3f06dcefef`
+and `361f47ca19d592adcc66ff2cb591686ad785fea157b295648738bed6921a68df`.
+The byte-exact source seed and SHA3-256 digests of the expected 1952-byte public
+and 4032-byte private outputs are checked in the unit test. Official sigGen and
+sigVer cases, including the ACVP suite's documented zero-hint and z-bound
+coverage gaps, remain open.
