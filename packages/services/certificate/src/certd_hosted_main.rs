@@ -1,10 +1,13 @@
 use mrml_certificate::{
-    decode_certd_channel_request, encode_certd_channel_request, load_durable_authenticator,
-    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
-    CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, HostedSecret, UnixCertdListener,
-    CERTD_CHANNEL_HEADER_BYTES, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PRODUCTION_SECRET_MODE,
+    CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
+    CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
+    HmacSha256DurableAuthenticator, HostedP256KeyStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PRODUCTION_SECRET_MODE, UnixCertdListener,
+    decode_certd_channel_request, encode_certd_channel_request,
 };
+use mrml_crypto::{erase_secret_bytes, hmac_sha256};
 use std::path::Path;
+use std::sync::Arc;
 
 const CERTD_UID: u32 = 21003;
 const GITD_PEER: CertdPeerIdentity = CertdPeerIdentity {
@@ -22,6 +25,7 @@ const CERTD_PEER: CertdPeerIdentity = CertdPeerIdentity {
 const GITD_SOCKET: &str = "/run/mrml/certd-gitd/certd.sock";
 const ACMED_SOCKET: &str = "/run/mrml/certd-acmed/certd.sock";
 const UNLOCK_SECRET: &str = "/run/secrets/certd-unlock.key";
+const KEY_STORE_ROOT: &str = "/var/lib/mrml/certd/keys";
 const GITD_CAPABILITY: &str = "/run/secrets/certd-gitd.cap";
 const ACMED_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
@@ -37,8 +41,7 @@ fn application_main() -> Result<(), &'static str> {
     let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
     match command.as_str() {
         "check-config" => {
-            let _authenticator = load_durable_authenticator(Path::new(UNLOCK_SECRET), CERTD_UID)
-                .map_err(|_| "invalid certd unlock secret")?;
+            let (_authenticator, _key_store) = load_certd_storage()?;
             let _gitd = load_channel_capability(GITD_CAPABILITY)?;
             let _acmed = load_channel_capability(ACMED_CAPABILITY)?;
             println!("mrml-certd configuration valid");
@@ -50,8 +53,8 @@ fn application_main() -> Result<(), &'static str> {
 }
 
 fn serve() -> Result<(), &'static str> {
-    let _durable_authenticator = load_durable_authenticator(Path::new(UNLOCK_SECRET), CERTD_UID)
-        .map_err(|_| "invalid certd unlock secret")?;
+    let (_durable_authenticator, key_store) = load_certd_storage()?;
+    let key_store = Arc::new(key_store);
     let gitd_capability = load_channel_capability(GITD_CAPABILITY)?;
     let acmed_capability = load_channel_capability(ACMED_CAPABILITY)?;
     let gitd = UnixCertdListener::bind(
@@ -74,10 +77,24 @@ fn serve() -> Result<(), &'static str> {
     .map_err(|_| "cannot bind ACME channel")?;
 
     std::thread::scope(|scope| {
-        scope
-            .spawn(move || serve_channel(gitd, gitd_capability, CertdChannelRole::Gitd, GITD_PEER));
+        let gitd_key_store = Arc::clone(&key_store);
         scope.spawn(move || {
-            serve_channel(acmed, acmed_capability, CertdChannelRole::Acmed, ACMED_PEER)
+            serve_channel(
+                gitd,
+                gitd_capability,
+                CertdChannelRole::Gitd,
+                GITD_PEER,
+                gitd_key_store,
+            )
+        });
+        scope.spawn(move || {
+            serve_channel(
+                acmed,
+                acmed_capability,
+                CertdChannelRole::Acmed,
+                ACMED_PEER,
+                key_store,
+            )
         });
     });
     Err("certd channel worker terminated")
@@ -88,7 +105,9 @@ fn serve_channel(
     capability: CertdChannelCapability,
     role: CertdChannelRole,
     expected_peer: CertdPeerIdentity,
+    _key_store: Arc<HostedP256KeyStore>,
 ) {
+    let mut replay = CertdReplayWindow::new();
     loop {
         let Ok(mut session) = listener.accept() else {
             break;
@@ -97,7 +116,6 @@ fn serve_channel(
         let Ok(length) = session.read_frame(&mut frame) else {
             continue;
         };
-        let mut replay = CertdReplayWindow::new();
         let Ok(request) = decode_certd_channel_request(
             &frame[..length],
             session.observed_peer(),
@@ -125,6 +143,29 @@ fn serve_channel(
         };
         let _ = session.write_frame(&frame[..written]);
     }
+}
+
+fn load_certd_storage() -> Result<(HmacSha256DurableAuthenticator, HostedP256KeyStore), &'static str>
+{
+    let secret = HostedSecret::open(
+        Path::new(UNLOCK_SECRET),
+        CERTD_UID,
+        PRODUCTION_SECRET_MODE,
+        32,
+    )
+    .map_err(|_| "invalid certd unlock secret")?;
+    let mut unlock_key: [u8; 32] = secret
+        .expose()
+        .try_into()
+        .map_err(|_| "invalid certd unlock secret")?;
+    let mut authentication_key =
+        hmac_sha256(&unlock_key, &[b"mrml-certd-durable-authentication-key-v1"]);
+    let authenticator = HmacSha256DurableAuthenticator::new(authentication_key);
+    erase_secret_bytes(&mut authentication_key);
+    let key_store = HostedP256KeyStore::open(Path::new(KEY_STORE_ROOT), CERTD_UID, &unlock_key)
+        .map_err(|_| "cannot open certd key store");
+    erase_secret_bytes(&mut unlock_key);
+    Ok((authenticator, key_store?))
 }
 
 fn load_channel_capability(path: &'static str) -> Result<CertdChannelCapability, &'static str> {
