@@ -68,7 +68,11 @@ impl Ord for AcmeIdentifier {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Dns(left), Self::Dns(right)) => left.as_str().cmp(right.as_str()),
-            (Self::Ip(left), Self::Ip(right)) => left.octets().cmp(right.octets()),
+            (Self::Ip(left), Self::Ip(right)) => left
+                .octets()
+                .len()
+                .cmp(&right.octets().len())
+                .then_with(|| left.octets().cmp(right.octets())),
             (Self::Dns(_), Self::Ip(_)) => Ordering::Less,
             (Self::Ip(_), Self::Dns(_)) => Ordering::Greater,
         }

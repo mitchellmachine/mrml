@@ -1,5 +1,5 @@
-use crate::{DnsIdentifier, Es256Signature, P256Jwk};
-use mrml_crypto::{encode_der_signature, Sha256};
+use crate::{AcmeIdentifier, DnsIdentifier, Es256Signature, P256Jwk};
+use mrml_crypto::{Sha256, encode_der_signature};
 
 pub const MAX_CSR_BYTES: usize = 4096;
 pub const MAX_CSR_IDENTIFIERS: usize = 16;
@@ -103,19 +103,69 @@ const OID_EXTENSION_REQUEST: &[u8] = &[
 const OID_SUBJECT_ALT_NAME: &[u8] = &[0x06, 0x03, 0x55, 0x1d, 0x11];
 const OID_ECDSA_SHA256: &[u8] = &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
 
-fn identifier_digest(identifiers: &[DnsIdentifier]) -> [u8; 32] {
+trait CsrIdentifierValue {
+    fn compare(&self, other: &Self) -> core::cmp::Ordering;
+    fn is_wildcard(&self) -> bool;
+    fn update_digest(&self, digest: &mut Sha256);
+    fn push_general_name(&self, names: &mut Bytes<'_>) -> Result<(), CsrError>;
+}
+
+impl CsrIdentifierValue for DnsIdentifier {
+    fn compare(&self, other: &Self) -> core::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+    fn is_wildcard(&self) -> bool {
+        self.is_wildcard()
+    }
+    fn update_digest(&self, digest: &mut Sha256) {
+        digest.update(&(self.as_str().len() as u16).to_be_bytes());
+        digest.update(self.as_str().as_bytes());
+    }
+    fn push_general_name(&self, names: &mut Bytes<'_>) -> Result<(), CsrError> {
+        names.push_tlv(0x82, self.as_str().as_bytes())
+    }
+}
+
+impl CsrIdentifierValue for AcmeIdentifier {
+    fn compare(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp(other)
+    }
+    fn is_wildcard(&self) -> bool {
+        self.is_wildcard()
+    }
+    fn update_digest(&self, digest: &mut Sha256) {
+        digest.update(self.kind().as_bytes());
+        match self {
+            Self::Dns(identifier) => {
+                digest.update(&(identifier.as_str().len() as u16).to_be_bytes());
+                digest.update(identifier.as_str().as_bytes());
+            }
+            Self::Ip(identifier) => {
+                digest.update(&(identifier.octets().len() as u16).to_be_bytes());
+                digest.update(identifier.octets());
+            }
+        }
+    }
+    fn push_general_name(&self, names: &mut Bytes<'_>) -> Result<(), CsrError> {
+        match self {
+            Self::Dns(identifier) => names.push_tlv(0x82, identifier.as_str().as_bytes()),
+            Self::Ip(identifier) => names.push_tlv(0x87, identifier.octets()),
+        }
+    }
+}
+
+fn identifier_digest<I: CsrIdentifierValue>(identifiers: &[I]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"mrml-acme-csr-identifiers-v1\0");
     for identifier in identifiers {
-        digest.update(&(identifier.as_str().len() as u16).to_be_bytes());
-        digest.update(identifier.as_str().as_bytes());
+        identifier.update_digest(&mut digest);
     }
     digest.finalize()
 }
 
-fn certification_request_info(
+fn certification_request_info<I: CsrIdentifierValue>(
     key: &P256Jwk,
-    identifiers: &[DnsIdentifier],
+    identifiers: &[I],
     wildcard_authorized: bool,
     output: &mut [u8],
 ) -> Result<usize, CsrError> {
@@ -126,18 +176,18 @@ fn certification_request_info(
         return Err(CsrError::TooManyIdentifiers);
     }
     for pair in identifiers.windows(2) {
-        if pair[0].as_str() >= pair[1].as_str() {
+        if pair[0].compare(&pair[1]) != core::cmp::Ordering::Less {
             return Err(CsrError::DuplicateOrUnsortedIdentifier);
         }
     }
-    if !wildcard_authorized && identifiers.iter().any(DnsIdentifier::is_wildcard) {
+    if !wildcard_authorized && identifiers.iter().any(CsrIdentifierValue::is_wildcard) {
         return Err(CsrError::WildcardPolicyRequired);
     }
 
     let mut names_content = [0u8; 2048];
     let mut names = Bytes::new(&mut names_content);
     for identifier in identifiers {
-        names.push_tlv(0x82, identifier.as_str().as_bytes())?;
+        identifier.push_general_name(&mut names)?;
     }
     let mut general_names = [0u8; 2100];
     let general_names_len = tlv(0x30, names.as_slice(), &mut general_names)?;
@@ -187,6 +237,46 @@ fn certification_request_info(
 pub fn write_pkcs10_csr<'a>(
     key: &P256Jwk,
     identifiers: &[DnsIdentifier],
+    wildcard_authorized: bool,
+    key_generation: u64,
+    policy_generation: u64,
+    signer: &mut impl Pkcs10Signer,
+    output: &'a mut [u8],
+) -> Result<&'a [u8], CsrError> {
+    write_pkcs10_csr_inner(
+        key,
+        identifiers,
+        wildcard_authorized,
+        key_generation,
+        policy_generation,
+        signer,
+        output,
+    )
+}
+
+pub fn write_pkcs10_csr_identifiers<'a>(
+    key: &P256Jwk,
+    identifiers: &[AcmeIdentifier],
+    wildcard_authorized: bool,
+    key_generation: u64,
+    policy_generation: u64,
+    signer: &mut impl Pkcs10Signer,
+    output: &'a mut [u8],
+) -> Result<&'a [u8], CsrError> {
+    write_pkcs10_csr_inner(
+        key,
+        identifiers,
+        wildcard_authorized,
+        key_generation,
+        policy_generation,
+        signer,
+        output,
+    )
+}
+
+fn write_pkcs10_csr_inner<'a, I: CsrIdentifierValue>(
+    key: &P256Jwk,
+    identifiers: &[I],
     wildcard_authorized: bool,
     key_generation: u64,
     policy_generation: u64,
@@ -260,12 +350,14 @@ mod tests {
         let csr =
             write_pkcs10_csr(&generator(), &names, false, 4, 9, &mut Signer, &mut output).unwrap();
         assert_eq!(csr[0], 0x30);
-        assert!(csr
-            .windows(b"git.mrml.ca".len())
-            .any(|window| window == b"git.mrml.ca"));
-        assert!(csr
-            .windows(b"raw.mrml.ca".len())
-            .any(|window| window == b"raw.mrml.ca"));
+        assert!(
+            csr.windows(b"git.mrml.ca".len())
+                .any(|window| window == b"git.mrml.ca")
+        );
+        assert!(
+            csr.windows(b"raw.mrml.ca".len())
+                .any(|window| window == b"raw.mrml.ca")
+        );
     }
 
     #[test]
@@ -294,5 +386,33 @@ mod tests {
             ),
             Err(CsrError::WildcardPolicyRequired)
         ));
+    }
+
+    #[test]
+    fn emits_ip_subject_alt_names_as_raw_address_octets() {
+        let identifiers = [
+            AcmeIdentifier::Dns(DnsIdentifier::parse("git.example", false).unwrap()),
+            AcmeIdentifier::Ip(crate::IpIdentifier::parse("192.0.2.1").unwrap()),
+            AcmeIdentifier::Ip(crate::IpIdentifier::parse("2001:db8::1").unwrap()),
+        ];
+        let mut output = [0u8; MAX_CSR_BYTES];
+        let csr = write_pkcs10_csr_identifiers(
+            &generator(),
+            &identifiers,
+            false,
+            5,
+            9,
+            &mut Signer,
+            &mut output,
+        )
+        .unwrap();
+        assert!(csr.windows(6).any(|value| value == [0x87, 4, 192, 0, 2, 1]));
+        let ipv6 = crate::IpIdentifier::parse("2001:db8::1").unwrap();
+        assert!(
+            csr.windows(18).any(|value| {
+                value[0] == 0x87 && value[1] == 16 && &value[2..] == ipv6.octets()
+            })
+        );
+        assert!(!csr.windows(9).any(|value| value == b"192.0.2.1"));
     }
 }

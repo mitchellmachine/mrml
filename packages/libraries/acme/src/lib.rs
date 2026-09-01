@@ -52,7 +52,8 @@ pub use challenge_tls_alpn::{
     write_tls_alpn01_certificate,
 };
 pub use csr::{
-    ApprovedCsrDigest, CsrError, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, Pkcs10Signer, write_pkcs10_csr,
+    ApprovedCsrDigest, CsrError, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, Pkcs10Signer,
+    write_pkcs10_csr, write_pkcs10_csr_identifiers,
 };
 pub use directory::{
     AcmeDirectory, DirectoryError, MAX_CAA_IDENTITIES, MAX_DIRECTORY_BYTES, MAX_DIRECTORY_PROFILES,

@@ -11834,6 +11834,13 @@ storage, and deterministic canonical rendering for ordinary IPv4 and IPv6 ACME
 identifier data. It does not enable issuance or add a network-validation
 mechanism, and it introduces no recorded re-review trigger.
 
+# 2026-09-01 — PKCS#10 IP subject-alternative names
+
+Patent review: **NOT_TRIGGERED**. This increment extends the existing bounded
+PKCS#10 encoder with the standard X.509 iPAddress GeneralName encoding for
+owner-selected IPv4 and IPv6 identifiers. It adds no new validation topology
+or recorded re-review trigger.
+
 # 2026-09-01 — Typed ACME identifier payload encoding
 
 Patent review: **NOT_TRIGGERED**. This increment deterministically encodes
