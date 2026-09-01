@@ -154,7 +154,9 @@ it finds the single manifest entry, reauthenticates that installed pack/index
 summary byte-for-byte, opens only the transaction's bounded scratch object, and
 rehashes its Git identity. Thin-pack validation consults this selected view
 before the separately authenticated baseline repository, so sequential receives
-can use prior active arrivals without directory scanning. General repository
+can use prior active arrivals without directory scanning. Protected-history
+traversal uses the same selected view, and the end-to-end receive test prepares
+a second commit whose parent exists only in the first selected arrival. General repository
 view and upload-pack composition still need to route through this selected
 arrival reader. This mechanism is independent of compaction and does not
 authorize patent-gated delta selection.

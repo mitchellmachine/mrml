@@ -379,6 +379,9 @@ fn received_or_active(
     store
         .read_quarantined_object(transaction, id, crate::DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES)
         .or_else(|_| {
+            store.read_active_arrival_object(id, crate::DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES)
+        })
+        .or_else(|_| {
             active
                 .read_object(id)
                 .map_err(|_| GitdCoreError::ObjectValidation)
@@ -695,6 +698,75 @@ mod tests {
             signed.receipt.activated_repository_generation,
             RepositoryGeneration(8)
         );
+
+        // A later receive must traverse the prior commit through the selected
+        // arrival manifest; the baseline repository intentionally lacks it.
+        let newer_contents = mrml_runtime::mrml_format!(
+            "tree {}\nparent {}\nauthor Owner <owner@example.invalid> 3 +0000\n\nnewer\n",
+            tree.to_hex(),
+            new.to_hex()
+        );
+        let (newer, _) = crate::encode_loose_object_with_format(
+            ObjectFormat::Sha256,
+            ObjectKind::Commit,
+            newer_contents.as_bytes(),
+        );
+        let mut newer_bytes = Vector::new();
+        newer_bytes.extend(newer_contents.as_bytes().iter().copied());
+        let newer_pack = encode_pack_with_format(
+            &[PackObject {
+                id: newer,
+                kind: ObjectKind::Commit,
+                contents: newer_bytes,
+            }],
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        let command = mrml_runtime::mrml_format!(
+            "{} {} refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
+            new.to_hex(),
+            newer.to_hex()
+        );
+        let mut bytes = Vector::new();
+        append_packet(&mut bytes, command.as_bytes());
+        bytes.extend(*b"0000");
+        bytes.extend(newer_pack.iter().copied());
+        let mut input = Reader { bytes, offset: 0 };
+        let active = store.active_refs().load().unwrap();
+        let mut verifier = ExactVerifier {
+            repository: active.repository.clone(),
+            generation: RepositoryGeneration(8),
+            trust: TrustGeneration(8),
+            revocations: RevocationGeneration(9),
+            expected: newer,
+        };
+        let prepared_later = prepare_protected_receive(
+            SmartGitRequest {
+                repository: active.repository.clone(),
+                repository_generation: RepositoryGeneration(8),
+                operation: SmartGitOperation::ReceivePack,
+                object_format: ObjectFormat::Sha256,
+            },
+            &active,
+            &repository,
+            &store,
+            &mut verifier,
+            QuarantineTransactionId([32; 16]),
+            QuarantineLimits {
+                max_incoming_pack_bytes: 1024 * 1024,
+                max_expanded_object_bytes: 1024 * 1024,
+                max_individual_object_bytes: 1024 * 1024,
+                max_objects: 16,
+                max_refs: 4,
+                minimum_free_space_bytes: 0,
+            },
+            HistoryVerificationLimits::default(),
+            16 * 1024 * 1024,
+            &mut input,
+            work_budget,
+        )
+        .unwrap();
+        assert_eq!(prepared_later.verified().updates()[0].proposed_new(), Some(newer));
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }
