@@ -1,3 +1,4 @@
+use crate::deflate::encode_zlib;
 use crate::inflate::inflate_zlib_prefix;
 use crate::{ObjectFormat, ObjectId, ObjectKind, encode_loose_object_with_format};
 use core::fmt;
@@ -226,7 +227,7 @@ pub fn encode_pack_with_format(
             return Err(PackError::ObjectId);
         }
         encode_object_header(kind, object.contents.len(), &mut pack);
-        deflate_stored(&object.contents, &mut pack);
+        pack.extend(encode_zlib(&object.contents));
     }
     let checksum = format.hash_bytes(&pack);
     pack.extend(checksum.as_bytes().iter().copied());
@@ -249,6 +250,7 @@ fn encode_object_header(kind: u8, mut size: usize, output: &mut Vector<u8>) {
         output.push(byte);
     }
 }
+#[cfg(test)]
 fn deflate_stored(source: &[u8], output: &mut Vector<u8>) {
     output.extend([0x78, 0x01]);
     let mut offset = 0usize;
@@ -267,6 +269,7 @@ fn deflate_stored(source: &[u8], output: &mut Vector<u8>) {
     output.extend(adler32(source).to_be_bytes());
 }
 
+#[cfg(test)]
 fn adler32(source: &[u8]) -> u32 {
     let (mut a, mut b) = (1u32, 0u32);
     for chunk in source.chunks(5552) {

@@ -2,6 +2,7 @@
 
 use mrml_runtime::{Text, Vector};
 
+mod deflate;
 mod diff;
 mod gitd_core;
 mod hybrid_signing;

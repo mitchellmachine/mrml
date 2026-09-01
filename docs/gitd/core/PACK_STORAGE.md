@@ -3,11 +3,19 @@
 Status: **PARTIALLY IMPLEMENTED**. Existing bounded whole-buffer pack parsing
 and the first-party authenticated pack-index v2 module are implemented.
 
-The current encoder emits stored DEFLATE blocks and performs no delta
-selection. It is interoperable but does not satisfy the canonical storage
-profile. The future profile is deterministic level-9 first-party zlib/DEFLATE,
-a 250-object delta candidate window, maximum delta depth 50, OFS deltas, no
-reuse of lower-compression streams, and recomputed canonical deltas.
+The pack encoder now emits a deterministic first-party zlib stream with one
+fixed-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains retain a
+32 KiB window, inspect no more than 256 candidates at each input position, and
+emit matches no longer than 258 bytes. Empty, incompressible, repetitive, and
+window-boundary inputs round-trip through the first-party inflater on Linux and
+through the pinned Windows Rust oracle under Wine. Wine is a hosted
+compatibility probe, not Windows-native evidence.
+
+Dynamic Huffman construction, canonical block selection, lazy level-9 match
+selection, and pack delta selection remain open, so this does not yet satisfy
+the canonical storage profile. The completed profile also requires a
+250-object delta candidate window, maximum delta depth 50, OFS deltas, no reuse
+of lower-compression streams, and recomputed canonical deltas.
 
 Receive must stream into an isolated quarantine under checked byte, object,
 expanded-size, delta, memory, and work limits. Whole-repository repacking is not
