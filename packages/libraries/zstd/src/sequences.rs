@@ -227,10 +227,6 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
         output.try_push(0).map_err(|_| Error::Allocation)?;
         return Ok(output);
     }
-    let mut output = Vector::new();
-    write_sequence_count(sequences.len(), &mut output)?;
-    output.try_push(0).map_err(|_| Error::Allocation)?;
-
     let mut literal_symbols =
         Vector::with_capacity(sequences.len()).map_err(|_| Error::Allocation)?;
     let mut offset_symbols =
@@ -263,9 +259,25 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
         match_extras.push(match_extra);
     }
 
-    let literal_table = predefined(Kind::Literals)?;
-    let offset_table = predefined(Kind::Offset)?;
-    let match_table = predefined(Kind::Match)?;
+    let (literal_mode, literal_table) = selected_table(&literal_symbols, Kind::Literals)?;
+    let (offset_mode, offset_table) = selected_table(&offset_symbols, Kind::Offset)?;
+    let (match_mode, match_table) = selected_table(&match_symbols, Kind::Match)?;
+    let mut output = Vector::new();
+    write_sequence_count(sequences.len(), &mut output)?;
+    output
+        .try_push((literal_mode << 6) | (offset_mode << 4) | (match_mode << 2))
+        .map_err(|_| Error::Allocation)?;
+    for (mode, symbols) in [
+        (literal_mode, &literal_symbols),
+        (offset_mode, &offset_symbols),
+        (match_mode, &match_symbols),
+    ] {
+        if mode == 1 {
+            output
+                .try_push(symbols[0] as u8)
+                .map_err(|_| Error::Allocation)?;
+        }
+    }
     let literal_path = CompressionPath::for_symbols(&literal_table, &literal_symbols)?;
     let offset_path = CompressionPath::for_symbols(&offset_table, &offset_symbols)?;
     let match_path = CompressionPath::for_symbols(&match_table, &match_symbols)?;
@@ -299,6 +311,35 @@ pub(crate) fn encode_predefined(sequences: &[Sequence]) -> Result<Vector<u8>> {
         .try_extend_from_slice(&writer.finish()?)
         .map_err(|_| Error::Allocation)?;
     Ok(output)
+}
+
+fn selected_table(symbols: &[u16], kind: Kind) -> Result<(u8, Table)> {
+    let first = *symbols.first().ok_or(Error::InvalidSequencesSection)?;
+    if symbols.iter().all(|symbol| *symbol == first) {
+        let maximum = match kind {
+            Kind::Literals => 35,
+            Kind::Offset => 31,
+            Kind::Match => 52,
+        };
+        if first > maximum {
+            return Err(Error::InvalidSequencesSection);
+        }
+        let mut entries = Vector::with_capacity(1).map_err(|_| Error::Allocation)?;
+        entries.push(Entry {
+            symbol: first,
+            bits: 0,
+            baseline: 0,
+        });
+        Ok((
+            1,
+            Table {
+                accuracy: 0,
+                entries,
+            },
+        ))
+    } else {
+        Ok((0, predefined(kind)?))
+    }
 }
 
 fn encode_length(value: u32, table: &[(u32, u8)]) -> Result<(u16, u32)> {
@@ -527,6 +568,7 @@ mod encode_tests {
     fn predefined_sequence_section_round_trips_and_executes() {
         let expected = [Sequence::new(3, 3, 3), Sequence::new(0, 3, 6)];
         let encoded = encode_predefined(&expected).unwrap();
+        assert_eq!(encoded[1] & 0x0c, 0x04);
         let decoded = decode(&encoded, &mut State::new()).unwrap();
         assert_eq!(decoded.len(), expected.len());
         for (actual, expected) in decoded.iter().zip(expected) {
@@ -537,6 +579,17 @@ mod encode_tests {
         let mut output = Vector::new();
         execute(&decoded, b"abc", &mut output).unwrap();
         assert_eq!(&output[..], b"abcabcabc");
+    }
+
+    #[test]
+    fn uniform_code_streams_select_rle_tables() {
+        let encoded = encode_predefined(&[Sequence::new(3, 7, 3)]).unwrap();
+        assert_eq!(encoded[1], 0x54);
+        let decoded = decode(&encoded, &mut State::new()).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].literals, 3);
+        assert_eq!(decoded[0].length, 7);
+        assert_eq!(decoded[0].offset, 3);
     }
 
     #[test]
