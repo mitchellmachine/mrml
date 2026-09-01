@@ -26,6 +26,8 @@ pub struct BlockState {
     pub motion_vectors: [MotionVector; 2],
     /// Numeric AV1 prediction-mode enum retained for neighbor contexts.
     pub prediction_mode: u8,
+    /// Numeric AV1 chroma prediction mode retained for intra-edge filtering.
+    pub chroma_prediction_mode: u8,
     pub motion_mode: u8,
     pub compound_type: u8,
     pub compound_group_index: u8,
@@ -58,6 +60,7 @@ impl Default for BlockState {
             reference_frames: [0, -1],
             motion_vectors: [MotionVector::default(); 2],
             prediction_mode: 0,
+            chroma_prediction_mode: 0,
             motion_mode: 0,
             compound_type: 0,
             compound_group_index: 0,

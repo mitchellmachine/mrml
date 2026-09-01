@@ -129,6 +129,8 @@ pub struct IntraPredictionConfig<'a> {
     pub have_above: bool,
     pub have_above_right: bool,
     pub have_below_left: bool,
+    pub enable_edge_filter: bool,
+    pub filter_type: bool,
     pub above_availability: Option<&'a [bool]>,
     pub left_availability: Option<&'a [bool]>,
 }
@@ -173,21 +175,30 @@ pub fn predict_intra_block<'a>(
     {
         return Err(Error::InvalidObu);
     }
-    let above_available = |index: usize| {
-        config
-            .above_availability
-            .and_then(|availability| availability.get(index).copied())
-            .unwrap_or(config.have_above)
+    // A fixed-transform walk can reach a prediction block before every
+    // geometrically adjacent sample has been reconstructed. AV1 extends the
+    // last permitted edge sample in that case; it does not replace each
+    // unavailable suffix sample with the bit-depth midpoint.
+    let available_prefix = |availability: Option<&[bool]>, have_edge: bool| {
+        if !have_edge {
+            0
+        } else {
+            availability.map_or(edge_length, |samples| {
+                samples
+                    .iter()
+                    .take(edge_length)
+                    .take_while(|sample| **sample)
+                    .count()
+            })
+        }
     };
-    let left_available = |index: usize| {
-        config
-            .left_availability
-            .and_then(|availability| availability.get(index).copied())
-            .unwrap_or(config.have_left)
-    };
+    let above_available = available_prefix(config.above_availability, config.have_above);
+    let left_available = available_prefix(config.left_availability, config.have_left);
+    let have_above = above_available != 0;
+    let have_left = left_available != 0;
     for index in 0..edge_length {
-        let above_sample = if above_available(index) {
-            let limit = region
+        let above_sample = if have_above {
+            let geometric_limit = region
                 .x
                 .checked_add(if config.have_above_right {
                     region.width.saturating_mul(2)
@@ -195,10 +206,16 @@ pub fn predict_intra_block<'a>(
                     region.width
                 })
                 .and_then(|value| value.checked_sub(1))
-                .ok_or(Error::LimitExceeded)?
+                .ok_or(Error::LimitExceeded)?;
+            let reconstructed_limit = region
+                .x
+                .checked_add(above_available - 1)
+                .ok_or(Error::LimitExceeded)?;
+            let limit = geometric_limit
+                .min(reconstructed_limit)
                 .min(plane.width() - 1);
             plane.sample(region.x.saturating_add(index).min(limit), region.y - 1)?
-        } else if left_available(index) {
+        } else if have_left {
             plane.sample(region.x - 1, region.y)?
         } else {
             midpoint - 1
@@ -206,8 +223,8 @@ pub fn predict_intra_block<'a>(
         above
             .try_push(above_sample)
             .map_err(|_| Error::LimitExceeded)?;
-        let left_sample = if left_available(index) {
-            let limit = region
+        let left_sample = if have_left {
+            let geometric_limit = region
                 .y
                 .checked_add(if config.have_below_left {
                     region.height.saturating_mul(2)
@@ -215,10 +232,16 @@ pub fn predict_intra_block<'a>(
                     region.height
                 })
                 .and_then(|value| value.checked_sub(1))
-                .ok_or(Error::LimitExceeded)?
+                .ok_or(Error::LimitExceeded)?;
+            let reconstructed_limit = region
+                .y
+                .checked_add(left_available - 1)
+                .ok_or(Error::LimitExceeded)?;
+            let limit = geometric_limit
+                .min(reconstructed_limit)
                 .min(plane.height() - 1);
             plane.sample(region.x - 1, region.y.saturating_add(index).min(limit))?
-        } else if above_available(index) {
+        } else if have_above {
             plane.sample(region.x, region.y - 1)?
         } else {
             midpoint + 1
@@ -226,11 +249,11 @@ pub fn predict_intra_block<'a>(
         left.try_push(left_sample)
             .map_err(|_| Error::LimitExceeded)?;
     }
-    let top_left = if above_available(0) && left_available(0) {
+    let mut top_left = if have_above && have_left {
         plane.sample(region.x - 1, region.y - 1)?
-    } else if above_available(0) {
+    } else if have_above {
         plane.sample(region.x, region.y - 1)?
-    } else if left_available(0) {
+    } else if have_left {
         plane.sample(region.x - 1, region.y)?
     } else {
         midpoint
@@ -250,12 +273,8 @@ pub fn predict_intra_block<'a>(
             config.bit_depth,
             BasicIntraMode::Dc,
             IntraEdges {
-                above: if above_available(0) {
-                    Some(&above)
-                } else {
-                    None
-                },
-                left: if left_available(0) { Some(&left) } else { None },
+                above: if have_above { Some(&above) } else { None },
+                left: if have_left { Some(&left) } else { None },
                 top_left,
             },
         ),
@@ -263,11 +282,121 @@ pub fn predict_intra_block<'a>(
             const ANGLES: [u16; 9] = [0, 90, 180, 45, 135, 113, 157, 203, 67];
             let angle =
                 i32::from(ANGLES[usize::from(config.mode)]) + i32::from(config.angle_delta) * 3;
-            predict_directional(
+            let angle = u16::try_from(angle).map_err(|_| Error::InvalidObu)?;
+            let mut upsample_above = false;
+            let mut upsample_left = false;
+            if config.enable_edge_filter {
+                if angle != 90 && angle != 180 {
+                    if angle > 90 && angle < 180 && edge_length >= 24 {
+                        top_left = filter_corner(
+                            *left.first().ok_or(Error::InvalidObu)?,
+                            top_left,
+                            *above.first().ok_or(Error::InvalidObu)?,
+                        );
+                    }
+                    if have_above {
+                        let sample_count = region
+                            .width
+                            .min(plane.width().saturating_sub(region.x))
+                            .checked_add(if angle < 90 { region.height } else { 0 })
+                            .ok_or(Error::LimitExceeded)?;
+                        let strength = edge_filter_strength(
+                            region.width,
+                            region.height,
+                            config.filter_type,
+                            i16::try_from(i32::from(angle) - 90).map_err(|_| Error::InvalidObu)?,
+                        );
+                        let samples = above.get_mut(..sample_count).ok_or(Error::InvalidObu)?;
+                        filter_edge(top_left, samples, strength)?;
+                    }
+                    if have_left {
+                        let sample_count = region
+                            .height
+                            .min(plane.height().saturating_sub(region.y))
+                            .checked_add(if angle > 180 { region.width } else { 0 })
+                            .ok_or(Error::LimitExceeded)?;
+                        let strength = edge_filter_strength(
+                            region.width,
+                            region.height,
+                            config.filter_type,
+                            i16::try_from(i32::from(angle) - 180).map_err(|_| Error::InvalidObu)?,
+                        );
+                        let samples = left.get_mut(..sample_count).ok_or(Error::InvalidObu)?;
+                        filter_edge(top_left, samples, strength)?;
+                    }
+                }
+                upsample_above = should_upsample_edge(
+                    region.width,
+                    region.height,
+                    config.filter_type,
+                    i16::try_from(i32::from(angle) - 90).map_err(|_| Error::InvalidObu)?,
+                );
+                upsample_left = should_upsample_edge(
+                    region.width,
+                    region.height,
+                    config.filter_type,
+                    i16::try_from(i32::from(angle) - 180).map_err(|_| Error::InvalidObu)?,
+                );
+            }
+            let above_sample_count = region
+                .width
+                .checked_add(if angle < 90 { region.height } else { 0 })
+                .ok_or(Error::LimitExceeded)?;
+            let left_sample_count = region
+                .height
+                .checked_add(if angle > 180 { region.width } else { 0 })
+                .ok_or(Error::LimitExceeded)?;
+            let mut upsampled_above = Vector::new();
+            if upsample_above {
+                let output_len = above_sample_count
+                    .checked_mul(2)
+                    .and_then(|value| value.checked_add(1))
+                    .ok_or(Error::LimitExceeded)?;
+                upsampled_above =
+                    Vector::with_capacity(output_len).map_err(|_| Error::LimitExceeded)?;
+                upsampled_above.resize(output_len, 0);
+                upsample_edge(
+                    top_left,
+                    above.get(..above_sample_count).ok_or(Error::InvalidObu)?,
+                    &mut upsampled_above,
+                    config.bit_depth,
+                )?;
+            }
+            let mut upsampled_left = Vector::new();
+            if upsample_left {
+                let output_len = left_sample_count
+                    .checked_mul(2)
+                    .and_then(|value| value.checked_add(1))
+                    .ok_or(Error::LimitExceeded)?;
+                upsampled_left =
+                    Vector::with_capacity(output_len).map_err(|_| Error::LimitExceeded)?;
+                upsampled_left.resize(output_len, 0);
+                upsample_edge(
+                    top_left,
+                    left.get(..left_sample_count).ok_or(Error::InvalidObu)?,
+                    &mut upsampled_left,
+                    config.bit_depth,
+                )?;
+            }
+            predict_directional_prepared(
                 plane,
                 region,
-                u16::try_from(angle).map_err(|_| Error::InvalidObu)?,
-                edges(),
+                angle,
+                IntraEdges {
+                    above: Some(if upsample_above {
+                        &upsampled_above
+                    } else {
+                        &above
+                    }),
+                    left: Some(if upsample_left {
+                        &upsampled_left
+                    } else {
+                        &left
+                    }),
+                    top_left,
+                },
+                upsample_above,
+                upsample_left,
             )
         }
         9 => predict_smooth(plane, region, SmoothMode::Both, edges()),
@@ -412,6 +541,17 @@ pub fn predict_directional(
     angle: u16,
     edges: IntraEdges<'_>,
 ) -> Result<(), Error> {
+    predict_directional_prepared(plane, region, angle, edges, false, false)
+}
+
+fn predict_directional_prepared(
+    plane: &mut Plane,
+    region: PredictionRegion,
+    angle: u16,
+    edges: IntraEdges<'_>,
+    upsample_above: bool,
+    upsample_left: bool,
+) -> Result<(), Error> {
     let PredictionRegion {
         x,
         y,
@@ -447,33 +587,62 @@ pub fn predict_directional(
     } else {
         0
     };
+    let above_shift = i32::from(upsample_above);
+    let left_shift = i32::from(upsample_left);
     for row in 0..height {
         for column in 0..width {
             let value = if angle < 90 {
                 let index = i32::try_from(row + 1).map_err(|_| Error::LimitExceeded)? * dx;
-                let base = index / 64 + i32::try_from(column).map_err(|_| Error::LimitExceeded)?;
-                let maximum =
-                    i32::try_from(width + height - 1).map_err(|_| Error::LimitExceeded)?;
+                let base = (index >> (6 - above_shift))
+                    + (i32::try_from(column).map_err(|_| Error::LimitExceeded)? << above_shift);
+                let maximum = i32::try_from(width + height - 1)
+                    .map_err(|_| Error::LimitExceeded)?
+                    << above_shift;
                 if base >= maximum {
-                    directional_edge(above, edges.top_left, maximum)?
+                    directional_edge(above, edges.top_left, maximum, upsample_above)?
                 } else {
-                    interpolate(above, edges.top_left, base, (index >> 1) & 31)?
+                    interpolate(
+                        above,
+                        edges.top_left,
+                        base,
+                        ((index << above_shift) >> 1) & 31,
+                        upsample_above,
+                    )?
                 }
             } else if angle < 180 {
                 let index = i32::try_from(column).map_err(|_| Error::LimitExceeded)? * 64
                     - i32::try_from(row + 1).map_err(|_| Error::LimitExceeded)? * dx;
-                let base = index >> 6;
-                if base >= -1 {
-                    interpolate(above, edges.top_left, base, (index >> 1) & 31)?
+                let base = index >> (6 - above_shift);
+                if base >= -(1 << above_shift) {
+                    interpolate(
+                        above,
+                        edges.top_left,
+                        base,
+                        ((index << above_shift) >> 1) & 31,
+                        upsample_above,
+                    )?
                 } else {
                     let index = i32::try_from(row).map_err(|_| Error::LimitExceeded)? * 64
                         - i32::try_from(column + 1).map_err(|_| Error::LimitExceeded)? * dy;
-                    interpolate(left, edges.top_left, index >> 6, (index >> 1) & 31)?
+                    interpolate(
+                        left,
+                        edges.top_left,
+                        index >> (6 - left_shift),
+                        ((index << left_shift) >> 1) & 31,
+                        upsample_left,
+                    )?
                 }
             } else {
                 let index = i32::try_from(column + 1).map_err(|_| Error::LimitExceeded)? * dy;
-                let base = index / 64 + i32::try_from(row).map_err(|_| Error::LimitExceeded)?;
-                interpolate(left, edges.top_left, base, (index >> 1) & 31)?
+                let base = (index >> (6 - left_shift))
+                    + (i32::try_from(row).map_err(|_| Error::LimitExceeded)? << left_shift);
+                interpolate(
+                    left,
+                    edges.top_left,
+                    base,
+                    ((index << left_shift) >> 1) & 31,
+                    upsample_left,
+                )?
             };
             plane.set_sample(x + column, y + row, value)?;
         }
@@ -665,20 +834,36 @@ fn derivative(angle: u16) -> Result<i32, Error> {
     Ok(i32::from(value))
 }
 
-fn interpolate(edge: &[u16], top_left: u16, base: i32, shift: i32) -> Result<u16, Error> {
+fn interpolate(
+    edge: &[u16],
+    top_left: u16,
+    base: i32,
+    shift: i32,
+    upsampled: bool,
+) -> Result<u16, Error> {
     if !(-1..=31).contains(&shift) {
         return Err(Error::InvalidObu);
     }
-    let first = directional_edge(edge, top_left, base)?;
-    let second = directional_edge(edge, top_left, base + 1)?;
+    let first = directional_edge(edge, top_left, base, upsampled)?;
+    let second = directional_edge(edge, top_left, base + 1, upsampled)?;
     let value = (i32::from(first) * (32 - shift) + i32::from(second) * shift + 16) >> 5;
     u16::try_from(value).map_err(|_| Error::InvalidObu)
 }
 
-fn directional_edge(edge: &[u16], top_left: u16, index: i32) -> Result<u16, Error> {
-    if index == -1 {
+fn directional_edge(
+    edge: &[u16],
+    top_left: u16,
+    index: i32,
+    upsampled: bool,
+) -> Result<u16, Error> {
+    if !upsampled && index == -1 {
         Ok(top_left)
     } else {
+        let index = if upsampled {
+            index.checked_add(2).ok_or(Error::LimitExceeded)?
+        } else {
+            index
+        };
         let index = usize::try_from(index).map_err(|_| Error::InvalidObu)?;
         edge.get(index).copied().ok_or(Error::InvalidObu)
     }
@@ -887,6 +1072,8 @@ mod tests {
                 have_above: false,
                 have_above_right: false,
                 have_below_left: false,
+                enable_edge_filter: false,
+                filter_type: false,
                 above_availability: None,
                 left_availability: None,
             },
@@ -913,6 +1100,8 @@ mod tests {
                 have_above: false,
                 have_above_right: false,
                 have_below_left: false,
+                enable_edge_filter: false,
+                filter_type: false,
                 above_availability: None,
                 left_availability: None,
             },
@@ -970,6 +1159,8 @@ mod tests {
                 have_above: true,
                 have_above_right: false,
                 have_below_left: false,
+                enable_edge_filter: false,
+                filter_type: false,
                 above_availability: None,
                 left_availability: None,
             },
@@ -977,6 +1168,276 @@ mod tests {
         .unwrap();
 
         assert!(plane.samples()[32..].iter().all(|&sample| sample == 108));
+    }
+
+    #[test]
+    fn partial_fixed_residual_edges_extend_the_last_reconstructed_sample() {
+        let mut left_plane = Plane::new(3, 4, 0).unwrap();
+        for (row, sample) in [40, 60, 200, 220].into_iter().enumerate() {
+            left_plane.set_sample(0, row, sample).unwrap();
+        }
+        predict_intra_block(
+            &mut left_plane,
+            IntraPredictionConfig {
+                region: PredictionRegion {
+                    x: 1,
+                    y: 0,
+                    width: 2,
+                    height: 4,
+                },
+                bit_depth: 8,
+                mode: 0,
+                angle_delta: 0,
+                filter_intra_mode: None,
+                have_left: true,
+                have_above: false,
+                have_above_right: false,
+                have_below_left: true,
+                enable_edge_filter: false,
+                filter_type: false,
+                above_availability: None,
+                left_availability: Some(&[true, true, false, false, false, false]),
+            },
+        )
+        .unwrap();
+        for row in 0..4 {
+            assert_eq!(left_plane.sample(1, row), Ok(55));
+            assert_eq!(left_plane.sample(2, row), Ok(55));
+        }
+
+        let mut above_plane = Plane::new(4, 3, 0).unwrap();
+        for (column, sample) in [40, 60, 200, 220].into_iter().enumerate() {
+            above_plane.set_sample(column, 0, sample).unwrap();
+        }
+        predict_intra_block(
+            &mut above_plane,
+            IntraPredictionConfig {
+                region: PredictionRegion {
+                    x: 0,
+                    y: 1,
+                    width: 4,
+                    height: 2,
+                },
+                bit_depth: 8,
+                mode: 0,
+                angle_delta: 0,
+                filter_intra_mode: None,
+                have_left: false,
+                have_above: true,
+                have_above_right: true,
+                have_below_left: false,
+                enable_edge_filter: false,
+                filter_type: false,
+                above_availability: Some(&[true, true, false, false, false, false]),
+                left_availability: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            above_plane.samples()[4..]
+                .iter()
+                .all(|sample| *sample == 55)
+        );
+
+        let mut smooth_plane = Plane::new(4, 5, 0).unwrap();
+        for (column, sample) in [40, 60, 200, 220].into_iter().enumerate() {
+            smooth_plane.set_sample(column, 0, sample).unwrap();
+        }
+        predict_intra_block(
+            &mut smooth_plane,
+            IntraPredictionConfig {
+                region: PredictionRegion {
+                    x: 0,
+                    y: 1,
+                    width: 4,
+                    height: 4,
+                },
+                bit_depth: 8,
+                mode: 10,
+                angle_delta: 0,
+                filter_intra_mode: None,
+                have_left: false,
+                have_above: true,
+                have_above_right: true,
+                have_below_left: false,
+                enable_edge_filter: false,
+                filter_type: false,
+                above_availability: Some(&[true, true, false, false, false, false, false, false]),
+                left_availability: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(&smooth_plane.samples()[4..8], &[40, 60, 60, 60]);
+    }
+
+    #[test]
+    fn d203_dispatch_filters_the_complete_nonconstant_left_edge() {
+        let mut plane = Plane::new(17, 24, 0).unwrap();
+        for (row, sample) in [
+            0, 64, 128, 192, 255, 192, 128, 64, 0, 32, 96, 160, 224, 160, 96, 32, 0, 40, 80, 120,
+            160, 200, 240, 255,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            plane.set_sample(0, row, sample).unwrap();
+        }
+        predict_intra_block(
+            &mut plane,
+            IntraPredictionConfig {
+                region: PredictionRegion {
+                    x: 1,
+                    y: 0,
+                    width: 16,
+                    height: 8,
+                },
+                bit_depth: 8,
+                mode: 7,
+                angle_delta: 0,
+                filter_intra_mode: None,
+                have_left: true,
+                have_above: false,
+                have_above_right: false,
+                have_below_left: true,
+                enable_edge_filter: true,
+                filter_type: false,
+                above_availability: None,
+                left_availability: None,
+            },
+        )
+        .unwrap();
+
+        let expected = [
+            [
+                38, 57, 80, 108, 134, 162, 188, 201, 211, 211, 201, 188, 162, 134, 108, 80,
+            ],
+            [
+                90, 118, 144, 172, 194, 205, 215, 207, 197, 178, 152, 124, 98, 70, 53, 39,
+            ],
+            [
+                154, 182, 198, 209, 214, 203, 194, 168, 142, 114, 88, 62, 48, 33, 34, 39,
+            ],
+            [
+                202, 212, 210, 200, 186, 158, 132, 104, 78, 57, 43, 31, 36, 41, 59, 83,
+            ],
+            [
+                206, 196, 176, 148, 122, 94, 68, 51, 37, 33, 38, 45, 67, 91, 116, 144,
+            ],
+            [
+                166, 138, 112, 84, 61, 46, 32, 35, 39, 54, 76, 100, 126, 154, 168, 178,
+            ],
+            [
+                102, 74, 56, 41, 31, 36, 41, 62, 84, 110, 136, 162, 171, 182, 177, 166,
+            ],
+            [
+                50, 35, 33, 38, 47, 71, 93, 120, 146, 165, 175, 183, 173, 162, 140, 112,
+            ],
+        ];
+        for (row, expected_row) in expected.into_iter().enumerate() {
+            for (column, sample) in expected_row.into_iter().enumerate() {
+                assert_eq!(plane.sample(column + 1, row), Ok(sample));
+            }
+        }
+    }
+
+    #[test]
+    fn d113_dispatch_upsamples_the_above_edge_with_logical_negative_indices() {
+        let mut plane = Plane::new(6, 6, 0).unwrap();
+        plane.set_sample(0, 0, 20).unwrap();
+        for (column, sample) in [40, 80, 120, 160].into_iter().enumerate() {
+            plane.set_sample(column + 1, 0, sample).unwrap();
+        }
+        for (row, sample) in [30, 60, 90, 120].into_iter().enumerate() {
+            plane.set_sample(0, row + 1, sample).unwrap();
+        }
+        predict_intra_block(
+            &mut plane,
+            IntraPredictionConfig {
+                region: PredictionRegion {
+                    x: 1,
+                    y: 1,
+                    width: 4,
+                    height: 4,
+                },
+                bit_depth: 8,
+                mode: 5,
+                angle_delta: 0,
+                filter_intra_mode: None,
+                have_left: true,
+                have_above: true,
+                have_above_right: false,
+                have_below_left: false,
+                enable_edge_filter: true,
+                filter_type: false,
+                above_availability: None,
+                left_availability: None,
+            },
+        )
+        .unwrap();
+
+        let expected = [
+            [30, 62, 103, 146],
+            [23, 46, 86, 127],
+            [29, 34, 69, 109],
+            [51, 25, 52, 93],
+        ];
+        for (row, expected_row) in expected.into_iter().enumerate() {
+            for (column, sample) in expected_row.into_iter().enumerate() {
+                assert_eq!(plane.sample(column + 1, row + 1), Ok(sample));
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_mode_angle_delta_honors_the_smooth_neighbor_filter_type() {
+        let mut plane = Plane::new(6, 10, 0).unwrap();
+        plane.set_sample(0, 0, 20).unwrap();
+        for (column, sample) in [40, 80, 120, 160].into_iter().enumerate() {
+            plane.set_sample(column + 1, 0, sample).unwrap();
+        }
+        for row in 0..8 {
+            plane.set_sample(0, row + 1, 30).unwrap();
+        }
+        predict_intra_block(
+            &mut plane,
+            IntraPredictionConfig {
+                region: PredictionRegion {
+                    x: 1,
+                    y: 1,
+                    width: 4,
+                    height: 8,
+                },
+                bit_depth: 8,
+                mode: 1,
+                angle_delta: 1,
+                filter_intra_mode: None,
+                have_left: true,
+                have_above: true,
+                have_above_right: false,
+                have_below_left: false,
+                enable_edge_filter: true,
+                filter_type: true,
+                above_availability: None,
+                left_availability: None,
+            },
+        )
+        .unwrap();
+
+        let expected = [
+            [39, 78, 118, 158],
+            [38, 76, 116, 156],
+            [37, 74, 114, 154],
+            [36, 73, 113, 153],
+            [35, 70, 110, 150],
+            [34, 69, 109, 149],
+            [33, 66, 106, 146],
+            [33, 65, 105, 145],
+        ];
+        for (row, expected_row) in expected.into_iter().enumerate() {
+            for (column, sample) in expected_row.into_iter().enumerate() {
+                assert_eq!(plane.sample(column + 1, row + 1), Ok(sample));
+            }
+        }
     }
 
     #[test]

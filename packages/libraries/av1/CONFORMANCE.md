@@ -1,8 +1,8 @@
 # AV1 conformance ledger
 
-This crate is a clean-room, CPU-only implementation. `mrml test
-org.mrml.library.av1 --target native` is the minimum current gate. A feature is
-only marked complete after
+This crate is a clean-room, CPU-only implementation. On Linux,
+`./target/debug/mrml test org.mrml.library.av1 --target linux --release` is the
+minimum current gate. A feature is only marked complete after
 positive vectors, malformed-input tests, and comparison with AOM conformance
 vectors have passed.
 
@@ -27,7 +27,7 @@ vectors have passed.
 | 5.19 film grain parameters | implemented, vectors pending | pending | Includes reference inheritance, normative Gaussian/AR pattern generation, stripe overlap, scaling lookup, output clipping, and output-only synthesis |
 | 5.9.15 tile group syntax | partial, vectors pending | pending | Ordered multi-OBU tile-group accumulation with gap/overlap/duplicate rejection and allocated pending-frame grid/reconstruction planes; arithmetic-coded recursive traversal and normative initial CDF state for implemented symbols; per-MI block/reference/MV/palette state; common block prefix, reference decisions, intra/inter mode syntax, palette maps, quantization matrices, motion-vector stacks, adaptive transform syntax, coefficient token decoding, dequantization, prediction, inverse transforms, residual addition, and context updates are connected in the concrete block/tile loop; independent-vector coverage remains |
 | 8.2 symbol coding process | decoder implemented, vectors pending | encoder groundwork | Decoder range normalization, literals, NS, CDF adaptation, and trailing validation; inverse adaptive range encoder round-trips symbols/literals/NS with identical CDF state and emits byte-aligned tile termination accepted by the strict decoder |
-| 7.11 prediction | partial, vectors pending | n/a | Intra families, edge filtering, CfL, decoded palette-map plane materialization, motion scaling, compound blending, separable inter convolution, normative sub-pel and warped-filter banks, affine warp estimation, motion-mode contexts, SIMPLE/local/global dispatch, and OBMC neighbor traversal are connected to block reconstruction; independent-vector coverage remains |
+| 7.11 prediction | partial, vectors pending | n/a | Intra families, decoded-edge extension, neighbor-derived filter types, directional edge filtering and upsampling, CfL, decoded palette-map plane materialization, motion scaling, compound blending, separable inter convolution, normative sub-pel and warped-filter banks, affine warp estimation, motion-mode contexts, SIMPLE/local/global dispatch, and OBMC neighbor traversal are connected to block reconstruction; the official q7 vector's first frame is byte-exact, but its inter frame and broader independent-vector coverage remain pending |
 | 7.12 reconstruction | partial | n/a | Checked 8/10/12-bit planes, residual placement, clipping, and public frame conversion |
 | 7.13 inverse transforms | implemented, vectors pending | n/a | DCT, ADST, identity, WHT, 2D transform process, transform-type components, and normative transform-set selection/inversion |
 | 7.14 deblocking | partial, vectors pending | n/a | Normative edge masks, level derivation, narrow/8-tap/16-tap filters, and frame-edge traversal are integrated |

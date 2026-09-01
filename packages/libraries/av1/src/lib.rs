@@ -619,6 +619,70 @@ fn clipped_inter_prediction_region(
     })
 }
 
+fn intra_filter_type(
+    grid: &block_state::MiGrid,
+    block: partition::BlockRect,
+    availability: partition::BlockAvailability,
+    chroma: bool,
+    subsampling_x: bool,
+    subsampling_y: bool,
+) -> Result<bool, Error> {
+    let is_smooth = |row: u32, column: u32| {
+        grid.get(row, column).is_some_and(|state| {
+            let mode = if chroma {
+                if state.reference_frames[0] > 0 {
+                    return false;
+                }
+                state.chroma_prediction_mode
+            } else {
+                state.prediction_mode
+            };
+            matches!(mode, 9..=11)
+        })
+    };
+    let have_above = if chroma {
+        availability.upper_chroma
+    } else {
+        availability.upper
+    };
+    let have_left = if chroma {
+        availability.left_chroma
+    } else {
+        availability.left
+    };
+    let above_smooth = if have_above {
+        let mut row = block.row.checked_sub(1).ok_or(Error::InvalidObu)?;
+        let mut column = block.column;
+        if chroma {
+            if subsampling_x && block.column.is_multiple_of(2) {
+                column = column.checked_add(1).ok_or(Error::LimitExceeded)?;
+            }
+            if subsampling_y && !block.row.is_multiple_of(2) {
+                row = row.checked_sub(1).ok_or(Error::InvalidObu)?;
+            }
+        }
+        is_smooth(row, column)
+    } else {
+        false
+    };
+    let left_smooth = if have_left {
+        let mut row = block.row;
+        let mut column = block.column.checked_sub(1).ok_or(Error::InvalidObu)?;
+        if chroma {
+            if subsampling_x && !block.column.is_multiple_of(2) {
+                column = column.checked_sub(1).ok_or(Error::InvalidObu)?;
+            }
+            if subsampling_y && block.row.is_multiple_of(2) {
+                row = row.checked_add(1).ok_or(Error::LimitExceeded)?;
+            }
+        }
+        is_smooth(row, column)
+    } else {
+        false
+    };
+    Ok(above_smooth || left_smooth)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub max_width: u32,
@@ -2325,6 +2389,8 @@ impl Decoder {
                                     } else {
                                         availability.left
                                     },
+                                    enable_edge_filter: false,
+                                    filter_type: false,
                                     above_availability: None,
                                     left_availability: None,
                                 },
@@ -2479,6 +2545,7 @@ impl Decoder {
                             || intra.map_or(0, |mode| mode.y_mode as u8),
                             |mode| mode.y_mode,
                         ),
+                        chroma_prediction_mode: intra.map_or(0, |mode| mode.chroma.mode as u8),
                         motion_mode: inter_post.map_or(0, |post| post.motion_mode as u8),
                         compound_type: inter_post.map_or(0, |post| post.compound.kind as u8),
                         compound_group_index: inter_post
@@ -2506,6 +2573,36 @@ impl Decoder {
                         partition::BlockSize::Block64x64
                     } else {
                         size
+                    };
+                    // A nonzero angle delta can turn nominal vertical or
+                    // horizontal prediction into a filtered direction, so
+                    // filter types are block-level state rather than a check
+                    // of only the base prediction-mode number.
+                    let filter_types = if sequence.enable_intra_edge_filter {
+                        [
+                            intra_filter_type(
+                                grid,
+                                block,
+                                availability,
+                                false,
+                                subsampling_x,
+                                subsampling_y,
+                            )?,
+                            if availability.has_chroma {
+                                intra_filter_type(
+                                    grid,
+                                    block,
+                                    availability,
+                                    true,
+                                    subsampling_x,
+                                    subsampling_y,
+                                )?
+                            } else {
+                                false
+                            },
+                        ]
+                    } else {
+                        [false; 2]
                     };
                     reconstruction::walk_fixed_residual_blocks(
                         reconstruction::FixedResidualWalkConfig {
@@ -2661,6 +2758,8 @@ impl Decoder {
                                 have_above,
                                 have_above_right,
                                 have_below_left,
+                                enable_edge_filter: sequence.enable_intra_edge_filter,
+                                filter_type: filter_types[usize::from(chroma)],
                                 above_availability: if have_above {
                                     Some(&above_availability[..edge_length])
                                 } else {
@@ -4108,6 +4207,107 @@ fn vector_from_slice<T: Clone>(values: &[T]) -> Result<Vector<T>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn luma_intra_filter_type_uses_smooth_above_or_left_neighbors() {
+        let block = partition::BlockRect::new(1, 1, partition::BlockSize::Block4x4);
+        let availability = partition::BlockAvailability {
+            has_chroma: true,
+            upper: true,
+            left: true,
+            upper_chroma: true,
+            left_chroma: true,
+        };
+        let mut grid = block_state::MiGrid::new(4, 4).unwrap();
+        assert_eq!(
+            intra_filter_type(&grid, block, availability, false, true, true),
+            Ok(false)
+        );
+
+        grid.fill(
+            partition::BlockRect::new(1, 0, partition::BlockSize::Block4x4),
+            block_state::BlockState {
+                prediction_mode: 9,
+                ..block_state::BlockState::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            intra_filter_type(&grid, block, availability, false, true, true),
+            Ok(true)
+        );
+
+        grid.fill(
+            partition::BlockRect::new(1, 0, partition::BlockSize::Block4x4),
+            block_state::BlockState::default(),
+        )
+        .unwrap();
+        grid.fill(
+            partition::BlockRect::new(0, 1, partition::BlockSize::Block4x4),
+            block_state::BlockState {
+                prediction_mode: 11,
+                ..block_state::BlockState::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            intra_filter_type(&grid, block, availability, false, true, true),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn chroma_intra_filter_type_adjusts_420_neighbors_and_rejects_inter() {
+        let block = partition::BlockRect::new(2, 3, partition::BlockSize::Block4x4);
+        let availability = partition::BlockAvailability {
+            has_chroma: true,
+            upper: true,
+            left: false,
+            upper_chroma: true,
+            left_chroma: false,
+        };
+        let mut grid = block_state::MiGrid::new(6, 6).unwrap();
+        grid.fill(
+            partition::BlockRect::new(2, 2, partition::BlockSize::Block4x4),
+            block_state::BlockState {
+                chroma_prediction_mode: 10,
+                ..block_state::BlockState::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            intra_filter_type(&grid, block, availability, true, true, true),
+            Ok(false)
+        );
+
+        let adjusted_above = partition::BlockRect::new(3, 1, partition::BlockSize::Block4x4);
+        grid.fill(
+            adjusted_above,
+            block_state::BlockState {
+                chroma_prediction_mode: 10,
+                ..block_state::BlockState::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            intra_filter_type(&grid, block, availability, true, true, true),
+            Ok(true)
+        );
+
+        grid.fill(
+            adjusted_above,
+            block_state::BlockState {
+                reference_frames: [1, -1],
+                chroma_prediction_mode: 10,
+                ..block_state::BlockState::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            intra_filter_type(&grid, block, availability, true, true, true),
+            Ok(false)
+        );
+    }
 
     #[test]
     fn inter_prediction_regions_clip_at_cropped_frame_edges() {

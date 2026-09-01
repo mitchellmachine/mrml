@@ -3,9 +3,61 @@
 The codec is incomplete; this evidence covers only the code currently present.
 It must not be used as evidence of AV1 bitstream conformance.
 
-The dated commands below are historical evidence from before Manifest V2.
-Current contributors use `mrml test org.mrml.library.av1 --target native
---release`; Cargo is reserved for the locked stage-zero build of `mrml`.
+The dated commands below include historical evidence from before Manifest V2.
+Current Linux contributors use `./target/debug/mrml test
+org.mrml.library.av1 --target linux --release`; Cargo is reserved for the
+locked stage-zero build of `mrml`.
+
+## Current 2026-08-30 Linux
+
+Host: Arch Linux `x86_64-unknown-linux-gnu`, Linux 7.1.11, Rust nightly
+1.100.0 (`17fd5b8a3`, 2026-08-28). The following current Manifest V2 gate
+passed with 281 tests and no failures, ignored tests, or filtered tests:
+
+```bash
+./target/debug/mrml build org.mrml.library.av1 --target linux --release
+./target/debug/mrml test org.mrml.library.av1 --target linux --release
+env ASAN_OPTIONS=detect_leaks=0 ./target/debug/mrml test org.mrml.library.av1 --target linux --sanitizer address
+```
+
+The release build passed, and the release suite passed 281/281 tests. The first
+AddressSanitizer invocation also passed all 281 tests but then encountered an
+`E0460` stale shared-artifact mismatch while compiling the example; an immediate
+retry of the exact command passed the complete gate with 281/281 tests.
+LeakSanitizer was not part of this AddressSanitizer run.
+
+The official q7 vector was checked against AOMedia's
+[`test/test-data.sha1`](https://aomedia.googlesource.com/aom/+/refs/heads/av1-normative/test/test-data.sha1)
+manifest, then decoded independently with the system AOMedia decoder 3.15.0.
+The exact comparison commands were:
+
+```bash
+sha1sum /tmp/av1-1-b8-00-quantizer-07.ivf
+mkdir -p /tmp/mrml-av1-q7-aom-3.15.0
+/usr/bin/aomdec --codec=av1 --i420 --output=/tmp/mrml-av1-q7-aom-3.15.0/frame-%4.yuv /tmp/av1-1-b8-00-quantizer-07.ivf
+rustc --edition=2024 packages/libraries/av1/examples/decode_ivf.rs --extern mrml_av1=target/mrml-native/linux/release/libmrml_av1.rlib -L dependency=target/mrml-native/linux/release -C opt-level=2 -C panic=abort -o /tmp/decode_ivf_edge_filter
+mkdir -p /tmp/mrml-av1-q7-edge-filter
+/tmp/decode_ivf_edge_filter /tmp/av1-1-b8-00-quantizer-07.ivf /tmp/mrml-av1-q7-edge-filter
+md5sum /tmp/mrml-av1-q7-edge-filter/frame-0000.yuv /tmp/mrml-av1-q7-edge-filter/frame-0001.yuv /tmp/mrml-av1-q7-aom-3.15.0/frame-0001.yuv /tmp/mrml-av1-q7-aom-3.15.0/frame-0002.yuv
+cmp -s /tmp/mrml-av1-q7-edge-filter/frame-0000.yuv /tmp/mrml-av1-q7-aom-3.15.0/frame-0001.yuv
+```
+
+The vector SHA-1 was
+`7f8113cd13d8faaa06fdbaaa50dc328daf037e6d`. MRML's complete first
+152064-byte I420 frame is now byte-exact with AOM 3.15.0; both have MD5
+`fbd569613f9a2e52075566dce8e2af6d`, and `cmp` returned zero. This correction
+extends the last reconstructed prediction-edge sample, derives the luma and
+chroma filter type from the exact adjusted neighbor, and connects directional
+corner filtering, edge filtering, and edge upsampling to prediction dispatch.
+
+The second frame remains an explicit failure: MRML has MD5
+`d0957d2b1f1558b235f577427657b5df`, while AOM has
+`4dd65db01fb2db92d6ebb3c8c64b0747`. Its first difference is zero-based luma
+sample 24 (`x=24`, `y=0`); 74912 bytes differ and the maximum absolute sample
+delta is 209. This points the next bounded investigation at the inter/reference
+path and is not evidence of full-stream or AV1 conformance. AOM was used only
+as an external black-box oracle; no reference implementation source or library
+is incorporated into MRML.
 
 ## Historical 2026-08-22 Windows
 
