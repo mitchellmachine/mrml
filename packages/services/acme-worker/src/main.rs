@@ -1,14 +1,23 @@
-use mrml_acmed::{AcmedConfig, MAX_ACMED_CONFIG_BYTES, parse_acmed_config};
+use mrml_acmed::{
+    AcmedAccountPhase, AcmedAccountRecord, AcmedConfig, AcmeDirectoryClass,
+    MAX_ACMED_CONFIG_BYTES, parse_acmed_config,
+};
 use mrml_acme::{
-    AcmeJwsEnvelopeWriter, AcmeUrl, JoseError, ProtectedKey, ReplayNonce,
+    AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
+    AcmeJwsEnvelopeWriter, AcmeUrl, CaClass, HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES,
+    MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES, P256Jwk, ProtectedKey, ReplayNonce,
+    account_contacts_digest, execute_prepared_account_create, fetch_directory,
+    recover_uncertain_account_creation,
 };
 use mrml_certificate::{
     CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_RESPONSE_BYTES,
     AcmeJwsOperation, CertdAccountKeyRequest, CertdChannelCapability, CertdChannelOperation,
     CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
     CertdTlsKeyRequest, CloudflareDns01Provider, ConstrainedAcmeJwsRequest,
-    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CSR_BYTES,
-    PRODUCTION_SECRET_MODE, UnixCertdSession, decode_certd_channel_request,
+    DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
+    DurableStateStore, HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
+    MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE,
+    UnixCertdSession, decode_certd_channel_request,
     encode_certd_account_key_request, encode_certd_channel_request, encode_certd_jws_request,
     encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
 };
@@ -127,7 +136,7 @@ fn main() {
 fn application_main() -> Result<(), &'static str> {
     let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
     let config = load_config()?;
-    let _state_authenticator = load_durable_authenticator(Path::new(STATE_KEY), ACMED_UID)
+    let state_authenticator = load_durable_authenticator(Path::new(STATE_KEY), ACMED_UID)
         .map_err(|_| "invalid acmed state authentication key")?;
     let _provider = CloudflareDns01Provider::open(
         Path::new(DNS_TOKEN),
@@ -142,13 +151,17 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-acmed configuration valid");
             Ok(())
         }
-        "serve" => serve(config, capability),
+        "serve" => serve(config, capability, state_authenticator),
         _ => Err("usage: mrml-acmed [serve|check-config]"),
     }
 }
 
-fn serve(config: AcmedConfig, capability: CertdChannelCapability) -> Result<(), &'static str> {
-    let _state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+fn serve(
+    config: AcmedConfig,
+    capability: CertdChannelCapability,
+    mut state_authenticator: impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
     let bootstrap = bootstrap_certd(&config, &capability)?;
     let _account_public_key = bootstrap.account_public_key;
@@ -161,6 +174,13 @@ fn serve(config: AcmedConfig, capability: CertdChannelCapability) -> Result<(), 
         operation: AcmeJwsOperation::NewAccount,
         next_request_id: bootstrap.next_request_id,
     };
+    let _account = establish_account(
+        &config,
+        &bootstrap.account_public_key,
+        &mut envelope_writer,
+        &mut state,
+        &mut state_authenticator,
+    )?;
     loop {
         if certd_health(&capability, envelope_writer.next_request_id).is_err() {
             eprintln!("mrml-acmed: certd health degraded");
@@ -171,6 +191,339 @@ fn serve(config: AcmedConfig, capability: CertdChannelCapability) -> Result<(), 
             .ok_or("channel request ID exhausted")?;
         std::thread::sleep(Duration::from_secs(config.poll_interval_seconds));
     }
+}
+
+fn establish_account(
+    config: &AcmedConfig,
+    encoded_public_key: &[u8; CERTD_P256_PUBLIC_KEY_BYTES],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<AccountLifecycle, &'static str> {
+    let public_key = account_public_key(encoded_public_key)?;
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve trusted ACME directory")?;
+    let terms = config
+        .terms_approval(&directory)
+        .map_err(|_| "ACME terms approval does not match directory")?;
+    let contacts: [&str; 0] = [];
+    let contact_digest =
+        account_contacts_digest(&contacts).map_err(|_| "invalid ACME account contacts")?;
+    let policy = AccountPolicy {
+        ca_class: match config.directory_class {
+            AcmeDirectoryClass::PublicProduction => CaClass::Production,
+            AcmeDirectoryClass::LocalTest | AcmeDirectoryClass::PublicStaging => CaClass::Staging,
+        },
+        policy_generation: config.policy_generation,
+        contact_digest,
+    };
+    let loaded = load_account_record(config, state, authenticator)?;
+    match loaded {
+        Some((record, _durable_generation)) if record.phase == AcmedAccountPhase::Active => {
+            record.require_policy(config).map_err(|_| "stale ACME account policy")?;
+            if record.key_thumbprint != public_key.thumbprint().map_err(|_| "invalid account key")?
+                || record.contact_digest != contact_digest
+            {
+                return Err("ACME account record binding mismatch");
+            }
+            AccountLifecycle::restore_active(
+                &directory,
+                policy.ca_class,
+                record.account_generation,
+                record.policy_generation,
+                record.account_url.ok_or("active account URL missing")?,
+                &public_key,
+                contact_digest,
+            )
+            .map_err(|_| "cannot restore active ACME account")
+        }
+        Some((record, durable_generation))
+            if record.phase == AcmedAccountPhase::RequestMayHaveBeenSent =>
+        {
+            if config.account_generation != 1 {
+                return Err("initial ACME account recovery requires generation one");
+            }
+            record.require_policy(config).map_err(|_| "stale ACME account policy")?;
+            if record.key_thumbprint != public_key.thumbprint().map_err(|_| "invalid account key")?
+                || record.contact_digest != contact_digest
+            {
+                return Err("ACME account recovery binding mismatch");
+            }
+            let (mut lifecycle, receipt) = AccountLifecycle::prepare_create(
+                &directory,
+                policy,
+                &public_key,
+                terms.as_ref(),
+                false,
+            )
+            .map_err(|_| "cannot prepare ACME account recovery")?;
+            lifecycle
+                .mark_uncertain()
+                .map_err(|_| "cannot mark ACME account recovery uncertain")?;
+            match recover_account(
+                &mut lifecycle,
+                receipt,
+                &directory,
+                &contacts,
+                &public_key,
+                &mut exchange,
+                &mut transport,
+                signer,
+            ) {
+                Ok(account_url) => {
+                    persist_account_record(
+                        config,
+                        state,
+                        authenticator,
+                        durable_generation,
+                        AcmedAccountPhase::Active,
+                        public_key.thumbprint().map_err(|_| "invalid account key")?,
+                        contact_digest,
+                        Some(account_url),
+                    )?;
+                    Ok(lifecycle)
+                }
+                Err(AccountRecoveryError::Server(problem))
+                    if problem.problem_type.as_str()
+                        == "urn:ietf:params:acme:error:accountDoesNotExist" =>
+                {
+                    create_account(
+                        config,
+                        &directory,
+                        policy,
+                        terms.as_ref(),
+                        &contacts,
+                        &public_key,
+                        &mut exchange,
+                        &mut transport,
+                        signer,
+                        state,
+                        authenticator,
+                        durable_generation,
+                    )
+                }
+                Err(_) => Err("ACME account recovery remains uncertain"),
+            }
+        }
+        Some(_) => Err("unsupported ACME account durable phase"),
+        None => {
+            if config.account_generation != 1 {
+                return Err("missing ACME account state for configured generation");
+            }
+            create_account(
+                config,
+                &directory,
+                policy,
+                terms.as_ref(),
+                &contacts,
+                &public_key,
+                &mut exchange,
+                &mut transport,
+                signer,
+                state,
+                authenticator,
+                0,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_account(
+    config: &AcmedConfig,
+    directory: &mrml_acme::AcmeDirectory,
+    policy: AccountPolicy,
+    terms: Option<&mrml_acme::OwnerTermsApproval>,
+    contacts: &[&str],
+    public_key: &P256Jwk,
+    exchange: &mut AcmeExchange,
+    transport: &mut HostedAcmeTransport,
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    previous_durable_generation: u64,
+) -> Result<AccountLifecycle, &'static str> {
+    let (mut lifecycle, receipt) = AccountLifecycle::prepare_create(
+        directory,
+        policy,
+        public_key,
+        terms,
+        false,
+    )
+    .map_err(|_| "cannot prepare ACME account creation")?;
+    let pending_generation = persist_account_record(
+        config,
+        state,
+        authenticator,
+        previous_durable_generation,
+        AcmedAccountPhase::RequestMayHaveBeenSent,
+        public_key.thumbprint().map_err(|_| "invalid account key")?,
+        policy.contact_digest,
+        None,
+    )?;
+    let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    signer.operation = AcmeJwsOperation::NewAccount;
+    let account_url = execute_prepared_account_create(
+        &mut lifecycle,
+        receipt,
+        directory,
+        contacts,
+        None,
+        public_key,
+        exchange,
+        transport,
+        signer,
+        AccountCreateBuffers {
+            payload: &mut payload,
+            response: &mut response,
+            jws: &mut jws,
+        },
+    )
+    .map_err(|_| "ACME account creation is uncertain or rejected")?;
+    persist_account_record(
+        config,
+        state,
+        authenticator,
+        pending_generation,
+        AcmedAccountPhase::Active,
+        public_key.thumbprint().map_err(|_| "invalid account key")?,
+        policy.contact_digest,
+        Some(account_url),
+    )?;
+    Ok(lifecycle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_account(
+    lifecycle: &mut AccountLifecycle,
+    receipt: mrml_acme::PreparedAccountAction,
+    directory: &mrml_acme::AcmeDirectory,
+    contacts: &[&str],
+    public_key: &P256Jwk,
+    exchange: &mut AcmeExchange,
+    transport: &mut HostedAcmeTransport,
+    signer: &mut CertdEnvelopeWriter<'_>,
+) -> Result<AcmeUrl, AccountRecoveryError<mrml_acme::HostedTransportError>> {
+    let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    signer.operation = AcmeJwsOperation::NewAccount;
+    recover_uncertain_account_creation(
+        lifecycle,
+        receipt,
+        directory,
+        contacts,
+        public_key,
+        exchange,
+        transport,
+        signer,
+        AccountCreateBuffers {
+            payload: &mut payload,
+            response: &mut response,
+            jws: &mut jws,
+        },
+    )
+}
+
+fn account_public_key(
+    encoded: &[u8; CERTD_P256_PUBLIC_KEY_BYTES],
+) -> Result<P256Jwk, &'static str> {
+    if encoded[0] != 4 {
+        return Err("invalid certd account public key encoding");
+    }
+    P256Jwk::from_coordinates(
+        encoded[1..33]
+            .try_into()
+            .map_err(|_| "invalid certd account public key")?,
+        encoded[33..65]
+            .try_into()
+            .map_err(|_| "invalid certd account public key")?,
+    )
+    .map_err(|_| "invalid certd account public key")
+}
+
+fn load_account_record(
+    config: &AcmedConfig,
+    state: &HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<(AcmedAccountRecord, u64)>, &'static str> {
+    let object = DurableObjectId(config.account_identity);
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let Some(length) = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot read ACME account state")?
+    else {
+        return Ok(None);
+    };
+    let durable = DurableRecord::decode(&encoded[..length], authenticator)
+        .map_err(|_| "ACME account state authentication failed")?;
+    if durable.namespace != DurableNamespace::PublicState
+        || durable.kind != DurableRecordKind::Account
+        || durable.object != object
+    {
+        return Err("ACME account durable record type mismatch");
+    }
+    let record = AcmedAccountRecord::decode(
+        durable.payload(),
+        &config.directory_url,
+        config.directory_class == AcmeDirectoryClass::LocalTest,
+    )
+    .map_err(|_| "invalid ACME account durable record")?;
+    Ok(Some((record, durable.generation)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_account_record(
+    config: &AcmedConfig,
+    state: &mut impl DurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    previous_generation: u64,
+    phase: AcmedAccountPhase,
+    key_thumbprint: mrml_acme::JwkThumbprint,
+    contact_digest: [u8; 32],
+    account_url: Option<AcmeUrl>,
+) -> Result<u64, &'static str> {
+    let account = AcmedAccountRecord {
+        phase,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        policy_generation: config.policy_generation,
+        account_identity: config.account_identity,
+        key_thumbprint,
+        contact_digest,
+        account_url,
+    };
+    let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
+    let length = account
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode ACME account state")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::Account,
+        DurableObjectId(config.account_identity),
+        previous_generation,
+        &payload[..length],
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate ACME account state")?;
+    let prepared = state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare ACME account state")?;
+    let committed = state
+        .commit(prepared)
+        .map_err(|_| "ACME account state commit uncertain")?;
+    Ok(committed.generation)
 }
 
 fn certd_health(capability: &CertdChannelCapability, request_id: u64) -> Result<(), &'static str> {

@@ -1,12 +1,161 @@
 #![no_std]
 
 use mrml_acme::{
-    AcmeDirectory, AcmeUrl, DnsIdentifier, MAX_CSR_IDENTIFIERS, OwnerTermsApproval,
+    AcmeDirectory, AcmeUrl, DnsIdentifier, JwkThumbprint, MAX_CSR_IDENTIFIERS, MAX_URL_BYTES,
+    OwnerTermsApproval,
 };
 use mrml_certificate::certd_identifier_set_digest;
 use mrml_json::Value;
 
 pub const MAX_ACMED_CONFIG_BYTES: usize = 16 * 1024;
+const ACCOUNT_RECORD_MAGIC: &[u8; 8] = b"MRMLACA1";
+const ACCOUNT_RECORD_HEADER_BYTES: usize = 116;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcmedAccountPhase {
+    RequestMayHaveBeenSent = 1,
+    Active = 2,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AcmedAccountRecord {
+    pub phase: AcmedAccountPhase,
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub policy_generation: u64,
+    pub account_identity: [u8; 16],
+    pub key_thumbprint: JwkThumbprint,
+    pub contact_digest: [u8; 32],
+    pub account_url: Option<AcmeUrl>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcmedAccountRecordError {
+    InvalidState,
+    OutputTooSmall,
+    Malformed,
+    PolicyMismatch,
+}
+
+impl AcmedAccountRecord {
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, AcmedAccountRecordError> {
+        let url = self.account_url.as_ref().map(AcmeUrl::as_str).unwrap_or("");
+        if self.directory_generation == 0
+            || self.account_generation == 0
+            || self.policy_generation == 0
+            || self.account_identity == [0; 16]
+            || self.key_thumbprint.0 == [0; 32]
+            || (self.phase == AcmedAccountPhase::Active) != self.account_url.is_some()
+            || url.len() > MAX_URL_BYTES
+        {
+            return Err(AcmedAccountRecordError::InvalidState);
+        }
+        let length = ACCOUNT_RECORD_HEADER_BYTES
+            .checked_add(url.len())
+            .ok_or(AcmedAccountRecordError::OutputTooSmall)?;
+        if output.len() < length {
+            return Err(AcmedAccountRecordError::OutputTooSmall);
+        }
+        output[..length].fill(0);
+        output[..8].copy_from_slice(ACCOUNT_RECORD_MAGIC);
+        output[8] = self.phase as u8;
+        output[12..20].copy_from_slice(&self.directory_generation.to_be_bytes());
+        output[20..28].copy_from_slice(&self.account_generation.to_be_bytes());
+        output[28..36].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[36..52].copy_from_slice(&self.account_identity);
+        output[52..84].copy_from_slice(&self.key_thumbprint.0);
+        output[84..116].copy_from_slice(&self.contact_digest);
+        output[10..12].copy_from_slice(&(url.len() as u16).to_be_bytes());
+        output[ACCOUNT_RECORD_HEADER_BYTES..length].copy_from_slice(url.as_bytes());
+        Ok(length)
+    }
+
+    pub fn decode(
+        input: &[u8],
+        configured_directory: &AcmeUrl,
+        allow_test_http: bool,
+    ) -> Result<Self, AcmedAccountRecordError> {
+        if input.len() < ACCOUNT_RECORD_HEADER_BYTES
+            || input.get(..8) != Some(ACCOUNT_RECORD_MAGIC)
+            || input[9] != 0
+        {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        let phase = match input[8] {
+            1 => AcmedAccountPhase::RequestMayHaveBeenSent,
+            2 => AcmedAccountPhase::Active,
+            _ => return Err(AcmedAccountRecordError::Malformed),
+        };
+        let url_length = usize::from(u16::from_be_bytes([input[10], input[11]]));
+        if url_length > MAX_URL_BYTES
+            || input.len() != ACCOUNT_RECORD_HEADER_BYTES + url_length
+        {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        let directory_generation = read_u64(&input[12..20])?;
+        let account_generation = read_u64(&input[20..28])?;
+        let policy_generation = read_u64(&input[28..36])?;
+        let account_identity = input[36..52]
+            .try_into()
+            .map_err(|_| AcmedAccountRecordError::Malformed)?;
+        let key_thumbprint = JwkThumbprint(
+            input[52..84]
+                .try_into()
+                .map_err(|_| AcmedAccountRecordError::Malformed)?,
+        );
+        let contact_digest = input[84..116]
+            .try_into()
+            .map_err(|_| AcmedAccountRecordError::Malformed)?;
+        let account_url = if url_length == 0 {
+            None
+        } else {
+            let text = core::str::from_utf8(&input[116..])
+                .map_err(|_| AcmedAccountRecordError::Malformed)?;
+            let url = AcmeUrl::parse(text, allow_test_http)
+                .map_err(|_| AcmedAccountRecordError::Malformed)?;
+            url.require_origin(configured_directory.origin())
+                .map_err(|_| AcmedAccountRecordError::PolicyMismatch)?;
+            Some(url)
+        };
+        let record = Self {
+            phase,
+            directory_generation,
+            account_generation,
+            policy_generation,
+            account_identity,
+            key_thumbprint,
+            contact_digest,
+            account_url,
+        };
+        let mut canonical = [0u8; ACCOUNT_RECORD_HEADER_BYTES + MAX_URL_BYTES];
+        let length = record.encode(&mut canonical)?;
+        if canonical[..length] != *input {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        Ok(record)
+    }
+
+    pub fn require_policy(&self, config: &AcmedConfig) -> Result<(), AcmedAccountRecordError> {
+        if self.directory_generation != config.directory_generation
+            || self.account_generation != config.account_generation
+            || self.policy_generation != config.policy_generation
+            || self.account_identity != config.account_identity
+        {
+            Err(AcmedAccountRecordError::PolicyMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn read_u64(input: &[u8]) -> Result<u64, AcmedAccountRecordError> {
+    Ok(u64::from_be_bytes(
+        input
+            .try_into()
+            .map_err(|_| AcmedAccountRecordError::Malformed)?,
+    ))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AcmeDirectoryClass {
@@ -305,8 +454,126 @@ fn decode_hex(value: &[u8]) -> Result<u8, AcmedConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_certificate::{
+        DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
+        HmacSha256DurableAuthenticator, MAX_DURABLE_RECORD_BYTES,
+    };
 
     const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
+
+    #[test]
+    fn account_record_round_trips_only_exact_policy_bound_states() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let pending = AcmedAccountRecord {
+            phase: AcmedAccountPhase::RequestMayHaveBeenSent,
+            directory_generation: config.directory_generation,
+            account_generation: config.account_generation,
+            policy_generation: config.policy_generation,
+            account_identity: config.account_identity,
+            key_thumbprint: JwkThumbprint([3; 32]),
+            contact_digest: [4; 32],
+            account_url: None,
+        };
+        let mut encoded = [0u8; ACCOUNT_RECORD_HEADER_BYTES + MAX_URL_BYTES];
+        let length = pending.encode(&mut encoded).unwrap();
+        let decoded = AcmedAccountRecord::decode(
+            &encoded[..length],
+            &config.directory_url,
+            false,
+        )
+        .unwrap();
+        assert!(decoded == pending);
+        decoded.require_policy(&config).unwrap();
+
+        let active = AcmedAccountRecord {
+            phase: AcmedAccountPhase::Active,
+            account_url: Some(
+                AcmeUrl::parse(
+                    "https://acme-staging-v02.api.letsencrypt.org/acct/1",
+                    false,
+                )
+                .unwrap(),
+            ),
+            ..pending
+        };
+        let length = active.encode(&mut encoded).unwrap();
+        assert!(
+            AcmedAccountRecord::decode(&encoded[..length], &config.directory_url, false).unwrap()
+                == active
+        );
+        encoded[9] = 1;
+        assert!(AcmedAccountRecord::decode(
+            &encoded[..length],
+            &config.directory_url,
+            false,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn account_record_rejects_cross_origin_and_phase_url_confusion() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let record = AcmedAccountRecord {
+            phase: AcmedAccountPhase::Active,
+            directory_generation: 1,
+            account_generation: 1,
+            policy_generation: 1,
+            account_identity: config.account_identity,
+            key_thumbprint: JwkThumbprint([3; 32]),
+            contact_digest: [4; 32],
+            account_url: Some(AcmeUrl::parse("https://other.example/acct/1", false).unwrap()),
+        };
+        let mut encoded = [0u8; ACCOUNT_RECORD_HEADER_BYTES + MAX_URL_BYTES];
+        let length = record.encode(&mut encoded).unwrap();
+        assert!(matches!(
+            AcmedAccountRecord::decode(&encoded[..length], &config.directory_url, false),
+            Err(AcmedAccountRecordError::PolicyMismatch)
+        ));
+        let confused = AcmedAccountRecord {
+            phase: AcmedAccountPhase::RequestMayHaveBeenSent,
+            ..record
+        };
+        assert!(matches!(
+            confused.encode(&mut encoded),
+            Err(AcmedAccountRecordError::InvalidState)
+        ));
+    }
+
+    #[test]
+    fn account_record_requires_keyed_durable_authentication() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let account = AcmedAccountRecord {
+            phase: AcmedAccountPhase::RequestMayHaveBeenSent,
+            directory_generation: 1,
+            account_generation: 1,
+            policy_generation: 1,
+            account_identity: config.account_identity,
+            key_thumbprint: JwkThumbprint([3; 32]),
+            contact_digest: [4; 32],
+            account_url: None,
+        };
+        let mut payload = [0u8; ACCOUNT_RECORD_HEADER_BYTES + MAX_URL_BYTES];
+        let payload_length = account.encode(&mut payload).unwrap();
+        let mut writer = HmacSha256DurableAuthenticator::new([0x51; 32]);
+        let durable = DurableRecord::prepare(
+            DurableNamespace::PublicState,
+            DurableRecordKind::Account,
+            DurableObjectId(config.account_identity),
+            0,
+            &payload[..payload_length],
+            &mut writer,
+        )
+        .unwrap();
+        let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+        let length = durable.encode(&mut encoded).unwrap();
+        let mut correct = HmacSha256DurableAuthenticator::new([0x51; 32]);
+        assert!(DurableRecord::decode(&encoded[..length], &mut correct).is_ok());
+        let mut wrong = HmacSha256DurableAuthenticator::new([0x52; 32]);
+        assert!(DurableRecord::decode(&encoded[..length], &mut wrong).is_err());
+        encoded[length - 1] ^= 1;
+        let mut correct = HmacSha256DurableAuthenticator::new([0x51; 32]);
+        assert!(DurableRecord::decode(&encoded[..length], &mut correct).is_err());
+    }
 
     #[test]
     fn staging_configuration_is_exact_and_bounded() {

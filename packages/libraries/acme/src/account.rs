@@ -115,6 +115,37 @@ pub struct AccountLifecycle {
 }
 
 impl AccountLifecycle {
+    #[allow(clippy::too_many_arguments)]
+    pub fn restore_active(
+        directory: &AcmeDirectory,
+        ca_class: CaClass,
+        account_generation: u64,
+        policy_generation: u64,
+        account_url: AcmeUrl,
+        key: &P256Jwk,
+        contact_digest: [u8; 32],
+    ) -> Result<Self, AccountError> {
+        if account_generation == 0 || policy_generation == 0 {
+            return Err(AccountError::InvalidState);
+        }
+        account_url
+            .require_origin(directory.new_account.origin())
+            .map_err(|_| AccountError::AccountUrlPolicy)?;
+        Ok(Self {
+            ca_class,
+            generation: account_generation,
+            directory_generation: directory.generation,
+            policy_generation,
+            account_url: Some(account_url),
+            key: key.thumbprint().map_err(|_| AccountError::InvalidState)?,
+            contact_digest,
+            active: true,
+            operation: AccountOperation::None,
+            prepared: None,
+            terms_prepared: None,
+        })
+    }
+
     pub fn prepare_create(
         directory: &AcmeDirectory,
         policy: AccountPolicy,
@@ -539,6 +570,18 @@ mod tests {
                 &d,
             )
             .unwrap();
+        let restored = AccountLifecycle::restore_active(
+            &d,
+            CaClass::Staging,
+            account.generation,
+            account.policy_generation,
+            account.account_url.unwrap(),
+            &key(1),
+            account.contact_digest,
+        )
+        .unwrap();
+        assert_eq!(restored.generation, account.generation);
+        assert!(restored.active);
         let rollover = account.prepare_rollover(&key(2), 3).unwrap();
         account.mark_uncertain().unwrap();
         account
