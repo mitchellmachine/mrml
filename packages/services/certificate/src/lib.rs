@@ -25,6 +25,8 @@ mod durable_capability;
 mod durable_hosted;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod hot_reload;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod hosted_daemon;
 mod identity;
 mod identity_service;
 mod lifecycle_service;
@@ -123,6 +125,12 @@ pub use durable_hosted::HostedDurableStateStore;
 pub use hot_reload::{
     HostedCandidateHandshakeTester, HostedSigningRouteResolver, HostedTlsIdentityDeploymentTarget,
     HostedTlsIdentityPublication, PublishedTlsIdentity, TlsIdentityHealth,
+};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub use hosted_daemon::{
+    HostedLifecycleDaemonError, HostedLifecycleSessionService, HostedLifecycleSupervisor,
+    HostedLifecycleSupervisorEvent, MAX_HOSTED_LIFECYCLE_SESSIONS_PER_RUN,
+    ReconstructingLifecycleService, run_hosted_lifecycle_daemon,
 };
 pub use identity::{
     ActivationReceipt, ApprovedTls13CertificateVerify, CandidateDeploymentRetirementReceipt,

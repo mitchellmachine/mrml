@@ -450,9 +450,13 @@ most 16 KiB of borrowed memory, applies two-second read/write deadlines, rejects
 noncanonical lengths and reserved fields, retains the exact per-operation
 authorizer, and clears server scratch after each call. The client and generic
 one-session admission primitive are implemented and exercised on Linux and the
-Windows target under Wine. A long-running hosted daemon that reconstructs the
-real durable catalog and asks the supervisor for fresh tickets remains required
-before operational administration can be claimed.
+Windows target under Wine. The hosted daemon core now accepts only separately
+supervisor-authorized sessions, reconstructs a fresh authorizer and provider
+before every session, serves one bounded lifecycle call, and caps a run at one
+million sessions. Supervisor shutdown is explicit, while budget exhaustion or
+provider reconstruction failure is an alertable error rather than a fallback.
+The Linux/Windows platform entry point and real durable catalog/sealed-key
+reconstructor remain required before operational administration can be claimed.
 
 The bounded deterministic security-fuzz harness covers ACME directory,
 problem, account, order, authorization, ARI, URL, and Base64url parsing; X.509
