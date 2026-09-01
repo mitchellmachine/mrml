@@ -10266,10 +10266,15 @@ join accepts only a fresh active launch
 receipt with the same provider object, association generation, filesystem and
 block provider generations, and system generation. It then invokes the kernel's
 constructed restart transaction; any association or kernel rejection returns both
-linear owners unchanged. The Linux-host storage suite passes 166 tests, including
-every association-field substitution, and the kernel suite passes 718. These are
-separate unit/simulation paths; constructing and executing the replacement FAT32
-process end to end remains unverified. The
+linear owners unchanged. The Linux-host storage suite passes 167 tests, including
+every association-field substitution and an integrated restart simulation. That
+test blocks the peer tasks, completes old-generation resource and supervisor
+cleanup, consumes the resulting idle dispatch, constructs a second memory root,
+physical backing, inactive page table, copy-task binding, task, and native launch
+receipt, then atomically advances the supervised service generation and schedules
+the replacement while retaining exactly one live backing object. It does not
+execute the replacement provider entry or IPC loop. The kernel suite passes 718.
+The
 storage service passes
 a release `MRML_NATIVE` build. Installed boot composition, hosted execution, and
 physical-device execution remain unverified.

@@ -2487,9 +2487,10 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Eq, PartialEq)]
     enum SupervisedFailureKind {
         Retirement,
+        RetirementRestart,
         Fault,
         ProtocolViolation,
     }
@@ -2686,6 +2687,23 @@ mod tests {
             receipt.instance().active().unwrap().construction().task(),
             target
         );
+        let _blocked_peers = if failure_kind == SupervisedFailureKind::RetirementRestart {
+            runtime.start();
+            assert_eq!(runtime.current(), Some(source));
+            let source_wait = match runtime.receive_or_block_current().unwrap() {
+                Err(blocked) => blocked,
+                Ok(_) => panic!("empty source inbox must block"),
+            };
+            assert_eq!(runtime.current(), Some(provider));
+            let provider_wait = match runtime.receive_or_block_current().unwrap() {
+                Err(blocked) => blocked,
+                Ok(_) => panic!("empty provider inbox must block"),
+            };
+            assert_eq!(runtime.current(), None);
+            Some((source_wait, provider_wait))
+        } else {
+            None
+        };
         let mut full_supervisor = ServiceSupervisor::<0>::new();
         let failure = activate_native_filesystem_provider(
             receipt,
@@ -2723,8 +2741,8 @@ mod tests {
         runtime.start();
         runtime.yield_current().unwrap();
         assert_eq!(runtime.current(), Some(target));
-        let (dispatch, successor, successor_context) = match failure_kind {
-            SupervisedFailureKind::Retirement => {
+        let (dispatch, expected_successor) = match failure_kind {
+            SupervisedFailureKind::Retirement | SupervisedFailureKind::RetirementRestart => {
                 let retired = retire_current_supervised_native_filesystem_provider(
                     failure.into_active(),
                     &mut supervisor,
@@ -2734,8 +2752,8 @@ mod tests {
                 assert_eq!(retired.service(), service_id);
                 assert_eq!(retired.task(), target);
                 assert!(retired.receipt().instance().active().is_some());
-                let successor = runtime.current().unwrap();
-                let successor_context = *runtime.context(successor).unwrap();
+                let successor = runtime.current();
+                let successor_context = successor.map(|task| *runtime.context(task).unwrap());
                 let mut rejecting = RejectingRevoker;
                 let failure = {
                     let mut teardown = NativeFilesystemProviderTeardownBackend::new(
@@ -2836,7 +2854,132 @@ mod tests {
                     restartable.receipt().association_generation(),
                     association.association_generation
                 );
-                (dispatch, successor, successor_context)
+                if failure_kind == SupervisedFailureKind::RetirementRestart {
+                    assert!(dispatch.is_idle());
+                    runtime.consume_idle_dispatch(dispatch).unwrap();
+                    let mut restart_page_tables = PageTableArena([0; 512 * 5]);
+                    let restart_page_table_base =
+                        mrml_kernel::PhysAddr::new(restart_page_tables.0.as_mut_ptr() as u64)
+                            .unwrap();
+                    let replacement = runtime
+                        .create_for_construction(
+                            mrml_kernel::Priority::NORMAL,
+                            context(restart_page_table_base.get(), 0x70_0000, 0x7300_0000),
+                        )
+                        .unwrap();
+                    let restart_root = mrml_kernel::reserve_component_service_read_transfer_memory(
+                        &mut memory,
+                        pool,
+                        pool_capability,
+                        &mut runtime,
+                        source,
+                    )
+                    .unwrap();
+                    mrml_kernel::bind_component_service_read_transfer_backing(
+                        &mut memory,
+                        restart_root,
+                        MemoryPhysicalBacking::new(
+                            mrml_kernel::PhysAddr::new(0x90_0000).unwrap(),
+                            1,
+                        )
+                        .unwrap(),
+                        &runtime,
+                        source,
+                        &mut backing,
+                    )
+                    .unwrap();
+                    let restart_store =
+                        unsafe { PreallocatedPageTableStore::new(restart_page_table_base, 5) }
+                            .unwrap();
+                    let restart_builder = PageTableBuilder::new(restart_store).unwrap();
+                    // SAFETY: the second aligned arena is exclusively owned and
+                    // remains unreachable by every CPU for this fixture.
+                    let mut restart_local_mapping = unsafe {
+                        InactivePageTableMappingBackend::new(restart_builder, ObjectId(0x7100))
+                    };
+                    let restart_mapping =
+                        mrml_kernel::install_component_service_read_transfer_local_mapping(
+                            &mut memory,
+                            restart_root,
+                            local_target,
+                            0x300,
+                            &mut restart_local_mapping,
+                            &runtime,
+                            source,
+                        )
+                        .unwrap();
+                    let restart_binding =
+                        mrml_kernel::bind_component_service_read_transfer_copy_tasks(
+                            restart_mapping,
+                            replacement,
+                            provider,
+                            &runtime,
+                        )
+                        .unwrap();
+                    let restart_launch_attachment = ComponentServiceLaunchAttachment::new(
+                        service,
+                        association.association_generation,
+                        ObjectId(0x90),
+                        3,
+                        FILESYSTEM_BLOCK_ASSOCIATION_HANDOFF_BYTES as u32,
+                        launch_data,
+                        association.block_binding.endpoint_object,
+                        association.block_binding.binding_generation,
+                        endpoint,
+                        runtime.capabilities(source).unwrap(),
+                    )
+                    .unwrap();
+                    let restart_transfer =
+                        mrml_kernel::prepare_component_service_read_transfer_attachment(
+                            &mut runtime,
+                            source,
+                            provider,
+                            restart_root.shared_object(),
+                            restart_root.generation(),
+                            restart_root.bytes(),
+                            restart_root.root(),
+                        )
+                        .unwrap();
+                    let candidate = launch_native_filesystem_provider(
+                        &mut runtime,
+                        source,
+                        replacement,
+                        endpoint,
+                        restart_transfer,
+                        association,
+                        service,
+                        restart_launch_attachment,
+                        restart_root,
+                        restart_binding,
+                        restart_local_mapping.root(),
+                        ObjectId(0x91),
+                    )
+                    .unwrap();
+                    let restarted = restart_and_activate_native_filesystem_provider(
+                        restartable,
+                        candidate,
+                        &mut supervisor,
+                        &mut runtime,
+                        0,
+                    )
+                    .unwrap();
+                    assert_eq!(restarted.stopped().service(), service_id);
+                    assert_eq!(restarted.stopped().task(), target);
+                    assert_eq!(restarted.active().task(), replacement);
+                    assert_eq!(
+                        restarted.active().service().token(),
+                        service_id.token() + (1_u64 << 32)
+                    );
+                    assert_eq!(
+                        supervisor.task(restarted.active().service()),
+                        Ok(Some(replacement))
+                    );
+                    runtime.start();
+                    assert_eq!(runtime.current(), Some(replacement));
+                    (None, None)
+                } else {
+                    (Some(dispatch), successor.zip(successor_context))
+                }
             }
             SupervisedFailureKind::Fault => {
                 let faulted = fault_current_supervised_native_filesystem_provider(
@@ -2953,7 +3096,7 @@ mod tests {
                     restartable.receipt().association_generation(),
                     association.association_generation
                 );
-                (dispatch, successor, successor_context)
+                (Some(dispatch), Some((successor, successor_context)))
             }
             SupervisedFailureKind::ProtocolViolation => {
                 let violating = violate_current_supervised_native_filesystem_provider(
@@ -3075,10 +3218,14 @@ mod tests {
                     restartable.receipt().association_generation(),
                     association.association_generation
                 );
-                (dispatch, successor, successor_context)
+                (Some(dispatch), Some((successor, successor_context)))
             }
         };
-        assert_eq!(dispatch.user(), Some((successor, successor_context)));
+        if let Some(dispatch) = dispatch {
+            assert_eq!(dispatch.user(), expected_successor);
+        } else {
+            assert_eq!(expected_successor, None);
+        }
         let expected = Mapping::new(
             VirtAddr::new(0x300 * mrml_kernel::PAGE_SIZE).unwrap(),
             mrml_kernel::PhysAddr::new(0x80_0000).unwrap(),
@@ -3093,13 +3240,19 @@ mod tests {
                 .verify_unmapped(expected),
             Ok(())
         );
-        assert!(backing.claimed.is_none());
+        let expected_live_pages = if failure_kind == SupervisedFailureKind::RetirementRestart {
+            assert!(backing.claimed.is_some());
+            1
+        } else {
+            assert!(backing.claimed.is_none());
+            0
+        };
         assert_eq!(
             memory
                 .usage(pool, pool_capability, runtime.capabilities(source).unwrap())
                 .unwrap()
                 .object_pages(),
-            0
+            expected_live_pages
         );
     }
 
@@ -3107,6 +3260,13 @@ mod tests {
     fn native_retirement_teardown_retains_one_exact_copy_task_lifecycle() {
         native_launch_and_teardown_retain_one_exact_copy_task_lifecycle(
             SupervisedFailureKind::Retirement,
+        );
+    }
+
+    #[test]
+    fn native_retirement_constructs_and_activates_exact_replacement() {
+        native_launch_and_teardown_retain_one_exact_copy_task_lifecycle(
+            SupervisedFailureKind::RetirementRestart,
         );
     }
 
