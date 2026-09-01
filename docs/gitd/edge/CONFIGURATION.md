@@ -2,8 +2,10 @@
 
 Status: **PARTIALLY IMPLEMENTED**. The strict version-1 parser, secure hosted
 loader, storage-layout validation, and authority health client are implemented.
-Listener, certd, recovery, and repository catalog startup stages remain to be
-composed into the executable.
+Authenticated authority/certd dependency health, catalog loading, repository
+path derivation, and exact generation admission are also implemented as
+libraries. Listener and recovery stages remain to be composed into the
+executable.
 
 Gitd accepts a bounded ASCII `key=value` configuration with an explicit
 `version=1`. Every security-sensitive field is required exactly once. Unknown

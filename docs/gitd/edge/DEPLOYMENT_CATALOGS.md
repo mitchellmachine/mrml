@@ -2,7 +2,8 @@
 
 Status: **PARTIALLY IMPLEMENTED**. Canonical authenticated catalog loading is
 implemented and is a native startup gate. Repository backend construction and
-listener composition remain to be completed.
+generation admission are implemented; selected arrival-pack composition,
+recovery, and listeners remain to be completed.
 
 Gitd accepts two distinct bounded version-1 catalogs. The profile catalog maps
 a canonical deployment-owned profile name to `public-read`, `private`, or
@@ -29,13 +30,22 @@ admits the repository only when all three generations exactly match the
 authenticated catalog entry, and does not infer security state from storage
 paths or repository labels.
 
+For each authenticated identity, Gitd derives the same exact owner and
+repository components beneath the independently configured object, state,
+quarantine, cache, and receipt roots. Every resulting leaf and parent component
+must be a nonsymlink directory with the exact Gitd owner/group and restrictive
+mode before the SHA-256 repository view is opened. The admitted object contains
+only these derived paths and the generation-matched view; the catalog never
+supplies an ambient filesystem path.
+
 Focused hosted Linux evidence:
 
-- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 11 tests pass,
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 12 tests pass,
   covering canonical resolution, generation binding, ordering, duplicate and
   unknown-profile rejection, malformed identities, digest substitution,
   symlink refusal, insecure mode refusal, exact reopened repository-state
-  admission, and real authority/certd Unix exchanges.
+  admission, five-root path derivation/validation, stale-revocation refusal, and
+  real authority/certd Unix exchanges.
 - `./target/debug/mrml test org.mrml.tool.git --target linux`: 194 library and 3
   CLI tests passed, including exact SHA-256 authority-generation projection from
   a reopened filesystem repository view.
