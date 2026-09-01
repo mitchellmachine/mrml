@@ -14,6 +14,11 @@ CertificateVerify, or generation-wait requests. Gitd therefore remains
 non-ready and does not bind public listeners. There is no PEM, embedded-key,
 self-signed, plaintext, or development-identity fallback.
 
+The daemon's native dependency check composes certd health with authority
+health only after configuration and storage validation. Authority and certd use
+separate monotonic request counters and separately owned capability files; one
+service's success cannot substitute for the other's failure.
+
 Focused hosted Linux evidence:
 
 - `./target/debug/mrml test org.mrml.service.gitd --target linux`: 6 tests

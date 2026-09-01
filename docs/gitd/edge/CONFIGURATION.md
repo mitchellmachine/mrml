@@ -14,7 +14,7 @@ limits, and overlapping authoritative/cache roots fail startup.
 The configuration identifies separate repository, state, quarantine, cache,
 receipt, and policy roots; authority and certd sockets and capability files;
 the Gitd, authority, and certd numeric identities; a nonzero persisted next
-authority request identifier; connection/upload/receive/body limits; one
+authority and certd request identifiers; connection/upload/receive/body limits; one
 unprivileged shared TCP/UDP port; and a bounded drain interval. Paths identify
 deployment objects but do not grant authority. Startup must subsequently open
 and validate each as the appropriate capability before admitting traffic.
@@ -29,6 +29,13 @@ Gitd UID/GID, and writable roots must have owner write authority without
 group/world write. The policy root may be owner-read-only. This command does not
 report service readiness; authority and certd authentication remain later
 startup gates.
+
+`mrml-gitd dependencies-health CONFIG SIGNER_IDENTITY_HEX` composes these
+startup gates without binding a listener. It validates configuration and
+storage, securely loads the two separately owned 32-byte capability files,
+erases transient key copies, and authenticates exact health responses from both
+authority and certd using independent configured request sequences. Failure of
+either dependency yields no partial-ready result.
 
 The default production identities remain Gitd `21001:21001`, authority
 `21002:21002`, and certd `21003:21003`. The parser permits explicit deployment

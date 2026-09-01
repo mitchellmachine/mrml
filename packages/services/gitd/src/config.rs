@@ -27,6 +27,7 @@ pub struct GitdConfig {
     pub certd_uid: u32,
     pub certd_gid: u32,
     pub next_authority_request_id: u64,
+    pub next_certd_request_id: u64,
     pub max_connections: u32,
     pub max_uploads: u32,
     pub max_receives: u32,
@@ -106,6 +107,7 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
     let mut certd_uid = None;
     let mut certd_gid = None;
     let mut next_authority_request_id = None;
+    let mut next_certd_request_id = None;
     let mut max_connections = None;
     let mut max_uploads = None;
     let mut max_receives = None;
@@ -154,6 +156,9 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
             "next_authority_request_id" => {
                 set!(next_authority_request_id, nonzero_number::<u64>(value)?)
             }
+            "next_certd_request_id" => {
+                set!(next_certd_request_id, nonzero_number::<u64>(value)?)
+            }
             "max_connections" => set!(max_connections, bounded_u32(value, 1, 1_000_000)?),
             "max_uploads" => set!(max_uploads, bounded_u32(value, 1, 65_536)?),
             "max_receives" => set!(max_receives, bounded_u32(value, 1, 4_096)?),
@@ -193,6 +198,7 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
         certd_uid: required!(certd_uid),
         certd_gid: required!(certd_gid),
         next_authority_request_id: required!(next_authority_request_id),
+        next_certd_request_id: required!(next_certd_request_id),
         max_connections: required!(max_connections),
         max_uploads: required!(max_uploads),
         max_receives: required!(max_receives),
@@ -297,7 +303,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
+    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
 
     #[test]
     fn exact_v1_config_parses_with_production_defaults() {
