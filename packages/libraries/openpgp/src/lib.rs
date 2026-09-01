@@ -63,6 +63,27 @@ impl DigestAlgorithm {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DigestAlgorithmSet(u8);
+
+impl DigestAlgorithmSet {
+    pub const SHA256: Self = Self(1 << 0);
+    pub const SHA512: Self = Self(1 << 1);
+    pub const SHA256_AND_SHA512: Self = Self(Self::SHA256.0 | Self::SHA512.0);
+
+    pub const fn permits(self, algorithm: DigestAlgorithm) -> bool {
+        let bit = match algorithm {
+            DigestAlgorithm::Sha256 => Self::SHA256.0,
+            DigestAlgorithm::Sha512 => Self::SHA512.0,
+            // SHA-384 is implemented for legacy packet interoperability but
+            // is outside the MRML v6 policy profile. SHA3-512 has no assigned
+            // OpenPGP algorithm in this implementation and fails parsing.
+            DigestAlgorithm::Sha384 => 0,
+        };
+        self.0 & bit != 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fingerprint([u8; 20]);
 
 impl Fingerprint {
@@ -236,6 +257,7 @@ impl Drop for SigningKeyV6 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerificationPolicyV6 {
     pub expected_primary_fingerprint: FingerprintV6,
+    pub allowed_digests: DigestAlgorithmSet,
     pub validation_time: Option<u64>,
     pub key_not_after: Option<u64>,
     pub key_revoked: bool,
@@ -666,6 +688,9 @@ pub fn verify_detached_v6_ascii(
         return Err(Error::AmbiguousSignature);
     }
     let parsed = parse_signature_body_v6(body, &public_key.fingerprint)?;
+    if !policy.allowed_digests.permits(parsed.digest_algorithm) {
+        return Err(Error::UnsupportedAlgorithm);
+    }
     if parsed.created_at < u64::from(public_key.created_at) {
         return Err(Error::InvalidTime);
     }
@@ -1849,11 +1874,7 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
     fn v6_detached_signatures_round_trip_with_exact_salt_sizes() {
         let key = SigningKeyV6::from_seed([0x42; 32], 1_700_000_000).unwrap();
         let public = key.public_key();
-        for algorithm in [
-            DigestAlgorithm::Sha256,
-            DigestAlgorithm::Sha384,
-            DigestAlgorithm::Sha512,
-        ] {
+        for algorithm in [DigestAlgorithm::Sha256, DigestAlgorithm::Sha512] {
             let salt = [0x5a; 32];
             let salt = &salt[..algorithm.v6_salt_bytes()];
             let mut armor = [0u8; 512];
@@ -1873,6 +1894,7 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
                 &armor[..written],
                 &VerificationPolicyV6 {
                     expected_primary_fingerprint: public.fingerprint(),
+                    allowed_digests: DigestAlgorithmSet::SHA256_AND_SHA512,
                     validation_time: Some(1_700_000_001),
                     key_not_after: None,
                     key_revoked: false,
@@ -1883,6 +1905,64 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
             .unwrap();
             assert_eq!(verified.digest_algorithm, algorithm);
         }
+
+        let salt = [0x5a; 24];
+        let mut armor = [0u8; 512];
+        let written = sign_detached_v6_ascii_with_salt(
+            &key,
+            b"MRML v6",
+            DigestAlgorithm::Sha384,
+            1_700_000_001,
+            &salt,
+            &mut armor,
+        )
+        .unwrap();
+        let mut scratch = [0u8; MAX_OPENPGP_SIGNATURE_BYTES];
+        assert_eq!(
+            verify_detached_v6_ascii(
+                &public,
+                b"MRML v6",
+                &armor[..written],
+                &VerificationPolicyV6 {
+                    expected_primary_fingerprint: public.fingerprint(),
+                    allowed_digests: DigestAlgorithmSet::SHA256_AND_SHA512,
+                    validation_time: Some(1_700_000_001),
+                    key_not_after: None,
+                    key_revoked: false,
+                    enforce_signature_expiration: true,
+                },
+                &mut scratch,
+            ),
+            Err(Error::UnsupportedAlgorithm)
+        );
+
+        let salt = [0x6b; 32];
+        let written = sign_detached_v6_ascii_with_salt(
+            &key,
+            b"MRML v6",
+            DigestAlgorithm::Sha512,
+            1_700_000_001,
+            &salt,
+            &mut armor,
+        )
+        .unwrap();
+        assert_eq!(
+            verify_detached_v6_ascii(
+                &public,
+                b"MRML v6",
+                &armor[..written],
+                &VerificationPolicyV6 {
+                    expected_primary_fingerprint: public.fingerprint(),
+                    allowed_digests: DigestAlgorithmSet::SHA256,
+                    validation_time: Some(1_700_000_001),
+                    key_not_after: None,
+                    key_revoked: false,
+                    enforce_signature_expiration: true,
+                },
+                &mut scratch,
+            ),
+            Err(Error::UnsupportedAlgorithm)
+        );
     }
 
     #[test]

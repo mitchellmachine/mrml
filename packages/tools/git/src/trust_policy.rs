@@ -6,12 +6,15 @@
 //! cannot be constructed outside this module.
 
 use mrml_crypto::{ML_DSA_65_PUBLIC_KEY_BYTES, Sha3_512, ml_dsa_65_verify};
-use mrml_openpgp::{FingerprintV6, PublicKeyV6, VerificationPolicyV6, verify_detached_v6_ascii};
+use mrml_openpgp::{
+    DigestAlgorithmSet, FingerprintV6, PublicKeyV6, VerificationPolicyV6, verify_detached_v6_ascii,
+};
 use mrml_runtime::Vector;
 
 use crate::{
     FullRefName, ObjectFormat, ObjectId, RepositoryIdentity, RevocationGeneration,
     SignaturePurpose, TrustGeneration,
+    verification::{ProtectedHistoryContext, VerifiedCommitProof},
 };
 
 pub const HYBRID_PROFILE_NAME: &str = "MRML-GIT-HYBRID-V1";
@@ -110,6 +113,7 @@ pub struct VerifiedHybridSignature {
     revocation_generation: RevocationGeneration,
     pair: AuthorizedHybridPair,
     repository_digest: [u8; 64],
+    payload_digest: [u8; 64],
     purpose: SignaturePurpose,
     object_type: GitObjectType,
 }
@@ -732,6 +736,7 @@ pub fn verify_hybrid_signature(
         request.openpgp_signature,
         &VerificationPolicyV6 {
             expected_primary_fingerprint: actual_pair.openpgp_fingerprint,
+            allowed_digests: DigestAlgorithmSet::SHA256_AND_SHA512,
             validation_time: policy.validation_time,
             key_not_after: policy.openpgp_not_after,
             key_revoked: false,
@@ -752,9 +757,52 @@ pub fn verify_hybrid_signature(
         revocation_generation: policy.revocation_generation,
         pair: actual_pair,
         repository_digest: repository_digest(request.repository),
+        payload_digest: Sha3_512::digest(request.payload),
         purpose: request.purpose,
         object_type: request.object_type,
     })
+}
+
+/// Bind a successful hybrid verification to the exact commit and authority
+/// context consumed by protected-history admission.
+pub fn bind_verified_commit_proof(
+    signature: &VerifiedHybridSignature,
+    commit: ObjectId,
+    commit_contents: &[u8],
+    context: ProtectedHistoryContext<'_>,
+) -> Result<VerifiedCommitProof, HybridPolicyError> {
+    if commit.is_zero()
+        || commit.format() != context.object_format
+        || context.repository_generation.0 == 0
+        || signature.repository_digest != repository_digest(context.repository)
+        || signature.payload_digest != Sha3_512::digest(commit_contents)
+        || hash_commit(context.object_format, commit_contents) != commit
+        || signature.trust_generation != context.trust_generation
+        || signature.revocation_generation != context.revocation_generation
+        || signature.purpose != SignaturePurpose::GitCommit
+        || signature.object_type != GitObjectType::Commit
+        || context.purpose != SignaturePurpose::GitCommit
+    {
+        return Err(HybridPolicyError::InvalidPurpose);
+    }
+    Ok(VerifiedCommitProof {
+        commit,
+        repository: context.repository.clone(),
+        repository_generation: context.repository_generation,
+        trust_generation: context.trust_generation,
+        revocation_generation: context.revocation_generation,
+        purpose: context.purpose,
+        object_format: context.object_format,
+    })
+}
+
+fn hash_commit(format: ObjectFormat, contents: &[u8]) -> ObjectId {
+    crate::object::encode_loose_object_with_format(
+        format,
+        crate::object::ObjectKind::Commit,
+        contents,
+    )
+    .0
 }
 
 fn openpgp_key_digest(key: &PublicKeyV6) -> [u8; 64] {
@@ -876,7 +924,7 @@ mod tests {
             ml_dsa_signature: &ml_signature,
         };
         let mut scratch = [0u8; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
-        verify_hybrid_signature(
+        let verified = verify_hybrid_signature(
             &policy,
             &openpgp.public_key(),
             &ml_public,
@@ -884,6 +932,29 @@ mod tests {
             &mut scratch,
         )
         .unwrap();
+        let context = ProtectedHistoryContext {
+            repository: &repository,
+            repository_generation: crate::RepositoryGeneration(3),
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(8),
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha256,
+        };
+        let commit = hash_commit(ObjectFormat::Sha256, request.payload);
+        assert!(bind_verified_commit_proof(&verified, commit, request.payload, context).is_ok());
+        assert_eq!(
+            bind_verified_commit_proof(
+                &verified,
+                ObjectId::Sha256([99; 32]),
+                request.payload,
+                context
+            ),
+            Err(HybridPolicyError::InvalidPurpose)
+        );
+        assert_eq!(
+            bind_verified_commit_proof(&verified, commit, b"different commit", context),
+            Err(HybridPolicyError::InvalidPurpose)
+        );
 
         let wrong_repository = RepositoryIdentity::parse("owner/other").unwrap();
         let wrong = HybridVerificationRequest {
@@ -1052,6 +1123,7 @@ mod tests {
             revocation_generation: RevocationGeneration(generation.0),
             pair,
             repository_digest: repository_digest(repository),
+            payload_digest: [0; 64],
             purpose: SignaturePurpose::KeyRotation,
             object_type: GitObjectType::KeyRotation,
         }

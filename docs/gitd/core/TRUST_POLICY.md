@@ -57,6 +57,23 @@ mixed object formats, missing objects, cycles, and verifier failure, and returns
 a private-field `VerifiedCommitRange`. Tests prove that an invalid merge-side
 intermediate cannot hide beneath an otherwise accepted tip.
 
-The range typestate is not yet wired into an atomic `VerifiedRefTransaction`,
-and the policy parser remains open, so protected ref activation remains
-unavailable.
+Protected-history admission now exposes only
+`verify_protected_introduced_history`. Its verifier must return a private
+`VerifiedCommitProof` for every newly introduced commit in deterministic
+parent-before-child order, including every merge-side parent. The proof is
+minted only by hashing the exact authenticated commit payload as a Git commit
+object, requiring that hash to equal the requested commit ID, and binding the
+successful hybrid verification to the exact repository identity, repository generation, trust generation,
+revocation generation, `GitCommit` purpose, and object format. A callback that
+merely returns success cannot construct the proof.
+
+The resulting private `VerifiedCommitRange` carries that same context into the
+atomic `VerifiedRefTransaction` constructor. A range from another repository,
+generation, purpose, format, or object ID is rejected. The unbound graph walker
+is crate-private and retained only for internal/test graph fixtures; it is not a
+public protected-ref authorization boundary. This proof path currently consumes
+detached signatures over the exact commit contents. The installed-as-`git`
+commit/tag path does not yet encode and self-verify the complete
+`MRML-GIT-HYBRID-V1` result before its local ref update, and protected receive
+does not yet load those detached proofs from an authenticated repository object.
+End-to-end protected ref activation therefore remains unavailable.

@@ -39,9 +39,13 @@ transaction identity and state and is never reported as safely retryable.
 
 `VerifiedRefUpdate` and `VerifiedRefTransaction` have private fields at the
 public boundary. The fast-forward constructor requires exact verified commit
-ranges. Creation, deletion, history replacement, actual quarantine isolation,
-and audit signing remain unavailable until their policy-specific concrete
-storage implementations exist.
+ranges whose opaque per-commit proofs match the candidate's exact repository,
+repository/trust/revocation generations, `GitCommit` purpose, object format,
+and old/new IDs. Every introduced merge-side commit is covered; an unsigned
+intermediate or a no-op verifier cannot mint the range. Creation, deletion,
+history replacement, authenticated proof loading in the receive backend, and
+audit signing remain unavailable until their policy-specific concrete storage
+implementations exist.
 
 `durably_activate_verified_receive` now makes the storage ordering
 non-bypassable through `DurableReceiveStore`. It persists and fsyncs the

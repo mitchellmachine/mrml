@@ -111,12 +111,15 @@ pub use trust_policy::{
     AuthorizedHybridPair, GitObjectType, HYBRID_PROFILE_NAME, HybridPolicyError, HybridTrustPolicy,
     HybridVerificationRequest, MAX_ENCODED_TRUST_POLICY_BYTES, MAX_HYBRID_PAYLOAD_BYTES,
     MAX_POLICY_PAIRS, MAX_POLICY_PROTECTED_REFS, MAX_POLICY_REVOKED_KEYS, TrustPolicyCandidate,
-    TrustPolicyState, VerifiedHybridSignature, canonical_hybrid_transcript, encode_trust_policy,
-    parse_trust_policy, verify_hybrid_signature,
+    TrustPolicyState, VerifiedHybridSignature, bind_verified_commit_proof,
+    canonical_hybrid_transcript, encode_trust_policy, parse_trust_policy, verify_hybrid_signature,
 };
+#[cfg(test)]
+pub(crate) use verification::verify_introduced_history;
 pub use verification::{
     DEFAULT_MAX_INTRODUCED_COMMITS, HistoryVerificationError, HistoryVerificationLimits,
-    VerifiedCommitRange, verify_introduced_history,
+    ProtectedHistoryContext, VerifiedCommitProof, VerifiedCommitRange,
+    verify_protected_introduced_history,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

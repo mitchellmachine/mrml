@@ -6,7 +6,10 @@
 
 use mrml_runtime::Vector;
 
-use crate::ObjectId;
+use crate::{
+    ObjectFormat, ObjectId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+    SignaturePurpose, TrustGeneration,
+};
 
 pub const DEFAULT_MAX_INTRODUCED_COMMITS: u32 = 5_000;
 
@@ -37,11 +40,38 @@ pub enum HistoryVerificationError {
     Resource,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtectedHistoryContext<'a> {
+    pub repository: &'a RepositoryIdentity,
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub purpose: SignaturePurpose,
+    pub object_format: ObjectFormat,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedCommitProof {
+    pub(crate) commit: ObjectId,
+    pub(crate) repository: RepositoryIdentity,
+    pub(crate) repository_generation: RepositoryGeneration,
+    pub(crate) trust_generation: TrustGeneration,
+    pub(crate) revocation_generation: RevocationGeneration,
+    pub(crate) purpose: SignaturePurpose,
+    pub(crate) object_format: ObjectFormat,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedCommitRange {
     old: ObjectId,
     new: ObjectId,
     introduced: Vector<ObjectId>,
+    repository: Option<RepositoryIdentity>,
+    repository_generation: RepositoryGeneration,
+    trust_generation: TrustGeneration,
+    revocation_generation: RevocationGeneration,
+    purpose: SignaturePurpose,
+    object_format: ObjectFormat,
 }
 
 impl VerifiedCommitRange {
@@ -57,6 +87,19 @@ impl VerifiedCommitRange {
     pub fn introduced(&self) -> &[ObjectId] {
         &self.introduced
     }
+
+    pub(crate) fn matches_context(&self, context: &ProtectedHistoryContext<'_>) -> bool {
+        #[cfg(test)]
+        if self.repository.is_none() {
+            return true;
+        }
+        self.repository.as_ref() == Some(context.repository)
+            && self.repository_generation == context.repository_generation
+            && self.trust_generation == context.trust_generation
+            && self.revocation_generation == context.revocation_generation
+            && self.purpose == context.purpose
+            && self.object_format == context.object_format
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -66,7 +109,51 @@ struct Frame {
     next_parent: usize,
 }
 
-pub fn verify_introduced_history<R, V>(
+pub fn verify_protected_introduced_history<R, V>(
+    context: ProtectedHistoryContext<'_>,
+    old: ObjectId,
+    new: ObjectId,
+    limits: HistoryVerificationLimits,
+    read_parents: R,
+    mut verify_commit: V,
+) -> Result<VerifiedCommitRange, HistoryVerificationError>
+where
+    R: FnMut(ObjectId) -> Result<Vector<ObjectId>, HistoryVerificationError>,
+    V: FnMut(ObjectId) -> Result<VerifiedCommitProof, HistoryVerificationError>,
+{
+    if context.repository_generation.0 == 0
+        || context.trust_generation.0 == 0
+        || context.revocation_generation.0 == 0
+        || context.purpose != SignaturePurpose::GitCommit
+        || old.format() != context.object_format
+        || new.format() != context.object_format
+    {
+        return Err(HistoryVerificationError::Signature);
+    }
+    let mut range = verify_introduced_history(old, new, limits, read_parents, |id| {
+        let proof = verify_commit(id)?;
+        if proof.commit != id
+            || proof.repository != *context.repository
+            || proof.repository_generation != context.repository_generation
+            || proof.trust_generation != context.trust_generation
+            || proof.revocation_generation != context.revocation_generation
+            || proof.purpose != context.purpose
+            || proof.object_format != context.object_format
+        {
+            return Err(HistoryVerificationError::Signature);
+        }
+        Ok(())
+    })?;
+    range.repository = Some(context.repository.clone());
+    range.repository_generation = context.repository_generation;
+    range.trust_generation = context.trust_generation;
+    range.revocation_generation = context.revocation_generation;
+    range.purpose = context.purpose;
+    range.object_format = context.object_format;
+    Ok(range)
+}
+
+pub(crate) fn verify_introduced_history<R, V>(
     old: ObjectId,
     new: ObjectId,
     limits: HistoryVerificationLimits,
@@ -153,6 +240,12 @@ where
         old,
         new,
         introduced: verified,
+        repository: None,
+        repository_generation: RepositoryGeneration(0),
+        trust_generation: TrustGeneration(0),
+        revocation_generation: RevocationGeneration(0),
+        purpose: SignaturePurpose::GitCommit,
+        object_format: new.format(),
     })
 }
 
@@ -236,6 +329,167 @@ mod tests {
             5 => [id(3), id(4)].into(),
             _ => return Err(HistoryVerificationError::MissingCommit),
         })
+    }
+
+    fn repository() -> RepositoryIdentity {
+        RepositoryIdentity::parse("owner/protected").unwrap()
+    }
+
+    fn proof(
+        commit: ObjectId,
+        repository: &RepositoryIdentity,
+        repository_generation: u64,
+        trust_generation: u64,
+        revocation_generation: u64,
+        purpose: SignaturePurpose,
+        object_format: ObjectFormat,
+    ) -> VerifiedCommitProof {
+        VerifiedCommitProof {
+            commit,
+            repository: repository.clone(),
+            repository_generation: RepositoryGeneration(repository_generation),
+            trust_generation: TrustGeneration(trust_generation),
+            revocation_generation: RevocationGeneration(revocation_generation),
+            purpose,
+            object_format,
+        }
+    }
+
+    fn context(repository: &RepositoryIdentity) -> ProtectedHistoryContext<'_> {
+        ProtectedHistoryContext {
+            repository,
+            repository_generation: RepositoryGeneration(7),
+            trust_generation: TrustGeneration(8),
+            revocation_generation: RevocationGeneration(9),
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha1,
+        }
+    }
+
+    #[test]
+    fn unsigned_intermediate_and_merge_side_invalid_proof_fail_closed() {
+        let repository = repository();
+        for rejected in [id(3), id(4)] {
+            assert_eq!(
+                verify_protected_introduced_history(
+                    context(&repository),
+                    id(2),
+                    id(5),
+                    HistoryVerificationLimits::default(),
+                    graph,
+                    |commit| if commit == rejected {
+                        Err(HistoryVerificationError::Signature)
+                    } else {
+                        Ok(proof(
+                            commit,
+                            &repository,
+                            7,
+                            8,
+                            9,
+                            SignaturePurpose::GitCommit,
+                            ObjectFormat::Sha1,
+                        ))
+                    },
+                ),
+                Err(HistoryVerificationError::Signature)
+            );
+        }
+    }
+
+    #[test]
+    fn proof_must_match_id_and_every_authority_dimension() {
+        let repository = repository();
+        let other = RepositoryIdentity::parse("owner/other").unwrap();
+        let variants = [
+            proof(
+                id(99),
+                &repository,
+                7,
+                8,
+                9,
+                SignaturePurpose::GitCommit,
+                ObjectFormat::Sha1,
+            ),
+            proof(
+                id(3),
+                &other,
+                7,
+                8,
+                9,
+                SignaturePurpose::GitCommit,
+                ObjectFormat::Sha1,
+            ),
+            proof(
+                id(3),
+                &repository,
+                6,
+                8,
+                9,
+                SignaturePurpose::GitCommit,
+                ObjectFormat::Sha1,
+            ),
+            proof(
+                id(3),
+                &repository,
+                7,
+                6,
+                9,
+                SignaturePurpose::GitCommit,
+                ObjectFormat::Sha1,
+            ),
+            proof(
+                id(3),
+                &repository,
+                7,
+                8,
+                6,
+                SignaturePurpose::GitCommit,
+                ObjectFormat::Sha1,
+            ),
+            proof(
+                id(3),
+                &repository,
+                7,
+                8,
+                9,
+                SignaturePurpose::BuildReceipt,
+                ObjectFormat::Sha1,
+            ),
+            proof(
+                id(3),
+                &repository,
+                7,
+                8,
+                9,
+                SignaturePurpose::GitCommit,
+                ObjectFormat::Sha256,
+            ),
+        ];
+        for invalid in variants {
+            assert_eq!(
+                verify_protected_introduced_history(
+                    context(&repository),
+                    id(2),
+                    id(3),
+                    HistoryVerificationLimits::default(),
+                    graph,
+                    |commit| Ok(if commit == id(3) {
+                        invalid.clone()
+                    } else {
+                        proof(
+                            commit,
+                            &repository,
+                            7,
+                            8,
+                            9,
+                            SignaturePurpose::GitCommit,
+                            ObjectFormat::Sha1,
+                        )
+                    }),
+                ),
+                Err(HistoryVerificationError::Signature)
+            );
+        }
     }
 
     #[test]

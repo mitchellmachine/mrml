@@ -7,7 +7,7 @@
 use core::fmt;
 use mrml_runtime::{Text, Vector};
 
-use crate::verification::VerifiedCommitRange;
+use crate::verification::{ProtectedHistoryContext, VerifiedCommitRange};
 use crate::{ObjectFormat, ObjectId};
 
 pub const MAX_REPOSITORY_IDENTITY_BYTES: usize = 257;
@@ -325,6 +325,19 @@ pub fn build_verified_fast_forward_transaction(
         return Err(GitdCoreError::MalformedRef);
     }
     let mut updates = Vector::new();
+    let context = ProtectedHistoryContext {
+        repository: &candidate.repository,
+        repository_generation: candidate.repository_generation,
+        trust_generation: candidate.trust_generation,
+        revocation_generation: candidate.revocation_generation,
+        purpose: SignaturePurpose::GitCommit,
+        object_format: candidate
+            .updates
+            .first()
+            .and_then(|update| update.proposed_new)
+            .ok_or(GitdCoreError::Unsupported)?
+            .format(),
+    };
     for (update, range) in candidate.updates.into_iter().zip(ranges.iter()) {
         let old = update.expected_old.ok_or(GitdCoreError::Unsupported)?;
         let new = update.proposed_new.ok_or(GitdCoreError::Unsupported)?;
@@ -333,6 +346,7 @@ pub fn build_verified_fast_forward_transaction(
             || old.format() != new.format()
             || range.old() != old
             || range.new() != new
+            || !range.matches_context(&context)
         {
             return Err(GitdCoreError::Ancestry);
         }
