@@ -54,7 +54,8 @@ pub use gitd_core::{
     RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
     RevocationGeneration, SignaturePurpose,
     SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,
-    VerificationSummary, VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget,
+    VerificationSummary, VerifiedMetadataDescriptor, VerifiedRefTransaction, VerifiedRefUpdate,
+    WorkBudget,
     build_verified_fast_forward_transaction,
 };
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};

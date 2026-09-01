@@ -224,6 +224,18 @@ pub struct ReadmeCandidate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedMetadataDescriptor {
+    pub repository_generation: RepositoryGeneration,
+    pub tree: ObjectId,
+    pub path: RepositoryPath,
+    pub blob: ObjectId,
+    pub size: u64,
+    pub purpose: SignaturePurpose,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImmutablePackDescriptor {
     pub repository_generation: RepositoryGeneration,
     pub commit: ObjectId,
@@ -572,6 +584,19 @@ pub trait GitdCoreBackend {
         _repository: &RepositoryIdentity,
         _treeish: ObjectId,
     ) -> Result<Option<ReadmeCandidate>, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn read_verified_metadata(
+        &self,
+        _repository: &RepositoryIdentity,
+        _treeish: ObjectId,
+        _path: &RepositoryPath,
+        _purpose: SignaturePurpose,
+        _policy: TrustGeneration,
+        _revocations: RevocationGeneration,
+        _limits: QueryLimits,
+    ) -> Result<VerifiedMetadataDescriptor, GitdCoreError> {
         Err(GitdCoreError::Unsupported)
     }
 

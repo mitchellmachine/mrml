@@ -9,8 +9,8 @@ use crate::{
     ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
     RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
-    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request,
-    write_pkt_line, VerifiedCommitProof, VerifiedGitObjectProof,
+    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedMetadataDescriptor,
+    WorkBudget, read_v2_request, write_pkt_line, VerifiedCommitProof, VerifiedGitObjectProof,
 };
 
 pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
@@ -206,6 +206,28 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         limits: QueryLimits,
     ) -> Result<BlobPage, GitdCoreError> {
         Self::read_blob_page_at(self, repository, treeish, path, offset, limits)
+    }
+
+    fn read_verified_metadata(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        purpose: crate::SignaturePurpose,
+        policy: TrustGeneration,
+        revocations: RevocationGeneration,
+        limits: QueryLimits,
+    ) -> Result<VerifiedMetadataDescriptor, GitdCoreError> {
+        Self::read_verified_metadata(
+            self,
+            repository,
+            treeish,
+            path,
+            purpose,
+            policy,
+            revocations,
+            limits,
+        )
     }
 
     fn resolve_readme_candidate(
@@ -925,6 +947,72 @@ impl FilesystemRepositoryView {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_verified_metadata(
+        &self,
+        repository: &RepositoryIdentity,
+        treeish: ObjectId,
+        path: &RepositoryPath,
+        purpose: crate::SignaturePurpose,
+        policy: TrustGeneration,
+        revocations: RevocationGeneration,
+        limits: QueryLimits,
+    ) -> Result<VerifiedMetadataDescriptor, GitdCoreError> {
+        if !matches!(
+            purpose,
+            crate::SignaturePurpose::SourceManifest
+                | crate::SignaturePurpose::SourceLock
+                | crate::SignaturePurpose::BuildReceipt
+        ) {
+            return Err(GitdCoreError::Policy);
+        }
+        validate_limits(limits)?;
+        let before = self.load_for(repository)?;
+        let tree = self.tree_id(treeish, before.object_format)?;
+        let index = self
+            .objects
+            .tree_index(tree)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let entry = index
+            .entry(path.as_str())
+            .ok_or(GitdCoreError::ObjectValidation)?;
+        let object = self
+            .objects
+            .read_object(entry.id)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if object.kind != ObjectKind::Blob {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        if object.contents.len() as u64 > limits.max_bytes || limits.max_entries < 1 {
+            return Err(GitdCoreError::Resource);
+        }
+        let summary = GitdCoreBackend::verification_summary(
+            self,
+            repository,
+            entry.id,
+            policy,
+            revocations,
+        )?;
+        if summary.purpose != purpose
+            || !summary.openpgp_authorized
+            || !summary.ml_dsa_65_authorized
+            || !summary.exact_pair_authorized
+        {
+            return Err(GitdCoreError::Signature);
+        }
+        self.ensure_generation(before.repository_generation)?;
+        Ok(VerifiedMetadataDescriptor {
+            repository_generation: before.repository_generation,
+            tree,
+            path: path.clone(),
+            blob: entry.id,
+            size: object.contents.len() as u64,
+            purpose,
+            trust_generation: policy,
+            revocation_generation: revocations,
+        })
+    }
+
     fn tree_id(
         &self,
         treeish: ObjectId,
@@ -1254,7 +1342,27 @@ mod tests {
             tag_evidence.summary.purpose,
             crate::SignaturePurpose::GitAnnotatedTag
         );
-        let evidence_store = VerificationSummaryStore::new([evidence].into()).unwrap();
+        let metadata_evidence = VerificationSummaryEvidence::from_verified_git_object(
+            &VerifiedGitObjectProof {
+                object: blob,
+                repository: identity.clone(),
+                repository_generation: RepositoryGeneration(4),
+                trust_generation: TrustGeneration(5),
+                revocation_generation: RevocationGeneration(6),
+                purpose: crate::SignaturePurpose::SourceManifest,
+                object_format: ObjectFormat::Sha256,
+                object_kind: ObjectKind::Blob,
+            },
+        );
+        let mut evidence_records = Vector::from([evidence, metadata_evidence]);
+        evidence_records.sort_unstable_by(|left, right| {
+            if evidence_less(left, right) {
+                core::cmp::Ordering::Less
+            } else {
+                core::cmp::Ordering::Greater
+            }
+        });
+        let evidence_store = VerificationSummaryStore::new(evidence_records).unwrap();
         assert!(evidence_store
             .exact(
                 &identity,
@@ -1385,6 +1493,33 @@ mod tests {
         assert_eq!(readme.repository_generation, RepositoryGeneration(4));
         assert_eq!(readme.path, RepositoryPath::parse("README.md").unwrap());
         assert_eq!(readme.blob, blob);
+        let metadata = GitdCoreBackend::read_verified_metadata(
+            &view,
+            &identity,
+            commit,
+            &RepositoryPath::parse("README.md").unwrap(),
+            crate::SignaturePurpose::SourceManifest,
+            TrustGeneration(5),
+            RevocationGeneration(6),
+            limits,
+        )
+        .unwrap();
+        assert_eq!(metadata.blob, blob);
+        assert_eq!(metadata.size, 12);
+        assert_eq!(metadata.repository_generation, RepositoryGeneration(4));
+        assert_eq!(
+            GitdCoreBackend::read_verified_metadata(
+                &view,
+                &identity,
+                commit,
+                &RepositoryPath::parse("README.md").unwrap(),
+                crate::SignaturePurpose::SourceLock,
+                TrustGeneration(5),
+                RevocationGeneration(6),
+                limits,
+            ),
+            Err(GitdCoreError::Signature)
+        );
         let descriptor = GitdCoreBackend::immutable_pack_descriptor(&view, &identity, commit)
             .unwrap();
         assert_eq!(descriptor.repository_generation, RepositoryGeneration(4));
@@ -1513,7 +1648,7 @@ mod tests {
         );
         assert_eq!(
             GitdCoreBackend::verification_summary(
-                &view, &identity, blob, TrustGeneration(5), RevocationGeneration(6),
+                &view, &identity, tree, TrustGeneration(5), RevocationGeneration(6),
             ),
             Err(GitdCoreError::Signature)
         );

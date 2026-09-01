@@ -51,6 +51,15 @@ stale result, and cross-repository requests remain unauthorized. The structured
 hybrid result is a projection of previously verified evidence, not a verifier,
 policy decision, signing path, or source of authority.
 
+`read_verified_metadata` resolves a caller-selected path only inside an exact
+Git tree and accepts only the `SourceManifest`, `SourceLock`, or `BuildReceipt`
+purpose. It authenticates the target as a bounded blob, requires an exact
+generation-bound hybrid summary for the same blob and purpose, and returns its
+tree, path, object ID, size, and all authority generations. This avoids
+inventing ambient host paths or canonical filenames where the package/release
+format has not defined one; unsigned or purpose-substituted blobs remain data
+and fail with a signature error.
+
 The view otherwise
 implements bounded repository summaries, full-ref resolution, first-parent
 commit pages, tree-path pages, and exact blob reads. Every page is tagged with
