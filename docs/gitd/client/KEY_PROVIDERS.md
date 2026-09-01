@@ -22,6 +22,13 @@ are erased. Production protected operation must reject it and use a narrow
 capability-selected provider. The remaining provider transport and production
 credential service are not yet implemented.
 
+The native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
+signature algorithm is not negotiable. Duplicate algorithm-list entries fail
+closed, and independent inbound/outbound encrypted packet state refuses another
+packet before a 32-bit sequence could wrap under one key. Full byte/age-based
+rekey orchestration and independent constant-time cryptographic review remain
+open, so the optional SSH transport is not classified as production-ready.
+
 Patent review: **NOT_TRIGGERED**. This change is conventional local secret-file
 confinement, provider selection, diagnostic redaction, and memory erasure; it
 introduces no new protocol or cryptographic mechanism. See

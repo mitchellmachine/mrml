@@ -18,6 +18,7 @@ pub enum ProtocolError {
     InvalidPacket,
     Entropy,
     Authentication,
+    SequenceExhausted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -300,6 +301,9 @@ impl EncryptedPacketWriter {
         }
     }
     pub fn encode(&mut self, payload: &[u8]) -> Result<Vector<u8>, ProtocolError> {
+        if self.sequence == u32::MAX {
+            return Err(ProtocolError::SequenceExhausted);
+        }
         let plain = encode_plain_packet(payload, 16)?;
         let mac = hmac_sha256(&self.mac_key, &[&self.sequence.to_be_bytes(), &plain]);
         let mut output = Vector::new();
@@ -309,7 +313,7 @@ impl EncryptedPacketWriter {
         self.counter = aes128_ctr_xor(&self.key, self.counter, &plain, &mut output)
             .map_err(|_| ProtocolError::Length)?;
         output.extend(mac);
-        self.sequence = self.sequence.wrapping_add(1);
+        self.sequence += 1;
         Ok(output)
     }
 }
@@ -331,6 +335,9 @@ impl EncryptedPacketReader {
         }
     }
     pub fn decode(&mut self, source: &[u8]) -> Result<(Vector<u8>, usize), ProtocolError> {
+        if self.sequence == u32::MAX {
+            return Err(ProtocolError::SequenceExhausted);
+        }
         if source.len() < 16 + 32 {
             return Err(ProtocolError::Truncated);
         }
@@ -373,7 +380,7 @@ impl EncryptedPacketReader {
         let mut owned = Vector::new();
         owned.extend(payload.iter().copied());
         self.counter = next;
-        self.sequence = self.sequence.wrapping_add(1);
+        self.sequence += 1;
         Ok((owned, total))
     }
     pub fn wire_length(&self, first_block: &[u8; 16]) -> Result<usize, ProtocolError> {
@@ -474,6 +481,7 @@ impl fmt::Display for ProtocolError {
             Self::InvalidPacket => "invalid SSH binary packet",
             Self::Entropy => "operating-system entropy is unavailable",
             Self::Authentication => "SSH packet authentication failed",
+            Self::SequenceExhausted => "SSH packet sequence exhausted before rekey",
         })
     }
 }
@@ -564,5 +572,24 @@ mod tests {
         bad[end] ^= 1;
         let mut reader = EncryptedPacketReader::new(key, iv, mac);
         assert_eq!(reader.decode(&bad), Err(ProtocolError::Authentication));
+    }
+
+    #[test]
+    fn encrypted_packet_sequences_never_wrap_under_one_key() {
+        let mut writer = EncryptedPacketWriter::new([1; 16], [2; 16], [3; 32]);
+        writer.sequence = u32::MAX;
+        assert_eq!(
+            writer.encode(b"blocked"),
+            Err(ProtocolError::SequenceExhausted)
+        );
+        assert_eq!(writer.sequence, u32::MAX);
+
+        let mut reader = EncryptedPacketReader::new([1; 16], [2; 16], [3; 32]);
+        reader.sequence = u32::MAX;
+        assert_eq!(
+            reader.decode(&[0u8; 48]),
+            Err(ProtocolError::SequenceExhausted)
+        );
+        assert_eq!(reader.sequence, u32::MAX);
     }
 }

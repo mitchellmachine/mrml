@@ -2,7 +2,7 @@ use crate::{BinaryReader, BinaryWriter, ProtocolError, negotiate};
 use mrml_runtime::{Text, Vector};
 
 pub const KEY_EXCHANGE: &[&str] = &["curve25519-sha256"];
-pub const HOST_KEYS: &[&str] = &["rsa-sha2-256", "ssh-rsa"];
+pub const HOST_KEYS: &[&str] = &["rsa-sha2-256"];
 pub const CIPHERS: &[&str] = &["aes128-ctr"];
 pub const MACS: &[&str] = &["hmac-sha2-256"];
 pub const COMPRESSIONS: &[&str] = &["none"];
@@ -77,6 +77,18 @@ pub fn negotiate_kex_init(
     if reader.remaining() != 0 {
         return Err(ProtocolError::InvalidPacket);
     }
+    for values in [
+        &kex,
+        &host,
+        &c2s_cipher,
+        &s2c_cipher,
+        &c2s_mac,
+        &s2c_mac,
+        &c2s_compression,
+        &s2c_compression,
+    ] {
+        reject_duplicates(values)?;
+    }
     require_none(&c2s_compression)?;
     require_none(&s2c_compression)?;
     let algorithms = KexAlgorithms {
@@ -114,6 +126,14 @@ fn require_none(values: &[Text]) -> Result<(), ProtocolError> {
         .then_some(())
         .ok_or(ProtocolError::NoCommonAlgorithm)
 }
+fn reject_duplicates(values: &[Text]) -> Result<(), ProtocolError> {
+    for (index, value) in values.iter().enumerate() {
+        if values[index + 1..].contains(value) {
+            return Err(ProtocolError::InvalidNameList);
+        }
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -135,5 +155,24 @@ mod tests {
             negotiate_kex_init(&message),
             Err(ProtocolError::InvalidPacket)
         ));
+    }
+
+    #[test]
+    fn production_proposal_excludes_sha1_host_signatures() {
+        assert_eq!(HOST_KEYS, &["rsa-sha2-256"]);
+        assert!(
+            !build_kex_init()
+                .unwrap()
+                .windows(b"ssh-rsa".len())
+                .any(|window| window == b"ssh-rsa")
+        );
+    }
+
+    #[test]
+    fn duplicate_negotiation_entries_fail_closed() {
+        assert_eq!(
+            reject_duplicates(&[Text::from("rsa-sha2-256"), Text::from("rsa-sha2-256")]),
+            Err(ProtocolError::InvalidNameList)
+        );
     }
 }
