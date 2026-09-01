@@ -8,9 +8,17 @@ packets, including their shared hybrid range stream. The SILK path includes
 multi-interval frames, asymmetric in-band LBRR/FEC parsing, side suppression,
 concealment, channel conversion, and output at each Opus API sample rate. The
 public decoder exposes one-transition regular-plus-LBRR decoding and stateful
-loss concealment for SILK, CELT, and hybrid frames. It also exposes the final
-constituent frame's entropy range for `OPUS_GET_FINAL_RANGE` interoperability
-checks; DTX and packet-loss concealment report zero.
+loss concealment for SILK, CELT, and hybrid frames. Its loss path and the
+regular/no-FEC path through `decode_with_fec` cover every SILK duration at all
+five output sample rates, including mono/stereo channel conversion. The FEC API
+counts only reconstructible output-rate intervals, which require a protected
+mid channel for stereo, and preserves zero-filled boundaries for partial mono
+and asymmetric-stereo LBRR. Every zero- or one-byte constituent follows the
+stateful loss-concealment/DTX path; its regular output can therefore contain
+nonzero concealment audio after active audio, while its FEC output remains
+zero. The decoder also exposes the final constituent frame's entropy range for
+`OPUS_GET_FINAL_RANGE` interoperability checks; DTX and packet-loss concealment
+report zero.
 
 A public PCM encoder emits 10/20/40/60 ms mono or stereo narrowband,
 medium-band, and wideband SILK packets; 2.5/5/10/20 ms mono or stereo
@@ -50,14 +58,13 @@ statefully, and compares final_range() with the authoritative range stored in
 each record. Build and verify the declared package through `mrml`, then run the
 resulting declared example:
 
-    mrml test org.mrml.library.opus --target native --release
-    target/mrml-native/<host>/release/rfc8251_audit[.exe] <vector-directory>
-    target/mrml-native/<host>/release/rfc8251_audit[.exe] <vector.bit>
+    ./target/debug/mrml test org.mrml.library.opus --target linux --release
+    target/mrml-native/linux/release/rfc8251_audit <vector-directory>
+    target/mrml-native/linux/release/rfc8251_audit <vector.bit>
 
 Pass `--report-first` to print the first mismatching packet, its hexadecimal
 payload, and both final ranges. Pass `--report-configs` to break the totals
 down by TOC configuration. Pass `--require-exact` to make any decode or
-final-range mismatch fail the process. The current baseline decodes all
-20,075 packets and matches 17,423
-final ranges; full exact-range coverage remains required before this crate is
-considered complete.
+final-range mismatch fail the process. The current baseline decodes all 20,075
+packets and matches 17,423 final ranges; full exact-range coverage remains
+required before this crate is considered complete.

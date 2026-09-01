@@ -18,6 +18,8 @@ use crate::{
     },
 };
 
+const MAX_SILK_FRAME_SAMPLES_AT_16_KHZ: usize = MAX_EXCITATION_SAMPLES * 3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameContext {
     pub active: bool,
@@ -335,6 +337,10 @@ impl StereoDecoder {
     pub fn reset_mid(&mut self) {
         self.mid.reset();
     }
+    pub(crate) fn reset_mid_and_unmixer(&mut self) {
+        self.mid.reset();
+        self.unmixer = StereoUnmixer::new();
+    }
     pub fn reset_side(&mut self) {
         self.side.reset();
     }
@@ -348,8 +354,8 @@ impl StereoDecoder {
         if left.len() < sample_count || right.len() < sample_count {
             return Err(Error::BufferTooSmall);
         }
-        let mut mid = [0.0f32; MAX_EXCITATION_SAMPLES];
-        let mut side = [0.0f32; MAX_EXCITATION_SAMPLES];
+        let mut mid = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_16_KHZ];
+        let mut side = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_16_KHZ];
         self.mid.conceal(sample_count, &mut mid)?;
         self.side.conceal(sample_count, &mut side)?;
         self.unmixer.unmix(

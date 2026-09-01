@@ -35,6 +35,7 @@ pub use entropy::{RangeDecoder, RangeEncoder};
 pub const MAX_FRAMES: usize = 48;
 pub const MAX_FRAME_BYTES: usize = 1275;
 pub const MAX_PACKET_DURATION_MS: u16 = 120;
+const MAX_SILK_FRAME_SAMPLES_AT_48_KHZ: usize = 2_880;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
@@ -2066,6 +2067,7 @@ pub struct Decoder {
     celt_plc: [celt::CeltPlc; 2],
     celt_transition_ready: bool,
     last_frame: Option<LastFrame>,
+    last_stateful_mode: Option<Mode>,
     final_range: u32,
 }
 
@@ -2080,7 +2082,10 @@ struct LastFrame {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FecDecodeResult {
     pub frames: usize,
-    /// Number of output-rate frames reconstructed from in-band LBRR data.
+    /// Total output-rate frames reconstructed from in-band LBRR data; the
+    /// protected intervals need not be contiguous. Stereo intervals carrying
+    /// only side data update decoder state but cannot reconstruct PCM without
+    /// a protected mid channel, so they are not counted.
     pub fec_frames: usize,
 }
 impl Decoder {
@@ -2101,6 +2106,7 @@ impl Decoder {
             celt_plc: [const { celt::CeltPlc::new() }; 2],
             celt_transition_ready: false,
             last_frame: None,
+            last_stateful_mode: None,
             final_range: 0,
         })
     }
@@ -2118,6 +2124,47 @@ impl Decoder {
         self.celt_seed = 0;
         self.celt_plc = [const { celt::CeltPlc::new() }; 2];
     }
+
+    fn prepare_silk_decode(&mut self, stereo: bool) {
+        if self.previous_stereo != Some(stereo) || self.last_stateful_mode == Some(Mode::Celt) {
+            self.silk_mono.reset();
+            self.silk_stereo.reset();
+            self.previous_stereo = Some(stereo);
+        }
+        self.celt_transition_ready = false;
+    }
+
+    fn prepare_dtx_decode(&mut self, mode: Mode, stereo: bool) {
+        let previous_mode = self.last_stateful_mode;
+        let stereo_changed = self.previous_stereo != Some(stereo);
+        let celt_transition_ready = self.celt_transition_ready;
+        self.celt_transition_ready = false;
+        match mode {
+            Mode::Silk => {
+                if stereo_changed || previous_mode == Some(Mode::Celt) {
+                    self.silk_mono.reset();
+                    self.silk_stereo.reset();
+                }
+            }
+            Mode::Celt => {
+                if stereo_changed || (previous_mode != Some(Mode::Celt) && !celt_transition_ready) {
+                    self.reset_celt();
+                }
+            }
+            Mode::Hybrid => {
+                if stereo_changed || previous_mode == Some(Mode::Celt) {
+                    self.silk_mono.reset();
+                    self.silk_stereo.reset();
+                }
+                if stereo_changed || previous_mode != Some(Mode::Hybrid) {
+                    self.reset_celt();
+                }
+            }
+        }
+        self.previous_stereo = Some(stereo);
+        self.last_stateful_mode = Some(mode);
+    }
+
     /// Decodes SILK, CELT, hybrid, and DTX packets.
     pub fn decode(
         &mut self,
@@ -2143,13 +2190,23 @@ impl Decoder {
             return Err(Error::BufferTooSmall);
         }
         if all_dtx {
-            output[..samples].fill(0);
-            self.last_frame = Some(LastFrame {
+            self.prepare_dtx_decode(parsed.mode, parsed.stereo);
+            let geometry = LastFrame {
                 mode: parsed.mode,
                 bandwidth: parsed.bandwidth,
                 duration_us: parsed.frame_duration_us,
                 stereo: parsed.stereo,
-            });
+            };
+            let constituent_samples = samples / usize::from(parsed.frame_count);
+            for index in 0..usize::from(parsed.frame_count) {
+                let start = index * constituent_samples;
+                self.conceal_frame(
+                    geometry,
+                    &mut output[start..start + constituent_samples],
+                    sample_rate,
+                )?;
+            }
+            self.last_frame = Some(geometry);
             self.final_range = 0;
             return Ok(frames);
         }
@@ -2159,14 +2216,7 @@ impl Decoder {
         if parsed.mode == Mode::Hybrid {
             return self.decode_hybrid_packet(packet, &parsed, output, sample_rate);
         }
-        if self.previous_stereo != Some(parsed.stereo)
-            || self.last_frame.is_some_and(|last| last.mode == Mode::Celt)
-        {
-            self.silk_mono.reset();
-            self.silk_stereo.reset();
-            self.previous_stereo = Some(parsed.stereo);
-        }
-        self.celt_transition_ready = false;
+        self.prepare_silk_decode(parsed.stereo);
         let duration_ms = (parsed.frame_duration_us / 1_000) as u8;
         let native_rate = match parsed.bandwidth {
             Bandwidth::Narrow => 8_000usize,
@@ -2176,13 +2226,16 @@ impl Decoder {
         };
         let native_count = native_rate * usize::from(duration_ms) / 1_000;
         let output_count = sample_rate as usize * usize::from(duration_ms) / 1_000;
+        if output_count > MAX_SILK_FRAME_SAMPLES_AT_48_KHZ {
+            return Err(Error::InvalidFrameSize);
+        }
         let mut native_left = [0.0f32; 960];
         let mut native_right = [0.0f32; 960];
         let mut fec_left = [0.0f32; 960];
         let mut fec_right = [0.0f32; 960];
-        let mut converted_left = [0.0f32; 2_880];
-        let mut converted_right = [0.0f32; 2_880];
-        let mut main_48k = [[0.0f32; 2_880]; 2];
+        let mut converted_left = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ];
+        let mut converted_right = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ];
+        let mut main_48k = [[0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ]; 2];
         let mut redundant = [[0.0f32; 240]; 2];
         let main_48k_count = 48 * usize::from(duration_ms);
         let redundancy_end_band = match parsed.bandwidth {
@@ -2191,47 +2244,54 @@ impl Decoder {
             _ => return Err(Error::InvalidPacket),
         };
         let mut packet_range = 0u32;
+        let geometry = LastFrame {
+            mode: parsed.mode,
+            bandwidth: parsed.bandwidth,
+            duration_us: parsed.frame_duration_us,
+            stereo: parsed.stereo,
+        };
         for index in 0..usize::from(parsed.frame_count) {
             let frame = parsed.frames[index];
             let start = usize::from(frame.offset);
             let end = start + usize::from(frame.len);
-            let redundancy = if frame.len == 0 {
-                native_left[..native_count].fill(0.0);
-                native_right[..native_count].fill(0.0);
-                None
+            if frame.len <= 1 {
+                let output_start = index * output_count * usize::from(self.channels);
+                let output_end = output_start + output_count * usize::from(self.channels);
+                self.celt_transition_ready = false;
+                self.conceal_frame(geometry, &mut output[output_start..output_end], sample_rate)?;
+                packet_range = 0;
+                continue;
+            }
+            let mut range = RangeDecoder::new(&packet[start..end]);
+            if parsed.stereo {
+                self.silk_stereo.decode_range(
+                    &mut range,
+                    parsed.bandwidth,
+                    duration_ms,
+                    &mut native_left[..native_count],
+                    &mut native_right[..native_count],
+                    &mut fec_left[..native_count],
+                    &mut fec_right[..native_count],
+                )?;
             } else {
-                let mut range = RangeDecoder::new(&packet[start..end]);
-                if parsed.stereo {
-                    self.silk_stereo.decode_range(
-                        &mut range,
-                        parsed.bandwidth,
-                        duration_ms,
-                        &mut native_left[..native_count],
-                        &mut native_right[..native_count],
-                        &mut fec_left[..native_count],
-                        &mut fec_right[..native_count],
-                    )?;
-                } else {
-                    self.silk_mono.decode_range(
-                        &mut range,
-                        parsed.bandwidth,
-                        duration_ms,
-                        &mut native_left[..native_count],
-                        &mut fec_left[..native_count],
-                    )?;
-                    native_right[..native_count].copy_from_slice(&native_left[..native_count]);
-                }
-                let info =
-                    transition::decode_header(&mut range, Mode::Silk, usize::from(frame.len))?;
-                packet_range = range.range();
-                info.map(|info| {
-                    let payload_start = start + info.offset;
-                    (
-                        &packet[payload_start..payload_start + info.len],
-                        info.position,
-                    )
-                })
-            };
+                self.silk_mono.decode_range(
+                    &mut range,
+                    parsed.bandwidth,
+                    duration_ms,
+                    &mut native_left[..native_count],
+                    &mut fec_left[..native_count],
+                )?;
+                native_right[..native_count].copy_from_slice(&native_left[..native_count]);
+            }
+            let info = transition::decode_header(&mut range, Mode::Silk, usize::from(frame.len))?;
+            packet_range = range.range();
+            let redundancy = info.map(|info| {
+                let payload_start = start + info.offset;
+                (
+                    &packet[payload_start..payload_start + info.len],
+                    info.position,
+                )
+            });
             silk::resample_linear(
                 &native_left[..native_count],
                 &mut main_48k[0][..main_48k_count],
@@ -2274,39 +2334,38 @@ impl Decoder {
                 }
             }
         }
-        self.last_frame = Some(LastFrame {
-            mode: parsed.mode,
-            bandwidth: parsed.bandwidth,
-            duration_us: parsed.frame_duration_us,
-            stereo: parsed.stereo,
-        });
+        self.last_frame = Some(geometry);
+        self.last_stateful_mode = Some(Mode::Silk);
         self.final_range = packet_range;
         Ok(frames)
     }
 
-    /// Conceals one frame using the most recently decoded packet geometry.
-    pub fn decode_loss(&mut self, output: &mut [i16], sample_rate: u32) -> Result<usize, Error> {
-        if !matches!(sample_rate, 8_000 | 12_000 | 16_000 | 24_000 | 48_000) {
+    fn conceal_frame(
+        &mut self,
+        geometry: LastFrame,
+        output: &mut [i16],
+        sample_rate: u32,
+    ) -> Result<usize, Error> {
+        let output_count = sample_rate as usize * geometry.duration_us as usize / 1_000_000;
+        if output_count > MAX_SILK_FRAME_SAMPLES_AT_48_KHZ {
             return Err(Error::InvalidFrameSize);
         }
-        let last = self.last_frame.ok_or(Error::InvalidPacket)?;
-        let output_count = sample_rate as usize * last.duration_us as usize / 1_000_000;
         let needed = output_count * usize::from(self.channels);
         if output.len() < needed {
             return Err(Error::BufferTooSmall);
         }
         let mut native = [[0.0f32; 960]; 2];
-        let mut converted = [[0.0f32; 960]; 2];
-        match last.mode {
+        let mut converted = [[0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ]; 2];
+        match geometry.mode {
             Mode::Silk => {
-                let native_rate = match last.bandwidth {
+                let native_rate = match geometry.bandwidth {
                     Bandwidth::Narrow => 8_000usize,
                     Bandwidth::Medium => 12_000,
                     Bandwidth::Wide => 16_000,
                     _ => return Err(Error::InvalidPacket),
                 };
-                let count = native_rate * last.duration_us as usize / 1_000_000;
-                if last.stereo {
+                let count = native_rate * geometry.duration_us as usize / 1_000_000;
+                if geometry.stereo {
                     let [left, right] = &mut native;
                     self.silk_stereo
                         .conceal(native_rate as u32, count, left, right)?;
@@ -2323,12 +2382,12 @@ impl Decoder {
                 }
             }
             Mode::Celt | Mode::Hybrid => {
-                let count = 48_000usize * last.duration_us as usize / 1_000_000;
+                let count = 48_000usize * geometry.duration_us as usize / 1_000_000;
                 if count > 960 {
                     return Err(Error::InvalidFrameSize);
                 }
                 self.celt_plc[0].conceal(&mut native[0][..count]);
-                if last.stereo {
+                if geometry.stereo {
                     self.celt_plc[1].conceal(&mut native[1][..count]);
                 } else {
                     let [left, right] = &mut native;
@@ -2350,12 +2409,24 @@ impl Decoder {
                 output[sample * 2 + 1] = float_to_i16(converted[1][sample]);
             }
         }
+        Ok(output_count)
+    }
+
+    /// Conceals one frame using the most recently decoded packet geometry.
+    pub fn decode_loss(&mut self, output: &mut [i16], sample_rate: u32) -> Result<usize, Error> {
+        if !matches!(sample_rate, 8_000 | 12_000 | 16_000 | 24_000 | 48_000) {
+            return Err(Error::InvalidFrameSize);
+        }
+        let last = self.last_frame.ok_or(Error::InvalidPacket)?;
+        let output_count = self.conceal_frame(last, output, sample_rate)?;
         self.final_range = 0;
         Ok(output_count)
     }
 
     /// Decodes one SILK packet and its optional in-band LBRR copy in one state
-    /// transition. `fec_output` is zero-filled where protection is absent.
+    /// transition. `fec_output` is zero-filled where reconstructible protection
+    /// is absent; zero- or one-byte DTX constituents conceal the regular output
+    /// while leaving the FEC output zero-filled.
     pub fn decode_with_fec(
         &mut self,
         packet: &[u8],
@@ -2370,6 +2441,9 @@ impl Decoder {
         if parsed.mode != Mode::Silk {
             return Err(Error::UnsupportedAudioMode);
         }
+        let all_dtx = parsed.frames[..usize::from(parsed.frame_count)]
+            .iter()
+            .all(|frame| frame.len <= 1);
         let frames = sample_rate as usize
             * parsed.frame_duration_us as usize
             * usize::from(parsed.frame_count)
@@ -2382,11 +2456,31 @@ impl Decoder {
         }
         output[..needed].fill(0);
         fec_output[..needed].fill(0);
-        if self.previous_stereo != Some(parsed.stereo) {
-            self.silk_mono.reset();
-            self.silk_stereo.reset();
-            self.previous_stereo = Some(parsed.stereo);
+        if all_dtx {
+            self.prepare_dtx_decode(parsed.mode, parsed.stereo);
+            let geometry = LastFrame {
+                mode: parsed.mode,
+                bandwidth: parsed.bandwidth,
+                duration_us: parsed.frame_duration_us,
+                stereo: parsed.stereo,
+            };
+            let constituent_samples = needed / usize::from(parsed.frame_count);
+            for index in 0..usize::from(parsed.frame_count) {
+                let start = index * constituent_samples;
+                self.conceal_frame(
+                    geometry,
+                    &mut output[start..start + constituent_samples],
+                    sample_rate,
+                )?;
+            }
+            self.last_frame = Some(geometry);
+            self.final_range = 0;
+            return Ok(FecDecodeResult {
+                frames,
+                fec_frames: 0,
+            });
         }
+        self.prepare_silk_decode(parsed.stereo);
         let duration_ms = (parsed.frame_duration_us / 1_000) as u8;
         let native_rate = match parsed.bandwidth {
             Bandwidth::Narrow => 8_000usize,
@@ -2396,27 +2490,45 @@ impl Decoder {
         };
         let native_count = native_rate * usize::from(duration_ms) / 1_000;
         let output_count = sample_rate as usize * usize::from(duration_ms) / 1_000;
+        if output_count > MAX_SILK_FRAME_SAMPLES_AT_48_KHZ {
+            return Err(Error::InvalidFrameSize);
+        }
+        let interval_count = match duration_ms {
+            10 | 20 => 1,
+            40 => 2,
+            60 => 3,
+            _ => return Err(Error::InvalidFrameSize),
+        };
+        let native_interval_count = native_count / interval_count;
+        let output_interval_count = output_count / interval_count;
         let mut native_left = [0.0f32; 960];
         let mut native_right = [0.0f32; 960];
         let mut fec_left = [0.0f32; 960];
         let mut fec_right = [0.0f32; 960];
-        let mut converted_left = [0.0f32; 960];
-        let mut converted_right = [0.0f32; 960];
-        let mut converted_fec_left = [0.0f32; 960];
-        let mut converted_fec_right = [0.0f32; 960];
-        let mut fec_frames = 0;
+        let mut converted_left = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ];
+        let mut converted_right = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ];
+        let mut converted_fec_left = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ];
+        let mut converted_fec_right = [0.0f32; MAX_SILK_FRAME_SAMPLES_AT_48_KHZ];
+        let mut fec_frames = 0usize;
         let mut packet_range = 0u32;
+        let geometry = LastFrame {
+            mode: parsed.mode,
+            bandwidth: parsed.bandwidth,
+            duration_us: parsed.frame_duration_us,
+            stereo: parsed.stereo,
+        };
         for index in 0..usize::from(parsed.frame_count) {
             let frame = parsed.frames[index];
             let start = usize::from(frame.offset);
             let end = start + usize::from(frame.len);
-            let fec_samples = if frame.len == 0 {
-                native_left[..native_count].fill(0.0);
-                native_right[..native_count].fill(0.0);
-                fec_left[..native_count].fill(0.0);
-                fec_right[..native_count].fill(0.0);
-                0
-            } else if parsed.stereo {
+            if frame.len <= 1 {
+                let base = index * output_count * usize::from(self.channels);
+                let end = base + output_count * usize::from(self.channels);
+                self.conceal_frame(geometry, &mut output[base..end], sample_rate)?;
+                packet_range = 0;
+                continue;
+            }
+            let fec_mask = if parsed.stereo {
                 let mut range = RangeDecoder::new(&packet[start..end]);
                 let result = self.silk_stereo.decode_range(
                     &mut range,
@@ -2428,7 +2540,7 @@ impl Decoder {
                     &mut fec_right[..native_count],
                 )?;
                 packet_range = range.range();
-                result.fec_samples
+                result.mid_fec_mask
             } else {
                 let mut range = RangeDecoder::new(&packet[start..end]);
                 let result = self.silk_mono.decode_range(
@@ -2441,7 +2553,7 @@ impl Decoder {
                 packet_range = range.range();
                 native_right[..native_count].copy_from_slice(&native_left[..native_count]);
                 fec_right[..native_count].copy_from_slice(&fec_left[..native_count]);
-                result.fec_samples
+                result.fec_mask
             };
             silk::resample_linear(
                 &native_left[..native_count],
@@ -2451,20 +2563,46 @@ impl Decoder {
                 &native_right[..native_count],
                 &mut converted_right[..output_count],
             )?;
-            if fec_samples != 0 {
+            converted_fec_left[..output_count].fill(0.0);
+            converted_fec_right[..output_count].fill(0.0);
+            let fec_samples = native_interval_count
+                .checked_mul(fec_mask.count_ones() as usize)
+                .ok_or(Error::InvalidFrameSize)?;
+            let mut interval = 0usize;
+            while interval < interval_count {
+                if fec_mask & (1 << interval) == 0 {
+                    interval += 1;
+                    continue;
+                }
+                let run_start = interval;
+                interval += 1;
+                while interval < interval_count && fec_mask & (1 << interval) != 0 {
+                    interval += 1;
+                }
+                let run_intervals = interval - run_start;
+                let native_start = run_start * native_interval_count;
+                let native_run_count = run_intervals * native_interval_count;
+                let output_start = run_start * output_interval_count;
+                let output_run_count = run_intervals * output_interval_count;
                 silk::resample_linear(
-                    &fec_left[..native_count],
-                    &mut converted_fec_left[..output_count],
+                    &fec_left[native_start..native_start + native_run_count],
+                    &mut converted_fec_left[output_start..output_start + output_run_count],
                 )?;
                 silk::resample_linear(
-                    &fec_right[..native_count],
-                    &mut converted_fec_right[..output_count],
+                    &fec_right[native_start..native_start + native_run_count],
+                    &mut converted_fec_right[output_start..output_start + output_run_count],
                 )?;
-                fec_frames += output_count;
-            } else {
-                converted_fec_left[..output_count].fill(0.0);
-                converted_fec_right[..output_count].fill(0.0);
             }
+            let scaled_fec_samples = fec_samples
+                .checked_mul(sample_rate as usize)
+                .ok_or(Error::InvalidFrameSize)?;
+            if scaled_fec_samples % native_rate != 0 {
+                return Err(Error::InvalidFrameSize);
+            }
+            let output_fec_samples = scaled_fec_samples / native_rate;
+            fec_frames = fec_frames
+                .checked_add(output_fec_samples)
+                .ok_or(Error::InvalidFrameSize)?;
             let base = index * output_count * usize::from(self.channels);
             for sample in 0..output_count {
                 if self.channels == 1 {
@@ -2481,12 +2619,8 @@ impl Decoder {
                 }
             }
         }
-        self.last_frame = Some(LastFrame {
-            mode: parsed.mode,
-            bandwidth: parsed.bandwidth,
-            duration_us: parsed.frame_duration_us,
-            stereo: parsed.stereo,
-        });
+        self.last_frame = Some(geometry);
+        self.last_stateful_mode = Some(Mode::Silk);
         self.final_range = packet_range;
         Ok(FecDecodeResult { frames, fec_frames })
     }
@@ -2514,7 +2648,9 @@ impl Decoder {
             Bandwidth::Medium => return Err(Error::InvalidPacket),
         };
         let stereo_changed = self.previous_stereo != Some(parsed.stereo);
-        let mode_changed = self.last_frame.is_some_and(|last| last.mode != Mode::Celt);
+        let mode_changed = self
+            .last_stateful_mode
+            .is_some_and(|mode| mode != Mode::Celt);
         if stereo_changed || (mode_changed && !self.celt_transition_ready) {
             self.reset_celt();
         }
@@ -2531,8 +2667,21 @@ impl Decoder {
         let mut native = [[0.0f32; 960]; 2];
         let mut converted = [[0.0f32; 960]; 2];
         let mut packet_range = 0u32;
+        let geometry = LastFrame {
+            mode: parsed.mode,
+            bandwidth: parsed.bandwidth,
+            duration_us: parsed.frame_duration_us,
+            stereo: parsed.stereo,
+        };
         for frame_index in 0..usize::from(parsed.frame_count) {
             let frame = parsed.frames[frame_index];
+            if frame.len <= 1 {
+                let output_start = frame_index * output_count * usize::from(self.channels);
+                let output_end = output_start + output_count * usize::from(self.channels);
+                self.conceal_frame(geometry, &mut output[output_start..output_end], sample_rate)?;
+                packet_range = 0;
+                continue;
+            }
             let start = usize::from(frame.offset);
             let end = start + usize::from(frame.len);
             let mut decoder = RangeDecoder::new(&packet[start..end]);
@@ -2606,12 +2755,8 @@ impl Decoder {
             self.celt_older_energies = self.celt_previous_energies;
             self.celt_previous_energies = self.celt_energies;
         }
-        self.last_frame = Some(LastFrame {
-            mode: parsed.mode,
-            bandwidth: parsed.bandwidth,
-            duration_us: parsed.frame_duration_us,
-            stereo: parsed.stereo,
-        });
+        self.last_frame = Some(geometry);
+        self.last_stateful_mode = Some(Mode::Celt);
         self.final_range = packet_range;
         Ok(output_count * usize::from(parsed.frame_count))
     }
@@ -2636,7 +2781,7 @@ impl Decoder {
             _ => return Err(Error::InvalidPacket),
         };
         let stereo_changed = self.previous_stereo != Some(parsed.stereo);
-        let previous_mode = self.last_frame.map(|last| last.mode);
+        let previous_mode = self.last_stateful_mode;
         self.celt_transition_ready = false;
         if stereo_changed || previous_mode == Some(Mode::Celt) {
             self.silk_mono.reset();
@@ -2666,8 +2811,26 @@ impl Decoder {
         let mut converted = [[0.0f32; 960]; 2];
         let mut redundant = [[0.0f32; 240]; 2];
         let mut packet_range = 0u32;
+        let geometry = LastFrame {
+            mode: parsed.mode,
+            bandwidth: parsed.bandwidth,
+            duration_us: parsed.frame_duration_us,
+            stereo: parsed.stereo,
+        };
         for frame_index in 0..usize::from(parsed.frame_count) {
             let frame = parsed.frames[frame_index];
+            if frame.len <= 1 {
+                let output_start = frame_index * output_count * usize::from(self.channels);
+                let output_end = output_start + output_count * usize::from(self.channels);
+                if celt_transition_pending {
+                    self.reset_celt();
+                    celt_transition_pending = false;
+                }
+                self.conceal_frame(geometry, &mut output[output_start..output_end], sample_rate)?;
+                self.celt_transition_ready = false;
+                packet_range = 0;
+                continue;
+            }
             let start = usize::from(frame.offset);
             let end = start + usize::from(frame.len);
             let mut range = RangeDecoder::new(&packet[start..end]);
@@ -2796,12 +2959,8 @@ impl Decoder {
             self.celt_older_energies = self.celt_previous_energies;
             self.celt_previous_energies = self.celt_energies;
         }
-        self.last_frame = Some(LastFrame {
-            mode: parsed.mode,
-            bandwidth: parsed.bandwidth,
-            duration_us: parsed.frame_duration_us,
-            stereo: parsed.stereo,
-        });
+        self.last_frame = Some(geometry);
+        self.last_stateful_mode = Some(Mode::Hybrid);
         self.final_range = packet_range;
         Ok(output_count * usize::from(parsed.frame_count))
     }
@@ -2917,7 +3076,10 @@ mod tests {
         silk_entropy::MAX_EXCITATION_SAMPLES,
         silk_frame::{ChannelHeader, LayerHeader},
         silk_lsf::{LsfIndices, Stage2},
-        silk_packet::MonoPayloadEncoder,
+        silk_packet::{
+            MonoPayloadDecoder, MonoPayloadEncoder, StereoFrameParameters, StereoPayloadEncoder,
+        },
+        silk_stereo::prediction_from_indices,
     };
 
     #[test]
@@ -2980,6 +3142,301 @@ mod tests {
             assert!(output[..samples * 2].iter().all(|&sample| sample == 0));
             assert_eq!(decoder.final_range(), 0);
         }
+    }
+
+    #[test]
+    fn mixed_packets_match_sequential_stateful_dtx_in_every_mode() {
+        let mut input = [0i16; 960];
+        for (index, sample) in input.iter_mut().enumerate() {
+            *sample = (((index % 43) as i32 - 21) * 900) as i16;
+        }
+        let mut silk_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&input, 48_000, &mut silk_packet)
+            .unwrap();
+        let mut celt_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&input, 48_000, &mut celt_packet)
+            .unwrap();
+        let mut hybrid_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let hybrid_len = Encoder::new(1)
+            .unwrap()
+            .encode_hybrid(&input, 48_000, &mut hybrid_packet)
+            .unwrap();
+
+        for (mode, active_packet, supports_fec) in [
+            ("silk", &silk_packet[..silk_len], true),
+            ("celt", &celt_packet[..celt_len], false),
+            ("hybrid", &hybrid_packet[..hybrid_len], false),
+        ] {
+            let config = active_packet[0] >> 3;
+            let active_payload = &active_packet[1..];
+
+            for dtx_byte in [0x00u8, 0x7f, 0xff] {
+                let dtx = [dtx_byte];
+                let dtx_packet = [config << 3, dtx_byte];
+                for dtx_first in [true, false] {
+                    let frame_payloads: [&[u8]; 2] = if dtx_first {
+                        [&dtx, active_payload]
+                    } else {
+                        [active_payload, &dtx]
+                    };
+                    let mut mixed_packet = [0u8; 2_560];
+                    let mixed_len =
+                        packetize(config, false, &frame_payloads, 0, &mut mixed_packet).unwrap();
+                    let sequential_packets = if dtx_first {
+                        [&dtx_packet[..], active_packet]
+                    } else {
+                        [active_packet, &dtx_packet[..]]
+                    };
+                    let mut expected = [0i16; 1_920];
+                    let mut expected_decoder = Decoder::new(1).unwrap();
+                    for (index, sequential_packet) in sequential_packets.iter().enumerate() {
+                        assert_eq!(
+                            expected_decoder.decode(
+                                sequential_packet,
+                                &mut expected[index * 960..(index + 1) * 960],
+                                48_000,
+                            ),
+                            Ok(960),
+                        );
+                    }
+                    let expected_range = expected_decoder.final_range();
+                    let mut output = [1i16; 1_920];
+                    let mut decoder = Decoder::new(1).unwrap();
+                    assert_eq!(
+                        decoder.decode(&mixed_packet[..mixed_len], &mut output, 48_000),
+                        Ok(1_920),
+                        "mode={mode} dtx_byte={dtx_byte:#04x} dtx_first={dtx_first}",
+                    );
+                    assert_eq!(output, expected);
+                    assert_eq!(decoder.final_range(), expected_range);
+                    if !dtx_first {
+                        assert!(output[960..].iter().any(|&sample| sample != 0));
+                    }
+
+                    if supports_fec {
+                        let mut expected_regular = [0i16; 1_920];
+                        let mut expected_fec = [0i16; 1_920];
+                        let mut expected_fec_frames = 0usize;
+                        let mut sequential_decoder = Decoder::new(1).unwrap();
+                        for (index, sequential_packet) in sequential_packets.iter().enumerate() {
+                            let result = sequential_decoder
+                                .decode_with_fec(
+                                    sequential_packet,
+                                    &mut expected_regular[index * 960..(index + 1) * 960],
+                                    &mut expected_fec[index * 960..(index + 1) * 960],
+                                    48_000,
+                                )
+                                .unwrap();
+                            assert_eq!(result.frames, 960);
+                            expected_fec_frames += result.fec_frames;
+                        }
+                        let expected_range = sequential_decoder.final_range();
+                        let mut regular = [1i16; 1_920];
+                        let mut fec = [1i16; 1_920];
+                        let mut fec_decoder = Decoder::new(1).unwrap();
+                        assert_eq!(
+                            fec_decoder.decode_with_fec(
+                                &mixed_packet[..mixed_len],
+                                &mut regular,
+                                &mut fec,
+                                48_000,
+                            ),
+                            Ok(FecDecodeResult {
+                                frames: 1_920,
+                                fec_frames: expected_fec_frames,
+                            }),
+                            "mode={mode} dtx_byte={dtx_byte:#04x} dtx_first={dtx_first}",
+                        );
+                        assert_eq!(regular, expected_regular);
+                        assert_eq!(fec, expected_fec);
+                        assert_eq!(fec_decoder.final_range(), expected_range);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn one_byte_dtx_matches_explicit_loss_and_advances_state() {
+        let mut input = [0i16; 960];
+        for (index, sample) in input.iter_mut().enumerate() {
+            *sample = (((index % 43) as i32 - 21) * 900) as i16;
+        }
+        let mut silk_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&input, 48_000, &mut silk_packet)
+            .unwrap();
+        let mut celt_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&input, 48_000, &mut celt_packet)
+            .unwrap();
+        let mut hybrid_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let hybrid_len = Encoder::new(1)
+            .unwrap()
+            .encode_hybrid(&input, 48_000, &mut hybrid_packet)
+            .unwrap();
+
+        for (mode, active_packet) in [
+            ("silk", &silk_packet[..silk_len]),
+            ("celt", &celt_packet[..celt_len]),
+            ("hybrid", &hybrid_packet[..hybrid_len]),
+        ] {
+            let dtx_packet = [(active_packet[0] >> 3) << 3, 0x7f];
+            let mut dtx_decoder = Decoder::new(1).unwrap();
+            let mut loss_decoder = Decoder::new(1).unwrap();
+            let mut scratch = [0i16; 960];
+            dtx_decoder
+                .decode(active_packet, &mut scratch, 48_000)
+                .unwrap();
+            loss_decoder
+                .decode(active_packet, &mut scratch, 48_000)
+                .unwrap();
+            let mut dtx = [0i16; 960];
+            let mut loss = [0i16; 960];
+            assert_eq!(
+                dtx_decoder.decode(&dtx_packet, &mut dtx, 48_000),
+                Ok(960),
+                "mode={mode}",
+            );
+            assert_eq!(loss_decoder.decode_loss(&mut loss, 48_000), Ok(960));
+            assert_eq!(dtx, loss, "mode={mode}");
+            assert!(dtx.iter().any(|&sample| sample != 0), "mode={mode}");
+
+            let mut after_dtx = [0i16; 960];
+            let mut after_loss = [0i16; 960];
+            dtx_decoder
+                .decode(active_packet, &mut after_dtx, 48_000)
+                .unwrap();
+            loss_decoder
+                .decode(active_packet, &mut after_loss, 48_000)
+                .unwrap();
+            assert_eq!(after_dtx, after_loss, "mode={mode}");
+            assert_eq!(dtx_decoder.final_range(), loss_decoder.final_range());
+        }
+
+        let active_packet = &silk_packet[..silk_len];
+        let dtx_packet = [(active_packet[0] >> 3) << 3, 0x7f];
+        let mut dtx_decoder = Decoder::new(1).unwrap();
+        let mut loss_decoder = Decoder::new(1).unwrap();
+        let mut scratch = [0i16; 960];
+        let mut fec_scratch = [0i16; 960];
+        dtx_decoder
+            .decode_with_fec(active_packet, &mut scratch, &mut fec_scratch, 48_000)
+            .unwrap();
+        loss_decoder
+            .decode_with_fec(active_packet, &mut scratch, &mut fec_scratch, 48_000)
+            .unwrap();
+        let mut dtx = [0i16; 960];
+        let mut dtx_fec = [1i16; 960];
+        assert_eq!(
+            dtx_decoder.decode_with_fec(&dtx_packet, &mut dtx, &mut dtx_fec, 48_000),
+            Ok(FecDecodeResult {
+                frames: 960,
+                fec_frames: 0,
+            }),
+        );
+        let mut loss = [0i16; 960];
+        assert_eq!(loss_decoder.decode_loss(&mut loss, 48_000), Ok(960));
+        assert_eq!(dtx, loss);
+        assert!(dtx_fec.iter().all(|&sample| sample == 0));
+
+        let mut after_dtx = [0i16; 960];
+        let mut after_dtx_fec = [0i16; 960];
+        let mut after_loss = [0i16; 960];
+        let mut after_loss_fec = [0i16; 960];
+        let dtx_result = dtx_decoder
+            .decode_with_fec(active_packet, &mut after_dtx, &mut after_dtx_fec, 48_000)
+            .unwrap();
+        let loss_result = loss_decoder
+            .decode_with_fec(active_packet, &mut after_loss, &mut after_loss_fec, 48_000)
+            .unwrap();
+        assert_eq!(dtx_result, loss_result);
+        assert_eq!(after_dtx, after_loss);
+        assert_eq!(after_dtx_fec, after_loss_fec);
+        assert_eq!(dtx_decoder.final_range(), loss_decoder.final_range());
+    }
+
+    #[test]
+    fn celt_dtx_framing_preserves_end_redundancy_transition_state() {
+        let mut transition_input = [0i16; 240];
+        let mut silk_input = [0i16; 960];
+        let mut celt_input = [0i16; 960];
+        for (index, sample) in transition_input.iter_mut().enumerate() {
+            *sample = (((index % 29) as i32 - 14) * 500) as i16;
+        }
+        for (index, sample) in silk_input.iter_mut().enumerate() {
+            *sample = (((index % 37) as i32 - 18) * 700) as i16;
+        }
+        for (index, sample) in celt_input.iter_mut().enumerate() {
+            *sample = (((index % 43) as i32 - 21) * 900) as i16;
+        }
+
+        let mut redundant = [0u8; 64];
+        let redundant_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt_redundancy(&transition_input, 48_000, &mut redundant)
+            .unwrap();
+        let mut priming_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let priming_len = Encoder::new(1)
+            .unwrap()
+            .encode_silk_with_redundancy(
+                &silk_input,
+                48_000,
+                Bandwidth::Narrow,
+                20_000,
+                &redundant[..redundant_len],
+                false,
+                &mut priming_packet,
+            )
+            .unwrap();
+        let mut active_packet = [0u8; MAX_FRAME_BYTES + 1];
+        let active_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&celt_input, 48_000, &mut active_packet)
+            .unwrap();
+        let active_packet = &active_packet[..active_len];
+        let config = active_packet[0] >> 3;
+        let dtx_payload = [0x7fu8];
+        let dtx_packet = [config << 3, dtx_payload[0]];
+        let mut mixed_packet = [0u8; 2_560];
+        let mixed_len = packetize(
+            config,
+            false,
+            &[&dtx_payload, &active_packet[1..]],
+            0,
+            &mut mixed_packet,
+        )
+        .unwrap();
+
+        let mut split = Decoder::new(1).unwrap();
+        let mut combined = Decoder::new(1).unwrap();
+        let mut scratch = [0i16; 960];
+        split
+            .decode(&priming_packet[..priming_len], &mut scratch, 48_000)
+            .unwrap();
+        combined
+            .decode(&priming_packet[..priming_len], &mut scratch, 48_000)
+            .unwrap();
+        let mut expected = [0i16; 1_920];
+        split
+            .decode(&dtx_packet, &mut expected[..960], 48_000)
+            .unwrap();
+        split
+            .decode(active_packet, &mut expected[960..], 48_000)
+            .unwrap();
+        let mut actual = [0i16; 1_920];
+        assert_eq!(
+            combined.decode(&mixed_packet[..mixed_len], &mut actual, 48_000),
+            Ok(1_920),
+        );
+        assert_eq!(actual, expected);
+        assert_eq!(combined.final_range(), split.final_range());
     }
 
     #[test]
@@ -4130,6 +4587,60 @@ mod tests {
     }
 
     #[test]
+    fn loss_concealment_covers_every_silk_duration_rate_and_channel_geometry() {
+        for coded_channels in [1u8, 2] {
+            for bandwidth in [Bandwidth::Narrow, Bandwidth::Medium, Bandwidth::Wide] {
+                for duration_us in [10_000usize, 20_000, 40_000, 60_000] {
+                    let input_frames = 48_000 * duration_us / 1_000_000;
+                    let input_samples = input_frames * usize::from(coded_channels);
+                    let mut input = [0i16; 5_760];
+                    for (index, sample) in input[..input_samples].iter_mut().enumerate() {
+                        *sample = (((index % 37) as i32 - 18) * 1_200) as i16;
+                    }
+                    let mut packet = [0u8; MAX_FRAME_BYTES + 1];
+                    let packet_len = Encoder::new(coded_channels)
+                        .unwrap()
+                        .encode_silk_bandwidth_duration(
+                            &input[..input_samples],
+                            48_000,
+                            bandwidth,
+                            duration_us as u32,
+                            &mut packet,
+                        )
+                        .unwrap();
+
+                    for output_channels in [1u8, 2] {
+                        for sample_rate in [8_000usize, 12_000, 16_000, 24_000, 48_000] {
+                            let frames = sample_rate * duration_us / 1_000_000;
+                            let samples = frames * usize::from(output_channels);
+                            let mut decoded = [1i16; 5_760];
+                            let mut decoder = Decoder::new(output_channels).unwrap();
+                            assert_eq!(
+                                decoder.decode(
+                                    &packet[..packet_len],
+                                    &mut decoded[..samples],
+                                    sample_rate as u32,
+                                ),
+                                Ok(frames)
+                            );
+
+                            let mut guarded = [0x35a7i16; 5_762];
+                            assert_eq!(
+                                decoder
+                                    .decode_loss(&mut guarded[1..samples + 1], sample_rate as u32,),
+                                Ok(frames),
+                                "coded_channels={coded_channels} output_channels={output_channels} bandwidth={bandwidth:?} duration_us={duration_us} sample_rate={sample_rate}",
+                            );
+                            assert_eq!((guarded[0], guarded[samples + 1]), (0x35a7, 0x35a7));
+                            assert!(guarded[1..samples + 1].iter().any(|&sample| sample != 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn public_decoder_reports_deterministic_final_entropy_ranges() {
         let mut input = [0i16; 960];
         for (index, sample) in input.iter_mut().enumerate() {
@@ -4221,12 +4732,11 @@ mod tests {
         assert_eq!(combined.final_range(), last_only.final_range());
     }
 
-    #[test]
-    fn public_fec_decode_returns_regular_and_lbrr_audio_once() {
+    fn fec_test_parameters() -> MonoFrameParameters {
         let mut excitation = [0i32; MAX_EXCITATION_SAMPLES];
         excitation[0] = 2;
         excitation[20] = -1;
-        let parameters = MonoFrameParameters {
+        MonoFrameParameters {
             signal: SignalType::Unvoiced,
             quantization: QuantizationOffset::Low,
             gain_symbols: [20, 4, 4, 4],
@@ -4244,7 +4754,12 @@ mod tests {
             seed: 1,
             rate_level: 0,
             excitation,
-        };
+        }
+    }
+
+    #[test]
+    fn public_fec_decode_returns_regular_and_lbrr_audio_once() {
+        let parameters = fec_test_parameters();
         let header = LayerHeader {
             channels: 1,
             frames: 1,
@@ -4281,6 +4796,651 @@ mod tests {
         );
         assert!(regular.iter().any(|&sample| sample != 0));
         assert!(fec.iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
+    fn partial_mono_lbrr_counts_and_zero_fills_only_protected_intervals() {
+        let parameters = fec_test_parameters();
+        let regular_parameters = [parameters; 3];
+        let fec_parameters = [Some(&parameters), None, Some(&parameters)];
+        for (duration_ms, interval_count, mask) in [(40u8, 2usize, 0b01u8), (60, 3, 0b101)] {
+            let header = LayerHeader {
+                channels: 1,
+                frames: interval_count as u8,
+                channel: [
+                    ChannelHeader {
+                        vad: (1 << interval_count) - 1,
+                        lbrr: mask,
+                    },
+                    ChannelHeader { vad: 0, lbrr: 0 },
+                ],
+            };
+            let mut packet = [0u8; MAX_FRAME_BYTES + 1];
+            packet[0] = (duration_ms / 20) << 3;
+            let payload = MonoPayloadEncoder::new()
+                .encode(
+                    &mut packet[1..],
+                    Bandwidth::Narrow,
+                    duration_ms,
+                    header,
+                    &regular_parameters[..interval_count],
+                    &fec_parameters[..interval_count],
+                )
+                .unwrap();
+
+            for sample_rate in [8_000usize, 12_000, 16_000, 24_000, 48_000] {
+                let output_frames = sample_rate * usize::from(duration_ms) / 1_000;
+                let interval_frames = sample_rate / 50;
+                let mut regular = [0i16; 2_880];
+                let mut fec = [0i16; 2_880];
+                assert_eq!(
+                    Decoder::new(1).unwrap().decode_with_fec(
+                        &packet[..payload + 1],
+                        &mut regular[..output_frames],
+                        &mut fec[..output_frames],
+                        sample_rate as u32,
+                    ),
+                    Ok(FecDecodeResult {
+                        frames: output_frames,
+                        fec_frames: interval_frames * mask.count_ones() as usize,
+                    }),
+                    "duration_ms={duration_ms} sample_rate={sample_rate}",
+                );
+                for interval in 0..interval_count {
+                    let span = &fec[interval * interval_frames..(interval + 1) * interval_frames];
+                    if mask & (1 << interval) == 0 {
+                        assert!(span.iter().all(|&sample| sample == 0));
+                    } else {
+                        assert!(span.iter().any(|&sample| sample != 0));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contiguous_mono_lbrr_intervals_keep_one_resampling_grid() {
+        let parameters = fec_test_parameters();
+        let regular_parameters = [parameters; 3];
+        let fec_parameters = [Some(&parameters); 3];
+        for (duration_ms, interval_count) in [(40u8, 2usize), (60, 3)] {
+            let mask = (1u8 << interval_count) - 1;
+            let header = LayerHeader {
+                channels: 1,
+                frames: interval_count as u8,
+                channel: [
+                    ChannelHeader {
+                        vad: mask,
+                        lbrr: mask,
+                    },
+                    ChannelHeader { vad: 0, lbrr: 0 },
+                ],
+            };
+            let mut packet = [0u8; MAX_FRAME_BYTES + 1];
+            packet[0] = (duration_ms / 20) << 3;
+            let payload = MonoPayloadEncoder::new()
+                .encode(
+                    &mut packet[1..],
+                    Bandwidth::Narrow,
+                    duration_ms,
+                    header,
+                    &regular_parameters[..interval_count],
+                    &fec_parameters[..interval_count],
+                )
+                .unwrap();
+            let native_frames = 8 * usize::from(duration_ms);
+            let mut native_regular = [0.0f32; 480];
+            let mut native_fec = [0.0f32; 480];
+            MonoPayloadDecoder::new()
+                .decode(
+                    &packet[1..payload + 1],
+                    Bandwidth::Narrow,
+                    duration_ms,
+                    &mut native_regular[..native_frames],
+                    &mut native_fec[..native_frames],
+                )
+                .unwrap();
+
+            for sample_rate in [12_000usize, 16_000, 24_000, 48_000] {
+                let output_frames = sample_rate * usize::from(duration_ms) / 1_000;
+                let mut expected_float = [0.0f32; 2_880];
+                silk::resample_linear(
+                    &native_fec[..native_frames],
+                    &mut expected_float[..output_frames],
+                )
+                .unwrap();
+                let mut expected = [0i16; 2_880];
+                for frame in 0..output_frames {
+                    expected[frame] = float_to_i16(expected_float[frame]);
+                }
+                let mut regular = [0i16; 2_880];
+                let mut fec = [0i16; 2_880];
+                assert_eq!(
+                    Decoder::new(1).unwrap().decode_with_fec(
+                        &packet[..payload + 1],
+                        &mut regular[..output_frames],
+                        &mut fec[..output_frames],
+                        sample_rate as u32,
+                    ),
+                    Ok(FecDecodeResult {
+                        frames: output_frames,
+                        fec_frames: output_frames,
+                    }),
+                    "duration_ms={duration_ms} sample_rate={sample_rate}",
+                );
+                assert_eq!(
+                    &fec[..output_frames],
+                    &expected[..output_frames],
+                    "duration_ms={duration_ms} sample_rate={sample_rate}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn asymmetric_stereo_lbrr_preserves_unprotected_interval_boundaries() {
+        let parameters = fec_test_parameters();
+        let prediction = prediction_from_indices(12, 1, 2, 1, 2).unwrap();
+        let coded = StereoFrameParameters {
+            prediction: Some(&prediction),
+            mid_only: None,
+            mid: Some(&parameters),
+            side: Some(&parameters),
+        };
+        let absent = StereoFrameParameters {
+            prediction: None,
+            mid_only: None,
+            mid: None,
+            side: None,
+        };
+        let mid_only = StereoFrameParameters {
+            prediction: Some(&prediction),
+            mid_only: Some(true),
+            mid: Some(&parameters),
+            side: None,
+        };
+        let side_only = StereoFrameParameters {
+            prediction: None,
+            mid_only: None,
+            mid: None,
+            side: Some(&parameters),
+        };
+        let regular_parameters = [coded; 3];
+        let standalone_header = LayerHeader {
+            channels: 2,
+            frames: 1,
+            channel: [
+                ChannelHeader {
+                    vad: 0b1,
+                    lbrr: 0b1,
+                },
+                ChannelHeader { vad: 0b1, lbrr: 0 },
+            ],
+        };
+        let mut standalone_packet = [0u8; MAX_FRAME_BYTES + 1];
+        standalone_packet[0] = 1 << 3 | 1 << 2;
+        let standalone_payload = StereoPayloadEncoder::new()
+            .encode(
+                &mut standalone_packet[1..],
+                Bandwidth::Narrow,
+                20,
+                standalone_header,
+                &[coded],
+                &[mid_only],
+            )
+            .unwrap();
+        for (fec_parameters, mid_mask, side_mask) in [
+            ([coded, absent, mid_only], 0b101u8, 0b001u8),
+            ([coded, absent, side_only], 0b001, 0b101),
+        ] {
+            let header = LayerHeader {
+                channels: 2,
+                frames: 3,
+                channel: [
+                    ChannelHeader {
+                        vad: 0b111,
+                        lbrr: mid_mask,
+                    },
+                    ChannelHeader {
+                        vad: 0b111,
+                        lbrr: side_mask,
+                    },
+                ],
+            };
+            let mut packet = [0u8; MAX_FRAME_BYTES + 1];
+            packet[0] = 3 << 3 | 1 << 2;
+            let payload = StereoPayloadEncoder::new()
+                .encode(
+                    &mut packet[1..],
+                    Bandwidth::Narrow,
+                    60,
+                    header,
+                    &regular_parameters,
+                    &fec_parameters,
+                )
+                .unwrap();
+
+            for sample_rate in [8_000usize, 12_000, 16_000, 24_000, 48_000] {
+                let interval_frames = sample_rate / 50;
+                let output_frames = interval_frames * 3;
+                let interval_samples = interval_frames * 2;
+                let mut regular = [0i16; 5_760];
+                let mut fec = [0i16; 5_760];
+                assert_eq!(
+                    Decoder::new(2).unwrap().decode_with_fec(
+                        &packet[..payload + 1],
+                        &mut regular[..output_frames * 2],
+                        &mut fec[..output_frames * 2],
+                        sample_rate as u32,
+                    ),
+                    Ok(FecDecodeResult {
+                        frames: output_frames,
+                        fec_frames: interval_frames * mid_mask.count_ones() as usize,
+                    }),
+                    "mid_mask={mid_mask:#05b} side_mask={side_mask:#05b} sample_rate={sample_rate}",
+                );
+                for interval in 0..3 {
+                    let start = interval * interval_samples;
+                    let span = &fec[start..start + interval_samples];
+                    if mid_mask & (1 << interval) == 0 {
+                        assert!(span.iter().all(|&sample| sample == 0));
+                    } else {
+                        assert!(span.iter().any(|&sample| sample != 0));
+                    }
+                }
+                if mid_mask == 0b101 {
+                    let mut standalone_regular = [0i16; 1_920];
+                    let mut standalone_fec = [0i16; 1_920];
+                    assert_eq!(
+                        Decoder::new(2).unwrap().decode_with_fec(
+                            &standalone_packet[..standalone_payload + 1],
+                            &mut standalone_regular[..interval_samples],
+                            &mut standalone_fec[..interval_samples],
+                            sample_rate as u32,
+                        ),
+                        Ok(FecDecodeResult {
+                            frames: interval_frames,
+                            fec_frames: interval_frames,
+                        }),
+                    );
+                    assert_eq!(
+                        &fec[2 * interval_samples..3 * interval_samples],
+                        &standalone_fec[..interval_samples],
+                        "later mid-only FEC retained hidden pre-gap stereo history at sample_rate={sample_rate}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn silk_entry_points_reset_state_after_celt_even_through_dtx() {
+        let make_pcm = |scale: i32| {
+            let mut pcm = [0i16; 960];
+            for (index, sample) in pcm.iter_mut().enumerate() {
+                *sample = (((index % 43) as i32 - 21) * scale) as i16;
+            }
+            pcm
+        };
+        let first_pcm = make_pcm(350);
+        let next_pcm = make_pcm(700);
+        let celt_pcm = make_pcm(1_100);
+        let mut first_silk = [0u8; MAX_FRAME_BYTES + 1];
+        let first_silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&first_pcm, 48_000, &mut first_silk)
+            .unwrap();
+        let mut next_silk = [0u8; MAX_FRAME_BYTES + 1];
+        let next_silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&next_pcm, 48_000, &mut next_silk)
+            .unwrap();
+        let mut celt = [0u8; MAX_FRAME_BYTES + 1];
+        let celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&celt_pcm, 48_000, &mut celt)
+            .unwrap();
+        let dtx = [1 << 3, 0x7f];
+
+        let mut scratch = [0i16; 960];
+        let mut fec = [0i16; 960];
+        let mut transitioned = Decoder::new(1).unwrap();
+        transitioned
+            .decode(&first_silk[..first_silk_len], &mut scratch, 48_000)
+            .unwrap();
+        transitioned
+            .decode(&celt[..celt_len], &mut scratch, 48_000)
+            .unwrap();
+        let mut actual = [0i16; 960];
+        transitioned
+            .decode_with_fec(&next_silk[..next_silk_len], &mut actual, &mut fec, 48_000)
+            .unwrap();
+        let mut expected = [0i16; 960];
+        Decoder::new(1)
+            .unwrap()
+            .decode_with_fec(&next_silk[..next_silk_len], &mut expected, &mut fec, 48_000)
+            .unwrap();
+        assert_eq!(actual, expected);
+
+        let mut fec_transitioned = Decoder::new(1).unwrap();
+        fec_transitioned
+            .decode(&first_silk[..first_silk_len], &mut scratch, 48_000)
+            .unwrap();
+        fec_transitioned
+            .decode(&celt[..celt_len], &mut scratch, 48_000)
+            .unwrap();
+        fec_transitioned
+            .decode_with_fec(&dtx, &mut scratch, &mut fec, 48_000)
+            .unwrap();
+        let mut after_fec_dtx = [0i16; 960];
+        fec_transitioned
+            .decode_with_fec(
+                &next_silk[..next_silk_len],
+                &mut after_fec_dtx,
+                &mut fec,
+                48_000,
+            )
+            .unwrap();
+        let mut fresh_after_fec_dtx = Decoder::new(1).unwrap();
+        fresh_after_fec_dtx
+            .decode_with_fec(&dtx, &mut scratch, &mut fec, 48_000)
+            .unwrap();
+        fresh_after_fec_dtx
+            .decode_with_fec(&next_silk[..next_silk_len], &mut expected, &mut fec, 48_000)
+            .unwrap();
+        assert_eq!(after_fec_dtx, expected);
+
+        let mut regular_transitioned = Decoder::new(1).unwrap();
+        regular_transitioned
+            .decode(&first_silk[..first_silk_len], &mut scratch, 48_000)
+            .unwrap();
+        regular_transitioned
+            .decode(&celt[..celt_len], &mut scratch, 48_000)
+            .unwrap();
+        regular_transitioned
+            .decode(&dtx, &mut scratch, 48_000)
+            .unwrap();
+        let mut after_regular_dtx = [0i16; 960];
+        regular_transitioned
+            .decode(&next_silk[..next_silk_len], &mut after_regular_dtx, 48_000)
+            .unwrap();
+        let mut fresh_after_regular_dtx = Decoder::new(1).unwrap();
+        fresh_after_regular_dtx
+            .decode(&dtx, &mut scratch, 48_000)
+            .unwrap();
+        fresh_after_regular_dtx
+            .decode(&next_silk[..next_silk_len], &mut expected, 48_000)
+            .unwrap();
+        assert_eq!(after_regular_dtx, expected);
+    }
+
+    #[test]
+    fn target_mode_dtx_does_not_hide_celt_or_hybrid_state_transitions() {
+        let make_pcm = |scale: i32| {
+            let mut pcm = [0i16; 960];
+            for (index, sample) in pcm.iter_mut().enumerate() {
+                *sample = (((index % 47) as i32 - 23) * scale) as i16;
+            }
+            pcm
+        };
+        let first_pcm = make_pcm(300);
+        let middle_pcm = make_pcm(700);
+        let target_pcm = make_pcm(1_100);
+        let mut first_celt = [0u8; MAX_FRAME_BYTES + 1];
+        let first_celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&first_pcm, 48_000, &mut first_celt)
+            .unwrap();
+        let mut target_celt = [0u8; MAX_FRAME_BYTES + 1];
+        let target_celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&target_pcm, 48_000, &mut target_celt)
+            .unwrap();
+        let mut silk = [0u8; MAX_FRAME_BYTES + 1];
+        let silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&middle_pcm, 48_000, &mut silk)
+            .unwrap();
+        let celt_dtx = [31 << 3, 0x7f];
+        let mut scratch = [0i16; 960];
+        let mut stale_celt = Decoder::new(1).unwrap();
+        stale_celt
+            .decode(&first_celt[..first_celt_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_celt
+            .decode(&silk[..silk_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_celt.decode(&celt_dtx, &mut scratch, 48_000).unwrap();
+        let mut actual_celt = [0i16; 960];
+        stale_celt
+            .decode(&target_celt[..target_celt_len], &mut actual_celt, 48_000)
+            .unwrap();
+        let mut fresh_celt = Decoder::new(1).unwrap();
+        fresh_celt
+            .decode(&silk[..silk_len], &mut scratch, 48_000)
+            .unwrap();
+        fresh_celt.decode(&celt_dtx, &mut scratch, 48_000).unwrap();
+        let mut expected_celt = [0i16; 960];
+        fresh_celt
+            .decode(&target_celt[..target_celt_len], &mut expected_celt, 48_000)
+            .unwrap();
+        assert_eq!(actual_celt, expected_celt);
+
+        let mut first_hybrid = [0u8; MAX_FRAME_BYTES + 1];
+        let first_hybrid_len = Encoder::new(1)
+            .unwrap()
+            .encode_hybrid(&first_pcm, 48_000, &mut first_hybrid)
+            .unwrap();
+        let mut target_hybrid = [0u8; MAX_FRAME_BYTES + 1];
+        let target_hybrid_len = Encoder::new(1)
+            .unwrap()
+            .encode_hybrid(&target_pcm, 48_000, &mut target_hybrid)
+            .unwrap();
+        let hybrid_dtx = [15 << 3, 0x7f];
+        let mut stale_hybrid = Decoder::new(1).unwrap();
+        stale_hybrid
+            .decode(&first_hybrid[..first_hybrid_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_hybrid
+            .decode(&first_celt[..first_celt_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_hybrid
+            .decode(&hybrid_dtx, &mut scratch, 48_000)
+            .unwrap();
+        let mut actual_hybrid = [0i16; 960];
+        stale_hybrid
+            .decode(
+                &target_hybrid[..target_hybrid_len],
+                &mut actual_hybrid,
+                48_000,
+            )
+            .unwrap();
+        let mut fresh_hybrid = Decoder::new(1).unwrap();
+        fresh_hybrid
+            .decode(&first_celt[..first_celt_len], &mut scratch, 48_000)
+            .unwrap();
+        fresh_hybrid
+            .decode(&hybrid_dtx, &mut scratch, 48_000)
+            .unwrap();
+        let mut expected_hybrid = [0i16; 960];
+        fresh_hybrid
+            .decode(
+                &target_hybrid[..target_hybrid_len],
+                &mut expected_hybrid,
+                48_000,
+            )
+            .unwrap();
+        assert_eq!(actual_hybrid, expected_hybrid);
+    }
+
+    #[test]
+    fn mode_switching_dtx_prepares_target_state_for_loss_concealment() {
+        let make_pcm = |scale: i32| {
+            let mut pcm = [0i16; 960];
+            for (index, sample) in pcm.iter_mut().enumerate() {
+                *sample = (((index % 41) as i32 - 20) * scale) as i16;
+            }
+            pcm
+        };
+        let first_pcm = make_pcm(400);
+        let middle_pcm = make_pcm(900);
+        let mut first_silk = [0u8; MAX_FRAME_BYTES + 1];
+        let first_silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&first_pcm, 48_000, &mut first_silk)
+            .unwrap();
+        let mut middle_silk = [0u8; MAX_FRAME_BYTES + 1];
+        let middle_silk_len = Encoder::new(1)
+            .unwrap()
+            .encode(&middle_pcm, 48_000, &mut middle_silk)
+            .unwrap();
+        let mut first_celt = [0u8; MAX_FRAME_BYTES + 1];
+        let first_celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&first_pcm, 48_000, &mut first_celt)
+            .unwrap();
+        let mut middle_celt = [0u8; MAX_FRAME_BYTES + 1];
+        let middle_celt_len = Encoder::new(1)
+            .unwrap()
+            .encode_celt(&middle_pcm, 48_000, &mut middle_celt)
+            .unwrap();
+        let silk_dtx = [1 << 3, 0x7f];
+        let celt_dtx = [31 << 3, 0x7f];
+        let mut scratch = [0i16; 960];
+
+        let mut stale_silk = Decoder::new(1).unwrap();
+        stale_silk
+            .decode(&first_silk[..first_silk_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_silk
+            .decode(&middle_celt[..middle_celt_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_silk.decode(&silk_dtx, &mut scratch, 48_000).unwrap();
+        let mut actual_silk_loss = [0i16; 960];
+        stale_silk
+            .decode_loss(&mut actual_silk_loss, 48_000)
+            .unwrap();
+        let mut fresh_silk = Decoder::new(1).unwrap();
+        fresh_silk
+            .decode(&middle_celt[..middle_celt_len], &mut scratch, 48_000)
+            .unwrap();
+        fresh_silk.decode(&silk_dtx, &mut scratch, 48_000).unwrap();
+        let mut expected_silk_loss = [0i16; 960];
+        fresh_silk
+            .decode_loss(&mut expected_silk_loss, 48_000)
+            .unwrap();
+        assert_eq!(actual_silk_loss, expected_silk_loss);
+        assert!(actual_silk_loss.iter().all(|&sample| sample == 0));
+
+        let mut stale_celt = Decoder::new(1).unwrap();
+        stale_celt
+            .decode(&first_celt[..first_celt_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_celt
+            .decode(&middle_silk[..middle_silk_len], &mut scratch, 48_000)
+            .unwrap();
+        stale_celt.decode(&celt_dtx, &mut scratch, 48_000).unwrap();
+        let mut actual_celt_loss = [0i16; 960];
+        stale_celt
+            .decode_loss(&mut actual_celt_loss, 48_000)
+            .unwrap();
+        let mut fresh_celt = Decoder::new(1).unwrap();
+        fresh_celt
+            .decode(&middle_silk[..middle_silk_len], &mut scratch, 48_000)
+            .unwrap();
+        fresh_celt.decode(&celt_dtx, &mut scratch, 48_000).unwrap();
+        let mut expected_celt_loss = [0i16; 960];
+        fresh_celt
+            .decode_loss(&mut expected_celt_loss, 48_000)
+            .unwrap();
+        assert_eq!(actual_celt_loss, expected_celt_loss);
+        assert!(actual_celt_loss.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn decode_with_fec_regular_path_covers_every_silk_duration_rate_and_channel_geometry() {
+        for coded_channels in [1u8, 2] {
+            for bandwidth in [Bandwidth::Narrow, Bandwidth::Medium, Bandwidth::Wide] {
+                for duration_us in [10_000usize, 20_000, 40_000, 60_000] {
+                    let input_frames = 48_000 * duration_us / 1_000_000;
+                    let input_samples = input_frames * usize::from(coded_channels);
+                    let mut input = [0i16; 5_760];
+                    for (index, sample) in input[..input_samples].iter_mut().enumerate() {
+                        *sample = (((index % 37) as i32 - 18) * 1_200) as i16;
+                    }
+                    let mut packet = [0u8; MAX_FRAME_BYTES + 1];
+                    let packet_len = Encoder::new(coded_channels)
+                        .unwrap()
+                        .encode_silk_bandwidth_duration(
+                            &input[..input_samples],
+                            48_000,
+                            bandwidth,
+                            duration_us as u32,
+                            &mut packet,
+                        )
+                        .unwrap();
+                    assert!(packet_len > 2);
+
+                    for output_channels in [1u8, 2] {
+                        for sample_rate in [8_000usize, 12_000, 16_000, 24_000, 48_000] {
+                            let frames = sample_rate * duration_us / 1_000_000;
+                            let samples = frames * usize::from(output_channels);
+                            let mut regular = [0x35a7i16; 5_762];
+                            let mut fec = [0x6b19i16; 5_762];
+                            assert_eq!(
+                                Decoder::new(output_channels).unwrap().decode_with_fec(
+                                    &packet[..packet_len],
+                                    &mut regular[1..samples + 1],
+                                    &mut fec[1..samples + 1],
+                                    sample_rate as u32,
+                                ),
+                                Ok(FecDecodeResult {
+                                    frames,
+                                    fec_frames: 0,
+                                }),
+                                "coded_channels={coded_channels} output_channels={output_channels} bandwidth={bandwidth:?} duration_us={duration_us} sample_rate={sample_rate}",
+                            );
+                            assert_eq!((regular[0], regular[samples + 1]), (0x35a7, 0x35a7));
+                            assert_eq!((fec[0], fec[samples + 1]), (0x6b19, 0x6b19));
+                            assert!(fec[1..samples + 1].iter().all(|&sample| sample == 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fec_decode_treats_every_one_byte_silk_frame_as_dtx() {
+        for config in 0u8..12 {
+            for stereo in [false, true] {
+                for payload in [0x00u8, 0x7f, 0xff] {
+                    let packet = [config << 3 | u8::from(stereo) << 2, payload];
+                    let parsed = Packet::parse(&packet).unwrap();
+                    let frames = 48_000 * parsed.frame_duration_us as usize / 1_000_000;
+                    let samples = frames * 2;
+                    let mut regular = [1i16; 5_760];
+                    let mut fec = [1i16; 5_760];
+                    let mut decoder = Decoder::new(2).unwrap();
+                    assert_eq!(
+                        decoder.decode_with_fec(
+                            &packet,
+                            &mut regular[..samples],
+                            &mut fec[..samples],
+                            48_000,
+                        ),
+                        Ok(FecDecodeResult {
+                            frames,
+                            fec_frames: 0,
+                        }),
+                        "config={config} stereo={stereo} payload={payload:#04x}",
+                    );
+                    assert!(regular[..samples].iter().all(|&sample| sample == 0));
+                    assert!(fec[..samples].iter().all(|&sample| sample == 0));
+                    assert_eq!(decoder.final_range(), 0);
+                }
+            }
+        }
     }
 
     #[test]

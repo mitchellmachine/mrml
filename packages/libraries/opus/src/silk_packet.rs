@@ -358,13 +358,12 @@ impl StereoPayloadDecoder {
                     side_context,
                     &mut scratch[..interval_samples],
                 )?;
-                self.fec.reset_mid();
             }
             if has_mid || has_side {
                 fec_samples += interval_samples;
             }
             if !has_mid {
-                self.fec.reset_mid();
+                self.fec.reset_mid_and_unmixer();
             }
             if !has_side {
                 self.fec.reset_side();
