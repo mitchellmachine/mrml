@@ -32,8 +32,8 @@ repository authority.
 The hosted loader opens an absolute config path with `O_NOFOLLOW`, requires one
 bounded regular file owned by root or the configured Gitd UID, and rejects
 group/world-writable modes. The native `mrml-gitd validate-config CONFIG`
-command also validates every authoritative storage path before reporting
-success: each path component must be a directory rather than a symlink, unsafe
+command also validates every authoritative storage path and both exact catalog
+digests before reporting success: each path component must be a directory rather than a symlink, unsafe
 writable parents are rejected, leaf ownership must exactly match the configured
 Gitd UID/GID, and writable roots must have owner write authority without
 group/world write. The policy root may be owner-read-only. This command does not

@@ -7,7 +7,8 @@ use mrml_certificate::{CertdChannelCapability, CertdPeerIdentity};
 use mrml_crypto::erase_secret_bytes;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
-    GitAuthorityChannelClient, GitdCertdChannelClient, load_gitd_config, validate_storage_layout,
+    GitAuthorityChannelClient, GitdCertdChannelClient, load_deployment_catalog, load_gitd_config,
+    validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -27,6 +28,7 @@ fn run() -> Result<(), ()> {
         }
         let config = load_gitd_config(Path::new(config)).map_err(|_| ())?;
         validate_storage_layout(&config).map_err(|_| ())?;
+        load_deployment_catalog(&config).map_err(|_| ())?;
         println!("valid");
         return Ok(());
     }
@@ -36,6 +38,7 @@ fn run() -> Result<(), ()> {
         }
         let config = load_gitd_config(Path::new(config_path)).map_err(|_| ())?;
         validate_storage_layout(&config).map_err(|_| ())?;
+        load_deployment_catalog(&config).map_err(|_| ())?;
         let authority_capability =
             load_authority_capability(config.authority_capability.as_path(), config.authority_uid)?;
         let certd_capability =
