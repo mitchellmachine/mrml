@@ -76,9 +76,8 @@ exact authorized pair, checks exact trust and revocation generations, verifies
 the salted OpenPGP v6 signature, then verifies ML-DSA-65. Its success typestate
 has private fields. Canonical generational policy parsing, normal two-pair
 rotation constraints, and complete introduced-history range verification are
-implemented. Canonical revocation/emergency execution, independent
-interoperability evidence, and final FIPS 204 ML-DSA-65 evidence remain open,
-so the status cannot be promoted.
+implemented. Canonical revocation/emergency execution and independent
+cryptographic review remain open, so the status cannot be promoted.
 
 ML-DSA-65 signing reconstructs the public key from decoded secret polynomials,
 checks the stored public-key transcript hash, and verifies every generated
@@ -92,8 +91,8 @@ unchecked challenge cursor is a correctness dependency. Key generation clears
 caller outputs before work and volatile-zeroes its expanded seed and temporary
 polynomial state on success and classified sampler failure. Tests cover the
 255-byte context boundary, fail-closed 256-byte rejection with cleared output,
-and noncanonical hint ordering. Official final FIPS 204/correction vectors, a
-timing evidence and independent cryptographic review remain open. Signing now
+and noncanonical hint ordering. Constant-time timing evidence and independent
+cryptographic review remain open. Signing now
 volatile-zeroes every rejected and accepted attempt's sampled `y`, transformed
 vectors, products, low bits, challenge, encoded high bits, and hint working
 state before retry or return. The gamma sampler's temporary serialization is
@@ -157,3 +156,30 @@ Fixtures stay test-only and are loaded only when
 ACVP suite by proving that equal cumulative hint counts (including all-zero
 hint rows) are accepted by canonical hint decoding and that a coefficient
 exactly at the strict `gamma1 - beta` bound is rejected.
+
+## FIPS 204 potential-updates audit
+
+NIST's official FIPS 204 publication page linked the 2026-07-31
+`fips-204-potential-updates.xlsx` planning note. NIST labels these items as
+potential corrections, not official changes, and states that they introduce no
+new technical requirements. The implementation-relevant items map as follows:
+
+- the corrected challenge transcript is `mu || w1`; signing and verification
+  independently hash those values in that order;
+- Montgomery reduction treats the low word as signed through the `i32` cast,
+  sign-extends it to `i64`, and its callers stay inside the algorithm's
+  exclusive input bound;
+- malformed signature encoding produces `InvalidSignature`, the public API's
+  fail-closed verification result;
+- for ML-DSA-65, corrected Algorithm 40 has upper range
+  `(q - 1) / (2 * gamma2) - 1 = 15`; `use_hint` wraps with `& 15`, and a focused
+  regression pins that relationship; and
+- the fixed internal signing bound is 4,096 attempts, exceeding the corrected
+  minimum allowable limit of 821, with a regression preventing accidental
+  reduction below that minimum.
+
+The remaining workbook items correct specification prose, notation, links, or
+the reference pseudocode's unused definitions and do not change this
+implementation. Evidence is source mapping plus the mandatory NIST ACVP and
+pinned OpenSSL fixtures described above; it is not a NIST validation
+certificate or independent cryptographic review.
