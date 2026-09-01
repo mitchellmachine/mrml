@@ -5,7 +5,7 @@ use std::path::Path;
 
 use mrml_crypto::erase_secret_bytes;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
-use mrml_gitd::GitAuthorityChannelClient;
+use mrml_gitd::{GitAuthorityChannelClient, load_gitd_config};
 
 const O_NOFOLLOW: i32 = 0x20_000;
 
@@ -18,6 +18,14 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if let [_, command, config] = arguments.as_slice() {
+        if command != "validate-config" {
+            return Err(());
+        }
+        load_gitd_config(Path::new(config)).map_err(|_| ())?;
+        println!("valid");
+        return Ok(());
+    }
     let [
         _,
         command,
@@ -32,7 +40,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };

@@ -1,6 +1,10 @@
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_CONFIG_BYTES: usize = 32 * 1024;
+const O_NOFOLLOW: i32 = 0x20_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GitdConfig {
@@ -32,6 +36,10 @@ pub struct GitdConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdConfigError {
+    Open,
+    Metadata,
+    Permissions,
+    Read,
     Size,
     Encoding,
     Syntax,
@@ -39,6 +47,38 @@ pub enum GitdConfigError {
     DuplicateField,
     MissingField,
     InvalidValue,
+}
+
+pub fn load_gitd_config(path: &Path) -> Result<GitdConfig, GitdConfigError> {
+    if !path.is_absolute() {
+        return Err(GitdConfigError::InvalidValue);
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| GitdConfigError::Open)?;
+    let metadata = file.metadata().map_err(|_| GitdConfigError::Metadata)?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || mode & 0o022 != 0
+        || mode & 0o444 == 0
+        || metadata.len() == 0
+        || metadata.len() > MAX_CONFIG_BYTES as u64
+    {
+        return Err(GitdConfigError::Permissions);
+    }
+    let length = usize::try_from(metadata.len()).map_err(|_| GitdConfigError::Size)?;
+    let mut input = vec![0u8; length];
+    file.read_exact(&mut input)
+        .map_err(|_| GitdConfigError::Read)?;
+    let config = parse_gitd_config(&input)?;
+    if metadata.uid() != 0 && metadata.uid() != config.gitd_uid {
+        return Err(GitdConfigError::Permissions);
+    }
+    Ok(config)
 }
 
 pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
@@ -254,6 +294,8 @@ fn parse_server_name(value: &str) -> Result<String, GitdConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
 
@@ -302,5 +344,29 @@ mod tests {
             ),
             Err(GitdConfigError::InvalidValue)
         );
+    }
+
+    #[test]
+    fn hosted_loader_rejects_symlinks_and_insecure_modes() {
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-config-loader-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let config = root.join("gitd.conf");
+        fs::write(&config, VALID).unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+        let owned = VALID.replace(
+            "gitd_uid=21001",
+            &format!("gitd_uid={}", fs::metadata(&config).unwrap().uid()),
+        );
+        fs::write(&config, owned).unwrap();
+        assert!(load_gitd_config(&config).is_ok());
+
+        let link = root.join("link.conf");
+        symlink(&config, &link).unwrap();
+        assert_eq!(load_gitd_config(&link), Err(GitdConfigError::Open));
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(load_gitd_config(&config), Err(GitdConfigError::Permissions));
+        fs::remove_dir_all(root).unwrap();
     }
 }
