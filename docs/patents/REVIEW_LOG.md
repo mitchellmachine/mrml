@@ -11240,6 +11240,14 @@ versioned authenticated records and prepare/commit/authoritative-read recovery
 receipts. It adds no protocol mechanism covered by the scoped ACME review and
 no recorded re-review trigger.
 
+# 2026-09-01 — RFC 9773 certificate identity and renewal scheduler
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment implements ordinary RFC 9773
+certificate-ID derivation, suggested-window parsing, randomized scheduling,
+replacement binding, and a certificate-lifetime fallback. It adds no recorded
+re-review-trigger mechanism.
+
 # 2026-09-01 — Typed ACME problem documents
 
 Patent review: **NOT_TRIGGERED** beyond the owner-supplied

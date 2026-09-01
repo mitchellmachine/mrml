@@ -110,6 +110,7 @@ const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
 const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
 const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
 const EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
+const AUTHORITY_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x23];
 const SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
 const OCSP_SIGNING: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09];
 const ANY_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25, 0x00];
@@ -382,6 +383,32 @@ impl<'a> Certificate<'a> {
     /// The DER INTEGER contents of the certificate serial number.
     pub fn serial(&self) -> &'a [u8] {
         self.serial
+    }
+
+    pub fn authority_key_identifier(&self) -> Result<&'a [u8], CertificateError> {
+        let value = self
+            .extension(AUTHORITY_KEY_IDENTIFIER)?
+            .ok_or(CertificateError::Malformed)?;
+        let mut outer = Reader::new(value);
+        let sequence = outer.next()?;
+        outer.finish()?;
+        if sequence.tag != 0x30 {
+            return Err(CertificateError::Malformed);
+        }
+        let mut fields = Reader::new(sequence.value);
+        let mut identifier = None;
+        while fields.position < fields.bytes.len() {
+            let field = fields.next()?;
+            if field.tag == 0x80 {
+                if identifier.is_some() || field.value.is_empty() || field.value.len() > 64 {
+                    return Err(CertificateError::Malformed);
+                }
+                identifier = Some(field.value);
+            } else if !matches!(field.tag, 0xa1 | 0x82) {
+                return Err(CertificateError::Malformed);
+            }
+        }
+        identifier.ok_or(CertificateError::Malformed)
     }
 
     pub(crate) fn subject_name_der(&self) -> &'a [u8] {
@@ -743,7 +770,8 @@ fn validate_extensions(extensions: &[u8]) -> Result<(), CertificateError> {
         let supported = oid.value == SUBJECT_ALT_NAME
             || oid.value == BASIC_CONSTRAINTS
             || oid.value == KEY_USAGE
-            || oid.value == EXTENDED_KEY_USAGE;
+            || oid.value == EXTENDED_KEY_USAGE
+            || oid.value == AUTHORITY_KEY_IDENTIFIER;
         if critical && !supported {
             return Err(CertificateError::UnsupportedCriticalExtension);
         }

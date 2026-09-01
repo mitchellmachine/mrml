@@ -1,4 +1,4 @@
-use mrml_acme::{CaClass, CertificateProfile, DnsIdentifier, P256Jwk};
+use mrml_acme::{AriCertificateId, CaClass, CertificateProfile, DnsIdentifier, P256Jwk};
 use mrml_crypto::Sha256;
 
 pub const MAX_CERTIFICATE_CHAIN_BYTES: usize = 65_536;
@@ -142,6 +142,7 @@ pub struct VerifiedCertificateReceipt {
     pub not_before: u64,
     pub not_after: u64,
     pub trust_store_digest: [u8; 32],
+    pub ari_certificate_id: AriCertificateId,
 }
 
 pub trait CertificateChainVerifier {
@@ -231,6 +232,12 @@ impl CertificateChainVerifier for HostedCertificateChainVerifier<'_> {
             not_before: leaf.not_before(),
             not_after: leaf.not_after(),
             trust_store_digest: policy.trust_store_digest,
+            ari_certificate_id: AriCertificateId::derive(
+                leaf.authority_key_identifier()
+                    .map_err(|_| CertificateValidationError::InvalidCertificate)?,
+                leaf.serial(),
+            )
+            .map_err(|_| CertificateValidationError::InvalidCertificate)?,
         })
     }
 }

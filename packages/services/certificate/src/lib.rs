@@ -4,6 +4,7 @@ mod certificate;
 mod challenge_dns;
 mod challenge_publisher;
 mod identity;
+mod scheduler;
 mod durable;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -22,6 +23,10 @@ pub use identity::{
     IdentityDeploymentTarget, IdentityError, IdentityManager, PreparedIdentityReceipt,
     TestedIdentityReceipt, TlsCertificateSigningKey, TlsIdentityDescriptor, TlsIdentityId,
     TlsKeyIdentity, TlsSigningRoute,
+};
+pub use scheduler::{
+    ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,
+    ReplacementBinding, SchedulerError,
 };
 pub use durable::{
     CommittedStoreReceipt, DURABLE_RECORD_VERSION, DurableAuthenticator, DurableError,

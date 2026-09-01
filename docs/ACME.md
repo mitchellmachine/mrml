@@ -82,6 +82,15 @@ secret handles, certificate secret handles, and audit records occupy distinct
 namespaces; only opaque provider handles, never key bytes, are admitted to the
 secret-handle namespaces. An uncertain commit is resolved against the store's
 authoritative generation and digest rather than guessed.
+RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
+and DER serial contents, including a required leading zero, and are carried in
+the verified-chain receipt. RenewalInfo parsing bounds and validates the exact
+RFC 3339 suggested window. The scheduler selects a randomized point inside ARI,
+binds the queried certificate identity, randomizes bounded re-query timing, and
+persists replacement relationships. Its fallback derives timing from the
+certificate's actual lifetime, applies jittered exponential backoff and
+Retry-After, and exposes healthy, warning, critical, and expired states without
+assuming a 90-day profile.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -95,7 +104,7 @@ review.
 
 General JOSE response parsing, ACME transport, concrete socket adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
-alternate-chain selection, renewal, revocation, backup/restore, CLI
+alternate-chain selection, renewal execution, revocation, backup/restore, CLI
 administration, concrete gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.

@@ -21,7 +21,10 @@ pub use account::{
     AccountError, AccountLifecycle, AccountOperation, AccountPolicy, CaClass, OwnerTermsApproval,
     PreparedAccountAction,
 };
-pub use ari::{AriError, RenewalWindow};
+pub use ari::{
+    AriCertificateId, AriError, MAX_ARI_CERTIFICATE_ID, MAX_ARI_RESPONSE_BYTES, RenewalInfo,
+    RenewalWindow,
+};
 pub use base64url::{Base64UrlError, decode_base64url, encode_base64url};
 pub use challenge::{
     ChallengeError, ChallengeLifecycle, ChallengePublicationRequest, ChallengePublisher,

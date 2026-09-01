@@ -555,6 +555,7 @@ mod tests {
             not_before: 1,
             not_after: 100,
             trust_store_digest: [3; 32],
+            ari_certificate_id: mrml_acme::AriCertificateId::derive(&[1], &[1]).unwrap(),
         };
         let id = TlsIdentityId([4; 16]);
         let mut manager = IdentityManager::new(id, 2);
