@@ -1,22 +1,25 @@
 use mrml_acmed::{
-    AcmedAccountPhase, AcmedAccountRecord, AcmedChannelRequestCounter, AcmedConfig,
-    AcmedOrderPhase, AcmedOrderRecord, AcmedRequestIdReservation, AcmeDirectoryClass,
-    MAX_ACMED_CONFIG_BYTES, parse_acmed_config,
+    AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase, AcmedChallengeRecord,
+    AcmedChannelRequestCounter, AcmedConfig, AcmedOrderPhase, AcmedOrderRecord,
+    AcmedRequestIdReservation, AcmeDirectoryClass, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
+    parse_acmed_config,
 };
 use mrml_acme::{
     AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
     AcmeIdentifier, AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, CaClass,
     HostedAcmeTransport, JoseError, MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS,
-    MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES, OrderCreateBuffers,
-    OrderLifecycle, P256Jwk, ProtectedKey, ReplayNonce, account_contacts_digest,
-    execute_prepared_account_create, execute_prepared_order_create, fetch_directory,
-    prepare_order_creation, recover_uncertain_account_creation,
+    AuthorizationState, ChallengeKind, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES, MAX_JWS_REQUEST_BYTES,
+    MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk, ProtectedKey, ReplayNonce,
+    account_contacts_digest, dns01_txt_digest, execute_prepared_account_create,
+    execute_prepared_order_create, fetch_authorization, fetch_directory, prepare_order_creation,
+    recover_uncertain_account_creation, write_key_authorization,
 };
 use mrml_certificate::{
     CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_RESPONSE_BYTES,
     AcmeJwsOperation, CertdAccountKeyRequest, CertdChannelCapability, CertdChannelOperation,
     CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
-    CertdTlsKeyRequest, CloudflareDns01Provider, ConstrainedAcmeJwsRequest,
+    CertdTlsKeyRequest, CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider,
+    Dns01PublicationRequest,
     DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
     DurableStateStore, HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE,
@@ -141,7 +144,7 @@ fn application_main() -> Result<(), &'static str> {
     let config = load_config()?;
     let state_authenticator = load_durable_authenticator(Path::new(STATE_KEY), ACMED_UID)
         .map_err(|_| "invalid acmed state authentication key")?;
-    let _provider = CloudflareDns01Provider::open(
+    let provider = CloudflareDns01Provider::open(
         Path::new(DNS_TOKEN),
         ACMED_UID,
         core::str::from_utf8(&config.zone_id).map_err(|_| "invalid zone ID")?,
@@ -154,7 +157,7 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-acmed configuration valid");
             Ok(())
         }
-        "serve" => serve(config, capability, state_authenticator),
+        "serve" => serve(config, capability, state_authenticator, provider),
         _ => Err("usage: mrml-acmed [serve|check-config]"),
     }
 }
@@ -163,6 +166,7 @@ fn serve(
     config: AcmedConfig,
     capability: CertdChannelCapability,
     mut state_authenticator: impl DurableAuthenticator,
+    mut provider: CloudflareDns01Provider,
 ) -> Result<(), &'static str> {
     let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
@@ -189,10 +193,20 @@ fn serve(
         &mut state,
         &mut state_authenticator,
     )?;
-    let _order = establish_order(
+    let (mut order, authorization_resources) = establish_order(
         &config,
         &account,
         &mut envelope_writer,
+        &mut state,
+        &mut state_authenticator,
+    )?;
+    publish_dns_challenges(
+        &config,
+        &account,
+        &mut order,
+        &authorization_resources,
+        &mut envelope_writer,
+        &mut provider,
         &mut state,
         &mut state_authenticator,
     )?;
@@ -853,6 +867,247 @@ fn persist_order_record(
     let committed = state
         .commit(prepared)
         .map_err(|_| "ACME order state commit uncertain")?;
+    Ok(committed.generation)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_dns_challenges(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    order: &mut OrderLifecycle,
+    resources: &[Option<AuthorizationResource>; MAX_AUTHORIZATIONS],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    provider: &mut impl Dns01Provider,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock precedes Unix epoch")?
+        .as_secs();
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for authorizations")?;
+    for index in 0..usize::from(config.identifier_count) {
+        let identifier = config.identifiers[index].ok_or("missing configured identifier")?;
+        let resource = resources[index].ok_or("missing ACME authorization resource")?;
+        let mut response = [0u8; MAX_DIRECTORY_BYTES];
+        let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+        signer.operation = AcmeJwsOperation::Authorization;
+        let authorization = fetch_authorization(
+            resource,
+            AcmeIdentifier::Dns(identifier),
+            Some(ChallengeKind::Dns01),
+            1,
+            now_unix,
+            &directory,
+            account,
+            order,
+            &mut exchange,
+            &mut transport,
+            signer,
+            &mut response,
+            &mut jws,
+        )
+        .map_err(|_| "cannot fetch bound ACME authorization")?;
+        if authorization.status == AuthorizationState::Valid {
+            continue;
+        }
+        if authorization.status != AuthorizationState::Pending {
+            return Err("ACME authorization is not pending or valid");
+        }
+        let challenge = authorization
+            .challenges()
+            .find(|challenge| challenge.kind == ChallengeKind::Dns01)
+            .ok_or("ACME DNS-01 challenge missing")?;
+        let mut key_authorization = [0u8; MAX_KEY_AUTHORIZATION];
+        let key_authorization_length = write_key_authorization(
+            &challenge.token,
+            account.key,
+            &mut key_authorization,
+        )
+        .map_err(|_| "cannot construct DNS-01 key authorization")?;
+        let key_authorization_digest =
+            dns01_txt_digest(&key_authorization[..key_authorization_length]);
+        let object = challenge_object_id(config.identity, index as u8, identifier);
+        let expected = AcmedChallengeRecord {
+            phase: AcmedChallengePhase::Selected,
+            authorization_index: index as u8,
+            directory_generation: config.directory_generation,
+            account_generation: config.account_generation,
+            policy_generation: config.policy_generation,
+            identity: config.identity,
+            operation_id: object,
+            challenge_generation: 1,
+            identifier,
+            authorization_url: resource.url,
+            challenge_url: challenge.url,
+            token: challenge.token,
+            key_authorization_digest,
+            provider_record_id: [0; mrml_certificate::MAX_DNS01_PROVIDER_RECORD_ID_BYTES],
+            provider_record_id_length: 0,
+            provider_binding_digest: [0; 32],
+        };
+        let loaded = load_challenge_record(config, index as u8, identifier, state, authenticator)?;
+        let (record, durable_generation) = match loaded {
+            Some((record, generation)) => {
+                if !same_challenge_binding(&record, &expected) {
+                    return Err("ACME challenge durable binding mismatch");
+                }
+                (record, generation)
+            }
+            None => {
+                let generation =
+                    persist_challenge_record(config, state, authenticator, 0, &expected)?;
+                (expected, generation)
+            }
+        };
+        match record.phase {
+            AcmedChallengePhase::Selected => {
+                let receipt = provider
+                    .publish(Dns01PublicationRequest {
+                        operation_id: record.operation_id,
+                        generation: record.challenge_generation,
+                        identifier: record.identifier,
+                        key_authorization_digest: record.key_authorization_digest,
+                    })
+                    .map_err(|_| "DNS-01 provider publication failed")?;
+                let published = AcmedChallengeRecord {
+                    phase: AcmedChallengePhase::Published,
+                    provider_record_id: receipt.provider_record_id,
+                    provider_record_id_length: receipt.provider_record_id_length,
+                    provider_binding_digest: receipt.binding_digest,
+                    ..record
+                };
+                if published.publication_receipt().ok().flatten() != Some(receipt) {
+                    return Err("DNS-01 provider receipt binding mismatch");
+                }
+                persist_challenge_record(
+                    config,
+                    state,
+                    authenticator,
+                    durable_generation,
+                    &published,
+                )?;
+            }
+            AcmedChallengePhase::Published
+            | AcmedChallengePhase::Propagated
+            | AcmedChallengePhase::Accepted => {
+                let expected_receipt = record
+                    .publication_receipt()
+                    .map_err(|_| "invalid persisted DNS-01 receipt")?
+                    .ok_or("missing persisted DNS-01 receipt")?;
+                let observed = provider
+                    .publish(Dns01PublicationRequest {
+                        operation_id: record.operation_id,
+                        generation: record.challenge_generation,
+                        identifier: record.identifier,
+                        key_authorization_digest: record.key_authorization_digest,
+                    })
+                    .map_err(|_| "DNS-01 provider reconciliation failed")?;
+                if observed != expected_receipt {
+                    return Err("DNS-01 provider record substitution detected");
+                }
+            }
+            AcmedChallengePhase::CleanupPending | AcmedChallengePhase::Complete => {}
+        }
+    }
+    Ok(())
+}
+
+fn same_challenge_binding(left: &AcmedChallengeRecord, right: &AcmedChallengeRecord) -> bool {
+    left.authorization_index == right.authorization_index
+        && left.directory_generation == right.directory_generation
+        && left.account_generation == right.account_generation
+        && left.policy_generation == right.policy_generation
+        && left.identity == right.identity
+        && left.operation_id == right.operation_id
+        && left.challenge_generation == right.challenge_generation
+        && left.identifier == right.identifier
+        && left.authorization_url == right.authorization_url
+        && left.challenge_url == right.challenge_url
+        && left.token == right.token
+        && left.key_authorization_digest == right.key_authorization_digest
+}
+
+fn load_challenge_record(
+    config: &AcmedConfig,
+    authorization_index: u8,
+    identifier: mrml_acme::DnsIdentifier,
+    state: &HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<(AcmedChallengeRecord, u64)>, &'static str> {
+    let object = DurableObjectId(challenge_object_id(
+        config.identity,
+        authorization_index,
+        identifier,
+    ));
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let Some(length) = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot read ACME challenge state")?
+    else {
+        return Ok(None);
+    };
+    let durable = DurableRecord::decode(&encoded[..length], authenticator)
+        .map_err(|_| "ACME challenge state authentication failed")?;
+    if durable.namespace != DurableNamespace::PublicState
+        || durable.kind != DurableRecordKind::DnsPublication
+        || durable.object != object
+    {
+        return Err("ACME challenge durable record type mismatch");
+    }
+    let record = AcmedChallengeRecord::decode(
+        durable.payload(),
+        &config.directory_url,
+        config.directory_class == AcmeDirectoryClass::LocalTest,
+        config.wildcard_enabled,
+    )
+    .map_err(|_| "invalid ACME challenge durable record")?;
+    record
+        .require_policy(config)
+        .map_err(|_| "stale ACME challenge policy")?;
+    Ok(Some((record, durable.generation)))
+}
+
+fn persist_challenge_record(
+    config: &AcmedConfig,
+    state: &mut impl DurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    previous_generation: u64,
+    challenge: &AcmedChallengeRecord,
+) -> Result<u64, &'static str> {
+    challenge
+        .require_policy(config)
+        .map_err(|_| "stale ACME challenge policy")?;
+    let object = DurableObjectId(challenge.durable_object_id());
+    let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
+    let length = challenge
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode ACME challenge state")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::DnsPublication,
+        object,
+        previous_generation,
+        &payload[..length],
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate ACME challenge state")?;
+    let prepared = state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare ACME challenge state")?;
+    let committed = state
+        .commit(prepared)
+        .map_err(|_| "ACME challenge state commit uncertain")?;
     Ok(committed.generation)
 }
 
