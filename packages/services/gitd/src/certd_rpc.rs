@@ -7,6 +7,25 @@ use mrml_certificate::{
     encode_certd_channel_request,
 };
 
+const IDENTITY_REQUEST_MAGIC: &[u8; 8] = b"MRGIDR01";
+const IDENTITY_SNAPSHOT_MAGIC: &[u8; 8] = b"MRGIDS01";
+const MAX_SERVER_NAME_BYTES: usize = 253;
+const MAX_CERTIFICATE_CHAIN_ENTRIES: usize = 8;
+const MAX_CERTIFICATE_DER_BYTES: usize = 8 * 1024;
+const MAX_SIGNATURE_SCHEMES: usize = 8;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitdIdentitySnapshot {
+    pub server_name: String,
+    pub identity_generation: u64,
+    pub certificate_chain: Vec<Vec<u8>>,
+    pub leaf_spki_sha256: [u8; 32],
+    pub not_before_unix_seconds: u64,
+    pub not_after_unix_seconds: u64,
+    pub signature_schemes: Vec<u16>,
+    pub publication_digest: [u8; 32],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdCertdChannelError {
     InvalidConfiguration,
@@ -60,6 +79,20 @@ impl GitdCertdChannelClient {
             return Err(GitdCertdChannelError::Authenticate);
         }
         Ok(())
+    }
+
+    pub fn get_identity_snapshot(
+        &mut self,
+        server_name: &str,
+    ) -> Result<GitdIdentitySnapshot, GitdCertdChannelError> {
+        let request = encode_identity_request(server_name)?;
+        let mut output = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
+        let written = self.exchange(
+            CertdChannelOperation::GetIdentitySnapshot,
+            &request,
+            &mut output,
+        )?;
+        parse_identity_snapshot(&output[..written], server_name)
     }
 
     pub fn exchange(
@@ -124,12 +157,201 @@ impl GitdCertdChannelClient {
     }
 }
 
+fn encode_identity_request(server_name: &str) -> Result<Vec<u8>, GitdCertdChannelError> {
+    validate_server_name(server_name)?;
+    let length =
+        u16::try_from(server_name.len()).map_err(|_| GitdCertdChannelError::OutputLimit)?;
+    let mut output = Vec::with_capacity(10 + server_name.len());
+    output.extend_from_slice(IDENTITY_REQUEST_MAGIC);
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(server_name.as_bytes());
+    Ok(output)
+}
+
+fn parse_identity_snapshot(
+    input: &[u8],
+    expected_server_name: &str,
+) -> Result<GitdIdentitySnapshot, GitdCertdChannelError> {
+    validate_server_name(expected_server_name)?;
+    let mut cursor = SnapshotCursor { input, offset: 0 };
+    if cursor.take(8)? != IDENTITY_SNAPSHOT_MAGIC {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let identity_generation = cursor.u64()?;
+    if identity_generation == 0 {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let name_length = usize::from(cursor.u16()?);
+    let server_name = core::str::from_utf8(cursor.take(name_length)?)
+        .map_err(|_| GitdCertdChannelError::Authenticate)?;
+    validate_server_name(server_name)?;
+    if server_name != expected_server_name {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let chain_count = usize::from(cursor.u8()?);
+    if !(1..=MAX_CERTIFICATE_CHAIN_ENTRIES).contains(&chain_count) {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let mut certificate_chain = Vec::with_capacity(chain_count);
+    for _ in 0..chain_count {
+        let length =
+            usize::try_from(cursor.u32()?).map_err(|_| GitdCertdChannelError::Authenticate)?;
+        if length == 0 || length > MAX_CERTIFICATE_DER_BYTES {
+            return Err(GitdCertdChannelError::Authenticate);
+        }
+        certificate_chain.push(cursor.take(length)?.to_vec());
+    }
+    let mut leaf_spki_sha256 = [0u8; 32];
+    leaf_spki_sha256.copy_from_slice(cursor.take(32)?);
+    let not_before_unix_seconds = cursor.u64()?;
+    let not_after_unix_seconds = cursor.u64()?;
+    if leaf_spki_sha256 == [0; 32]
+        || not_before_unix_seconds == 0
+        || not_after_unix_seconds <= not_before_unix_seconds
+    {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let scheme_count = usize::from(cursor.u8()?);
+    if !(1..=MAX_SIGNATURE_SCHEMES).contains(&scheme_count) {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let mut signature_schemes = Vec::with_capacity(scheme_count);
+    for _ in 0..scheme_count {
+        let scheme = cursor.u16()?;
+        if scheme == 0 || signature_schemes.last().is_some_and(|last| *last >= scheme) {
+            return Err(GitdCertdChannelError::Authenticate);
+        }
+        signature_schemes.push(scheme);
+    }
+    let mut publication_digest = [0u8; 32];
+    publication_digest.copy_from_slice(cursor.take(32)?);
+    if publication_digest == [0; 32] || cursor.u8()? != 1 || cursor.offset != input.len() {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    Ok(GitdIdentitySnapshot {
+        server_name: server_name.to_owned(),
+        identity_generation,
+        certificate_chain,
+        leaf_spki_sha256,
+        not_before_unix_seconds,
+        not_after_unix_seconds,
+        signature_schemes,
+        publication_digest,
+    })
+}
+
+fn validate_server_name(server_name: &str) -> Result<(), GitdCertdChannelError> {
+    if server_name.is_empty()
+        || server_name.len() > MAX_SERVER_NAME_BYTES
+        || server_name.starts_with('.')
+        || server_name.ends_with('.')
+        || server_name.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || label.bytes().any(|byte| {
+                    !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && byte != b'-'
+                })
+        })
+    {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    Ok(())
+}
+
+struct SnapshotCursor<'a> {
+    input: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> SnapshotCursor<'a> {
+    fn take(&mut self, length: usize) -> Result<&'a [u8], GitdCertdChannelError> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(GitdCertdChannelError::Authenticate)?;
+        let value = self
+            .input
+            .get(self.offset..end)
+            .ok_or(GitdCertdChannelError::Authenticate)?;
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn u8(&mut self) -> Result<u8, GitdCertdChannelError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, GitdCertdChannelError> {
+        Ok(u16::from_be_bytes(
+            self.take(2)?
+                .try_into()
+                .map_err(|_| GitdCertdChannelError::Authenticate)?,
+        ))
+    }
+
+    fn u32(&mut self) -> Result<u32, GitdCertdChannelError> {
+        Ok(u32::from_be_bytes(
+            self.take(4)?
+                .try_into()
+                .map_err(|_| GitdCertdChannelError::Authenticate)?,
+        ))
+    }
+
+    fn u64(&mut self) -> Result<u64, GitdCertdChannelError> {
+        Ok(u64::from_be_bytes(
+            self.take(8)?
+                .try_into()
+                .map_err(|_| GitdCertdChannelError::Authenticate)?,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mrml_certificate::UnixCertdListener;
     use std::fs;
     use std::os::unix::fs::MetadataExt;
+
+    fn snapshot_bytes() -> Vec<u8> {
+        let mut output = Vec::new();
+        output.extend_from_slice(IDENTITY_SNAPSHOT_MAGIC);
+        output.extend_from_slice(&7u64.to_be_bytes());
+        output.extend_from_slice(&15u16.to_be_bytes());
+        output.extend_from_slice(b"git.example.com");
+        output.push(2);
+        output.extend_from_slice(&3u32.to_be_bytes());
+        output.extend_from_slice(&[0x30, 1, 1]);
+        output.extend_from_slice(&3u32.to_be_bytes());
+        output.extend_from_slice(&[0x30, 1, 2]);
+        output.extend_from_slice(&[3u8; 32]);
+        output.extend_from_slice(&100u64.to_be_bytes());
+        output.extend_from_slice(&200u64.to_be_bytes());
+        output.push(1);
+        output.extend_from_slice(&0x0403u16.to_be_bytes());
+        output.extend_from_slice(&[4u8; 32]);
+        output.push(1);
+        output
+    }
+
+    #[test]
+    fn identity_snapshot_is_exact_hostname_generation_chain_and_policy_bound() {
+        let snapshot = parse_identity_snapshot(&snapshot_bytes(), "git.example.com").unwrap();
+        assert_eq!(snapshot.identity_generation, 7);
+        assert_eq!(snapshot.certificate_chain.len(), 2);
+        assert_eq!(snapshot.signature_schemes, [0x0403]);
+        assert_eq!(snapshot.publication_digest, [4u8; 32]);
+        assert!(parse_identity_snapshot(&snapshot_bytes(), "other.example.com").is_err());
+        let mut trailing = snapshot_bytes();
+        trailing.push(0);
+        assert!(parse_identity_snapshot(&trailing, "git.example.com").is_err());
+        let mut rollback = snapshot_bytes();
+        rollback[8..16].fill(0);
+        assert!(parse_identity_snapshot(&rollback, "git.example.com").is_err());
+        assert!(encode_identity_request("Git.example.com").is_err());
+    }
 
     #[test]
     fn real_channel_authenticates_exact_health_response() {

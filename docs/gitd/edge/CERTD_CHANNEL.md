@@ -9,6 +9,16 @@ the Gitd role's operation allowlist, binds every response to the exact operation
 and monotonically increasing request identifier, and rejects sequence
 exhaustion. Health succeeds only for the exact authenticated `ready` payload.
 
+The Gitd client now also constructs a canonical hostname-bound identity request
+and strictly decodes the bounded `MRGIDS01` snapshot payload. The response must
+contain the exact requested lowercase DNS name, a nonzero identity generation,
+one to eight bounded DER chain entries, a nonzero leaf-SPKI SHA-256 digest, an
+ordered validity interval, one to eight strictly ordered nonzero signature
+schemes, a nonzero publication digest, and the exact ready state, with no
+trailing bytes. These fields are decoded data, not yet trusted identity:
+independent certificate/chain/hostname/time/SPKI/signature validation and
+monotonic publication are still required before listener use.
+
 The current certd executable does not yet dispatch identity snapshot,
 CertificateVerify, or generation-wait requests. Gitd therefore remains
 non-ready and does not bind public listeners. There is no PEM, embedded-key,
@@ -21,9 +31,11 @@ service's success cannot substitute for the other's failure.
 
 Focused hosted Linux evidence:
 
-- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 6 tests
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 13 tests
   passed, including real authenticated authority and certd Unix socket
-  exchanges with kernel-observed peer credentials.
+  exchanges with kernel-observed peer credentials, plus exact snapshot parsing,
+  hostname substitution, rollback-generation, trailing-byte, and canonical-name
+  refusal.
 - `./target/debug/mrml manifest lock --check`: 70 packages, 5 interfaces, 205
   compile edges, and 185 package edges passed after adding the explicit certd
   dependency.
