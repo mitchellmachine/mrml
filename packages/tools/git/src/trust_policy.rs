@@ -10,7 +10,8 @@ use mrml_openpgp::{FingerprintV6, PublicKeyV6, VerificationPolicyV6, verify_deta
 use mrml_runtime::Vector;
 
 use crate::{
-    ObjectFormat, RepositoryIdentity, RevocationGeneration, SignaturePurpose, TrustGeneration,
+    FullRefName, ObjectFormat, RepositoryIdentity, RevocationGeneration, SignaturePurpose,
+    TrustGeneration,
 };
 
 pub const HYBRID_PROFILE_NAME: &str = "MRML-GIT-HYBRID-V1";
@@ -39,6 +40,15 @@ pub enum HybridPolicyError {
     MlDsaKeyMismatch,
     OpenPgpVerification,
     MlDsaVerification,
+    InvalidPolicy,
+    PolicyRollback,
+    PreviousPolicyMismatch,
+    TrustRootBroadened,
+    RevocationRollback,
+    RevokedKeyReactivated,
+    HybridDowngrade,
+    MissingPreviousAuthorization,
+    MissingNewAuthorization,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +107,9 @@ pub struct VerifiedHybridSignature {
     trust_generation: TrustGeneration,
     revocation_generation: RevocationGeneration,
     pair: AuthorizedHybridPair,
+    repository_digest: [u8; 64],
+    purpose: SignaturePurpose,
+    object_type: GitObjectType,
 }
 
 impl VerifiedHybridSignature {
@@ -111,6 +124,221 @@ impl VerifiedHybridSignature {
     pub const fn pair(&self) -> AuthorizedHybridPair {
         self.pair
     }
+
+    pub const fn purpose(&self) -> SignaturePurpose {
+        self.purpose
+    }
+}
+
+pub const MAX_POLICY_PAIRS: usize = 64;
+pub const MAX_POLICY_REVOKED_KEYS: usize = 256;
+pub const MAX_POLICY_PROTECTED_REFS: usize = 256;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrustPolicyState {
+    repository: RepositoryIdentity,
+    generation: TrustGeneration,
+    previous_policy_digest: [u8; 64],
+    revocation_generation: RevocationGeneration,
+    protected_refs: Vector<FullRefName>,
+    allowed_object_formats: u8,
+    hybrid_required: bool,
+    active_pairs: Vector<AuthorizedHybridPair>,
+    revoked_openpgp: Vector<FingerprintV6>,
+    revoked_ml_dsa: Vector<[u8; 64]>,
+}
+
+pub struct TrustPolicyCandidate {
+    pub repository: RepositoryIdentity,
+    pub generation: TrustGeneration,
+    pub previous_policy_digest: [u8; 64],
+    pub revocation_generation: RevocationGeneration,
+    pub protected_refs: Vector<FullRefName>,
+    pub allow_sha1: bool,
+    pub allow_sha256: bool,
+    pub hybrid_required: bool,
+    pub active_pairs: Vector<AuthorizedHybridPair>,
+    pub revoked_openpgp: Vector<FingerprintV6>,
+    pub revoked_ml_dsa: Vector<[u8; 64]>,
+}
+
+impl TrustPolicyState {
+    pub fn establish(candidate: TrustPolicyCandidate) -> Result<Self, HybridPolicyError> {
+        validate_candidate(&candidate)?;
+        if candidate.generation.0 == 0 || candidate.previous_policy_digest != [0u8; 64] {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        Ok(Self::from_candidate(candidate))
+    }
+
+    pub fn transition(
+        &self,
+        candidate: TrustPolicyCandidate,
+        previous_authorization: &VerifiedHybridSignature,
+        new_authorization: &VerifiedHybridSignature,
+    ) -> Result<Self, HybridPolicyError> {
+        validate_candidate(&candidate)?;
+        if candidate.repository != self.repository {
+            return Err(HybridPolicyError::TrustRootBroadened);
+        }
+        if candidate.generation.0 <= self.generation.0 {
+            return Err(HybridPolicyError::PolicyRollback);
+        }
+        if candidate.previous_policy_digest != self.digest() {
+            return Err(HybridPolicyError::PreviousPolicyMismatch);
+        }
+        if candidate.revocation_generation.0 < self.revocation_generation.0 {
+            return Err(HybridPolicyError::RevocationRollback);
+        }
+        if self.hybrid_required && !candidate.hybrid_required {
+            return Err(HybridPolicyError::HybridDowngrade);
+        }
+        if candidate.allowed_format_mask() & !self.allowed_object_formats != 0
+            || self
+                .protected_refs
+                .iter()
+                .any(|reference| !candidate.protected_refs.contains(reference))
+        {
+            return Err(HybridPolicyError::TrustRootBroadened);
+        }
+        if self
+            .revoked_openpgp
+            .iter()
+            .any(|key| !candidate.revoked_openpgp.contains(key))
+            || self
+                .revoked_ml_dsa
+                .iter()
+                .any(|key| !candidate.revoked_ml_dsa.contains(key))
+        {
+            return Err(HybridPolicyError::RevocationRollback);
+        }
+        if candidate.active_pairs.iter().any(|pair| {
+            candidate
+                .revoked_openpgp
+                .contains(&pair.openpgp_fingerprint)
+                || candidate.revoked_ml_dsa.contains(&pair.ml_dsa_key_digest)
+        }) {
+            return Err(HybridPolicyError::RevokedKeyReactivated);
+        }
+        let expected_repository = repository_digest(&self.repository);
+        if previous_authorization.repository_digest != expected_repository
+            || previous_authorization.purpose != SignaturePurpose::KeyRotation
+            || previous_authorization.object_type != GitObjectType::KeyRotation
+            || previous_authorization.trust_generation != self.generation
+            || !self.active_pairs.contains(&previous_authorization.pair)
+        {
+            return Err(HybridPolicyError::MissingPreviousAuthorization);
+        }
+        if new_authorization.repository_digest != expected_repository
+            || new_authorization.purpose != SignaturePurpose::KeyRotation
+            || new_authorization.object_type != GitObjectType::KeyRotation
+            || new_authorization.trust_generation != candidate.generation
+            || !candidate.active_pairs.contains(&new_authorization.pair)
+        {
+            return Err(HybridPolicyError::MissingNewAuthorization);
+        }
+        Ok(Self::from_candidate(candidate))
+    }
+
+    pub fn digest(&self) -> [u8; 64] {
+        let mut hash = Sha3_512::new();
+        hash.update(b"MRML-GIT-TRUST-POLICY-V1\0");
+        hash.update(&(self.repository.as_str().len() as u16).to_be_bytes());
+        hash.update(self.repository.as_str().as_bytes());
+        hash.update(&self.generation.0.to_be_bytes());
+        hash.update(&self.previous_policy_digest);
+        hash.update(&self.revocation_generation.0.to_be_bytes());
+        hash.update(&[self.allowed_object_formats, u8::from(self.hybrid_required)]);
+        hash.update(&(self.protected_refs.len() as u16).to_be_bytes());
+        for reference in &self.protected_refs {
+            hash.update(&(reference.as_str().len() as u16).to_be_bytes());
+            hash.update(reference.as_str().as_bytes());
+        }
+        hash.update(&(self.active_pairs.len() as u16).to_be_bytes());
+        for pair in &self.active_pairs {
+            hash.update(pair.openpgp_fingerprint.as_bytes());
+            hash.update(&pair.openpgp_key_digest);
+            hash.update(&pair.ml_dsa_key_digest);
+        }
+        hash.update(&(self.revoked_openpgp.len() as u16).to_be_bytes());
+        for fingerprint in &self.revoked_openpgp {
+            hash.update(fingerprint.as_bytes());
+        }
+        hash.update(&(self.revoked_ml_dsa.len() as u16).to_be_bytes());
+        for digest in &self.revoked_ml_dsa {
+            hash.update(digest);
+        }
+        hash.finalize()
+    }
+
+    pub const fn generation(&self) -> TrustGeneration {
+        self.generation
+    }
+
+    pub fn active_pairs(&self) -> &[AuthorizedHybridPair] {
+        &self.active_pairs
+    }
+
+    fn from_candidate(candidate: TrustPolicyCandidate) -> Self {
+        let allowed_object_formats = candidate.allowed_format_mask();
+        Self {
+            repository: candidate.repository,
+            generation: candidate.generation,
+            previous_policy_digest: candidate.previous_policy_digest,
+            revocation_generation: candidate.revocation_generation,
+            protected_refs: candidate.protected_refs,
+            allowed_object_formats,
+            hybrid_required: candidate.hybrid_required,
+            active_pairs: candidate.active_pairs,
+            revoked_openpgp: candidate.revoked_openpgp,
+            revoked_ml_dsa: candidate.revoked_ml_dsa,
+        }
+    }
+}
+
+impl TrustPolicyCandidate {
+    fn allowed_format_mask(&self) -> u8 {
+        u8::from(self.allow_sha1) | (u8::from(self.allow_sha256) << 1)
+    }
+}
+
+fn validate_candidate(candidate: &TrustPolicyCandidate) -> Result<(), HybridPolicyError> {
+    if candidate.generation.0 == 0
+        || candidate.revocation_generation.0 == 0
+        || candidate.active_pairs.is_empty()
+        || candidate.active_pairs.len() > MAX_POLICY_PAIRS
+        || candidate.protected_refs.is_empty()
+        || candidate.protected_refs.len() > MAX_POLICY_PROTECTED_REFS
+        || candidate.revoked_openpgp.len() > MAX_POLICY_REVOKED_KEYS
+        || candidate.revoked_ml_dsa.len() > MAX_POLICY_REVOKED_KEYS
+        || candidate.allowed_format_mask() == 0
+        || !strictly_ordered_by(&candidate.active_pairs, pair_less)
+        || !strictly_ordered_by(&candidate.protected_refs, |left, right| left < right)
+        || !strictly_ordered_by(&candidate.revoked_openpgp, |left, right| {
+            left.as_bytes() < right.as_bytes()
+        })
+        || !strictly_ordered_by(&candidate.revoked_ml_dsa, |left, right| left < right)
+    {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(())
+}
+
+fn strictly_ordered_by<T>(values: &[T], less: impl Fn(&T, &T) -> bool) -> bool {
+    values.windows(2).all(|pair| less(&pair[0], &pair[1]))
+}
+
+fn pair_less(left: &AuthorizedHybridPair, right: &AuthorizedHybridPair) -> bool {
+    left.openpgp_fingerprint
+        .as_bytes()
+        .cmp(right.openpgp_fingerprint.as_bytes())
+        .then(left.openpgp_key_digest.cmp(&right.openpgp_key_digest))
+        .then(left.ml_dsa_key_digest.cmp(&right.ml_dsa_key_digest))
+        .is_lt()
+}
+
+fn repository_digest(repository: &RepositoryIdentity) -> [u8; 64] {
+    Sha3_512::digest(repository.as_str().as_bytes())
 }
 
 pub fn canonical_hybrid_transcript(
@@ -218,6 +446,9 @@ pub fn verify_hybrid_signature(
         trust_generation: policy.trust_generation,
         revocation_generation: policy.revocation_generation,
         pair: actual_pair,
+        repository_digest: repository_digest(request.repository),
+        purpose: request.purpose,
+        object_type: request.object_type,
     })
 }
 
@@ -412,5 +643,86 @@ mod tests {
                 0xb3, 0x39, 0xbf, 0xf4, 0xef, 0x7a, 0x1b, 0x48,
             ]
         );
+    }
+
+    #[test]
+    fn policy_rotation_requires_old_and_new_pairs_and_never_broadens() {
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let old_pair = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([1u8; 32]),
+            openpgp_key_digest: [2u8; 64],
+            ml_dsa_key_digest: [3u8; 64],
+        };
+        let new_pair = AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes([4u8; 32]),
+            openpgp_key_digest: [5u8; 64],
+            ml_dsa_key_digest: [6u8; 64],
+        };
+        let initial = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(1),
+            previous_policy_digest: [0u8; 64],
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: true,
+            allow_sha256: true,
+            hybrid_required: true,
+            active_pairs: [old_pair].into(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let old_proof = rotation_proof(&repository, TrustGeneration(1), old_pair);
+        let new_proof = rotation_proof(&repository, TrustGeneration(2), new_pair);
+        let candidate = TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(2),
+            previous_policy_digest: initial.digest(),
+            revocation_generation: RevocationGeneration(2),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            active_pairs: [new_pair].into(),
+            revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
+            revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
+        };
+        let rotated = initial
+            .transition(candidate, &old_proof, &new_proof)
+            .unwrap();
+        assert_eq!(rotated.generation(), TrustGeneration(2));
+
+        let downgrade = TrustPolicyCandidate {
+            repository,
+            generation: TrustGeneration(3),
+            previous_policy_digest: rotated.digest(),
+            revocation_generation: RevocationGeneration(2),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: false,
+            active_pairs: [new_pair].into(),
+            revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
+            revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
+        };
+        assert_eq!(
+            rotated.transition(downgrade, &new_proof, &new_proof),
+            Err(HybridPolicyError::HybridDowngrade)
+        );
+    }
+
+    fn rotation_proof(
+        repository: &RepositoryIdentity,
+        generation: TrustGeneration,
+        pair: AuthorizedHybridPair,
+    ) -> VerifiedHybridSignature {
+        VerifiedHybridSignature {
+            trust_generation: generation,
+            revocation_generation: RevocationGeneration(generation.0),
+            pair,
+            repository_digest: repository_digest(repository),
+            purpose: SignaturePurpose::KeyRotation,
+            object_type: GitObjectType::KeyRotation,
+        }
     }
 }
