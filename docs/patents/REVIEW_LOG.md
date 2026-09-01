@@ -12082,3 +12082,11 @@ authenticated backup format for ordinary generation-bound sequential download
 and clears the bounded staging memory after use. It adds no certificate
 protocol, signing mechanism, validation topology, certificate authority
 operation, or recorded re-review trigger.
+
+# 2026-09-01 — Lifecycle backup export handler
+
+Patent review: **NOT_TRIGGERED**. This increment dispatches the existing
+bounded backup export state machine through the reserved lifecycle operation
+and returns canonical metadata receipts or exact sequential chunks. It adds no
+certificate protocol, signing mechanism, validation topology, certificate
+authority operation, or recorded re-review trigger.

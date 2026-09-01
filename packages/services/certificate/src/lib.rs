@@ -49,9 +49,10 @@ pub use backup::{
     restore_sealed_key_record, untrusted_backup_container_digest, verify_backup,
 };
 pub use backup_export::{
-    BACKUP_EXPORT_COMMAND_BYTES, BackupExportCommand, BackupExportError, BackupExportReceipt,
-    BackupExportSession, BackupExportSource, MAX_BACKUP_EXPORT_CHUNK,
-    decode_backup_export_command, encode_backup_export_command,
+    BACKUP_EXPORT_COMMAND_BYTES, BACKUP_EXPORT_RECEIPT_BYTES, BackupExportCommand,
+    BackupExportError, BackupExportReceipt, BackupExportSession, BackupExportSource,
+    MAX_BACKUP_EXPORT_CHUNK, decode_backup_export_command, decode_backup_export_receipt,
+    encode_backup_export_command, encode_backup_export_receipt,
 };
 pub use backup_transfer::{
     BACKUP_TRANSFER_HEADER_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES, BackupTransferCommand,

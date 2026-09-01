@@ -1,9 +1,12 @@
 use crate::{BackupDescriptor, BackupError, MAX_BACKUP_BYTES};
 use mrml_crypto::Sha256;
+use mrml_interface_certificate_lifecycle_v1 as abi;
 
 pub const BACKUP_EXPORT_COMMAND_BYTES: usize = 32;
+pub const BACKUP_EXPORT_RECEIPT_BYTES: usize = 72;
 pub const MAX_BACKUP_EXPORT_CHUNK: usize = 8192;
 const EXPORT_MAGIC: &[u8; 8] = b"MRMLBE01";
+const RECEIPT_MAGIC: &[u8; 8] = b"MRMLBER1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupExportError {
@@ -163,9 +166,88 @@ impl<'a> BackupExportSession<'a> {
         Ok(receipt)
     }
 
+    pub fn handle(
+        &mut self,
+        operation: u32,
+        policy_generation: u64,
+        request: &[u8],
+        output: &mut [u8],
+        source: &mut impl BackupExportSource,
+    ) -> Result<abi::BackupOperationResponse, abi::BackupOperationError> {
+        if operation != abi::BACKUP_CREATE || policy_generation == 0 {
+            return Err(abi::BackupOperationError::InvalidRequest);
+        }
+        let command = decode_backup_export_command(request)
+            .map_err(|_| abi::BackupOperationError::InvalidRequest)?;
+        let generation = match command {
+            BackupExportCommand::Begin {
+                export_generation,
+                policy_generation: command_policy,
+            } if command_policy == policy_generation => {
+                let value = self
+                    .begin(export_generation, policy_generation, source)
+                    .map_err(map_export_error)?;
+                encode_backup_export_receipt(value, output)
+                    .map_err(|_| abi::BackupOperationError::OperationFailed)?;
+                export_generation
+            }
+            BackupExportCommand::Read {
+                export_generation,
+                offset,
+            } => {
+                self.require_policy(export_generation, policy_generation)?;
+                let (written, _) = self
+                    .read(export_generation, offset, output)
+                    .map_err(map_export_error)?;
+                return Ok(abi::BackupOperationResponse {
+                    written: written as u64,
+                    backup_generation: export_generation,
+                });
+            }
+            BackupExportCommand::Finish { export_generation } => {
+                self.require_policy(export_generation, policy_generation)?;
+                let value = self.finish(export_generation).map_err(map_export_error)?;
+                encode_backup_export_receipt(value, output)
+                    .map_err(|_| abi::BackupOperationError::OperationFailed)?;
+                export_generation
+            }
+            _ => return Err(abi::BackupOperationError::StalePolicy),
+        };
+        Ok(abi::BackupOperationResponse {
+            written: BACKUP_EXPORT_RECEIPT_BYTES as u64,
+            backup_generation: generation,
+        })
+    }
+
+    fn require_policy(
+        &self,
+        export_generation: u64,
+        policy_generation: u64,
+    ) -> Result<(), abi::BackupOperationError> {
+        let active = self
+            .active
+            .ok_or(abi::BackupOperationError::OperationFailed)?;
+        if active.export_generation != export_generation
+            || active.descriptor.policy_generation != policy_generation
+        {
+            return Err(abi::BackupOperationError::StalePolicy);
+        }
+        Ok(())
+    }
+
     pub fn clear(&mut self) {
         self.bytes.fill(0);
         self.active = None;
+    }
+}
+
+fn map_export_error(error: BackupExportError) -> abi::BackupOperationError {
+    match error {
+        BackupExportError::InvalidCommand | BackupExportError::InvalidGeneration => {
+            abi::BackupOperationError::InvalidRequest
+        }
+        BackupExportError::StaleExport => abi::BackupOperationError::StalePolicy,
+        _ => abi::BackupOperationError::OperationFailed,
     }
 }
 
@@ -239,6 +321,63 @@ pub fn decode_backup_export_command(
         }),
         _ => Err(BackupExportError::InvalidCommand),
     }
+}
+
+pub fn encode_backup_export_receipt(
+    receipt: BackupExportReceipt,
+    output: &mut [u8],
+) -> Result<(), BackupExportError> {
+    if receipt.export_generation == 0
+        || receipt.policy_generation == 0
+        || receipt.total_bytes == 0
+        || receipt.offset > receipt.total_bytes
+        || receipt.record_count == 0
+        || receipt.backup_digest == [0; 32]
+        || receipt.finished != (receipt.offset == receipt.total_bytes)
+    {
+        return Err(BackupExportError::InvalidCommand);
+    }
+    let output = output
+        .get_mut(..BACKUP_EXPORT_RECEIPT_BYTES)
+        .ok_or(BackupExportError::OutputTooSmall)?;
+    output.fill(0);
+    output[..8].copy_from_slice(RECEIPT_MAGIC);
+    output[8] = u8::from(receipt.finished);
+    output[12..20].copy_from_slice(&receipt.export_generation.to_be_bytes());
+    output[20..28].copy_from_slice(&receipt.policy_generation.to_be_bytes());
+    output[28..32].copy_from_slice(&receipt.offset.to_be_bytes());
+    output[32..36].copy_from_slice(&receipt.total_bytes.to_be_bytes());
+    output[36..38].copy_from_slice(&receipt.record_count.to_be_bytes());
+    output[40..72].copy_from_slice(&receipt.backup_digest);
+    Ok(())
+}
+
+pub fn decode_backup_export_receipt(
+    input: &[u8],
+) -> Result<BackupExportReceipt, BackupExportError> {
+    if input.len() != BACKUP_EXPORT_RECEIPT_BYTES
+        || input.get(..8) != Some(RECEIPT_MAGIC)
+        || input[8] > 1
+        || input[9..12] != [0; 3]
+        || input[38..40] != [0; 2]
+    {
+        return Err(BackupExportError::InvalidCommand);
+    }
+    let receipt = BackupExportReceipt {
+        export_generation: u64::from_be_bytes(input[12..20].try_into().unwrap()),
+        policy_generation: u64::from_be_bytes(input[20..28].try_into().unwrap()),
+        offset: u32::from_be_bytes(input[28..32].try_into().unwrap()),
+        total_bytes: u32::from_be_bytes(input[32..36].try_into().unwrap()),
+        record_count: u16::from_be_bytes(input[36..38].try_into().unwrap()),
+        backup_digest: input[40..72].try_into().unwrap(),
+        finished: input[8] == 1,
+    };
+    let mut canonical = [0; BACKUP_EXPORT_RECEIPT_BYTES];
+    encode_backup_export_receipt(receipt, &mut canonical)?;
+    if canonical != input {
+        return Err(BackupExportError::InvalidCommand);
+    }
+    Ok(receipt)
 }
 
 #[cfg(test)]
@@ -323,6 +462,42 @@ mod tests {
                 Err(BackupExportError::InvalidCommand)
             );
         }
+    }
+
+    #[test]
+    fn lifecycle_handler_returns_receipts_and_exact_chunks() {
+        let expected = vec![0x31; MAX_BACKUP_EXPORT_CHUNK + 3];
+        let mut source = Source(expected.clone());
+        let mut storage = vec![0; MAX_BACKUP_BYTES];
+        let mut session = BackupExportSession::new(&mut storage).unwrap();
+        let mut output = [0u8; MAX_BACKUP_EXPORT_CHUNK];
+        let begin = encode_backup_export_command(BackupExportCommand::Begin {
+            export_generation: 7,
+            policy_generation: 4,
+        })
+        .unwrap();
+        let response = session
+            .handle(abi::BACKUP_CREATE, 4, &begin, &mut output, &mut source)
+            .unwrap();
+        assert_eq!(response.written, BACKUP_EXPORT_RECEIPT_BYTES as u64);
+        let opened = decode_backup_export_receipt(&output[..response.written as usize]).unwrap();
+        assert_eq!(opened.total_bytes as usize, expected.len());
+        let read = encode_backup_export_command(BackupExportCommand::Read {
+            export_generation: 7,
+            offset: 0,
+        })
+        .unwrap();
+        let response = session
+            .handle(abi::BACKUP_CREATE, 4, &read, &mut output, &mut source)
+            .unwrap();
+        assert_eq!(
+            &output[..response.written as usize],
+            &expected[..response.written as usize]
+        );
+        assert_eq!(
+            session.handle(abi::BACKUP_CREATE, 5, &read, &mut output, &mut source),
+            Err(abi::BackupOperationError::StalePolicy)
+        );
     }
 
     #[test]

@@ -196,7 +196,10 @@ digest, then permits only generation-bound sequential reads of at most 8192
 bytes. Replayed, stale, skipped, or concurrent exports fail closed, and the
 entire staging buffer is cleared after completion, provider failure, or drop.
 The canonical fixed-size begin/read/finish command rejects reserved bytes and
-ambiguous metadata. Hosted transport and CLI download wiring remain required.
+ambiguous metadata. The lifecycle handler enforces the reserved `BACKUP_CREATE`
+operation and rechecks the exact policy generation on every read. Begin and
+finish return a canonical 72-byte metadata receipt; reads return only the exact
+next container bytes. Hosted transport and CLI download wiring remain required.
 Because a complete container may exceed the lifecycle ABI's 4 KiB request
 window, restore input is assembled by a bounded sequential transfer state
 machine rather than by raising that ABI bound. Each upload binds a nonzero
