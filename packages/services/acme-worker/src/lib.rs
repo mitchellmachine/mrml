@@ -18,6 +18,8 @@ pub struct AcmedConfig {
     pub directory_url: AcmeUrl,
     pub directory_generation: u64,
     pub directory_class: AcmeDirectoryClass,
+    pub approved_terms_url: Option<AcmeUrl>,
+    pub approved_terms_content_digest: Option<[u8; 32]>,
     pub zone_id: [u8; 32],
     pub zone: DnsIdentifier,
     pub identity: [u8; 16],
@@ -41,6 +43,7 @@ pub enum AcmedConfigError {
     UnknownField,
     MissingField,
     InvalidDirectory,
+    InvalidTermsApproval,
     ProductionNotEnabled,
     InvalidZone,
     InvalidIdentity,
@@ -53,11 +56,13 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| AcmedConfigError::Malformed)?;
     let object = value.as_object().ok_or(AcmedConfigError::Malformed)?;
-    const FIELDS: [&str; 16] = [
+    const FIELDS: [&str; 18] = [
         "directory_url",
         "directory_generation",
         "directory_class",
         "production_enabled",
+        "terms_of_service_url",
+        "terms_content_sha256",
         "dns_provider",
         "zone_id",
         "zone",
@@ -104,6 +109,16 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     let directory_generation = number(&value, "directory_generation")?;
     if directory_generation == 0 {
         return Err(AcmedConfigError::InvalidBounds);
+    }
+    let approved_terms_url = optional_text(&value, "terms_of_service_url")?
+        .map(|url| AcmeUrl::parse(url, directory_class == AcmeDirectoryClass::LocalTest))
+        .transpose()
+        .map_err(|_| AcmedConfigError::InvalidTermsApproval)?;
+    let approved_terms_content_digest = optional_text(&value, "terms_content_sha256")?
+        .map(parse_digest)
+        .transpose()?;
+    if approved_terms_url.is_some() != approved_terms_content_digest.is_some() {
+        return Err(AcmedConfigError::InvalidTermsApproval);
     }
     let zone_id_text = text(&value, "zone_id")?;
     if !valid_hex(zone_id_text, 32) {
@@ -163,6 +178,8 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         directory_url,
         directory_generation,
         directory_class,
+        approved_terms_url,
+        approved_terms_content_digest,
         zone_id,
         zone,
         identity,
@@ -210,6 +227,33 @@ fn number(value: &Value, key: &str) -> Result<u64, AcmedConfigError> {
         .ok_or(AcmedConfigError::MissingField)
 }
 
+fn optional_text<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>, AcmedConfigError> {
+    let value = value.get(key).ok_or(AcmedConfigError::MissingField)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .map(Some)
+        .ok_or(AcmedConfigError::InvalidTermsApproval)
+}
+
+fn parse_digest(value: &str) -> Result<[u8; 32], AcmedConfigError> {
+    if !valid_hex(value, 64) {
+        return Err(AcmedConfigError::InvalidTermsApproval);
+    }
+    let mut digest = [0u8; 32];
+    for (index, output) in digest.iter_mut().enumerate() {
+        *output = decode_hex(&value.as_bytes()[index * 2..index * 2 + 2])?;
+    }
+    if digest == [0; 32] {
+        Err(AcmedConfigError::InvalidTermsApproval)
+    } else {
+        Ok(digest)
+    }
+}
+
 fn valid_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
@@ -235,7 +279,7 @@ fn decode_hex(value: &[u8]) -> Result<u8, AcmedConfigError> {
 mod tests {
     use super::*;
 
-    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
+    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
 
     #[test]
     fn staging_configuration_is_exact_and_bounded() {
@@ -248,6 +292,8 @@ mod tests {
         assert_eq!(config.per_identity_concurrency, 1);
         assert_eq!(config.identifier_count, 2);
         assert_ne!(config.identifier_set_digest, [0; 32]);
+        assert!(config.approved_terms_url.is_some());
+        assert_eq!(config.approved_terms_content_digest, Some([0x11; 32]));
     }
 
     #[test]
@@ -279,6 +325,13 @@ mod tests {
         assert!(matches!(
             parse_acmed_config(&STAGING.replace("0123456789abcdef", "0123456789ABCDEF")),
             Err(AcmedConfigError::InvalidZone)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace(
+                "\"terms_content_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"",
+                "\"terms_content_sha256\":null"
+            )),
+            Err(AcmedConfigError::InvalidTermsApproval)
         ));
     }
 }
