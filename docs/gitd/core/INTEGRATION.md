@@ -2,6 +2,41 @@
 
 Base: `cf1f75755e6961737d6c1972959aac9a8dcea061ec26b7f7e43b20ab261868c2`.
 
+## Baseline reproduction
+
+The prompt's inspected-state claims were reproduced against that exact base
+before relying on them:
+
+- `CONFIRMED`: `packages/tools/git` was a `#![no_std]` first-party library and
+  CLI with SHA-1/SHA-256 object code, index/worktree operations, pack parsing,
+  SSH client fetch/push, and commit/tag signing. The baseline `lib.rs`,
+  `remote.rs`, `repository.rs`, and their package tests supplied the evidence.
+- `CONFIRMED`: baseline `pack.rs::encode_pack_with_format` called its local
+  `deflate_stored` writer for every object. The current branch replaces that
+  upload-pack encoder path with deterministic bounded LZ77 and fixed-Huffman
+  DEFLATE, while canonical dynamic-Huffman level 9 remains open.
+- `CONFIRMED`: baseline `repository.rs` nested an `mrml-mldsa65` payload under
+  the OpenPGP commit signature, but it had no complete protected-history trust
+  policy or privately constructed activation transaction. The bounded hybrid
+  verifier/policy/range typestates now address those core boundaries; the
+  installed CLI and production key-service transaction remain open.
+- `CONFIRMED`: baseline `mrml_openpgp::Fingerprint` was exactly 20 bytes and
+  its own module documentation described a current v4 key. The first-party v6
+  SHA-256 fingerprint and salted verification paths are now separately tested;
+  v4 remains explicit legacy compatibility.
+- `CONFIRMED`: baseline remote operations imported the SSH client and exposed
+  `fetch_ssh`/`push_ssh`; there was no first-party server receive/quarantine/ref
+  engine. The transport-neutral protocol and durable receive core now exist,
+  while the public listener remains Agent B's boundary.
+- `CONFIRMED`: baseline `repository.rs` was 4,430 lines. Focused object, pack,
+  delta, index, quarantine, transaction, trust, verification, protocol, and
+  view modules now own the new security-critical mechanisms. The legacy file
+  remains large (currently more than 4,600 lines), so further extraction is a
+  maintainability task and no cosmetic rewrite is claimed.
+
+None of these findings is `NOT_REPRODUCIBLE_ON_CURRENT_HEAD`; each was checked
+at the recorded base rather than inferred from an older chat summary.
+
 The edge branch can import the public `mrml_git::GitdCoreBackend` contract
 without a dependency on HTTP, TLS, or Zstandard packages. A concrete backend is
 still required; transport code must retain fail-closed route disablement until
