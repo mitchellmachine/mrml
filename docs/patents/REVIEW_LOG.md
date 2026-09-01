@@ -11745,3 +11745,10 @@ select and report each already reviewed HTTP-01, TLS-ALPN-01, and DNS-01
 authorization type through the same order state machine. It introduces no
 MultiTLS multiplexing, private-network challenge proxy, route-selected
 multi-vantage validation, or other recorded re-review trigger.
+
+# 2026-09-01 — Deterministic ACME adverse-response injection
+
+Patent review: **NOT_TRIGGERED**. This increment adds test-only bounded fault
+responses for rate limiting with Retry-After, stale authorization state,
+contradictory order regression, and malformed certificate-chain content. It
+introduces no certificate protocol mechanism or recorded re-review trigger.

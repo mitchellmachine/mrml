@@ -36,6 +36,8 @@ const AUTH_TLS_ALPN_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.ex
 const AUTH_DNS_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"dns-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
 const AUTH_DNS_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"dns-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
 const SYNTHETIC_CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----\nTUlNRS1CT1VOREVELUxPQ0FMLUNBLUZJWFRVUkU=\n-----END CERTIFICATE-----\n";
+const MALFORMED_CERTIFICATE: &str =
+    "-----BEGIN CERTIFICATE-----\nA===\n-----END CERTIFICATE-----\n";
 const NONCES: [&str; 16] = [
     "local-nonce-01",
     "local-nonce-02",
@@ -77,6 +79,10 @@ pub enum LocalAuthorityFault {
     DropResponseOnce,
     DelayOrderOnce,
     RateLimitAriOnce,
+    RateLimitOrderOnce,
+    StaleAuthorizationOnce,
+    ContradictoryOrderOnce,
+    MalformedCertificateOnce,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityError {
@@ -334,6 +340,18 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 )
             }
             LOCAL_NEW_ORDER_URL => {
+                if self.fault == LocalAuthorityFault::RateLimitOrderOnce && !self.fault_used {
+                    self.fault_used = true;
+                    return reply_with_retry(
+                        out,
+                        429,
+                        effective,
+                        next,
+                        "120",
+                        Some("application/problem+json"),
+                        r#"{"type":"urn:ietf:params:acme:error:rateLimited","status":429}"#,
+                    );
+                }
                 if self.state != LocalAuthorityState::AccountValid
                     || !contains(payload, r#""value":"git.example""#)
                 {
@@ -351,6 +369,21 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 )
             }
             LOCAL_AUTHORIZATION_URL => {
+                if self.fault == LocalAuthorityFault::StaleAuthorizationOnce
+                    && !self.fault_used
+                    && self.state == LocalAuthorityState::AuthorizationValid
+                {
+                    self.fault_used = true;
+                    return reply(
+                        out,
+                        200,
+                        effective,
+                        next,
+                        None,
+                        Some("application/json"),
+                        authorization_body(self.challenge, false),
+                    );
+                }
                 let body = if self.state == LocalAuthorityState::OrderPending {
                     authorization_body(self.challenge, false)
                 } else if matches!(
@@ -387,6 +420,21 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 )
             }
             LOCAL_ORDER_URL => {
+                if self.fault == LocalAuthorityFault::ContradictoryOrderOnce
+                    && !self.fault_used
+                    && self.state == LocalAuthorityState::OrderValid
+                {
+                    self.fault_used = true;
+                    return reply(
+                        out,
+                        200,
+                        effective,
+                        next,
+                        None,
+                        Some("application/json"),
+                        ORDER_PENDING,
+                    );
+                }
                 let body = match self.state {
                     LocalAuthorityState::OrderPending => ORDER_PENDING,
                     LocalAuthorityState::AuthorizationValid => ORDER_READY,
@@ -436,6 +484,14 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 if self.state != LocalAuthorityState::OrderValid || !payload.is_empty() {
                     return Err(LocalAuthorityError::InvalidState);
                 }
+                let certificate = if self.fault == LocalAuthorityFault::MalformedCertificateOnce
+                    && !self.fault_used
+                {
+                    self.fault_used = true;
+                    MALFORMED_CERTIFICATE
+                } else {
+                    self.certificate
+                };
                 reply(
                     out,
                     200,
@@ -443,7 +499,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     next,
                     None,
                     Some("application/pem-certificate-chain"),
-                    self.certificate,
+                    certificate,
                 )
             }
             LOCAL_REVOKE_URL => {
@@ -761,6 +817,19 @@ fn reply<'a>(
         body_length: body.len(),
     })
 }
+fn reply_with_retry<'a>(
+    out: &mut [u8],
+    status: u16,
+    effective: &'static str,
+    nonce: Option<&'static str>,
+    retry_after: &'static str,
+    content: Option<&'static str>,
+    body: &str,
+) -> Result<AcmeTransportResponse<'a>, LocalAuthorityError> {
+    let mut response = reply(out, status, effective, nonce, None, content, body)?;
+    response.retry_after = Some(retry_after);
+    Ok(response)
+}
 
 #[cfg(test)]
 mod tests {
@@ -860,6 +929,23 @@ mod tests {
         .unwrap();
         assert_eq!(account.metadata.status, 201);
         let kid = url(LOCAL_ACCOUNT_URL);
+        authority.inject(LocalAuthorityFault::RateLimitOrderOnce);
+        let limited = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_order,
+            ProtectedKey::Kid(&kid),
+            br#"{"identifiers":[{"type":"dns","value":"git.example"}],"profile":"classic"}"#,
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(limited.metadata.status, 429);
+        assert!(limited.metadata.has_retry_after);
+        assert!(limited.problem.is_some());
         for (endpoint, payload, status) in [
             (
                 LOCAL_NEW_ORDER_URL,
@@ -1218,5 +1304,79 @@ mod tests {
                 core::str::from_utf8(&response[..authorization.metadata.body_length]).unwrap();
             assert!(body.contains(expected));
         }
+    }
+
+    #[test]
+    fn stale_contradictory_and_malformed_faults_are_deterministic() {
+        let directory_url = url(LOCAL_DIRECTORY_URL);
+        let mut exchange = AcmeExchange::new(6, directory_url);
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, key());
+        let mut response = [0u8; 65_536];
+        let mut jws = [0u8; 49_152];
+        let directory = fetch_directory(
+            &directory_url,
+            6,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let account = url(LOCAL_ACCOUNT_URL);
+        let mut signer = Signer;
+        authority.state = LocalAuthorityState::AuthorizationValid;
+        authority.inject(LocalAuthorityFault::StaleAuthorizationOnce);
+        let stale = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &url(LOCAL_AUTHORIZATION_URL),
+            ProtectedKey::Kid(&account),
+            b"",
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        let body = core::str::from_utf8(&response[..stale.metadata.body_length]).unwrap();
+        assert!(body.contains("\"status\":\"pending\""));
+
+        authority.state = LocalAuthorityState::OrderValid;
+        authority.inject(LocalAuthorityFault::ContradictoryOrderOnce);
+        let contradictory = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &url(LOCAL_ORDER_URL),
+            ProtectedKey::Kid(&account),
+            b"",
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        let body = core::str::from_utf8(&response[..contradictory.metadata.body_length]).unwrap();
+        assert!(body.contains("\"status\":\"pending\""));
+
+        authority.inject(LocalAuthorityFault::MalformedCertificateOnce);
+        let malformed = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &url(LOCAL_CERTIFICATE_URL),
+            ProtectedKey::Kid(&account),
+            b"",
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert!(
+            response[..malformed.metadata.body_length]
+                .windows(4)
+                .any(|w| w == b"A===")
+        );
     }
 }
