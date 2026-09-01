@@ -86,6 +86,15 @@ secret handles, certificate secret handles, and audit records occupy distinct
 namespaces; only opaque provider handles, never key bytes, are admitted to the
 secret-handle namespaces. An uncertain commit is resolved against the store's
 authoritative generation and digest rather than guessed.
+The certificate package now also defines a bounded, versioned, authenticated
+backup container. Creation verifies every included durable record, rejects
+duplicate namespace/object identities, authenticates a manifest of exact record
+digests, and produces an overall digest. Verification is read-only; restoration
+requires an empty target and a target-provided atomic begin/import/commit path
+with abort on failure. The format carries opaque sealed-provider handles, never
+raw private keys. A provider-specific separately protected sealed-key export and
+the `mrml cert backup` frontend wiring remain required before operational
+disaster recovery is complete.
 RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
 and DER serial contents, including a required leading zero, and are carried in
 the verified-chain receipt. RenewalInfo parsing bounds and validates the exact
@@ -137,7 +146,7 @@ through capability-bound services.
 General JOSE response parsing, MRML HTTPS capability adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
 alternate-chain link retrieval, renewal execution, revocation transport,
-backup/restore, CLI administration, interface dispatch/service loop, concrete
+sealed-key backup/restore adapters, CLI administration, interface dispatch/service loop, concrete
 gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.

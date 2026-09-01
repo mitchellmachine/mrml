@@ -11332,3 +11332,10 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary deterministic
 selection among already validated X.509 chains using an exact owner-approved
 chain-digest preference list. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Authenticated certificate-state backup container
+
+Patent review: **NOT_TRIGGERED**. This increment adds a conventional bounded,
+versioned authenticated container over already authenticated durable records
+and atomic clean-target restore operations. It adds no scoped ACME protocol
+mechanism and no recorded re-review trigger.

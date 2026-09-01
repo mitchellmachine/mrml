@@ -1,5 +1,6 @@
 #![no_std]
 
+mod backup;
 mod certificate;
 mod challenge_dns;
 mod challenge_publisher;
@@ -8,6 +9,10 @@ mod identity;
 mod revocation;
 mod scheduler;
 
+pub use backup::{
+    create_backup, restore_backup, verify_backup, BackupDescriptor, BackupError,
+    BackupRestoreTarget, BACKUP_VERSION, MAX_BACKUP_BYTES, MAX_BACKUP_RECORDS,
+};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
 pub use certificate::{
