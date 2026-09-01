@@ -122,5 +122,22 @@ respectively `1777657b3fd18f02b5e781690f61680f1914c8b9f49698a3b65fb0a7b833d050`,
 `d7770ef2edf94daf1aa5be608d785a716d64f5c611e7bea2fb55d39457f18c74`,
 `8a331fdde7032f33a71e1b2e257d80166e348e00fcb17914f48bdb57a1c63007`,
 and `f85739f53adb1cf03dacd390cddb586c3c8ba80067113ac4a4f055c58222239e`.
-Official sigVer cases, including the ACVP suite's documented zero-hint and
-z-bound coverage gaps, remain open.
+Official external-interface sigVer coverage uses accepted group-3 case 33 and
+rejected group-3 case 31 from the same pinned commit. The sigVer prompt and
+results JSON SHA-256 digests are
+`e2cba4589389756fa0bea1a7e6837138bf0a81f9d14234c9ee8f6d33caa1654e`
+and `e1d84ef1b2f35196278ab0b0ed6a46ec62cc03d2dfa92c564199e1999bfb8ea6`.
+For accepted case 33 the public-key, context, message, and signature fixture
+digests are `d190a6a6d0d8438b195f4d32e6ed1d236d10709ed6fbca47306efb5ada1468e1`,
+`a9ce73821e80cdf934513ee95d4002924d5c06173ef1766b5e9672acf72330ba`,
+`6923837e5fe3d3d73e22d92f0b244c1ff836abf21a2e9fc95610ece693f72664`,
+and `57d8384ce083b170a117b13172b9b712cbd944ba349a1598ac5e69526786f9e8`.
+For rejected case 31 they are
+`abb1fcf6f209eba69f6a2ce2d5510a6487584a36ca543783df5f338bd386c725`,
+`6d3691bf6aed51fd7966cad29768eac16ac51734b2cd11da4f3c8b98238abd7e`,
+`0a5e13852a9376b1c83297e502c09664c35a4d1a13c7fd0f0feef90ae98834ed`,
+and `532646784cd450f22ad9c7a0f89f4651ac95eaaa9348b2812e6d6ba076d27df5`.
+Fixtures stay test-only and are loaded only when
+`MRML_ACVP_MLDSA65_SIGVER` is configured. The ACVP suite's documented
+zero-hint-row and z-bound coverage gaps still require separate local negative
+regressions.

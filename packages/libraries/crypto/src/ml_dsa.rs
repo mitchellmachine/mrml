@@ -1024,6 +1024,32 @@ mod tests {
     }
 
     #[test]
+    fn nist_acvp_fips204_sigver_cases_when_configured() {
+        let Some(directory) = mrml_runtime::environment_variable("MRML_ACVP_MLDSA65_SIGVER") else {
+            return;
+        };
+        for (case, expected) in [
+            ("sigver-33", Ok(())),
+            ("sigver-31", Err(MlDsaError::InvalidSignature)),
+        ] {
+            let case = mrml_runtime::join_path(&directory, case);
+            let read = |name: &str| {
+                mrml_runtime::read_file(&mrml_runtime::join_path(&case, name)).unwrap()
+            };
+            let public = read("public.raw");
+            let context = read("context.bin");
+            let message = read("message.bin");
+            let signature = read("signature.bin");
+            assert_eq!(public.len(), ML_DSA_65_PUBLIC_KEY_BYTES);
+            assert_eq!(signature.len(), ML_DSA_65_SIGNATURE_BYTES);
+            assert_eq!(
+                ml_dsa_65_verify(&public, &context, &message, &signature),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn independently_generated_openssl_vector_when_configured() {
         let Some(directory) = mrml_runtime::environment_variable("MRML_ML_DSA_65_OPENSSL") else {
             return;
