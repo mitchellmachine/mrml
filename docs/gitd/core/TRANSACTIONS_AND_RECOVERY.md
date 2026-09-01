@@ -75,3 +75,18 @@ marked complete. Any generation change, partial update, or third ref value is
 `ManualUncertain`. Mock crash-state tests exercise these decisions, but a
 filesystem journal writer, directory fsync, process restart, injected power
 loss, and physical-storage evidence remain open.
+
+On Linux, `ReceiveJournalDirectory` now persists these records through an
+exclusive `.new` file, complete write, file fsync, atomic rename over the prior
+phase, and journal-directory fsync. Record names are derived only from the
+128-bit transaction ID. Reload uses a bounded regular-file/no-final-symlink
+open, validates the embedded transaction ID, rejects noncanonical filenames,
+symlinks, directories, unrelated entries, and stale temporary records, and
+orders recovered transactions deterministically. A stale `.new` record is
+preserved and blocks mutation for explicit recovery instead of being silently
+deleted. Focused hosted-Linux tests persist two phases and reopen exact state.
+The Windows build deliberately returns fsync failure because the runtime does
+not yet expose Windows directory-handle flush; Wine proves compilation and
+fail-closed availability, not Windows crash durability. Arrival-pack install,
+atomic ref-generation persistence, audit-receipt storage, process-kill fault
+injection, real power-loss testing, and physical media evidence remain open.

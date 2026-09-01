@@ -14,6 +14,7 @@ mod pack;
 mod pack_index;
 mod quarantine;
 mod receive_journal;
+mod receive_journal_file;
 mod remote;
 mod repository;
 mod sha1;
@@ -66,6 +67,7 @@ pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,
     RecoveryAction, classify_receive_recovery, encode_receive_journal, parse_receive_journal,
 };
+pub use receive_journal_file::ReceiveJournalDirectory;
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
     push_ssh,
