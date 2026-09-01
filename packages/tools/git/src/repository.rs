@@ -252,6 +252,10 @@ impl Repository {
             create_dir_all(&directory)?;
             write_file(&path, &encoded)?;
         }
+        let stored = self.read_object(id)?;
+        if stored.kind != kind || &stored.contents[..] != contents {
+            return Err(RepositoryError::InvalidHead);
+        }
         Ok(id)
     }
 
@@ -3611,6 +3615,25 @@ mod tests {
         remove_dir_all(&source_path).unwrap();
         remove_dir_all(&destination_path).unwrap();
         remove_dir_all(&rejected_path).unwrap();
+    }
+
+    #[test]
+    fn object_write_rereads_exact_bytes_before_returning_identity() {
+        let path = root("object-write-reread");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        let (id, _) = encode_loose_object_with_format(
+            ObjectFormat::Sha256,
+            ObjectKind::Blob,
+            b"expected contents",
+        );
+        let hex = id.to_hex();
+        let directory = join_path(&join_path(&repository.git_dir, "objects"), &hex[..2]);
+        create_dir_all(&directory).unwrap();
+        write_file(&join_path(&directory, &hex[2..]), b"corrupt preexisting object").unwrap();
+        assert!(repository
+            .write_object(ObjectKind::Blob, b"expected contents")
+            .is_err());
+        remove_dir_all(&path).unwrap();
     }
 
     #[test]

@@ -72,3 +72,8 @@ generated and self-verified by OpenSSL 3.6.4's default provider is always
 verified by the first-party implementation. These tests no longer silently
 pass when fixture environment variables are absent; OpenSSL remains a test
 oracle and is not a runtime dependency.
+
+Every native loose-object write now immediately reopens, parses, rehashes, and
+byte-compares the stored object before returning its identity. Consequently a
+pre-existing corrupt object at the computed path, a malformed write, or an
+identity/content mismatch fails before commit/tag code can mutate its ref.
