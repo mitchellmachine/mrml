@@ -16,6 +16,10 @@ pub struct GitdConfig {
     pub cache_root: PathBuf,
     pub receipt_root: PathBuf,
     pub policy_root: PathBuf,
+    pub repository_catalog: PathBuf,
+    pub profile_catalog: PathBuf,
+    pub token_records: PathBuf,
+    pub token_pepper: PathBuf,
     pub authority_socket: PathBuf,
     pub certd_socket: PathBuf,
     pub authority_capability: PathBuf,
@@ -96,6 +100,10 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
     let mut cache_root = None;
     let mut receipt_root = None;
     let mut policy_root = None;
+    let mut repository_catalog = None;
+    let mut profile_catalog = None;
+    let mut token_records = None;
+    let mut token_pepper = None;
     let mut authority_socket = None;
     let mut certd_socket = None;
     let mut authority_capability = None;
@@ -143,6 +151,10 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
             "cache_root" => set!(cache_root, absolute_path(value)?),
             "receipt_root" => set!(receipt_root, absolute_path(value)?),
             "policy_root" => set!(policy_root, absolute_path(value)?),
+            "repository_catalog" => set!(repository_catalog, absolute_path(value)?),
+            "profile_catalog" => set!(profile_catalog, absolute_path(value)?),
+            "token_records" => set!(token_records, absolute_path(value)?),
+            "token_pepper" => set!(token_pepper, absolute_path(value)?),
             "authority_socket" => set!(authority_socket, absolute_path(value)?),
             "certd_socket" => set!(certd_socket, absolute_path(value)?),
             "authority_capability" => set!(authority_capability, absolute_path(value)?),
@@ -187,6 +199,10 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
         cache_root: required!(cache_root),
         receipt_root: required!(receipt_root),
         policy_root: required!(policy_root),
+        repository_catalog: required!(repository_catalog),
+        profile_catalog: required!(profile_catalog),
+        token_records: required!(token_records),
+        token_pepper: required!(token_pepper),
         authority_socket: required!(authority_socket),
         certd_socket: required!(certd_socket),
         authority_capability: required!(authority_capability),
@@ -223,7 +239,21 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
             }
         }
     }
+    if !is_direct_child(&config.repository_catalog, &config.policy_root)
+        || !is_direct_child(&config.profile_catalog, &config.policy_root)
+        || !is_direct_child(&config.token_records, &config.state_root)
+        || config.token_pepper.parent() != Some(Path::new("/run/secrets"))
+        || config.repository_catalog == config.profile_catalog
+        || config.token_pepper == config.authority_capability
+        || config.token_pepper == config.certd_capability
+    {
+        return Err(GitdConfigError::InvalidValue);
+    }
     Ok(config)
+}
+
+fn is_direct_child(path: &Path, parent: &Path) -> bool {
+    path.parent() == Some(parent) && path.file_name().is_some()
 }
 
 fn number<T: core::str::FromStr>(value: &str) -> Result<T, GitdConfigError> {
@@ -303,7 +333,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
+    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
 
     #[test]
     fn exact_v1_config_parses_with_production_defaults() {
@@ -334,6 +364,28 @@ mod tests {
                     .replace(
                         "repository_root=/mnt/mrml/gitd/repos",
                         "repository_root=repos"
+                    )
+                    .as_bytes()
+            ),
+            Err(GitdConfigError::InvalidValue)
+        );
+        assert_eq!(
+            parse_gitd_config(
+                VALID
+                    .replace(
+                        "repository_catalog=/mnt/mrml/gitd/policies/repositories.v1",
+                        "repository_catalog=/mnt/mrml/gitd/state/repositories.v1"
+                    )
+                    .as_bytes()
+            ),
+            Err(GitdConfigError::InvalidValue)
+        );
+        assert_eq!(
+            parse_gitd_config(
+                VALID
+                    .replace(
+                        "token_records=/mnt/mrml/gitd/state/tokens.v1",
+                        "token_records=/mnt/mrml/gitd/policies/tokens.v1"
                     )
                     .as_bytes()
             ),
