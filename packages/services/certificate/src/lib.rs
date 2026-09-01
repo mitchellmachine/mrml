@@ -1,5 +1,6 @@
 #![no_std]
 
+mod administration;
 mod backup;
 mod backup_export;
 mod backup_transfer;
@@ -30,6 +31,7 @@ mod hot_reload;
 mod hosted_daemon;
 mod identity;
 mod identity_service;
+mod keyed_authenticator;
 mod lifecycle_service;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod lifecycle_transport_hosted;
@@ -46,6 +48,11 @@ mod status;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod tls_signing_adapter;
 
+pub use administration::{
+    ADMINISTRATION_HEADER_BYTES, AdministrationClass, AdministrationCodecError,
+    AdministrationRequest, CanonicalAdministrationProvider, MAX_ADMINISTRATION_PAYLOAD_BYTES,
+    decode_administration_request, encode_administration_request,
+};
 pub use backup::{
     BACKUP_VERSION, BackupDescriptor, BackupError, BackupRestoreTarget, MAX_BACKUP_BYTES,
     MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES, SealedKeyProvider, create_backup,
@@ -147,6 +154,9 @@ pub use identity::{
     TlsIdentityDescriptor, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
 };
 pub use identity_service::{CertificateIdentityProvider, dispatch_identity_call};
+pub use keyed_authenticator::{
+    DURABLE_AUTHENTICATION_KEY_BYTES, HmacSha256DurableAuthenticator,
+};
 pub use lifecycle_service::{
     CertificateLifecycleAuthorizer, CertificateLifecycleProvider, LifecycleDispatchError,
     dispatch_lifecycle_call,
