@@ -11664,3 +11664,14 @@ fixture record, binds its endpoint, caller, shared-memory capability, route,
 and generation from launch registers, and serves one typed certificate call.
 Signing and challenge authority remain denied in the probe. It adds no new
 certificate mechanism or recorded re-review trigger.
+
+# 2026-09-01 — Deterministic local ACME authority
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds a bounded, deterministic,
+test-only implementation of ordinary RFC 8555 directory, nonce, account,
+order, authorization, challenge, finalization, certificate-download, and
+revocation exchanges. It verifies the existing canonical ES256 JWS form and
+does not operate a public certification authority, add route-selected
+multi-vantage validation, proxy private challenges, or introduce another
+recorded re-review trigger.
