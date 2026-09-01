@@ -1,0 +1,60 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.git-authority"
+kind = "service"
+name = "mrml-git-authority"
+profile = "system-service"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+must_run = true
+runtime_class = "microvm-eligible"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_git_authority"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-git-authority"
+
+[rust]
+crate_name = "mrml_git_authority"
+crate_type = "lib"
+source = "packages/services/git-authority/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_git_authority_hosted"
+output = "mrml-git-authority"
+self_extern = true
+source = "packages/services/git-authority/src/main.rs"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[host_test]]
+targets = ["LINUX"]
+
+[test_policy]
+stack_bytes = 8388608
