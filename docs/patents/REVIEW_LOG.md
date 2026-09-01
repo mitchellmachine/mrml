@@ -12074,3 +12074,11 @@ verify-only and digest-confirmed clean-target restore operations under their
 canonical administration command spelling. It adds no certificate protocol,
 signing mechanism, validation topology, certificate authority operation, or
 recorded re-review trigger.
+
+# 2026-09-01 — Bounded certificate-backup export core
+
+Patent review: **NOT_TRIGGERED**. This increment stages an existing
+authenticated backup format for ordinary generation-bound sequential download
+and clears the bounded staging memory after use. It adds no certificate
+protocol, signing mechanism, validation topology, certificate authority
+operation, or recorded re-review trigger.

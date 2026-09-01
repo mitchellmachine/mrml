@@ -1,6 +1,7 @@
 #![no_std]
 
 mod backup;
+mod backup_export;
 mod backup_transfer;
 mod caa;
 mod catalog_lifecycle_provider;
@@ -46,6 +47,11 @@ pub use backup::{
     MAX_BACKUP_RECORDS, MAX_SEALED_KEY_BYTES, SealedKeyProvider, create_backup,
     create_recoverable_backup, prepare_sealed_key_record, restore_backup,
     restore_sealed_key_record, untrusted_backup_container_digest, verify_backup,
+};
+pub use backup_export::{
+    BACKUP_EXPORT_COMMAND_BYTES, BackupExportCommand, BackupExportError, BackupExportReceipt,
+    BackupExportSession, BackupExportSource, MAX_BACKUP_EXPORT_CHUNK,
+    decode_backup_export_command, encode_backup_export_command,
 };
 pub use backup_transfer::{
     BACKUP_TRANSFER_HEADER_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES, BackupTransferCommand,

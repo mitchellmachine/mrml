@@ -188,8 +188,15 @@ digests, and produces an overall digest. Verification is read-only; restoration
 requires an empty target and a target-provided atomic begin/import/commit path
 with abort on failure. The format carries opaque sealed-provider handles, never
 raw private keys. A provider-specific separately protected sealed-key export and
-backup creation/download provider remain required before operational disaster
-recovery is complete.
+backup catalog provider remain required before operational disaster recovery is
+complete. The shared export core now gives that provider a bounded
+`BACKUP_CREATE` path: it stages at most 269492 bytes, verifies the provider's
+exact policy generation, record count, total length, and SHA-256 container
+digest, then permits only generation-bound sequential reads of at most 8192
+bytes. Replayed, stale, skipped, or concurrent exports fail closed, and the
+entire staging buffer is cleared after completion, provider failure, or drop.
+The canonical fixed-size begin/read/finish command rejects reserved bytes and
+ambiguous metadata. Hosted transport and CLI download wiring remain required.
 Because a complete container may exceed the lifecycle ABI's 4 KiB request
 window, restore input is assembled by a bounded sequential transfer state
 machine rather than by raising that ABI bound. Each upload binds a nonzero
