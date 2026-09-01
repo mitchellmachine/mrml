@@ -100,17 +100,26 @@ active pair at the new generation. A transition cannot lower a generation,
 break the previous-policy digest chain, remove a revocation, reactivate a
 revoked key, or downgrade hybrid-required policy.
 
-Authenticated emergency recovery execution is not yet implemented. The current
-state stores only an opaque emergency-policy digest, with no canonical
-descriptor binding the repository, authorized hybrid identities, validity,
-revocation, threshold, and recovery generation. The verifier policy is supplied
-separately and cannot prove that it is the policy named by that digest. Treating
-it as the pinned authority would permit policy substitution. A future design
-therefore needs a purpose-separated canonical transition, strictly increasing
-trust and recovery generations, nondecreasing complete revocations, an opaque
-verifier-minted authorization bound to both descriptor and transition digests,
-and a durable one-use activation boundary. Until those architectural types
-exist, protected refs cannot activate through the emergency path.
+Authenticated emergency recovery uses the canonical bounded `MRGERA01`
+authority descriptor and `MRGERT01` transition. The descriptor binds the exact
+repository, authority generation, validity interval, threshold, ordered hybrid
+pair identities, and revoked component identities. Distinct verified hybrid
+approvals over the exact purpose-separated transition mint a private
+`EmergencyRecoveryAuthorization`; duplicate pairs cannot satisfy the threshold.
+The transition binds the prior policy digest and trust/revocation generations,
+the exact next policy digest and generations, the next authority digest, and
+effective time.
+
+`LinuxDurableTrustPolicyStore` rereads the expected current generation and
+digest under a create-new lock, consumes that authorization, enforces retained
+revocations/protected refs, non-broadening formats, and hybrid non-downgrade,
+then fsyncs and atomically selects the canonical next policy. It reopens and
+byte-validates the selected state before releasing the lock. Uncertain outcomes
+retain the lock; replay against the persisted next state fails the exact prior
+generation/digest check. Hosted-Linux tests cover canonical parsing, threshold
+failure, substitution, truncation, tampering, stale locks, exact reopen, and
+durable replay rejection. Key custody and approval production remain in the
+injected owner-controlled verifier service rather than this storage module.
 
 `verify_introduced_history` now deterministically walks every commit introduced
 by `old..new`, including all merge-side parents, in parent-before-child order.
