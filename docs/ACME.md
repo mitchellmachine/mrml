@@ -26,6 +26,12 @@ poll retries and deadlines, and one authorization URL per identifier. Stale or
 substituted authorization responses fail closed; wildcard authorization selects
 DNS-01; finalization requires every exact authorization to be valid and uses a
 one-use CSR-digest receipt.
+Order responses now pass through a bounded strict parser before reaching that
+state machine. The parser requires the exact ordered identifier set and selected
+profile, an exact authorization count, unique same-origin authorization URLs,
+same-origin finalization/certificate endpoints, known status values, singleton
+fields, bounded JSON complexity, and no trailing data. Cross-order or
+cross-origin substitution is rejected before lifecycle mutation.
 Typed ACME problem documents and bounded subproblems are parsed with duplicate
 singleton rejection, bounded body/token/depth/text limits, strict HTTP status
 ranges, trailing-data rejection, and explicit `badNonce` classification.

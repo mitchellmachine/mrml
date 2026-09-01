@@ -17,6 +17,7 @@ mod payload;
 mod platform;
 mod problem;
 mod profile;
+mod response;
 mod state;
 mod transport;
 mod url;
@@ -74,6 +75,10 @@ pub use problem::{
     MAX_PROBLEM_TYPE, MAX_SUBPROBLEMS,
 };
 pub use profile::{CertificateProfile, ProfileError, MAX_PROFILE_NAME};
+pub use response::{
+    parse_order_response, ParsedAuthorizationResponse, ParsedChallenge, ParsedOrderResponse,
+    ResponseError,
+};
 pub use state::{AccountState, OrderState, StateError};
 pub use transport::{
     AcmeContentType, AcmeExchange, AcmeHttpMethod, AcmeResponseMetadata, AcmeTransport,

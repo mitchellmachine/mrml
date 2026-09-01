@@ -11385,3 +11385,10 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 payload generation for ordinary RFC 8555 account, order, finalization, and
 revocation requests plus current profile/replacement fields. It adds no
 recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Exact ACME order-response parsing
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds bounded ordinary RFC 8555
+order-response parsing with exact identifier, profile, authorization count, and
+same-origin endpoint binding. It adds no recorded re-review-trigger mechanism.

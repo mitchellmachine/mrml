@@ -319,21 +319,21 @@ impl Default for Metadata {
     }
 }
 
-struct Parser<'a> {
+pub(crate) struct Parser<'a> {
     tokens: Tokens<'a>,
     pushed: Option<Token<'a>>,
     count: usize,
 }
 
 impl<'a> Parser<'a> {
-    fn new(source: &'a str) -> Self {
+    pub(crate) fn new(source: &'a str) -> Self {
         Self {
             tokens: Tokens::new(source),
             pushed: None,
             count: 0,
         }
     }
-    fn next(&mut self) -> Result<Option<Token<'a>>, DirectoryError> {
+    pub(crate) fn next(&mut self) -> Result<Option<Token<'a>>, DirectoryError> {
         if let Some(token) = self.pushed.take() {
             return Ok(Some(token));
         }
@@ -346,17 +346,17 @@ impl<'a> Parser<'a> {
             .transpose()
             .map_err(|_| DirectoryError::Malformed)
     }
-    fn put_back(&mut self, token: Token<'a>) {
+    pub(crate) fn put_back(&mut self, token: Token<'a>) {
         self.pushed = Some(token);
     }
-    fn expect(&mut self, expected: Token<'_>) -> Result<(), DirectoryError> {
+    pub(crate) fn expect(&mut self, expected: Token<'_>) -> Result<(), DirectoryError> {
         if self.next()? == Some(expected) {
             Ok(())
         } else {
             Err(DirectoryError::Malformed)
         }
     }
-    fn string(&mut self) -> Result<&'a str, DirectoryError> {
+    pub(crate) fn string(&mut self) -> Result<&'a str, DirectoryError> {
         match self.next()? {
             Some(Token::String(value)) if value.contains('\\') => {
                 Err(DirectoryError::EscapedStringUnsupported)
@@ -370,7 +370,7 @@ impl<'a> Parser<'a> {
         value.require_origin(origin)?;
         Ok(value)
     }
-    fn object_fields(
+    pub(crate) fn object_fields(
         &mut self,
         mut field: impl FnMut(&mut Self, &'a str) -> Result<(), DirectoryError>,
     ) -> Result<(), DirectoryError> {
@@ -476,7 +476,7 @@ impl<'a> Parser<'a> {
             }
         }
     }
-    fn skip_value(&mut self, depth: usize) -> Result<(), DirectoryError> {
+    pub(crate) fn skip_value(&mut self, depth: usize) -> Result<(), DirectoryError> {
         if depth > MAX_JSON_DEPTH {
             return Err(DirectoryError::TooComplex);
         }
@@ -522,7 +522,7 @@ impl<'a> Parser<'a> {
             _ => Err(DirectoryError::Malformed),
         }
     }
-    fn finish(&mut self) -> Result<(), DirectoryError> {
+    pub(crate) fn finish(&mut self) -> Result<(), DirectoryError> {
         if self.next()?.is_none() {
             Ok(())
         } else {
