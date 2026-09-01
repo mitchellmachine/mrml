@@ -11715,3 +11715,12 @@ outer request with the current account key, validates the exact account and
 old-key binding, verifies the nested JWS with the replacement P-256 key, and
 then changes the test authority's account key. It adds no smart-card
 precomputed signing machinery or other recorded re-review trigger.
+
+# 2026-09-01 — Deterministic ACME external-account binding
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment makes the local test authority
+advertise and enforce ordinary RFC 8555 External Account Binding. It checks the
+exact HS256 key identifier, endpoint, account JWK, signing-input digest, and MAC
+and rejects missing or incorrect bindings. It adds no certificate brokerage,
+smart-card precomputation, or other recorded re-review-trigger mechanism.

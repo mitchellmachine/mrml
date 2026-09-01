@@ -19,6 +19,8 @@ pub const LOCAL_RENEWAL_INFO_CERTIFICATE_URL: &str =
     "https://local-ca.invalid/acme/renewal-info/khDjV8EtmLIeVjvn6VPf3cfDARU.Ag";
 pub const LOCAL_KEY_CHANGE_URL: &str = "https://local-ca.invalid/acme/key-change";
 const DIRECTORY: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
+const DIRECTORY_EAB: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","externalAccountRequired":true,"website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
+const LOCAL_EAB_KEY_IDENTIFIER: &str = "local-eab-key";
 const ACCOUNT: &str =
     r#"{"status":"valid","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
 const ACCOUNT_DEACTIVATED: &str =
@@ -81,6 +83,9 @@ pub enum LocalAuthorityError {
 }
 pub trait LocalJwsVerifier {
     fn verify(&mut self, key: &P256Jwk, digest: &[u8; 32], signature: &[u8; 64]) -> bool;
+    fn verify_eab(&mut self, _: &str, _: &[u8; 32], _: &[u8; 32]) -> bool {
+        false
+    }
 }
 pub struct FirstPartyP256JwsVerifier;
 impl LocalJwsVerifier for FirstPartyP256JwsVerifier {
@@ -98,6 +103,7 @@ pub struct DeterministicAcmeAuthority<V> {
     fault: LocalAuthorityFault,
     fault_used: bool,
     certificate: &'static str,
+    require_eab: bool,
 }
 impl<V> DeterministicAcmeAuthority<V> {
     pub const fn new(verifier: V, key: P256Jwk) -> Self {
@@ -110,6 +116,7 @@ impl<V> DeterministicAcmeAuthority<V> {
             fault: LocalAuthorityFault::None,
             fault_used: false,
             certificate: SYNTHETIC_CERTIFICATE,
+            require_eab: false,
         }
     }
     pub const fn state(&self) -> LocalAuthorityState {
@@ -124,6 +131,10 @@ impl<V> DeterministicAcmeAuthority<V> {
     }
     pub fn with_certificate(mut self, pem_chain: &'static str) -> Self {
         self.certificate = pem_chain;
+        self
+    }
+    pub fn require_external_account_binding(mut self) -> Self {
+        self.require_eab = true;
         self
     }
     fn issue_nonce(&mut self) -> &'static str {
@@ -148,7 +159,11 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 None,
                 None,
                 Some("application/json"),
-                DIRECTORY,
+                if self.require_eab {
+                    DIRECTORY_EAB
+                } else {
+                    DIRECTORY
+                },
             );
         }
         if r.method == AcmeHttpMethod::Get && url == LOCAL_RENEWAL_INFO_CERTIFICATE_URL {
@@ -242,6 +257,9 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                 }
                 if self.state != LocalAuthorityState::Empty || !contains(payload, b"{") {
                     return Err(LocalAuthorityError::InvalidState);
+                }
+                if self.require_eab {
+                    validate_external_account_binding(&mut self.verifier, &self.key, payload)?;
                 }
                 self.state = LocalAuthorityState::AccountValid;
                 reply(
@@ -591,6 +609,65 @@ fn validate_key_change(
     }
     Ok(new_key)
 }
+fn validate_external_account_binding(
+    verifier: &mut impl LocalJwsVerifier,
+    account_key: &P256Jwk,
+    account_payload: &[u8],
+) -> Result<(), LocalAuthorityError> {
+    let text =
+        core::str::from_utf8(account_payload).map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let binding = text
+        .split_once("\"externalAccountBinding\":")
+        .and_then(|(_, value)| value.strip_suffix('}'))
+        .ok_or(LocalAuthorityError::InvalidProtectedHeader)?;
+    let (protected64, payload64, signature64) = jws_fields(binding)?;
+    let mut protected_buffer = [0u8; 2048];
+    let protected = decode_base64url(protected64, &mut protected_buffer)
+        .map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let protected =
+        core::str::from_utf8(protected).map_err(|_| LocalAuthorityError::MalformedJws)?;
+    if !contains(protected, "\"alg\":\"HS256\"")
+        || !contains_json_string_field(protected, "kid", LOCAL_EAB_KEY_IDENTIFIER)
+        || !contains_json_string_field(protected, "url", LOCAL_NEW_ACCOUNT_URL)
+        || contains(protected, "\"jwk\":")
+    {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    let mut payload_buffer = [0u8; 2048];
+    let payload = decode_base64url(payload64, &mut payload_buffer)
+        .map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let payload = core::str::from_utf8(payload).map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let public = account_key.sec1_uncompressed();
+    let mut x = [0u8; 43];
+    let mut y = [0u8; 43];
+    let x = encode_base64url(&public[1..33], &mut x)
+        .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?;
+    let y = encode_base64url(&public[33..], &mut y)
+        .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?;
+    if !contains_json_string_field(payload, "x", x)
+        || !contains_json_string_field(payload, "y", y)
+        || !contains_json_string_field(payload, "crv", "P-256")
+        || !contains_json_string_field(payload, "kty", "EC")
+    {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    let mut mac = [0u8; 32];
+    if decode_base64url(signature64, &mut mac)
+        .map_err(|_| LocalAuthorityError::MalformedJws)?
+        .len()
+        != mac.len()
+    {
+        return Err(LocalAuthorityError::MalformedJws);
+    }
+    let mut digest = Sha256::new();
+    digest.update(protected64.as_bytes());
+    digest.update(b".");
+    digest.update(payload64.as_bytes());
+    if !verifier.verify_eab(LOCAL_EAB_KEY_IDENTIFIER, &digest.finalize(), &mac) {
+        return Err(LocalAuthorityError::InvalidSignature);
+    }
+    Ok(())
+}
 fn json_string_field<'a>(source: &'a str, name: &str) -> Result<&'a str, LocalAuthorityError> {
     let mut prefix = [0u8; 260];
     let required = name.len().saturating_add(4);
@@ -663,13 +740,17 @@ fn reply<'a>(
 mod tests {
     use super::*;
     use crate::{
-        AcmeExchange, AcmeJwsSigner, ApprovedAcmeJwsDigest, Es256Signature, ProtectedKey,
-        fetch_directory, post_jws, write_key_change_inner_jws,
+        AcmeExchange, AcmeJwsSigner, ApprovedAcmeJwsDigest, ApprovedEabMac, Es256Signature,
+        ExternalAccountMac, ProtectedKey, fetch_directory, post_jws,
+        write_external_account_binding, write_key_change_inner_jws, write_new_account_payload,
     };
     struct Verifier;
     impl LocalJwsVerifier for Verifier {
         fn verify(&mut self, _: &P256Jwk, d: &[u8; 32], s: &[u8; 64]) -> bool {
             *d != [0; 32] && *s == [1; 64]
+        }
+        fn verify_eab(&mut self, kid: &str, digest: &[u8; 32], mac: &[u8; 32]) -> bool {
+            kid == LOCAL_EAB_KEY_IDENTIFIER && *digest != [0; 32] && *mac == [2; 32]
         }
     }
     struct Signer;
@@ -679,6 +760,26 @@ mod tests {
             _: &ApprovedAcmeJwsDigest,
         ) -> Result<Es256Signature, crate::JoseError> {
             Es256Signature::from_raw([1; 64])
+        }
+    }
+    struct EabMac;
+    impl ExternalAccountMac for EabMac {
+        fn mac_external_account_binding(
+            &mut self,
+            _: &ApprovedEabMac,
+            _: &[u8],
+        ) -> Result<[u8; 32], crate::JoseError> {
+            Ok([2; 32])
+        }
+    }
+    struct BadEabMac;
+    impl ExternalAccountMac for BadEabMac {
+        fn mac_external_account_binding(
+            &mut self,
+            _: &ApprovedEabMac,
+            _: &[u8],
+        ) -> Result<[u8; 32], crate::JoseError> {
+            Ok([3; 32])
         }
     }
     fn key() -> P256Jwk {
@@ -920,5 +1021,104 @@ mod tests {
         .unwrap();
         assert_eq!(rolled.metadata.status, 200);
         assert!(authority.account_key() == new_key);
+    }
+
+    #[test]
+    fn required_external_account_binding_is_verified_and_key_bound() {
+        let directory_url = url(LOCAL_DIRECTORY_URL);
+        let public_key = key();
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, public_key)
+            .require_external_account_binding();
+        let mut exchange = AcmeExchange::new(4, directory_url);
+        let mut response = [0u8; 65_536];
+        let mut jws = [0u8; 49_152];
+        let directory = fetch_directory(
+            &directory_url,
+            4,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        assert!(directory.external_account_required);
+        let mut signer = Signer;
+        assert!(
+            post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &directory.new_account,
+                ProtectedKey::Jwk(&public_key),
+                b"{}",
+                0,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            )
+            .is_err()
+        );
+        let mut bad_binding = [0u8; 8192];
+        let bad_binding_len = write_external_account_binding(
+            LOCAL_EAB_KEY_IDENTIFIER,
+            &directory.new_account,
+            &public_key,
+            directory.generation,
+            &mut BadEabMac,
+            &mut bad_binding,
+        )
+        .unwrap()
+        .len();
+        let bad_binding = core::str::from_utf8(&bad_binding[..bad_binding_len]).unwrap();
+        let mut bad_payload = [0u8; 12_000];
+        let bad_payload_len =
+            write_new_account_payload(&[], true, false, Some(bad_binding), &mut bad_payload)
+                .unwrap()
+                .len();
+        assert!(
+            post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &directory.new_account,
+                ProtectedKey::Jwk(&public_key),
+                &bad_payload[..bad_payload_len],
+                0,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            )
+            .is_err()
+        );
+        let mut binding = [0u8; 8192];
+        let binding_len = write_external_account_binding(
+            LOCAL_EAB_KEY_IDENTIFIER,
+            &directory.new_account,
+            &public_key,
+            directory.generation,
+            &mut EabMac,
+            &mut binding,
+        )
+        .unwrap()
+        .len();
+        let binding = core::str::from_utf8(&binding[..binding_len]).unwrap();
+        let mut payload = [0u8; 12_000];
+        let payload_len = write_new_account_payload(&[], true, false, Some(binding), &mut payload)
+            .unwrap()
+            .len();
+        let created = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_account,
+            ProtectedKey::Jwk(&public_key),
+            &payload[..payload_len],
+            0,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(created.metadata.status, 201);
+        assert_eq!(authority.state(), LocalAuthorityState::AccountValid);
     }
 }
