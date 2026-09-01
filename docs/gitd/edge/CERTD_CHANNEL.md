@@ -27,6 +27,12 @@ request and contain one bounded canonical ECDSA DER signature. Long-form,
 negative, redundantly padded, oversized, truncated, substituted, or trailing
 signature encodings fail closed. The client offers no generic signing method.
 
+Generation notification is a bounded request containing the exact current
+nonzero generation and a 1–30,000 ms wait. The authenticated response either
+reports an unchanged generation as a timeout or a strictly greater generation
+as a change. Zero, rollback, inconsistent state, and trailing bytes fail closed;
+the notification itself does not publish identity material.
+
 The current certd executable does not yet dispatch identity snapshot,
 CertificateVerify, or generation-wait requests. Gitd therefore remains
 non-ready and does not bind public listeners. There is no PEM, embedded-key,
@@ -39,12 +45,13 @@ service's success cannot substitute for the other's failure.
 
 Focused hosted Linux evidence:
 
-- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 14 tests
+- `./target/debug/mrml test org.mrml.service.gitd --target linux`: 15 tests
   passed, including real authenticated authority and certd Unix socket
   exchanges with kernel-observed peer credentials, plus exact snapshot parsing,
   hostname substitution, rollback-generation, trailing-byte, and canonical-name
   refusal, and generation/scheme/request/canonical-DER CertificateVerify
-  response binding.
+  response binding, plus distinct bounded timeout/change and rollback refusal
+  for identity-generation waits.
 - `./target/debug/mrml manifest lock --check`: 70 packages, 5 interfaces, 205
   compile edges, and 185 package edges passed after adding the explicit certd
   dependency.

@@ -11,8 +11,11 @@ const IDENTITY_REQUEST_MAGIC: &[u8; 8] = b"MRGIDR01";
 const IDENTITY_SNAPSHOT_MAGIC: &[u8; 8] = b"MRGIDS01";
 const CERTIFICATE_VERIFY_REQUEST_MAGIC: &[u8; 8] = b"MRGSGN01";
 const CERTIFICATE_VERIFY_RESPONSE_MAGIC: &[u8; 8] = b"MRGSGS01";
+const GENERATION_WAIT_REQUEST_MAGIC: &[u8; 8] = b"MRGWAI01";
+const GENERATION_WAIT_RESPONSE_MAGIC: &[u8; 8] = b"MRGWAS01";
 pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
 const MAX_CERTIFICATE_VERIFY_SIGNATURE_BYTES: usize = 72;
+const MAX_GENERATION_WAIT_MILLISECONDS: u32 = 30_000;
 const MAX_SERVER_NAME_BYTES: usize = 253;
 const MAX_CERTIFICATE_CHAIN_ENTRIES: usize = 8;
 const MAX_CERTIFICATE_DER_BYTES: usize = 8 * 1024;
@@ -130,6 +133,30 @@ impl GitdCertdChannelClient {
             signature_scheme,
             logical_request_id,
         )
+    }
+
+    pub fn wait_for_identity_generation(
+        &mut self,
+        current_generation: u64,
+        timeout_milliseconds: u32,
+    ) -> Result<Option<u64>, GitdCertdChannelError> {
+        if current_generation == 0
+            || timeout_milliseconds == 0
+            || timeout_milliseconds > MAX_GENERATION_WAIT_MILLISECONDS
+        {
+            return Err(GitdCertdChannelError::Authenticate);
+        }
+        let mut request = Vec::with_capacity(20);
+        request.extend_from_slice(GENERATION_WAIT_REQUEST_MAGIC);
+        request.extend_from_slice(&current_generation.to_be_bytes());
+        request.extend_from_slice(&timeout_milliseconds.to_be_bytes());
+        let mut output = [0u8; 32];
+        let written = self.exchange(
+            CertdChannelOperation::WaitForIdentityGeneration,
+            &request,
+            &mut output,
+        )?;
+        parse_generation_wait_response(&output[..written], current_generation)
     }
 
     pub fn exchange(
@@ -361,6 +388,26 @@ fn valid_ecdsa_der(signature: &[u8]) -> bool {
     offset == signature.len()
 }
 
+fn parse_generation_wait_response(
+    input: &[u8],
+    current_generation: u64,
+) -> Result<Option<u64>, GitdCertdChannelError> {
+    let mut cursor = SnapshotCursor { input, offset: 0 };
+    if cursor.take(8)? != GENERATION_WAIT_RESPONSE_MAGIC {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    let observed_generation = cursor.u64()?;
+    let state = cursor.u8()?;
+    if cursor.offset != input.len() || observed_generation == 0 {
+        return Err(GitdCertdChannelError::Authenticate);
+    }
+    match state {
+        0 if observed_generation == current_generation => Ok(None),
+        1 if observed_generation > current_generation => Ok(Some(observed_generation)),
+        _ => Err(GitdCertdChannelError::Authenticate),
+    }
+}
+
 struct SnapshotCursor<'a> {
     input: &'a [u8],
     offset: usize,
@@ -482,6 +529,24 @@ mod tests {
             parse_certificate_verify_response(&noncanonical, 7, ECDSA_SECP256R1_SHA256, 11)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn generation_wait_distinguishes_timeout_change_and_rollback() {
+        let response = |generation: u64, state: u8| {
+            let mut output = Vec::new();
+            output.extend_from_slice(GENERATION_WAIT_RESPONSE_MAGIC);
+            output.extend_from_slice(&generation.to_be_bytes());
+            output.push(state);
+            output
+        };
+        assert_eq!(parse_generation_wait_response(&response(7, 0), 7), Ok(None));
+        assert_eq!(
+            parse_generation_wait_response(&response(8, 1), 7),
+            Ok(Some(8))
+        );
+        assert!(parse_generation_wait_response(&response(6, 1), 7).is_err());
+        assert!(parse_generation_wait_response(&response(8, 0), 7).is_err());
     }
 
     #[test]
