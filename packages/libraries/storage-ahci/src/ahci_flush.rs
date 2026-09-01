@@ -77,7 +77,7 @@ pub fn flush_ahci_cache<R: AhciRegisterIo, M: AhciCommandMemoryIo>(
                 return Err(AhciFlushFailure::Untouched {
                     owner,
                     error: AhciFlushError::RegisterRead,
-                })
+                });
             }
         };
         if value & required != required || value & forbidden != 0 {
@@ -104,13 +104,13 @@ pub fn flush_ahci_cache<R: AhciRegisterIo, M: AhciCommandMemoryIo>(
                 return Err(AhciFlushFailure::Untouched {
                     owner,
                     error: AhciFlushError::MemoryNotClean,
-                })
+                });
             }
             Err(()) => {
                 return Err(AhciFlushFailure::Untouched {
                     owner,
                     error: AhciFlushError::MemoryRead,
-                })
+                });
             }
         }
     }
@@ -122,13 +122,13 @@ pub fn flush_ahci_cache<R: AhciRegisterIo, M: AhciCommandMemoryIo>(
                 return Err(AhciFlushFailure::Untouched {
                     owner,
                     error: AhciFlushError::MemoryNotClean,
-                })
+                });
             }
             Err(()) => {
                 return Err(AhciFlushFailure::Untouched {
                     owner,
                     error: AhciFlushError::MemoryRead,
-                })
+                });
             }
         }
         offset += 4;

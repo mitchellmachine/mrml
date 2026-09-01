@@ -41,20 +41,20 @@ use mrml_deployment::{
     DeploymentService, GenerationCandidate, encode_deployment_recovery_state_with_release,
     encode_deployment_release_checkpoint,
 };
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+use mrml_kernel::{
+    BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryEnvelope, CapabilitySpace, RecoveryStateMetadata,
+};
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{
     Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-use mrml_kernel::{
-    BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryEnvelope, CapabilitySpace, RecoveryStateMetadata,
-};
-#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_package_format::{
-    ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms, RuntimeInventoryRecord,
-    RuntimeIsolationClass, RuntimeIsolationPlacement, SystemGenerationDigestRecord,
-    encode_interface_catalog, encode_runtime_inventory, encode_system_generation,
-    encode_system_release_with_runtime_inventory, parse_system_release,
+    ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
+    RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
+    SystemGenerationDigestRecord, encode_interface_catalog, encode_runtime_inventory,
+    encode_system_generation, encode_system_release_with_runtime_inventory, parse_system_release,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
@@ -85,10 +85,7 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 
 // This entry is assembly rather than a Rust ABI function because r12-r14 are
 // intentional launch registers, not compiler-owned callee-saved temporaries.
-#[cfg(all(
-    not(feature = "preemption-probe"),
-    not(feature = "ahci-service-entry")
-))]
+#[cfg(all(not(feature = "preemption-probe"), not(feature = "ahci-service-entry")))]
 global_asm!(
     r#"
             .section .text$a,"xr"
@@ -448,20 +445,11 @@ unsafe extern "sysv64" fn mrml_ahci_receiver(
         AhciInstalledDataAuthorizer::from_installed_launch(NativeAhciRawSyscall, launch);
     let delay = mrml_kernel::arch::x86_64::ApStartupTiming::detect().unwrap_or_else(|_| halt());
     let state = unsafe {
-        prepare_bootstrapped_native_x86_coherent_ahci_service(
-            &mut authorizer,
-            launch,
-            delay,
-        )
+        prepare_bootstrapped_native_x86_coherent_ahci_service(&mut authorizer, launch, delay)
     }
     .unwrap_or_else(|_| halt());
     let (request, capability_tokens, scratch) = buffers.dispatch_buffers();
-    let stop = state.serve_until_stop(
-        &mut syscalls,
-        request,
-        capability_tokens,
-        scratch,
-    );
+    let stop = state.serve_until_stop(&mut syscalls, request, capability_tokens, scratch);
     buffers.erase();
     // End every service-side Rust borrow before operation 3. The receipt is
     // authority-free; the controller manager freezes this task and reconstructs
@@ -624,7 +612,14 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     _restart_manager: u64,
     _recovery_capability: u64,
 ) -> ! {
-    unsafe { asm!("xor rsp, rsp", "xor eax, eax", "int 0x80", options(noreturn)) }
+    unsafe {
+        asm!(
+            "xor rsp, rsp",
+            "xor eax, eax",
+            "int 0x80",
+            options(noreturn)
+        )
+    }
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
@@ -1794,7 +1789,11 @@ fn probe_object(local: u64) -> StorageObjectId {
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-fn write_probe_block(device: &mut RemoteBlockDevice, block: u64, bytes: &mut [u8; PROBE_BLOCK_BYTES]) {
+fn write_probe_block(
+    device: &mut RemoteBlockDevice,
+    block: u64,
+    bytes: &mut [u8; PROBE_BLOCK_BYTES],
+) {
     device.write_blocks(block, bytes).unwrap_or_else(|_| halt());
     bytes.fill(0);
 }
@@ -1845,12 +1844,9 @@ fn build_probe_deployment_evidence(
         artifact_digest: &artifact_digest,
     };
     let mut generation = [0u8; 160];
-    let generation_length = encode_system_generation(
-        RELEASE_GENERATION,
-        &[generation_record],
-        &mut generation,
-    )
-    .unwrap_or_else(|_| halt());
+    let generation_length =
+        encode_system_generation(RELEASE_GENERATION, &[generation_record], &mut generation)
+            .unwrap_or_else(|_| halt());
     let mut catalog = [0u8; 256];
     let provider = ComponentInterfaceProvider::exact(
         "org.mrml.zstd",
@@ -1867,8 +1863,13 @@ fn build_probe_deployment_evidence(
         [0x6a; 32],
     )
     .unwrap_or_else(|_| halt());
-    let catalog_length = encode_interface_catalog(RELEASE_GENERATION, &[requirement], &[provider], &mut catalog)
-        .unwrap_or_else(|_| halt());
+    let catalog_length = encode_interface_catalog(
+        RELEASE_GENERATION,
+        &[requirement],
+        &[provider],
+        &mut catalog,
+    )
+    .unwrap_or_else(|_| halt());
     let runtime_record = RuntimeInventoryRecord {
         package_id: "org.mrml.zstd",
         version: 1,
@@ -1941,7 +1942,11 @@ fn build_probe_deployment_evidence(
         2,
     )
     .unwrap_or_else(|_| halt());
-    (release_length, checkpoint, ProbeDeploymentStateStore { bytes: state })
+    (
+        release_length,
+        checkpoint,
+        ProbeDeploymentStateStore { bytes: state },
+    )
 }
 
 /// Publishes the controlled probe's four distinct recovery files as one
@@ -2021,9 +2026,30 @@ fn publish_probe_total_recovery_graph(
     write_probe_block(device, 11, &mut scratch.0);
 
     let files = [
-        (configuration_object, configuration_extents, 12, 13, 30, configuration),
-        (authority_object, authority_extents, 14, 15, 31, authority_checkpoint),
-        (deployment_object, deployment_extents, 16, 17, 32, deployment_checkpoint),
+        (
+            configuration_object,
+            configuration_extents,
+            12,
+            13,
+            30,
+            configuration,
+        ),
+        (
+            authority_object,
+            authority_extents,
+            14,
+            15,
+            31,
+            authority_checkpoint,
+        ),
+        (
+            deployment_object,
+            deployment_extents,
+            16,
+            17,
+            32,
+            deployment_checkpoint,
+        ),
     ];
     for (object, extents_pointer, metadata_block, extents_block, data_block, contents) in files {
         scratch.0[..contents.len()].copy_from_slice(contents);
@@ -2045,15 +2071,8 @@ fn publish_probe_total_recovery_graph(
                 .unwrap_or_else(|_| halt()),
         );
         write_probe_block(device, metadata_block, &mut scratch.0);
-        let extent = ExtentRecord::data(
-            object,
-            GENERATION,
-            0,
-            1,
-            data_block,
-            padded_digest,
-        )
-        .unwrap_or_else(|_| halt());
+        let extent = ExtentRecord::data(object, GENERATION, 0, 1, data_block, padded_digest)
+            .unwrap_or_else(|_| halt());
         ExtentImage::<1>::build(
             header,
             object,
@@ -2076,7 +2095,9 @@ fn publish_probe_total_recovery_graph(
     let release_padded_digest = probe_digest(&release[..release_padded_length]);
     for block in 0..release_blocks {
         let start = block * PROBE_BLOCK_BYTES;
-        scratch.0.copy_from_slice(&release[start..start + PROBE_BLOCK_BYTES]);
+        scratch
+            .0
+            .copy_from_slice(&release[start..start + PROBE_BLOCK_BYTES]);
         write_probe_block(device, 33 + block as u64, &mut scratch.0);
     }
     FileMetadata::new(
@@ -2118,22 +2139,122 @@ fn publish_probe_total_recovery_graph(
     write_probe_block(device, 19, &mut scratch.0);
 
     let records = [
-        AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(root, 2, 11, 1, AllocationKind::DirectoryEntries).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(configuration_object, GENERATION, 12, 1, AllocationKind::ObjectMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(configuration_object, GENERATION, 13, 1, AllocationKind::FileExtents).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(authority_object, GENERATION, 14, 1, AllocationKind::ObjectMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(authority_object, GENERATION, 15, 1, AllocationKind::FileExtents).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(deployment_object, GENERATION, 16, 1, AllocationKind::ObjectMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(deployment_object, GENERATION, 17, 1, AllocationKind::FileExtents).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(release_object, GENERATION, 18, 1, AllocationKind::ObjectMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(release_object, GENERATION, 19, 1, AllocationKind::FileExtents).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(root, ROOT_GENERATION, 20, 1, AllocationKind::AllocationMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(root, ROOT_GENERATION, 21, 1, AllocationKind::ObjectIdAllocatorMetadata).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(configuration_object, GENERATION, 30, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(authority_object, GENERATION, 31, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(deployment_object, GENERATION, 32, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(release_object, GENERATION, 33, release_blocks as u32, AllocationKind::FileData).unwrap_or_else(|_| halt()),
+        AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata)
+            .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(root, 2, 11, 1, AllocationKind::DirectoryEntries)
+            .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            configuration_object,
+            GENERATION,
+            12,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            configuration_object,
+            GENERATION,
+            13,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            authority_object,
+            GENERATION,
+            14,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            authority_object,
+            GENERATION,
+            15,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            deployment_object,
+            GENERATION,
+            16,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            deployment_object,
+            GENERATION,
+            17,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            release_object,
+            GENERATION,
+            18,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            release_object,
+            GENERATION,
+            19,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            root,
+            ROOT_GENERATION,
+            20,
+            1,
+            AllocationKind::AllocationMetadata,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            root,
+            ROOT_GENERATION,
+            21,
+            1,
+            AllocationKind::ObjectIdAllocatorMetadata,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            configuration_object,
+            GENERATION,
+            30,
+            1,
+            AllocationKind::FileData,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            authority_object,
+            GENERATION,
+            31,
+            1,
+            AllocationKind::FileData,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            deployment_object,
+            GENERATION,
+            32,
+            1,
+            AllocationKind::FileData,
+        )
+        .unwrap_or_else(|_| halt()),
+        AllocationRecord::new(
+            release_object,
+            GENERATION,
+            33,
+            release_blocks as u32,
+            AllocationKind::FileData,
+        )
+        .unwrap_or_else(|_| halt()),
     ];
     AllocationImage::<16>::build(header, ROOT_GENERATION, allocation_pointer, &records)
         .unwrap_or_else(|_| halt())
@@ -2157,7 +2278,9 @@ fn publish_probe_total_recovery_graph(
     .unwrap_or_else(|_| halt());
     let mut encoded = [0; SUPERBLOCK_BYTES];
     candidate.encode(&mut encoded);
-    device.replace_superblock(1, &encoded).unwrap_or_else(|_| halt());
+    device
+        .replace_superblock(1, &encoded)
+        .unwrap_or_else(|_| halt());
     device.flush().unwrap_or_else(|_| halt());
     1
 }
@@ -2184,10 +2307,9 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         ready[..8].try_into().unwrap_or_else(|_| halt()),
     ))
     .unwrap_or_else(|| halt());
-    let recovery_envelope = BootRecoveryEnvelope::decode(
-        ready[8..].try_into().unwrap_or_else(|_| halt()),
-    )
-    .unwrap_or_else(|_| halt());
+    let recovery_envelope =
+        BootRecoveryEnvelope::decode(ready[8..].try_into().unwrap_or_else(|_| halt()))
+            .unwrap_or_else(|_| halt());
     let recovery = recovery_envelope.recovery();
     ready.fill(0);
     let release = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_RELEASE_BYTES) };

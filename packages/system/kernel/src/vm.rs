@@ -1079,11 +1079,10 @@ pub fn revoke_tracked_mapping_before_resume<
         let _ = vms.poison(vm, ExecutionPoisonReason::NativeUnmapUncertain);
         return Err(MappingRevocationError::Backend(error));
     }
-    vms.retire_mapping(vm, memory, id, alias)
-        .map_err(|error| {
-            let _ = vms.poison(vm, ExecutionPoisonReason::PageTableRemovalUncertain);
-            MappingRevocationError::Policy(error)
-        })
+    vms.retire_mapping(vm, memory, id, alias).map_err(|error| {
+        let _ = vms.poison(vm, ExecutionPoisonReason::PageTableRemovalUncertain);
+        MappingRevocationError::Policy(error)
+    })
 }
 
 pub fn decode_hypercall_exit<B: VmBackend>(
@@ -1409,8 +1408,7 @@ mod tests {
             .map_region(
                 vm,
                 &mut memory,
-                GuestRegion::new(0x9000, PhysAddr::new(0x20_000).unwrap(), 1, true, false)
-                    .unwrap(),
+                GuestRegion::new(0x9000, PhysAddr::new(0x20_000).unwrap(), 1, true, false).unwrap(),
             )
             .unwrap();
         let mut backend = RevocationBackend {
@@ -1460,7 +1458,9 @@ mod tests {
         assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
         table.range_unpinned(vm).unwrap();
         table.retire_mapping(vm, &mut memory, alias, true).unwrap();
-        table.retire_mapping(vm, &mut memory, mapping, false).unwrap();
+        table
+            .retire_mapping(vm, &mut memory, mapping, false)
+            .unwrap();
         table.destroy(vm).unwrap();
     }
 

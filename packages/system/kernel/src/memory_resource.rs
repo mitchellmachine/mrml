@@ -2876,17 +2876,19 @@ mod tests {
         assert_eq!(state.first(), Some(pair.first()));
         assert_eq!(state.second(), None);
         first_backend.fail_remove = false;
-        assert!(table
-            .remove_mapping_pair(
-                state,
-                first_target,
-                &mut first_backend,
-                second_target,
-                &mut second_backend,
-                &caps,
-            )
-            .unwrap()
-            .complete());
+        assert!(
+            table
+                .remove_mapping_pair(
+                    state,
+                    first_target,
+                    &mut first_backend,
+                    second_target,
+                    &mut second_backend,
+                    &caps,
+                )
+                .unwrap()
+                .complete()
+        );
         assert_eq!(
             table
                 .usage(pool, pool_cap, &caps)
