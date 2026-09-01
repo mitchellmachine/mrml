@@ -572,4 +572,50 @@ mod tests {
             Err(HistoryVerificationError::Resource)
         );
     }
+
+    #[test]
+    fn required_linear_range_scales_execute_at_exact_limits() {
+        fn linear_id(value: u32) -> ObjectId {
+            let mut bytes = [0u8; 32];
+            bytes[..4].copy_from_slice(&value.to_be_bytes());
+            ObjectId::Sha256(bytes)
+        }
+        for count in [1u32, 100, 1_000, 5_000] {
+            let range = verify_introduced_history(
+                linear_id(0),
+                linear_id(count),
+                HistoryVerificationLimits::default(),
+                |node| {
+                    let value = u32::from_be_bytes(node.as_bytes()[..4].try_into().unwrap());
+                    Ok(if value == 0 {
+                        Vector::new()
+                    } else {
+                        [linear_id(value - 1)].into()
+                    })
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(range.introduced().len(), count as usize);
+            assert_eq!(range.introduced().first(), Some(&linear_id(1)));
+            assert_eq!(range.introduced().last(), Some(&linear_id(count)));
+        }
+        assert_eq!(
+            verify_introduced_history(
+                linear_id(0),
+                linear_id(5_001),
+                HistoryVerificationLimits::default(),
+                |node| {
+                    let value = u32::from_be_bytes(node.as_bytes()[..4].try_into().unwrap());
+                    Ok(if value == 0 {
+                        Vector::new()
+                    } else {
+                        [linear_id(value - 1)].into()
+                    })
+                },
+                |_| Ok(()),
+            ),
+            Err(HistoryVerificationError::Resource)
+        );
+    }
 }

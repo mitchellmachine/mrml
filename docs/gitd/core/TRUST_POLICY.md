@@ -55,7 +55,12 @@ to be reached for fast-forward acceptance, bounds both existing and introduced
 walks (5,000 introduced commits by default), bounds parents per commit, rejects
 mixed object formats, missing objects, cycles, and verifier failure, and returns
 a private-field `VerifiedCommitRange`. Tests prove that an invalid merge-side
-intermediate cannot hide beneath an otherwise accepted tip.
+intermediate cannot hide beneath an otherwise accepted tip. Deterministic
+functional tests execute exact linear introduced ranges of 1, 100, 1,000, and
+5,000 commits and reject 5,001 at the default limit on Linux and the pinned
+Wine-hosted Windows target. These cases establish bounded behavior at the
+configured boundary; they are not production throughput, peak-memory, or
+native-Windows evidence.
 
 Protected-history admission now exposes only
 `verify_protected_introduced_history`. Its verifier must return a private
