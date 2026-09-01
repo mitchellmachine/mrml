@@ -17,6 +17,8 @@ pub const LOCAL_REVOKE_URL: &str = "https://local-ca.invalid/acme/revoke-cert";
 const DIRECTORY: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
 const ACCOUNT: &str =
     r#"{"status":"valid","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
+const ACCOUNT_DEACTIVATED: &str =
+    r#"{"status":"deactivated","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
 const ORDER_PENDING: &str = r#"{"status":"pending","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
 const ORDER_READY: &str = r#"{"status":"ready","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","profile":"classic"}"#;
 const ORDER_VALID: &str = r#"{"status":"valid","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","certificate":"https://local-ca.invalid/acme/certificate/1","profile":"classic"}"#;
@@ -49,6 +51,7 @@ pub enum LocalAuthorityState {
     AuthorizationValid,
     OrderValid,
     Revoked,
+    AccountDeactivated,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityFault {
@@ -188,7 +191,20 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
         let next = Some(self.issue_nonce());
         match url {
             LOCAL_NEW_ACCOUNT_URL => {
-                if self.state != LocalAuthorityState::Empty {
+                if self.state == LocalAuthorityState::AccountValid
+                    && contains(payload, r#""onlyReturnExisting":true"#)
+                {
+                    return reply(
+                        out,
+                        200,
+                        effective,
+                        next,
+                        Some(LOCAL_ACCOUNT_URL),
+                        Some("application/json"),
+                        ACCOUNT,
+                    );
+                }
+                if self.state != LocalAuthorityState::Empty || !contains(payload, b"{") {
                     return Err(LocalAuthorityError::InvalidState);
                 }
                 self.state = LocalAuthorityState::AccountValid;
@@ -201,6 +217,35 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     Some("application/json"),
                     ACCOUNT,
                 )
+            }
+            LOCAL_ACCOUNT_URL => {
+                if self.state != LocalAuthorityState::AccountValid {
+                    return Err(LocalAuthorityError::InvalidState);
+                }
+                if payload.is_empty() || contains(payload, r#""contact":"#) {
+                    return reply(
+                        out,
+                        200,
+                        effective,
+                        next,
+                        None,
+                        Some("application/json"),
+                        ACCOUNT,
+                    );
+                }
+                if contains(payload, r#""status":"deactivated""#) {
+                    self.state = LocalAuthorityState::AccountDeactivated;
+                    return reply(
+                        out,
+                        200,
+                        effective,
+                        next,
+                        None,
+                        Some("application/json"),
+                        ACCOUNT_DEACTIVATED,
+                    );
+                }
+                Err(LocalAuthorityError::InvalidState)
             }
             LOCAL_NEW_ORDER_URL => {
                 if self.state != LocalAuthorityState::AccountValid
@@ -568,5 +613,86 @@ mod tests {
         }
         assert_eq!(authority.state(), LocalAuthorityState::Revoked);
         assert!(jws.iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn existing_account_lookup_update_and_deactivation_are_explicit() {
+        let directory_url = url(LOCAL_DIRECTORY_URL);
+        let mut exchange = AcmeExchange::new(2, directory_url);
+        let public_key = key();
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, public_key);
+        let mut response = [0u8; 65_536];
+        let mut jws = [0u8; 49_152];
+        let directory = fetch_directory(
+            &directory_url,
+            2,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let mut signer = Signer;
+        let created = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_account,
+            ProtectedKey::Jwk(&public_key),
+            b"{}",
+            0,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(created.metadata.status, 201);
+        let recovered = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_account,
+            ProtectedKey::Jwk(&public_key),
+            br#"{"onlyReturnExisting":true}"#,
+            0,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(recovered.metadata.status, 200);
+        assert_eq!(
+            recovered.metadata.location.unwrap().as_str(),
+            LOCAL_ACCOUNT_URL
+        );
+        let account_url = url(LOCAL_ACCOUNT_URL);
+        let updated = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &account_url,
+            ProtectedKey::Kid(&account_url),
+            br#"{"contact":["mailto:owner@example.test"]}"#,
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(updated.metadata.status, 200);
+        let deactivated = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &account_url,
+            ProtectedKey::Kid(&account_url),
+            br#"{"status":"deactivated"}"#,
+            1,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        )
+        .unwrap();
+        assert_eq!(deactivated.metadata.status, 200);
+        assert_eq!(authority.state(), LocalAuthorityState::AccountDeactivated);
     }
 }

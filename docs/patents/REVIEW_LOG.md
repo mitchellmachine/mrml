@@ -11686,3 +11686,12 @@ generated fixture's exact P-256 key, DNS SAN, server purpose, validity, chain,
 trust domain, profile, and receipt digests. It adds no new validation route,
 public-CA operation, MultiTLS multiplexing, or other recorded re-review
 trigger.
+
+# 2026-09-01 — Deterministic ACME account recovery and deactivation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment extends the local test
+authority with ordinary RFC 8555 existing-account lookup, contact update,
+POST-as-GET, and account deactivation transitions. It adds no certificate
+brokerage, smart-card precomputation, public-CA operation, or other recorded
+re-review-trigger mechanism.
