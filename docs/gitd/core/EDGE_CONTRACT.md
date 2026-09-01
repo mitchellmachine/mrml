@@ -42,7 +42,7 @@ mismatches fail authorization. The hosted-Linux test exercises SHA-256 commit,
 tree, and truncated blob reads without invoking an external Git executable.
 This component does not yet implement rich commit metadata, resumable tree/blob
 pagination, tags/releases/events/archive descriptors, verification summaries,
-or either Smart Git operation, so it is not yet a complete
+the complete upload-pack profile, or receive-pack, so it is not yet a complete
 `GitdCoreBackend`.
 
 The shared pkt-line codec accepts lowercase hexadecimal canonical framing,
@@ -53,13 +53,27 @@ operation can continue. Invalid lengths, noncanonical hexadecimal, truncation,
 and exhausted limits fail without invoking repository mutation.
 
 The protocol-v2 core emits an exact capability advertisement for `ls-refs`,
-`fetch=thin-pack ofs-delta sideband-all`, and the selected SHA-1 or SHA-256
+the currently implemented `fetch=ofs-delta` subset, and the selected SHA-1 or SHA-256
 object format. Its bounded request parser accepts `ls-refs` options and exact-
 width fetch wants/haves for that format. Duplicate flags, malformed client
 capabilities, unknown commands, and unsupported shallow, deepen, filter,
-want-ref, packfile-URI, and future arguments fail closed. These parser tests do
-not constitute a fetch backend: object negotiation, pack generation, side-band
-response production and object negotiation are still disabled.
+want-ref, packfile-URI, and future arguments fail closed. Parser coverage is
+separate from the bounded clone backend described below.
+
+`FilesystemRepositoryView` now implements a bounded protocol-v2 clone subset.
+`ls-refs` reads only the exact active ref generation, applies bounded byte
+prefixes, emits the default `HEAD` symref or an explicitly requested unborn
+default, performs bounded annotated-tag peeling when requested, and rechecks the
+generation before its terminal flush. Fetch accepts exactly one advertised active tip, requires `done`,
+rejects haves, thin packs, and `sideband-all`, generates the reachable SHA-1 or
+SHA-256 pack using first-party code, rechecks the generation before output, and
+preflights the complete framed response before emitting the standard `packfile`
+section with mandatory band-1 framing. The golden
+hosted-Linux test reparses that emitted pack and finds the requested commit.
+Incremental wants/haves negotiation, arbitrary reachable wants, thin-pack
+completion, streaming generation without a whole-pack memory allocation, and
+receive-pack backend activation remain open, so the omitted features are not
+advertised.
 
 The receive-pack command boundary parses at most 32 exact-width SHA-1 or
 SHA-256 old/new IDs and validated full ref names, requires `report-status-v2`

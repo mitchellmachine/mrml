@@ -3,10 +3,11 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdCoreBackend, GitdCoreError,
-    ObjectId, ObjectKind, QueryLimits, Repository, RepositoryGeneration, RepositoryIdentity,
-    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitRequest, SmartGitResponse,
-    TreePage, TrustGeneration, VerificationSummary, WorkBudget,
+    read_v2_request, write_pkt_line, ActiveRefFile, BlobPage, BoundedRead, BoundedWrite,
+    CommitPage, GitdCoreBackend, GitdCoreError, ObjectId, ObjectKind, PktLine, ProtocolBudget,
+    ProtocolV2Request, QueryLimits, Repository, RepositoryGeneration, RepositoryIdentity,
+    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
+    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, WorkBudget,
 };
 
 pub struct FilesystemRepositoryView {
@@ -82,16 +83,176 @@ impl GitdCoreBackend for FilesystemRepositoryView {
     fn smart_git(
         &mut self,
         request: SmartGitRequest,
-        _input: &mut dyn BoundedRead,
-        _output: &mut dyn BoundedWrite,
-        _budget: WorkBudget,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+        budget: WorkBudget,
     ) -> Result<SmartGitResponse, GitdCoreError> {
-        self.load_for(&request.repository)?;
-        Err(GitdCoreError::Unsupported)
+        if request.operation != SmartGitOperation::UploadPack {
+            return Err(GitdCoreError::Unsupported);
+        }
+        let state = self.load_for(&request.repository)?;
+        if state.repository_generation != request.repository_generation
+            || state.object_format != request.object_format
+        {
+            return Err(GitdCoreError::StaleGeneration);
+        }
+        if budget.max_input_bytes == 0
+            || budget.max_output_bytes == 0
+            || budget.max_memory_bytes == 0
+            || budget.max_work_units == 0
+        {
+            return Err(GitdCoreError::Resource);
+        }
+        let mut protocol = ProtocolBudget::new(budget);
+        match read_v2_request(input, request.object_format, &mut protocol)? {
+            ProtocolV2Request::LsRefs {
+                peel,
+                symrefs,
+                unborn,
+                prefixes,
+            } => {
+                self.write_ls_refs(
+                    &state,
+                    peel,
+                    symrefs,
+                    unborn,
+                    &prefixes,
+                    output,
+                    &mut protocol,
+                )?;
+            }
+            ProtocolV2Request::Fetch {
+                wants,
+                haves,
+                done,
+                thin_pack,
+                ofs_delta: _,
+                sideband_all,
+            } => {
+                if !done || thin_pack || sideband_all || !haves.is_empty() || wants.len() != 1 {
+                    return Err(GitdCoreError::Unsupported);
+                }
+                let want = wants[0];
+                if !state.refs.iter().any(|(_, id)| *id == want) {
+                    return Err(GitdCoreError::Authorization);
+                }
+                let pack = self
+                    .objects
+                    .pack_reachable(want)
+                    .map_err(|_| GitdCoreError::ObjectValidation)?;
+                if pack.len() as u64 > budget.max_memory_bytes {
+                    return Err(GitdCoreError::Resource);
+                }
+                self.ensure_generation(state.repository_generation)?;
+                preflight_pack_response(pack.len(), output, protocol)?;
+                write_data_line(output, b"packfile\n", &mut protocol)?;
+                for chunk in pack.chunks(crate::MAX_PKT_LINE_BYTES - 5) {
+                    let mut payload = Vector::new();
+                    payload
+                        .try_reserve_exact(chunk.len() + 1)
+                        .map_err(|_| GitdCoreError::Resource)?;
+                    payload.push(1);
+                    payload
+                        .try_extend_from_slice(chunk)
+                        .map_err(|_| GitdCoreError::Resource)?;
+                    write_pkt_line(output, &PktLine::Data(payload), &mut protocol)?;
+                }
+                write_pkt_line(output, &PktLine::Flush, &mut protocol)?;
+            }
+        }
+        Ok(SmartGitResponse {
+            repository_generation: state.repository_generation,
+            bytes_read: budget.max_input_bytes - protocol.input_remaining(),
+            bytes_written: budget.max_output_bytes - protocol.output_remaining(),
+            refs_activated: false,
+        })
     }
 }
 
 impl FilesystemRepositoryView {
+    fn write_ls_refs(
+        &self,
+        state: &crate::ActiveRefState,
+        peel: bool,
+        symrefs: bool,
+        unborn: bool,
+        prefixes: &[Vector<u8>],
+        output: &mut dyn BoundedWrite,
+        budget: &mut ProtocolBudget,
+    ) -> Result<(), GitdCoreError> {
+        let default = state
+            .refs
+            .iter()
+            .find(|(name, _)| name == &state.default_branch)
+            .map(|(_, id)| *id);
+        if prefix_matches(b"HEAD", prefixes) {
+            if let Some(id) = default {
+                let mut line = mrml_runtime::mrml_format!("{} HEAD", id.to_hex());
+                if symrefs {
+                    line.push_str(" symref-target:");
+                    line.push_str(state.default_branch.as_str());
+                }
+                line.push('\n');
+                write_data_line(output, line.as_bytes(), budget)?;
+            } else if unborn {
+                let mut line = mrml_runtime::Text::from("unborn HEAD symref-target:");
+                line.push_str(state.default_branch.as_str());
+                line.push('\n');
+                write_data_line(output, line.as_bytes(), budget)?;
+            }
+        }
+        for (name, id) in &state.refs {
+            if !prefix_matches(name.as_str().as_bytes(), prefixes) {
+                continue;
+            }
+            let mut line = mrml_runtime::mrml_format!("{} {}", id.to_hex(), name.as_str());
+            if peel {
+                if let Some(peeled) = self.peel_annotated_tag(*id)? {
+                    line.push_str(" peeled:");
+                    line.push_str(&peeled.to_hex());
+                }
+            }
+            line.push('\n');
+            write_data_line(output, line.as_bytes(), budget)?;
+        }
+        self.ensure_generation(state.repository_generation)?;
+        write_pkt_line(output, &PktLine::Flush, budget)
+    }
+
+    fn peel_annotated_tag(&self, mut id: ObjectId) -> Result<Option<ObjectId>, GitdCoreError> {
+        let original = id;
+        for _ in 0..16 {
+            let object = self
+                .objects
+                .read_object(id)
+                .map_err(|_| GitdCoreError::ObjectValidation)?;
+            if object.kind != ObjectKind::Tag {
+                return Ok((id != original).then_some(id));
+            }
+            let headers = object
+                .contents
+                .split(|byte| *byte == b'\n')
+                .take_while(|line| !line.is_empty());
+            let mut target = None;
+            for header in headers {
+                if let Some(value) = header.strip_prefix(b"object ") {
+                    if target.is_some() {
+                        return Err(GitdCoreError::ObjectValidation);
+                    }
+                    let value =
+                        core::str::from_utf8(value).map_err(|_| GitdCoreError::ObjectValidation)?;
+                    target = ObjectId::parse_for(self.objects.object_format(), value);
+                }
+            }
+            let next = target.ok_or(GitdCoreError::ObjectValidation)?;
+            if next == id {
+                return Err(GitdCoreError::ObjectValidation);
+            }
+            id = next;
+        }
+        Err(GitdCoreError::Resource)
+    }
+
     pub fn open(
         identity: RepositoryIdentity,
         repository_path: &str,
@@ -347,6 +508,47 @@ impl FilesystemRepositoryView {
     }
 }
 
+fn prefix_matches(name: &[u8], prefixes: &[Vector<u8>]) -> bool {
+    prefixes.is_empty() || prefixes.iter().any(|prefix| name.starts_with(prefix))
+}
+
+fn write_data_line(
+    output: &mut dyn BoundedWrite,
+    bytes: &[u8],
+    budget: &mut ProtocolBudget,
+) -> Result<(), GitdCoreError> {
+    let mut payload = Vector::new();
+    payload
+        .try_extend_from_slice(bytes)
+        .map_err(|_| GitdCoreError::Resource)?;
+    write_pkt_line(output, &PktLine::Data(payload), budget)
+}
+
+fn preflight_pack_response(
+    pack_bytes: usize,
+    output: &dyn BoundedWrite,
+    budget: ProtocolBudget,
+) -> Result<(), GitdCoreError> {
+    let chunk_bytes = crate::MAX_PKT_LINE_BYTES - 5;
+    let chunks = pack_bytes
+        .checked_add(chunk_bytes - 1)
+        .ok_or(GitdCoreError::Resource)?
+        / chunk_bytes;
+    let framed = 13usize
+        .checked_add(pack_bytes)
+        .and_then(|value| value.checked_add(chunks.checked_mul(5)?))
+        .and_then(|value| value.checked_add(4))
+        .ok_or(GitdCoreError::Resource)?;
+    let framed = framed as u64;
+    if framed > output.remaining()
+        || framed > budget.output_remaining()
+        || framed > budget.work_remaining()
+    {
+        return Err(GitdCoreError::Resource);
+    }
+    Ok(())
+}
+
 fn validate_limits(limits: QueryLimits) -> Result<(), GitdCoreError> {
     if limits.max_entries == 0 || limits.max_bytes == 0 {
         Err(GitdCoreError::Resource)
@@ -364,6 +566,63 @@ mod tests {
         ActiveRefState, FullRefName, ObjectFormat, PackGeneration, RevocationGeneration,
         TrustGeneration,
     };
+
+    struct Reader {
+        bytes: Vector<u8>,
+        offset: usize,
+    }
+
+    impl BoundedRead for Reader {
+        fn remaining(&self) -> u64 {
+            (self.bytes.len() - self.offset) as u64
+        }
+
+        fn read(&mut self, output: &mut [u8]) -> Result<usize, GitdCoreError> {
+            let count = output.len().min(5).min(self.bytes.len() - self.offset);
+            output[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+            self.offset += count;
+            Ok(count)
+        }
+    }
+
+    struct Writer(Vector<u8>);
+
+    impl BoundedWrite for Writer {
+        fn remaining(&self) -> u64 {
+            (1024 * 1024 - self.0.len()) as u64
+        }
+
+        fn write(&mut self, input: &[u8]) -> Result<(), GitdCoreError> {
+            self.0
+                .try_extend_from_slice(input)
+                .map_err(|_| GitdCoreError::Resource)
+        }
+    }
+
+    fn work_budget() -> WorkBudget {
+        WorkBudget {
+            max_input_bytes: 1024 * 1024,
+            max_output_bytes: 1024 * 1024,
+            max_memory_bytes: 1024 * 1024,
+            max_work_units: 4 * 1024 * 1024,
+        }
+    }
+
+    fn protocol_request(lines: &[Option<&[u8]>]) -> Reader {
+        let mut writer = Writer(Vector::new());
+        let mut budget = ProtocolBudget::new(work_budget());
+        for line in lines {
+            match line {
+                Some(bytes) => write_data_line(&mut writer, bytes, &mut budget).unwrap(),
+                None => write_pkt_line(&mut writer, &PktLine::Delimiter, &mut budget).unwrap(),
+            }
+        }
+        write_pkt_line(&mut writer, &PktLine::Flush, &mut budget).unwrap();
+        Reader {
+            bytes: writer.0,
+            offset: 0,
+        }
+    }
 
     #[test]
     fn queries_are_bounded_identity_scoped_and_generation_tagged() {
@@ -388,6 +647,13 @@ mod tests {
         let commit = objects
             .write_object(ObjectKind::Commit, commit_bytes.as_bytes())
             .unwrap();
+        let tag_bytes = mrml_runtime::mrml_format!(
+            "object {}\ntype commit\ntag v1\ntagger Owner <owner@example.invalid> 2 +0000\n\nrelease\n",
+            commit.to_hex()
+        );
+        let tag = objects
+            .write_object(ObjectKind::Tag, tag_bytes.as_bytes())
+            .unwrap();
         let identity = RepositoryIdentity::parse("owner/repository").unwrap();
         ActiveRefFile::initialize(
             &refs_path,
@@ -399,11 +665,15 @@ mod tests {
                 pack_generation: PackGeneration(1),
                 object_format: ObjectFormat::Sha256,
                 default_branch: FullRefName::parse("refs/heads/main").unwrap(),
-                refs: [(FullRefName::parse("refs/heads/main").unwrap(), commit)].into(),
+                refs: [
+                    (FullRefName::parse("refs/heads/main").unwrap(), commit),
+                    (FullRefName::parse("refs/tags/v1").unwrap(), tag),
+                ]
+                .into(),
             },
         )
         .unwrap();
-        let view =
+        let mut view =
             FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path).unwrap();
         let limits = QueryLimits {
             max_entries: 8,
@@ -475,6 +745,88 @@ mod tests {
             ),
             Err(GitdCoreError::Unsupported)
         );
+
+        let request = SmartGitRequest {
+            repository: identity.clone(),
+            repository_generation: RepositoryGeneration(4),
+            operation: SmartGitOperation::UploadPack,
+            object_format: ObjectFormat::Sha256,
+        };
+        let mut ls_input = protocol_request(&[
+            Some(b"command=ls-refs\n"),
+            Some(b"object-format=sha256\n"),
+            None,
+            Some(b"symrefs\n"),
+            Some(b"ref-prefix refs/heads/\n"),
+        ]);
+        let mut ls_output = Writer(Vector::new());
+        let response = view
+            .smart_git(
+                request.clone(),
+                &mut ls_input,
+                &mut ls_output,
+                work_budget(),
+            )
+            .unwrap();
+        assert!(!response.refs_activated);
+        let ls_text = core::str::from_utf8(&ls_output.0).unwrap();
+        assert!(ls_text.contains("refs/heads/main"));
+        assert!(!ls_text.contains(" HEAD"));
+
+        let mut tag_input = protocol_request(&[
+            Some(b"command=ls-refs\n"),
+            Some(b"object-format=sha256\n"),
+            None,
+            Some(b"peel\n"),
+            Some(b"ref-prefix refs/tags/\n"),
+        ]);
+        let mut tag_output = Writer(Vector::new());
+        view.smart_git(
+            request.clone(),
+            &mut tag_input,
+            &mut tag_output,
+            work_budget(),
+        )
+        .unwrap();
+        let tag_text = core::str::from_utf8(&tag_output.0).unwrap();
+        let expected_tag =
+            mrml_runtime::mrml_format!("{} refs/tags/v1 peeled:{}", tag.to_hex(), commit.to_hex());
+        assert!(tag_text.contains(expected_tag.as_str()));
+
+        let want = mrml_runtime::mrml_format!("want {}\n", commit.to_hex());
+        let mut fetch_input = protocol_request(&[
+            Some(b"command=fetch\n"),
+            Some(b"object-format=sha256\n"),
+            None,
+            Some(want.as_bytes()),
+            Some(b"done\n"),
+            Some(b"ofs-delta\n"),
+        ]);
+        let mut fetch_output = Writer(Vector::new());
+        view.smart_git(request, &mut fetch_input, &mut fetch_output, work_budget())
+            .unwrap();
+        let mut response_reader = Reader {
+            bytes: fetch_output.0,
+            offset: 0,
+        };
+        let mut response_budget = ProtocolBudget::new(work_budget());
+        assert_eq!(
+            crate::read_pkt_line(&mut response_reader, &mut response_budget),
+            Ok(PktLine::Data(Vector::from(*b"packfile\n")))
+        );
+        let mut pack = Vector::new();
+        loop {
+            match crate::read_pkt_line(&mut response_reader, &mut response_budget).unwrap() {
+                PktLine::Data(payload) => {
+                    assert_eq!(payload[0], 1);
+                    pack.extend(payload[1..].iter().copied());
+                }
+                PktLine::Flush => break,
+                _ => panic!("unexpected fetch response packet"),
+            }
+        }
+        let objects = crate::parse_pack_with_format(&pack, ObjectFormat::Sha256).unwrap();
+        assert!(objects.iter().any(|object| object.id == commit));
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

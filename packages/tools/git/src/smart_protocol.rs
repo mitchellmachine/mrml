@@ -335,7 +335,7 @@ pub fn write_v2_capability_advertisement(
     for line in [
         b"version 2\n".as_slice(),
         b"ls-refs=unborn\n".as_slice(),
-        b"fetch=thin-pack ofs-delta sideband-all\n".as_slice(),
+        b"fetch=ofs-delta\n".as_slice(),
     ] {
         write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
     }
@@ -905,7 +905,9 @@ mod tests {
             .unwrap();
         let text = core::str::from_utf8(&writer.bytes).unwrap();
         assert!(text.contains("object-format=sha256"));
-        assert!(text.contains("fetch=thin-pack ofs-delta sideband-all"));
+        assert!(text.contains("fetch=ofs-delta"));
+        assert!(!text.contains("thin-pack"));
+        assert!(!text.contains("sideband-all"));
         assert!(!text.contains("filter"));
         assert!(!text.contains("shallow"));
         assert!(!text.contains("packfile-uris"));
