@@ -12090,3 +12090,11 @@ bounded backup export state machine through the reserved lifecycle operation
 and returns canonical metadata receipts or exact sequential chunks. It adds no
 certificate protocol, signing mechanism, validation topology, certificate
 authority operation, or recorded re-review trigger.
+
+# 2026-09-01 — Typed hosted backup export client
+
+Patent review: **NOT_TRIGGERED**. This increment composes the existing hosted
+authorized lifecycle transport with the bounded sequential backup export and
+verifies exact generation, length, and digest receipts. It adds no certificate
+protocol, signing mechanism, validation topology, certificate authority
+operation, or recorded re-review trigger.

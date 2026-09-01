@@ -1,10 +1,12 @@
 use crate::{
-    BACKUP_TRANSFER_RECEIPT_BYTES, BackupTransferCommand, BackupTransferPurpose,
+    BACKUP_EXPORT_COMMAND_BYTES, BACKUP_EXPORT_RECEIPT_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES,
+    BackupExportCommand, BackupExportReceipt, BackupTransferCommand, BackupTransferPurpose,
     BackupTransferReceipt, BackupTransferReceiptState, CertificateLifecycleAuthorizer,
-    CertificateLifecycleProvider, MAX_BACKUP_BYTES, MAX_BACKUP_WIRE_CHUNK,
+    CertificateLifecycleProvider, MAX_BACKUP_BYTES, MAX_BACKUP_EXPORT_CHUNK, MAX_BACKUP_WIRE_CHUNK,
     MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId,
-    decode_backup_transfer_receipt, decode_managed_identity_status, dispatch_lifecycle_call,
-    encode_backup_transfer_command, untrusted_backup_container_digest,
+    decode_backup_export_receipt, decode_backup_transfer_receipt, decode_managed_identity_status,
+    dispatch_lifecycle_call, encode_backup_export_command, encode_backup_transfer_command,
+    untrusted_backup_container_digest,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
 use mrml_runtime::{NetError, TcpListener, TcpStream};
@@ -301,6 +303,123 @@ impl HostedLifecycleClient {
         Ok(receipt)
     }
 
+    pub fn create_backup_container(
+        &mut self,
+        policy_generation: u64,
+        export_generation: u64,
+        output: &mut [u8],
+    ) -> Result<(usize, BackupExportReceipt), HostedLifecycleTransportError> {
+        if policy_generation == 0 || export_generation == 0 || output.is_empty() {
+            return Err(HostedLifecycleTransportError::InvalidFrame);
+        }
+        let mut receipt_bytes = [0u8; BACKUP_EXPORT_RECEIPT_BYTES];
+        let begin_written = self.backup_export_call(
+            policy_generation,
+            BackupExportCommand::Begin {
+                export_generation,
+                policy_generation,
+            },
+            &mut receipt_bytes,
+        )?;
+        let opened = decode_backup_export_receipt(&receipt_bytes[..begin_written])
+            .map_err(|_| HostedLifecycleTransportError::InvalidFrame)?;
+        validate_export_receipt(opened, policy_generation, export_generation, false)?;
+        let total = opened.total_bytes as usize;
+        if total > output.len() || total > MAX_BACKUP_BYTES {
+            return Err(HostedLifecycleTransportError::MemoryLimit);
+        }
+        let mut offset = 0usize;
+        while offset < total {
+            let limit = (total - offset).min(MAX_BACKUP_EXPORT_CHUNK);
+            let written = self.backup_export_call(
+                policy_generation,
+                BackupExportCommand::Read {
+                    export_generation,
+                    offset,
+                },
+                &mut output[offset..offset + limit],
+            )?;
+            if written == 0 || written > limit {
+                output[..offset].fill(0);
+                return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+            }
+            offset += written;
+        }
+        if untrusted_backup_container_digest(&output[..total])
+            .map_err(|_| HostedLifecycleTransportError::InvalidFrame)?
+            != opened.backup_digest
+        {
+            output[..total].fill(0);
+            return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+        }
+        receipt_bytes.fill(0);
+        let finish_written = self.backup_export_call(
+            policy_generation,
+            BackupExportCommand::Finish { export_generation },
+            &mut receipt_bytes,
+        )?;
+        let completed = decode_backup_export_receipt(&receipt_bytes[..finish_written])
+            .map_err(|_| HostedLifecycleTransportError::InvalidFrame)?;
+        validate_export_receipt(completed, policy_generation, export_generation, true)?;
+        if completed.export_generation != opened.export_generation
+            || completed.policy_generation != opened.policy_generation
+            || completed.offset != completed.total_bytes
+            || completed.total_bytes != opened.total_bytes
+            || completed.record_count != opened.record_count
+            || completed.backup_digest != opened.backup_digest
+        {
+            output[..total].fill(0);
+            return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+        }
+        Ok((total, completed))
+    }
+
+    fn backup_export_call(
+        &mut self,
+        policy_generation: u64,
+        command: BackupExportCommand,
+        output: &mut [u8],
+    ) -> Result<usize, HostedLifecycleTransportError> {
+        const OUTPUT_AT: usize = 4096;
+        let mut memory = [0u8; OUTPUT_AT + MAX_BACKUP_EXPORT_CHUNK];
+        let request = encode_backup_export_command(command)
+            .map_err(|_| HostedLifecycleTransportError::InvalidFrame)?;
+        memory[..BACKUP_EXPORT_COMMAND_BYTES].copy_from_slice(&request);
+        let output_length = output.len().min(MAX_BACKUP_EXPORT_CHUNK);
+        if output_length == 0 {
+            return Err(HostedLifecycleTransportError::MemoryLimit);
+        }
+        let frame = abi::encode_backup_operation_request(abi::BackupOperationRequest {
+            operation: abi::BACKUP_CREATE,
+            policy_generation,
+            request: abi::BorrowedReadView::within(
+                0,
+                BACKUP_EXPORT_COMMAND_BYTES as u64,
+                memory.len() as u64,
+            )
+            .unwrap(),
+            output: abi::BorrowedWriteView::within(
+                OUTPUT_AT as u64,
+                output_length as u64,
+                memory.len() as u64,
+            )
+            .unwrap(),
+        })
+        .map_err(HostedLifecycleTransportError::Protocol)?;
+        let response = self.call(&frame, &mut memory)?;
+        let response = abi::decode_backup_operation_response(&response, output_length as u64)
+            .map_err(HostedLifecycleTransportError::Protocol)?
+            .map_err(HostedLifecycleTransportError::RemoteBackupStatus)?;
+        if response.backup_generation != command_export_generation(command) {
+            return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+        }
+        let written = usize::try_from(response.written)
+            .map_err(|_| HostedLifecycleTransportError::OutputLengthMismatch)?;
+        output[..written].copy_from_slice(&memory[OUTPUT_AT..OUTPUT_AT + written]);
+        memory.fill(0);
+        Ok(written)
+    }
+
     fn upload_backup_container(
         &mut self,
         operation: u32,
@@ -391,6 +510,36 @@ impl HostedLifecycleClient {
         }
         result
     }
+}
+
+fn command_export_generation(command: BackupExportCommand) -> u64 {
+    match command {
+        BackupExportCommand::Begin {
+            export_generation, ..
+        }
+        | BackupExportCommand::Read {
+            export_generation, ..
+        }
+        | BackupExportCommand::Finish { export_generation } => export_generation,
+    }
+}
+
+fn validate_export_receipt(
+    receipt: BackupExportReceipt,
+    policy_generation: u64,
+    export_generation: u64,
+    finished: bool,
+) -> Result<(), HostedLifecycleTransportError> {
+    if receipt.policy_generation != policy_generation
+        || receipt.export_generation != export_generation
+        || receipt.finished != finished
+        || receipt.total_bytes == 0
+        || receipt.record_count == 0
+        || receipt.backup_digest == [0; 32]
+    {
+        return Err(HostedLifecycleTransportError::OutputLengthMismatch);
+    }
+    Ok(())
 }
 
 fn validate_progress(
@@ -554,7 +703,10 @@ mod tests {
         fn authorize_backup(&self, operation: u32, policy: u64, _: &[u8]) -> bool {
             matches!(
                 operation,
-                abi::BACKUP_VERIFY | abi::RESTORE_VERIFY_ONLY | abi::RESTORE_COMMIT
+                abi::BACKUP_CREATE
+                    | abi::BACKUP_VERIFY
+                    | abi::RESTORE_VERIFY_ONLY
+                    | abi::RESTORE_COMMIT
             ) && policy == 7
         }
     }
@@ -661,6 +813,77 @@ mod tests {
             crate::create_backup(7, &[&record], &mut encoded, &mut authenticator).unwrap();
         encoded.truncate(written);
         (encoded, descriptor.backup_digest)
+    }
+
+    struct ExportSource {
+        bytes: std::vec::Vec<u8>,
+        digest: [u8; 32],
+    }
+    impl crate::BackupExportSource for ExportSource {
+        fn create_recoverable_backup(
+            &mut self,
+            policy_generation: u64,
+            output: &mut [u8],
+        ) -> Result<(usize, crate::BackupDescriptor), crate::BackupError> {
+            output[..self.bytes.len()].copy_from_slice(&self.bytes);
+            Ok((
+                self.bytes.len(),
+                crate::BackupDescriptor {
+                    policy_generation,
+                    record_count: 1,
+                    backup_digest: self.digest,
+                },
+            ))
+        }
+    }
+
+    struct ExportProvider<'a> {
+        lifecycle: crate::BackupExportSession<'a>,
+        source: ExportSource,
+    }
+    impl CertificateLifecycleProvider for ExportProvider<'_> {
+        fn status(
+            &mut self,
+            _: u32,
+            _: &[u8],
+            _: &mut [u8],
+        ) -> Result<abi::StatusResponse, abi::StatusError> {
+            Err(abi::StatusError::PermissionDenied)
+        }
+        fn account_operation(
+            &mut self,
+            _: u32,
+            _: u64,
+            _: &[u8],
+            _: &mut [u8],
+        ) -> Result<abi::AccountOperationResponse, abi::AccountOperationError> {
+            Err(abi::AccountOperationError::PermissionDenied)
+        }
+        fn identity_operation(
+            &mut self,
+            _: u32,
+            _: &[u8],
+            _: u64,
+            _: &[u8],
+            _: &mut [u8],
+        ) -> Result<abi::IdentityOperationResponse, abi::IdentityOperationError> {
+            Err(abi::IdentityOperationError::PermissionDenied)
+        }
+        fn backup_operation(
+            &mut self,
+            operation: u32,
+            policy_generation: u64,
+            request: &[u8],
+            output: &mut [u8],
+        ) -> Result<abi::BackupOperationResponse, abi::BackupOperationError> {
+            self.lifecycle.handle(
+                operation,
+                policy_generation,
+                request,
+                output,
+                &mut self.source,
+            )
+        }
     }
 
     struct Provider;
@@ -923,5 +1146,40 @@ mod tests {
             .unwrap();
         assert_eq!(receipt.state, crate::BackupTransferReceiptState::Restored);
         assert_eq!(receipt.backup_digest, digest);
+    }
+
+    #[test]
+    fn hosted_client_downloads_exact_authenticated_backup_container() {
+        let (expected, digest) = backup_fixture();
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let listener = Shared::new(listener);
+        let server_listener = listener.clone();
+        let expected_for_server = expected.clone();
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
+                let mut provider = ExportProvider {
+                    lifecycle: crate::BackupExportSession::new(&mut storage).unwrap(),
+                    source: ExportSource {
+                        bytes: expected_for_server,
+                        digest,
+                    },
+                };
+                let stream = server_listener.accept().unwrap();
+                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+                for _ in 0..3 {
+                    server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
+                }
+            })
+            .is_ok()
+        );
+        let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
+        let mut output = std::vec![0; crate::MAX_BACKUP_BYTES];
+        let (written, receipt) = client.create_backup_container(7, 31, &mut output).unwrap();
+        assert_eq!(&output[..written], &expected);
+        assert_eq!(receipt.backup_digest, digest);
+        assert!(receipt.finished);
     }
 }
