@@ -545,6 +545,10 @@ fn repository_signed_commit(
                         Err(mrml_git::RepositoryError::Signing)
                     }
                 },
+                |payload, armor| {
+                    verify_openpgp(repository, payload, armor)
+                        .map_err(|_| mrml_git::RepositoryError::Signing)
+                },
             );
             repository_result_with_detail(result, signing_error)
         }
@@ -585,6 +589,10 @@ fn repository_signed_tag(
                         signing_error = Some(format!("{}", error));
                         Err(mrml_git::RepositoryError::Signing)
                     }
+                },
+                |payload, armor| {
+                    verify_openpgp(repository, payload, armor)
+                        .map_err(|_| mrml_git::RepositoryError::Signing)
                 },
             );
             repository_result_with_detail(result, signing_error)

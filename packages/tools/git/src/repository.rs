@@ -106,6 +106,7 @@ enum CommitSigning<'a> {
     Single(
         GitSignatureFormat,
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        &'a mut dyn FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     ),
     Hybrid(
         &'a mut dyn FnMut(&[u8]) -> Result<Text, RepositoryError>,
@@ -1847,10 +1848,14 @@ impl Repository {
             timestamp,
             GitSignatureFormat::Ssh,
             |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
+            |payload, armor| {
+                verify_sshsig(&key.public, "git", payload, armor)
+                    .map_err(|_| RepositoryError::Signing)
+            },
         )
     }
 
-    pub fn create_signed_tag_with<F>(
+    pub fn create_signed_tag_with<F, V>(
         &self,
         name: &str,
         message: &str,
@@ -1859,9 +1864,11 @@ impl Repository {
         timestamp: u64,
         signature_format: GitSignatureFormat,
         signer: F,
+        verifier: V,
     ) -> Result<ObjectId, RepositoryError>
     where
         F: FnOnce(&[u8]) -> Result<Text, RepositoryError>,
+        V: FnOnce(&[u8], &str) -> Result<(), RepositoryError>,
     {
         let reference = mrml_runtime::mrml_format!("refs/tags/{name}");
         validate_reference(&reference)?;
@@ -1881,6 +1888,7 @@ impl Repository {
         unsigned.push('\n');
         let signature = signer(unsigned.as_bytes())?;
         validate_signature_armor(&signature, signature_format)?;
+        verifier(unsigned.as_bytes(), &signature)?;
         let mut contents = unsigned;
         contents.push_str(&signature);
         let id = self.write_object(ObjectKind::Tag, contents.as_bytes())?;
@@ -2453,10 +2461,14 @@ impl Repository {
             timestamp,
             GitSignatureFormat::Ssh,
             |payload| sign_sshsig(key, "git", payload).map_err(|_| RepositoryError::Signing),
+            |payload, armor| {
+                verify_sshsig(&key.public, "git", payload, armor)
+                    .map_err(|_| RepositoryError::Signing)
+            },
         )
     }
 
-    pub fn commit_signed_with<F>(
+    pub fn commit_signed_with<F, V>(
         &self,
         message: &str,
         name: &str,
@@ -2464,16 +2476,22 @@ impl Repository {
         timestamp: u64,
         signature_format: GitSignatureFormat,
         mut signer: F,
+        mut verifier: V,
     ) -> Result<ObjectId, RepositoryError>
     where
         F: FnMut(&[u8]) -> Result<Text, RepositoryError>,
+        V: FnMut(&[u8], &str) -> Result<(), RepositoryError>,
     {
         self.commit_internal(
             message,
             name,
             email,
             timestamp,
-            Some(CommitSigning::Single(signature_format, &mut signer)),
+            Some(CommitSigning::Single(
+                signature_format,
+                &mut signer,
+                &mut verifier,
+            )),
         )
     }
 
@@ -2562,8 +2580,11 @@ impl Repository {
         unsigned.push('\n');
         if let Some(signer) = signer {
             let (signature_format, armor) = match signer {
-                CommitSigning::Single(signature_format, signer) => {
-                    (signature_format, signer(unsigned.as_bytes())?)
+                CommitSigning::Single(signature_format, signer, verifier) => {
+                    let signature = signer(unsigned.as_bytes())?;
+                    validate_signature_armor(&signature, signature_format)?;
+                    verifier(unsigned.as_bytes(), &signature)?;
+                    (signature_format, signature)
                 }
                 CommitSigning::Hybrid(
                     ml_dsa_signer,
@@ -3960,6 +3981,53 @@ mod tests {
     }
 
     #[test]
+    fn signature_verification_failure_never_updates_commit_or_tag_refs() {
+        let path = root("signed-ref-verification-failure");
+        let repository = Repository::init(&path).unwrap();
+        write_file(&join_path(&path, "tracked"), b"base").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let base = repository
+            .commit("base", "Signer", "signer@example.invalid", 6)
+            .unwrap();
+        write_file(&join_path(&path, "tracked"), b"changed").unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let armor = "-----BEGIN PGP SIGNATURE-----\nZmFrZQ==\n-----END PGP SIGNATURE-----\n";
+        assert_eq!(
+            repository.commit_signed_with(
+                "rejected",
+                "Signer",
+                "signer@example.invalid",
+                7,
+                GitSignatureFormat::OpenPgp,
+                |_| Ok(armor.into()),
+                |_, _| Err(RepositoryError::Signing),
+            ),
+            Err(RepositoryError::Signing)
+        );
+        assert_eq!(repository.head(), Ok(Some(base)));
+        assert_eq!(
+            repository.create_signed_tag_with(
+                "rejected",
+                "rejected",
+                "Signer",
+                "signer@example.invalid",
+                8,
+                GitSignatureFormat::OpenPgp,
+                |_| Ok(armor.into()),
+                |_, _| Err(RepositoryError::Signing),
+            ),
+            Err(RepositoryError::Signing)
+        );
+        assert_eq!(repository.read_reference("refs/tags/rejected"), Ok(None));
+        assert_eq!(repository.head(), Ok(Some(base)));
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
     fn sha256_commit_uses_gpgsig_sha256_and_generic_openpgp_payload() {
         let path = root("signed-sha256-commit");
         let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
@@ -3978,6 +4046,11 @@ mod tests {
                 |payload| {
                     assert!(payload.ends_with(b"\n\nsigned\n"));
                     Ok(armor.into())
+                },
+                |payload, found| {
+                    assert!(payload.ends_with(b"\n\nsigned\n"));
+                    assert_eq!(found, armor);
+                    Ok(())
                 },
             )
             .unwrap();

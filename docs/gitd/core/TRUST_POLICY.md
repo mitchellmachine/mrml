@@ -153,8 +153,9 @@ generation, purpose, format, or object ID is rejected. The unbound graph walker
 is crate-private and retained only for internal/test graph fixtures; it is not a
 public protected-ref authorization boundary. This proof path currently consumes
 detached signatures over the exact commit contents. The installed-as-`git`
-commit/tag path does not yet encode and self-verify the complete
-`MRML-GIT-HYBRID-V1` result before its local ref update. Protected receive can
+conventional commit/tag path now independently verifies the exact returned SSH
+or OpenPGP signature before its local ref update, but it does not yet encode the
+complete `MRML-GIT-HYBRID-V1` result. Protected receive can
 now consume a caller-provisioned bounded proof store through its verifier
 boundary. Durable proof-record storage and its authorization policy remain open;
 records gain no authority merely by being stored. Production durable proof

@@ -64,6 +64,13 @@ closed until their native semantics are implemented and tested.
 The public hybrid commit constructor no longer accepts signing callbacks alone:
 it requires independent OpenPGP and ML-DSA verification callbacks and runs both
 against the exact nested payloads before writing or moving the local branch.
+The conventional signed-commit and signed-annotated-tag constructors likewise
+require an independent verification callback over the exact canonical payload
+and returned armor before writing the object or changing a branch/tag ref. The
+SSH wrappers supply first-party SSHSIG verification, and the OpenPGP CLI path
+supplies the configured complete-fingerprint policy verifier. Focused rejection
+tests prove that verifier failure preserves the prior branch head and leaves the
+tag ref absent.
 The installed `git commit -S` path still selects the configured conventional
 SSH or OpenPGP profile. Automatically selecting the mandatory hybrid path for a
 protected repository requires the out-of-scope canonical policy/key-service
