@@ -4,6 +4,7 @@ mod account;
 mod ari;
 mod base64url;
 mod challenge;
+mod challenge_http;
 mod csr;
 mod directory;
 mod identifier;
@@ -24,6 +25,9 @@ pub use challenge::{
     ChallengeError, ChallengeLifecycle, ChallengePublicationRequest, ChallengePublisher,
     ChallengeToken, MAX_CHALLENGE_TOKEN, MAX_KEY_AUTHORIZATION, PublicationReceipt,
     PublicationState, dns01_txt_digest, write_key_authorization,
+};
+pub use challenge_http::{
+    Http01Error, MAX_HTTP01_HEADERS, MAX_HTTP01_REQUEST, validate_http01_request,
 };
 pub use csr::{
     ApprovedCsrDigest, CsrError, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, Pkcs10Signer, write_pkcs10_csr,

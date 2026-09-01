@@ -31,6 +31,10 @@ exact order URL digest, authorization URL digest, identifier, challenge kind,
 token, key-authorization digest, policy generation, activation window, and
 publisher receipt. Publication and cleanup are prepare/commit operations;
 uncertain cleanup remains represented until authoritative publisher re-read.
+The bounded HTTP-01 request validator accepts only an exact `GET` challenge
+path and exact Host (optionally port 80), rejects percent/query/path ambiguity,
+duplicate Host fields, oversized requests, and excess headers, and compares the
+active token without data-dependent early exit.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 

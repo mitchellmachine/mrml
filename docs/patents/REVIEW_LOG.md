@@ -11225,3 +11225,10 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 generation-bound publication lifecycle shared by HTTP-01, TLS-ALPN-01, and
 DNS-01, including exact authorization/name/lifetime binding and resolvable
 uncertain removal. It implements none of the recorded re-review triggers.
+
+# 2026-09-01 — Bounded HTTP-01 request validation
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment implements ordinary exact-path,
+Host, token, and request-bound checks for RFC 8555 HTTP-01 and no recorded
+re-review-trigger mechanism.
