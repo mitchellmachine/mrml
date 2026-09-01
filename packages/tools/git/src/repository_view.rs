@@ -187,16 +187,18 @@ impl GitdCoreBackend for FilesystemRepositoryView {
                 ofs_delta: _,
                 sideband_all,
             } => {
-                if !done || thin_pack || sideband_all || !haves.is_empty() || wants.len() != 1 {
+                if !done || thin_pack || sideband_all || wants.is_empty() {
                     return Err(GitdCoreError::Unsupported);
                 }
-                let want = wants[0];
-                if !state.refs.iter().any(|(_, id)| *id == want) {
+                if wants
+                    .iter()
+                    .any(|want| !state.refs.iter().any(|(_, id)| id == want))
+                {
                     return Err(GitdCoreError::Authorization);
                 }
                 let pack = self
                     .objects
-                    .pack_reachable(want)
+                    .pack_negotiated(&wants, &haves)
                     .map_err(|_| GitdCoreError::ObjectValidation)?;
                 if pack.len() as u64 > budget.max_memory_bytes {
                     return Err(GitdCoreError::Resource);

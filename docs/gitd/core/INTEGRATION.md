@@ -107,3 +107,10 @@ revocation, and pack generations. It reports exact previous/current snapshots,
 rejects cursors ahead of authoritative state, and never fabricates a historical
 transition log. Edge consumers can invalidate derived views without direct
 filesystem access; authenticated receipts remain the durable audit authority.
+
+Protocol-v2 fetch now accepts multiple exact advertised wants and bounded
+haves. The first-party graph walk authenticates each have closure, subtracts it
+from the wanted closures, and emits only the deterministic remainder. Mixed
+formats, missing objects, malformed graphs, and the one-million-object ceiling
+fail closed. This is single-request wants/haves subtraction; multi-round ACK
+negotiation and thin-pack generation remain unadvertised.

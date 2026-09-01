@@ -19,6 +19,37 @@ const MAX_WORKTREE_FILE: usize = 256 * 1024 * 1024;
 const MAX_WORKTREE_ENTRIES: usize = 1_000_000;
 const MAX_DEPTH: usize = 128;
 
+fn append_reachable_children(
+    object: &Object,
+    format: ObjectFormat,
+    pending: &mut Vector<ObjectId>,
+) -> Result<(), RepositoryError> {
+    match object.kind {
+        ObjectKind::Commit => {
+            let commit = Commit::parse_with_format(&object.contents, format)?;
+            pending.push(commit.tree);
+            pending.extend(commit.parents.iter().copied());
+        }
+        ObjectKind::Tree => pending.extend(
+            parse_tree_with_format(&object.contents, format)?
+                .iter()
+                .map(|entry| entry.id),
+        ),
+        ObjectKind::Tag => {
+            let text = core::str::from_utf8(&object.contents)
+                .map_err(|_| RepositoryError::InvalidReference)?;
+            let target = text
+                .lines()
+                .find_map(|line| line.strip_prefix("object "))
+                .and_then(|value| ObjectId::parse_for(format, value))
+                .ok_or(RepositoryError::InvalidReference)?;
+            pending.push(target);
+        }
+        ObjectKind::Blob => {}
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Repository {
     pub worktree: Text,
@@ -357,40 +388,48 @@ impl Repository {
     }
 
     pub fn pack_reachable(&self, tip: ObjectId) -> Result<Vector<u8>, RepositoryError> {
-        let mut pending = Vector::from([tip]);
+        self.pack_negotiated(&[tip], &[])
+    }
+
+    pub fn pack_negotiated(
+        &self,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+    ) -> Result<Vector<u8>, RepositoryError> {
+        if wants.is_empty()
+            || wants
+                .iter()
+                .chain(haves.iter())
+                .any(|id| id.format() != self.object_format)
+        {
+            return Err(RepositoryError::InvalidReference);
+        }
+        let mut excluded = Vector::new();
+        let mut pending: Vector<ObjectId> = haves.iter().copied().collect();
+        while let Some(id) = pending.pop() {
+            if excluded.contains(&id) {
+                continue;
+            }
+            if excluded.len() >= 1_000_000 {
+                return Err(RepositoryError::TooManyFiles);
+            }
+            let object = self.read_object(id)?;
+            append_reachable_children(&object, self.object_format, &mut pending)?;
+            excluded.push(id);
+        }
+
+        let mut pending: Vector<ObjectId> = wants.iter().copied().collect();
         let mut seen = Vector::new();
         let mut objects = Vector::new();
         while let Some(id) = pending.pop() {
-            if seen.contains(&id) {
+            if excluded.contains(&id) || seen.contains(&id) {
                 continue;
             }
             if seen.len() >= 1_000_000 {
                 return Err(RepositoryError::TooManyFiles);
             }
             let object = self.read_object(id)?;
-            match object.kind {
-                ObjectKind::Commit => {
-                    let commit = Commit::parse_with_format(&object.contents, self.object_format)?;
-                    pending.push(commit.tree);
-                    pending.extend(commit.parents.iter().copied());
-                }
-                ObjectKind::Tree => pending.extend(
-                    parse_tree_with_format(&object.contents, self.object_format)?
-                        .iter()
-                        .map(|entry| entry.id),
-                ),
-                ObjectKind::Tag => {
-                    let text = core::str::from_utf8(&object.contents)
-                        .map_err(|_| RepositoryError::InvalidReference)?;
-                    let target = text
-                        .lines()
-                        .find_map(|line| line.strip_prefix("object "))
-                        .and_then(|value| ObjectId::parse_for(self.object_format, value))
-                        .ok_or(RepositoryError::InvalidReference)?;
-                    pending.push(target);
-                }
-                ObjectKind::Blob => {}
-            }
+            append_reachable_children(&object, self.object_format, &mut pending)?;
             seen.push(id);
             objects.push(PackObject {
                 id,
@@ -4090,6 +4129,38 @@ mod tests {
                 .any(|(name, _)| name == "topic")
         );
         remove_dir_all(&source_path).unwrap();
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn negotiated_pack_subtracts_complete_have_closure() {
+        let path = root("negotiated-pack");
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        let tracked = join_path(&path, "tracked");
+        write_file(&tracked, b"first").unwrap();
+        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        let first = repository
+            .commit("first", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        write_file(&tracked, b"second").unwrap();
+        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        let second = repository
+            .commit("second", "MRML", "mrml@example.invalid", 2)
+            .unwrap();
+
+        let incremental = parse_pack_with_format(
+            &repository.pack_negotiated(&[second], &[first]).unwrap(),
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        assert!(incremental.iter().any(|object| object.id == second));
+        assert!(!incremental.iter().any(|object| object.id == first));
+        let empty = parse_pack_with_format(
+            &repository.pack_negotiated(&[second], &[second]).unwrap(),
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        assert!(empty.is_empty());
         remove_dir_all(&path).unwrap();
     }
 

@@ -79,18 +79,20 @@ capabilities, unknown commands, and unsupported shallow, deepen, filter,
 want-ref, packfile-URI, and future arguments fail closed. Parser coverage is
 separate from the bounded clone backend described below.
 
-`FilesystemRepositoryView` now implements a bounded protocol-v2 clone subset.
+`FilesystemRepositoryView` now implements a bounded protocol-v2 fetch subset.
 `ls-refs` reads only the exact active ref generation, applies bounded byte
 prefixes, emits the default `HEAD` symref or an explicitly requested unborn
 default, performs bounded annotated-tag peeling when requested, and rechecks the
-generation before its terminal flush. Fetch accepts exactly one advertised active tip, requires `done`,
-rejects haves, thin packs, and `sideband-all`, generates the reachable SHA-1 or
-SHA-256 pack using first-party code, rechecks the generation before output, and
+generation before its terminal flush. Fetch accepts one or more advertised
+active tips, requires `done`, and subtracts the complete authenticated object
+closure of each bounded `have`. Unknown or malformed have objects fail closed.
+It rejects thin packs and `sideband-all`, generates the remaining SHA-1 or
+SHA-256 closure using first-party code, rechecks the generation before output, and
 preflights the complete framed response before emitting the standard `packfile`
 section with mandatory band-1 framing. The golden
 hosted-Linux test reparses that emitted pack and finds the requested commit.
-Incremental wants/haves negotiation, arbitrary reachable wants, thin-pack
-completion, streaming generation without a whole-pack memory allocation, and
+Arbitrary non-tip reachable wants, ACK negotiation rounds, thin-pack
+generation, streaming generation without a whole-pack memory allocation, and
 receive-pack backend activation remain open, so the omitted features are not
 advertised.
 

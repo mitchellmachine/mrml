@@ -16,12 +16,12 @@ Executed on 2026-09-01:
 
 - `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
 - `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
-- `./target/debug/mrml test mrml-git --target linux` — PASS, 139 library tests and 2 CLI tests.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 140 library tests and 2 CLI tests.
 - `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 15 tests.
 - `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 49 tests, including mandatory pinned NIST ACVP sigGen/sigVer and OpenSSL 3.6.4 differential fixtures.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.openpgp --target windows` — PASS, 15 tests under the pinned Wine-hosted Windows target.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.crypto --target windows` — PASS, 49 tests with the same mandatory ML-DSA fixtures and mutation corpus under the pinned Wine-hosted Windows target.
-- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 129 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. This is Wine-hosted Windows-target compatibility evidence, not native Windows.
+- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 130 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. This is Wine-hosted Windows-target compatibility evidence, not native Windows.
 - `cargo fmt --all -- --check` — PASS.
 - `git diff --check` — PASS before this evidence file.
 - `./target/debug/mrml assurance check` — FAIL: `UnsafeBoundaryUnadmitted { path: docs/compiler/probes/pinned_std_thread_tls_execution.rs }`. This path is outside Agent A's permitted files and arrived through concurrent main integration; it was not hidden or modified here.
