@@ -102,6 +102,7 @@ pub enum QuicError {
     ConnectionId,
     TransportParameter,
     HandshakeConfirmation,
+    KeyUsageLimit,
     PeerClosed {
         code: u64,
         frame_type: u64,

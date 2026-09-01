@@ -13,6 +13,29 @@ use crate::{
 
 const CRYPTO_CHUNK: usize = 900;
 const CONNECTION_ID_LENGTH: usize = 8;
+const MAX_APPLICATION_PACKETS_PER_KEY: u64 = 1 << 20;
+const MAX_APPLICATION_BYTES_PER_KEY: u64 = 1 << 30;
+
+fn authorize_key_use(packets: u64, bytes: u64, amount: usize) -> Result<u64, QuicError> {
+    let projected = bytes
+        .checked_add(amount as u64)
+        .ok_or(QuicError::KeyUsageLimit)?;
+    if packets >= MAX_APPLICATION_PACKETS_PER_KEY || projected > MAX_APPLICATION_BYTES_PER_KEY {
+        Err(QuicError::KeyUsageLimit)
+    } else {
+        Ok(projected)
+    }
+}
+
+fn validate_key_phase(received: bool, current: bool) -> Result<(), QuicError> {
+    if received == current {
+        Ok(())
+    } else {
+        // This bounded profile deliberately closes rather than attempting a
+        // key update without old/new key retention and abuse controls.
+        Err(QuicError::ProtocolViolation)
+    }
+}
 
 fn quic_tls_error(error: TlsError) -> QuicError {
     match error {
@@ -128,6 +151,10 @@ pub struct QuicConnection {
     peer_max_ack_delay_micros: u64,
     pending_frames: Vector<QuicFrame>,
     version: QuicVersion,
+    sent_protected_packets: u64,
+    sent_protected_bytes: u64,
+    received_protected_packets: u64,
+    received_protected_bytes: u64,
 }
 
 struct PendingPacket {
@@ -176,6 +203,16 @@ impl QuicConnection {
         ack_eliciting: bool,
         attempts: u8,
     ) -> Result<(), QuicError> {
+        if authorize_key_use(
+            self.sent_protected_packets,
+            self.sent_protected_bytes,
+            payload.len().saturating_add(64),
+        )
+        .is_err()
+        {
+            self.state.close();
+            return Err(QuicError::KeyUsageLimit);
+        }
         let packet = ShortPacket {
             destination_id: self.peer_id.clone(),
             packet_number: self.next_packet_number,
@@ -195,6 +232,11 @@ impl QuicConnection {
         {
             return Err(QuicError::Io);
         }
+        self.sent_protected_packets += 1;
+        self.sent_protected_bytes = self
+            .sent_protected_bytes
+            .checked_add(packet.len() as u64)
+            .ok_or(QuicError::KeyUsageLimit)?;
         self.next_packet_number = self
             .next_packet_number
             .checked_add(1)
@@ -222,6 +264,16 @@ impl QuicConnection {
     fn send_path_frame(&mut self, peer: SocketAddress, frame: QuicFrame) -> Result<(), QuicError> {
         let mut payload = Vector::new();
         frame.encode(&mut payload)?;
+        if authorize_key_use(
+            self.sent_protected_packets,
+            self.sent_protected_bytes,
+            payload.len().saturating_add(64),
+        )
+        .is_err()
+        {
+            self.state.close();
+            return Err(QuicError::KeyUsageLimit);
+        }
         let packet = ShortPacket {
             destination_id: self.peer_id.clone(),
             packet_number: self.next_packet_number,
@@ -237,6 +289,11 @@ impl QuicConnection {
         {
             return Err(QuicError::Io);
         }
+        self.sent_protected_packets += 1;
+        self.sent_protected_bytes = self
+            .sent_protected_bytes
+            .checked_add(packet.len() as u64)
+            .ok_or(QuicError::KeyUsageLimit)?;
         self.next_packet_number = self
             .next_packet_number
             .checked_add(1)
@@ -267,8 +324,27 @@ impl QuicConnection {
                         }
                         Err(error) => return Err(error),
                     };
+                    if validate_key_phase(packet.key_phase, false).is_err() {
+                        self.state.close();
+                        return Err(QuicError::ProtocolViolation);
+                    }
+                    let projected_bytes = match authorize_key_use(
+                        self.received_protected_packets,
+                        self.received_protected_bytes,
+                        amount,
+                    ) {
+                        Ok(projected) => projected,
+                        Err(_) => {
+                            self.state.close();
+                            return Err(QuicError::KeyUsageLimit);
+                        }
+                    };
                     match self.received_packets.record(packet.packet_number)? {
-                        ReceivedPacket::New => break (packet, peer, amount),
+                        ReceivedPacket::New => {
+                            self.received_protected_packets += 1;
+                            self.received_protected_bytes = projected_bytes;
+                            break (packet, peer, amount);
+                        }
                         ReceivedPacket::Duplicate | ReceivedPacket::TooOld => continue,
                     }
                 }
@@ -590,6 +666,10 @@ impl QuicClientConnection {
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
             pending_frames: Vector::new(),
             version,
+            sent_protected_packets: 0,
+            sent_protected_bytes: 0,
+            received_protected_packets: 0,
+            received_protected_bytes: 0,
         };
         let mut early_frames = Vector::new();
         loop {
@@ -856,6 +936,10 @@ impl QuicServerListener {
             peer_max_ack_delay_micros: peer_parameters.max_ack_delay_ms * 1000,
             pending_frames: Vector::new(),
             version,
+            sent_protected_packets: 0,
+            sent_protected_bytes: 0,
+            received_protected_packets: 0,
+            received_protected_bytes: 0,
         };
         connection
             .send_frames(&[QuicFrame::HandshakeDone])
@@ -887,6 +971,28 @@ mod tests {
         assert_eq!(
             validate_version_information(&parameters, QuicVersion::V2, true),
             Err(QuicError::TransportParameter)
+        );
+    }
+
+    #[test]
+    fn key_usage_closes_before_counter_or_nonce_reuse() {
+        assert_eq!(authorize_key_use(0, 0, 1200), Ok(1200));
+        assert_eq!(
+            authorize_key_use(MAX_APPLICATION_PACKETS_PER_KEY, 0, 1),
+            Err(QuicError::KeyUsageLimit)
+        );
+        assert_eq!(
+            authorize_key_use(0, MAX_APPLICATION_BYTES_PER_KEY, 1),
+            Err(QuicError::KeyUsageLimit)
+        );
+        assert_eq!(
+            authorize_key_use(0, u64::MAX, 1),
+            Err(QuicError::KeyUsageLimit)
+        );
+        assert_eq!(validate_key_phase(false, false), Ok(()));
+        assert_eq!(
+            validate_key_phase(true, false),
+            Err(QuicError::ProtocolViolation)
         );
     }
 }
