@@ -3,6 +3,7 @@
 mod account;
 mod ari;
 mod base64url;
+mod challenge;
 mod csr;
 mod directory;
 mod identifier;
@@ -19,6 +20,11 @@ pub use account::{
 };
 pub use ari::{AriError, RenewalWindow};
 pub use base64url::{Base64UrlError, decode_base64url, encode_base64url};
+pub use challenge::{
+    ChallengeError, ChallengeLifecycle, ChallengePublicationRequest, ChallengePublisher,
+    ChallengeToken, MAX_CHALLENGE_TOKEN, MAX_KEY_AUTHORIZATION, PublicationReceipt,
+    PublicationState, dns01_txt_digest, write_key_authorization,
+};
 pub use csr::{
     ApprovedCsrDigest, CsrError, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, Pkcs10Signer, write_pkcs10_csr,
 };

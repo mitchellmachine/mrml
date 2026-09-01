@@ -26,6 +26,11 @@ poll retries and deadlines, and one authorization URL per identifier. Stale or
 substituted authorization responses fail closed; wildcard authorization selects
 DNS-01; finalization requires every exact authorization to be valid and uses a
 one-use CSR-digest receipt.
+Challenge publication now has a shared capability-oriented contract binding the
+exact order URL digest, authorization URL digest, identifier, challenge kind,
+token, key-authorization digest, policy generation, activation window, and
+publisher receipt. Publication and cleanup are prepare/commit operations;
+uncertain cleanup remains represented until authoritative publisher re-read.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -38,7 +43,8 @@ arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
 General JOSE response and problem-document parsing, X.509 issuance validation,
-ACME transport, challenge publication, durable recovery, certificate publication, renewal,
+ACME transport, concrete HTTP/TLS-ALPN/DNS publishers, durable recovery,
+certificate publication, renewal,
 revocation, backup/restore, CLI administration, gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.

@@ -11217,3 +11217,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 order/authorization state, exact URL and identifier binding, polling budgets,
 wildcard-to-DNS-01 enforcement, and prepare/commit finalization receipts. It
 does not add a listed re-review-trigger mechanism.
+
+# 2026-09-01 — Typed ACME challenge publication contract
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds an ordinary typed,
+generation-bound publication lifecycle shared by HTTP-01, TLS-ALPN-01, and
+DNS-01, including exact authorization/name/lifetime binding and resolvable
+uncertain removal. It implements none of the recorded re-review triggers.
