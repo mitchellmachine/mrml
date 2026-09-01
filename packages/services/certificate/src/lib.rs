@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(peer_credentials_unix_socket)]
 
 mod administration;
 mod backup;
@@ -8,6 +9,8 @@ mod caa;
 mod catalog_lifecycle_provider;
 mod certificate;
 mod certd_channel;
+#[cfg(target_os = "linux")]
+mod certd_channel_unix;
 mod challenge_dns;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_dns_hosted;
@@ -94,6 +97,11 @@ pub use certd_channel::{
     CertdChannelError, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
     CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     decode_certd_channel_request, encode_certd_channel_request,
+};
+#[cfg(target_os = "linux")]
+pub use certd_channel_unix::{
+    CERTD_CHANNEL_IO_TIMEOUT_MILLIS, MAX_CERTD_CHANNEL_CONNECTIONS_PER_RUN,
+    UnixCertdChannelError, UnixCertdListener, UnixCertdSession,
 };
 pub use challenge_dns::{
     AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_PACKET, MAX_DNS_TXT_RECORDS,
