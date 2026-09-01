@@ -11354,3 +11354,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 narrow authoritative challenge zone over ordinary UDP and TCP DNS sockets on
 one port with bounded framing and timeouts. It adds no recursive resolver,
 multi-vantage selection, proxy, or recorded re-review-trigger mechanism.
+
+# 2026-09-01 — DNS-01 propagation observation receipts
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment requires exact TXT observation
+through separately owner-authorized authoritative and recursive-resolver
+capability routes before validation. Routes are fixed by policy; it does not
+perform route selection, CA multi-vantage validation, or challenge proxying.

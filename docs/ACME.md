@@ -68,6 +68,13 @@ two-second I/O timeouts, accepts one bounded datagram or one exact length-framed
 TCP query per operation, and delegates all parsing and response policy to the
 shared authoritative zone. Linux and Windows-target-under-Wine loopbacks verify
 both transports against the same active TXT generation.
+DNS-01 propagation is a separate bounded state machine. An authorization is not
+reported ready until one owner-authorized authoritative route and one distinct
+owner-authorized recursive-resolver route each return a receipt binding the
+exact TXT digest, challenge generation, publisher generation, route generation,
+observation class, and time. Attempts and deadline are bounded; mismatched or
+substituted receipts fail closed. This is fixed owner policy, not route-selected
+multi-vantage CA validation.
 Certificate-chain retrieval has a strict fixed-capacity PEM decoder and a
 shared validation policy/receipt. The hosted first-party X.509 adapter verifies
 the exact P-256 SPKI, exact sorted SAN set with no extra GeneralNames, TLS server
@@ -156,8 +163,8 @@ budget, and never invokes the HTTP redirect-following API. The MRML target does
 not inherit hosted sockets and continues to use the same transport contract
 through capability-bound services.
 
-General JOSE response parsing, MRML HTTPS capability adapters, DNS propagation
-observation, lifecycle-specific state codecs and recovery wiring,
+General JOSE response parsing, MRML HTTPS capability adapters, hosted DNS query
+adapters, lifecycle-specific state codecs and recovery wiring,
 alternate-chain link retrieval, renewal execution, revocation transport,
 sealed-key backup/restore adapters, CLI administration, interface dispatch/service loop, concrete
 gitd hot reload, and the MRML

@@ -8,6 +8,7 @@ mod challenge_dns_hosted;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod challenge_http;
 mod challenge_publisher;
+mod dns_propagation;
 mod durable;
 mod identity;
 mod revocation;
@@ -38,6 +39,11 @@ pub use challenge_http::{
     HTTP01_WRITE_TIMEOUT_MILLIS,
 };
 pub use challenge_publisher::DnsChallengePublisher;
+pub use dns_propagation::{
+    DnsObservationClass, DnsObservationRoute, DnsPropagationError, DnsPropagationObserver,
+    DnsPropagationPolicy, DnsPropagationQuery, DnsPropagationReceipt, DnsTxtObservationReceipt,
+    DnsTxtObservationRequest, MAX_PROPAGATION_ATTEMPTS,
+};
 pub use durable::{
     CommittedStoreReceipt, DurableAuthenticator, DurableError, DurableNamespace, DurableObjectId,
     DurableRecord, DurableRecordKind, DurableStateStore, DurableTransaction, PreparedStoreReceipt,
