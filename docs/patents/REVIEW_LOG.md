@@ -23,14 +23,22 @@ frequency mutation; proprietary table-change signalling; gradient-descent or
 proprietary parallel FSE construction; and hardware/FPGA/ASIC compression
 acceleration.
 
-CIPO reported a database service interruption during the status check. An
-authoritative status recheck after service restoration remains an open release
-gate but does not block implementation and testing of this exact bounded
-profile. This entry does not establish patent clearance, freedom to operate,
-non-infringement, validity, essentiality, or completion of independent security
-review. Re-review is required for any excluded mechanism, material algorithm
-change, public/commercial release, or intentional distribution or operation
-outside Canada.
+The owner reports that CIPO's search interface was operational despite a notice
+of possible intermittent access issues and was searched directly for
+Zstandard, Zstd, Finite State Entropy, FSE compression, tANS, table-based and
+tabled asymmetric numeral systems, normalized-count entropy tables, Zstandard
+Huffman weights, and related RFC 8878 FSE and Huffman terminology. No directly
+relevant Canadian patent application or granted patent was identified. The
+owner also reports that the IETF IPR database contains no disclosure submitted
+directly against RFC 8878.
+
+The resulting disposition is **TRIGGERED**, **REVIEW_COMPLETED**,
+**CONDITIONAL_PROCEED**, and **IMPLEMENTATION_GATE_SATISFIED** for the exact
+bounded profile above. This entry does not establish patent clearance, freedom
+to operate, non-infringement, validity, essentiality, or completion of
+independent security review. Re-review is required for any excluded mechanism,
+material algorithm change, public/commercial release, or intentional
+distribution or operation outside Canada.
 
 # 2026-08-31 — QUIC version 2 bounded extension — Canada
 

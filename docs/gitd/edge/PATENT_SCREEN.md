@@ -13,6 +13,9 @@ confidence **MEDIUM**, and technical overlap **LOW**. It may be implemented and
 tested only within the recorded FSE/Huffman/table-mode scope. Every listed
 table-database, BIC/interpolative, adaptive/proprietary, symmetry, range-
 probability, gradient-construction, and hardware-acceleration mechanism remains
-excluded. CIPO status must be rechecked after its reported database service
-interruption before release. This document makes no clearance, freedom-to-
-operate, non-infringement, or independent-review conclusion.
+excluded. The targeted Canadian CIPO and IETF IPR searches recorded in the
+review log are **REVIEW_COMPLETED** and the bounded profile's
+**IMPLEMENTATION_GATE_SATISFIED**: no directly relevant Canadian application or
+grant, or disclosure submitted directly against RFC 8878, was identified. This
+document makes no clearance, freedom-to-operate, non-infringement, or
+independent-review conclusion.
