@@ -3,13 +3,15 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefState, GitdCoreError, HistoryVerificationError, HistoryVerificationLimits,
-    LinuxDurableReceiveStore, Object, ObjectId, ObjectKind, ProtectedHistoryContext,
-    ProtocolBudget, QuarantineLimits, QuarantineTransaction, QuarantineTransactionId,
-    ReceivePackRequest, Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest,
-    VerifiedCommitProof, VerifiedRefTransaction, WorkBudget,
+    ActiveRefState, AuditReceipt, AuthenticatedReceiveStore, DurableReceiveError, GitdCoreError,
+    HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore, Object,
+    ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
+    QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, Repository,
+    SignaturePurpose, SmartGitOperation, SmartGitRequest, VerifiedCommitProof,
+    VerifiedRefTransaction, WorkBudget,
     build_verified_fast_forward_transaction, read_receive_pack_commands,
     reserve_push_disk_before_body, verify_protected_introduced_history,
+    durably_activate_verified_receive,
 };
 
 /// Verification-only authority. Implementations receive public policy/key state
@@ -48,6 +50,17 @@ impl PreparedProtectedReceive {
     pub const fn protocol_budget(&self) -> ProtocolBudget {
         self.protocol_budget
     }
+}
+
+/// Activate an already verified protected receive through the only durable
+/// store in this crate that authenticates its audit receipt. Consuming the
+/// opaque preparation prevents replaying one authorization in-process.
+pub fn activate_prepared_protected_receive(
+    mut prepared: PreparedProtectedReceive,
+    store: &mut AuthenticatedReceiveStore<'_>,
+) -> Result<AuditReceipt, GitdCoreError> {
+    durably_activate_verified_receive(&mut prepared.transaction, &prepared.verified, store)
+        .map_err(map_durable_error)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -241,8 +254,18 @@ fn map_history_error(error: HistoryVerificationError) -> GitdCoreError {
     }
 }
 
+fn map_durable_error(error: DurableReceiveError) -> GitdCoreError {
+    match error {
+        DurableReceiveError::InvalidState => GitdCoreError::Policy,
+        DurableReceiveError::StaleAuthority => GitdCoreError::StaleGeneration,
+        DurableReceiveError::Aborted(_) => GitdCoreError::Storage,
+        DurableReceiveError::Uncertain(_) => GitdCoreError::UncertainCommit,
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
+    use mrml_crypto::Sha256;
     use mrml_runtime::{Text, Vector, join_path};
 
     use super::*;
@@ -296,6 +319,29 @@ mod tests {
                 purpose: SignaturePurpose::GitCommit,
                 object_format: ObjectFormat::Sha256,
             })
+        }
+    }
+
+    struct ReceiptAuthority;
+
+    impl crate::AuditReceiptAuthority for ReceiptAuthority {
+        fn signer_identity(&self) -> [u8; 64] {
+            [23u8; 64]
+        }
+
+        fn sign(&mut self, transcript: &[u8], output: &mut [u8]) -> Result<usize, ()> {
+            let signature = Sha256::digest(transcript);
+            output
+                .get_mut(..signature.len())
+                .ok_or(())?
+                .copy_from_slice(&signature);
+            Ok(signature.len())
+        }
+
+        fn verify(&self, transcript: &[u8], signature: &[u8]) -> Result<(), ()> {
+            (Sha256::digest(transcript).as_slice() == signature)
+                .then_some(())
+                .ok_or(())
         }
     }
 
@@ -431,6 +477,28 @@ mod tests {
         );
         assert_eq!(prepared.verified().updates()[0].proposed_new(), Some(new));
         assert_eq!(store.active_refs().load().unwrap(), active);
+
+        let signed_receipts = path(&root, "signed-receipts");
+        let mut store = store;
+        let mut authority = ReceiptAuthority;
+        let receipt = {
+            let mut authenticated = crate::AuthenticatedReceiveStore::new(
+                &mut store,
+                &signed_receipts,
+                &mut authority,
+            )
+            .unwrap();
+            activate_prepared_protected_receive(prepared, &mut authenticated).unwrap()
+        };
+        let activated = store.active_refs().load().unwrap();
+        assert_eq!(activated.repository_generation, RepositoryGeneration(8));
+        assert_eq!(activated.refs[0].1, new);
+        assert_eq!(receipt.activated_repository_generation, RepositoryGeneration(8));
+        let signed = crate::AuthenticatedAuditReceiptDirectory::open(&signed_receipts)
+            .unwrap()
+            .load(receipt.transaction, &authority)
+            .unwrap();
+        assert_eq!(signed.receipt, receipt);
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

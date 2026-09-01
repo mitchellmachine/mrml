@@ -80,7 +80,8 @@ pub use quarantine::{
     reserve_push_disk_before_body,
 };
 pub use receive_backend::{
-    PreparedProtectedReceive, ProtectedCommitVerifier, prepare_protected_receive,
+    PreparedProtectedReceive, ProtectedCommitVerifier, activate_prepared_protected_receive,
+    prepare_protected_receive,
 };
 pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,
