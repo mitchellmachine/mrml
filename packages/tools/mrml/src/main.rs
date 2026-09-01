@@ -49,6 +49,7 @@ use std::time::Instant;
 use generation::mrml_package_identifier;
 use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
+use mrml_certificate::{CaaChallengeMethod, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 #[path = "../../../libraries/crypto/src/sha3.rs"]
 #[allow(dead_code)]
 mod package_sha3;
@@ -265,6 +266,7 @@ fn run() -> Result<(), String> {
         "list" => list(&workspace, &args[1..]),
         "build" | "test" => build_or_test(&workspace, &args),
         "compiler" => compiler_command(&workspace, &args[1..]),
+        "cert" => cert_command(&args[1..]),
         "doctor" => doctor(&workspace, &args[1..]),
         "audit" => audit(&workspace, &args[1..]),
         "assurance" => assurance::command(&workspace, &args[1..]),
@@ -282,10 +284,11 @@ fn run() -> Result<(), String> {
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
     println!(
-        "usage: mrml <list|doctor|audit|assurance|build|test|compiler|manifest|interface|package|release> [component] [options]"
+        "usage: mrml <list|doctor|audit|assurance|build|test|compiler|manifest|interface|package|release|cert> [component] [options]"
     );
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml assurance <check|generate>");
+    println!("       mrml cert caa <recommend|verify> ...");
     println!(
         "       mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o OUTPUT [--release]"
     );
@@ -330,6 +333,130 @@ fn print_help() {
     println!("  --compile-env N=V     set an allowlisted manifest compile input");
     println!("  --sanitizer address   instrument Linux native tests with AddressSanitizer");
     println!("  --output structured   emit stable key=value records");
+}
+
+fn cert_command(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("caa") => cert_caa_command(&args[1..]),
+        Some(operation) => Err(format!(
+            "CertificateOperationUnavailable {{ operation: {operation}, status: REMAINS_OPEN }}"
+        )),
+        None => Err("CertificateUsageError { expected: caa recommend|verify }".into()),
+    }
+}
+
+fn cert_caa_command(args: &[String]) -> Result<(), String> {
+    let operation = args
+        .first()
+        .map(String::as_str)
+        .ok_or("CertificateCaaUsageError { expected: recommend|verify ISSUER ... }")?;
+    let issuer = args
+        .get(1)
+        .map(String::as_str)
+        .ok_or("CertificateCaaIssuerMissing")?;
+    let mut allow_http01 = false;
+    let mut allow_tls_alpn01 = false;
+    let mut allow_dns01 = false;
+    let mut wildcard = false;
+    let mut account_uri = None;
+    let mut output = OutputMode::Human;
+    let mut method = None;
+    let mut records = Vec::new();
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--http-01" => allow_http01 = true,
+            "--tls-alpn-01" => allow_tls_alpn01 = true,
+            "--dns-01" => allow_dns01 = true,
+            "--wildcard" => wildcard = true,
+            "--account-uri" => {
+                index += 1;
+                account_uri = Some(
+                    args.get(index)
+                        .map(String::as_str)
+                        .ok_or("CertificateCaaAccountUriMissing")?,
+                );
+            }
+            "--method" => {
+                index += 1;
+                method = Some(match args.get(index).map(String::as_str) {
+                    Some("http-01") => CaaChallengeMethod::Http01,
+                    Some("tls-alpn-01") => CaaChallengeMethod::TlsAlpn01,
+                    Some("dns-01") => CaaChallengeMethod::Dns01,
+                    _ => return Err("CertificateCaaMethodInvalid".into()),
+                });
+            }
+            "--record" => {
+                index += 1;
+                let record = args
+                    .get(index)
+                    .map(String::as_str)
+                    .ok_or("CertificateCaaRecordMissing")?;
+                if records.len() == MAX_CAA_RECORDS {
+                    return Err("CertificateCaaRecordLimitExceeded".into());
+                }
+                records.push(record);
+            }
+            "--output" => {
+                index += 1;
+                output = match args.get(index).map(String::as_str) {
+                    Some("structured") => OutputMode::Structured,
+                    Some("human") => OutputMode::Human,
+                    _ => return Err("CertificateCaaOutputInvalid".into()),
+                };
+            }
+            option => {
+                return Err(format!(
+                    "CertificateCaaUnknownOption {{ option: {option} }}"
+                ));
+            }
+        }
+        index += 1;
+    }
+    let policy = CaaPolicy {
+        issuer_domain: issuer,
+        allow_http01,
+        allow_tls_alpn01,
+        allow_dns01,
+        allow_wildcard: wildcard,
+        account_uri,
+    };
+    match operation {
+        "recommend" => {
+            if method.is_some() || !records.is_empty() {
+                return Err("CertificateCaaRecommendUnexpectedVerificationInput".into());
+            }
+            let mut rendered = [0; MAX_CAA_RECORD_BYTES];
+            let written = policy
+                .write_recommended_records(&mut rendered)
+                .map_err(|error| format!("CertificateCaaPolicyInvalid {{ detail: {error:?} }}"))?;
+            let records = std::str::from_utf8(&rendered[..written])
+                .map_err(|_| "CertificateCaaEncodingInvalid")?;
+            match output {
+                OutputMode::Human => print!("{records}"),
+                OutputMode::Structured => println!(
+                    "cert-caa|operation=recommend|status=PASS|issuer={issuer}|wildcard={wildcard}|records={}",
+                    records.trim_end().replace('\n', "\\n")
+                ),
+            }
+            Ok(())
+        }
+        "verify" => {
+            let method = method.ok_or("CertificateCaaMethodMissing")?;
+            policy
+                .authorize_observed(&records, wildcard, method)
+                .map_err(|error| format!("CertificateCaaUnauthorized {{ detail: {error:?} }}"))?;
+            match output {
+                OutputMode::Human => println!("CAA policy authorizes the exact requested issuance"),
+                OutputMode::Structured => println!(
+                    "cert-caa|operation=verify|status=PASS|issuer={issuer}|wildcard={wildcard}|records={}",
+                    records.len()
+                ),
+            }
+            Ok(())
+        }
+        _ => Err("CertificateCaaUsageError { expected: recommend|verify ISSUER ... }".into()),
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]

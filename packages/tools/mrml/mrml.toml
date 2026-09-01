@@ -26,6 +26,13 @@ crate_name = "mrml_build_action"
 crate_type = "none"
 source = "-"
 
+[[dependency]]
+alias = "mrml_certificate"
+compile_name = "mrml-certd"
+package = "org.mrml.service.certificate"
+scope = "compile"
+targets = ["WINDOWS", "LINUX"]
+
 [[binary]]
 crate_name = "mrml"
 output = "mrml"

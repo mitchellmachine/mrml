@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 187
+compile_edges = 188
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 167
+package_edges = 168
 system_release_edges = 3
 
 [[package]]
@@ -771,9 +771,9 @@ isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
 isolation_supported = ["platform"]
-compile_dependencies = []
+compile_dependencies = ["org.mrml.service.certificate"]
 
-static_runtime = []
+static_runtime = ["org.mrml.service.certificate"]
 boot_bound = []
 system_release_bound = []
 
