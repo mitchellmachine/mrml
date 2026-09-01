@@ -10,18 +10,18 @@ Baseline commit:
 `cf1f75755e6961737d6c1972959aac9a8dcea061ec26b7f7e43b20ab261868c2`.
 
 Final core implementation commit before this evidence record:
-`564f49fa`.
+`8a15e18b1d816cec99a472111b23888c8da5509c941db55735f633716acb91b7`.
 
 Executed on 2026-09-01:
 
 - `./target/debug/mrml manifest check` — PASS, 61 components and 174 dependencies.
 - `./target/debug/mrml manifest lock --check` — PASS, 61 packages and 5 interfaces.
-- `./target/debug/mrml test mrml-git --target linux` — PASS, 152 library tests and 2 CLI tests. The suite exercised exact linear protected-history ranges of 1, 100, 1,000, and 5,000 introduced commits and rejected 5,001 at the configured limit. It also generated the same exact first-party fetch pack in six simultaneous process-local workers. These are controlled functional limit/concurrency tests, not production-performance or peak-memory benchmarks.
+- `./target/debug/mrml test mrml-git --target linux` — PASS, 153 library tests and 2 CLI tests. The suite exercised exact linear protected-history ranges of 1, 100, 1,000, and 5,000 introduced commits and rejected 5,001 at the configured limit. It also generated the same exact first-party fetch pack in six simultaneous process-local workers. These are controlled functional limit/concurrency tests, not production-performance or peak-memory benchmarks.
 - `./target/debug/mrml test org.mrml.library.openpgp --target linux` — PASS, 15 tests.
 - `./target/debug/mrml test org.mrml.library.crypto --target linux` — PASS, 49 tests, including mandatory pinned NIST ACVP sigGen/sigVer and OpenSSL 3.6.4 differential fixtures.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.openpgp --target windows` — PASS, 15 tests under the pinned Wine-hosted Windows target.
 - `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test org.mrml.library.crypto --target windows` — PASS, 49 tests with the same mandatory ML-DSA fixtures and mutation corpus under the pinned Wine-hosted Windows target.
-- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 139 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. Exact functional range, canonical validity/retirement, key-revocation, legacy-v4 ledger, pack-set manifest/binding, generalized artifact proof, verified-summary, annotated-tag, and metadata cases passed. This is Wine-hosted Windows-target compatibility evidence, not native Windows or production-performance evidence.
+- `source tools/toolchain/setup-wine-oracle.sh && WINEDEBUG=-all wine target/debug/mrml.exe test mrml-git --target windows` — PASS, 140 library tests and 2 CLI tests using `nightly-2026-08-29-x86_64-pc-windows-gnullvm`, rustc commit `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`. Exact functional range, canonical validity/retirement, key-revocation, legacy-v4 ledger, pack-set manifest/binding, generalized artifact proof, verified-summary, annotated-tag, metadata, and pre-ref signature-verification failure cases passed. This is Wine-hosted Windows-target compatibility evidence, not native Windows or production-performance evidence.
 - `cargo fmt --all -- --check` — PASS.
 - `git diff --check` — PASS before this evidence file.
 - `./target/debug/mrml assurance check` — FAIL: `UnsafeBoundaryUnadmitted { path: docs/compiler/probes/pinned_std_thread_tls_execution.rs }`. This path is outside Agent A's permitted files and arrived through concurrent main integration; it was not hidden or modified here.
@@ -31,6 +31,7 @@ Implemented and executed in the focused environments:
 - RFC 9580 v6 fingerprint/salt parsing and negative vectors; complete-key identities.
 - purpose-separated `MRML-GIT-HYBRID-V1` AND verification and bounded trust transitions.
 - ML-DSA self-verification, runtime entropy wrappers, malformed-key rejection, and volatile clearing of reviewed secret-derived intermediates.
+- exact conventional SSH/OpenPGP commit and annotated-tag signature verification before local branch/tag ref mutation, with failure preserving the old head and absent tag ref.
 - bounded Git object/pack/index parsing, deterministic fixed-Huffman LZ77 DEFLATE, file-backed quarantine validation, OFS/REF delta resolution, authenticated thin-base completion, arrival packs, disk reservation, journals, atomic ref generations, recovery classification, and authenticated audit receipts.
 - deterministic verification of every introduced commit, including merge-side ancestry, concrete detached hybrid proofs, and protected activation that consumes opaque verified state.
 - canonical monotonic pair-validity/retirement state, authenticated purpose-separated key revocations, and generation-bound verification summaries derived only from opaque verified commit proofs.
