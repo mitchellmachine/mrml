@@ -2,9 +2,28 @@ use crate::{Certificate, CertificateError};
 
 const BASIC_OCSP_RESPONSE: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01];
 const SHA256_WITH_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+const SHA256_WITH_ECDSA: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
 const SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
 const MAX_OCSP_BYTES: usize = 64 * 1024;
 const MAX_AGE_WITHOUT_NEXT_UPDATE: u64 = 7 * 24 * 60 * 60;
+
+#[derive(Clone, Copy)]
+enum OcspSignatureAlgorithm {
+    RsaSha256,
+    EcdsaP256Sha256,
+}
+
+fn verify_ocsp_signature(
+    signer: &Certificate<'_>,
+    algorithm: OcspSignatureAlgorithm,
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), CertificateError> {
+    match algorithm {
+        OcspSignatureAlgorithm::RsaSha256 => signer.verify_pkcs1_sha256(message, signature),
+        OcspSignatureAlgorithm::EcdsaP256Sha256 => signer.verify_tls_ecdsa(message, signature),
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Element<'a> {
@@ -180,6 +199,19 @@ fn equal_digest(actual: &[u8], expected: &[u8; 32]) -> bool {
         == 0
 }
 
+fn cert_id_matches(
+    serial: &[u8],
+    leaf_serial: &[u8],
+    issuer_name_hash: &[u8],
+    issuer_key_hash: &[u8],
+    expected_name_hash: &[u8; 32],
+    expected_key_hash: &[u8; 32],
+) -> bool {
+    same_serial(serial, leaf_serial)
+        && equal_digest(issuer_name_hash, expected_name_hash)
+        && equal_digest(issuer_key_hash, expected_key_hash)
+}
+
 pub fn verify_stapled_ocsp(
     response: &[u8],
     leaf: &Certificate<'_>,
@@ -226,18 +258,43 @@ pub fn verify_stapled_ocsp(
     if signature.tag != 3 || signature.value.first() != Some(&0) {
         return Err(CertificateError::OcspMalformed);
     }
+    let mut delegated = None;
     if basic.at < basic.bytes.len() {
         let certs = basic.next()?;
         if certs.tag != 0xa0 {
             return Err(CertificateError::OcspMalformed);
         }
+        let mut wrapper = Reader::new(certs.value);
+        let certificates = wrapper.next()?;
+        if certificates.tag != 0x30 || !wrapper.done() {
+            return Err(CertificateError::OcspMalformed);
+        }
+        let mut certificates = Reader::new(certificates.value);
+        let certificate = certificates.next()?;
+        if !certificates.done() {
+            return Err(CertificateError::OcspMalformed);
+        }
+        delegated = Some(
+            Certificate::parse(certificate.encoded).map_err(|_| CertificateError::OcspMalformed)?,
+        );
     }
     if !basic.done() {
         return Err(CertificateError::OcspMalformed);
     }
     let mut alg = sequence(algorithm)?;
-    oid(alg.next()?, SHA256_WITH_RSA)?;
-    if alg.at < alg.bytes.len() {
+    let algorithm_oid = alg.next()?;
+    if algorithm_oid.tag != 6 {
+        return Err(CertificateError::OcspMalformed);
+    }
+    let signature_algorithm = if algorithm_oid.value == SHA256_WITH_RSA {
+        OcspSignatureAlgorithm::RsaSha256
+    } else if algorithm_oid.value == SHA256_WITH_ECDSA {
+        OcspSignatureAlgorithm::EcdsaP256Sha256
+    } else {
+        return Err(CertificateError::UnsupportedAlgorithm);
+    };
+    if matches!(signature_algorithm, OcspSignatureAlgorithm::RsaSha256) && alg.at < alg.bytes.len()
+    {
         let null = alg.next()?;
         if null.tag != 5 || !null.value.is_empty() {
             return Err(CertificateError::OcspMalformed);
@@ -246,7 +303,6 @@ pub fn verify_stapled_ocsp(
     if !alg.done() {
         return Err(CertificateError::OcspMalformed);
     }
-    issuer.verify_pkcs1_sha256(tbs.encoded, &signature.value[1..])?;
     let mut data = sequence(tbs)?;
     if data.bytes.first() == Some(&0xa0) {
         data.next()?;
@@ -262,10 +318,40 @@ pub fn verify_stapled_ocsp(
             Err(CertificateError::OcspMalformed)
         };
     }
-    let mut issuer_name = Reader::new(issuer.subject_name_der());
-    let issuer_name = issuer_name.next()?;
-    if issuer_name.tag != 0x30 || responder.value != issuer_name.value {
+    let mut issuer_subject = Reader::new(issuer.subject_name_der());
+    let issuer_subject = issuer_subject.next()?;
+    if issuer_subject.tag != 0x30 {
         return Err(CertificateError::OcspMalformed);
+    }
+    if responder.value == issuer_subject.value {
+        if delegated.is_some() {
+            return Err(CertificateError::OcspMalformed);
+        }
+        verify_ocsp_signature(
+            issuer,
+            signature_algorithm,
+            tbs.encoded,
+            &signature.value[1..],
+        )?;
+    } else {
+        let responder_certificate = delegated.ok_or(CertificateError::OcspMalformed)?;
+        let mut responder_subject = Reader::new(responder_certificate.subject_name_der());
+        let responder_subject = responder_subject.next()?;
+        if responder_subject.tag != 0x30
+            || responder.value != responder_subject.value
+            || responder_certificate.issuer_name_der() != issuer.subject_name_der()
+        {
+            return Err(CertificateError::OcspMalformed);
+        }
+        responder_certificate.verify_signed_by(issuer)?;
+        responder_certificate.verify_time(now)?;
+        responder_certificate.require_ocsp_signing()?;
+        verify_ocsp_signature(
+            &responder_certificate,
+            signature_algorithm,
+            tbs.encoded,
+            &signature.value[1..],
+        )?;
     }
     let produced_at = generalized(data.next()?)?;
     if produced_at > now.saturating_add(300) {
@@ -312,10 +398,14 @@ pub fn verify_stapled_ocsp(
         }
         let name_digest = mrml_crypto::Sha256::digest(issuer.subject_name_der());
         let key_digest = mrml_crypto::Sha256::digest(issuer.subject_public_key_bits());
-        if same_serial(serial, leaf.serial())
-            && equal_digest(issuer_name_hash.value, &name_digest)
-            && equal_digest(issuer_key_hash.value, &key_digest)
-        {
+        if cert_id_matches(
+            serial,
+            leaf.serial(),
+            issuer_name_hash.value,
+            issuer_key_hash.value,
+            &name_digest,
+            &key_digest,
+        ) {
             matched = true;
             match cert_status.tag {
                 0x80 | 0xa0 if cert_status.value.is_empty() => {}
@@ -362,5 +452,16 @@ mod tests {
         let certificate = Certificate::parse(&[]);
         assert!(certificate.is_err());
         assert!(MAX_OCSP_BYTES < usize::MAX)
+    }
+
+    #[test]
+    fn same_serial_from_a_different_issuer_and_wrong_hashes_do_not_match() {
+        let name = [1; 32];
+        let key = [2; 32];
+        assert!(cert_id_matches(&[7], &[0, 7], &name, &key, &name, &key));
+        let other_name = [3; 32];
+        assert!(!cert_id_matches(&[7], &[7], &other_name, &key, &name, &key));
+        let other_key = [4; 32];
+        assert!(!cert_id_matches(&[7], &[7], &name, &other_key, &name, &key));
     }
 }
