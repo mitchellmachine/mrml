@@ -1,12 +1,13 @@
 //! Bounded receive-pack composition for an injected edge transport.
 
+use crate::receive_backend::prepare_authority_classified_receive;
 use crate::{
-    ActiveRefState, AuditReceiptAuthority, AuthenticatedReceiveStore, BoundedRead, BoundedWrite,
-    GitdCoreError, HistoryVerificationLimits, LinuxDurableReceiveStore, ProtectedCommitVerifier,
-    QuarantineLimits, QuarantineTransactionId, Repository, RepositoryGeneration,
-    RepositoryIdentity, RevocationGeneration, SmartGitRequest, SmartGitResponse, TrustGeneration,
-    TrustPolicyState, WorkBudget, finish_prepared_protected_receive,
-    prepare_policy_classified_receive, prepare_protected_receive,
+    finish_prepared_protected_receive, prepare_policy_classified_receive,
+    prepare_protected_receive, ActiveRefState, AuditReceiptAuthority, AuthenticatedReceiveStore,
+    BoundedRead, BoundedWrite, GitdCoreError, HistoryVerificationLimits, LinuxDurableReceiveStore,
+    ProtectedCommitVerifier, QuarantineLimits, QuarantineTransactionId, Repository,
+    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, SmartGitRequest,
+    SmartGitResponse, TrustGeneration, TrustPolicyState, WorkBudget,
 };
 
 /// Exact public context presented to the capability-bearing protected Git
@@ -30,6 +31,40 @@ pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAutho
         &mut self,
         request: &ProtectedReceiveAuthorization,
     ) -> Result<(), GitdCoreError>;
+
+    fn authorize_ref_transaction(
+        &mut self,
+        transaction: &crate::CandidateRefTransaction,
+    ) -> Result<(), GitdCoreError>;
+}
+
+struct AuthorityVerifier<'a, A>(&'a mut A);
+
+impl<A: ProtectedReceiveAuthority> ProtectedCommitVerifier for AuthorityVerifier<'_, A> {
+    fn authorize_transaction(
+        &mut self,
+        transaction: &crate::CandidateRefTransaction,
+    ) -> Result<(), GitdCoreError> {
+        self.0.authorize_ref_transaction(transaction)
+    }
+
+    fn verify_commit(
+        &mut self,
+        context: crate::ProtectedHistoryContext<'_>,
+        commit: crate::ObjectId,
+        exact_contents: &[u8],
+    ) -> Result<crate::VerifiedCommitProof, crate::HistoryVerificationError> {
+        self.0.verify_commit(context, commit, exact_contents)
+    }
+
+    fn verify_legacy_commit(
+        &mut self,
+        context: crate::ProtectedHistoryContext<'_>,
+        commit: crate::ObjectId,
+        exact_contents: &[u8],
+    ) -> Result<crate::VerifiedLegacyCommitProof, crate::HistoryVerificationError> {
+        self.0.verify_legacy_commit(context, commit, exact_contents)
+    }
 }
 
 /// Exact per-request authority and resource envelope supplied by a gitd edge.
@@ -78,12 +113,12 @@ impl ReceivePackCore {
             revocation_generation: active.revocation_generation,
             policy_digest: policy.digest(),
         })?;
-        let prepared = prepare_policy_classified_receive(
+        let prepared = prepare_authority_classified_receive(
             self.request.clone(),
             active,
             active_objects,
             store,
-            authority,
+            &mut AuthorityVerifier(authority),
             policy,
             self.transaction,
             self.quarantine_limits,

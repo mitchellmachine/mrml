@@ -5,16 +5,19 @@ deployment remains an integration responsibility.
 
 `ReceivePackCore::execute_with_authority` is the protected production entry
 point. The caller injects one `ProtectedReceiveAuthority`, which combines only
-three constrained operations:
+four constrained operations:
 
 1. authorize the exact repository generation, trust generation, revocation
    generation, and canonical policy digest;
-2. verify each introduced commit and return the existing opaque
+2. authorize the exact parsed candidate ref transaction;
+3. verify each introduced commit and return the existing opaque
    `VerifiedCommitProof`; and
-3. sign and independently verify the purpose-separated durable audit receipt.
+4. sign and independently verify the purpose-separated durable audit receipt.
 
-The authorization check runs before any request byte is consumed and before a
-quarantine transaction is created. The core independently requires the request,
+The state-and-policy authorization check runs before any request byte is
+consumed. The exact ref transaction is authorized immediately after the bounded
+receive-command prefix is parsed and before disk reservation, quarantine
+creation, or any pack byte is read. The core independently requires the request,
 active ref state, object format, and parsed trust policy to identify the same
 exact state. A repository name, key identity, stored signature, or successful
 transport authentication cannot authorize the operation. The injected service

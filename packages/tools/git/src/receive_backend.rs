@@ -3,20 +3,30 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefState, AuditReceipt, AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError,
-    GitdCoreError, HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore,
-    Object, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
+    build_verified_fast_forward_transaction, durably_activate_verified_receive,
+    read_receive_pack_commands, reserve_push_disk_before_body, verify_policy_classified_history,
+    verify_protected_introduced_history, write_receive_pack_report, ActiveRefState, AuditReceipt,
+    AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError, GitdCoreError,
+    HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore, Object,
+    ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
     QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
     Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
     TrustPolicyState, VerifiedCommitProof, VerifiedLegacyCommitProof, VerifiedRefTransaction,
-    WorkBudget, build_verified_fast_forward_transaction, durably_activate_verified_receive,
-    read_receive_pack_commands, reserve_push_disk_before_body, verify_policy_classified_history,
-    verify_protected_introduced_history, write_receive_pack_report,
+    WorkBudget,
 };
 
 /// Verification-only authority. Implementations receive public policy/key state
 /// and exact commit bytes; no signing key belongs at this boundary.
 pub trait ProtectedCommitVerifier {
+    /// Optional exact ref-transaction authorization used by the production
+    /// authority composition after command parsing and before pack admission.
+    fn authorize_transaction(
+        &mut self,
+        _: &crate::CandidateRefTransaction,
+    ) -> Result<(), GitdCoreError> {
+        Err(GitdCoreError::Authorization)
+    }
+
     fn verify_commit(
         &mut self,
         context: ProtectedHistoryContext<'_>,
@@ -131,6 +141,7 @@ pub fn prepare_protected_receive(
         store,
         verifier,
         None,
+        false,
         transaction_id,
         quarantine_limits,
         history_limits,
@@ -162,6 +173,39 @@ pub fn prepare_policy_classified_receive(
         store,
         verifier,
         Some(policy),
+        false,
+        transaction_id,
+        quarantine_limits,
+        history_limits,
+        ordinary_free_bytes,
+        input,
+        work_budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_authority_classified_receive(
+    smart_request: SmartGitRequest,
+    active: &ActiveRefState,
+    active_objects: &Repository,
+    store: &LinuxDurableReceiveStore,
+    verifier: &mut dyn ProtectedCommitVerifier,
+    policy: &TrustPolicyState,
+    transaction_id: QuarantineTransactionId,
+    quarantine_limits: QuarantineLimits,
+    history_limits: HistoryVerificationLimits,
+    ordinary_free_bytes: u64,
+    input: &mut dyn crate::BoundedRead,
+    work_budget: WorkBudget,
+) -> Result<PreparedProtectedReceive, GitdCoreError> {
+    prepare_protected_receive_internal(
+        smart_request,
+        active,
+        active_objects,
+        store,
+        verifier,
+        Some(policy),
+        true,
         transaction_id,
         quarantine_limits,
         history_limits,
@@ -179,6 +223,7 @@ fn prepare_protected_receive_internal(
     store: &LinuxDurableReceiveStore,
     verifier: &mut dyn ProtectedCommitVerifier,
     policy: Option<&TrustPolicyState>,
+    require_transaction_authorization: bool,
     transaction_id: QuarantineTransactionId,
     quarantine_limits: QuarantineLimits,
     history_limits: HistoryVerificationLimits,
@@ -214,6 +259,9 @@ fn prepare_protected_receive_internal(
     )?;
     if !request.atomic || !request.report_status_v2 || request.delete_refs {
         return Err(GitdCoreError::Unsupported);
+    }
+    if require_transaction_authorization {
+        verifier.authorize_transaction(&request.candidate)?;
     }
     for update in &request.candidate.updates {
         let old = update.expected_old.ok_or(GitdCoreError::Unsupported)?;
@@ -417,13 +465,13 @@ fn map_durable_error(error: DurableReceiveError) -> GitdCoreError {
 mod tests {
     use core::sync::atomic::{AtomicUsize, Ordering};
     use mrml_crypto::Sha256;
-    use mrml_runtime::{Shared, Text, Vector, join_path};
+    use mrml_runtime::{join_path, Shared, Text, Vector};
 
     use super::*;
     use crate::{
-        ActiveRefFile, FullRefName, ObjectFormat, PackGeneration, PackObject, PackSetLimits,
-        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
-        encode_pack_with_format,
+        encode_pack_with_format, ActiveRefFile, FullRefName, ObjectFormat, PackGeneration,
+        PackObject, PackSetLimits, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+        TrustGeneration,
     };
 
     struct Reader {
@@ -700,6 +748,59 @@ mod tests {
         append_packet(&mut bytes, command.as_bytes());
         bytes.extend(*b"0000");
         bytes.extend(pack.iter().copied());
+        let command_bytes = bytes.len() - pack.len();
+        let mut unauthorized_input = Reader {
+            bytes: bytes.clone(),
+            offset: 0,
+        };
+        let mut unauthorized_verifier = ExactVerifier {
+            repository: identity.clone(),
+            generation: RepositoryGeneration(7),
+            trust: TrustGeneration(8),
+            revocations: RevocationGeneration(9),
+            expected: new,
+        };
+        assert!(matches!(
+            prepare_protected_receive_internal(
+                SmartGitRequest {
+                    repository: identity.clone(),
+                    repository_generation: RepositoryGeneration(7),
+                    operation: SmartGitOperation::ReceivePack,
+                    object_format: ObjectFormat::Sha256,
+                },
+                &active,
+                &repository,
+                &store,
+                &mut unauthorized_verifier,
+                None,
+                true,
+                QuarantineTransactionId([30u8; 16]),
+                QuarantineLimits {
+                    max_incoming_pack_bytes: 1024 * 1024,
+                    max_expanded_object_bytes: 1024 * 1024,
+                    max_individual_object_bytes: 1024 * 1024,
+                    max_objects: 16,
+                    max_refs: 4,
+                    minimum_free_space_bytes: 0,
+                },
+                HistoryVerificationLimits::default(),
+                16 * 1024 * 1024,
+                &mut unauthorized_input,
+                WorkBudget {
+                    max_input_bytes: 2 * 1024 * 1024,
+                    max_output_bytes: 1024 * 1024,
+                    max_memory_bytes: 1024 * 1024,
+                    max_work_units: 8 * 1024 * 1024,
+                },
+            ),
+            Err(GitdCoreError::Authorization)
+        ));
+        assert_eq!(unauthorized_input.offset, command_bytes);
+        assert_eq!(
+            unauthorized_input.bytes.len() - unauthorized_input.offset,
+            pack.len()
+        );
+
         let mut input = Reader { bytes, offset: 0 };
         let mut verifier = ExactVerifier {
             repository: identity.clone(),
