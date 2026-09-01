@@ -13,6 +13,13 @@ fail-closed account/order transitions. It also implements strict unpadded
 Base64url, P-256 public-point admission, canonical EC JWK thumbprints,
 deterministic ACME protected headers with exactly one of `jwk` or `kid`, raw
 ES256 scalar bounds, purpose-typed signing approval, and flattened JWS output.
+It parses a bounded ACME directory, rejects duplicate or cross-origin endpoint
+authority, records current profile advertisements by directory generation, and
+supports non-exporting HS256 external-account binding. The account lifecycle
+separates staging and production policy, binds Terms-of-Service approval and
+EAB presence to creation, and uses generation-bound prepare/commit receipts for
+creation, contact updates, key rollover, deactivation, and uncertain-result
+reconciliation.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -24,10 +31,10 @@ is excluded from ordinary feature profiles because the inherited curve
 arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
-JOSE parsing and EAB, X.509 issuance validation, ACME transport, accounts,
-challenges, durable recovery, certificate publication, renewal, revocation,
-backup/restore, CLI administration, gitd hot reload, and the MRML certificate
-service remain **PLANNED**. The shared state machine must
+General JOSE response parsing, X.509 issuance validation, ACME transport,
+authorization challenges, durable recovery, certificate publication, renewal,
+revocation, backup/restore, CLI administration, gitd hot reload, and the MRML
+certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 Future platform adapters belong inside these logical packages and must not fork
 their public semantics.

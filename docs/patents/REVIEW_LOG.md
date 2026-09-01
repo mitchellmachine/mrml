@@ -11198,3 +11198,14 @@ certificate brokerage, operation of an MRML public certification authority,
 material mechanism changes, public/commercial release, or intentional
 distribution or operation outside Canada. Production counsel may independently
 confirm current Canadian dockets and the exact shipping implementation.
+
+# 2026-09-01 — ACME directory, EAB, and account lifecycle increment
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope recorded immediately above. This increment adds
+bounded RFC 8555 directory metadata parsing, current ACME profile advertisement
+binding, ordinary HS256 external-account binding through a non-exporting MAC
+provider, and generation-bound account creation, contact update, key rollover,
+deactivation, and uncertain-result reconciliation. It does not implement any
+listed re-review trigger, public CA operation, challenge proxy, multi-vantage
+selection, MultiTLS multiplexing, or smart-card precomputation machinery.

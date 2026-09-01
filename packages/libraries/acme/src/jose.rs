@@ -103,6 +103,25 @@ pub trait AcmeJwsSigner {
     ) -> Result<Es256Signature, JoseError>;
 }
 
+pub struct ApprovedEabMac {
+    protected_and_payload_digest: [u8; 32],
+    pub directory_generation: u64,
+}
+
+impl ApprovedEabMac {
+    pub fn protected_and_payload_digest(&self) -> &[u8; 32] {
+        &self.protected_and_payload_digest
+    }
+}
+
+pub trait ExternalAccountMac {
+    fn mac_external_account_binding(
+        &mut self,
+        approved: &ApprovedEabMac,
+        signing_input: &[u8],
+    ) -> Result<[u8; 32], JoseError>;
+}
+
 struct Writer<'a> {
     out: &'a mut [u8],
     len: usize,
@@ -218,6 +237,77 @@ pub fn write_flattened_jws<'a>(
     Ok(&output[..len])
 }
 
+pub fn write_external_account_binding<'a>(
+    key_identifier: &str,
+    new_account_url: &AcmeUrl,
+    account_key: &P256Jwk,
+    directory_generation: u64,
+    mac_provider: &mut impl ExternalAccountMac,
+    output: &'a mut [u8],
+) -> Result<&'a [u8], JoseError> {
+    if key_identifier.is_empty() || key_identifier.len() > 256 {
+        return Err(JoseError::InvalidJsonString);
+    }
+    let mut protected = [0u8; 2400];
+    let mut protected_writer = Writer::new(&mut protected);
+    protected_writer.push(b"{\"alg\":\"HS256\",\"kid\":")?;
+    protected_writer.json_string(key_identifier)?;
+    protected_writer.push(b",\"url\":")?;
+    protected_writer.json_string(new_account_url.as_str())?;
+    protected_writer.push(b"}")?;
+    let protected_len = protected_writer.len;
+    let mut protected64 = [0u8; 3200];
+    let protected64 = encode_base64url(&protected[..protected_len], &mut protected64)
+        .map_err(|_| JoseError::OutputTooSmall)?;
+
+    let mut x = [0u8; 43];
+    let mut y = [0u8; 43];
+    let x = encode_base64url(&account_key.x, &mut x).map_err(|_| JoseError::OutputTooSmall)?;
+    let y = encode_base64url(&account_key.y, &mut y).map_err(|_| JoseError::OutputTooSmall)?;
+    let mut payload = [0u8; 192];
+    let mut payload_writer = Writer::new(&mut payload);
+    payload_writer.push(b"{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"")?;
+    payload_writer.push(x.as_bytes())?;
+    payload_writer.push(b"\",\"y\":\"")?;
+    payload_writer.push(y.as_bytes())?;
+    payload_writer.push(b"\"}")?;
+    let payload_len = payload_writer.len;
+    let mut payload64 = [0u8; 256];
+    let payload64 = encode_base64url(&payload[..payload_len], &mut payload64)
+        .map_err(|_| JoseError::OutputTooSmall)?;
+
+    let signing_length = protected64
+        .len()
+        .checked_add(1)
+        .and_then(|value| value.checked_add(payload64.len()))
+        .ok_or(JoseError::LengthOverflow)?;
+    let mut signing_input = [0u8; 3600];
+    if signing_input.len() < signing_length {
+        return Err(JoseError::OutputTooSmall);
+    }
+    signing_input[..protected64.len()].copy_from_slice(protected64.as_bytes());
+    signing_input[protected64.len()] = b'.';
+    signing_input[protected64.len() + 1..signing_length].copy_from_slice(payload64.as_bytes());
+    let approved = ApprovedEabMac {
+        protected_and_payload_digest: Sha256::digest(&signing_input[..signing_length]),
+        directory_generation,
+    };
+    let mac =
+        mac_provider.mac_external_account_binding(&approved, &signing_input[..signing_length])?;
+    let mut mac64 = [0u8; 43];
+    let mac64 = encode_base64url(&mac, &mut mac64).map_err(|_| JoseError::OutputTooSmall)?;
+    let mut writer = Writer::new(output);
+    writer.push(b"{\"protected\":\"")?;
+    writer.push(protected64.as_bytes())?;
+    writer.push(b"\",\"payload\":\"")?;
+    writer.push(payload64.as_bytes())?;
+    writer.push(b"\",\"signature\":\"")?;
+    writer.push(mac64.as_bytes())?;
+    writer.push(b"\"}")?;
+    let length = writer.len;
+    Ok(&output[..length])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +321,20 @@ mod tests {
         ) -> Result<Es256Signature, JoseError> {
             self.seen = Some(*a.digest());
             Es256Signature::from_raw([1u8; 64])
+        }
+    }
+    struct Eab([u8; 32]);
+    impl ExternalAccountMac for Eab {
+        fn mac_external_account_binding(
+            &mut self,
+            approved: &ApprovedEabMac,
+            input: &[u8],
+        ) -> Result<[u8; 32], JoseError> {
+            assert_eq!(
+                approved.protected_and_payload_digest(),
+                &Sha256::digest(input)
+            );
+            Ok(mrml_crypto::hmac_sha256(&self.0, &[input]))
         }
     }
     #[test]
@@ -331,5 +435,36 @@ mod tests {
             Es256Signature::from_raw(at_order),
             Err(JoseError::InvalidSignature)
         ));
+    }
+
+    #[test]
+    fn external_account_binding_uses_non_exporting_hs256_provider() {
+        let jwk = P256Jwk::from_coordinates(
+            [
+                0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+                0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45,
+                0xd8, 0x98, 0xc2, 0x96,
+            ],
+            [
+                0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f,
+                0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68,
+                0x37, 0xbf, 0x51, 0xf5,
+            ],
+        )
+        .unwrap();
+        let url = AcmeUrl::parse("https://ca.example/new-account", false).unwrap();
+        let mut output = [0u8; 4096];
+        let eab = write_external_account_binding(
+            "owner-key-7",
+            &url,
+            &jwk,
+            3,
+            &mut Eab([0x0b; 32]),
+            &mut output,
+        )
+        .unwrap();
+        let text = core::str::from_utf8(eab).unwrap();
+        assert!(text.starts_with("{\"protected\":"));
+        assert_eq!(text.matches("signature").count(), 1);
     }
 }
