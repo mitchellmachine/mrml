@@ -18,6 +18,14 @@ Security-sensitive values use validated types:
 - repository, trust, and revocation generations are distinct types; and
 - verified ref types expose only getters and have private fields.
 
+`build_verified_fast_forward_transaction` is the only public constructor for
+the current protected fast-forward transaction profile. It accepts at most 32
+distinct full refs and requires one exact `VerifiedCommitRange` for every
+`expected_old -> proposed_new` pair. Zero IDs, mixed formats, missing ranges,
+creates, deletes, and history replacements fail closed. Creation, deletion, and
+replacement will require separate policy-specific typestate builders rather
+than optional IDs being interpreted as ambient authority.
+
 `BoundedRead` and `BoundedWrite` expose remaining capacity. `WorkBudget`
 separately limits input, output, memory, and work units. Implementations must
 enforce the smaller of transport and backend limits and use checked arithmetic.

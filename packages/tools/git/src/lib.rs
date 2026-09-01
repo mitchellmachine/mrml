@@ -21,10 +21,11 @@ mod verification;
 pub use diff::FileDiff;
 pub use gitd_core::{
     BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, CommitPage,
-    FullRefName, GitdCoreBackend, GitdCoreError, QueryLimits, RepositoryGeneration,
-    RepositoryIdentity, RepositoryPath, RepositorySummary, RevocationGeneration, SignaturePurpose,
-    SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,
-    VerificationSummary, VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget,
+    FullRefName, GitdCoreBackend, GitdCoreError, MAX_REFS_PER_TRANSACTION, QueryLimits,
+    RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
+    RevocationGeneration, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
+    TreePage, TrustGeneration, VerificationSummary, VerifiedRefTransaction, VerifiedRefUpdate,
+    WorkBudget, build_verified_fast_forward_transaction,
 };
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};

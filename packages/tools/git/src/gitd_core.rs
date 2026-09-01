@@ -7,11 +7,13 @@
 use core::fmt;
 use mrml_runtime::{Text, Vector};
 
+use crate::verification::VerifiedCommitRange;
 use crate::{ObjectFormat, ObjectId};
 
 pub const MAX_REPOSITORY_IDENTITY_BYTES: usize = 257;
 pub const MAX_REF_NAME_BYTES: usize = 1_024;
 pub const MAX_REPOSITORY_PATH_BYTES: usize = 4_096;
+pub const MAX_REFS_PER_TRANSACTION: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RepositoryGeneration(pub u64);
@@ -296,6 +298,56 @@ impl VerifiedRefTransaction {
     }
 }
 
+/// Convert exact verified commit ranges into an atomic fast-forward ref
+/// transaction. Creation, deletion, and history replacement require separate
+/// policy-specific builders and therefore fail closed here.
+pub fn build_verified_fast_forward_transaction(
+    candidate: CandidateRefTransaction,
+    ranges: &[VerifiedCommitRange],
+) -> Result<VerifiedRefTransaction, GitdCoreError> {
+    if candidate.repository_generation.0 == 0
+        || candidate.trust_generation.0 == 0
+        || candidate.revocation_generation.0 == 0
+        || candidate.updates.is_empty()
+        || candidate.updates.len() > MAX_REFS_PER_TRANSACTION
+        || candidate.updates.len() != ranges.len()
+    {
+        return Err(GitdCoreError::Policy);
+    }
+    if candidate.updates.iter().enumerate().any(|(index, update)| {
+        candidate.updates[..index]
+            .iter()
+            .any(|previous| previous.name == update.name)
+    }) {
+        return Err(GitdCoreError::MalformedRef);
+    }
+    let mut updates = Vector::new();
+    for (update, range) in candidate.updates.into_iter().zip(ranges.iter()) {
+        let old = update.expected_old.ok_or(GitdCoreError::Unsupported)?;
+        let new = update.proposed_new.ok_or(GitdCoreError::Unsupported)?;
+        if old.is_zero()
+            || new.is_zero()
+            || old.format() != new.format()
+            || range.old() != old
+            || range.new() != new
+        {
+            return Err(GitdCoreError::Ancestry);
+        }
+        updates.push(VerifiedRefUpdate {
+            name: update.name,
+            expected_old: Some(old),
+            proposed_new: Some(new),
+        });
+    }
+    Ok(VerifiedRefTransaction {
+        repository: candidate.repository,
+        repository_generation: candidate.repository_generation,
+        trust_generation: candidate.trust_generation,
+        revocation_generation: candidate.revocation_generation,
+        updates,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdCoreError {
     MalformedInput,
@@ -398,6 +450,7 @@ pub trait GitdCoreBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::verification::{HistoryVerificationLimits, verify_introduced_history};
 
     #[test]
     fn repository_identity_is_exactly_owner_and_name() {
@@ -454,5 +507,40 @@ mod tests {
                 Err(GitdCoreError::MalformedPath)
             );
         }
+    }
+
+    #[test]
+    fn only_exact_verified_ranges_construct_fast_forward_transactions() {
+        let old = ObjectId::Sha1([1u8; 20]);
+        let new = ObjectId::Sha1([2u8; 20]);
+        let range = verify_introduced_history(
+            old,
+            new,
+            HistoryVerificationLimits::default(),
+            |id| {
+                Ok(if id == new {
+                    [old].into()
+                } else {
+                    Vector::new()
+                })
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let candidate = CandidateRefTransaction {
+            repository: RepositoryIdentity::parse("owner/repository").unwrap(),
+            repository_generation: RepositoryGeneration(3),
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(5),
+            updates: [CandidateRefUpdate {
+                name: FullRefName::parse("refs/heads/main").unwrap(),
+                expected_old: Some(old),
+                proposed_new: Some(new),
+            }]
+            .into(),
+        };
+        let verified = build_verified_fast_forward_transaction(candidate, &[range]).unwrap();
+        assert_eq!(verified.repository_generation(), RepositoryGeneration(3));
+        assert_eq!(verified.updates()[0].proposed_new(), Some(new));
     }
 }
