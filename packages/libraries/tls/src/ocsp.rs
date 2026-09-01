@@ -2,6 +2,7 @@ use crate::{Certificate, CertificateError};
 
 const BASIC_OCSP_RESPONSE: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01];
 const SHA256_WITH_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+const SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
 const MAX_OCSP_BYTES: usize = 64 * 1024;
 const MAX_AGE_WITHOUT_NEXT_UPDATE: u64 = 7 * 24 * 60 * 60;
 
@@ -168,6 +169,17 @@ fn same_serial(a: &[u8], b: &[u8]) -> bool {
     trim(a) == trim(b)
 }
 
+fn equal_digest(actual: &[u8], expected: &[u8; 32]) -> bool {
+    if actual.len() != expected.len() {
+        return false;
+    }
+    actual
+        .iter()
+        .zip(expected)
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
+}
+
 pub fn verify_stapled_ocsp(
     response: &[u8],
     leaf: &Certificate<'_>,
@@ -240,27 +252,45 @@ pub fn verify_stapled_ocsp(
         data.next()?;
     }
     let responder = data.next()?;
-    if !matches!(responder.tag, 0xa1 | 0xa2) {
+    if responder.tag != 0xa1 {
+        // OCSP responderID byKey is defined using SHA-1. This profile has no
+        // SHA-1 primitive and therefore fails closed instead of accepting an
+        // identity it cannot recompute.
+        return if responder.tag == 0xa2 {
+            Err(CertificateError::UnsupportedAlgorithm)
+        } else {
+            Err(CertificateError::OcspMalformed)
+        };
+    }
+    let mut issuer_name = Reader::new(issuer.subject_name_der());
+    let issuer_name = issuer_name.next()?;
+    if issuer_name.tag != 0x30 || responder.value != issuer_name.value {
         return Err(CertificateError::OcspMalformed);
     }
-    generalized(data.next()?)?;
+    let produced_at = generalized(data.next()?)?;
+    if produced_at > now.saturating_add(300) {
+        return Err(CertificateError::OcspStale);
+    }
     let mut responses = sequence(data.next()?)?;
     let mut matched = false;
     while !responses.done() {
         let mut single = sequence(responses.next()?)?;
         let mut cert_id = sequence(single.next()?)?;
         let mut hash_algorithm = sequence(cert_id.next()?)?;
-        let hash_oid = hash_algorithm.next()?;
-        if hash_oid.tag != 6 {
-            return Err(CertificateError::OcspMalformed);
-        }
-        while !hash_algorithm.done() {
-            hash_algorithm.next()?;
-        }
-        for _ in 0..2 {
-            if cert_id.next()?.tag != 4 {
+        oid(hash_algorithm.next()?, SHA256)?;
+        if !hash_algorithm.done() {
+            let parameter = hash_algorithm.next()?;
+            if parameter.tag != 5 || !parameter.value.is_empty() {
                 return Err(CertificateError::OcspMalformed);
             }
+        }
+        if !hash_algorithm.done() {
+            return Err(CertificateError::OcspMalformed);
+        }
+        let issuer_name_hash = cert_id.next()?;
+        let issuer_key_hash = cert_id.next()?;
+        if issuer_name_hash.tag != 4 || issuer_key_hash.tag != 4 {
+            return Err(CertificateError::OcspMalformed);
         }
         let serial = integer_bytes(cert_id.next()?)?;
         if !cert_id.done() {
@@ -280,7 +310,12 @@ pub fn verify_stapled_ocsp(
         while !single.done() {
             single.next()?;
         }
-        if same_serial(serial, leaf.serial()) {
+        let name_digest = mrml_crypto::Sha256::digest(issuer.subject_name_der());
+        let key_digest = mrml_crypto::Sha256::digest(issuer.subject_public_key_bits());
+        if same_serial(serial, leaf.serial())
+            && equal_digest(issuer_name_hash.value, &name_digest)
+            && equal_digest(issuer_key_hash.value, &key_digest)
+        {
             matched = true;
             match cert_status.tag {
                 0x80 | 0xa0 if cert_status.value.is_empty() => {}
