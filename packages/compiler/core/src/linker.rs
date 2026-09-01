@@ -781,6 +781,14 @@ pub enum PeWritableRelocationTarget<'a> {
         identity: CoffSectionIdentity,
         offset: usize,
     },
+    /// An exact writable section reached through an AMD64 REL32 field. This is
+    /// intentionally limited to LLVM profile-data records that name their
+    /// corresponding counter section.
+    Relative32WritableSection {
+        identity: CoffSectionIdentity,
+        offset: usize,
+        addend: i32,
+    },
     WritableSymbol(&'a str),
 }
 
@@ -842,11 +850,13 @@ impl PeCrtInitializerFamily {
 pub struct PeCrtInitializerOrder {
     family: PeCrtInitializerFamily,
     suffix: u8,
+    requires_sentinels: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PeProfileDataFamily {
     Data,
+    Names,
     Counters,
     Bitmap,
     ValueNodes,
@@ -856,9 +866,10 @@ impl PeProfileDataFamily {
     const fn index(self) -> usize {
         match self {
             Self::Data => 0,
-            Self::Counters => 1,
-            Self::Bitmap => 2,
-            Self::ValueNodes => 3,
+            Self::Names => 1,
+            Self::Counters => 2,
+            Self::Bitmap => 3,
+            Self::ValueNodes => 4,
         }
     }
 }
@@ -890,7 +901,11 @@ impl PeProfileDataOrder {
 impl PeCrtInitializerOrder {
     pub const fn new(family: PeCrtInitializerFamily, suffix: u8) -> Option<Self> {
         if suffix >= b'A' && suffix <= b'Z' {
-            Some(Self { family, suffix })
+            Some(Self {
+                family,
+                suffix,
+                requires_sentinels: true,
+            })
         } else {
             None
         }
@@ -902,6 +917,18 @@ impl PeCrtInitializerOrder {
 
     pub const fn suffix(self) -> u8 {
         self.suffix
+    }
+
+    const fn legacy_ctors() -> Self {
+        Self {
+            family: PeCrtInitializerFamily::C,
+            suffix: b'U',
+            requires_sentinels: false,
+        }
+    }
+
+    const fn requires_sentinels(self) -> bool {
+        self.requires_sentinels
     }
 }
 
@@ -3840,6 +3867,14 @@ fn coff_profile_writable_order(name: &str) -> Option<PeProfileDataOrder> {
     PeProfileDataOrder::new(family, *suffix)
 }
 
+fn coff_profile_name_order(name: &str) -> Option<PeProfileDataOrder> {
+    let suffix = name.strip_prefix(".lprfn$")?;
+    let [suffix] = suffix.as_bytes() else {
+        return None;
+    };
+    PeProfileDataOrder::new(PeProfileDataFamily::Names, *suffix)
+}
+
 fn coff_profile_writable_sentinel_size(name: &str) -> Option<usize> {
     match name {
         ".lprfd$A" | ".lprfd$Z" => Some(72),
@@ -3864,9 +3899,7 @@ fn coff_tls_callback_order(name: &str) -> Result<Option<PeTlsCallbackOrder>, Lin
 
 fn coff_crt_initializer_order(name: &str) -> Result<Option<PeCrtInitializerOrder>, LinkerError> {
     if name == ".ctors" {
-        return PeCrtInitializerOrder::new(PeCrtInitializerFamily::C, b'U')
-            .map(Some)
-            .ok_or(LinkerError::UnsupportedCoff);
+        return Ok(Some(PeCrtInitializerOrder::legacy_ctors()));
     }
     let Some(suffix) = name.strip_prefix(".CRT$X") else {
         return Ok(None);
@@ -3916,7 +3949,23 @@ fn coff_is_readonly_data_section(name: &str) -> bool {
     name == ".rdata"
         || name.starts_with(".rdata$")
         || name == ".00cfg"
-        || matches!(name, ".lprfn$A" | ".lprfn$Z")
+        || coff_profile_name_order(name).is_some()
+}
+
+fn validate_coff_coverage_mapping_metadata(
+    name: &str,
+    characteristics: u32,
+    relocation_count: u16,
+) -> Result<bool, LinkerError> {
+    let expected_characteristics = match name {
+        ".lcovfun$M" => 0x0240_1000,
+        ".lcovmap$M" => 0x0240_0000,
+        _ => return Ok(false),
+    };
+    if characteristics != expected_characteristics || relocation_count != 0 {
+        return Err(LinkerError::UnsupportedCoffSection);
+    }
+    Ok(true)
 }
 
 pub fn x86_64_coff_readonly_absolute_relocation_count(object: &[u8]) -> Result<usize, LinkerError> {
@@ -4775,11 +4824,19 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
             .ok_or(LinkerError::OffsetOverflow)?;
         let field_offset = usize::try_from(read_u32(object, relocation)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
+        let relocation_type = read_u16(object, relocation + 8)?;
+        let relative_profile_counter = relocation_type == 4
+            && matches!(
+                data_kind,
+                PeDataKind::Profile(order)
+                    if order.family() == PeProfileDataFamily::Data && order.suffix() == b'M'
+            );
+        let field_width = if relative_profile_counter { 4 } else { 8 };
         if field_offset
-            .checked_add(8)
+            .checked_add(field_width)
             .filter(|end| *end <= bytes.len())
             .is_none()
-            || read_u16(object, relocation + 8)? != 1
+            || (relocation_type != 1 && !relative_profile_counter)
         {
             return Err(LinkerError::UnsupportedCoff);
         }
@@ -4913,21 +4970,51 @@ fn decode_x86_64_coff_writable_data_fragment_for_object<'data, 'relocations>(
                     let target_size = initialized_size.max(zeroed_size);
                     let target_value = usize::try_from(read_u32(object, target + 8)?)
                         .map_err(|_| LinkerError::OffsetOverflow)?;
-                    let addend =
-                        i64::from_le_bytes(read_u64_coff(bytes, field_offset)?.to_le_bytes());
-                    let offset = i128::try_from(target_value)
-                        .ok()
-                        .and_then(|value| value.checked_add(i128::from(addend)))
-                        .and_then(|offset| usize::try_from(offset).ok())
-                        .filter(|offset| *offset <= target_size)
-                        .ok_or(LinkerError::InvalidRelocationOffset)?;
-                    PeWritableRelocationTarget::WritableSection {
-                        identity: CoffSectionIdentity::new(
-                            object_identity,
-                            u16::try_from(target_section_index)
-                                .map_err(|_| LinkerError::OffsetOverflow)?,
-                        )?,
-                        offset,
+                    if relative_profile_counter {
+                        let target_name = coff_section_name(
+                            object
+                                .get(target_header..target_header + 8)
+                                .ok_or(LinkerError::InvalidCoff)?
+                                .try_into()
+                                .map_err(|_| LinkerError::InvalidCoff)?,
+                            object,
+                            symbols_end,
+                            string_size,
+                        )?;
+                        let addend = read_i32(bytes, field_offset)?;
+                        if coff_profile_writable_order(target_name)
+                            != PeProfileDataOrder::new(PeProfileDataFamily::Counters, b'M')
+                            || read_u32(object, target + 8)? != 0
+                            || usize::try_from(addend).ok() != field_offset.checked_add(4)
+                        {
+                            return Err(LinkerError::UnsupportedCoff);
+                        }
+                        PeWritableRelocationTarget::Relative32WritableSection {
+                            identity: CoffSectionIdentity::new(
+                                object_identity,
+                                u16::try_from(target_section_index)
+                                    .map_err(|_| LinkerError::OffsetOverflow)?,
+                            )?,
+                            offset: 0,
+                            addend,
+                        }
+                    } else {
+                        let addend =
+                            i64::from_le_bytes(read_u64_coff(bytes, field_offset)?.to_le_bytes());
+                        let offset = i128::try_from(target_value)
+                            .ok()
+                            .and_then(|value| value.checked_add(i128::from(addend)))
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .filter(|offset| *offset <= target_size)
+                            .ok_or(LinkerError::InvalidRelocationOffset)?;
+                        PeWritableRelocationTarget::WritableSection {
+                            identity: CoffSectionIdentity::new(
+                                object_identity,
+                                u16::try_from(target_section_index)
+                                    .map_err(|_| LinkerError::OffsetOverflow)?,
+                            )?,
+                            offset,
+                        }
                     }
                 } else {
                     if read_u32(object, target + 8)? != 0
@@ -5631,6 +5718,12 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
                 return Err(LinkerError::UnsupportedCoffSection);
             }
             metadata_sections.insert(section + 1)?;
+        } else if validate_coff_coverage_mapping_metadata(
+            name,
+            read_u32(object, header + 36)?,
+            read_u16(object, header + 32)?,
+        )? {
+            metadata_sections.insert(section + 1)?;
         } else if name == ".drectve" {
             validate_discardable_coff_exclude_directives(object, header, contents, symbol_count)?;
             metadata_sections.insert(section + 1)?;
@@ -5664,6 +5757,22 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             continue;
         }
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        if coff_profile_name_order(name).is_some() {
+            readonly_sections.remove(section + 1)?;
+            discarded_readonly_sections.insert(section + 1)?;
+            continue;
+        }
         if inventory.section(section_number).is_some_and(|metadata| {
             object_identity.is_some()
                 || metadata.selection != CoffTextComdatSelection::Associative
@@ -5673,9 +5782,6 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
             discarded_readonly_sections.insert(section + 1)?;
             continue;
         }
-        let header = 20usize
-            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
-            .ok_or(LinkerError::OffsetOverflow)?;
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
         let offset = usize::try_from(read_u32(object, header + 20)?)
@@ -5960,9 +6066,6 @@ fn decode_x86_64_coff_text_fragment_for_object_from_inventory<'data, 'relocation
         } else if target_section > 0
             && discarded_readonly_sections
                 .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-            && inventory
-                .section(u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .is_some()
         {
             if let Some(object_identity) = object_identity {
                 let section =
@@ -6185,6 +6288,7 @@ fn x86_64_coff_projected_readonly_fragment_count(
         if coff_is_readonly_data_section(name)
             && read_u32(object, header + 16)? != 0
             && (name == ".00cfg"
+                || coff_profile_name_order(name).is_some()
                 || inventory.section(section_number).is_some_and(|metadata| {
                     include_associative
                         || metadata.selection != CoffTextComdatSelection::Associative
@@ -6268,7 +6372,7 @@ fn decode_x86_64_coff_projected_readonly_fragment<'data, 'definitions>(
             .map_err(|_| LinkerError::OffsetOverflow)?;
         if size == 0
             || !coff_is_readonly_data_section(name)
-            || (metadata.is_none() && name != ".00cfg")
+            || (metadata.is_none() && name != ".00cfg" && coff_profile_name_order(name).is_none())
             || (object_identity.is_none()
                 && metadata.is_some_and(|metadata| {
                     metadata.selection == CoffTextComdatSelection::Associative
@@ -8945,8 +9049,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
     }
     let mut profile_indices = [0usize; MAX_LINK_INPUTS];
     let mut profile_count = 0usize;
-    let mut profile_start_counts = [0usize; 4];
-    let mut profile_end_counts = [0usize; 4];
+    let mut profile_start_counts = [0usize; 5];
+    let mut profile_end_counts = [0usize; 5];
     for (index, data) in writable_data.iter().enumerate() {
         let PeDataKind::Profile(order) = data.kind else {
             continue;
@@ -8976,7 +9080,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             .checked_add(1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    for family in 0..4 {
+    for family in 0..5 {
         let present = profile_indices[..profile_count]
             .iter()
             .copied()
@@ -9022,6 +9126,17 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         {
             return Err(LinkerError::UnsupportedCoff);
         }
+        for relocation in data.relocations {
+            let width = match relocation.target {
+                PeWritableRelocationTarget::Relative32WritableSection { .. } => 4,
+                _ => 8,
+            };
+            relocation
+                .offset
+                .checked_add(width)
+                .filter(|end| *end <= data.initialized.len())
+                .ok_or(LinkerError::InvalidRelocationOffset)?;
+        }
     }
 
     let mut crt_initializer_indices = [0usize; MAX_LINK_INPUTS];
@@ -9064,7 +9179,8 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             .any(|index| {
                 matches!(
                     writable_data[index].kind,
-                    PeDataKind::CrtInitializer(order) if order.family().index() == family
+                    PeDataKind::CrtInitializer(order)
+                        if order.family().index() == family && order.requires_sentinels()
                 )
             });
         if present
@@ -9340,11 +9456,16 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                 PeWritableRelocationTarget::TextSymbol(symbol) => validate_symbol(symbol)?,
                 PeWritableRelocationTarget::TlsSection { .. } => {}
                 PeWritableRelocationTarget::WritableSection { .. } => {}
+                PeWritableRelocationTarget::Relative32WritableSection { .. } => {}
                 PeWritableRelocationTarget::WritableSymbol(symbol) => validate_symbol(symbol)?,
             }
+            let width = match relocation.target {
+                PeWritableRelocationTarget::Relative32WritableSection { .. } => 4,
+                _ => 8,
+            };
             relocation
                 .offset
-                .checked_add(8)
+                .checked_add(width)
                 .filter(|end| *end <= data.initialized.len())
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
         }
@@ -9467,6 +9588,12 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
             continue;
         }
         for relocation in data.relocations {
+            if matches!(
+                relocation.target,
+                PeWritableRelocationTarget::Relative32WritableSection { .. }
+            ) {
+                continue;
+            }
             record_base_relocation(
                 usize::try_from(provisional_writable_rva)
                     .map_err(|_| LinkerError::OffsetOverflow)?
@@ -9967,6 +10094,39 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
         let output = writable_raw + writable_offsets[index];
         copy_at(bytes, output, data.initialized)?;
         for relocation in data.relocations {
+            if let PeWritableRelocationTarget::Relative32WritableSection {
+                identity,
+                offset,
+                addend,
+            } = relocation.target
+            {
+                let PeDataKind::Profile(source_order) = data.kind else {
+                    return Err(LinkerError::UnsupportedCoff);
+                };
+                let (target_index, target_offset) = writable_section(identity, offset)?;
+                let PeDataKind::Profile(target_order) = writable_data[target_index].kind else {
+                    return Err(LinkerError::UnsupportedCoff);
+                };
+                if source_order.family() != PeProfileDataFamily::Data
+                    || source_order.suffix() != b'M'
+                    || target_order.family() != PeProfileDataFamily::Counters
+                    || target_order.suffix() != b'M'
+                    || usize::try_from(addend).ok() != relocation.offset.checked_add(4)
+                {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                let target_rva = writable_rva
+                    .checked_add(writable_offsets[target_index])
+                    .and_then(|target| target.checked_add(target_offset))
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let place_rva = writable_rva
+                    .checked_add(writable_offsets[index])
+                    .and_then(|place| place.checked_add(relocation.offset))
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let displacement = pe_relative32_value(target_rva, place_rva, addend)?;
+                patch_i32(bytes, output + relocation.offset, displacement)?;
+                continue;
+            }
             let target_rva = match relocation.target {
                 PeWritableRelocationTarget::Readonly { owner, offset } => resolve_readonly_symbol(
                     inputs,
@@ -10023,6 +10183,7 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations_into_with_linked
                         .and_then(|target| target.checked_add(target_offset))
                         .ok_or(LinkerError::OffsetOverflow)?
                 }
+                PeWritableRelocationTarget::Relative32WritableSection { .. } => unreachable!(),
                 PeWritableRelocationTarget::WritableSymbol(symbol) => {
                     let target_index = writable_index(symbol)?;
                     writable_rva
@@ -11284,6 +11445,24 @@ fn patch_i32(output: &mut [u8], offset: usize, value: i32) -> Result<(), LinkerE
         .ok_or(LinkerError::OutputTooSmall)?
         .copy_from_slice(&value.to_le_bytes());
     Ok(())
+}
+
+fn pe_relative32_value(
+    target_rva: usize,
+    field_rva: usize,
+    addend: i32,
+) -> Result<i32, LinkerError> {
+    i128::try_from(target_rva)
+        .ok()
+        .and_then(|target| target.checked_add(i128::from(addend)))
+        .and_then(|target| {
+            i128::try_from(field_rva)
+                .ok()
+                .and_then(|field| field.checked_add(4))
+                .and_then(|place_end| target.checked_sub(place_end))
+        })
+        .and_then(|value| i32::try_from(value).ok())
+        .ok_or(LinkerError::OffsetOverflow)
 }
 
 fn patch_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), LinkerError> {
@@ -15058,6 +15237,22 @@ mod tests {
 
     #[test]
     fn ignores_only_relocation_free_coff_link_remove_metadata() {
+        assert_eq!(
+            validate_coff_coverage_mapping_metadata(".lcovfun$M", 0x0240_1000, 0),
+            Ok(true)
+        );
+        assert_eq!(
+            validate_coff_coverage_mapping_metadata(".lcovmap$M", 0x0240_0000, 0),
+            Ok(true)
+        );
+        assert_eq!(
+            validate_coff_coverage_mapping_metadata(".lcovmap$Q", 0x0240_0000, 0),
+            Ok(false)
+        );
+        assert_eq!(
+            validate_coff_coverage_mapping_metadata(".lcovfun$M", 0x0240_1000, 1),
+            Err(LinkerError::UnsupportedCoffSection)
+        );
         let object = two_fragment_coff_with_removed_metadata();
         let mut relocations = [LinkRelocation {
             offset: 0,
@@ -15539,7 +15734,7 @@ mod tests {
     fn retains_typed_coff_crt_initializer_order_independently_of_symbols() {
         let order = PeCrtInitializerOrder::new(PeCrtInitializerFamily::I, b'C').unwrap();
         assert_eq!(coff_crt_initializer_order(".CRT$XIC"), Ok(Some(order)));
-        let legacy_order = PeCrtInitializerOrder::new(PeCrtInitializerFamily::C, b'U').unwrap();
+        let legacy_order = PeCrtInitializerOrder::legacy_ctors();
         assert_eq!(coff_crt_initializer_order(".ctors"), Ok(Some(legacy_order)));
         assert_eq!(coff_crt_initializer_order(".ctors$U"), Ok(None));
         assert_eq!(
@@ -16358,6 +16553,15 @@ mod tests {
     }
 
     #[test]
+    fn applies_typed_profile_data_relative_counter_relocations() {
+        assert_eq!(pe_relative32_value(96, 24, 20), Ok(88));
+        assert_eq!(
+            pe_relative32_value(usize::MAX, 0, i32::MAX),
+            Err(LinkerError::OffsetOverflow)
+        );
+    }
+
+    #[test]
     fn rejects_malformed_typed_pe_crt_initializer_tables() {
         let definitions = [LinkDefinition {
             symbol: "not_text",
@@ -16779,7 +16983,7 @@ mod tests {
         };
 
         assert_eq!(
-            link_x86_64_pe_with_data_and_unwind::<2048, 8192>(
+            link_x86_64_pe_with_data_and_unwind::<16384, 16384>(
                 &[input],
                 "entry",
                 &[],

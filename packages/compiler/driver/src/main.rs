@@ -133,6 +133,32 @@ struct CoffWeakAlias<'a> {
     fallback: &'a str,
 }
 
+fn pe_profile_name_input_order(symbol: &str) -> u8 {
+    match symbol {
+        "NamesStart" => 1,
+        ".lprfn$M" => 2,
+        "NamesEnd" => 3,
+        _ => 0,
+    }
+}
+
+fn order_selected_pe_profile_name_inputs(selected: &mut SelectedLinkInputs<'_, '_, '_>) {
+    for index in 1..selected.inputs.len() {
+        let selected_order = pe_profile_name_input_order(selected.inputs[index].symbol);
+        let mut position = index;
+        while position > 0
+            && pe_profile_name_input_order(selected.inputs[position - 1].symbol) > selected_order
+        {
+            selected.inputs.swap(position - 1, position);
+            selected.archive_group.swap(position - 1, position);
+            selected.archive_member.swap(position - 1, position);
+            selected.source_object.swap(position - 1, position);
+            selected.comdat_selection.swap(position - 1, position);
+            position -= 1;
+        }
+    }
+}
+
 fn resolve_duplicate_coff_definition(
     earlier: LinkInput<'_, '_, '_>,
     earlier_selection: CoffTextComdatSelection,
@@ -1376,7 +1402,7 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     }
     let selection =
         select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
-            .map_err(|_| anyhow!("could not select static link members"))?;
+            .map_err(|error| anyhow!("could not select static link members: {}", error))?;
     let mut selected: Vector<LinkInput<'data, 'relocations, 'definitions>> =
         Vector::with_capacity(inputs.len())
             .map_err(|_| anyhow!("could not allocate selected link input list"))?;
@@ -1794,6 +1820,7 @@ fn retain_writable_relocation_targets<'data, 'relocations, 'definitions>(
             PeWritableRelocationTarget::Readonly { .. }
             | PeWritableRelocationTarget::TlsSection { .. }
             | PeWritableRelocationTarget::WritableSection { .. }
+            | PeWritableRelocationTarget::Relative32WritableSection { .. }
             | PeWritableRelocationTarget::WritableSymbol(_) => None,
         };
         let Some(target_index) = target_index else {
@@ -2124,6 +2151,46 @@ fn rebind_selected_readonly_comdat_target<'data>(
     })
 }
 
+fn contextualize_selected_readonly_target<'data>(
+    selected: &SelectedLinkInputs<'data, '_, '_>,
+    relocation: PeReadonlyAbsoluteRelocation<'data>,
+) -> Result<PeReadonlyAbsoluteRelocation<'data>> {
+    if relocation.target_identity.is_some() {
+        return Ok(relocation);
+    }
+    let mut typed = None;
+    for input in &selected.inputs {
+        for definition in core::iter::once(LinkDefinition {
+            symbol: input.symbol,
+            target: input.symbol_target,
+        })
+        .chain(input.additional_definitions.iter().copied())
+        {
+            if definition.symbol != relocation.target_symbol {
+                continue;
+            }
+            match definition.target {
+                LinkDefinitionTarget::CoffSection { identity, .. } => match typed {
+                    None => typed = Some(identity),
+                    Some(candidate) if candidate == identity => {}
+                    Some(_) => {
+                        return Err(anyhow!(
+                            "selected read-only relocation target section is ambiguous: {}",
+                            relocation.target_symbol
+                        ));
+                    }
+                },
+                LinkDefinitionTarget::CoffTextSection { .. } => {}
+                _ => return Ok(relocation),
+            }
+        }
+    }
+    Ok(PeReadonlyAbsoluteRelocation {
+        target_identity: typed,
+        ..relocation
+    })
+}
+
 fn selected_readonly_absolute_relocations<'data>(
     objects: &[&'data [u8]],
     _archive_group: &[u16],
@@ -2196,7 +2263,8 @@ fn selected_readonly_absolute_relocations<'data>(
                     if output.len() == MAX_PE_READONLY_RELOCATIONS {
                         return Err(anyhow!("too many selected COFF readonly relocations"));
                     }
-                    let relocation = rebind_selected_readonly_comdat_target(selected, *relocation)?;
+                    let relocation = contextualize_selected_readonly_target(selected, *relocation)?;
+                    let relocation = rebind_selected_readonly_comdat_target(selected, relocation)?;
                     output
                         .try_push(relocation)
                         .map_err(|_| anyhow!("could not allocate selected COFF readonly list"))?;
@@ -2608,6 +2676,7 @@ fn write_linked_pe(
             break;
         }
     }
+    order_selected_pe_profile_name_inputs(&mut selected);
     let readonly_absolute_relocations =
         selected_readonly_absolute_relocations(objects, archive_group, archive_member, &selected)?;
     let mut runtime_arena = [PeRuntimeFunction {
@@ -2927,6 +2996,7 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
                     ));
                 }
                 PeWritableRelocationTarget::WritableSection { identity, .. }
+                | PeWritableRelocationTarget::Relative32WritableSection { identity, .. }
                     if !writable_section_defined(identity) =>
                 {
                     return Err(anyhow!(
