@@ -68,9 +68,10 @@ pub use operation::{
     AccountUpdateError, AccountUpdateFailure, AuthorizationFetchError, AuthorizationResource,
     ChallengeSubmission, ChallengeSubmitError, CreateAccountError, DirectoryFetchError,
     FinalizeError, FinalizeFailure, OrderCreateBuffers, OrderCreateError, OrderCreateFailure,
-    PrepareOrderError, PreparedOrderCreation, execute_prepared_account_create,
-    execute_prepared_account_rollover, execute_prepared_account_update, execute_prepared_finalize,
-    execute_prepared_order_create, fetch_authorization, fetch_directory, prepare_order_creation,
+    OrderPollError, OrderPollReceipt, PrepareOrderError, PreparedOrderCreation,
+    execute_prepared_account_create, execute_prepared_account_rollover,
+    execute_prepared_account_update, execute_prepared_finalize, execute_prepared_order_create,
+    fetch_authorization, fetch_directory, poll_order, prepare_order_creation,
     recover_uncertain_account_creation, trigger_published_challenge,
 };
 pub use order::{

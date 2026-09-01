@@ -80,6 +80,22 @@ pub enum DirectoryFetchError<E> {
     Directory(crate::DirectoryError),
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum OrderPollError<E> {
+    ResourceMismatch,
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+    Response(ResponseError),
+    Lifecycle(OrderError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OrderPollReceipt {
+    pub order_generation: u64,
+    pub has_retry_after: bool,
+}
+
 pub struct AccountCreateBuffers<'a> {
     pub payload: &'a mut [u8],
     pub response: &'a mut [u8],
@@ -454,6 +470,99 @@ pub fn fetch_authorization<T: AcmeTransport>(
         )
         .map_err(AuthorizationFetchError::Lifecycle)?;
     Ok(parsed)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn poll_order<T: AcmeTransport>(
+    response_generation: u64,
+    now_unix: u64,
+    identifiers: &[DnsIdentifier],
+    authorization_resources: &[AuthorizationResource],
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &mut OrderLifecycle,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<OrderPollReceipt, OrderPollError<T::Error>> {
+    let order_digest = Sha256::digest(order.order_url.as_str().as_bytes());
+    if !account.active
+        || directory.generation != order.directory_generation
+        || account.generation != order.account_generation
+        || account.key != order.account_key
+        || identifiers.len() != order.identifiers().count()
+        || !identifiers
+            .iter()
+            .zip(order.identifiers())
+            .all(|(provided, expected)| provided == expected)
+        || authorization_resources.len() != identifiers.len()
+        || authorization_resources.iter().any(|resource| {
+            resource.order_url_digest != order_digest
+                || resource.directory_generation != directory.generation
+                || resource.account_generation != account.generation
+        })
+    {
+        return Err(OrderPollError::ResourceMismatch);
+    }
+    order
+        .consume_retry(now_unix)
+        .map_err(OrderPollError::Lifecycle)?;
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(OrderPollError::ResourceMismatch)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &order.order_url,
+        crate::ProtectedKey::Kid(account_url),
+        b"",
+        account.generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(OrderPollError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(OrderPollError::Server(problem));
+    }
+    if result.metadata.status != 200
+        || result.metadata.response_type != crate::AcmeResponseType::Json
+    {
+        return Err(OrderPollError::UnexpectedStatus);
+    }
+    let body = core::str::from_utf8(&response_body[..result.metadata.body_length])
+        .map_err(|_| OrderPollError::Response(ResponseError::Malformed))?;
+    let response = parse_order_response(
+        body,
+        order.order_url.origin(),
+        identifiers,
+        order.profile.name(),
+    )
+    .map_err(OrderPollError::Response)?;
+    if response.finalize != order.finalize_url
+        || !response
+            .authorizations()
+            .zip(authorization_resources)
+            .all(|(returned, expected)| returned == &expected.url)
+    {
+        return Err(OrderPollError::ResourceMismatch);
+    }
+    order
+        .apply_order_response(
+            response_generation,
+            response.status,
+            response.certificate,
+            now_unix,
+        )
+        .map_err(OrderPollError::Lifecycle)?;
+    Ok(OrderPollReceipt {
+        order_generation: response_generation,
+        has_retry_after: result.metadata.has_retry_after,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1217,6 +1326,19 @@ mod tests {
                     body_length: body.len(),
                 });
             }
+            if request.url.as_str() == "https://ca.example/order/1" {
+                let body = br#"{"status":"ready","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":["https://ca.example/authz/1"],"finalize":"https://ca.example/order/1/finalize","profile":"classic"}"#;
+                output[..body.len()].copy_from_slice(body);
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/order/1",
+                    replay_nonce: Some("order-poll-nonce-1"),
+                    retry_after: Some("5"),
+                    location: None,
+                    content_type: Some("application/json"),
+                    body_length: body.len(),
+                });
+            }
             let body = br#"{"status":"pending","identifiers":[{"type":"dns","value":"example.com"}],"authorizations":["https://ca.example/authz/1"],"finalize":"https://ca.example/order/1/finalize","profile":"classic"}"#;
             output[..body.len()].copy_from_slice(body);
             Ok(AcmeTransportResponse {
@@ -1658,9 +1780,26 @@ mod tests {
                 110,
             )
             .unwrap();
-        created
-            .apply_order_response(2, crate::OrderState::Ready, None, 110)
-            .unwrap();
+        let authorization_resources = [authorizations[0].unwrap()];
+        let polled = poll_order(
+            2,
+            110,
+            &identifiers,
+            &authorization_resources,
+            &directory,
+            &account,
+            &mut created,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        );
+        let polled = match polled {
+            Ok(polled) => polled,
+            Err(_) => panic!("order poll failed"),
+        };
+        assert!(polled.has_retry_after);
         let csr = [1u8, 2, 3, 4];
         let finalize = created.prepare_finalize(&csr).unwrap();
         let finalized = execute_prepared_finalize(

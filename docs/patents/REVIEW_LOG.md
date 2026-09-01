@@ -11506,3 +11506,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 configured ACME directory through the already reviewed bounded authenticated
 transport, exact origin, JSON media type, and explicit generation. It adds no
 recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Exact bounded ACME order polling
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment performs ordinary POST-as-GET
+order polling with bounded retry/deadline state and exact replay of the
+prepared identifier, profile, finalization URL, and order-scoped authorization
+resources. It adds no recorded re-review-trigger mechanism.
