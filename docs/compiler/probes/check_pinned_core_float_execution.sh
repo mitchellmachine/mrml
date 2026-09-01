@@ -8,7 +8,7 @@ library_root="$sysroot/lib/rustlib/x86_64-pc-windows-gnullvm/lib"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
 test "$#" -le 1 || {
-    echo "usage: $0 [parse|format]" >&2
+    echo "usage: $0 [parse|format|unicode]" >&2
     exit 1
 }
 case ${1:-parse} in
@@ -24,8 +24,14 @@ case ${1:-parse} in
         expected_size=466432
         expected_hash=8d28157fc2387863c905ab4b337b257ab3106c285213f9477d5f5ecd131a663c
         ;;
+    unicode)
+        crate_name=mrml_core_unicode_probe
+        probe_source=docs/compiler/probes/pinned_core_unicode_execution.rs
+        expected_size=466432
+        expected_hash=7fa145eebe352b65ebbae62686ea1e3a736cc1ba620142ed9f18fd20b6f25573
+        ;;
     *)
-        echo "usage: $0 [parse|format]" >&2
+        echo "usage: $0 [parse|format|unicode]" >&2
         exit 1
         ;;
 esac
