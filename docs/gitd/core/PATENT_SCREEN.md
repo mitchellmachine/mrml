@@ -82,4 +82,6 @@ The compaction planner selects an authenticated reachability set at one exact
 generation and sorts by complete object ID. Neither mechanism discovers
 similarity, ranks by cache or storage location, maps work to distributed nodes,
 or manages file recipes/chunk indexes. Patent review: `TRIGGERED`, implemented
-within the preliminary guardrails; durable filesystem composition remains open.
+within the preliminary guardrails. Hosted-Linux immutable cache persistence and
+generation-bound compaction activation use only conventional exact-key files,
+fsync, rename, and retained-old-generation recovery.

@@ -158,6 +158,17 @@ and a simulated crash-stale lock. Windows remains fail-closed pending a runtime
 directory flush primitive. Process-kill at every syscall boundary, power-loss,
 and physical-filesystem atomicity evidence remain open.
 
+Canonical compaction uses the same active-ref lock and `MRPKSET1`/`MRREFS02`
+authority as receive rather than a parallel selector. The replacement pack and
+index are fully authenticated and durably installed before the next manifest is
+written. Activation re-reads the exact repository and pack generations,
+preserves refs/trust/revocations, advances both repository and pack generations
+once, fsyncs the new active record and directory, and reopens the selected state
+and manifest. A stale or preactivation failure leaves the old record selected;
+successful activation retains the old arrival and manifest for later recovery-
+aware retirement. This is hosted Linux evidence only. Process-kill, power-loss,
+native-Windows directory flush, and physical-storage evidence remain open.
+
 The controlled concurrency test starts three native joinable workers against
 one exact repository transaction: the final state advances exactly once to the
 next generation and exact new ref, irrespective of which worker acquires the

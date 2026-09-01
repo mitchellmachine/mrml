@@ -120,7 +120,13 @@ exact ordered wants and haves, repository generation, pack-profile version, and
 encoder version. Its SHA-256 digest is only a rejection accelerator: a hit also
 requires full-key equality, and cached representation bytes are rehashed on
 every lookup. Inserts cannot overwrite or reinsert a key. This in-memory core
-does not yet claim durable precomputation or filesystem cache recovery.
+is paired on Linux with a canonical digest-named immutable file store. Each
+record contains and rechecks the full key, representation length and digest,
+and a terminal whole-record digest; insertion uses create-new, fsyncs the file
+and directory, then reopens and verifies before success. Regular-file opens
+reject final symlinks. Other targets fail closed until directory synchronization
+is available. Cache population policy and production hit-rate evidence remain
+separate from this durable exact-key mechanism.
 
 The reachability compaction core accepts an exact repository/pack-generation
 snapshot and caller-authenticated reachable objects, sorts only by complete
@@ -130,12 +136,22 @@ pressure, rejects estimates over the 4 GiB memory budget, preserves 40 GiB free
 space after the estimated output, and advances exactly one pack generation.
 Its journal admits only planned, staged, stage-synced, activated, and retired
 transitions and classifies crashes without treating an unactivated stage as
-authoritative. The current implementation is a pure state-machine core;
-filesystem staging, fsync, atomic generation activation, and retirement remain
-to be composed and physically tested.
+authoritative.
+
+The Linux compaction compositor reparses the generated pack, rebuilds and
+reopens its v2 index, writes exact scratch objects/pack/index into a new
+transaction directory, fsyncs files and directories, installs by directory
+rename, and derives a canonical one-pack `MRPKSET1`. Under the same activation
+lock used by pushes, it re-reads the selected generations, persists the
+manifest, fsyncs and renames `MRREFS02`, and reopens both exact state and
+manifest. Ref, trust, and revocation authority is preserved byte-for-byte while
+repository and pack generations advance once. Old arrivals and the old manifest
+remain retained after activation; a preactivation or stale-generation failure
+leaves the old state selected. This is hosted Linux filesystem evidence, not
+process-kill, power-loss, native-Windows, or physical-storage evidence.
 
 Dynamic-Huffman level-9 encoding, direct-window OFS delta selection, exact-key
-cache semantics, and the generation-safe compaction planner are implemented.
+cache semantics, and generation-safe durable Linux compaction activation are implemented.
 No outer Zstandard layer belongs in Git pack storage.
 
 Active arrival-pack reads remain fail closed for an immediate authority reason.

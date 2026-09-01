@@ -7,7 +7,9 @@ mod arrival_pack;
 mod adversarial;
 mod audit_receipt;
 mod cache_pack;
+mod cache_pack_file;
 mod compaction;
+mod compaction_file;
 mod deflate;
 mod detached_commit_proof;
 mod diff;
@@ -48,6 +50,7 @@ pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES,
     MAX_PACK_CACHE_KEY_BYTES, MAX_PACK_CACHE_OBJECTS_PER_SIDE, PackCacheError, PackCacheKey,
 };
+pub use cache_pack_file::{ImmutablePackCacheDirectory, PackCacheFileError};
 pub use compaction::{
     COMPACTION_DEFLATE_LEVEL, COMPACTION_DELTA_WINDOW, COMPACTION_FREE_RESERVE_BYTES,
     COMPACTION_MAX_DELTA_DEPTH, COMPACTION_MEMORY_LIMIT_BYTES, COMPACTION_WORKERS,

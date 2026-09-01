@@ -5,6 +5,7 @@ use mrml_runtime::{
     remove_file, rename_file,
 };
 
+use crate::ref_state::apply_compaction_pack_set;
 use crate::{
     ActivationSnapshot, ActiveRefState, ActiveRefStateError, DurableFailure,
     MAX_ACTIVE_REF_STATE_BYTES, MAX_PACK_SET_MANIFEST_BYTES, PackSetLimits, PackSetManifest,
@@ -187,6 +188,39 @@ impl ActiveRefFile {
         }
     }
 
+    /// Durably selects a compacted pack set under the same activation lock as
+    /// pushes, then immediately reopens the exact next generation.
+    #[allow(dead_code)] // invoked by the internal Linux compaction compositor
+    pub(crate) fn activate_compaction(
+        &self,
+        manifest: &PackSetManifest,
+    ) -> Result<ActiveRefState, DurableFailure> {
+        let lock = File::create_new(&self.lock).map_err(|_| DurableFailure::StaleLock)?;
+        lock.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(lock);
+        sync_ref_directory(&self.directory)?;
+        let result = self.activate_compaction_while_locked(manifest);
+        match result {
+            Ok(next) => {
+                remove_file(&self.lock).map_err(|_| DurableFailure::Rename)?;
+                sync_ref_directory(&self.directory)?;
+                Ok(next)
+            }
+            Err(error) => {
+                if matches!(
+                    error,
+                    DurableFailure::StaleLock
+                        | DurableFailure::DiskFull
+                        | DurableFailure::ShortWrite
+                ) {
+                    let _ = remove_file(&self.lock);
+                    let _ = sync_ref_directory(&self.directory);
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// Opens only the manifest selected by the active record and rechecks its
     /// digest and every generation/identity dimension.
     pub fn load_selected_pack_set(
@@ -254,6 +288,48 @@ impl ActiveRefFile {
             encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
         let manifest_path = self.pack_set_path(&next.pack_set_digest);
         self.persist_manifest_bytes(&manifest_path, &manifest_bytes)?;
+        let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
+        let mut temporary =
+            File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
+        temporary
+            .write_all(&encoded)
+            .map_err(|_| DurableFailure::ShortWrite)?;
+        temporary.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(temporary);
+        rename_file(&self.temporary, &self.active).map_err(|_| DurableFailure::Rename)?;
+        sync_ref_directory(&self.directory)?;
+        let reread = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
+        if reread != next {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        self.load_selected_pack_set(PackSetLimits {
+            max_packs: u32::MAX,
+            max_objects: u64::MAX,
+            max_pack_bytes: u64::MAX,
+            max_index_bytes: u64::MAX,
+            max_work_units: u64::MAX,
+        })
+        .map_err(|_| DurableFailure::VerifierCrash)?;
+        Ok(next)
+    }
+
+    #[allow(dead_code)] // invoked by activate_compaction once service wiring lands
+    fn activate_compaction_while_locked(
+        &self,
+        manifest: &PackSetManifest,
+    ) -> Result<ActiveRefState, DurableFailure> {
+        let current = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
+        let next = apply_compaction_pack_set(&current, manifest).map_err(|error| match error {
+            ActiveRefStateError::Stale => DurableFailure::StaleLock,
+            ActiveRefStateError::Resource => DurableFailure::DiskFull,
+            _ => DurableFailure::VerifierCrash,
+        })?;
+        let manifest_bytes =
+            encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
+        self.persist_manifest_bytes(
+            &self.pack_set_path(&next.pack_set_digest),
+            &manifest_bytes,
+        )?;
         let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
         let mut temporary =
             File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;

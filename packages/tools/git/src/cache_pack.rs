@@ -182,7 +182,7 @@ impl ImmutablePackCache {
     }
 }
 
-fn encode_key(
+pub(crate) fn encode_key(
     object_format: ObjectFormat,
     wants: &[ObjectId],
     haves: &[ObjectId],

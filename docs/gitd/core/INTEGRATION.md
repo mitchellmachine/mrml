@@ -81,8 +81,9 @@ NAME` creates without switching, `git branch -d NAME` deletes under the native
 branch checks, and `git switch -c NAME` / `git checkout -b NAME` create and
 switch. `git tag -s NAME -m MESSAGE` and `git tag -s -m MESSAGE NAME` route to
 the first-party signed annotated-tag path. `git gc` and `git repack` are
-recognized but return an explicit fail-closed canonical-compaction/patent-review
-error; they never invoke host Git or claim a no-op performed maintenance.
+recognized but still return an explicit fail-closed service-composition error;
+the internal canonical compactor is not yet wired to these porcelain commands.
+They never invoke host Git or claim a no-op performed maintenance.
 
 `git cat-file -t`, `-s`, and `-p` are native. Type and size work for every
 authenticated object kind. Pretty mode emits parsed tree entries or exact UTF-8

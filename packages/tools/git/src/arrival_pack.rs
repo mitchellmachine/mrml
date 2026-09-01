@@ -23,6 +23,59 @@ pub struct ArrivalPackStore {
 }
 
 impl ArrivalPackStore {
+    /// Stages an already independently verified compaction result using the
+    /// same immutable directory format as a received pack. The transaction ID
+    /// is derived by the compaction compositor, never supplied by an edge.
+    #[allow(dead_code)] // invoked by the internal Linux compaction compositor
+    pub(crate) fn stage_compacted_pack(
+        &self,
+        transaction: QuarantineTransactionId,
+        pack: &[u8],
+        expected_ids: &[ObjectId],
+    ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
+        if expected_ids.is_empty()
+            || u64::try_from(pack.len()).map_err(|_| DurableFailure::DiskFull)?
+                > self.max_pack_bytes
+        {
+            return Err(DurableFailure::DiskFull);
+        }
+        let (objects, entries) =
+            parse_pack_with_index(pack, self.format).map_err(|_| DurableFailure::VerifierCrash)?;
+        if objects.len() != expected_ids.len()
+            || objects
+                .iter()
+                .zip(expected_ids)
+                .any(|(object, expected)| object.id != *expected)
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let trailer = ObjectId::from_bytes(
+            self.format,
+            pack.get(pack.len().saturating_sub(self.format.hash_len())..)
+                .ok_or(DurableFailure::VerifierCrash)?,
+        )
+        .ok_or(DurableFailure::VerifierCrash)?;
+        let index = build_pack_index_v2(self.format, &entries, trailer)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let directory = self.quarantine_path(transaction);
+        if path_exists(&directory) || path_exists(&self.arrival_path(transaction)) {
+            return Err(DurableFailure::StaleLock);
+        }
+        create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
+        let scratch = join_path(&directory, "objects");
+        create_dir_all(&scratch).map_err(|_| DurableFailure::DiskFull)?;
+        for object in &objects {
+            write_scratch_object(&scratch, object.id, object.kind, &object.contents)?;
+        }
+        write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
+        write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
+        sync_pack_directory(&scratch)?;
+        sync_pack_directory(&directory)?;
+        sync_pack_directory(&self.quarantine)?;
+        let object_count = u32::try_from(objects.len()).map_err(|_| DurableFailure::DiskFull)?;
+        self.summarize_directory(&directory, transaction, object_count)
+    }
+
     /// Streams the exact already-admitted body into an isolated transaction
     /// directory. The directory is not part of normal object lookup and is
     /// fsynced before the lifecycle advances to `ObjectsQuarantined`.

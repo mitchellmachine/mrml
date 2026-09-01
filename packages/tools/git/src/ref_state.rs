@@ -212,6 +212,45 @@ pub fn apply_verified_ref_transaction_with_pack_set(
     Ok(next)
 }
 
+/// Selects a replacement pack set without changing ref, trust, or revocation
+/// authority. Both generations advance exactly once so stale readers and
+/// concurrent pushes fail closed.
+#[allow(dead_code)] // invoked by ActiveRefFile's internal compaction path
+pub(crate) fn apply_compaction_pack_set(
+    current: &ActiveRefState,
+    manifest: &PackSetManifest,
+) -> Result<ActiveRefState, ActiveRefStateError> {
+    let next_repository_generation = RepositoryGeneration(
+        current
+            .repository_generation
+            .0
+            .checked_add(1)
+            .ok_or(ActiveRefStateError::Resource)?,
+    );
+    let next_pack_generation = PackGeneration(
+        current
+            .pack_generation
+            .0
+            .checked_add(1)
+            .ok_or(ActiveRefStateError::Resource)?,
+    );
+    if manifest.repository() != &current.repository
+        || manifest.object_format() != current.object_format
+        || manifest.repository_generation() != next_repository_generation
+        || manifest.pack_generation() != next_pack_generation
+    {
+        return Err(ActiveRefStateError::Stale);
+    }
+    let mut next = current.clone();
+    next.repository_generation = next_repository_generation;
+    next.pack_generation = next_pack_generation;
+    next.pack_set_digest = manifest
+        .digest()
+        .map_err(|_| ActiveRefStateError::Policy)?;
+    validate_state(&next)?;
+    Ok(next)
+}
+
 fn validate_state(state: &ActiveRefState) -> Result<(), ActiveRefStateError> {
     if state.repository_generation.0 == 0
         || state.trust_generation.0 == 0
