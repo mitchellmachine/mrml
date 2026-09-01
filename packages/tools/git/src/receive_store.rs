@@ -200,6 +200,21 @@ impl LinuxDurableReceiveStore {
         &self,
         journal: &ReceiveJournalRecord,
     ) -> Result<AuditReceipt, DurableFailure> {
+        let receipt = self.recovery_audit_receipt(journal)?;
+        match self.receipts.load(journal.transaction) {
+            Ok(existing) if existing == receipt => return Ok(receipt),
+            Ok(_) => return Err(DurableFailure::AuditReceipt),
+            Err(crate::AuditReceiptError::Malformed) => {}
+            Err(_) => return Err(DurableFailure::AuditReceipt),
+        }
+        self.receipts.append(&receipt)?;
+        Ok(receipt)
+    }
+
+    pub(crate) fn recovery_audit_receipt(
+        &self,
+        journal: &ReceiveJournalRecord,
+    ) -> Result<AuditReceipt, DurableFailure> {
         let snapshot = self.recovery_snapshot(journal)?;
         if classify_receive_recovery(journal, &snapshot) != RecoveryAction::RecoverAuditReceipt {
             return Err(DurableFailure::VerifierCrash);
@@ -216,7 +231,7 @@ impl LinuxDurableReceiveStore {
             ));
         }
         updates.sort_unstable_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
-        let receipt = AuditReceipt {
+        Ok(AuditReceipt {
             transaction: journal.transaction,
             repository: journal.repository.clone(),
             repository_generation: journal.repository_generation,
@@ -224,15 +239,7 @@ impl LinuxDurableReceiveStore {
             trust_generation: journal.trust_generation,
             revocation_generation: journal.revocation_generation,
             updates,
-        };
-        match self.receipts.load(journal.transaction) {
-            Ok(existing) if existing == receipt => return Ok(receipt),
-            Ok(_) => return Err(DurableFailure::AuditReceipt),
-            Err(crate::AuditReceiptError::Malformed) => {}
-            Err(_) => return Err(DurableFailure::AuditReceipt),
-        }
-        self.receipts.append(&receipt)?;
-        Ok(receipt)
+        })
     }
 }
 

@@ -2,8 +2,9 @@
 
 Status: **PARTIALLY IMPLEMENTED** as a storage-neutral admission, lifecycle,
 ordered durable-receive coordinator, and hosted-Linux filesystem composition.
-The protected Smart Git receive backend and signed receipt authority remain
-unimplemented.
+The protected Smart Git receive backend and purpose-separated signed receipt
+boundary are implemented; production edge startup/recovery composition remains
+incomplete.
 
 The required state sequence is candidate received, objects quarantined,
 objects validated, history verified, ref updates prepared, objects durably
@@ -251,6 +252,18 @@ or exactly the next generation after activation. A journal whose refs are
 exactly new may reconstruct and immutably append the checksum-protected receipt;
 an existing byte-exact receipt makes that operation idempotent. Pre-activation
 installed objects still require complete history and policy re-verification,
-and any generation/ref divergence remains `ManualUncertain`. This does not yet
-durably advance the recovered journal to a terminal phase or provide the
-required isolated receipt signature.
+and any generation/ref divergence remains `ManualUncertain`. Protected recovery
+uses the same exact live-state reconstruction but writes through
+`AuthenticatedReceiveStore`: an existing receipt must reopen and verify under
+the exact signer identity, while a missing receipt is signed, independently
+verified, durably appended, reopened, and exact-compared. Repeating recovery is
+idempotent. Hosted Linux evidence is
+`./target/debug/mrml test org.mrml.tool.git --target linux` (195 library and 3
+CLI tests passed), including exact post-activation signed recovery. This does
+not yet durably advance the recovered journal to a terminal phase, re-verify a
+pre-activation transaction, or prove production key-service, power-loss, or
+physical-storage behavior.
+
+Patent review: **NOT_TRIGGERED**. Exact state comparison, immutable receipt
+append, signature verification, fsync, and idempotent crash recovery are
+conventional defensive composition. See `docs/patents/REVIEW_LOG.md`.

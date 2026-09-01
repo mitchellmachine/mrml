@@ -138,6 +138,29 @@ impl<'a> AuthenticatedReceiveStore<'a> {
             authority,
         })
     }
+
+    /// Recovers only a post-activation receipt after the concrete store has
+    /// re-read and exact-matched live generations and refs. An existing signed
+    /// receipt must verify byte-for-byte; journal contents never authorize a
+    /// ref transition or a new signer identity.
+    pub fn recover_audit_receipt(
+        &mut self,
+        journal: &crate::ReceiveJournalRecord,
+    ) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
+        let receipt = self.inner.recovery_audit_receipt(journal)?;
+        match self.receipts.load(journal.transaction, self.authority) {
+            Ok(existing) if existing.receipt == receipt => return Ok(existing),
+            Ok(_) => return Err(DurableFailure::AuditReceipt),
+            Err(DurableFailure::AuditReceipt) => {}
+            Err(error) => return Err(error),
+        }
+        self.receipts.append(&receipt, self.authority)?;
+        let recovered = self.receipts.load(journal.transaction, self.authority)?;
+        if recovered.receipt != receipt {
+            return Err(DurableFailure::AuditReceipt);
+        }
+        Ok(recovered)
+    }
 }
 
 impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
@@ -312,8 +335,9 @@ fn sync_directory(_: &str) -> Result<(), DurableFailure> {
 mod tests {
     use super::*;
     use crate::{
-        FullRefName, ObjectId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-        TrustGeneration,
+        ActiveRefFile, ActiveRefState, FullRefName, LinuxDurableReceiveStore, ObjectFormat,
+        ObjectId, PackGeneration, QuarantinePhase, ReceiveJournalRecord, RepositoryGeneration,
+        RepositoryIdentity, RevocationGeneration, TrustGeneration,
     };
 
     struct DigestAuthority {
@@ -421,6 +445,78 @@ mod tests {
             directory.append(&receipt, &mut authority),
             Err(DurableFailure::AuditReceipt)
         );
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_recovery_exact_matches_live_state_and_is_idempotently_signed() {
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!(
+                "mrml-authenticated-recovery-{}",
+                mrml_runtime::process_id()
+            ),
+        );
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let name = FullRefName::parse("refs/heads/main").unwrap();
+        let old = ObjectId::Sha256([1u8; 32]);
+        let new = ObjectId::Sha256([2u8; 32]);
+        let refs_path = join_path(&root, "refs");
+        ActiveRefFile::initialize(
+            &refs_path,
+            &ActiveRefState {
+                repository: repository.clone(),
+                repository_generation: RepositoryGeneration(42),
+                trust_generation: TrustGeneration(43),
+                revocation_generation: RevocationGeneration(44),
+                pack_generation: PackGeneration(2),
+                pack_set_digest: [3u8; 32],
+                object_format: ObjectFormat::Sha256,
+                default_branch: name.clone(),
+                refs: [(name.clone(), new)].into(),
+            },
+        )
+        .unwrap();
+        let journal = ReceiveJournalRecord {
+            transaction: QuarantineTransactionId([29u8; 16]),
+            repository,
+            repository_generation: RepositoryGeneration(41),
+            trust_generation: TrustGeneration(43),
+            revocation_generation: RevocationGeneration(44),
+            phase: QuarantinePhase::RefsAtomicallyActivated,
+            failure: None,
+            updates: [crate::JournalRefUpdate {
+                name,
+                expected_old: old,
+                proposed_new: new,
+            }]
+            .into(),
+        };
+        let mut inner = LinuxDurableReceiveStore::open(
+            &join_path(&root, "journals"),
+            &join_path(&root, "packs"),
+            &refs_path,
+            &join_path(&root, "plain-receipts"),
+            ObjectFormat::Sha256,
+            1024 * 1024,
+        )
+        .unwrap();
+        let mut authority = DigestAuthority {
+            identity: [7u8; 64],
+        };
+        let mut protected = AuthenticatedReceiveStore::new(
+            &mut inner,
+            &join_path(&root, "signed-receipts"),
+            &mut authority,
+        )
+        .unwrap();
+        let first = protected.recover_audit_receipt(&journal).unwrap();
+        let second = protected.recover_audit_receipt(&journal).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.receipt, fixture());
+        assert_eq!(first.signer_identity, [7u8; 64]);
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }
