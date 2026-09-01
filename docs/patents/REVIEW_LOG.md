@@ -11441,3 +11441,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 POST-as-GET authorization retrieval and binds each returned identifier and
 challenge set to the exact order URL digest, account generation, and directory
 generation. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Published ACME challenge submission
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment submits an ordinary RFC 8555
+challenge only after exact order, authorization, identifier, token, account,
+directory, publisher-receipt, and active-lifetime checks. It adds no recorded
+re-review-trigger mechanism.

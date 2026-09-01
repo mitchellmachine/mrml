@@ -1,10 +1,11 @@
 use crate::{
     AccountError, AccountLifecycle, AcmeDirectory, AcmeJwsSigner, AcmePostError, AcmeProblem,
-    AcmeTransport, AcmeUrl, CertificateProfile, ChallengeKind, DnsIdentifier, JwkThumbprint,
-    OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus, ParsedAuthorizationResponse,
-    PayloadError, PreparedAccountAction, ResponseError, account_contacts_digest,
-    parse_account_response, parse_authorization_response, parse_order_response, post_jws,
-    write_new_account_payload, write_new_order_payload,
+    AcmeTransport, AcmeUrl, CertificateProfile, ChallengeError, ChallengeKind, ChallengeLifecycle,
+    DnsIdentifier, JwkThumbprint, OrderError, OrderLifecycle, P256Jwk, ParsedAccountStatus,
+    ParsedAuthorizationResponse, ParsedChallenge, PayloadError, PreparedAccountAction,
+    PublicationReceipt, ResponseError, account_contacts_digest, parse_account_response,
+    parse_authorization_response, parse_order_response, post_jws, write_new_account_payload,
+    write_new_order_payload,
 };
 use mrml_crypto::Sha256;
 
@@ -82,6 +83,21 @@ pub enum AuthorizationFetchError<E> {
     Response(ResponseError),
     ChallengeUnavailable,
     Lifecycle(OrderError),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum ChallengeSubmitError<E> {
+    ResourceMismatch,
+    Publication(ChallengeError),
+    Post(AcmePostError<E>),
+    Server(AcmeProblem),
+    UnexpectedStatus,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct ChallengeSubmission {
+    pub publication: PublicationReceipt,
+    pub challenge_url_digest: [u8; 32],
 }
 
 pub struct OrderCreateBuffers<'a> {
@@ -328,6 +344,70 @@ pub fn fetch_authorization<T: AcmeTransport>(
     Ok(parsed)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn trigger_published_challenge<T: AcmeTransport>(
+    resource: AuthorizationResource,
+    challenge: ParsedChallenge,
+    publication: &ChallengeLifecycle,
+    now_unix: u64,
+    directory: &AcmeDirectory,
+    account: &AccountLifecycle,
+    order: &OrderLifecycle,
+    exchange: &mut crate::AcmeExchange,
+    transport: &mut T,
+    signer: &mut impl AcmeJwsSigner,
+    response_body: &mut [u8],
+    jws_scratch: &mut [u8],
+) -> Result<ChallengeSubmission, ChallengeSubmitError<T::Error>> {
+    let authorization_digest = Sha256::digest(resource.url.as_str().as_bytes());
+    if !account.active
+        || resource.directory_generation != directory.generation
+        || resource.account_generation != account.generation
+        || resource.order_url_digest != Sha256::digest(order.order_url.as_str().as_bytes())
+        || publication.request.order_url_digest != resource.order_url_digest
+        || publication.request.authorization_url_digest != authorization_digest
+        || publication.request.identifier
+            != order
+                .authorization_by_url_digest(authorization_digest)
+                .ok_or(ChallengeSubmitError::ResourceMismatch)?
+                .identifier
+        || publication.request.kind != challenge.kind
+        || publication.request.token != challenge.token
+    {
+        return Err(ChallengeSubmitError::ResourceMismatch);
+    }
+    let publication_receipt = publication
+        .require_active(now_unix)
+        .map_err(ChallengeSubmitError::Publication)?;
+    let account_url = account
+        .account_url
+        .as_ref()
+        .ok_or(ChallengeSubmitError::ResourceMismatch)?;
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &challenge.url,
+        crate::ProtectedKey::Kid(account_url),
+        b"{}",
+        account.generation,
+        signer,
+        response_body,
+        jws_scratch,
+    )
+    .map_err(ChallengeSubmitError::Post)?;
+    if let Some(problem) = result.problem {
+        return Err(ChallengeSubmitError::Server(problem));
+    }
+    if result.metadata.status != 200 {
+        return Err(ChallengeSubmitError::UnexpectedStatus);
+    }
+    Ok(ChallengeSubmission {
+        publication: publication_receipt,
+        challenge_url_digest: Sha256::digest(challenge.url.as_str().as_bytes()),
+    })
+}
+
 pub fn execute_prepared_account_create<T: AcmeTransport>(
     lifecycle: &mut AccountLifecycle,
     receipt: PreparedAccountAction,
@@ -428,7 +508,9 @@ mod tests {
     use super::*;
     use crate::{
         AccountOperation, AccountPolicy, AcmeHttpMethod, AcmeTransportRequest,
-        AcmeTransportResponse, ApprovedAcmeJwsDigest, CaClass, Es256Signature, JoseError,
+        AcmeTransportResponse, ApprovedAcmeJwsDigest, CaClass, ChallengePublicationRequest,
+        ChallengePublisher, Es256Signature, JoseError, PublicationState,
+        publication_binding_digest,
     };
 
     struct Signer;
@@ -447,6 +529,39 @@ mod tests {
 
     struct OrderTransport {
         fail_post: bool,
+    }
+
+    struct Publisher;
+    impl ChallengePublisher for Publisher {
+        fn prepare(
+            &mut self,
+            request: ChallengePublicationRequest,
+        ) -> Result<PublicationReceipt, ChallengeError> {
+            Ok(PublicationReceipt {
+                challenge_generation: request.challenge_generation,
+                publisher_generation: 1,
+                binding_digest: publication_binding_digest(&request),
+                kind: request.kind,
+            })
+        }
+        fn activate(&mut self, _: PublicationReceipt) -> Result<(), ChallengeError> {
+            Ok(())
+        }
+        fn prepare_removal(
+            &mut self,
+            receipt: PublicationReceipt,
+        ) -> Result<PublicationReceipt, ChallengeError> {
+            Ok(receipt)
+        }
+        fn commit_removal(&mut self, _: PublicationReceipt) -> Result<(), ChallengeError> {
+            Ok(())
+        }
+        fn authoritative_state(
+            &mut self,
+            _: PublicationReceipt,
+        ) -> Result<PublicationState, ChallengeError> {
+            Ok(PublicationState::Active)
+        }
     }
     impl AcmeTransport for OrderTransport {
         type Error = ();
@@ -475,6 +590,18 @@ mod tests {
                     status: 200,
                     effective_url: "https://ca.example/authz/1",
                     replay_nonce: Some("authz-nonce-1"),
+                    retry_after: None,
+                    location: None,
+                    body_length: body.len(),
+                });
+            }
+            if request.url.as_str() == "https://ca.example/challenge/1" {
+                let body = br#"{"type":"http-01","url":"https://ca.example/challenge/1","status":"processing","token":"token-1"}"#;
+                output[..body.len()].copy_from_slice(body);
+                return Ok(AcmeTransportResponse {
+                    status: 200,
+                    effective_url: "https://ca.example/challenge/1",
+                    replay_nonce: Some("challenge-nonce-1"),
                     retry_after: None,
                     location: None,
                     body_length: body.len(),
@@ -723,6 +850,36 @@ mod tests {
         };
         assert!(parsed.identifier == identifiers[0]);
         assert_eq!(created.authorizations().count(), 1);
+        let challenge = *parsed.challenges().next().unwrap();
+        let mut publication = ChallengeLifecycle::new(
+            1,
+            &created.order_url,
+            &authorizations[0].unwrap().url,
+            identifiers[0],
+            ChallengeKind::Http01,
+            challenge.token,
+            account.key,
+            90,
+            150,
+            3,
+        )
+        .unwrap();
+        publication.publish(&mut Publisher).unwrap();
+        let submitted = trigger_published_challenge(
+            authorizations[0].unwrap(),
+            challenge,
+            &publication,
+            100,
+            &directory,
+            &account,
+            &created,
+            &mut exchange,
+            &mut transport,
+            &mut signer,
+            &mut response,
+            &mut jws,
+        );
+        assert!(submitted.is_ok());
     }
 
     fn order_post_failure_is_explicitly_uncertain_impl() {
