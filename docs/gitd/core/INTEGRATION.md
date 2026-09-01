@@ -77,3 +77,11 @@ Every native loose-object write now immediately reopens, parses, rehashes, and
 byte-compares the stored object before returning its identity. Consequently a
 pre-existing corrupt object at the computed path, a malformed write, or an
 identity/content mismatch fails before commit/tag code can mutate its ref.
+
+Focused deterministic mutation campaigns now feed bounded hostile corpora into
+the Git pack, pack-index, loose-object, pkt-line/advertisement, trust-policy,
+journal, active-ref, full-ref-name, and repository-path parsers; the OpenPGP
+packet/armor parsers and verifier; and ML-DSA key/signature verification. They
+run identically on Linux and the pinned Wine-hosted Windows target. This is
+structured-random regression evidence, not a claim of sanitizer-backed or
+coverage-guided fuzz completion.

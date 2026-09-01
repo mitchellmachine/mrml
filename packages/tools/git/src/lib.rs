@@ -3,6 +3,8 @@
 use mrml_runtime::{Text, Vector};
 
 mod arrival_pack;
+#[cfg(test)]
+mod adversarial;
 mod audit_receipt;
 mod deflate;
 mod detached_commit_proof;

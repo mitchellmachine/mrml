@@ -2263,4 +2263,38 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
             Err(Error::InvalidArmor)
         );
     }
+
+    #[test]
+    fn packet_and_armor_parsers_survive_bounded_deterministic_hostile_corpus() {
+        let mut public_scratch = [0u8; 1024];
+        let public = parse_public_key_ascii(RFC_PUBLIC_KEY, &mut public_scratch).unwrap();
+        let policy = VerificationPolicy {
+            expected_primary_fingerprint: rfc_fingerprint(),
+            validation_time: Some(0x55f9_5f95),
+            key_not_after: None,
+            key_revoked: false,
+            enforce_signature_expiration: true,
+        };
+        let mut state = 0x4f50_454e_5047_5036u64;
+        let mut input = [0u8; 2048];
+        let mut parse_scratch = [0u8; 4096];
+        for case in 0..1024usize {
+            let length = (case * 43 + usize::from((state >> 19) as u8)) % (input.len() + 1);
+            for byte in &mut input[..length] {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = (state >> 24) as u8;
+            }
+            let _ = parse_public_key_ascii(&input[..length], &mut parse_scratch);
+            let _ = parse_public_key_v6_ascii(&input[..length], &mut parse_scratch);
+            let _ = verify_detached_ascii(
+                &public,
+                b"bounded adversarial payload",
+                &input[..length],
+                &policy,
+                &mut parse_scratch,
+            );
+        }
+    }
 }

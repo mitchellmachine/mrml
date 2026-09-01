@@ -1252,6 +1252,60 @@ mod tests {
     }
 
     #[test]
+    fn keys_and_signatures_survive_bounded_deterministic_mutation_corpus() {
+        let mut public = [0u8; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut secret = [0u8; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[71u8; 32], &mut public, &mut secret).unwrap();
+        let mut signature = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(
+            &secret,
+            b"mutation corpus",
+            b"bounded payload",
+            &[73u8; 32],
+            &mut signature,
+        )
+        .unwrap();
+
+        let mut state = 0x4d4c_4453_4136_3546u64;
+        for _ in 0..128 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let signature_index = state as usize % signature.len();
+            let public_index = (state >> 17) as usize % public.len();
+            let mut changed_signature = signature;
+            changed_signature[signature_index] ^= ((state >> 32) as u8) | 1;
+            let _ = ml_dsa_65_verify(
+                &public,
+                b"mutation corpus",
+                b"bounded payload",
+                &changed_signature,
+            );
+            let mut changed_public = public;
+            changed_public[public_index] ^= ((state >> 40) as u8) | 1;
+            let _ = ml_dsa_65_verify(
+                &changed_public,
+                b"mutation corpus",
+                b"bounded payload",
+                &signature,
+            );
+        }
+
+        for case in 0..16usize {
+            let mut changed_secret = secret;
+            changed_secret[(case * 251) % changed_secret.len()] ^= (case as u8) | 1;
+            let mut output = [0u8; ML_DSA_65_SIGNATURE_BYTES];
+            let _ = ml_dsa_65_sign(
+                &changed_secret,
+                b"mutation corpus",
+                b"bounded payload",
+                &[case as u8; 32],
+                &mut output,
+            );
+        }
+    }
+
+    #[test]
     fn round_trip_and_rejects_tampering() {
         let seed = [7u8; 32];
         let randomizer = [9u8; 32];
