@@ -3,6 +3,7 @@
 use mrml_crypto::Sha256;
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
+    remove_file,
 };
 
 use crate::cache_pack::{MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_KEY_BYTES, encode_key};
@@ -53,42 +54,53 @@ impl ImmutablePackCacheDirectory {
     ) -> Result<(), PackCacheFileError> {
         let encoded = encode_record(key, representation)?;
         let path = self.path(key);
+        let lock = self.lock_path(key);
         if path_exists(&path) {
             return Err(PackCacheFileError::AlreadyExists);
         }
-        let mut file = File::create_new(&path).map_err(|_| PackCacheFileError::AlreadyExists)?;
-        file.write_all(&encoded)
-            .map_err(|_| PackCacheFileError::Io)?;
-        file.sync().map_err(|_| PackCacheFileError::Durability)?;
-        drop(file);
-        sync_cache_directory(&self.root)?;
-        // Success is reported only after reopening through the regular-file
-        // path and authenticating the complete key and representation.
-        match self.lookup(key)? {
-            Some(bytes) if &bytes[..] == representation => Ok(()),
-            _ => Err(PackCacheFileError::Integrity),
+        let lock_file = File::create_new(&lock).map_err(|_| PackCacheFileError::AlreadyExists)?;
+        drop(lock_file);
+        if path_exists(&path) {
+            let _ = remove_file(&lock);
+            return Err(PackCacheFileError::AlreadyExists);
         }
+        let result = (|| {
+            let mut file = File::create_new(&path)
+                .map_err(|_| PackCacheFileError::AlreadyExists)?;
+            file.write_all(&encoded).map_err(|_| PackCacheFileError::Io)?;
+            file.sync().map_err(|_| PackCacheFileError::Durability)?;
+            drop(file);
+            sync_cache_directory(&self.root)?;
+            // Success is reported only after reopening through the
+            // regular-file path and authenticating the complete key and
+            // representation.
+            match read_record(&path, key)? {
+                bytes if &bytes[..] == representation => Ok(()),
+                _ => Err(PackCacheFileError::Integrity),
+            }
+        })();
+        if result.is_err() {
+            let _ = remove_file(&path);
+        }
+        remove_file(&lock).map_err(|_| PackCacheFileError::Durability)?;
+        sync_cache_directory(&self.root)?;
+        result
     }
 
     pub fn lookup(&self, key: &PackCacheKey) -> Result<Option<Vector<u8>>, PackCacheFileError> {
         let path = self.path(key);
+        let lock = self.lock_path(key);
+        if path_exists(&lock) {
+            return Ok(None);
+        }
         if !path_exists(&path) {
             return Ok(None);
         }
-        let mut file = File::open_regular(&path).map_err(|_| PackCacheFileError::Integrity)?;
-        let length = usize::try_from(file.len().map_err(|_| PackCacheFileError::Integrity)?)
-            .map_err(|_| PackCacheFileError::Resource)?;
-        if length > MAX_FILE_BYTES {
-            return Err(PackCacheFileError::Resource);
+        match read_record(&path, key) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(_) if path_exists(&lock) => Ok(None),
+            Err(error) => Err(error),
         }
-        let mut bytes = Vector::new();
-        bytes
-            .try_reserve_exact(length)
-            .map_err(|_| PackCacheFileError::Resource)?;
-        bytes.resize(length, 0);
-        file.read_exact(&mut bytes)
-            .map_err(|_| PackCacheFileError::Integrity)?;
-        parse_record(key, &bytes).map(Some)
     }
 
     fn path(&self, key: &PackCacheKey) -> Text {
@@ -101,6 +113,29 @@ impl ImmutablePackCacheDirectory {
         name.push_str(".pack-cache");
         join_path(&self.root, &name)
     }
+
+    fn lock_path(&self, key: &PackCacheKey) -> Text {
+        let mut path = self.path(key);
+        path.push_str(".lock");
+        path
+    }
+}
+
+fn read_record(path: &str, key: &PackCacheKey) -> Result<Vector<u8>, PackCacheFileError> {
+    let mut file = File::open_regular(path).map_err(|_| PackCacheFileError::Integrity)?;
+    let length = usize::try_from(file.len().map_err(|_| PackCacheFileError::Integrity)?)
+        .map_err(|_| PackCacheFileError::Resource)?;
+    if length > MAX_FILE_BYTES {
+        return Err(PackCacheFileError::Resource);
+    }
+    let mut bytes = Vector::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| PackCacheFileError::Resource)?;
+    bytes.resize(length, 0);
+    file.read_exact(&mut bytes)
+        .map_err(|_| PackCacheFileError::Integrity)?;
+    parse_record(key, &bytes)
 }
 
 fn encode_record(
@@ -243,6 +278,8 @@ fn sync_cache_directory(_: &str) -> Result<(), PackCacheFileError> {
 mod tests {
     use super::*;
     use crate::{ObjectFormat, ObjectId, RepositoryGeneration};
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use mrml_runtime::Shared;
 
     fn key(generation: u64) -> PackCacheKey {
         PackCacheKey::new(
@@ -312,6 +349,52 @@ mod tests {
         bytes[tampered] ^= 1;
         mrml_runtime::write_file(&path, &bytes).unwrap();
         assert_eq!(cache.lookup(&exact), Err(PackCacheFileError::Integrity));
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_same_key_population_has_one_immutable_winner() {
+        let root = temporary_root("concurrent");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let ready = Shared::new(AtomicUsize::new(0));
+        let inserted = Shared::new(AtomicUsize::new(0));
+        let contended = Shared::new(AtomicUsize::new(0));
+        let unexpected = Shared::new(AtomicUsize::new(0));
+        let mut workers = Vector::new();
+        for _ in 0..6 {
+            let worker_root = root.clone();
+            let worker_ready = ready.clone();
+            let worker_inserted = inserted.clone();
+            let worker_contended = contended.clone();
+            let worker_unexpected = unexpected.clone();
+            let worker = mrml_runtime::spawn_joinable(move || {
+                let cache = ImmutablePackCacheDirectory::open(&worker_root).unwrap();
+                worker_ready.fetch_add(1, Ordering::AcqRel);
+                while worker_ready.load(Ordering::Acquire) != 6 {
+                    mrml_runtime::yield_now();
+                }
+                match cache.insert(&key(7), b"one canonical representation") {
+                    Ok(()) => worker_inserted.fetch_add(1, Ordering::AcqRel),
+                    Err(PackCacheFileError::AlreadyExists) => {
+                        worker_contended.fetch_add(1, Ordering::AcqRel)
+                    }
+                    Err(_) => worker_unexpected.fetch_add(1, Ordering::AcqRel),
+                };
+            })
+            .unwrap_or_else(|_| panic!("failed to start cache population worker"));
+            workers.push(worker);
+        }
+        for worker in workers {
+            assert!(worker.join());
+        }
+        assert_eq!(inserted.load(Ordering::Acquire), 1);
+        assert_eq!(contended.load(Ordering::Acquire), 5);
+        assert_eq!(unexpected.load(Ordering::Acquire), 0);
+        let cache = ImmutablePackCacheDirectory::open(&root).unwrap();
+        assert_eq!(
+            &cache.lookup(&key(7)).unwrap().unwrap()[..],
+            b"one canonical representation"
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

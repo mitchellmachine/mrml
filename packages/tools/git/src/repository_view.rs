@@ -8,7 +8,8 @@ use crate::{
     GitdCoreError, ImmutablePackDescriptor, ObjectId, ObjectKind, PktLine, ProtocolBudget,
     ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
-    PackObject, PackSetLimits, PackSetManifest, RepositoryPath, RepositorySummary,
+    ImmutablePackCacheDirectory, PackCacheFileError, PackCacheKey, PackObject, PackSetLimits,
+    PackSetManifest, RepositoryPath, RepositorySummary,
     RevocationGeneration, SmartGitOperation, SmartGitRequest,
     SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedMetadataDescriptor,
     WorkBudget, encode_pack_with_format, parse_tree_with_format, read_v2_request, write_pkt_line,
@@ -23,6 +24,8 @@ const SELECTED_PACK_SET_LIMITS: PackSetLimits = PackSetLimits {
     max_index_bytes: 16 * 1024 * 1024 * 1024,
     max_work_units: 16 * 1024 * 1024 * 1024 * 1024,
 };
+const FETCH_PACK_PROFILE_VERSION: u32 = 1;
+const FETCH_PACK_ENCODER_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationSummaryEvidence {
@@ -144,6 +147,7 @@ pub struct FilesystemRepositoryView {
     objects: Repository,
     refs: ActiveRefFile,
     arrivals: Option<ArrivalPackStore>,
+    pack_cache: Option<ImmutablePackCacheDirectory>,
     verification: VerificationSummaryStore,
 }
 
@@ -376,7 +380,7 @@ impl GitdCoreBackend for FilesystemRepositoryView {
                 {
                     return Err(GitdCoreError::Authorization);
                 }
-                let pack = self.pack_negotiated(&state, &wants, &haves)?;
+                let pack = self.fetch_pack(&state, &wants, &haves)?;
                 if pack.len() as u64 > budget.max_memory_bytes {
                     return Err(GitdCoreError::Resource);
                 }
@@ -507,6 +511,7 @@ impl FilesystemRepositoryView {
             objects,
             refs,
             arrivals: None,
+            pack_cache: None,
             verification: VerificationSummaryStore::new(Vector::new())?,
         })
     }
@@ -533,6 +538,41 @@ impl FilesystemRepositoryView {
     pub fn with_verification_evidence(mut self, evidence: VerificationSummaryStore) -> Self {
         self.verification = evidence;
         self
+    }
+
+    /// Adds a durable immutable representation cache. Cache authority remains
+    /// subordinate to the exact active repository generation encoded in every
+    /// key; the directory name and a digest-name match never authorize a hit.
+    pub fn with_pack_cache(mut self, path: &str) -> Result<Self, GitdCoreError> {
+        self.pack_cache = Some(
+            ImmutablePackCacheDirectory::open(path).map_err(map_pack_cache_error)?,
+        );
+        Ok(self)
+    }
+
+    /// Precomputes the canonical pack for one exact ordered negotiation. Wants
+    /// remain restricted to advertised refs, exactly like protocol-v2 fetch.
+    pub fn precompute_fetch_pack(
+        &self,
+        repository: &RepositoryIdentity,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+    ) -> Result<(), GitdCoreError> {
+        if self.pack_cache.is_none() {
+            return Err(GitdCoreError::Unsupported);
+        }
+        if wants.is_empty() {
+            return Err(GitdCoreError::MalformedInput);
+        }
+        let state = self.load_for(repository)?;
+        if wants
+            .iter()
+            .any(|want| !state.refs.iter().any(|(_, id)| id == want))
+        {
+            return Err(GitdCoreError::Authorization);
+        }
+        self.fetch_pack(&state, wants, haves)?;
+        self.ensure_exact_generation(&state)
     }
 
     pub fn repository_generation(&self) -> Result<RepositoryGeneration, GitdCoreError> {
@@ -1222,6 +1262,41 @@ impl FilesystemRepositoryView {
             .map_err(|_| GitdCoreError::ObjectValidation)
     }
 
+    fn fetch_pack(
+        &self,
+        state: &crate::ActiveRefState,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+    ) -> Result<Vector<u8>, GitdCoreError> {
+        let Some(cache) = &self.pack_cache else {
+            return self.pack_negotiated(state, wants, haves);
+        };
+        let key = PackCacheKey::new(
+            state.object_format,
+            wants.iter().copied().collect(),
+            haves.iter().copied().collect(),
+            state.repository_generation,
+            FETCH_PACK_PROFILE_VERSION,
+            FETCH_PACK_ENCODER_VERSION,
+        )
+        .map_err(|_| GitdCoreError::Resource)?;
+        if let Some(pack) = cache.lookup(&key).map_err(map_pack_cache_error)? {
+            return Ok(pack);
+        }
+        let pack = self.pack_negotiated(state, wants, haves)?;
+        // Never populate a key after its full active state has become stale.
+        self.ensure_exact_generation(state)?;
+        match cache.insert(&key, &pack) {
+            Ok(()) => {}
+            // A concurrent producer may win. The independently generated
+            // bytes are canonical, so this request can safely use its local
+            // representation without waiting for or trusting a partial file.
+            Err(PackCacheFileError::AlreadyExists) => {}
+            Err(error) => return Err(map_pack_cache_error(error)),
+        }
+        Ok(pack)
+    }
+
     fn ensure_exact_generation(&self, expected: &crate::ActiveRefState) -> Result<(), GitdCoreError> {
         let current = self.load_state()?;
         if current == *expected {
@@ -1250,6 +1325,18 @@ impl FilesystemRepositoryView {
         Ok(state)
     }
 
+}
+
+fn map_pack_cache_error(error: PackCacheFileError) -> GitdCoreError {
+    match error {
+        PackCacheFileError::Resource => GitdCoreError::Resource,
+        PackCacheFileError::Integrity | PackCacheFileError::Key => {
+            GitdCoreError::ObjectValidation
+        }
+        PackCacheFileError::Io
+        | PackCacheFileError::AlreadyExists
+        | PackCacheFileError::Durability => GitdCoreError::Storage,
+    }
 }
 
 fn parse_annotated_tag(
@@ -1457,6 +1544,7 @@ mod tests {
         let _ = mrml_runtime::remove_dir_all(&root);
         let repository_path = join_path(&root, "objects");
         let refs_path = join_path(&root, "refs");
+        let cache_path = join_path(&root, "fetch-cache");
         let objects = Repository::init_with_format(&repository_path, ObjectFormat::Sha256).unwrap();
         let blob = objects
             .write_object(ObjectKind::Blob, b"bounded view")
@@ -1500,8 +1588,10 @@ mod tests {
             },
         )
         .unwrap();
-        let mut view =
-            FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path).unwrap();
+        let mut view = FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path)
+            .unwrap()
+            .with_pack_cache(&cache_path)
+            .unwrap();
         let evidence = VerificationSummaryEvidence::from_verified_hybrid_commit(
             &VerifiedCommitProof {
                 commit,
@@ -1934,6 +2024,29 @@ mod tests {
         }
         let objects = crate::parse_pack_with_format(&pack, ObjectFormat::Sha256).unwrap();
         assert!(objects.iter().any(|object| object.id == commit));
+        view.precompute_fetch_pack(&identity, &[commit], &[])
+            .unwrap();
+        let cache = ImmutablePackCacheDirectory::open(&cache_path).unwrap();
+        let exact_key = PackCacheKey::new(
+            ObjectFormat::Sha256,
+            Vector::from([commit]),
+            Vector::new(),
+            RepositoryGeneration(4),
+            FETCH_PACK_PROFILE_VERSION,
+            FETCH_PACK_ENCODER_VERSION,
+        )
+        .unwrap();
+        assert_eq!(&cache.lookup(&exact_key).unwrap().unwrap()[..], &pack[..]);
+        let stale_key = PackCacheKey::new(
+            ObjectFormat::Sha256,
+            Vector::from([commit]),
+            Vector::new(),
+            RepositoryGeneration(5),
+            FETCH_PACK_PROFILE_VERSION,
+            FETCH_PACK_ENCODER_VERSION,
+        )
+        .unwrap();
+        assert_eq!(cache.lookup(&stale_key).unwrap(), None);
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 
