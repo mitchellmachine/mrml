@@ -1,16 +1,20 @@
+use mrml_acme::{AcmeIdentifier, CaClass};
 use mrml_certificate::{
     AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
     CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
     CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow,
-    CertdTlsKeyRequest, CertificateP256SigningKey, ConstrainedAcmeJwsPolicy,
-    HmacSha256DurableAuthenticator, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
+    CertdTlsKeyRequest, CertificateChainVerifier, CertificateP256SigningKey,
+    CertificateValidationPolicy, ConstrainedAcmeJwsPolicy, HmacSha256DurableAuthenticator,
+    HostedCertificateChainVerifier, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
     HostedP256KeyStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES,
-    MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE, TlsIdentityId, TlsKeyIdentity,
-    TlsSigningRoute, UnixCertdListener, decode_certd_account_key_request,
-    decode_certd_channel_request, decode_certd_jws_request, decode_certd_tls_key_request,
-    encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
-    write_constrained_acme_jws, write_pkcs10_csr,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS,
+    PRODUCTION_SECRET_MODE, PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId,
+    TlsKeyIdentity, TlsSigningRoute, UnixCertdListener, decode_certd_account_key_request,
+    decode_certd_candidate_request, decode_certd_channel_request, decode_certd_jws_request,
+    decode_certd_tls_key_request, encode_certd_channel_request, encode_certd_tls_key_response,
+    parse_certd_config, write_constrained_acme_jws, write_pkcs10_csr,
 };
+use mrml_crypto::ecdsa_p256_digest_verify_raw;
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -33,6 +37,7 @@ const ACMED_SOCKET: &str = "/run/mrml/certd-acmed/certd.sock";
 const UNLOCK_SECRET: &str = "/run/secrets/certd-unlock.key";
 const KEY_STORE_ROOT: &str = "/var/lib/mrml/certd/keys";
 const CONFIG_PATH: &str = "/etc/mrml/certd/config.json";
+const TRUST_ROOTS_PATH: &str = "/etc/mrml/certd/acme-trust-roots.pem";
 const GITD_CAPABILITY: &str = "/run/secrets/certd-gitd.cap";
 const ACMED_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
@@ -41,6 +46,15 @@ struct CertdHostedState {
     config: CertdConfig,
     account_key: Mutex<AccountP256SigningKey>,
     certificate_key: Mutex<CertificateP256SigningKey>,
+    trust_roots: PemCertificateChain,
+    candidate: Mutex<Option<StagedCandidate>>,
+}
+
+struct StagedCandidate {
+    chain: PemCertificateChain,
+    leaf_spki_digest: [u8; 32],
+    not_before: u64,
+    not_after: u64,
 }
 
 fn main() {
@@ -56,6 +70,7 @@ fn application_main() -> Result<(), &'static str> {
     match command.as_str() {
         "check-config" => {
             let (_authenticator, _key_store) = load_certd_storage()?;
+            let _trust_roots = load_trust_roots(config)?;
             let _gitd = load_channel_capability(GITD_CAPABILITY)?;
             let _acmed = load_channel_capability(ACMED_CAPABILITY)?;
             println!("mrml-certd configuration valid");
@@ -68,7 +83,8 @@ fn application_main() -> Result<(), &'static str> {
 
 fn serve(config: CertdConfig) -> Result<(), &'static str> {
     let (_durable_authenticator, key_store) = load_certd_storage()?;
-    let state = Arc::new(load_or_create_keys(config, &key_store)?);
+    let trust_roots = load_trust_roots(config)?;
+    let state = Arc::new(load_or_create_keys(config, &key_store, trust_roots)?);
     let gitd_capability = load_channel_capability(GITD_CAPABILITY)?;
     let acmed_capability = load_channel_capability(ACMED_CAPABILITY)?;
     let gitd = UnixCertdListener::bind(
@@ -260,6 +276,113 @@ fn dispatch_channel_request(
             .map_err(|_| ())?;
             Ok(csr.len())
         }
+        CertdChannelOperation::StageCertificateCandidate => {
+            let request = decode_certd_candidate_request(payload).map_err(|_| ())?;
+            if request.identity != state.config.identity
+                || request.directory_generation != state.config.directory_generation
+                || request.account_generation != state.config.account_generation
+                || request.key_generation != state.config.key_generation
+                || request.policy_generation != state.config.policy_generation
+                || request.profile != state.config.certificate_profile
+            {
+                return Err(());
+            }
+            let now_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| ())?
+                .as_secs();
+            let count = usize::from(state.config.identifier_count);
+            let mut identifiers = [None; mrml_certificate::MAX_IDENTITY_NAMES];
+            for (target, source) in identifiers
+                .iter_mut()
+                .zip(state.config.identifiers.iter().take(count))
+            {
+                *target = Some(AcmeIdentifier::Dns(source.ok_or(())?));
+            }
+            let certificate = state.certificate_key.lock().map_err(|_| ())?;
+            let expected_key = certificate.public_jwk().map_err(|_| ())?;
+            let mut approved_roots = [&[][..]; MAX_CERTIFICATES];
+            for (index, root) in approved_roots
+                .iter_mut()
+                .enumerate()
+                .take(state.trust_roots.count())
+            {
+                *root = state.trust_roots.certificate(index).ok_or(())?;
+            }
+            let ca_class = if state.config.directory_class
+                == mrml_certificate::CertdDirectoryClass::PublicProduction
+            {
+                CaClass::Production
+            } else {
+                CaClass::Staging
+            };
+            let mut verifier = HostedCertificateChainVerifier {
+                ca_class,
+                trust_store_digest: state.config.trust_store_sha256,
+                approved_roots: &approved_roots[..state.trust_roots.count()],
+            };
+            let verified = verifier
+                .verify(
+                    &request.chain,
+                    &CertificateValidationPolicy {
+                        policy_generation: state.config.policy_generation,
+                        ca_class,
+                        profile: state.config.certificate_profile,
+                        order_url_digest: request.order_url_digest,
+                        expected_key,
+                        identifiers,
+                        identifier_count: state.config.identifier_count,
+                        allow_ip_identifiers: false,
+                        now_unix,
+                        maximum_validity_seconds: state.config.maximum_validity_seconds,
+                        minimum_remaining_lifetime_seconds: state
+                            .config
+                            .minimum_remaining_lifetime_seconds,
+                        maximum_chain_length: state.config.maximum_chain_length,
+                        trust_store_digest: state.config.trust_store_sha256,
+                    },
+                )
+                .map_err(|_| ())?;
+            let approved = mrml_certificate::ApprovedTls13CertificateVerify::new(
+                [0x5a; 32],
+                certificate.route(),
+            );
+            let mut certificate = certificate;
+            let signature = certificate
+                .sign_tls13_certificate_verify(&approved)
+                .map_err(|_| ())?;
+            if ecdsa_p256_digest_verify_raw(
+                &expected_key.sec1_uncompressed(),
+                approved.digest(),
+                signature.as_bytes(),
+            )
+            .is_err()
+            {
+                return Err(());
+            }
+            let mut candidate = state.candidate.lock().map_err(|_| ())?;
+            if let Some(existing) = candidate.as_ref() {
+                if existing.chain.chain_digest() != verified.chain_digest
+                    || existing.leaf_spki_digest != verified.leaf_spki_digest
+                    || existing.not_before != verified.not_before
+                    || existing.not_after != verified.not_after
+                {
+                    return Err(());
+                }
+            } else {
+                *candidate = Some(StagedCandidate {
+                    chain: request.chain,
+                    leaf_spki_digest: verified.leaf_spki_digest,
+                    not_before: verified.not_before,
+                    not_after: verified.not_after,
+                });
+            }
+            if output.len() < 32 {
+                return Err(());
+            }
+            output[..32].copy_from_slice(&verified.chain_digest);
+            Ok(32)
+        }
         _ => Err(()),
     }
 }
@@ -290,6 +413,7 @@ fn require_tls_request(config: CertdConfig, request: CertdTlsKeyRequest) -> Resu
 fn load_or_create_keys(
     config: CertdConfig,
     key_store: &HostedP256KeyStore,
+    trust_roots: PemCertificateChain,
 ) -> Result<CertdHostedState, &'static str> {
     let account_descriptor = HostedP256KeyDescriptor {
         role: HostedP256KeyRole::AcmeAccount,
@@ -344,7 +468,23 @@ fn load_or_create_keys(
         config,
         account_key: Mutex::new(account_key),
         certificate_key: Mutex::new(certificate_key),
+        trust_roots,
+        candidate: Mutex::new(None),
     })
+}
+
+fn load_trust_roots(config: CertdConfig) -> Result<PemCertificateChain, &'static str> {
+    let roots = HostedSecret::open(
+        Path::new(TRUST_ROOTS_PATH),
+        0,
+        0o444,
+        MAX_CERTIFICATE_CHAIN_BYTES,
+    )
+    .map_err(|_| "unsafe certd trust roots")?;
+    if Sha256::digest(roots.expose()) != config.trust_store_sha256 {
+        return Err("certd trust root digest mismatch");
+    }
+    PemCertificateChain::parse(roots.expose()).map_err(|_| "invalid certd trust roots")
 }
 
 fn fill_entropy(output: &mut [u8]) -> Result<(), mrml_crypto::P256Error> {

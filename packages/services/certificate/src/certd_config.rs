@@ -1,4 +1,4 @@
-use mrml_acme::{AcmeUrl, DnsIdentifier, MAX_CSR_IDENTIFIERS};
+use mrml_acme::{AcmeUrl, CertificateProfile, DnsIdentifier, MAX_CSR_IDENTIFIERS};
 use mrml_crypto::Sha256;
 use mrml_json::Value;
 
@@ -29,6 +29,7 @@ pub struct CertdConfig {
     pub maximum_validity_seconds: u64,
     pub minimum_remaining_lifetime_seconds: u64,
     pub maximum_chain_length: u8,
+    pub certificate_profile: CertificateProfile,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,7 +52,7 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| CertdConfigError::Malformed)?;
     let object = value.as_object().ok_or(CertdConfigError::Malformed)?;
-    const FIELDS: [&str; 16] = [
+    const FIELDS: [&str; 17] = [
         "directory_url",
         "directory_generation",
         "directory_class",
@@ -68,6 +69,7 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         "maximum_validity_seconds",
         "minimum_remaining_lifetime_seconds",
         "maximum_chain_length",
+        "certificate_profile",
     ];
     if object
         .iter()
@@ -141,6 +143,9 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         generation(&value, "minimum_remaining_lifetime_seconds")?;
     let maximum_chain_length = u8::try_from(generation(&value, "maximum_chain_length")?)
         .map_err(|_| CertdConfigError::InvalidGeneration)?;
+    let certificate_profile =
+        CertificateProfile::parse(text(&value, "certificate_profile")?, directory_generation)
+            .map_err(|_| CertdConfigError::InvalidGeneration)?;
     if !(86_400..=34_560_000).contains(&maximum_validity_seconds)
         || minimum_remaining_lifetime_seconds < 3_600
         || minimum_remaining_lifetime_seconds >= maximum_validity_seconds
@@ -165,6 +170,7 @@ pub fn parse_certd_config(source: &str) -> Result<CertdConfig, CertdConfigError>
         maximum_validity_seconds,
         minimum_remaining_lifetime_seconds,
         maximum_chain_length,
+        certificate_profile,
     })
 }
 
@@ -255,7 +261,7 @@ fn nibble(value: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
-    const CONFIG: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"account_identity":"11111111111111111111111111111111","account_generation":1,"identity":"22222222222222222222222222222222","key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"key_algorithm":"P-256","trust_store_sha256":"1111111111111111111111111111111111111111111111111111111111111111","maximum_validity_seconds":7776000,"minimum_remaining_lifetime_seconds":604800,"maximum_chain_length":4}"#;
+    const CONFIG: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"account_identity":"11111111111111111111111111111111","account_generation":1,"identity":"22222222222222222222222222222222","key_generation":1,"policy_generation":1,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"key_algorithm":"P-256","trust_store_sha256":"1111111111111111111111111111111111111111111111111111111111111111","maximum_validity_seconds":7776000,"minimum_remaining_lifetime_seconds":604800,"maximum_chain_length":4,"certificate_profile":"classic"}"#;
 
     #[test]
     fn exact_policy_derives_stable_identifier_binding() {
