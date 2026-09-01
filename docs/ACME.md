@@ -117,7 +117,14 @@ is excluded from ordinary feature profiles because the inherited curve
 arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
-General JOSE response parsing, ACME transport, concrete socket adapters and
+The shared ACME transport contract now admits only exact current-directory
+same-origin endpoints, requires authenticated adapters to report the effective
+URL, forbids redirects, bounds response bodies and Retry-After metadata,
+captures validated replay nonces into the exact directory generation, consumes
+each nonce once, and caps typed `badNonce` retries. Platform HTTPS socket/TLS
+adapters remain separate from this semantic state.
+
+General JOSE response parsing, concrete ACME socket adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
 alternate-chain selection, renewal execution, revocation transport,
 backup/restore, CLI administration, interface dispatch/service loop, concrete

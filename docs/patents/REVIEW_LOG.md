@@ -11308,3 +11308,12 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 certificate-chain publication, use-only TLS signing routes, and
 prepare/test/activate/resolve/retain identity generations. It adds no recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Bounded authenticated ACME transport contract
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary RFC 8555 HTTPS
+request/response binding, strict same-origin and no-redirect policy, bounded
+response metadata, one-use replay-nonce acquisition, and a finite `badNonce`
+retry counter. It adds no route-selected multi-vantage validation, challenge
+proxy, MultiTLS multiplexing, or other recorded re-review-trigger mechanism.
