@@ -1734,8 +1734,18 @@ fn dispatch(cli: &Cli) -> Result<()> {
             println!("validated {} reachable reference tip(s)", count);
             Ok(())
         }
-        "gc" | "repack" if tail.is_empty() => Err(anyhow!(
-            "{} is unavailable: canonical compaction remains fail-closed pending the required mechanism-level patent review",
+        "gc" | "repack" if tail.is_empty() => {
+            let result = native_repository(repository)?
+                .repack_local()
+                .map_err(|error| anyhow!("{}", error))?;
+            println!(
+                "packed {} reachable object(s) as {}",
+                result.object_count, result.pack_checksum
+            );
+            Ok(())
+        }
+        "gc" | "repack" => Err(anyhow!(
+            "{} accepts no options or positional arguments",
             cli.command
         )),
         "stash" if tail.is_empty() || (tail.len() == 1 && tail[0] == "list") => {
@@ -1886,12 +1896,25 @@ mod tests {
         invoke(&path, "mv", &["tracked.txt", "renamed.txt"]);
         invoke(&path, "rm", &["renamed.txt"]);
         for command in ["gc", "repack"] {
-            assert!(dispatch(&Cli {
+            let result = dispatch(&Cli {
                 repository: Some(path.clone()),
                 command: command.into(),
                 arguments: Vector::new(),
+            });
+            #[cfg(unix)]
+            assert!(result.is_ok());
+            #[cfg(windows)]
+            assert!(result.is_err());
+            let rejected = dispatch(&Cli {
+                repository: Some(path.clone()),
+                command: command.into(),
+                arguments: Vector::from([Text::from("--all")]),
             })
-            .is_err());
+            .unwrap_err();
+            assert_eq!(
+                format!("{}", rejected),
+                format!("{} accepts no options or positional arguments", command)
+            );
         }
         remove_dir_all(&path).unwrap();
     }

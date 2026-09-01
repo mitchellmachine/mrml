@@ -162,6 +162,12 @@ pub enum RepositoryError {
 }
 
 impl Repository {
+    /// Writes a deterministic pack containing every object reachable from
+    /// local branches, tags, and HEAD. Existing objects and packs are retained.
+    pub fn repack_local(&self) -> Result<crate::LocalRepackResult, RepositoryError> {
+        crate::local_repack::repack(self)
+    }
+
     pub fn discover(start: &str) -> Result<Self, RepositoryError> {
         let resolved = canonical_path(start)?;
         let mut current = if path_is_directory(&resolved) {

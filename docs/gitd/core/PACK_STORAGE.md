@@ -154,15 +154,13 @@ Dynamic-Huffman level-9 encoding, direct-window OFS delta selection, exact-key
 cache semantics, and generation-safe durable Linux compaction activation are implemented.
 No outer Zstandard layer belongs in Git pack storage.
 
-Active arrival-pack reads remain fail closed for an immediate authority reason.
-`MRREFS01` authenticates only a scalar `PackGeneration`, and verified receive
-preserves that value unchanged. No persisted object binds the generation to an
-ordered list of arrival transaction IDs, exact object counts, pack checksums,
-and index checksums. Journals identify individual transactions and counts, and
-each installed index authenticates its own pack checksum, but neither grants
-membership in an active pack set. Directory entries and transaction-derived
-names identify files only; a reader must not scan or promote them into
-authority.
+Active arrival-pack reads are authorized only by the exact `MRPKSET1` digest in
+`MRREFS02`; directory entries and transaction-derived names never grant
+membership. The repository view resolves commit, tree, blob, tag, README,
+verified-metadata, and upload-pack traversal through that selected set before
+the baseline object database. Every selected read reauthenticates its bounded
+pack/index pair and Git identity, unselected installed arrivals remain
+invisible, and operations recheck the complete active-ref state before return.
 
 `MRPKSET1` now implements the non-authoritative manifest prerequisite. Its
 private validated construction consumes authenticated index summaries and binds
@@ -198,7 +196,7 @@ rehashes its Git identity. Thin-pack validation consults this selected view
 before the separately authenticated baseline repository, so sequential receives
 can use prior active arrivals without directory scanning. Protected-history
 traversal uses the same selected view, and the end-to-end receive test prepares
-a second commit whose parent exists only in the first selected arrival. General
-repository view and upload-pack composition still need to route through this
-selected arrival reader. This membership authority remains independent of the
-guarded delta selector and future compaction policy.
+a second commit whose parent exists only in the first selected arrival. The
+general repository view and upload-pack composition use the same authority and
+have focused selected-versus-unselected coverage. This membership authority
+remains independent of the guarded delta selector and compaction policy.

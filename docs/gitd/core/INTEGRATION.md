@@ -80,10 +80,13 @@ Standard branch semantics are now exact for the bounded forms: `git branch
 NAME` creates without switching, `git branch -d NAME` deletes under the native
 branch checks, and `git switch -c NAME` / `git checkout -b NAME` create and
 switch. `git tag -s NAME -m MESSAGE` and `git tag -s -m MESSAGE NAME` route to
-the first-party signed annotated-tag path. `git gc` and `git repack` are
-recognized but still return an explicit fail-closed service-composition error;
-the internal canonical compactor is not yet wired to these porcelain commands.
-They never invoke host Git or claim a no-op performed maintenance.
+the first-party signed annotated-tag path. On hosted Linux, option-free `git gc`
+and `git repack` now write and reopen a deterministic content-addressed pack and
+v2 index containing the complete closure of local branches, tags, and `HEAD`.
+They retain loose objects and prior packs, so this is non-destructive repacking,
+not unreachable-object collection. Windows remains fail closed until directory
+durability exists, and unsupported arguments are rejected. Neither command
+invokes host Git.
 
 `git cat-file -t`, `-s`, and `-p` are native. Type and size work for every
 authenticated object kind. Pretty mode emits parsed tree entries or exact UTF-8
@@ -143,8 +146,8 @@ repair, both the primary checkout and this worktree passed `git fsck --full
 objects. This branch did not delete or repair Git objects.
 
 `docs/gitd/core/READY` records the focused green gates and deliberately
-classifies the result `CORE_BLOCKED`: canonical level-9/delta compaction,
-native-Windows durability, process-kill fault injection, scale/concurrency
+classifies the result `CORE_BLOCKED`: native-Windows durability, process-kill
+fault injection, scale/concurrency
 benchmarks, sanitizer/fuzz campaigns, and independent review remain open. The
 focused Windows Git package completed under Wine using the pinned
 `nightly-2026-08-29-x86_64-pc-windows-gnullvm` toolchain at rustc commit

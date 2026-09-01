@@ -17,6 +17,7 @@ mod gitd_core;
 mod hybrid_signing;
 mod index;
 mod inflate;
+mod local_repack;
 mod object;
 mod openpgp_provider;
 mod pack;
@@ -77,6 +78,7 @@ pub use gitd_core::{
 };
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
+pub use local_repack::LocalRepackResult;
 pub use mrml_openpgp::{
     DigestAlgorithm as OpenPgpDigestAlgorithm, Error as OpenPgpError,
     Fingerprint as OpenPgpFingerprint, PublicKey as OpenPgpPublicKey,

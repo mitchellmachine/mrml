@@ -122,6 +122,11 @@ want-ref, packfile-URI, and future arguments fail closed. Parser coverage is
 separate from the bounded clone backend described below.
 
 `FilesystemRepositoryView` now implements a bounded protocol-v2 fetch subset.
+When configured with the arrival store, it reads only packs named by the exact
+active `MRPKSET1` manifest; installed but unselected arrivals are invisible.
+Object queries and fetch traversal share this selected view, and the complete
+active state is re-read before success so ref, trust, revocation, repository,
+pack, default-branch, or manifest changes make the operation stale.
 `ls-refs` reads only the exact active ref generation, applies bounded byte
 prefixes, emits the default `HEAD` symref or an explicitly requested unborn
 default, performs bounded annotated-tag peeling when requested, and rechecks the
