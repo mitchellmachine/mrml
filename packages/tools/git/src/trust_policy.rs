@@ -419,7 +419,7 @@ pub struct EmergencyRecoveryAuthorization {
     transition_digest: [u8; 64],
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl EmergencyRecoveryAuthorization {
     pub(crate) fn exact_test_authorization(
         authority: &EmergencyRecoveryAuthority,
@@ -1231,7 +1231,7 @@ impl<'a> PolicyCursor<'a> {
 }
 
 impl TrustPolicyState {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn from_emergency_candidate_for_test(candidate: TrustPolicyCandidate) -> Self {
         validate_candidate(&candidate).expect("valid emergency policy test candidate");
         Self::from_candidate(candidate)
