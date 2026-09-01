@@ -68,8 +68,8 @@ pub use local_authority::{
     LOCAL_AUTHORIZATION_URL, LOCAL_CERTIFICATE_URL, LOCAL_CHALLENGE_URL, LOCAL_DIRECTORY_URL,
     LOCAL_FINALIZE_URL, LOCAL_KEY_CHANGE_URL, LOCAL_NEW_ACCOUNT_URL, LOCAL_NEW_NONCE_URL,
     LOCAL_NEW_ORDER_URL, LOCAL_ORDER_URL, LOCAL_RENEWAL_INFO_CERTIFICATE_URL,
-    LOCAL_RENEWAL_INFO_URL, LOCAL_REVOKE_URL, LocalAuthorityError, LocalAuthorityFault,
-    LocalAuthorityState, LocalJwsVerifier,
+    LOCAL_RENEWAL_INFO_URL, LOCAL_REVOKE_URL, LocalAuthorityChallenge, LocalAuthorityError,
+    LocalAuthorityFault, LocalAuthorityState, LocalJwsVerifier,
 };
 pub use nonce::{MAX_NONCE_BYTES, MAX_NONCES, NonceError, NoncePool, ReplayNonce};
 pub use operation::{

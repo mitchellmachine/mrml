@@ -31,6 +31,10 @@ const ORDER_READY: &str = r#"{"status":"ready","identifiers":[{"type":"dns","val
 const ORDER_VALID: &str = r#"{"status":"valid","identifiers":[{"type":"dns","value":"git.example"}],"authorizations":["https://local-ca.invalid/acme/authz/1"],"finalize":"https://local-ca.invalid/acme/order/1/finalize","certificate":"https://local-ca.invalid/acme/certificate/1","profile":"classic"}"#;
 const AUTH_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
 const AUTH_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"http-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
+const AUTH_TLS_ALPN_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"tls-alpn-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
+const AUTH_TLS_ALPN_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"tls-alpn-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
+const AUTH_DNS_PENDING: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"pending","wildcard":false,"challenges":[{"type":"dns-01","url":"https://local-ca.invalid/acme/challenge/1","status":"pending","token":"local-token"}]}"#;
+const AUTH_DNS_VALID: &str = r#"{"identifier":{"type":"dns","value":"git.example"},"status":"valid","wildcard":false,"challenges":[{"type":"dns-01","url":"https://local-ca.invalid/acme/challenge/1","status":"valid","token":"local-token"}]}"#;
 const SYNTHETIC_CERTIFICATE: &str = "-----BEGIN CERTIFICATE-----\nTUlNRS1CT1VOREVELUxPQ0FMLUNBLUZJWFRVUkU=\n-----END CERTIFICATE-----\n";
 const NONCES: [&str; 16] = [
     "local-nonce-01",
@@ -59,6 +63,12 @@ pub enum LocalAuthorityState {
     OrderValid,
     Revoked,
     AccountDeactivated,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalAuthorityChallenge {
+    Http01,
+    TlsAlpn01,
+    Dns01,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalAuthorityFault {
@@ -104,6 +114,7 @@ pub struct DeterministicAcmeAuthority<V> {
     fault_used: bool,
     certificate: &'static str,
     require_eab: bool,
+    challenge: LocalAuthorityChallenge,
 }
 impl<V> DeterministicAcmeAuthority<V> {
     pub const fn new(verifier: V, key: P256Jwk) -> Self {
@@ -117,6 +128,7 @@ impl<V> DeterministicAcmeAuthority<V> {
             fault_used: false,
             certificate: SYNTHETIC_CERTIFICATE,
             require_eab: false,
+            challenge: LocalAuthorityChallenge::Http01,
         }
     }
     pub const fn state(&self) -> LocalAuthorityState {
@@ -135,6 +147,10 @@ impl<V> DeterministicAcmeAuthority<V> {
     }
     pub fn require_external_account_binding(mut self) -> Self {
         self.require_eab = true;
+        self
+    }
+    pub fn with_challenge(mut self, challenge: LocalAuthorityChallenge) -> Self {
+        self.challenge = challenge;
         self
     }
     fn issue_nonce(&mut self) -> &'static str {
@@ -336,12 +352,12 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
             }
             LOCAL_AUTHORIZATION_URL => {
                 let body = if self.state == LocalAuthorityState::OrderPending {
-                    AUTH_PENDING
+                    authorization_body(self.challenge, false)
                 } else if matches!(
                     self.state,
                     LocalAuthorityState::AuthorizationValid | LocalAuthorityState::OrderValid
                 ) {
-                    AUTH_VALID
+                    authorization_body(self.challenge, true)
                 } else {
                     return Err(LocalAuthorityError::InvalidState);
                 };
@@ -367,7 +383,7 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     next,
                     None,
                     Some("application/json"),
-                    AUTH_VALID,
+                    authorization_body(self.challenge, true),
                 )
             }
             LOCAL_ORDER_URL => {
@@ -693,6 +709,16 @@ fn json_string_field<'a>(source: &'a str, name: &str) -> Result<&'a str, LocalAu
         return Err(LocalAuthorityError::InvalidProtectedHeader);
     }
     Ok(&rest[..end])
+}
+fn authorization_body(challenge: LocalAuthorityChallenge, valid: bool) -> &'static str {
+    match (challenge, valid) {
+        (LocalAuthorityChallenge::Http01, false) => AUTH_PENDING,
+        (LocalAuthorityChallenge::Http01, true) => AUTH_VALID,
+        (LocalAuthorityChallenge::TlsAlpn01, false) => AUTH_TLS_ALPN_PENDING,
+        (LocalAuthorityChallenge::TlsAlpn01, true) => AUTH_TLS_ALPN_VALID,
+        (LocalAuthorityChallenge::Dns01, false) => AUTH_DNS_PENDING,
+        (LocalAuthorityChallenge::Dns01, true) => AUTH_DNS_VALID,
+    }
 }
 fn contains(source: impl AsRef<[u8]>, needle: impl AsRef<[u8]>) -> bool {
     let s = source.as_ref();
@@ -1120,5 +1146,77 @@ mod tests {
         .unwrap();
         assert_eq!(created.metadata.status, 201);
         assert_eq!(authority.state(), LocalAuthorityState::AccountValid);
+    }
+
+    #[test]
+    fn authority_advertises_each_exact_supported_challenge() {
+        for (challenge, expected) in [
+            (LocalAuthorityChallenge::Http01, "\"type\":\"http-01\""),
+            (
+                LocalAuthorityChallenge::TlsAlpn01,
+                "\"type\":\"tls-alpn-01\"",
+            ),
+            (LocalAuthorityChallenge::Dns01, "\"type\":\"dns-01\""),
+        ] {
+            let directory_url = url(LOCAL_DIRECTORY_URL);
+            let public_key = key();
+            let mut authority =
+                DeterministicAcmeAuthority::new(Verifier, public_key).with_challenge(challenge);
+            let mut exchange = AcmeExchange::new(5, directory_url);
+            let mut response = [0u8; 65_536];
+            let mut jws = [0u8; 49_152];
+            let directory = fetch_directory(
+                &directory_url,
+                5,
+                &mut exchange,
+                &mut authority,
+                &mut response,
+            )
+            .unwrap();
+            let mut signer = Signer;
+            post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &directory.new_account,
+                ProtectedKey::Jwk(&public_key),
+                b"{}",
+                0,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            )
+            .unwrap();
+            let account = url(LOCAL_ACCOUNT_URL);
+            post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &directory.new_order,
+                ProtectedKey::Kid(&account),
+                br#"{"identifiers":[{"type":"dns","value":"git.example"}],"profile":"classic"}"#,
+                1,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            )
+            .unwrap();
+            let authorization = post_jws(
+                &mut exchange,
+                &mut authority,
+                &directory.new_nonce,
+                &url(LOCAL_AUTHORIZATION_URL),
+                ProtectedKey::Kid(&account),
+                b"",
+                1,
+                &mut signer,
+                &mut response,
+                &mut jws,
+            )
+            .unwrap();
+            let body =
+                core::str::from_utf8(&response[..authorization.metadata.body_length]).unwrap();
+            assert!(body.contains(expected));
+        }
     }
 }

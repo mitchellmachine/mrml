@@ -11736,3 +11736,12 @@ self-verification. It adds separately generated, purpose- and
 generation-restricted account, CSR, and TLS signing providers. It introduces
 no smart-card precomputed signing-element machinery or other recorded
 re-review trigger.
+
+# 2026-09-01 — Deterministic ACME challenge selection variants
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment makes the local test authority
+select and report each already reviewed HTTP-01, TLS-ALPN-01, and DNS-01
+authorization type through the same order state machine. It introduces no
+MultiTLS multiplexing, private-network challenge proxy, route-selected
+multi-vantage validation, or other recorded re-review trigger.
