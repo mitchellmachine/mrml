@@ -44,6 +44,15 @@ fail closed with `MissingBase`; scratch-backed base/result storage, depth-50
 resolution, and streaming delta instructions remain required before receive may
 accept or advertise delta/thin packs.
 
+Each authenticated direct object is now written as a new, fsynced scratch object
+under the transaction-derived quarantine directory using its recomputed full ID
+as the filename and an internal type byte. Duplicate IDs cannot overwrite an
+existing scratch object. The crate-private resolver reopens a regular file,
+bounds its size, decodes the type, recomputes the canonical Git object ID, and
+returns bytes only to the protected receive compositor. These scratch objects
+remain outside normal repository reads and move only with the immutable arrival
+transaction directory.
+
 `pack_index.rs` constructs and parses Git pack index v2 for both SHA-1
 compatibility and SHA-256 repositories. It validates monotonic fanout tables,
 strictly sorted full object IDs, duplicates, CRC fields, 32-bit and canonical

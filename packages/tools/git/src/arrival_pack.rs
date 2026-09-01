@@ -5,7 +5,8 @@ use mrml_runtime::{
     rename_file,
 };
 
-use crate::pack_file::validate_direct_pack_file;
+use crate::pack_file::{validate_direct_pack_file, validate_direct_pack_file_with_sink};
+use crate::sha1::GitObjectHasher;
 use crate::{
     BoundedRead, DEFAULT_MAX_EXPANDED_OBJECT_BYTES, DEFAULT_MAX_INCOMING_PACK_BYTES,
     DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES, DurableFailure, GitdCoreError, ObjectFormat, ObjectId,
@@ -39,6 +40,11 @@ impl ArrivalPackStore {
         }
         create_dir_all(&directory).map_err(|_| GitdCoreError::Storage)?;
         let incoming = join_path(&directory, "incoming.pack");
+        let scratch = join_path(&directory, "objects");
+        if path_exists(&scratch) {
+            return Err(GitdCoreError::Storage);
+        }
+        create_dir_all(&scratch).map_err(|_| GitdCoreError::Storage)?;
         let mut file = File::create_new(&incoming).map_err(|_| GitdCoreError::Storage)?;
         let mut remaining = expected;
         let mut buffer = [0u8; 64 * 1024];
@@ -77,13 +83,14 @@ impl ArrivalPackStore {
     ) -> Result<(), GitdCoreError> {
         let directory = self.quarantine_path(transaction.id());
         let incoming = join_path(&directory, "incoming.pack");
+        let scratch = join_path(&directory, "objects");
         let max_work = transaction
             .reservation()
             .incoming_pack_bytes()
             .checked_mul(2)
             .and_then(|value| value.checked_add(transaction.reservation().expanded_object_bytes()))
             .ok_or(GitdCoreError::Resource)?;
-        let validated = validate_direct_pack_file(
+        let validated = validate_direct_pack_file_with_sink(
             &incoming,
             self.format,
             transaction.reservation().incoming_pack_bytes(),
@@ -91,6 +98,10 @@ impl ArrivalPackStore {
             transaction.reservation().expanded_object_bytes(),
             transaction.reservation().individual_object_bytes(),
             max_work,
+            |id, kind, contents| {
+                write_scratch_object(&scratch, id, kind, contents)
+                    .map_err(|_| crate::PackError::TooLarge)
+            },
         )
         .map_err(|_| GitdCoreError::ObjectValidation)?;
         if validated.objects.is_empty()
@@ -108,6 +119,7 @@ impl ArrivalPackStore {
             .map_err(|_| GitdCoreError::Storage)?;
         rename_file(&incoming, &join_path(&directory, "objects.pack"))
             .map_err(|_| GitdCoreError::Storage)?;
+        sync_pack_directory(&scratch).map_err(|_| GitdCoreError::Storage)?;
         sync_pack_directory(&directory).map_err(|_| GitdCoreError::Storage)?;
         transaction
             .objects_validated(validated.expanded_bytes, validated.objects.len() as u32)
@@ -138,6 +150,46 @@ impl ArrivalPackStore {
             arrivals,
             format,
             max_pack_bytes,
+        })
+    }
+
+    #[allow(dead_code)] // consumed by the protected receive compositor in the next gate
+    pub(crate) fn read_quarantined_object(
+        &self,
+        transaction: QuarantineTransactionId,
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<crate::Object, GitdCoreError> {
+        if id.format() != self.format || max_bytes == 0 {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let path = join_path(
+            &join_path(&self.quarantine_path(transaction), "objects"),
+            &id.to_hex(),
+        );
+        let encoded = read_regular_bounded(
+            &path,
+            max_bytes.checked_add(1).ok_or(GitdCoreError::Resource)?,
+        )
+        .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let (&kind, contents) = encoded
+            .split_first()
+            .ok_or(GitdCoreError::ObjectValidation)?;
+        let kind = decode_kind(kind)?;
+        let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
+        let mut hash = GitObjectHasher::new(self.format);
+        hash.update(header.as_bytes());
+        hash.update(contents);
+        if hash.finalize() != id {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let mut copied = Vector::new();
+        copied
+            .try_extend_from_slice(contents)
+            .map_err(|_| GitdCoreError::Resource)?;
+        Ok(crate::Object {
+            kind,
+            contents: copied,
         })
     }
 
@@ -280,6 +332,37 @@ fn write_new_synced(path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
     file.sync().map_err(|_| DurableFailure::Fsync)
 }
 
+fn write_scratch_object(
+    directory: &str,
+    id: ObjectId,
+    kind: crate::ObjectKind,
+    contents: &[u8],
+) -> Result<(), DurableFailure> {
+    let mut file = File::create_new(&join_path(directory, &id.to_hex()))
+        .map_err(|_| DurableFailure::StaleLock)?;
+    let kind = match kind {
+        crate::ObjectKind::Commit => 1,
+        crate::ObjectKind::Tree => 2,
+        crate::ObjectKind::Blob => 3,
+        crate::ObjectKind::Tag => 4,
+    };
+    file.write_all(&[kind])
+        .and_then(|_| file.write_all(contents))
+        .map_err(|_| DurableFailure::ShortWrite)?;
+    file.sync().map_err(|_| DurableFailure::Fsync)
+}
+
+#[allow(dead_code)]
+fn decode_kind(kind: u8) -> Result<crate::ObjectKind, GitdCoreError> {
+    match kind {
+        1 => Ok(crate::ObjectKind::Commit),
+        2 => Ok(crate::ObjectKind::Tree),
+        3 => Ok(crate::ObjectKind::Blob),
+        4 => Ok(crate::ObjectKind::Tag),
+        _ => Err(GitdCoreError::ObjectValidation),
+    }
+}
+
 fn read_regular_bounded(path: &str, limit: u64) -> Result<Vector<u8>, DurableFailure> {
     let mut file = File::open_regular(path).map_err(|_| DurableFailure::VerifierCrash)?;
     let length = file.len().map_err(|_| DurableFailure::VerifierCrash)?;
@@ -320,7 +403,7 @@ fn sync_pack_directory(_: &str) -> Result<(), DurableFailure> {
 mod tests {
     use super::*;
     use crate::{
-        PackObject, PushStorageForecast, QuarantineLimits, RepositoryGeneration,
+        ObjectKind, PackObject, PushStorageForecast, QuarantineLimits, RepositoryGeneration,
         RepositoryIdentity, RevocationGeneration, TrustGeneration, encode_pack_with_format,
         reserve_push_disk,
     };
@@ -401,6 +484,15 @@ mod tests {
             .validate_received_pack(&mut transaction, &[object_id])
             .unwrap();
         assert_eq!(transaction.validated_object_count(), Some(1));
+        assert_eq!(
+            store
+                .read_quarantined_object(transaction.id(), object_id, 1024)
+                .unwrap(),
+            crate::Object {
+                kind: ObjectKind::Blob,
+                contents: Vector::from(*b"arrival"),
+            }
+        );
         assert!(!path_exists(&store.arrival_path(transaction.id())));
         store.install(transaction.id(), 1).unwrap();
         store.verify_installed(transaction.id(), 1).unwrap();

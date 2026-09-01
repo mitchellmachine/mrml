@@ -150,6 +150,31 @@ pub(crate) fn validate_direct_pack_file(
     max_individual_bytes: u64,
     max_work_units: u64,
 ) -> Result<ValidatedDirectPack, PackError> {
+    validate_direct_pack_file_with_sink(
+        path,
+        format,
+        max_pack_bytes,
+        max_objects,
+        max_expanded_bytes,
+        max_individual_bytes,
+        max_work_units,
+        |_, _, _| Ok(()),
+    )
+}
+
+pub(crate) fn validate_direct_pack_file_with_sink<F>(
+    path: &str,
+    format: ObjectFormat,
+    max_pack_bytes: u64,
+    max_objects: u32,
+    max_expanded_bytes: u64,
+    max_individual_bytes: u64,
+    max_work_units: u64,
+    mut sink: F,
+) -> Result<ValidatedDirectPack, PackError>
+where
+    F: FnMut(ObjectId, ObjectKind, &[u8]) -> Result<(), PackError>,
+{
     let scan = scan_pack_file(path, format, max_pack_bytes, max_objects, max_work_units)?;
     let second_pass = scan
         .bytes
@@ -234,6 +259,7 @@ pub(crate) fn validate_direct_pack_file(
         object_hash.update(header.as_bytes());
         object_hash.update(&contents);
         let id = object_hash.finalize();
+        sink(id, kind, &contents)?;
         entries.push(PackIndexEntry {
             id,
             crc32: cursor.finish_crc()?,
