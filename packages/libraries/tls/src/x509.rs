@@ -135,6 +135,7 @@ pub struct Certificate<'a> {
     tbs: &'a [u8],
     subject: &'a [u8],
     spki: &'a [u8],
+    public_key_bits: &'a [u8],
     public_key: PublicKey<'a>,
     signature_algorithm: SignatureAlgorithm,
     signature: &'a [u8],
@@ -323,6 +324,7 @@ impl<'a> Certificate<'a> {
             tbs: tbs.encoded,
             subject: subject.encoded,
             spki: spki.encoded,
+            public_key_bits: &bits.value[1..],
             public_key,
             signature_algorithm,
             signature: &signature.value[1..],
@@ -358,6 +360,14 @@ impl<'a> Certificate<'a> {
     /// The DER INTEGER contents of the certificate serial number.
     pub fn serial(&self) -> &'a [u8] {
         self.serial
+    }
+
+    pub(crate) fn subject_name_der(&self) -> &'a [u8] {
+        self.subject
+    }
+
+    pub(crate) fn subject_public_key_bits(&self) -> &'a [u8] {
+        self.public_key_bits
     }
 
     pub(crate) fn verify_pkcs1_sha256(
@@ -731,6 +741,7 @@ mod tests {
             tbs: &[],
             subject: &[],
             spki: &[],
+            public_key_bits: &[],
             public_key: PublicKey::Rsa {
                 modulus: &[],
                 exponent: &[],

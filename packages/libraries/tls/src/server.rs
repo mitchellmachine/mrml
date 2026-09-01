@@ -1,6 +1,6 @@
 use crate::{
-    finished_verify_data, hybrid_server_share, KeySchedule, RecordKeys, TlsError, Transcript,
-    TLS_AES_128_GCM_SHA256, X25519_MLKEM768,
+    KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript, X25519_MLKEM768,
+    finished_verify_data, hybrid_server_share,
 };
 use mrml_crypto::{rsa_pss_sha256_sign, x25519_public, x25519_shared};
 use mrml_runtime::{TcpStream, Text, Vector};
@@ -262,6 +262,18 @@ impl TlsServerConfig {
         self.ocsp_response = Some(owned);
         Ok(self)
     }
+
+    /// Select the public gitd production signing policy.
+    ///
+    /// The current first-party RSA private operation has not yet established
+    /// blinding, fixed-shape timing, post-sign verification, and bounded signer
+    /// concurrency. Public gitd therefore fails closed rather than exposing it.
+    /// A future constant-time signer adapter can replace this gate without
+    /// weakening the experimental loopback server profile.
+    pub fn for_public_gitd(self) -> Result<Self, TlsError> {
+        let _ = self;
+        Err(TlsError::Certificate)
+    }
 }
 
 fn record(stream: &mut TcpStream) -> Result<Vector<u8>, TlsError> {
@@ -299,17 +311,7 @@ fn compatibility_change_cipher_spec(record: &[u8]) -> Result<bool, TlsError> {
 }
 fn client_offer(
     msg: &[u8],
-) -> Result<
-    (
-        &[u8],
-        u16,
-        &[u8],
-        Vector<Text>,
-        Option<Vector<u8>>,
-        bool,
-    ),
-    TlsError,
-> {
+) -> Result<(&[u8], u16, &[u8], Vector<Text>, Option<Vector<u8>>, bool), TlsError> {
     let mut c = Cursor::new(msg);
     if c.byte()? != 1 || c.u24()? != msg.len() - 4 || c.take(2)? != [3, 3] {
         return Err(TlsError::Handshake);
@@ -917,6 +919,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn public_gitd_rsa_private_signing_fails_closed() {
+        let config = TlsServerConfig {
+            certificates: Vector::new(),
+            modulus: [3].into(),
+            private_exponent: [1].into(),
+            protocols: Vector::new(),
+            ocsp_response: None,
+        };
+        assert!(matches!(
+            config.for_public_gitd(),
+            Err(TlsError::Certificate)
+        ));
+    }
+
+    #[test]
     fn compatibility_ccs_is_exact_and_bounded() {
         assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 1, 1]).unwrap());
         assert!(!compatibility_change_cipher_spec(&[23, 3, 3, 0, 1, 1]).unwrap());
@@ -925,20 +942,24 @@ mod tests {
         assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 1, 2]).is_err());
     }
     use crate::TlsClientStream;
-    use mrml_runtime::{environment_variable, read_file, TcpListener};
+    use mrml_runtime::{TcpListener, environment_variable, read_file};
 
     #[test]
     fn pem_decoder_rejects_non_base64_and_trailing_data() {
-        assert!(pem_blocks(
-            b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
-            b"CERTIFICATE"
-        )
-        .is_err());
-        assert!(pem_blocks(
-            b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
-            b"CERTIFICATE"
-        )
-        .is_err());
+        assert!(
+            pem_blocks(
+                b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
+                b"CERTIFICATE"
+            )
+            .is_err()
+        );
+        assert!(
+            pem_blocks(
+                b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
+                b"CERTIFICATE"
+            )
+            .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -971,10 +992,7 @@ mod tests {
         )
         .unwrap();
         salt.fill(0);
-        let stem = mrml_runtime::mrml_format!(
-            "/tmp/mrml-tls-pss-{}",
-            mrml_runtime::process_id()
-        );
+        let stem = mrml_runtime::mrml_format!("/tmp/mrml-tls-pss-{}", mrml_runtime::process_id());
         let message_path = mrml_runtime::mrml_format!("{stem}.message");
         let signature_path = mrml_runtime::mrml_format!("{stem}.signature");
         let public_path = mrml_runtime::mrml_format!("{stem}.public.pem");
@@ -1032,15 +1050,17 @@ mod tests {
         let config = mrml_runtime::Shared::new(TlsServerConfig::from_pem(&cert, &key).unwrap());
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        assert!(mrml_runtime::spawn_detached(move || {
-            let socket = listener.accept().unwrap();
-            let mut tls = TlsServerStream::accept(socket, &config).unwrap();
-            let mut request = [0; 4];
-            assert_eq!(tls.read(&mut request).unwrap(), 4);
-            assert_eq!(&request, b"ping");
-            tls.write_all(b"pong").unwrap();
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let socket = listener.accept().unwrap();
+                let mut tls = TlsServerStream::accept(socket, &config).unwrap();
+                let mut request = [0; 4];
+                assert_eq!(tls.read(&mut request).unwrap(), 4);
+                assert_eq!(&request, b"ping");
+                tls.write_all(b"pong").unwrap();
+            })
+            .is_ok()
+        );
         let mut client = TlsClientStream::connect("localhost", port).unwrap();
         assert_eq!(client.negotiated_group(), X25519_MLKEM768);
         client.write_all(b"ping").unwrap();
