@@ -6,6 +6,7 @@ use mrml_runtime::{Text, Vector};
 mod adversarial;
 mod arrival_pack;
 mod audit_receipt;
+mod authority_wire;
 mod cache_pack;
 mod cache_pack_file;
 mod compaction;
@@ -49,6 +50,12 @@ pub use arrival_pack::ArrivalPackStore;
 pub use audit_receipt::{
     AuditReceiptDirectory, AuditReceiptError, MAX_AUDIT_RECEIPT_BYTES, encode_audit_receipt,
     parse_audit_receipt,
+};
+pub use authority_wire::{
+    AuthorityCommitRequest, AuthorityReceiptRequest, MAX_AUTHORITY_COMMIT_BYTES,
+    MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES, encode_authority_commit, encode_authority_receipt,
+    encode_authority_receive, encode_authority_ref_transaction, parse_authority_commit,
+    parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
 };
 pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,
