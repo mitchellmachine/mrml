@@ -188,8 +188,8 @@ digests, and produces an overall digest. Verification is read-only; restoration
 requires an empty target and a target-provided atomic begin/import/commit path
 with abort on failure. The format carries opaque sealed-provider handles, never
 raw private keys. A provider-specific separately protected sealed-key export and
-the `mrml cert backup` frontend wiring remain required before operational
-disaster recovery is complete.
+backup creation/download provider remain required before operational disaster
+recovery is complete.
 Because a complete container may exceed the lifecycle ABI's 4 KiB request
 window, restore input is assembled by a bounded sequential transfer state
 machine rather than by raising that ABI bound. Each upload binds a nonzero
@@ -217,7 +217,15 @@ it constructs the canonical command and generated lifecycle frame, owns the
 nonoverlapping 4096-byte request and 80-byte response views, distinguishes
 remote backup errors, validates the returned transfer generation against the
 canonical receipt, and clears its complete scratch buffer. Administrator CLI
-wiring remains required; backup creation/download remains separate and open.
+wiring now exposes `mrml cert backup verify` and `mrml cert backup restore` over
+the one-use hosted session. Both require explicit nonzero policy and transfer
+generations and a regular bounded input file. Restore additionally requires
+`--confirm-digest` to exactly match the complete container SHA-256 before the
+session ticket is consumed or any remote state changes. The frontend streams
+the full container, renders a stable receipt, and clears its input buffer after
+success or failure. This is executed against the real lifecycle handler in
+Linux and Windows-target-under-Wine tests. Backup creation/download and the
+long-running durable hosted daemon remain separate and open.
 RFC 9773 certificate identifiers are derived from the exact AKI keyIdentifier
 and DER serial contents, including a required leading zero, and are carried in
 the verified-chain receipt. RenewalInfo parsing bounds and validates the exact

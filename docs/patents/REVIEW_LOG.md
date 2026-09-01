@@ -12050,3 +12050,11 @@ authorized transport, generated lifecycle request codec, purpose-bound backup
 command, and canonical receipt decoder. It adds no certificate protocol,
 signing mechanism, validation topology, certificate authority operation, or
 recorded re-review trigger.
+
+# 2026-09-01 — Certificate backup verification and restore frontend
+
+Patent review: **NOT_TRIGGERED**. This increment streams the existing
+authenticated backup container through the existing hosted lifecycle route and
+requires an exact digest confirmation before clean-target restore. It adds no
+certificate protocol, signing mechanism, validation topology, certificate
+authority operation, or recorded re-review trigger.

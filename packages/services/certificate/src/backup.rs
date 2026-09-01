@@ -308,6 +308,15 @@ pub fn verify_backup(
     Ok(parsed)
 }
 
+/// Computes the container identity used to bind a transfer. This does not
+/// authenticate the container; `verify_backup` remains mandatory before use.
+pub fn untrusted_backup_container_digest(input: &[u8]) -> Result<[u8; 32], BackupError> {
+    if input.is_empty() || input.len() > MAX_BACKUP_BYTES {
+        return Err(BackupError::TooLarge);
+    }
+    Ok(Sha256::digest(input))
+}
+
 pub trait BackupRestoreTarget {
     fn require_empty(&mut self) -> Result<(), BackupError>;
     fn begin(&mut self, descriptor: BackupDescriptor) -> Result<(), BackupError>;
