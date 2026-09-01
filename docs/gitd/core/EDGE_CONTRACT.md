@@ -44,7 +44,17 @@ width fetch wants/haves for that format. Duplicate flags, malformed client
 capabilities, unknown commands, and unsupported shallow, deepen, filter,
 want-ref, packfile-URI, and future arguments fail closed. These parser tests do
 not constitute a fetch backend: object negotiation, pack generation, side-band
-response production, receive-pack parsing, and activation are still disabled.
+response production and object negotiation are still disabled.
+
+The receive-pack command boundary parses at most 32 exact-width SHA-1 or
+SHA-256 old/new IDs and validated full ref names, requires `report-status-v2`
+and `atomic`, rejects duplicate refs and unadvertised capabilities, and stops at
+the command flush without consuming the pack body. SHA-256 commands must bind
+`object-format=sha256`. A zero new ID is represented only as a deletion
+candidate and is rejected unless `delete-refs` was negotiated; authorization
+still belongs to a separate policy-specific verified transaction builder. The
+parser cannot activate refs, and receive pack-body quarantine, result framing,
+and end-to-end backend wiring remain open.
 
 Errors distinguish malformed input/identifiers/refs/paths, authorization,
 object validation, ancestry, signature, policy, resources, storage, stale

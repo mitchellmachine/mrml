@@ -2,7 +2,11 @@
 
 use mrml_runtime::Vector;
 
-use crate::{BoundedRead, BoundedWrite, GitdCoreError, ObjectFormat, ObjectId, WorkBudget};
+use crate::{
+    BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, FullRefName,
+    GitdCoreError, ObjectFormat, ObjectId, RepositoryGeneration, RepositoryIdentity,
+    RevocationGeneration, TrustGeneration, WorkBudget,
+};
 
 /// Git's four-byte hexadecimal length includes the header itself. Although the
 /// wire format can spell `ffff`, protocol payloads are limited to 65,516 bytes.
@@ -35,6 +39,174 @@ pub enum ProtocolV2Request {
         ofs_delta: bool,
         sideband_all: bool,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceivePackRequest {
+    pub candidate: CandidateRefTransaction,
+    pub report_status_v2: bool,
+    pub atomic: bool,
+    pub delete_refs: bool,
+    pub side_band_64k: bool,
+    pub ofs_delta: bool,
+}
+
+/// Parse the command section of a receive-pack request and stop exactly after
+/// its flush packet, leaving the following pack stream unread. Ref deletion is
+/// represented by `proposed_new == None`; this parser does not authorize it.
+pub fn read_receive_pack_commands(
+    input: &mut dyn BoundedRead,
+    repository: RepositoryIdentity,
+    repository_generation: RepositoryGeneration,
+    trust_generation: TrustGeneration,
+    revocation_generation: RevocationGeneration,
+    format: ObjectFormat,
+    budget: &mut ProtocolBudget,
+) -> Result<ReceivePackRequest, GitdCoreError> {
+    let mut updates = Vector::new();
+    let mut capabilities = ReceiveCapabilities::default();
+    for index in 0..crate::gitd_core::MAX_REFS_PER_TRANSACTION {
+        let line = match read_pkt_line(input, budget)? {
+            PktLine::Flush => {
+                if updates.is_empty() || !capabilities.report_status_v2 || !capabilities.atomic {
+                    return Err(GitdCoreError::Unsupported);
+                }
+                return Ok(ReceivePackRequest {
+                    candidate: CandidateRefTransaction {
+                        repository,
+                        repository_generation,
+                        trust_generation,
+                        revocation_generation,
+                        updates,
+                    },
+                    report_status_v2: capabilities.report_status_v2,
+                    atomic: capabilities.atomic,
+                    delete_refs: capabilities.delete_refs,
+                    side_band_64k: capabilities.side_band_64k,
+                    ofs_delta: capabilities.ofs_delta,
+                });
+            }
+            PktLine::Data(line) => line,
+            _ => return Err(GitdCoreError::MalformedInput),
+        };
+        let line = strip_lf_optional(&line)?;
+        let (command, capability_bytes) = if index == 0 {
+            let split = line
+                .iter()
+                .position(|byte| *byte == 0)
+                .ok_or(GitdCoreError::MalformedInput)?;
+            (&line[..split], Some(&line[split + 1..]))
+        } else {
+            if line.contains(&0) {
+                return Err(GitdCoreError::MalformedInput);
+            }
+            (line, None)
+        };
+        if let Some(values) = capability_bytes {
+            capabilities = parse_receive_capabilities(values, format)?;
+        }
+        let update = parse_receive_command(command, format)?;
+        if updates
+            .iter()
+            .any(|existing: &CandidateRefUpdate| existing.name == update.name)
+        {
+            return Err(GitdCoreError::MalformedRef);
+        }
+        if update.proposed_new.is_none() && !capabilities.delete_refs {
+            return Err(GitdCoreError::Unsupported);
+        }
+        updates.push(update);
+    }
+    // A full command budget must be terminated by flush, never truncated or
+    // silently accepted as a partial atomic transaction.
+    Err(GitdCoreError::Resource)
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ReceiveCapabilities {
+    report_status_v2: bool,
+    atomic: bool,
+    delete_refs: bool,
+    side_band_64k: bool,
+    ofs_delta: bool,
+}
+
+fn parse_receive_capabilities(
+    bytes: &[u8],
+    format: ObjectFormat,
+) -> Result<ReceiveCapabilities, GitdCoreError> {
+    if bytes.is_empty() || bytes.len() > 1_024 || !bytes.is_ascii() {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    let mut output = ReceiveCapabilities::default();
+    let mut saw_object_format = false;
+    for capability in bytes.split(|byte| *byte == b' ') {
+        match capability {
+            b"report-status-v2" => set_once(&mut output.report_status_v2)?,
+            b"atomic" => set_once(&mut output.atomic)?,
+            b"delete-refs" => set_once(&mut output.delete_refs)?,
+            b"side-band-64k" => set_once(&mut output.side_band_64k)?,
+            b"ofs-delta" => set_once(&mut output.ofs_delta)?,
+            _ if capability.starts_with(b"object-format=") => {
+                set_once(&mut saw_object_format)?;
+                let expected = match format {
+                    ObjectFormat::Sha1 => b"object-format=sha1".as_slice(),
+                    ObjectFormat::Sha256 => b"object-format=sha256".as_slice(),
+                };
+                if capability != expected {
+                    return Err(GitdCoreError::MalformedInput);
+                }
+            }
+            _ => return Err(GitdCoreError::Unsupported),
+        }
+    }
+    if format == ObjectFormat::Sha256 && !saw_object_format {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    Ok(output)
+}
+
+fn parse_receive_command(
+    command: &[u8],
+    format: ObjectFormat,
+) -> Result<CandidateRefUpdate, GitdCoreError> {
+    let mut fields = command.split(|byte| *byte == b' ');
+    let old = fields.next().ok_or(GitdCoreError::MalformedInput)?;
+    let new = fields.next().ok_or(GitdCoreError::MalformedInput)?;
+    let name = fields.next().ok_or(GitdCoreError::MalformedInput)?;
+    if fields.next().is_some() {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    let name = core::str::from_utf8(name).map_err(|_| GitdCoreError::MalformedRef)?;
+    Ok(CandidateRefUpdate {
+        name: FullRefName::parse(name)?,
+        expected_old: parse_nullable_wire_id(format, old)?,
+        proposed_new: parse_nullable_wire_id(format, new)?,
+    })
+}
+
+fn parse_nullable_wire_id(
+    format: ObjectFormat,
+    bytes: &[u8],
+) -> Result<Option<ObjectId>, GitdCoreError> {
+    if bytes.len()
+        == format
+            .hash_len()
+            .checked_mul(2)
+            .ok_or(GitdCoreError::Resource)?
+        && bytes.iter().all(|byte| *byte == b'0')
+    {
+        return Ok(None);
+    }
+    parse_wire_id(format, bytes).map(Some)
+}
+
+fn strip_lf_optional(line: &[u8]) -> Result<&[u8], GitdCoreError> {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    if line.contains(&b'\r') {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    Ok(line)
 }
 
 /// Advertise only the server-core features implemented by this parser. In
@@ -722,5 +894,68 @@ mod tests {
             ),
             Err(GitdCoreError::MalformedInput)
         );
+    }
+
+    fn receive(reader: &mut Reader) -> Result<ReceivePackRequest, GitdCoreError> {
+        read_receive_pack_commands(
+            reader,
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            RepositoryGeneration(7),
+            TrustGeneration(8),
+            RevocationGeneration(9),
+            ObjectFormat::Sha256,
+            &mut budget(16_384),
+        )
+    }
+
+    #[test]
+    fn receive_pack_parses_atomic_sha256_commands_and_leaves_pack_unread() {
+        let mut reader = request(&[
+            b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main\0report-status-v2 atomic delete-refs side-band-64k ofs-delta object-format=sha256\n",
+            b"3333333333333333333333333333333333333333333333333333333333333333 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/obsolete\n",
+            b"FLUSH",
+        ]);
+        reader.bytes.try_extend_from_slice(b"PACKtrailing").unwrap();
+        let parsed = receive(&mut reader).unwrap();
+        assert!(parsed.atomic && parsed.report_status_v2 && parsed.delete_refs);
+        assert!(parsed.side_band_64k && parsed.ofs_delta);
+        assert_eq!(parsed.candidate.updates.len(), 2);
+        assert!(parsed.candidate.updates[1].proposed_new.is_none());
+        assert_eq!(
+            &reader.bytes[reader.offset..],
+            b"PACKtrailing",
+            "the pack body belongs to quarantine validation, not command parsing"
+        );
+    }
+
+    #[test]
+    fn receive_pack_rejects_non_atomic_delete_duplicate_ref_and_unknown_capability() {
+        let valid = b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main";
+        for capabilities in [
+            b"report-status-v2 object-format=sha256\n".as_slice(),
+            b"report-status-v2 atomic push-options object-format=sha256\n",
+        ] {
+            let mut first = copy_bytes(valid).unwrap();
+            first.push(0);
+            first.try_extend_from_slice(capabilities).unwrap();
+            let mut reader = request(&[&first, b"FLUSH"]);
+            assert!(matches!(
+                receive(&mut reader),
+                Err(GitdCoreError::Unsupported)
+            ));
+        }
+
+        let mut duplicate = request(&[
+            b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
+            b"2222222222222222222222222222222222222222222222222222222222222222 3333333333333333333333333333333333333333333333333333333333333333 refs/heads/main\n",
+            b"FLUSH",
+        ]);
+        assert_eq!(receive(&mut duplicate), Err(GitdCoreError::MalformedRef));
+
+        let mut deletion = request(&[
+            b"1111111111111111111111111111111111111111111111111111111111111111 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
+            b"FLUSH",
+        ]);
+        assert_eq!(receive(&mut deletion), Err(GitdCoreError::Unsupported));
     }
 }
