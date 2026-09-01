@@ -51,8 +51,10 @@ SHA-256 old/new IDs and validated full ref names, requires `report-status-v2`
 and `atomic`, rejects duplicate refs and unadvertised capabilities, and stops at
 the command flush without consuming the pack body. SHA-256 commands must bind
 `object-format=sha256`. A zero new ID is represented only as a deletion
-candidate and is rejected unless `delete-refs` was negotiated; authorization
-still belongs to a separate policy-specific verified transaction builder. The
+candidate and is rejected unless the backend explicitly enabled deletion
+candidates when it advertised `delete-refs`; the client cannot grant that
+authority by echoing the server-only capability. Authorization still belongs
+to a separate policy-specific verified transaction builder. The
 parser cannot activate refs, and receive pack-body quarantine, result framing,
 and end-to-end backend wiring remain open.
 

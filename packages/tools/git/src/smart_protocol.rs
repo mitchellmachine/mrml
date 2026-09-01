@@ -61,6 +61,7 @@ pub fn read_receive_pack_commands(
     trust_generation: TrustGeneration,
     revocation_generation: RevocationGeneration,
     format: ObjectFormat,
+    allow_delete_candidates: bool,
     budget: &mut ProtocolBudget,
 ) -> Result<ReceivePackRequest, GitdCoreError> {
     let mut updates = Vector::new();
@@ -81,7 +82,7 @@ pub fn read_receive_pack_commands(
                     },
                     report_status_v2: capabilities.report_status_v2,
                     atomic: capabilities.atomic,
-                    delete_refs: capabilities.delete_refs,
+                    delete_refs: allow_delete_candidates,
                     side_band_64k: capabilities.side_band_64k,
                     ofs_delta: capabilities.ofs_delta,
                 });
@@ -112,7 +113,7 @@ pub fn read_receive_pack_commands(
         {
             return Err(GitdCoreError::MalformedRef);
         }
-        if update.proposed_new.is_none() && !capabilities.delete_refs {
+        if update.proposed_new.is_none() && !allow_delete_candidates {
             return Err(GitdCoreError::Unsupported);
         }
         updates.push(update);
@@ -126,7 +127,6 @@ pub fn read_receive_pack_commands(
 struct ReceiveCapabilities {
     report_status_v2: bool,
     atomic: bool,
-    delete_refs: bool,
     side_band_64k: bool,
     ofs_delta: bool,
 }
@@ -144,7 +144,6 @@ fn parse_receive_capabilities(
         match capability {
             b"report-status-v2" => set_once(&mut output.report_status_v2)?,
             b"atomic" => set_once(&mut output.atomic)?,
-            b"delete-refs" => set_once(&mut output.delete_refs)?,
             b"side-band-64k" => set_once(&mut output.side_band_64k)?,
             b"ofs-delta" => set_once(&mut output.ofs_delta)?,
             _ if capability.starts_with(b"object-format=") => {
@@ -904,6 +903,7 @@ mod tests {
             TrustGeneration(8),
             RevocationGeneration(9),
             ObjectFormat::Sha256,
+            true,
             &mut budget(16_384),
         )
     }
@@ -911,7 +911,7 @@ mod tests {
     #[test]
     fn receive_pack_parses_atomic_sha256_commands_and_leaves_pack_unread() {
         let mut reader = request(&[
-            b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main\0report-status-v2 atomic delete-refs side-band-64k ofs-delta object-format=sha256\n",
+            b"1111111111111111111111111111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 refs/heads/main\0report-status-v2 atomic side-band-64k ofs-delta object-format=sha256\n",
             b"3333333333333333333333333333333333333333333333333333333333333333 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/obsolete\n",
             b"FLUSH",
         ]);
@@ -956,6 +956,23 @@ mod tests {
             b"1111111111111111111111111111111111111111111111111111111111111111 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
             b"FLUSH",
         ]);
-        assert_eq!(receive(&mut deletion), Err(GitdCoreError::Unsupported));
+        assert!(receive(&mut deletion).is_ok());
+        let mut deletion = request(&[
+            b"1111111111111111111111111111111111111111111111111111111111111111 0000000000000000000000000000000000000000000000000000000000000000 refs/heads/main\0report-status-v2 atomic object-format=sha256\n",
+            b"FLUSH",
+        ]);
+        assert_eq!(
+            read_receive_pack_commands(
+                &mut deletion,
+                RepositoryIdentity::parse("owner/repository").unwrap(),
+                RepositoryGeneration(7),
+                TrustGeneration(8),
+                RevocationGeneration(9),
+                ObjectFormat::Sha256,
+                false,
+                &mut budget(16_384),
+            ),
+            Err(GitdCoreError::Unsupported)
+        );
     }
 }
