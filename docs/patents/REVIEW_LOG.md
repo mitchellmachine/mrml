@@ -11826,3 +11826,10 @@ deterministic adversarial test harness across ACME JSON, URL and Base64url,
 ARI, HTTP-01, DNS packets and compression pointers, PEM certificate chains,
 and authenticated certificate-state records. It adds test coverage rather than
 a new shipping protocol mechanism and introduces no recorded re-review trigger.
+
+# 2026-09-01 — Normalized ACME IP identifier type
+
+Patent review: **NOT_TRIGGERED**. This increment adds bounded parsing, binary
+storage, and deterministic canonical rendering for ordinary IPv4 and IPv6 ACME
+identifier data. It does not enable issuance or add a network-validation
+mechanism, and it introduces no recorded re-review trigger.

@@ -12,6 +12,7 @@ mod challenge_tls_alpn;
 mod csr;
 mod directory;
 mod identifier;
+mod ip_identifier;
 mod jose;
 mod local_authority;
 mod nonce;
@@ -58,6 +59,7 @@ pub use directory::{
     ProfileAdvertisement,
 };
 pub use identifier::{DnsIdentifier, IdentifierError, MAX_DNS_NAME};
+pub use ip_identifier::{IpIdentifier, IpIdentifierError, MAX_IP_IDENTIFIER_TEXT};
 pub use jose::{
     AcmeJwsSigner, ApprovedAcmeJwsDigest, ApprovedEabMac, Es256Signature, ExternalAccountMac,
     JoseError, JwkThumbprint, P256Jwk, ProtectedKey, write_external_account_binding,
