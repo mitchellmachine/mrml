@@ -11571,3 +11571,12 @@ seals and restores key material under an exact owner recovery-policy digest;
 recoverable backups require a matching sealed record for every secret handle.
 It adds no smart-card precomputed signing-element machinery or other recorded
 re-review-trigger mechanism.
+
+# 2026-09-01 — Canonical certificate signing interface codec
+
+Patent review: **NOT_TRIGGERED**. This increment adds only a conventional
+fixed-size little-endian service-interface codec with bounded shared-memory
+views, strict generation fields, reserved-byte validation, and exact typed
+responses for the already reviewed use-only certificate signing route. It adds
+no signing algorithm, smart-card precomputation machinery, or other recorded
+re-review-trigger mechanism.
