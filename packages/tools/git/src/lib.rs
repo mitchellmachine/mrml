@@ -46,8 +46,9 @@ pub use detached_commit_proof::{
 };
 pub use diff::FileDiff;
 pub use gitd_core::{
-    BlobPage, BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate,
-    CommitDetails, CommitPage, FullRefName, GitdCoreBackend, GitdCoreError,
+    AnnotatedTagDetails, AnnotatedTagPage, BlobPage, BoundedRead, BoundedWrite,
+    CandidateRefTransaction, CandidateRefUpdate, CommitDetails, CommitPage, FullRefName,
+    GitdCoreBackend, GitdCoreError,
     ImmutablePackDescriptor, MAX_REFS_PER_TRANSACTION, PackGeneration, QueryLimits,
     ReadmeCandidate, RepositoryEvent, RepositoryEventCursor, RepositoryEventPage,
     RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,

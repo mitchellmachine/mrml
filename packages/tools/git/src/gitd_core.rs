@@ -181,6 +181,24 @@ pub struct CommitDetails {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnnotatedTagDetails {
+    pub repository_generation: RepositoryGeneration,
+    pub reference: FullRefName,
+    pub tag: ObjectId,
+    pub target: ObjectId,
+    pub target_type: crate::ObjectKind,
+    pub tagger: Text,
+    pub message: Text,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnnotatedTagPage {
+    pub repository_generation: RepositoryGeneration,
+    pub tags: Vector<AnnotatedTagDetails>,
+    pub next_offset: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TreePage {
     pub repository_generation: RepositoryGeneration,
     pub tree: ObjectId,
@@ -484,6 +502,24 @@ pub trait GitdCoreBackend {
         _commit: ObjectId,
         _limits: QueryLimits,
     ) -> Result<CommitDetails, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn read_annotated_tag_page(
+        &self,
+        _repository: &RepositoryIdentity,
+        _offset: u64,
+        _limits: QueryLimits,
+    ) -> Result<AnnotatedTagPage, GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
+    fn read_annotated_tag_details(
+        &self,
+        _repository: &RepositoryIdentity,
+        _reference: &FullRefName,
+        _limits: QueryLimits,
+    ) -> Result<AnnotatedTagDetails, GitdCoreError> {
         Err(GitdCoreError::Unsupported)
     }
 

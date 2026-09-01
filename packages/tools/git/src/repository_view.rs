@@ -3,7 +3,8 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    ActiveRefFile, BlobPage, BoundedRead, BoundedWrite, CommitDetails, CommitPage, GitdCoreBackend,
+    ActiveRefFile, AnnotatedTagDetails, AnnotatedTagPage, BlobPage, BoundedRead, BoundedWrite,
+    CommitDetails, CommitPage, GitdCoreBackend,
     GitdCoreError, ImmutablePackDescriptor, ObjectId, ObjectKind, PktLine, ProtocolBudget,
     ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
@@ -128,6 +129,24 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         limits: QueryLimits,
     ) -> Result<CommitDetails, GitdCoreError> {
         Self::read_commit_details(self, repository, commit, limits)
+    }
+
+    fn read_annotated_tag_page(
+        &self,
+        repository: &RepositoryIdentity,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<AnnotatedTagPage, GitdCoreError> {
+        Self::read_annotated_tag_page(self, repository, offset, limits)
+    }
+
+    fn read_annotated_tag_details(
+        &self,
+        repository: &RepositoryIdentity,
+        reference: &crate::FullRefName,
+        limits: QueryLimits,
+    ) -> Result<AnnotatedTagDetails, GitdCoreError> {
+        Self::read_annotated_tag_details(self, repository, reference, limits)
     }
 
     fn read_tree_page(
@@ -546,6 +565,111 @@ impl FilesystemRepositoryView {
         })
     }
 
+    pub fn read_annotated_tag_page(
+        &self,
+        repository: &RepositoryIdentity,
+        offset: u64,
+        limits: QueryLimits,
+    ) -> Result<AnnotatedTagPage, GitdCoreError> {
+        validate_limits(limits)?;
+        let before = self.load_for(repository)?;
+        let offset = usize::try_from(offset).map_err(|_| GitdCoreError::Resource)?;
+        let mut annotated_seen = 0usize;
+        let mut tags = Vector::new();
+        let mut bytes = 0u64;
+        let mut more = false;
+        for (reference, id) in before
+            .refs
+            .iter()
+            .filter(|(name, _)| name.as_str().starts_with("refs/tags/"))
+        {
+            let object = self
+                .objects
+                .read_object(*id)
+                .map_err(|_| GitdCoreError::ObjectValidation)?;
+            if object.kind != ObjectKind::Tag {
+                continue;
+            }
+            if annotated_seen < offset {
+                parse_annotated_tag(
+                    &self.objects,
+                    before.repository_generation,
+                    reference,
+                    *id,
+                    &object.contents,
+                )?;
+                annotated_seen += 1;
+                continue;
+            }
+            if tags.len() >= limits.max_entries as usize {
+                more = true;
+                break;
+            }
+            let details = parse_annotated_tag(
+                &self.objects,
+                before.repository_generation,
+                reference,
+                *id,
+                &object.contents,
+            )?;
+            bytes = bytes
+                .checked_add(annotated_tag_bytes(&details)?)
+                .ok_or(GitdCoreError::Resource)?;
+            if bytes > limits.max_bytes {
+                return Err(GitdCoreError::Resource);
+            }
+            annotated_seen += 1;
+            tags.push(details);
+        }
+        if offset > annotated_seen {
+            return Err(GitdCoreError::MalformedInput);
+        }
+        self.ensure_generation(before.repository_generation)?;
+        Ok(AnnotatedTagPage {
+            repository_generation: before.repository_generation,
+            next_offset: more.then_some(annotated_seen as u64),
+            tags,
+        })
+    }
+
+    pub fn read_annotated_tag_details(
+        &self,
+        repository: &RepositoryIdentity,
+        reference: &crate::FullRefName,
+        limits: QueryLimits,
+    ) -> Result<AnnotatedTagDetails, GitdCoreError> {
+        validate_limits(limits)?;
+        if !reference.as_str().starts_with("refs/tags/") {
+            return Err(GitdCoreError::MalformedRef);
+        }
+        let before = self.load_for(repository)?;
+        let tag = before
+            .refs
+            .iter()
+            .find(|(name, _)| name == reference)
+            .map(|(_, id)| *id)
+            .ok_or(GitdCoreError::ObjectValidation)?;
+        let object = self
+            .objects
+            .read_object(tag)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        if object.kind != ObjectKind::Tag {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let details = parse_annotated_tag(
+            &self.objects,
+            before.repository_generation,
+            reference,
+            tag,
+            &object.contents,
+        )?;
+        if limits.max_entries < 1 || annotated_tag_bytes(&details)? > limits.max_bytes {
+            return Err(GitdCoreError::Resource);
+        }
+        self.ensure_generation(before.repository_generation)?;
+        Ok(details)
+    }
+
     pub fn resolve_readme_candidate(
         &self,
         repository: &RepositoryIdentity,
@@ -835,6 +959,87 @@ impl FilesystemRepositoryView {
     }
 }
 
+fn parse_annotated_tag(
+    repository: &Repository,
+    generation: RepositoryGeneration,
+    reference: &crate::FullRefName,
+    tag: ObjectId,
+    contents: &[u8],
+) -> Result<AnnotatedTagDetails, GitdCoreError> {
+    let (headers, message) = contents
+        .windows(2)
+        .position(|pair| pair == b"\n\n")
+        .map(|split| (&contents[..split], &contents[split + 2..]))
+        .ok_or(GitdCoreError::ObjectValidation)?;
+    let mut lines = headers.split(|byte| *byte == b'\n');
+    let object_line = lines.next().ok_or(GitdCoreError::ObjectValidation)?;
+    let type_line = lines.next().ok_or(GitdCoreError::ObjectValidation)?;
+    let tag_line = lines.next().ok_or(GitdCoreError::ObjectValidation)?;
+    let tagger_line = lines.next().ok_or(GitdCoreError::ObjectValidation)?;
+    if lines.next().is_some() {
+        return Err(GitdCoreError::ObjectValidation);
+    }
+    let target_text = object_line
+        .strip_prefix(b"object ")
+        .and_then(|bytes| core::str::from_utf8(bytes).ok())
+        .ok_or(GitdCoreError::ObjectValidation)?;
+    let target = ObjectId::parse_for(repository.object_format(), target_text)
+        .ok_or(GitdCoreError::ObjectValidation)?;
+    if target.is_zero() || target.format() != tag.format() {
+        return Err(GitdCoreError::ObjectValidation);
+    }
+    let declared_type = type_line
+        .strip_prefix(b"type ")
+        .ok_or(GitdCoreError::ObjectValidation)?;
+    let target_type = match declared_type {
+        b"commit" => ObjectKind::Commit,
+        b"tree" => ObjectKind::Tree,
+        b"blob" => ObjectKind::Blob,
+        b"tag" => ObjectKind::Tag,
+        _ => return Err(GitdCoreError::ObjectValidation),
+    };
+    let tag_name = tag_line
+        .strip_prefix(b"tag ")
+        .ok_or(GitdCoreError::ObjectValidation)?;
+    if tag_name.is_empty() || tag_name.iter().any(|byte| *byte <= b' ' || *byte == 0x7f) {
+        return Err(GitdCoreError::ObjectValidation);
+    }
+    let tagger = tagger_line
+        .strip_prefix(b"tagger ")
+        .and_then(|bytes| core::str::from_utf8(bytes).ok())
+        .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte == 0 || byte == b'\r'))
+        .ok_or(GitdCoreError::ObjectValidation)?;
+    let message = core::str::from_utf8(message).map_err(|_| GitdCoreError::ObjectValidation)?;
+    let target_object = repository
+        .read_object(target)
+        .map_err(|_| GitdCoreError::ObjectValidation)?;
+    if target_object.kind != target_type {
+        return Err(GitdCoreError::ObjectValidation);
+    }
+    Ok(AnnotatedTagDetails {
+        repository_generation: generation,
+        reference: reference.clone(),
+        tag,
+        target,
+        target_type,
+        tagger: tagger.into(),
+        message: message.into(),
+    })
+}
+
+fn annotated_tag_bytes(details: &AnnotatedTagDetails) -> Result<u64, GitdCoreError> {
+    details
+        .reference
+        .as_str()
+        .len()
+        .checked_add(details.tag.as_bytes().len())
+        .and_then(|bytes| bytes.checked_add(details.target.as_bytes().len()))
+        .and_then(|bytes| bytes.checked_add(details.tagger.len()))
+        .and_then(|bytes| bytes.checked_add(details.message.len()))
+        .map(|bytes| bytes as u64)
+        .ok_or(GitdCoreError::Resource)
+}
+
 fn prefix_matches(name: &[u8], prefixes: &[Vector<u8>]) -> bool {
     prefixes.is_empty() || prefixes.iter().any(|prefix| name.starts_with(prefix))
 }
@@ -994,7 +1199,9 @@ mod tests {
                 default_branch: FullRefName::parse("refs/heads/main").unwrap(),
                 refs: [
                     (FullRefName::parse("refs/heads/main").unwrap(), commit),
+                    (FullRefName::parse("refs/tags/latest").unwrap(), commit),
                     (FullRefName::parse("refs/tags/v1").unwrap(), tag),
+                    (FullRefName::parse("refs/tags/v2").unwrap(), tag),
                 ]
                 .into(),
             },
@@ -1044,6 +1251,92 @@ mod tests {
         assert_eq!(details.tree, tree);
         assert!(details.parents.is_empty());
         assert_eq!(details.message, "initial\n");
+        let tag_page = GitdCoreBackend::read_annotated_tag_page(&view, &identity, 0, limits)
+            .unwrap();
+        assert_eq!(tag_page.repository_generation, RepositoryGeneration(4));
+        assert_eq!(tag_page.tags.len(), 2);
+        assert_eq!(tag_page.tags[0].reference.as_str(), "refs/tags/v1");
+        assert_eq!(tag_page.tags[0].tag, tag);
+        assert_eq!(tag_page.tags[0].target, commit);
+        assert_eq!(tag_page.tags[0].target_type, ObjectKind::Commit);
+        assert_eq!(tag_page.tags[0].tagger, "Owner <owner@example.invalid> 2 +0000");
+        assert_eq!(tag_page.tags[0].message, "release\n");
+        assert_eq!(tag_page.next_offset, None);
+        let first_tag = GitdCoreBackend::read_annotated_tag_page(
+            &view,
+            &identity,
+            0,
+            QueryLimits { max_entries: 1, max_bytes: 1024 },
+        ).unwrap();
+        assert_eq!(first_tag.tags.len(), 1);
+        assert_eq!(first_tag.next_offset, Some(1));
+        let second_tag = GitdCoreBackend::read_annotated_tag_page(
+            &view,
+            &identity,
+            1,
+            QueryLimits { max_entries: 1, max_bytes: 1024 },
+        ).unwrap();
+        assert_eq!(second_tag.tags[0].reference.as_str(), "refs/tags/v2");
+        assert_eq!(second_tag.next_offset, None);
+        assert_eq!(
+            GitdCoreBackend::read_annotated_tag_details(
+                &view,
+                &identity,
+                &FullRefName::parse("refs/tags/v1").unwrap(),
+                limits,
+            ),
+            Ok(tag_page.tags[0].clone())
+        );
+        assert_eq!(
+            GitdCoreBackend::read_annotated_tag_details(
+                &view,
+                &identity,
+                &FullRefName::parse("refs/tags/latest").unwrap(),
+                limits,
+            ),
+            Err(GitdCoreError::ObjectValidation)
+        );
+        assert_eq!(
+            GitdCoreBackend::read_annotated_tag_page(&view, &identity, 3, limits),
+            Err(GitdCoreError::MalformedInput)
+        );
+        assert_eq!(
+            GitdCoreBackend::read_annotated_tag_page(
+                &view,
+                &identity,
+                0,
+                QueryLimits { max_entries: 1, max_bytes: 8 },
+            ),
+            Err(GitdCoreError::Resource)
+        );
+        let duplicate = mrml_runtime::mrml_format!(
+            "object {}\nobject {}\ntype commit\ntag bad\ntagger Owner <owner@example.invalid> 2 +0000\n\nmessage\n",
+            commit.to_hex(), commit.to_hex()
+        );
+        assert_eq!(
+            parse_annotated_tag(
+                &objects,
+                RepositoryGeneration(4),
+                &FullRefName::parse("refs/tags/bad").unwrap(),
+                tag,
+                duplicate.as_bytes(),
+            ),
+            Err(GitdCoreError::ObjectValidation)
+        );
+        let wrong_type = mrml_runtime::mrml_format!(
+            "object {}\ntype blob\ntag bad\ntagger Owner <owner@example.invalid> 2 +0000\n\nmessage\n",
+            commit.to_hex()
+        );
+        assert_eq!(
+            parse_annotated_tag(
+                &objects,
+                RepositoryGeneration(4),
+                &FullRefName::parse("refs/tags/bad").unwrap(),
+                tag,
+                wrong_type.as_bytes(),
+            ),
+            Err(GitdCoreError::ObjectValidation)
+        );
         let readme = GitdCoreBackend::resolve_readme_candidate(&view, &identity, commit)
             .unwrap()
             .unwrap();

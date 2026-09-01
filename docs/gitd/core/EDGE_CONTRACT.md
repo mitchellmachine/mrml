@@ -61,7 +61,21 @@ checked offsets resume an exact tree enumeration or blob byte range; returned
 continuations remain bound to the rechecked repository generation. Invalid or
 overflowing offsets fail closed. Commit pages have a companion exact-details
 query carrying the authenticated tree, complete bounded parent list, author,
-and message. README resolution checks only `README.md`, `README.txt`,
+and message.
+
+Annotated tags have a separate bounded page/details API. Each result carries
+the active repository generation, full `refs/tags/...` name, exact tag object,
+exact target object and object type, tagger, and message. Parsing requires the
+canonical `object`, `type`, `tag`, and `tagger` header sequence with one value
+each, exact object-format width, and an authenticated target whose actual kind
+matches the declared type. Duplicate, reordered, malformed, foreign-width, or
+type-substituted headers fail closed. Lightweight tag refs are skipped by the
+annotated listing and rejected by annotated details; they are never relabeled
+as signed or annotated objects. Checked offsets and entry/byte limits bound
+pagination, and repository generation is re-read before either page or details
+return.
+
+README resolution checks only `README.md`, `README.txt`,
 `README.rst`, then `README`, in that order, inside the exact Git tree and
 returns a generation-tagged blob descriptor. An immutable-pack descriptor
 validates the complete exact commit closure before returning the repository
