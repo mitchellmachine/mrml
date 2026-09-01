@@ -1,6 +1,48 @@
 use crate::{Certificate, CertificateError};
 use mrml_runtime::Vector;
 
+pub fn verify_server_chain_at(
+    chain: &[&[u8]],
+    approved_roots: &[&[u8]],
+    now_unix: u64,
+    max_chain_length: usize,
+) -> Result<(), CertificateError> {
+    if chain.is_empty()
+        || chain.len() > max_chain_length
+        || max_chain_length == 0
+        || approved_roots.is_empty()
+    {
+        return Err(CertificateError::PathLengthExceeded);
+    }
+    for (subordinate_ca_count, pair) in chain.windows(2).enumerate() {
+        let child = Certificate::parse(pair[0])?;
+        let issuer = Certificate::parse(pair[1])?;
+        issuer.require_certificate_signing()?;
+        issuer.enforce_ca_path_length(subordinate_ca_count)?;
+        issuer.verify_time(now_unix)?;
+        child.verify_signed_by(&issuer)?;
+    }
+    let last = Certificate::parse(chain[chain.len() - 1])?;
+    for root_der in approved_roots {
+        let root = Certificate::parse(root_der)?;
+        root.require_certificate_signing()?;
+        root.verify_time(now_unix)?;
+        let subordinate_ca_count =
+            chain
+                .len()
+                .saturating_sub(if *root_der == chain[chain.len() - 1] {
+                    2
+                } else {
+                    1
+                });
+        root.enforce_ca_path_length(subordinate_ca_count)?;
+        if last.same_trust_identity(&root) || last.verify_signed_by(&root).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(CertificateError::UntrustedIssuer)
+}
+
 pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), CertificateError> {
     let leaf_der = *chain.first().ok_or(CertificateError::Malformed)?;
     let presented_last_der = *chain.last().ok_or(CertificateError::Malformed)?;

@@ -12,7 +12,7 @@ pub use client::{
 pub use crlset::{CrlSet, CrlSetError, CrlSetResult};
 pub use ocsp::verify_stapled_ocsp;
 pub use server::{QuicTlsServerFlight, QuicTlsServerHandshake, TlsServerConfig, TlsServerStream};
-pub use trust::verify_server_chain;
+pub use trust::{verify_server_chain, verify_server_chain_at};
 pub use x509::{Certificate, CertificateError};
 
 use core::fmt;

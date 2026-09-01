@@ -11262,3 +11262,11 @@ Patent review: **NOT_TRIGGERED** beyond the owner-supplied
 **REVIEWED_NOT_BLOCKING** scope. This increment connects the already reviewed
 typed challenge lifecycle to exact delegated-zone TXT preparation, activation,
 expiry, and removal. It adds no recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Issued-chain exact validation policy
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment adds ordinary bounded PEM/X.509
+chain validation for the already reviewed RFC 5280 scope, binding the exact
+P-256 key, SAN set, purpose, validity, trust roots, CA class, profile, order,
+and policy generation. It adds no recorded re-review-trigger mechanism.

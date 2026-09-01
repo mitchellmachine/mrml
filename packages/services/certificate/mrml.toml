@@ -50,6 +50,13 @@ package = "org.mrml.library.crypto"
 provider_profile = "core"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_tls"
+compile_name = "mrml-tls"
+package = "org.mrml.library.tls"
+scope = "compile"
+targets = ["WINDOWS", "LINUX"]
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
 

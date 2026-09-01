@@ -170,6 +170,25 @@ impl<'a> Certificate<'a> {
         mrml_crypto::Sha256::digest(self.spki)
     }
 
+    pub const fn not_before(&self) -> u64 {
+        self.not_before
+    }
+
+    pub const fn not_after(&self) -> u64 {
+        self.not_after
+    }
+
+    pub fn require_p256_public_key(
+        &self,
+        expected_sec1: &[u8; 65],
+    ) -> Result<(), CertificateError> {
+        match self.public_key {
+            PublicKey::P256(point) if point == expected_sec1 => Ok(()),
+            PublicKey::P256(_) => Err(CertificateError::InvalidPurpose),
+            _ => Err(CertificateError::UnsupportedAlgorithm),
+        }
+    }
+
     pub(crate) fn verify_tls_pss(
         &self,
         message: &[u8],
@@ -587,6 +606,57 @@ impl<'a> Certificate<'a> {
         Err(CertificateError::HostnameMismatch)
     }
 
+    pub fn require_exact_dns_names(&self, expected: &[&str]) -> Result<(), CertificateError> {
+        if expected.is_empty() {
+            return Err(CertificateError::HostnameMismatch);
+        }
+        for pair in expected.windows(2) {
+            if pair[0] >= pair[1] {
+                return Err(CertificateError::HostnameMismatch);
+            }
+        }
+        let value = self
+            .extension(SUBJECT_ALT_NAME)?
+            .ok_or(CertificateError::HostnameMismatch)?;
+        let mut outer = Reader::new(value);
+        let names = outer.next()?;
+        outer.finish()?;
+        if names.tag != 0x30 {
+            return Err(CertificateError::Malformed);
+        }
+        let mut entries = Reader::new(names.value);
+        let mut count = 0usize;
+        while entries.position < entries.bytes.len() {
+            let name = entries.next()?;
+            if name.tag != 0x82
+                || name.value.is_empty()
+                || !name.value.is_ascii()
+                || !expected
+                    .iter()
+                    .any(|candidate| candidate.as_bytes().eq_ignore_ascii_case(name.value))
+            {
+                return Err(CertificateError::HostnameMismatch);
+            }
+            let mut duplicate_reader = Reader::new(names.value);
+            let mut occurrences = 0usize;
+            while duplicate_reader.position < duplicate_reader.bytes.len() {
+                let candidate = duplicate_reader.next()?;
+                if candidate.tag == 0x82 && candidate.value.eq_ignore_ascii_case(name.value) {
+                    occurrences += 1;
+                }
+            }
+            if occurrences != 1 {
+                return Err(CertificateError::HostnameMismatch);
+            }
+            count += 1;
+        }
+        if count == expected.len() {
+            Ok(())
+        } else {
+            Err(CertificateError::HostnameMismatch)
+        }
+    }
+
     pub fn verify_time(&self, now: u64) -> Result<(), CertificateError> {
         if now < self.not_before {
             Err(CertificateError::NotYetValid)
@@ -833,6 +903,40 @@ mod tests {
         assert!(dns_matches(b"*.example.com", b"api.example.com"));
         assert!(!dns_matches(b"*.example.com", b"a.b.example.com"));
         assert!(!dns_matches(b"*.example.com", b"example.com"));
+    }
+    #[test]
+    fn exact_dns_set_rejects_missing_extra_and_duplicate_names() {
+        let extensions = [
+            0x30, 0x21, 0x30, 0x1f, 0x06, 0x03, 0x55, 0x1d, 0x11, 0x04, 0x18, 0x30, 0x16, 0x82,
+            0x09, b'a', b'.', b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x82, 0x09, b'b', b'.',
+            b'e', b'x', b'a', b'm', b'p', b'l', b'e',
+        ];
+        let certificate = certificate_with_extensions(&extensions);
+        assert_eq!(
+            certificate.require_exact_dns_names(&["a.example", "b.example"]),
+            Ok(())
+        );
+        assert_eq!(
+            certificate.require_exact_dns_names(&["a.example"]),
+            Err(CertificateError::HostnameMismatch)
+        );
+        assert_eq!(
+            certificate.require_exact_dns_names(&["b.example", "a.example"]),
+            Err(CertificateError::HostnameMismatch)
+        );
+    }
+    #[test]
+    fn exact_p256_key_binding_rejects_substitution() {
+        let point = [4u8; 65];
+        let mut certificate = certificate_with_extensions(&[]);
+        certificate.public_key = PublicKey::P256(&point);
+        assert_eq!(certificate.require_p256_public_key(&point), Ok(()));
+        let mut other = point;
+        other[64] ^= 1;
+        assert_eq!(
+            certificate.require_p256_public_key(&other),
+            Err(CertificateError::InvalidPurpose)
+        );
     }
     #[test]
     fn der_rejects_nonminimal_and_truncated_lengths() {

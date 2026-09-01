@@ -55,6 +55,16 @@ The DNS role implements the shared challenge-publisher contract: preparation
 does not publish, activation inserts the exact TXT digest, cleanup removes the
 exact record generation, and successful removal releases bounded publisher
 capacity. Multiple authorization-bound records remain independently scoped.
+Certificate-chain retrieval has a strict fixed-capacity PEM decoder and a
+shared validation policy/receipt. The hosted first-party X.509 adapter verifies
+the exact P-256 SPKI, exact sorted SAN set with no extra GeneralNames, TLS server
+purpose, explicit validity bounds, supported critical extensions, bounded path
+length, signatures to explicitly supplied owner-approved roots, CA class,
+profile, order digest, policy generation, and trust-store digest before issuing
+a verified-chain receipt. The MRML target builds the same policy and verifier
+interface without inheriting a host ambient trust store. Checked-in leaf/root
+fixtures were independently generated with the OpenSSL CLI solely as a test
+oracle; no fixture private key is retained or shipped.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -66,8 +76,8 @@ is excluded from ordinary feature profiles because the inherited curve
 arithmetic remains variable-time and has not passed independent cryptographic
 review.
 
-General JOSE response parsing, X.509 issuance validation,
-ACME transport, concrete socket adapters and propagation observation, durable recovery,
+General JOSE response parsing, ACME transport, concrete socket adapters and
+propagation observation, durable recovery, alternate-chain selection,
 certificate publication, renewal,
 revocation, backup/restore, CLI administration, gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
