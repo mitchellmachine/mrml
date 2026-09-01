@@ -11705,3 +11705,13 @@ identifier and DER serial, binds it to the current directory generation and
 approved origin, classifies bounded retry responses, and passes the validated
 window to the existing randomized renewal scheduler. It adds no new
 certificate-validation route or other recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Deterministic nested-JWS account-key rollover
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment extends the local test
+authority with the ordinary RFC 8555 key-change exchange. It verifies the
+outer request with the current account key, validates the exact account and
+old-key binding, verifies the nested JWS with the replacement P-256 key, and
+then changes the test authority's account key. It adds no smart-card
+precomputed signing machinery or other recorded re-review trigger.

@@ -17,6 +17,7 @@ pub const LOCAL_REVOKE_URL: &str = "https://local-ca.invalid/acme/revoke-cert";
 pub const LOCAL_RENEWAL_INFO_URL: &str = "https://local-ca.invalid/acme/renewal-info";
 pub const LOCAL_RENEWAL_INFO_CERTIFICATE_URL: &str =
     "https://local-ca.invalid/acme/renewal-info/khDjV8EtmLIeVjvn6VPf3cfDARU.Ag";
+pub const LOCAL_KEY_CHANGE_URL: &str = "https://local-ca.invalid/acme/key-change";
 const DIRECTORY: &str = r#"{"newNonce":"https://local-ca.invalid/acme/new-nonce","newAccount":"https://local-ca.invalid/acme/new-account","newOrder":"https://local-ca.invalid/acme/new-order","revokeCert":"https://local-ca.invalid/acme/revoke-cert","keyChange":"https://local-ca.invalid/acme/key-change","renewalInfo":"https://local-ca.invalid/acme/renewal-info","meta":{"termsOfService":"https://local-ca.invalid/terms/v1","website":"https://local-ca.invalid/","caaIdentities":["local-ca.invalid"],"profiles":{"classic":"https://local-ca.invalid/profiles/classic"}}}"#;
 const ACCOUNT: &str =
     r#"{"status":"valid","contact":[],"orders":"https://local-ca.invalid/acme/orders/1"}"#;
@@ -113,6 +114,9 @@ impl<V> DeterministicAcmeAuthority<V> {
     }
     pub const fn state(&self) -> LocalAuthorityState {
         self.state
+    }
+    pub const fn account_key(&self) -> P256Jwk {
+        self.key
     }
     pub fn inject(&mut self, fault: LocalAuthorityFault) {
         self.fault = fault;
@@ -278,6 +282,22 @@ impl<V: LocalJwsVerifier> AcmeTransport for DeterministicAcmeAuthority<V> {
                     );
                 }
                 Err(LocalAuthorityError::InvalidState)
+            }
+            LOCAL_KEY_CHANGE_URL => {
+                if self.state != LocalAuthorityState::AccountValid {
+                    return Err(LocalAuthorityError::InvalidState);
+                }
+                let new_key = validate_key_change(&mut self.verifier, &self.key, payload)?;
+                self.key = new_key;
+                reply(
+                    out,
+                    200,
+                    effective,
+                    next,
+                    None,
+                    Some("application/json"),
+                    ACCOUNT,
+                )
             }
             LOCAL_NEW_ORDER_URL => {
                 if self.state != LocalAuthorityState::AccountValid
@@ -495,8 +515,107 @@ fn canonical_endpoint(value: &str) -> Option<&'static str> {
         LOCAL_FINALIZE_URL => LOCAL_FINALIZE_URL,
         LOCAL_CERTIFICATE_URL => LOCAL_CERTIFICATE_URL,
         LOCAL_REVOKE_URL => LOCAL_REVOKE_URL,
+        LOCAL_KEY_CHANGE_URL => LOCAL_KEY_CHANGE_URL,
         _ => return None,
     })
+}
+fn validate_key_change(
+    verifier: &mut impl LocalJwsVerifier,
+    old_key: &P256Jwk,
+    body: &[u8],
+) -> Result<P256Jwk, LocalAuthorityError> {
+    let text = core::str::from_utf8(body).map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let (protected64, payload64, signature64) = jws_fields(text)?;
+    let mut protected_buffer = [0u8; 2048];
+    let protected = decode_base64url(protected64, &mut protected_buffer)
+        .map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let protected =
+        core::str::from_utf8(protected).map_err(|_| LocalAuthorityError::MalformedJws)?;
+    if !contains(protected, "\"alg\":\"ES256\"")
+        || !contains_json_string_field(protected, "url", LOCAL_KEY_CHANGE_URL)
+        || contains(protected, "\"kid\":")
+    {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    let x = json_string_field(protected, "x")?;
+    let y = json_string_field(protected, "y")?;
+    let mut x_bytes = [0u8; 32];
+    let mut y_bytes = [0u8; 32];
+    if decode_base64url(x, &mut x_bytes)
+        .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?
+        .len()
+        != 32
+        || decode_base64url(y, &mut y_bytes)
+            .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?
+            .len()
+            != 32
+    {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    let new_key = P256Jwk::from_coordinates(x_bytes, y_bytes)
+        .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?;
+    let mut payload_buffer = [0u8; 2048];
+    let inner_payload = decode_base64url(payload64, &mut payload_buffer)
+        .map_err(|_| LocalAuthorityError::MalformedJws)?;
+    let inner_payload =
+        core::str::from_utf8(inner_payload).map_err(|_| LocalAuthorityError::MalformedJws)?;
+    if !contains_json_string_field(inner_payload, "account", LOCAL_ACCOUNT_URL) {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    let old_public = old_key.sec1_uncompressed();
+    let mut old_x = [0u8; 43];
+    let mut old_y = [0u8; 43];
+    let old_x = encode_base64url(&old_public[1..33], &mut old_x)
+        .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?;
+    let old_y = encode_base64url(&old_public[33..], &mut old_y)
+        .map_err(|_| LocalAuthorityError::InvalidProtectedHeader)?;
+    if !contains_json_string_field(inner_payload, "x", old_x)
+        || !contains_json_string_field(inner_payload, "y", old_y)
+    {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    let mut signature = [0u8; 64];
+    if decode_base64url(signature64, &mut signature)
+        .map_err(|_| LocalAuthorityError::MalformedJws)?
+        .len()
+        != signature.len()
+    {
+        return Err(LocalAuthorityError::MalformedJws);
+    }
+    let mut digest = Sha256::new();
+    digest.update(protected64.as_bytes());
+    digest.update(b".");
+    digest.update(payload64.as_bytes());
+    if !verifier.verify(&new_key, &digest.finalize(), &signature) {
+        return Err(LocalAuthorityError::InvalidSignature);
+    }
+    Ok(new_key)
+}
+fn json_string_field<'a>(source: &'a str, name: &str) -> Result<&'a str, LocalAuthorityError> {
+    let mut prefix = [0u8; 260];
+    let required = name.len().saturating_add(4);
+    let Some(out) = prefix.get_mut(..required) else {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    };
+    out[0] = b'"';
+    out[1..1 + name.len()].copy_from_slice(name.as_bytes());
+    out[1 + name.len()..].copy_from_slice(b"\":\"");
+    let at = source
+        .as_bytes()
+        .windows(out.len())
+        .position(|window| window == out)
+        .ok_or(LocalAuthorityError::InvalidProtectedHeader)?
+        + out.len();
+    let rest = source
+        .get(at..)
+        .ok_or(LocalAuthorityError::InvalidProtectedHeader)?;
+    let end = rest
+        .find('"')
+        .ok_or(LocalAuthorityError::InvalidProtectedHeader)?;
+    if end == 0 || rest[..end].contains(['\\', '"']) {
+        return Err(LocalAuthorityError::InvalidProtectedHeader);
+    }
+    Ok(&rest[..end])
 }
 fn contains(source: impl AsRef<[u8]>, needle: impl AsRef<[u8]>) -> bool {
     let s = source.as_ref();
@@ -545,7 +664,7 @@ mod tests {
     use super::*;
     use crate::{
         AcmeExchange, AcmeJwsSigner, ApprovedAcmeJwsDigest, Es256Signature, ProtectedKey,
-        fetch_directory, post_jws,
+        fetch_directory, post_jws, write_key_change_inner_jws,
     };
     struct Verifier;
     impl LocalJwsVerifier for Verifier {
@@ -726,5 +845,80 @@ mod tests {
         .unwrap();
         assert_eq!(deactivated.metadata.status, 200);
         assert_eq!(authority.state(), LocalAuthorityState::AccountDeactivated);
+    }
+
+    #[test]
+    fn key_rollover_verifies_nested_jws_and_replaces_account_key() {
+        let directory_url = url(LOCAL_DIRECTORY_URL);
+        let mut exchange = AcmeExchange::new(3, directory_url);
+        let old_key = key();
+        let new_key = P256Jwk::from_coordinates(
+            [
+                0x5e, 0x25, 0xb1, 0x1e, 0xc2, 0x48, 0x51, 0xba, 0xcc, 0x4d, 0x0f, 0x9d, 0x44, 0x46,
+                0x29, 0x1c, 0xdb, 0x88, 0xa0, 0xba, 0x89, 0xb5, 0xde, 0xcc, 0x20, 0x73, 0x10, 0x35,
+                0xfb, 0xa6, 0x0c, 0x35,
+            ],
+            [
+                0xb5, 0xae, 0xa9, 0xee, 0x46, 0xf8, 0x40, 0xd1, 0xa8, 0x26, 0x5d, 0x7d, 0x8e, 0x75,
+                0xe6, 0x0e, 0xde, 0x83, 0x46, 0x3e, 0x9b, 0x1d, 0xba, 0xde, 0x47, 0x1c, 0xcd, 0x9b,
+                0x3a, 0x51, 0x5a, 0x04,
+            ],
+        )
+        .unwrap();
+        let mut authority = DeterministicAcmeAuthority::new(Verifier, old_key);
+        let mut response = [0u8; 65_536];
+        let mut outer = [0u8; 49_152];
+        let directory = fetch_directory(
+            &directory_url,
+            3,
+            &mut exchange,
+            &mut authority,
+            &mut response,
+        )
+        .unwrap();
+        let mut signer = Signer;
+        post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &directory.new_account,
+            ProtectedKey::Jwk(&old_key),
+            b"{}",
+            0,
+            &mut signer,
+            &mut response,
+            &mut outer,
+        )
+        .unwrap();
+        let account_url = url(LOCAL_ACCOUNT_URL);
+        let key_change_url = url(LOCAL_KEY_CHANGE_URL);
+        let mut inner = [0u8; 8192];
+        let inner_len = write_key_change_inner_jws(
+            &new_key,
+            &old_key,
+            &account_url,
+            &key_change_url,
+            3,
+            2,
+            &mut signer,
+            &mut inner,
+        )
+        .unwrap()
+        .len();
+        let rolled = post_jws(
+            &mut exchange,
+            &mut authority,
+            &directory.new_nonce,
+            &key_change_url,
+            ProtectedKey::Kid(&account_url),
+            &inner[..inner_len],
+            1,
+            &mut signer,
+            &mut response,
+            &mut outer,
+        )
+        .unwrap();
+        assert_eq!(rolled.metadata.status, 200);
+        assert!(authority.account_key() == new_key);
     }
 }
