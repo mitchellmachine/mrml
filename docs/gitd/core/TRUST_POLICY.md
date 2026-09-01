@@ -147,6 +147,20 @@ both signatures over the supplied exact commit contents and full context before
 the Git object hash is bound and an opaque proof is returned. Missing,
 substituted, malformed, oversized, or context-mismatched records fail closed.
 
+`DurableDetachedCommitProofDirectory` now persists those untrusted records as
+bounded canonical immutable files. Each lookup key and stored record bind the
+exact repository identity, repository/trust/revocation generations,
+`GitCommit` purpose, object format, and commit ID. A digest-derived filename is
+only an accelerator: reopening rechecks the complete key, signature widths,
+record framing, and terminal SHA-256 digest. Installation uses create-new or
+accepts only byte-equivalent existing content, syncs the file and containing
+directory, then reopens and compares the complete record before reporting
+success. Linux tests cover persistence, exact-existing idempotence, conflicting
+duplicates, tampering, truncation, wrong generation, and wrong object format.
+Platforms without a supported directory-sync primitive, including the current
+Windows runtime, fail closed rather than claim crash durability. These stored
+bytes still grant no authority before hybrid verification.
+
 The resulting private `VerifiedCommitRange` carries that same context into the
 atomic `VerifiedRefTransaction` constructor. A range from another repository,
 generation, purpose, format, or object ID is rejected. The unbound graph walker
@@ -157,9 +171,10 @@ conventional commit/tag path now independently verifies the exact returned SSH
 or OpenPGP signature before its local ref update, but it does not yet encode the
 complete `MRML-GIT-HYBRID-V1` result. Protected receive can
 now consume a caller-provisioned bounded proof store through its verifier
-boundary. Durable proof-record storage and its authorization policy remain open;
-records gain no authority merely by being stored. Production durable proof
-records and canonical policy/key-service retrieval remain integration gates.
+boundary. Durable Linux proof-record storage exists, but population
+authorization and canonical policy/key-service retrieval remain integration
+gates; records gain no authority merely by being stored. Native-Windows
+directory durability also remains open.
 
 The repository's hybrid commit constructor now requires both verification
 callbacks alongside the two signing callbacks. It verifies the outer OpenPGP

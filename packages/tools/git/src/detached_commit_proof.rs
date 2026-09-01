@@ -54,6 +54,14 @@ impl DetachedCommitProofRecord {
     pub const fn commit(&self) -> ObjectId {
         self.commit
     }
+
+    pub(crate) fn openpgp_signature(&self) -> &[u8] {
+        &self.openpgp_signature
+    }
+
+    pub(crate) fn ml_dsa_signature(&self) -> &[u8] {
+        &self.ml_dsa_signature
+    }
 }
 
 /// Fixed-capacity proof store. Records must be strictly ordered by exact object

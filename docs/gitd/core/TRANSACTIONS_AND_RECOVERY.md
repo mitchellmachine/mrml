@@ -63,8 +63,12 @@ and old/new IDs. Every introduced merge-side commit is covered; an unsigned
 intermediate or a no-op verifier cannot mint the range. A concrete bounded
 detached-proof store and hybrid verifier now feed this boundary; stored bytes
 remain untrusted until both signatures, exact contents, and full context verify.
-Creation, deletion, history replacement, durable proof-record storage, and audit
-signing remain unavailable until their policy-specific implementations exist.
+The Linux durable proof directory binds and rechecks the complete repository,
+generation, purpose, format, commit, and signature record after file and
+directory synchronization; it never turns storage into authority. Creation,
+deletion, history replacement, proof-population authorization, native-Windows
+proof durability, and audit signing remain unavailable until their
+policy-specific implementations exist.
 
 `prepare_protected_receive` now composes the pre-activation protected path for
 existing refs: it parses only atomic `report-status-v2` commands, exact-matches

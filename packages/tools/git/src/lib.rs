@@ -12,6 +12,7 @@ mod compaction;
 mod compaction_file;
 mod deflate;
 mod detached_commit_proof;
+mod detached_commit_proof_file;
 mod diff;
 mod gitd_core;
 mod hybrid_signing;
@@ -62,6 +63,9 @@ pub use compaction::{
 pub use detached_commit_proof::{
     DetachedCommitProofRecord, DetachedCommitProofStore, DetachedHybridCommitVerifier,
     MAX_DETACHED_COMMIT_PROOFS,
+};
+pub use detached_commit_proof_file::{
+    DetachedCommitProofFileError, DurableDetachedCommitProofDirectory,
 };
 pub use diff::FileDiff;
 pub use gitd_core::{
