@@ -9,7 +9,7 @@ self_contained="$library_root/self-contained"
 rustc="$sysroot/bin/rustc.exe"
 driver=target/mrml-native/linux/release/mrml-rustc
 test "$#" -le 1 || {
-    echo "usage: $0 [execute|write]" >&2
+    echo "usage: $0 [execute|write|temporal]" >&2
     exit 1
 }
 case ${1:-execute} in
@@ -19,6 +19,7 @@ case ${1:-execute} in
         expected_hash=5aef132dd500c0e849e4736f4dcddef28f3ae939b639df6df840d12823e3d27b
         profile_size=
         profile_hash=
+        instrumentation=coverage
         ;;
     write)
         entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
@@ -26,9 +27,18 @@ case ${1:-execute} in
         expected_hash=a5949787946712c2d9c66a3a6e8c30986aec6ea639c6dc99f2e45ff884534c91
         profile_size=288
         profile_hash=437f3ffa93254a22de0098ab99e84cfd52148f7a7d8a92aafa3a91c80581da50
+        instrumentation=coverage
+        ;;
+    temporal)
+        entry_source=docs/compiler/probes/pinned_instrumented_profile_write_entry.s
+        expected_size=60416
+        expected_hash=79b17c85389aa2804f7d807d352e7444bfd3cd653577058df1c3d02cdcab83cd
+        profile_size=296
+        profile_hash=98a815c829e47f187341fe363c4a0b506e0ba30cb2ab796142fe14858eb1f933
+        instrumentation=temporal
         ;;
     *)
-        echo "usage: $0 [execute|write]" >&2
+        echo "usage: $0 [execute|write|temporal]" >&2
         exit 1
         ;;
 esac
@@ -86,10 +96,18 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-"$rustc" --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
-    -C instrument-coverage --target x86_64-pc-windows-gnullvm \
-    docs/compiler/probes/pinned_instrumented_profile.rs \
-    -o "$probe/profiled.obj"
+if test "$instrumentation" = temporal; then
+    "$rustc" --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
+        -C profile-generate -C llvm-args=-pgo-temporal-instrumentation \
+        --target x86_64-pc-windows-gnullvm \
+        docs/compiler/probes/pinned_instrumented_profile.rs \
+        -o "$probe/profiled.obj"
+else
+    "$rustc" --edition=2024 --crate-type=lib --emit=obj -C panic=abort \
+        -C instrument-coverage --target x86_64-pc-windows-gnullvm \
+        docs/compiler/probes/pinned_instrumented_profile.rs \
+        -o "$probe/profiled.obj"
+fi
 clang --target=x86_64-pc-windows-msvc -c \
     "$entry_source" -o "$probe/entry.obj"
 clang --target=x86_64-pc-windows-msvc -c \
