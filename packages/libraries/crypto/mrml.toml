@@ -27,9 +27,6 @@ name = "default"
 [[feature]]
 name = "runtime"
 
-[[feature]]
-name = "experimental-p256-signing"
-
 [[artifact]]
 kind = "lib"
 name = "mrml_crypto"

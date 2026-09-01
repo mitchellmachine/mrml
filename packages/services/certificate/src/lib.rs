@@ -17,6 +17,7 @@ mod identity;
 mod identity_service;
 mod lifecycle_service;
 mod native_service;
+mod p256_signer;
 mod revocation;
 mod scheduler;
 mod service_loop;
@@ -88,6 +89,7 @@ pub use native_service::{
     CertificateUserspaceSyscallError, CertificateUserspaceSyscalls, MAX_CERTIFICATE_CALL_BYTES,
     MAX_CERTIFICATE_SHARED_BYTES, ReceivedCertificateCall,
 };
+pub use p256_signer::{AccountP256SigningKey, CertificateP256SigningKey};
 pub use revocation::{
     AcmeRevocationAuthority, AcmeRevocationSigningIdentity, AutomaticRevocationCause,
     PreparedRevocation, RevocationAuthentication, RevocationAuthority, RevocationAuthorization,

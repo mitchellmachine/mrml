@@ -176,11 +176,26 @@ implementation or native-Windows evidence.
 
 The bounded PKCS#10 encoder now emits an empty subject, exact P-256 SPKI, and an
 extension-request containing only the sorted owner-approved SAN identifiers.
-An experimental P-256 signing path implements rejection-sampled keys, RFC 6979,
-low-S output, strict DER, self-verification, and volatile buffer clearing, but it
-is excluded from ordinary feature profiles because the inherited curve
-arithmetic remains variable-time and has not passed independent cryptographic
-review.
+The first-party P-256 signing path implements rejection-sampled private keys,
+a fixed four-candidate deterministic HMAC-SHA-256 nonce schedule, low-S output,
+strict DER, self-verification before release, and volatile clearing of private
+scalars, nonces, signatures, and HMAC state. Field multiplication executes all
+256 add-and-double steps and uses word masks to select each result. Secret
+scalar multiplication likewise computes both fixed-schedule branches and uses
+masked Jacobian selection; exceptional point cases are computed and selected
+without secret-dependent early returns. Account-JWS, PKCS#10, and TLS 1.3
+providers own non-cloneable keys, enforce their exact purpose generations, and
+expose only public SEC1/JWK data and signatures. Tests prove independently
+generated account and certificate keys differ and exercise real ES256 JWS,
+CSR, and TLS CertificateVerify signatures with self-verification.
+
+This is an implementation argument, not a claim of independently verified
+constant-time behavior. Compiler output, microarchitectural leakage, fault
+resistance, and the arithmetic construction still require independent human
+cryptographic review before **PRODUCTION_APPROVED** classification. The code is
+now in ordinary MRML/Windows/Linux profiles so integration can use and test the
+actual use-only provider; there is no fallback to the former experimental
+feature or to RSA private operations.
 
 The shared ACME transport contract now admits only exact current-directory
 same-origin endpoints, requires authenticated adapters to report the effective

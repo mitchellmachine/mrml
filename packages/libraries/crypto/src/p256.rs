@@ -1,6 +1,4 @@
-use crate::Sha256;
-#[cfg(any(test, feature = "experimental-p256-signing"))]
-use crate::{hmac_sha256, zeroize::volatile_zero};
+use crate::{Sha256, hmac_sha256, zeroize::volatile_zero};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum P256Error {
@@ -44,7 +42,6 @@ const GY: U256 = [
     0x4fe3_42e2_fe1a_7f9b,
 ];
 
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 const HALF_N: U256 = [
     0x79dc_e561_7e31_92a8,
     0xde73_7d56_d38b_cf42,
@@ -52,7 +49,6 @@ const HALF_N: U256 = [
     0x7fff_ffff_8000_0000,
 ];
 
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 fn to_be(value: U256) -> [u8; 32] {
     let mut out = [0u8; 32];
     for (index, word) in value.iter().rev().enumerate() {
@@ -61,19 +57,16 @@ fn to_be(value: U256) -> [u8; 32] {
     out
 }
 
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 pub struct P256SecretKey {
     bytes: [u8; 32],
 }
 
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 impl Drop for P256SecretKey {
     fn drop(&mut self) {
         volatile_zero(&mut self.bytes);
     }
 }
 
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 impl P256SecretKey {
     pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, P256Error> {
         let scalar = from_be(&bytes).ok_or(P256Error::InvalidKey)?;
@@ -129,11 +122,8 @@ impl P256SecretKey {
             let point = scalar(Affine { x: GX, y: GY }, nonce)
                 .affine()
                 .ok_or(P256Error::SigningFailed)?;
-            let r = if compare(point.x, N) == core::cmp::Ordering::Less {
-                point.x
-            } else {
-                subtract_raw(point.x, N).0
-            };
+            let (reduced_r, r_borrow) = subtract_raw(point.x, N);
+            let r = select_u256(reduced_r, point.x, r_borrow ^ 1);
             if r == [0; 4] {
                 return Err(P256Error::SigningFailed);
             }
@@ -142,9 +132,8 @@ impl P256SecretKey {
             if s == [0; 4] {
                 return Err(P256Error::SigningFailed);
             }
-            if compare(s, HALF_N) == core::cmp::Ordering::Greater {
-                s = subtract_raw(N, s).0;
-            }
+            let (_, low_s_borrow) = subtract_raw(HALF_N, s);
+            s = select_u256(subtract_raw(N, s).0, s, low_s_borrow);
             let mut signature = [0u8; 64];
             signature[..32].copy_from_slice(&to_be(r));
             signature[32..].copy_from_slice(&to_be(s));
@@ -170,7 +159,6 @@ impl P256SecretKey {
     }
 }
 
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 fn deterministic_nonce(private: &[u8; 32], digest: &[u8; 32]) -> Result<U256, P256Error> {
     let mut v = [1u8; 32];
     let mut k = [0u8; 32];
@@ -178,20 +166,27 @@ fn deterministic_nonce(private: &[u8; 32], digest: &[u8; 32]) -> Result<U256, P2
     v = hmac_sha256(&k, &[&v]);
     k = hmac_sha256(&k, &[&v, &[1], private, digest]);
     v = hmac_sha256(&k, &[&v]);
-    for _ in 0..128 {
+    let mut selected = [0u64; 4];
+    let mut found = 0u64;
+    for _ in 0..4 {
         v = hmac_sha256(&k, &[&v]);
-        let candidate = from_be(&v).ok_or(P256Error::SigningFailed)?;
-        if candidate != [0; 4] && compare(candidate, N) == core::cmp::Ordering::Less {
-            volatile_zero(&mut k);
-            volatile_zero(&mut v);
-            return Ok(candidate);
-        }
+        let mut candidate = from_be(&v).ok_or(P256Error::SigningFailed)?;
+        let valid = (zero_bit(candidate) ^ 1) & subtract_raw(candidate, N).1;
+        let choose = valid & (found ^ 1);
+        selected = select_u256(candidate, selected, choose);
+        found |= valid;
         k = hmac_sha256(&k, &[&v, &[0]]);
         v = hmac_sha256(&k, &[&v]);
+        volatile_zero(&mut candidate);
     }
     volatile_zero(&mut k);
     volatile_zero(&mut v);
-    Err(P256Error::SigningFailed)
+    if found == 1 {
+        Ok(selected)
+    } else {
+        volatile_zero(&mut selected);
+        Err(P256Error::SigningFailed)
+    }
 }
 
 fn encode_der_integer<'a>(value: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], P256Error> {
@@ -265,37 +260,68 @@ fn subtract_raw(a: U256, b: U256) -> (U256, u64) {
     (out, borrow as u64)
 }
 
+fn add_raw(a: U256, b: U256) -> (U256, u64) {
+    let mut out = [0; 4];
+    let mut carry = 0u128;
+    for index in 0..4 {
+        let value = u128::from(a[index]) + u128::from(b[index]) + carry;
+        out[index] = value as u64;
+        carry = value >> 64;
+    }
+    (out, carry as u64)
+}
+
+#[inline(always)]
+fn mask(bit: u64) -> u64 {
+    0u64.wrapping_sub(bit & 1)
+}
+
+#[inline(always)]
+fn select_u256(if_one: U256, if_zero: U256, bit: u64) -> U256 {
+    let selected = mask(bit);
+    let mut out = [0; 4];
+    for index in 0..4 {
+        out[index] = (if_one[index] & selected) | (if_zero[index] & !selected);
+    }
+    out
+}
+
+#[inline(always)]
+fn zero_bit(value: U256) -> u64 {
+    let mut combined = 0u64;
+    for word in value {
+        combined |= word;
+    }
+    ((combined | combined.wrapping_neg()) >> 63) ^ 1
+}
+
+#[inline(always)]
+fn equal_bit(a: U256, b: U256) -> u64 {
+    let mut difference = 0u64;
+    for index in 0..4 {
+        difference |= a[index] ^ b[index];
+    }
+    ((difference | difference.wrapping_neg()) >> 63) ^ 1
+}
+
 fn add_mod(a: U256, b: U256, modulus: U256) -> U256 {
     let (threshold, _) = subtract_raw(modulus, b);
-    if compare(a, threshold) != core::cmp::Ordering::Less {
-        subtract_raw(a, threshold).0
-    } else {
-        let mut out = [0; 4];
-        let mut carry = 0u128;
-        for index in 0..4 {
-            let value = u128::from(a[index]) + u128::from(b[index]) + carry;
-            out[index] = value as u64;
-            carry = value >> 64;
-        }
-        out
-    }
+    let (reduced, borrow) = subtract_raw(a, threshold);
+    let (sum, _) = add_raw(a, b);
+    select_u256(reduced, sum, borrow ^ 1)
 }
 
 fn sub_mod(a: U256, b: U256, modulus: U256) -> U256 {
-    if compare(a, b) != core::cmp::Ordering::Less {
-        subtract_raw(a, b).0
-    } else {
-        let difference = subtract_raw(b, a).0;
-        subtract_raw(modulus, difference).0
-    }
+    let (difference, borrow) = subtract_raw(a, b);
+    let (wrapped, _) = add_raw(difference, modulus);
+    select_u256(wrapped, difference, borrow)
 }
 
 fn mul_mod(mut a: U256, b: U256, modulus: U256) -> U256 {
     let mut out = [0; 4];
     for bit in 0..256 {
-        if (b[bit / 64] >> (bit & 63)) & 1 != 0 {
-            out = add_mod(out, a, modulus);
-        }
+        let added = add_mod(out, a, modulus);
+        out = select_u256(added, out, (b[bit / 64] >> (bit & 63)) & 1);
         a = add_mod(a, a, modulus);
     }
     out
@@ -351,9 +377,7 @@ impl Jacobian {
     }
 
     fn double(self) -> Self {
-        if self.z == [0; 4] || self.y == [0; 4] {
-            return Self::infinity();
-        }
+        let exceptional = zero_bit(self.z) | zero_bit(self.y);
         let delta = mul_mod(self.z, self.z, P);
         let gamma = mul_mod(self.y, self.y, P);
         let beta = mul_mod(self.x, gamma, P);
@@ -391,23 +415,16 @@ impl Jacobian {
             delta,
             P,
         );
-        Self { x, y, z }
+        Self::select(Self::infinity(), Self { x, y, z }, exceptional)
     }
 
     fn add_affine(self, other: Affine) -> Self {
-        if self.z == [0; 4] {
-            return Self::from_affine(other);
-        }
+        let was_infinity = zero_bit(self.z);
         let zz = mul_mod(self.z, self.z, P);
         let u = mul_mod(other.x, zz, P);
         let s = mul_mod(other.y, mul_mod(self.z, zz, P), P);
-        if u == self.x {
-            return if s == self.y {
-                self.double()
-            } else {
-                Self::infinity()
-            };
-        }
+        let same_x = equal_bit(u, self.x);
+        let same_y = equal_bit(s, self.y);
         let h = sub_mod(u, self.x, P);
         let hh = mul_mod(h, h, P);
         let i = add_mod(add_mod(hh, hh, P), add_mod(hh, hh, P), P);
@@ -429,7 +446,19 @@ impl Jacobian {
             hh,
             P,
         );
-        Self { x, y, z }
+        let general = Self { x, y, z };
+        let same_x_result = Self::select(self.double(), Self::infinity(), same_y);
+        let non_infinity = Self::select(same_x_result, general, same_x);
+        Self::select(Self::from_affine(other), non_infinity, was_infinity)
+    }
+
+    #[inline(always)]
+    fn select(if_one: Self, if_zero: Self, bit: u64) -> Self {
+        Self {
+            x: select_u256(if_one.x, if_zero.x, bit),
+            y: select_u256(if_one.y, if_zero.y, bit),
+            z: select_u256(if_one.z, if_zero.z, bit),
+        }
     }
 
     fn affine(self) -> Option<Affine> {
@@ -445,10 +474,9 @@ impl Jacobian {
 fn scalar(point: Affine, value: U256) -> Jacobian {
     let mut out = Jacobian::infinity();
     for bit in (0..256).rev() {
-        out = out.double();
-        if (value[bit / 64] >> (bit & 63)) & 1 != 0 {
-            out = out.add_affine(point);
-        }
+        let doubled = out.double();
+        let added = doubled.add_affine(point);
+        out = Jacobian::select(added, doubled, (value[bit / 64] >> (bit & 63)) & 1);
     }
     out
 }
@@ -569,6 +597,18 @@ pub fn p256_public_key_is_valid(public_key: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn masked_modular_edges_match_field_and_order_arithmetic() {
+        let one = [1, 0, 0, 0];
+        let n_minus_one = subtract_raw(N, one).0;
+        let p_minus_one = subtract_raw(P, one).0;
+        assert_eq!(add_mod(n_minus_one, one, N), [0; 4]);
+        assert_eq!(sub_mod([0; 4], one, N), n_minus_one);
+        assert_eq!(mul_mod(n_minus_one, n_minus_one, N), one);
+        assert_eq!(add_mod(p_minus_one, one, P), [0; 4]);
+        assert_eq!(sub_mod([0; 4], one, P), p_minus_one);
+        assert_eq!(mul_mod(p_minus_one, p_minus_one, P), one);
+    }
 
     fn hex<const N: usize>(value: &str) -> [u8; N] {
         assert_eq!(value.len(), N * 2);

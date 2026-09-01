@@ -11724,3 +11724,15 @@ advertise and enforce ordinary RFC 8555 External Account Binding. It checks the
 exact HS256 key identifier, endpoint, account JWK, signing-input digest, and MAC
 and rejects missing or incorrect bindings. It adds no certificate brokerage,
 smart-card precomputation, or other recorded re-review-trigger mechanism.
+
+# 2026-09-01 — Fixed-schedule P-256 signing and use-only providers
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment hardens the already screened
+ordinary P-256/ES256 implementation by replacing secret-bit conditional field
+and scalar selections with fixed schedules and word-mask selection, while
+retaining deterministic HMAC-SHA-256 nonces, low-S normalization, and signature
+self-verification. It adds separately generated, purpose- and
+generation-restricted account, CSR, and TLS signing providers. It introduces
+no smart-card precomputed signing-element machinery or other recorded
+re-review trigger.

@@ -48,7 +48,6 @@ pub use ml_kem::{
     MlKem768Ciphertext, MlKem768DecapsulationKey, MlKem768EncapsulationKey, MlKemError,
     ml_kem_768_decapsulate, ml_kem_768_encapsulate, ml_kem_768_keygen,
 };
-#[cfg(any(test, feature = "experimental-p256-signing"))]
 pub use p256::P256SecretKey;
 pub use p256::{
     P256Error, ecdsa_p256_digest_verify_raw, ecdsa_p256_sha256_verify, encode_der_signature,
