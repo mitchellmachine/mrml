@@ -192,9 +192,16 @@ pub fn classify_receive_recovery(
     journal: &ReceiveJournalRecord,
     live: &ActivationSnapshot,
 ) -> RecoveryAction {
-    let generations_match = live.repository_generation == journal.repository_generation
-        && live.trust_generation == journal.trust_generation
+    let authority_generations_match = live.trust_generation == journal.trust_generation
         && live.revocation_generation == journal.revocation_generation;
+    let old_generation_matches =
+        authority_generations_match && live.repository_generation == journal.repository_generation;
+    let new_generation_matches = authority_generations_match
+        && journal
+            .repository_generation
+            .0
+            .checked_add(1)
+            .is_some_and(|next| live.repository_generation == RepositoryGeneration(next));
     let exact_old = exact_refs(journal, live, false);
     let exact_new = exact_refs(journal, live, true);
     match journal.phase {
@@ -204,17 +211,17 @@ pub fn classify_receive_recovery(
         | QuarantinePhase::HistoryVerified
         | QuarantinePhase::RefUpdatesPrepared
         | QuarantinePhase::Aborted => RecoveryAction::DiscardBeforeActivation,
-        QuarantinePhase::ObjectsDurablyInstalled if generations_match && exact_old => {
+        QuarantinePhase::ObjectsDurablyInstalled if old_generation_matches && exact_old => {
             RecoveryAction::ReverifyBeforeActivation
         }
         QuarantinePhase::ObjectsDurablyInstalled
         | QuarantinePhase::RefsAtomicallyActivated
         | QuarantinePhase::Uncertain
-            if generations_match && exact_new =>
+            if new_generation_matches && exact_new =>
         {
             RecoveryAction::RecoverAuditReceipt
         }
-        QuarantinePhase::AuditReceiptAppended if generations_match && exact_new => {
+        QuarantinePhase::AuditReceiptAppended if new_generation_matches && exact_new => {
             RecoveryAction::MarkComplete
         }
         _ => RecoveryAction::ManualUncertain,
@@ -474,6 +481,16 @@ mod tests {
         }
     }
 
+    fn activated_snapshot(
+        verified: &VerifiedRefTransaction,
+        value: ObjectId,
+    ) -> ActivationSnapshot {
+        let mut snapshot = snapshot(verified, value);
+        snapshot.repository_generation =
+            RepositoryGeneration(verified.repository_generation().0.checked_add(1).unwrap());
+        snapshot
+    }
+
     #[test]
     fn canonical_journal_round_trips_and_detects_torn_or_tampered_records() {
         let (transaction, verified, _, _) = fixture();
@@ -512,7 +529,7 @@ mod tests {
             RecoveryAction::ReverifyBeforeActivation
         );
         assert_eq!(
-            classify_receive_recovery(&installed, &snapshot(&verified, new)),
+            classify_receive_recovery(&installed, &activated_snapshot(&verified, new)),
             RecoveryAction::RecoverAuditReceipt
         );
         assert_eq!(
@@ -529,10 +546,10 @@ mod tests {
             parse_receive_journal(&encode_receive_journal(&transaction, &verified).unwrap())
                 .unwrap();
         assert_eq!(
-            classify_receive_recovery(&completed, &snapshot(&verified, new)),
+            classify_receive_recovery(&completed, &activated_snapshot(&verified, new)),
             RecoveryAction::MarkComplete
         );
-        let mut stale = snapshot(&verified, new);
+        let mut stale = activated_snapshot(&verified, new);
         stale.trust_generation = TrustGeneration(99);
         assert_eq!(
             classify_receive_recovery(&completed, &stale),

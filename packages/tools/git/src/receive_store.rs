@@ -122,10 +122,11 @@ mod tests {
     use crate::{
         ActiveRefState, CandidateRefTransaction, CandidateRefUpdate, FullRefName,
         HistoryVerificationLimits, ObjectId, ObjectKind, PackGeneration, PackObject,
-        PushStorageForecast, QuarantineLimits, QuarantinePhase, RepositoryGeneration,
-        RepositoryIdentity, RevocationGeneration, TrustGeneration,
-        build_verified_fast_forward_transaction, durably_activate_verified_receive,
-        encode_pack_with_format, reserve_push_disk, verify_introduced_history,
+        PushStorageForecast, QuarantineLimits, QuarantinePhase, RecoveryAction,
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+        build_verified_fast_forward_transaction, classify_receive_recovery,
+        durably_activate_verified_receive, encode_pack_with_format, reserve_push_disk,
+        verify_introduced_history,
     };
 
     fn path(root: &str, child: &str) -> Text {
@@ -241,13 +242,17 @@ mod tests {
         assert_eq!(transaction.phase(), QuarantinePhase::AuditReceiptAppended);
         assert_eq!(store.active_refs().load().unwrap().refs[0].1, new);
         assert_eq!(store.receipts().load(id).unwrap(), receipt);
+        let final_journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
+            .unwrap()
+            .load(id)
+            .unwrap();
+        assert_eq!(final_journal.phase, QuarantinePhase::AuditReceiptAppended);
         assert_eq!(
-            ReceiveJournalDirectory::open(&path(&root, "journals"))
-                .unwrap()
-                .load(id)
-                .unwrap()
-                .phase,
-            QuarantinePhase::AuditReceiptAppended
+            classify_receive_recovery(
+                &final_journal,
+                &store.active_refs().snapshot_for(&verified).unwrap(),
+            ),
+            RecoveryAction::MarkComplete
         );
         ArrivalPackStore::open(&path(&root, "packs"), ObjectFormat::Sha256, 1024 * 1024)
             .unwrap()
