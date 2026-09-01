@@ -1,8 +1,9 @@
 # Gitd production configuration
 
-Status: **PARTIALLY IMPLEMENTED**. The strict version-1 parser and authority
-health client are implemented. Listener, certd, recovery, and repository
-catalog startup stages remain to be composed into the executable.
+Status: **PARTIALLY IMPLEMENTED**. The strict version-1 parser, secure hosted
+loader, storage-layout validation, and authority health client are implemented.
+Listener, certd, recovery, and repository catalog startup stages remain to be
+composed into the executable.
 
 Gitd accepts a bounded ASCII `key=value` configuration with an explicit
 `version=1`. Every security-sensitive field is required exactly once. Unknown
@@ -17,6 +18,17 @@ authority request identifier; connection/upload/receive/body limits; one
 unprivileged shared TCP/UDP port; and a bounded drain interval. Paths identify
 deployment objects but do not grant authority. Startup must subsequently open
 and validate each as the appropriate capability before admitting traffic.
+
+The hosted loader opens an absolute config path with `O_NOFOLLOW`, requires one
+bounded regular file owned by root or the configured Gitd UID, and rejects
+group/world-writable modes. The native `mrml-gitd validate-config CONFIG`
+command also validates every authoritative storage path before reporting
+success: each path component must be a directory rather than a symlink, unsafe
+writable parents are rejected, leaf ownership must exactly match the configured
+Gitd UID/GID, and writable roots must have owner write authority without
+group/world write. The policy root may be owner-read-only. This command does not
+report service readiness; authority and certd authentication remain later
+startup gates.
 
 The default production identities remain Gitd `21001:21001`, authority
 `21002:21002`, and certd `21003:21003`. The parser permits explicit deployment
