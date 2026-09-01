@@ -11768,3 +11768,10 @@ published, tested, activation-uncertain, and active deployment transitions in
 the existing authenticated generational state store and resolves uncertain
 commits by authoritative re-read. It introduces no new certificate protocol,
 validation topology, or recorded re-review trigger.
+
+# 2026-09-01 — Identity-scoped renewal single-flight
+
+Patent review: **NOT_TRIGGERED**. This increment associates an independent ARI
+or fallback schedule and a bounded expiring single-flight renewal lease with
+each capability-selected certificate identity. It adds no certificate protocol
+mechanism, route-selected validation, or recorded re-review trigger.

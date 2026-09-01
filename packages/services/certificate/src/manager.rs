@@ -1,4 +1,4 @@
-use crate::{IdentityManager, TlsIdentityId};
+use crate::{IdentityManager, RenewalSchedule, TlsIdentityId};
 
 pub const MAX_MANAGED_IDENTITIES: usize = 16;
 
@@ -9,6 +9,20 @@ pub enum CertificateManagerError {
     CapacityExceeded,
     InvalidPolicyGeneration,
     IdentityInUse,
+    ScheduleMismatch,
+    RenewalNotDue,
+    RenewalInProgress,
+    LeaseMismatch,
+    ArithmeticOverflow,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct RenewalLease {
+    pub identity: TlsIdentityId,
+    pub identity_generation: u64,
+    pub policy_generation: u64,
+    pub lease_generation: u64,
+    pub expires_at_unix: u64,
 }
 
 /// Bounded owner of independent certificate identity state machines.
@@ -18,6 +32,8 @@ pub enum CertificateManagerError {
 /// corresponding `IdentityManager` through the certificate service ABI.
 pub struct CertificateManager {
     identities: [Option<IdentityManager>; MAX_MANAGED_IDENTITIES],
+    schedules: [Option<RenewalSchedule>; MAX_MANAGED_IDENTITIES],
+    leases: [Option<RenewalLease>; MAX_MANAGED_IDENTITIES],
     count: u8,
 }
 
@@ -25,6 +41,8 @@ impl CertificateManager {
     pub const fn new() -> Self {
         Self {
             identities: [const { None }; MAX_MANAGED_IDENTITIES],
+            schedules: [None; MAX_MANAGED_IDENTITIES],
+            leases: [None; MAX_MANAGED_IDENTITIES],
             count: 0,
         }
     }
@@ -53,14 +71,14 @@ impl CertificateManager {
         {
             return Err(CertificateManagerError::DuplicateIdentity);
         }
-        let slot = self
+        let index = self
             .identities
-            .iter_mut()
-            .find(|slot| slot.is_none())
+            .iter()
+            .position(Option::is_none)
             .ok_or(CertificateManagerError::CapacityExceeded)?;
-        *slot = Some(IdentityManager::new(identity, policy_generation));
+        self.identities[index] = Some(IdentityManager::new(identity, policy_generation));
         self.count += 1;
-        Ok(slot.as_mut().unwrap())
+        Ok(self.identities[index].as_mut().unwrap())
     }
 
     pub fn get(
@@ -86,23 +104,100 @@ impl CertificateManager {
     }
 
     pub fn remove_empty(&mut self, identity: TlsIdentityId) -> Result<(), CertificateManagerError> {
-        let slot = self
+        let index = self
             .identities
-            .iter_mut()
-            .find(|slot| {
+            .iter()
+            .position(|slot| {
                 slot.as_ref()
                     .is_some_and(|manager| manager.identity() == identity)
             })
             .ok_or(CertificateManagerError::IdentityUnavailable)?;
-        if slot
+        if self.identities[index]
             .as_ref()
             .is_some_and(IdentityManager::has_deployment_state)
         {
             return Err(CertificateManagerError::IdentityInUse);
         }
-        *slot = None;
+        self.identities[index] = None;
+        self.schedules[index] = None;
+        self.leases[index] = None;
         self.count -= 1;
         Ok(())
+    }
+
+    pub fn install_renewal_schedule(
+        &mut self,
+        schedule: RenewalSchedule,
+    ) -> Result<(), CertificateManagerError> {
+        let index = self.index(schedule.identity)?;
+        let manager = self.identities[index].as_ref().unwrap();
+        if schedule.identity_generation == 0
+            || schedule.policy_generation != manager.policy_generation()
+        {
+            return Err(CertificateManagerError::ScheduleMismatch);
+        }
+        if self.leases[index].is_some() {
+            return Err(CertificateManagerError::RenewalInProgress);
+        }
+        self.schedules[index] = Some(schedule);
+        Ok(())
+    }
+
+    pub fn renewal_schedule(
+        &self,
+        identity: TlsIdentityId,
+    ) -> Result<RenewalSchedule, CertificateManagerError> {
+        self.schedules[self.index(identity)?].ok_or(CertificateManagerError::ScheduleMismatch)
+    }
+
+    pub fn begin_renewal(
+        &mut self,
+        identity: TlsIdentityId,
+        now_unix: u64,
+        lease_generation: u64,
+        lease_seconds: u64,
+    ) -> Result<RenewalLease, CertificateManagerError> {
+        if lease_generation == 0 || lease_seconds == 0 {
+            return Err(CertificateManagerError::LeaseMismatch);
+        }
+        let index = self.index(identity)?;
+        let schedule = self.schedules[index].ok_or(CertificateManagerError::ScheduleMismatch)?;
+        if schedule.renew_at_unix > now_unix {
+            return Err(CertificateManagerError::RenewalNotDue);
+        }
+        if self.leases[index].is_some_and(|lease| lease.expires_at_unix > now_unix) {
+            return Err(CertificateManagerError::RenewalInProgress);
+        }
+        let lease = RenewalLease {
+            identity,
+            identity_generation: schedule.identity_generation,
+            policy_generation: schedule.policy_generation,
+            lease_generation,
+            expires_at_unix: now_unix
+                .checked_add(lease_seconds)
+                .ok_or(CertificateManagerError::ArithmeticOverflow)?,
+        };
+        self.leases[index] = Some(lease);
+        Ok(lease)
+    }
+
+    pub fn finish_renewal(&mut self, lease: RenewalLease) -> Result<(), CertificateManagerError> {
+        let index = self.index(lease.identity)?;
+        if self.leases[index] != Some(lease) {
+            return Err(CertificateManagerError::LeaseMismatch);
+        }
+        self.leases[index] = None;
+        Ok(())
+    }
+
+    fn index(&self, identity: TlsIdentityId) -> Result<usize, CertificateManagerError> {
+        self.identities
+            .iter()
+            .position(|slot| {
+                slot.as_ref()
+                    .is_some_and(|manager| manager.identity() == identity)
+            })
+            .ok_or(CertificateManagerError::IdentityUnavailable)
     }
 }
 
@@ -115,6 +210,8 @@ impl Default for CertificateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ExpiryHealth, RenewalSource};
+    use mrml_acme::AriCertificateId;
 
     #[test]
     fn identities_are_exact_independent_and_bounded() {
@@ -155,5 +252,63 @@ mod tests {
             registry.enroll(TlsIdentityId([0xff; 16]), 1).err(),
             Some(CertificateManagerError::CapacityExceeded)
         );
+    }
+
+    fn schedule(identity: TlsIdentityId, renew_at_unix: u64) -> RenewalSchedule {
+        RenewalSchedule {
+            identity,
+            identity_generation: 2,
+            policy_generation: 4,
+            certificate_id: AriCertificateId::derive(&[1], &[2]).unwrap(),
+            source: RenewalSource::Ari,
+            renew_at_unix,
+            requery_ari_at_unix: renew_at_unix,
+            not_after_unix: renew_at_unix + 1000,
+            failure_count: 0,
+            health: ExpiryHealth::Healthy,
+        }
+    }
+
+    #[test]
+    fn renewal_is_identity_scoped_due_and_single_flight() {
+        let mut registry = CertificateManager::new();
+        let first = TlsIdentityId([1; 16]);
+        let second = TlsIdentityId([2; 16]);
+        registry.enroll(first, 4).unwrap();
+        registry.enroll(second, 4).unwrap();
+        registry
+            .install_renewal_schedule(schedule(first, 100))
+            .unwrap();
+        registry
+            .install_renewal_schedule(schedule(second, 200))
+            .unwrap();
+        assert_eq!(
+            registry.begin_renewal(first, 99, 1, 30).err(),
+            Some(CertificateManagerError::RenewalNotDue)
+        );
+        let lease = registry.begin_renewal(first, 100, 1, 30).unwrap();
+        assert_eq!(
+            registry.begin_renewal(first, 100, 2, 30).err(),
+            Some(CertificateManagerError::RenewalInProgress)
+        );
+        assert_eq!(
+            registry.begin_renewal(second, 100, 1, 30).err(),
+            Some(CertificateManagerError::RenewalNotDue)
+        );
+        registry.finish_renewal(lease).unwrap();
+        assert!(registry.begin_renewal(first, 100, 2, 30).is_ok());
+    }
+
+    #[test]
+    fn expired_lease_can_be_recovered_by_a_new_generation() {
+        let mut registry = CertificateManager::new();
+        let identity = TlsIdentityId([3; 16]);
+        registry.enroll(identity, 4).unwrap();
+        registry
+            .install_renewal_schedule(schedule(identity, 50))
+            .unwrap();
+        registry.begin_renewal(identity, 50, 1, 10).unwrap();
+        let recovered = registry.begin_renewal(identity, 60, 2, 10).unwrap();
+        assert_eq!(recovered.lease_generation, 2);
     }
 }

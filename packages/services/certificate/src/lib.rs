@@ -89,7 +89,9 @@ pub use lifecycle_service::{
     CertificateLifecycleAuthorizer, CertificateLifecycleProvider, LifecycleDispatchError,
     dispatch_lifecycle_call,
 };
-pub use manager::{CertificateManager, CertificateManagerError, MAX_MANAGED_IDENTITIES};
+pub use manager::{
+    CertificateManager, CertificateManagerError, MAX_MANAGED_IDENTITIES, RenewalLease,
+};
 pub use native_service::{
     CertificateNativeRoute, CertificateNativeServiceError, CertificateNativeServiceLoop,
     CertificateNativeSyscalls, CertificateRawSyscall, CertificateSyscallFrame,
