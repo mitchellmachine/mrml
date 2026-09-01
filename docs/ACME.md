@@ -28,8 +28,9 @@ publication, PKCS#10 generation, and certificate verification only when the
 owner policy explicitly enables them for the selected CA/profile generation.
 DNS-only prepared operations cannot be replayed with that permission changed.
 IP authorizations accept only HTTP-01; DNS-01 and TLS-ALPN-01 fail closed.
-Publishing an IP certificate as a service identity remains disabled until the
-identity interface and durable activation descriptor carry typed identifiers.
+The in-service TLS activation descriptor also carries the exact typed set and
+binds identifier kind and binary value into its generation receipt. Automated
+issuance-to-activation orchestration remains incomplete.
 The bounded payload and PKCS#10 layers can
 encode typed, canonically ordered DNS and IP identifiers without confusing
 their ACME kinds; PKCS#10 encodes IP SAN values as exact 4- or 16-byte address

@@ -1,5 +1,5 @@
 use crate::{PemCertificateChain, VerifiedCertificateReceipt};
-use mrml_acme::{CertificateProfile, DnsIdentifier, Es256Signature};
+use mrml_acme::{AcmeIdentifier, CertificateProfile, Es256Signature};
 use mrml_crypto::Sha256;
 
 pub const MAX_IDENTITY_NAMES: usize = 16;
@@ -31,8 +31,8 @@ pub struct TlsIdentityDescriptor {
     pub identity: TlsIdentityId,
     pub generation: u64,
     pub policy_generation: u64,
-    pub dns_names: [Option<DnsIdentifier>; MAX_IDENTITY_NAMES],
-    pub dns_name_count: u8,
+    pub identifiers: [Option<AcmeIdentifier>; MAX_IDENTITY_NAMES],
+    pub identifier_count: u8,
     pub chain_digest: [u8; 32],
     pub leaf_spki_digest: [u8; 32],
     pub key_identity: TlsKeyIdentity,
@@ -44,7 +44,7 @@ pub struct TlsIdentityDescriptor {
 impl TlsIdentityDescriptor {
     pub fn binding_digest(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
-        digest.update(b"mrml-tls-identity-v1\0");
+        digest.update(b"mrml-tls-identity-v2\0");
         digest.update(&self.identity.0);
         digest.update(&self.generation.to_be_bytes());
         digest.update(&self.policy_generation.to_be_bytes());
@@ -55,12 +55,22 @@ impl TlsIdentityDescriptor {
         digest.update(&self.not_after.to_be_bytes());
         digest.update(&self.profile.directory_generation().to_be_bytes());
         digest.update(self.profile.name().as_bytes());
-        for name in self.dns_names[..usize::from(self.dns_name_count)]
+        for identifier in self.identifiers[..usize::from(self.identifier_count)]
             .iter()
             .flatten()
         {
-            digest.update(&(name.as_str().len() as u16).to_be_bytes());
-            digest.update(name.as_str().as_bytes());
+            match identifier {
+                AcmeIdentifier::Dns(name) => {
+                    digest.update(b"dns\0");
+                    digest.update(&(name.as_str().len() as u16).to_be_bytes());
+                    digest.update(name.as_str().as_bytes());
+                }
+                AcmeIdentifier::Ip(address) => {
+                    digest.update(b"ip\0");
+                    digest.update(&(address.octets().len() as u16).to_be_bytes());
+                    digest.update(address.octets());
+                }
+            }
         }
         digest.finalize()
     }
@@ -228,14 +238,20 @@ impl IdentityManager {
         key_identity: TlsKeyIdentity,
         route_generation: u64,
         capability_id: [u8; 16],
-        dns_names: [Option<DnsIdentifier>; MAX_IDENTITY_NAMES],
-        dns_name_count: u8,
+        identifiers: [Option<AcmeIdentifier>; MAX_IDENTITY_NAMES],
+        identifier_count: u8,
     ) -> Result<PreparedIdentityReceipt, IdentityError> {
         if self.candidate.is_some()
             || verified.policy_generation != self.policy_generation
             || verified.chain_digest != chain.chain_digest()
-            || dns_name_count == 0
-            || usize::from(dns_name_count) > MAX_IDENTITY_NAMES
+            || identifier_count == 0
+            || usize::from(identifier_count) > MAX_IDENTITY_NAMES
+            || identifiers[..usize::from(identifier_count)]
+                .iter()
+                .any(Option::is_none)
+            || identifiers[..usize::from(identifier_count)]
+                .windows(2)
+                .any(|pair| pair[0].as_ref() >= pair[1].as_ref())
         {
             return Err(IdentityError::InvalidState);
         }
@@ -250,8 +266,8 @@ impl IdentityManager {
             identity: self.identity,
             generation,
             policy_generation: self.policy_generation,
-            dns_names,
-            dns_name_count,
+            identifiers,
+            identifier_count,
             chain_digest: verified.chain_digest,
             leaf_spki_digest: verified.leaf_spki_digest,
             key_identity,
@@ -572,7 +588,12 @@ mod tests {
         let id = TlsIdentityId([4; 16]);
         let mut manager = IdentityManager::new(id, 2);
         let mut names = [None; MAX_IDENTITY_NAMES];
-        names[0] = Some(DnsIdentifier::parse("git.example", false).unwrap());
+        names[0] = Some(AcmeIdentifier::Dns(
+            mrml_acme::DnsIdentifier::parse("git.example", false).unwrap(),
+        ));
+        names[1] = Some(AcmeIdentifier::Ip(
+            mrml_acme::IpIdentifier::parse("192.0.2.1").unwrap(),
+        ));
         let mut target = Target {
             generation: 0,
             active: None,
@@ -586,9 +607,16 @@ mod tests {
                 1,
                 [6; 16],
                 names,
-                1,
+                2,
             )
             .unwrap();
+        let descriptor = manager.candidate.as_ref().unwrap().descriptor;
+        assert_eq!(descriptor.identifier_count, 2);
+        let mut substituted = descriptor;
+        substituted.identifiers[1] = Some(AcmeIdentifier::Ip(
+            mrml_acme::IpIdentifier::parse("192.0.2.2").unwrap(),
+        ));
+        assert_ne!(descriptor.binding_digest(), substituted.binding_digest());
         manager.publish_candidate(prepared, &mut target).unwrap();
         let tested = manager.test_candidate(prepared, &mut target).unwrap();
         assert!(matches!(

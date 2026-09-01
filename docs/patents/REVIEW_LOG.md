@@ -11860,3 +11860,11 @@ an independently generated OpenSSL test oracle. It introduces no MultiTLS
 multiplexing, route-selected multi-vantage CA validation, challenge proxying,
 5G certificate brokerage, smart-card precomputed signing machinery, public CA
 operation, or other recorded re-review trigger.
+
+# 2026-09-01 — Typed TLS identity activation descriptor
+
+Patent review: **NOT_TRIGGERED**. This increment binds exact typed DNS, IPv4,
+and IPv6 identifiers into the existing generation-scoped TLS identity
+descriptor and activation receipt. It changes no certificate validation
+topology, TLS multiplexing behavior, CA operation, or other recorded re-review
+trigger.
