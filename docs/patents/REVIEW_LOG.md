@@ -11790,3 +11790,10 @@ Patent review: **NOT_TRIGGERED**. This increment changes the test authority's
 advertised profile catalog between exact directory generations and proves the
 client does not preserve a disappeared profile identity across that boundary.
 It introduces no certificate protocol mechanism or recorded re-review trigger.
+
+# 2026-09-01 — Typed CAA recommendation and observation policy
+
+Patent review: **NOT_TRIGGERED**. This increment renders and validates bounded
+owner-selected CAA issue/issuewild records, validation methods, and optional
+account URI constraints. CAA observations inform issuance policy and grant no
+local authority. No recorded re-review trigger is introduced.

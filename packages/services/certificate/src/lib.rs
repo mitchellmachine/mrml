@@ -1,6 +1,7 @@
 #![no_std]
 
 mod backup;
+mod caa;
 mod certificate;
 mod challenge_dns;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -34,6 +35,7 @@ pub use backup::{
     create_recoverable_backup, prepare_sealed_key_record, restore_backup,
     restore_sealed_key_record, verify_backup,
 };
+pub use caa::{CaaChallengeMethod, CaaError, CaaPolicy, MAX_CAA_RECORD_BYTES, MAX_CAA_RECORDS};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use certificate::HostedCertificateChainVerifier;
 pub use certificate::{
