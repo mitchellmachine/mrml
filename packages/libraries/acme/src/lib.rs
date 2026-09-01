@@ -25,7 +25,7 @@ pub use base64url::{Base64UrlError, decode_base64url, encode_base64url};
 pub use challenge::{
     ChallengeError, ChallengeLifecycle, ChallengePublicationRequest, ChallengePublisher,
     ChallengeToken, MAX_CHALLENGE_TOKEN, MAX_KEY_AUTHORIZATION, PublicationReceipt,
-    PublicationState, dns01_txt_digest, write_key_authorization,
+    PublicationState, dns01_txt_digest, publication_binding_digest, write_key_authorization,
 };
 pub use challenge_http::{
     Http01Error, MAX_HTTP01_HEADERS, MAX_HTTP01_REQUEST, validate_http01_request,

@@ -256,16 +256,20 @@ fn validate_receipt(
     {
         return Err(ChallengeError::ReceiptMismatch);
     }
+    if receipt.binding_digest != publication_binding_digest(request) {
+        return Err(ChallengeError::WrongPublisher);
+    }
+    Ok(())
+}
+
+pub fn publication_binding_digest(request: &ChallengePublicationRequest) -> [u8; 32] {
     let mut input = [0u8; 32 * 3 + 16];
     input[..32].copy_from_slice(&request.order_url_digest);
     input[32..64].copy_from_slice(&request.authorization_url_digest);
     input[64..96].copy_from_slice(&request.key_authorization_digest);
     input[96..104].copy_from_slice(&request.challenge_generation.to_be_bytes());
     input[104..112].copy_from_slice(&request.publisher_policy_generation.to_be_bytes());
-    if receipt.binding_digest != Sha256::digest(&input) {
-        return Err(ChallengeError::WrongPublisher);
-    }
-    Ok(())
+    Sha256::digest(&input)
 }
 
 #[cfg(test)]

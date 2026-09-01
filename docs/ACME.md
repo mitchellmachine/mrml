@@ -48,6 +48,10 @@ serves SOA, NS, TXT, and nameserver A responses over DNS UDP messages and TCP
 framing, supports concurrent TXT values, binds mutations to policy and record
 generations, expires records, rejects malformed/compression-loop input, refuses
 out-of-zone recursion, and returns truncated UDP responses when necessary.
+The DNS role implements the shared challenge-publisher contract: preparation
+does not publish, activation inserts the exact TXT digest, cleanup removes the
+exact record generation, and successful removal releases bounded publisher
+capacity. Multiple authorization-bound records remain independently scoped.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 

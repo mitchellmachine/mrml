@@ -11248,3 +11248,10 @@ authoritative DNS UDP/TCP parsing and SOA/NS/TXT/A responses for a delegated
 challenge zone, with generation-bound TXT lifecycle. It adds no recursive DNS,
 route-selected multi-vantage validation, challenge proxy, or other recorded
 re-review trigger.
+
+# 2026-09-01 — DNS-01 publisher lifecycle integration
+
+Patent review: **NOT_TRIGGERED** beyond the owner-supplied
+**REVIEWED_NOT_BLOCKING** scope. This increment connects the already reviewed
+typed challenge lifecycle to exact delegated-zone TXT preparation, activation,
+expiry, and removal. It adds no recorded re-review-trigger mechanism.
