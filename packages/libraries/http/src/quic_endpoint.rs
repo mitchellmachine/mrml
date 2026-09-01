@@ -1,6 +1,9 @@
 use mrml_runtime::{SocketAddress, UdpSocket, Vector};
 
-use crate::quic::initial_version_and_destination_id;
+use crate::quic::{initial_token, initial_version_and_destination_id};
+use crate::quic_retry::{
+    QuicAdmissionController, QuicAdmissionDecision, QuicRetryPurpose, QuicRetryTokenManager,
+};
 use crate::{QuicError, QuicVersion};
 
 const MAX_DATAGRAM: usize = 65_527;
@@ -35,6 +38,13 @@ pub struct QuicEndpointDatagram {
     pub bytes: Vector<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QuicInitialAdmission {
+    Admit { permit: u64 },
+    Retry { token: Vector<u8> },
+    Reject,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EndpointConnectionPhase {
     Handshake,
@@ -64,6 +74,8 @@ pub struct QuicServerEndpoint {
     retired_ids: Vector<RetiredConnectionId>,
     maximum_connections: usize,
     maximum_retired_ids: usize,
+    admission: Option<QuicAdmissionController>,
+    retry_tokens: Option<QuicRetryTokenManager>,
 }
 
 impl QuicServerEndpoint {
@@ -95,7 +107,75 @@ impl QuicServerEndpoint {
             retired_ids: Vector::new(),
             maximum_connections,
             maximum_retired_ids,
+            admission: None,
+            retry_tokens: None,
         })
+    }
+
+    pub fn configure_public_admission(
+        &mut self,
+        admission: QuicAdmissionController,
+        retry_tokens: QuicRetryTokenManager,
+    ) {
+        self.admission = Some(admission);
+        self.retry_tokens = Some(retry_tokens);
+    }
+
+    pub fn admit_initial(
+        &mut self,
+        input: &[u8],
+        peer: SocketAddress,
+        now: u64,
+        estimated_memory_bytes: u64,
+    ) -> QuicInitialAdmission {
+        if input.len() < 1200 {
+            return QuicInitialAdmission::Reject;
+        }
+        let Ok((_, original_destination_id)) = initial_version_and_destination_id(input) else {
+            return QuicInitialAdmission::Reject;
+        };
+        let Ok(token) = initial_token(input) else {
+            return QuicInitialAdmission::Reject;
+        };
+        let (Some(admission), Some(tokens)) = (&mut self.admission, &mut self.retry_tokens) else {
+            return QuicInitialAdmission::Reject;
+        };
+        let validated = if token.is_empty() {
+            false
+        } else if tokens
+            .verify_and_consume(
+                token,
+                peer,
+                &original_destination_id,
+                now,
+                QuicRetryPurpose::AddressValidation,
+            )
+            .is_ok()
+        {
+            true
+        } else {
+            return QuicInitialAdmission::Reject;
+        };
+        match admission.begin(peer, now, estimated_memory_bytes, validated) {
+            QuicAdmissionDecision::Admit { permit } => QuicInitialAdmission::Admit { permit },
+            QuicAdmissionDecision::Retry => match tokens.issue(
+                peer,
+                &original_destination_id,
+                now,
+                QuicRetryPurpose::AddressValidation,
+            ) {
+                Ok(token) => QuicInitialAdmission::Retry { token },
+                Err(_) => QuicInitialAdmission::Reject,
+            },
+            QuicAdmissionDecision::Reject => QuicInitialAdmission::Reject,
+        }
+    }
+
+    pub fn release_handshake_permit(&mut self, permit: u64) -> Result<(), QuicError> {
+        self.admission
+            .as_mut()
+            .ok_or(QuicError::ProtocolViolation)?
+            .release(permit)
     }
 
     pub fn local_port(&self) -> Result<u16, QuicError> {
@@ -302,6 +382,7 @@ fn destination_connection_id(input: &[u8]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InitialPacket, QuicInitialKeys, QuicRetryKey, QuicRole};
 
     fn peer(port: u16) -> SocketAddress {
         SocketAddress {
@@ -317,6 +398,8 @@ mod tests {
             retired_ids: Vector::new(),
             maximum_connections,
             maximum_retired_ids,
+            admission: None,
+            retry_tokens: None,
         }
     }
 
@@ -371,5 +454,52 @@ mod tests {
         assert_eq!(endpoint.route(&packet, peer(1)), None);
         endpoint.reap_retired(11);
         assert!(endpoint.retired_ids.is_empty());
+    }
+
+    #[test]
+    fn endpoint_authenticates_retry_before_allocating_a_handshake_permit() {
+        let mut endpoint = endpoint(2, 2);
+        endpoint.configure_public_admission(
+            QuicAdmissionController::new(2, 1, 4096, 30, 0).unwrap(),
+            QuicRetryTokenManager::new(
+                QuicRetryKey {
+                    generation: 1,
+                    key: [7; 16],
+                },
+                30,
+            )
+            .unwrap(),
+        );
+        let initial = InitialPacket {
+            destination_id: [1, 2, 3, 4].into(),
+            source_id: [5, 6, 7, 8].into(),
+            packet_number: 0,
+            payload: [0; 1150].into(),
+        };
+        let keys =
+            QuicInitialKeys::derive_for(QuicVersion::V2, &initial.destination_id, QuicRole::Client)
+                .unwrap();
+        let first = initial.seal_padded_for(QuicVersion::V2, &keys).unwrap();
+        let QuicInitialAdmission::Retry { token } =
+            endpoint.admit_initial(&first, peer(443), 100, 1024)
+        else {
+            panic!("unvalidated Initial did not receive Retry")
+        };
+        let retried = initial
+            .seal_for_with_token(QuicVersion::V2, &keys, &token)
+            .unwrap();
+        assert_eq!(
+            endpoint.admit_initial(&retried, peer(444), 101, 1024),
+            QuicInitialAdmission::Reject
+        );
+        assert_eq!(
+            endpoint.admit_initial(&retried, peer(443), 101, 1024),
+            QuicInitialAdmission::Admit { permit: 1 }
+        );
+        assert_eq!(
+            endpoint.admit_initial(&retried, peer(443), 101, 1024),
+            QuicInitialAdmission::Reject
+        );
+        endpoint.release_handshake_permit(1).unwrap();
     }
 }

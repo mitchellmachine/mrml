@@ -52,3 +52,7 @@ After delegated OCSP responder validation, the TLS suites passed 28 hosted Linux
 tests and 27 Windows-target tests under Wine. Coverage includes exact OCSP EKU
 and same-serial/different-issuer hash rejection. No public delegated-responder
 fixture or native Windows execution was exercised.
+
+After endpoint Retry/admission integration, the hosted Linux HTTP suite passed
+48 tests. Token authentication precedes bounded half-open permit creation;
+wrong-peer and replay attempts reject in the focused regression.

@@ -9,6 +9,10 @@ Retry tokens bind the exact IPv4 address and port, original destination ID,
 issuance time, purpose, and rotating key generation. Tokens are AEAD protected,
 single-use within bounded replay storage, and limited to 256 bytes. Half-open
 admission is bounded globally, per IPv4 address, by memory, and by lifetime.
+The persistent endpoint authenticates a presented Retry token before requesting
+a half-open permit. Under configured pressure an unvalidated Initial receives a
+fresh encrypted token; wrong-peer, expired, replayed, malformed, or oversized
+tokens reject without allocating handshake state.
 
 Application traffic closes before conservative packet or byte limits and on an
 unsupported key-phase change. `QuicServerEndpoint` persistently owns UDP and
