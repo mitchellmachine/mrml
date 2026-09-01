@@ -2999,6 +2999,47 @@ mod tests {
             association.filesystem_binding.provider_object
         );
         assert_eq!(supervisor.task(active.service()), Ok(Some(target)));
+        let active = if failure_kind != SupervisedFailureKind::RetirementRestart {
+            let ready_endpoint_object = association.filesystem_binding.endpoint_object;
+            let ready_capability = runtime
+                .capabilities_mut(target)
+                .unwrap()
+                .insert(ready_endpoint_object, Rights::SIGNAL)
+                .unwrap();
+            let ready = FilesystemProviderReady::new(
+                association.filesystem_binding.module_object.0,
+                association.filesystem_binding.provider_generation,
+                association.block_binding.provider_generation,
+                association.filesystem_binding.system_generation,
+                association.association_generation,
+                association.block_binding.endpoint_object.0,
+            )
+            .unwrap()
+            .encode();
+            let mut ready_endpoint = mrml_kernel::Endpoint::new(ready_endpoint_object);
+            let sequence = runtime
+                .deliver_ipc(
+                    target,
+                    source,
+                    &mut ready_endpoint,
+                    ready_capability,
+                    &ready,
+                    &[],
+                )
+                .unwrap();
+            let received = match runtime.receive_control(source).unwrap() {
+                mrml_kernel::ControlEvent::Message(received) => received,
+                mrml_kernel::ControlEvent::PeerDied(_) => {
+                    panic!("ready delivery cannot become peer death")
+                }
+            };
+            let ready = accept_native_filesystem_provider_ready(active, received).unwrap();
+            assert_eq!(ready.task(), target);
+            assert_eq!(ready.ready_sequence(), sequence);
+            ready.into_active()
+        } else {
+            active
+        };
         let service_id = active.service();
         let failure = retire_current_supervised_native_filesystem_provider(
             active,
