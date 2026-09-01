@@ -16,6 +16,17 @@ ML-DSA public-key digests, and a revocation generation. Lists are bounded and
 must be strictly ordered, so duplicate or alternate-order encodings cannot
 produce competing canonical policy digests.
 
+The first-party persisted `MRMLGTP1` encoding/parser is implemented and capped
+at 512 KiB. It uses fixed-width big-endian generations and counts, two-byte
+length-prefixed validated repository/ref identifiers, explicit format and
+hybrid flags, complete 32-byte OpenPGP v6 fingerprints, 64-byte MRML OpenPGP
+key digests, and 64-byte ML-DSA key digests. The parser checks every addition
+and slice boundary before access or allocation, caps all collection counts,
+reuses typed identifier validation, rejects unknown flag bits and non-Boolean
+values, requires strict collection order, rejects trailing bytes, and
+byte-for-byte re-encodes the result before acceptance. Every truncation of the
+golden policy fixture fails closed.
+
 Repository policy may narrow an externally pinned owner trust root but cannot
 broaden it: an update cannot add an object format or remove an already
 protected ref. Normal rotation requires `KeyRotation` verification typestates
@@ -24,8 +35,8 @@ active pair at the new generation. A transition cannot lower a generation,
 break the previous-policy digest chain, remove a revocation, reactivate a
 revoked key, or downgrade hybrid-required policy.
 
-The persisted policy encoding/parser, explicit retired-key validity intervals,
-legacy checkpoint and hybrid-cutover object IDs, authenticated emergency
+Explicit retired-key validity intervals, legacy checkpoint and hybrid-cutover
+object IDs, authenticated emergency
 recovery policy, and canonical key-revocation statement are not yet
 implemented. The current state therefore cannot activate protected refs.
 

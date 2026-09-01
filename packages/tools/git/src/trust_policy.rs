@@ -133,6 +133,8 @@ impl VerifiedHybridSignature {
 pub const MAX_POLICY_PAIRS: usize = 64;
 pub const MAX_POLICY_REVOKED_KEYS: usize = 256;
 pub const MAX_POLICY_PROTECTED_REFS: usize = 256;
+pub const MAX_ENCODED_TRUST_POLICY_BYTES: usize = 512 * 1024;
+const POLICY_MAGIC: &[u8; 8] = b"MRMLGTP1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrustPolicyState {
@@ -160,6 +162,200 @@ pub struct TrustPolicyCandidate {
     pub active_pairs: Vector<AuthorizedHybridPair>,
     pub revoked_openpgp: Vector<FingerprintV6>,
     pub revoked_ml_dsa: Vector<[u8; 64]>,
+}
+
+pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, HybridPolicyError> {
+    let mut output = Vector::with_capacity(512).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    append(&mut output, POLICY_MAGIC)?;
+    append_counted_bytes(&mut output, policy.repository.as_str().as_bytes())?;
+    append(&mut output, &policy.generation.0.to_be_bytes())?;
+    append(&mut output, &policy.previous_policy_digest)?;
+    append(&mut output, &policy.revocation_generation.0.to_be_bytes())?;
+    output.push(policy.allowed_object_formats);
+    output.push(u8::from(policy.hybrid_required));
+    append_u16(&mut output, policy.protected_refs.len())?;
+    append_u16(&mut output, policy.active_pairs.len())?;
+    append_u16(&mut output, policy.revoked_openpgp.len())?;
+    append_u16(&mut output, policy.revoked_ml_dsa.len())?;
+    for reference in &policy.protected_refs {
+        append_counted_bytes(&mut output, reference.as_str().as_bytes())?;
+    }
+    for pair in &policy.active_pairs {
+        append(&mut output, pair.openpgp_fingerprint.as_bytes())?;
+        append(&mut output, &pair.openpgp_key_digest)?;
+        append(&mut output, &pair.ml_dsa_key_digest)?;
+    }
+    for fingerprint in &policy.revoked_openpgp {
+        append(&mut output, fingerprint.as_bytes())?;
+    }
+    for digest in &policy.revoked_ml_dsa {
+        append(&mut output, digest)?;
+    }
+    if output.len() > MAX_ENCODED_TRUST_POLICY_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    Ok(output)
+}
+
+pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicyError> {
+    if input.is_empty() || input.len() > MAX_ENCODED_TRUST_POLICY_BYTES {
+        return Err(HybridPolicyError::InputTooLarge);
+    }
+    let mut cursor = PolicyCursor::new(input);
+    if cursor.take(POLICY_MAGIC.len())? != POLICY_MAGIC {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let repository_bytes = cursor.take_counted_bytes()?;
+    let repository_text =
+        core::str::from_utf8(repository_bytes).map_err(|_| HybridPolicyError::InvalidPolicy)?;
+    let repository =
+        RepositoryIdentity::parse(repository_text).map_err(|_| HybridPolicyError::InvalidPolicy)?;
+    let generation = TrustGeneration(cursor.u64()?);
+    let mut previous_policy_digest = [0u8; 64];
+    previous_policy_digest.copy_from_slice(cursor.take(64)?);
+    let revocation_generation = RevocationGeneration(cursor.u64()?);
+    let allowed_object_formats = cursor.u8()?;
+    let hybrid_required = match cursor.u8()? {
+        0 => false,
+        1 => true,
+        _ => return Err(HybridPolicyError::InvalidPolicy),
+    };
+    let ref_count = usize::from(cursor.u16()?);
+    let pair_count = usize::from(cursor.u16()?);
+    let revoked_openpgp_count = usize::from(cursor.u16()?);
+    let revoked_ml_dsa_count = usize::from(cursor.u16()?);
+    if ref_count > MAX_POLICY_PROTECTED_REFS
+        || pair_count > MAX_POLICY_PAIRS
+        || revoked_openpgp_count > MAX_POLICY_REVOKED_KEYS
+        || revoked_ml_dsa_count > MAX_POLICY_REVOKED_KEYS
+    {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let mut protected_refs =
+        Vector::with_capacity(ref_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..ref_count {
+        let bytes = cursor.take_counted_bytes()?;
+        let text = core::str::from_utf8(bytes).map_err(|_| HybridPolicyError::InvalidPolicy)?;
+        protected_refs
+            .push(FullRefName::parse(text).map_err(|_| HybridPolicyError::InvalidPolicy)?);
+    }
+    let mut active_pairs =
+        Vector::with_capacity(pair_count).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..pair_count {
+        let mut fingerprint = [0u8; 32];
+        fingerprint.copy_from_slice(cursor.take(32)?);
+        let mut openpgp_key_digest = [0u8; 64];
+        openpgp_key_digest.copy_from_slice(cursor.take(64)?);
+        let mut ml_dsa_key_digest = [0u8; 64];
+        ml_dsa_key_digest.copy_from_slice(cursor.take(64)?);
+        active_pairs.push(AuthorizedHybridPair {
+            openpgp_fingerprint: FingerprintV6::from_bytes(fingerprint),
+            openpgp_key_digest,
+            ml_dsa_key_digest,
+        });
+    }
+    let mut revoked_openpgp = Vector::with_capacity(revoked_openpgp_count)
+        .map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..revoked_openpgp_count {
+        let mut fingerprint = [0u8; 32];
+        fingerprint.copy_from_slice(cursor.take(32)?);
+        revoked_openpgp.push(FingerprintV6::from_bytes(fingerprint));
+    }
+    let mut revoked_ml_dsa = Vector::with_capacity(revoked_ml_dsa_count)
+        .map_err(|_| HybridPolicyError::InputTooLarge)?;
+    for _ in 0..revoked_ml_dsa_count {
+        let mut digest = [0u8; 64];
+        digest.copy_from_slice(cursor.take(64)?);
+        revoked_ml_dsa.push(digest);
+    }
+    if !cursor.is_complete() {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    let candidate = TrustPolicyCandidate {
+        repository,
+        generation,
+        previous_policy_digest,
+        revocation_generation,
+        protected_refs,
+        allow_sha1: allowed_object_formats & 1 != 0,
+        allow_sha256: allowed_object_formats & 2 != 0,
+        hybrid_required,
+        active_pairs,
+        revoked_openpgp,
+        revoked_ml_dsa,
+    };
+    if allowed_object_formats & !3 != 0 {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    validate_candidate(&candidate)?;
+    let policy = TrustPolicyState::from_candidate(candidate);
+    if &*encode_trust_policy(&policy)? != input {
+        return Err(HybridPolicyError::InvalidPolicy);
+    }
+    Ok(policy)
+}
+
+fn append_u16(output: &mut Vector<u8>, value: usize) -> Result<(), HybridPolicyError> {
+    let value = u16::try_from(value).map_err(|_| HybridPolicyError::InputTooLarge)?;
+    append(output, &value.to_be_bytes())
+}
+
+fn append_counted_bytes(output: &mut Vector<u8>, bytes: &[u8]) -> Result<(), HybridPolicyError> {
+    append_u16(output, bytes.len())?;
+    append(output, bytes)
+}
+
+struct PolicyCursor<'a> {
+    input: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> PolicyCursor<'a> {
+    const fn new(input: &'a [u8]) -> Self {
+        Self { input, offset: 0 }
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], HybridPolicyError> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(HybridPolicyError::InvalidPolicy)?;
+        let bytes = self
+            .input
+            .get(self.offset..end)
+            .ok_or(HybridPolicyError::InvalidPolicy)?;
+        self.offset = end;
+        Ok(bytes)
+    }
+
+    fn u8(&mut self) -> Result<u8, HybridPolicyError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, HybridPolicyError> {
+        Ok(u16::from_be_bytes(
+            self.take(2)?
+                .try_into()
+                .map_err(|_| HybridPolicyError::InvalidPolicy)?,
+        ))
+    }
+
+    fn u64(&mut self) -> Result<u64, HybridPolicyError> {
+        Ok(u64::from_be_bytes(
+            self.take(8)?
+                .try_into()
+                .map_err(|_| HybridPolicyError::InvalidPolicy)?,
+        ))
+    }
+
+    fn take_counted_bytes(&mut self) -> Result<&'a [u8], HybridPolicyError> {
+        let length = usize::from(self.u16()?);
+        self.take(length)
+    }
+
+    const fn is_complete(&self) -> bool {
+        self.offset == self.input.len()
+    }
 }
 
 impl TrustPolicyState {
@@ -672,6 +868,23 @@ mod tests {
             revoked_ml_dsa: Vector::new(),
         })
         .unwrap();
+        let encoded = encode_trust_policy(&initial).unwrap();
+        assert_eq!(parse_trust_policy(&encoded), Ok(initial.clone()));
+        for length in 0..encoded.len() {
+            assert!(parse_trust_policy(&encoded[..length]).is_err());
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert_eq!(
+            parse_trust_policy(&trailing),
+            Err(HybridPolicyError::InvalidPolicy)
+        );
+        let mut wrong_magic = encoded.clone();
+        wrong_magic[0] ^= 1;
+        assert_eq!(
+            parse_trust_policy(&wrong_magic),
+            Err(HybridPolicyError::InvalidPolicy)
+        );
         let old_proof = rotation_proof(&repository, TrustGeneration(1), old_pair);
         let new_proof = rotation_proof(&repository, TrustGeneration(2), new_pair);
         let candidate = TrustPolicyCandidate {
