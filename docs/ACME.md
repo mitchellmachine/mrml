@@ -207,6 +207,11 @@ cross-identity or cross-policy state. A concrete catalog lifecycle provider
 serves this payload only for an exact 16-byte identity under the existing
 per-call authorizer and delegates all mutating/account/backup operations to a
 separate provider.
+The hosted client exposes this as one typed `identity_status` operation: it
+constructs the canonical generated request, owns the bounded borrowed-memory
+layout, validates the remote status/error envelope, and decodes the shared
+payload. Frontends therefore cannot substitute scopes, overlap buffers, accept
+an oversized response, or maintain a second status parser.
 The unattended renewal coordinator acquires one identity-scoped lease, requires
 a fresh use-only candidate key and exact RFC 9773 replacement binding, verifies
 the returned chain receipt, stages the next schedule, publishes and exercises

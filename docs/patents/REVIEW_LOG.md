@@ -11987,3 +11987,11 @@ existing read-only identity, profile, expiry, and renewal status through the
 existing lifecycle ABI. It adds no certificate protocol, signing mechanism,
 validation topology, certificate authority operation, or recorded re-review
 trigger.
+
+# 2026-09-01 — Typed hosted certificate status client
+
+Patent review: **NOT_TRIGGERED**. This increment composes the existing hosted
+authorized transport, generated lifecycle request codec, and canonical
+read-only status decoder. It adds no certificate protocol, signing mechanism,
+validation topology, certificate authority operation, or recorded re-review
+trigger.

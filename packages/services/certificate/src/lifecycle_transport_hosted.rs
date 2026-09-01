@@ -1,5 +1,7 @@
 use crate::{
-    dispatch_lifecycle_call, CertificateLifecycleAuthorizer, CertificateLifecycleProvider,
+    decode_managed_identity_status, dispatch_lifecycle_call, CertificateLifecycleAuthorizer,
+    CertificateLifecycleProvider, ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId,
+    MAX_MANAGED_STATUS_BYTES,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
 use mrml_runtime::{NetError, TcpStream};
@@ -18,6 +20,9 @@ pub enum HostedLifecycleTransportError {
     InvalidFrame,
     MemoryLimit,
     OutputLengthMismatch,
+    Protocol(abi::ProtocolError),
+    RemoteStatus(abi::StatusError),
+    Status(ManagedStatusCodecError),
 }
 
 /// Client over one connection already authorized and delivered by the host
@@ -70,6 +75,34 @@ impl HostedLifecycleClient {
             .and_then(|_| self.stream.read_exact(memory))
             .map_err(HostedLifecycleTransportError::Network)?;
         Ok(response)
+    }
+
+    pub fn identity_status(
+        &mut self,
+        identity: TlsIdentityId,
+    ) -> Result<ManagedIdentityStatus, HostedLifecycleTransportError> {
+        const OUTPUT_AT: usize = 32;
+        let mut memory = [0u8; OUTPUT_AT + MAX_MANAGED_STATUS_BYTES];
+        memory[..16].copy_from_slice(&identity.0);
+        let frame = abi::encode_status_request(abi::StatusRequest {
+            scope: abi::SCOPE_IDENTITY,
+            object_identity: abi::BorrowedReadView::within(0, 16, memory.len() as u64).unwrap(),
+            output: abi::BorrowedWriteView::within(
+                OUTPUT_AT as u64,
+                MAX_MANAGED_STATUS_BYTES as u64,
+                memory.len() as u64,
+            )
+            .unwrap(),
+        })
+        .map_err(HostedLifecycleTransportError::Protocol)?;
+        let response = self.call(&frame, &mut memory)?;
+        let response = abi::decode_status_response(&response, MAX_MANAGED_STATUS_BYTES as u64)
+            .map_err(HostedLifecycleTransportError::Protocol)?
+            .map_err(HostedLifecycleTransportError::RemoteStatus)?;
+        let written = usize::try_from(response.written)
+            .map_err(|_| HostedLifecycleTransportError::OutputLengthMismatch)?;
+        decode_managed_identity_status(&memory[OUTPUT_AT..OUTPUT_AT + written])
+            .map_err(HostedLifecycleTransportError::Status)
     }
 }
 
@@ -178,10 +211,28 @@ mod tests {
         fn status(
             &mut self,
             _: u32,
-            _: &[u8],
-            _: &mut [u8],
+            identity: &[u8],
+            output: &mut [u8],
         ) -> Result<abi::StatusResponse, abi::StatusError> {
-            unreachable!()
+            let identity: [u8; 16] = identity
+                .try_into()
+                .map_err(|_| abi::StatusError::InvalidRequest)?;
+            let written = crate::encode_managed_identity_status(
+                crate::ManagedIdentityStatus {
+                    identity: TlsIdentityId(identity),
+                    policy_generation: 7,
+                    active: None,
+                    renewal: None,
+                    renewal_lease: None,
+                    replacement: None,
+                },
+                output,
+            )
+            .map_err(|_| abi::StatusError::OutputTooSmall)?;
+            Ok(abi::StatusResponse {
+                written: written as u64,
+                state_generation: 7,
+            })
         }
         fn account_operation(
             &mut self,
@@ -267,5 +318,26 @@ mod tests {
             client.call(&[0; abi::STATUS_REQUEST_BYTES], &mut oversized),
             Err(HostedLifecycleTransportError::MemoryLimit)
         );
+    }
+
+    #[test]
+    fn typed_status_call_hides_borrowed_memory_layout_from_client() {
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let listener = Shared::new(listener);
+        let server_listener = listener.clone();
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
+        let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
+        let identity = TlsIdentityId([9; 16]);
+        let status = client.identity_status(identity).unwrap();
+        assert!(status.identity == identity);
+        assert_eq!(status.policy_generation, 7);
+        assert!(status.active.is_none());
     }
 }
