@@ -98,6 +98,14 @@ current account-key or certificate-key credential. Automatic revocation is
 limited to confirmed key compromise or an explicitly bound replacement policy.
 Submission uncertainty remains resolvable through authoritative CA state and
 does not retire, delete, or misreport the only active identity.
+Four canonical generation-1 `mrml-call-v1` interfaces are checked in with
+deterministically generated pointer-free codecs for certificate signing, TLS
+identity publication, challenge publication, and lifecycle administration.
+`mrml-certd` declares the four exact fingerprints as isolated dynamic services
+from the same MRML/Windows/Linux package. The current ABI does not transfer
+capabilities in these calls: the supervisor binds the service route, and wire
+identity, generation, key, digest, and opaque-route fields only prevent
+substitution. They never manufacture authority.
 Wine exercises the Windows target; Wine is not a separate platform
 implementation or native-Windows evidence.
 
@@ -112,8 +120,8 @@ review.
 General JOSE response parsing, ACME transport, concrete socket adapters and
 propagation observation, lifecycle-specific state codecs and recovery wiring,
 alternate-chain selection, renewal execution, revocation transport,
-backup/restore, CLI
-administration, concrete gitd hot reload, and the MRML
+backup/restore, CLI administration, interface dispatch/service loop, concrete
+gitd hot reload, and the MRML
 certificate service remain **PLANNED**. The shared state machine must
 remain independent of `std::fs`, `std::net`, Win32 handles, and syscall numbers.
 Future platform adapters belong inside these logical packages and must not fork

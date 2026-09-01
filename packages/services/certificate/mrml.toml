@@ -16,6 +16,34 @@ must_run = true
 runtime_class = "microvm-eligible"
 supported = ["native-service", "microvm"]
 
+[[provides]]
+binding = "dynamic"
+fingerprint = "e359404a1c7eebdfea3a09d2bc937e50d99d08ce07c3331cec814ff344990fb8"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.certificate.signing"
+
+[[provides]]
+binding = "dynamic"
+fingerprint = "5cb5e8d96a007e703f18d397888b6f8392bb05e2657608a2ed184dd09ee9590c"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.certificate.identity"
+
+[[provides]]
+binding = "dynamic"
+fingerprint = "8535218a69138c26e5483551c4ae57e1e9c73c7ad394433a431159f9e93ea110"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.certificate.challenge"
+
+[[provides]]
+binding = "dynamic"
+fingerprint = "1bdae2e4c17792cb111e9473d6496140febd78efc1150f7d3a59838ce53ea28e"
+form = "isolated-service"
+generation = 1
+interface = "org.mrml.interface.certificate.lifecycle"
+
 [[target]]
 arch = "x86_64"
 environment = "mrml"
@@ -56,6 +84,30 @@ compile_name = "mrml-tls"
 package = "org.mrml.library.tls"
 scope = "compile"
 targets = ["WINDOWS", "LINUX"]
+
+[[dependency]]
+alias = "mrml_interface_certificate_signing_v1"
+compile_name = "mrml-interface-certificate-signing-v1"
+package = "org.mrml.interface.certificate.signing"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_interface_certificate_identity_v1"
+compile_name = "mrml-interface-certificate-identity-v1"
+package = "org.mrml.interface.certificate.identity"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_interface_certificate_challenge_v1"
+compile_name = "mrml-interface-certificate-challenge-v1"
+package = "org.mrml.interface.certificate.challenge"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_interface_certificate_lifecycle_v1"
+compile_name = "mrml-interface-certificate-lifecycle-v1"
+package = "org.mrml.interface.certificate.lifecycle"
+scope = "compile"
 
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]

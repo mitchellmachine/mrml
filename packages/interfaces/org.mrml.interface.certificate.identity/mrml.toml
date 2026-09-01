@@ -1,0 +1,32 @@
+[manifest]
+format = "mrml"
+version = 2
+[package]
+default = false
+id = "org.mrml.interface.certificate.identity"
+kind = "interface"
+name = "mrml-interface-certificate-identity-v1"
+profile = "interface"
+[interface]
+abi = "mrml-call-v1"
+fingerprint = "5cb5e8d96a007e703f18d397888b6f8392bb05e2657608a2ed184dd09ee9590c"
+generation = 1
+schema = "1.mri"
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+[[target]]
+arch = "x86_64"
+environment = "windows"
+[[target]]
+arch = "x86_64"
+environment = "linux"
+[[artifact]]
+kind = "lib"
+name = "mrml_interface_certificate_identity_v1"
+[rust]
+crate_name = "mrml_interface_certificate_identity_v1"
+crate_type = "lib"
+source = "packages/interfaces/org.mrml.interface.certificate.identity/src/lib.rs"
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

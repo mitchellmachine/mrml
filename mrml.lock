@@ -4,7 +4,7 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 178
+compile_edges = 182
 build_tool_edges = 0
 runtime_interface_edges = 5
 package_edges = 162
@@ -137,6 +137,58 @@ isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 
 static_runtime = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.interface.certificate.challenge"
+path = "packages/interfaces/org.mrml.interface.certificate.challenge"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.interface.certificate.identity"
+path = "packages/interfaces/org.mrml.interface.certificate.identity"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.interface.certificate.lifecycle"
+path = "packages/interfaces/org.mrml.interface.certificate.lifecycle"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.interface.certificate.signing"
+path = "packages/interfaces/org.mrml.interface.certificate.signing"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
+compile_dependencies = []
+
+static_runtime = []
 boot_bound = []
 system_release_bound = []
 
@@ -563,7 +615,7 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "microvm"
 isolation_supported = ["native-service", "microvm"]
-compile_dependencies = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.tls"]
+compile_dependencies = ["org.mrml.interface.certificate.challenge", "org.mrml.interface.certificate.identity", "org.mrml.interface.certificate.lifecycle", "org.mrml.interface.certificate.signing", "org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.tls"]
 
 static_runtime = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.tls"]
 boot_bound = []

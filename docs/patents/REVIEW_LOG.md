@@ -937,6 +937,13 @@ ownership and sequencing of the same existing checks and introduces no new
 placement, VM, scheduling, storage-protocol, DMA, queue, interrupt, or hardware
 mechanism.
 
+# 2026-09-01 — Canonical certificate service interfaces
+
+Patent review: **NOT_TRIGGERED**. This increment declares conventional bounded
+service schemas and deterministically generated codecs for signing, identity,
+challenge, and administration operations. Interface generation carries no new
+ACME mechanism and triggers none of the recorded re-review conditions.
+
 Sealing that assignment into a typed owner and retaining it beside the existing
 delivered configuration owner and admission table is also **NOT_TRIGGERED**.
 This is conventional ownership composition and failure ordering; it adds no VM
