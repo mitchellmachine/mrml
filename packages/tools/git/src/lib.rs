@@ -112,7 +112,10 @@ pub use repository::{
     BlameLine, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind, RebaseOutcome,
     Repository, RepositoryError,
 };
-pub use repository_view::FilesystemRepositoryView;
+pub use repository_view::{
+    FilesystemRepositoryView, MAX_VERIFICATION_SUMMARY_EVIDENCE,
+    VerificationSummaryEvidence, VerificationSummaryStore,
+};
 pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use signed_audit_receipt::{
     AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,

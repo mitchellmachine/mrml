@@ -9,13 +9,83 @@ use crate::{
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
     RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
     SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, WorkBudget, read_v2_request,
-    write_pkt_line,
+    write_pkt_line, VerifiedCommitProof,
 };
+
+pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationSummaryEvidence {
+    repository: RepositoryIdentity,
+    repository_generation: RepositoryGeneration,
+    summary: VerificationSummary,
+}
+
+impl VerificationSummaryEvidence {
+    pub fn from_verified_hybrid_commit(proof: &VerifiedCommitProof) -> Self {
+        Self {
+            repository: proof.repository.clone(),
+            repository_generation: proof.repository_generation,
+            summary: VerificationSummary {
+                object: proof.commit,
+                trust_generation: proof.trust_generation,
+                revocation_generation: proof.revocation_generation,
+                purpose: proof.purpose,
+                openpgp_authorized: true,
+                ml_dsa_65_authorized: true,
+                exact_pair_authorized: true,
+                hybrid_required: true,
+            },
+        }
+    }
+}
+
+/// Read-only exact evidence installed by the verification authority. Merely
+/// possessing object IDs or repository files cannot add an entry.
+pub struct VerificationSummaryStore {
+    evidence: Vector<VerificationSummaryEvidence>,
+}
+
+impl VerificationSummaryStore {
+    pub fn new(
+        evidence: Vector<VerificationSummaryEvidence>,
+    ) -> Result<Self, GitdCoreError> {
+        if evidence.len() > MAX_VERIFICATION_SUMMARY_EVIDENCE
+            || !evidence.windows(2).all(|pair| evidence_less(&pair[0], &pair[1]))
+        {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        Ok(Self { evidence })
+    }
+
+    fn exact(
+        &self,
+        repository: &RepositoryIdentity,
+        repository_generation: RepositoryGeneration,
+        object: ObjectId,
+        trust: TrustGeneration,
+        revocations: RevocationGeneration,
+    ) -> Option<VerificationSummary> {
+        self.evidence.iter().find(|evidence| {
+            &evidence.repository == repository
+                && evidence.repository_generation == repository_generation
+                && evidence.summary.object == object
+                && evidence.summary.trust_generation == trust
+                && evidence.summary.revocation_generation == revocations
+        }).map(|evidence| evidence.summary.clone())
+    }
+}
+
+fn evidence_less(left: &VerificationSummaryEvidence, right: &VerificationSummaryEvidence) -> bool {
+    (&left.repository, left.repository_generation, left.summary.object, left.summary.trust_generation, left.summary.revocation_generation)
+        < (&right.repository, right.repository_generation, right.summary.object, right.summary.trust_generation, right.summary.revocation_generation)
+}
 
 pub struct FilesystemRepositoryView {
     identity: RepositoryIdentity,
     objects: Repository,
     refs: ActiveRefFile,
+    verification: VerificationSummaryStore,
 }
 
 impl GitdCoreBackend for FilesystemRepositoryView {
@@ -130,12 +200,23 @@ impl GitdCoreBackend for FilesystemRepositoryView {
     fn verification_summary(
         &self,
         repository: &RepositoryIdentity,
-        _object: ObjectId,
-        _policy: TrustGeneration,
-        _revocations: RevocationGeneration,
+        object: ObjectId,
+        policy: TrustGeneration,
+        revocations: RevocationGeneration,
     ) -> Result<VerificationSummary, GitdCoreError> {
-        self.load_for(repository)?;
-        Err(GitdCoreError::Unsupported)
+        let state = self.load_for(repository)?;
+        if policy != state.trust_generation || revocations != state.revocation_generation {
+            return Err(GitdCoreError::StaleGeneration);
+        }
+        if object.is_zero() || object.format() != state.object_format {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        self.objects.read_object(object).map_err(|_| GitdCoreError::ObjectValidation)?;
+        let summary = self.verification.exact(
+            repository, state.repository_generation, object, policy, revocations,
+        ).ok_or(GitdCoreError::Signature)?;
+        self.ensure_generation(state.repository_generation)?;
+        Ok(summary)
     }
 
     fn smart_git(
@@ -328,7 +409,13 @@ impl FilesystemRepositoryView {
             identity,
             objects,
             refs,
+            verification: VerificationSummaryStore::new(Vector::new())?,
         })
+    }
+
+    pub fn with_verification_evidence(mut self, evidence: VerificationSummaryStore) -> Self {
+        self.verification = evidence;
+        self
     }
 
     pub fn repository_generation(&self) -> Result<RepositoryGeneration, GitdCoreError> {
@@ -915,6 +1002,20 @@ mod tests {
         .unwrap();
         let mut view =
             FilesystemRepositoryView::open(identity.clone(), &repository_path, &refs_path).unwrap();
+        let evidence = VerificationSummaryEvidence::from_verified_hybrid_commit(
+            &VerifiedCommitProof {
+                commit,
+                repository: identity.clone(),
+                repository_generation: RepositoryGeneration(4),
+                trust_generation: TrustGeneration(5),
+                revocation_generation: RevocationGeneration(6),
+                purpose: crate::SignaturePurpose::GitCommit,
+                object_format: ObjectFormat::Sha256,
+            },
+        );
+        view = view.with_verification_evidence(
+            VerificationSummaryStore::new([evidence].into()).unwrap(),
+        );
         let limits = QueryLimits {
             max_entries: 8,
             max_bytes: 1024,
@@ -1058,7 +1159,38 @@ mod tests {
                 TrustGeneration(5),
                 RevocationGeneration(6),
             ),
-            Err(GitdCoreError::Unsupported)
+            Ok(VerificationSummary {
+                object: commit,
+                trust_generation: TrustGeneration(5),
+                revocation_generation: RevocationGeneration(6),
+                purpose: crate::SignaturePurpose::GitCommit,
+                openpgp_authorized: true,
+                ml_dsa_65_authorized: true,
+                exact_pair_authorized: true,
+                hybrid_required: true,
+            })
+        );
+        assert_eq!(
+            GitdCoreBackend::verification_summary(
+                &view, &identity, commit, TrustGeneration(4), RevocationGeneration(6),
+            ),
+            Err(GitdCoreError::StaleGeneration)
+        );
+        assert_eq!(
+            GitdCoreBackend::verification_summary(
+                &view, &identity, blob, TrustGeneration(5), RevocationGeneration(6),
+            ),
+            Err(GitdCoreError::Signature)
+        );
+        assert_eq!(
+            GitdCoreBackend::verification_summary(
+                &view,
+                &RepositoryIdentity::parse("other/repository").unwrap(),
+                commit,
+                TrustGeneration(5),
+                RevocationGeneration(6),
+            ),
+            Err(GitdCoreError::Authorization)
         );
 
         let request = SmartGitRequest {

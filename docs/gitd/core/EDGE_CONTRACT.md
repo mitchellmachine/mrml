@@ -32,7 +32,23 @@ separately limits input, output, memory, and work units. Implementations must
 enforce the smaller of transport and backend limits and use checked arithmetic.
 
 `FilesystemRepositoryView` binds one validated `RepositoryIdentity`, one
-canonical first-party object store, and one canonical `ActiveRefFile`. It
+canonical first-party object store, one canonical `ActiveRefFile`, and an
+optional read-only `VerificationSummaryStore`. Evidence enters that store only
+by conversion from an opaque `VerifiedCommitProof`; repository contents, object
+names, signatures, and first-party status cannot manufacture a summary. The
+store is bounded to 5,000 strictly ordered exact records and carries repository
+identity plus repository, trust, and revocation generations.
+
+`verification_summary` exact-matches the requested repository and active
+trust/revocation generations, validates that the requested object exists under
+the active object format, then requires evidence for that exact object and
+active repository generation. It re-reads repository generation before return.
+Missing evidence returns signature failure, stale generations return a typed
+stale result, and cross-repository requests remain unauthorized. The structured
+hybrid result is a projection of previously verified evidence, not a verifier,
+policy decision, signing path, or source of authority.
+
+The view otherwise
 implements bounded repository summaries, full-ref resolution, first-parent
 commit pages, tree-path pages, and exact blob reads. Every page is tagged with
 the active repository generation, and the component re-reads that generation
@@ -52,7 +68,7 @@ validates the complete exact commit closure before returning the repository
 generation, object format, exact commit ID, pack profile version, and encoder
 version; those fields form the cache/production request identity and do not
 claim a pack has already been generated. This component does not yet implement
-release descriptors, verification summaries, the
+release descriptors, durable verification-evidence loading, the
 complete upload-pack profile, or production receive construction, so it is not
 yet a complete production `GitdCoreBackend`.
 
