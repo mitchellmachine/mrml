@@ -13,8 +13,10 @@ before relying on them:
   `remote.rs`, `repository.rs`, and their package tests supplied the evidence.
 - `CONFIRMED`: baseline `pack.rs::encode_pack_with_format` called its local
   `deflate_stored` writer for every object. The current branch replaces that
-  upload-pack encoder path with deterministic bounded LZ77 and fixed-Huffman
-  DEFLATE, while canonical dynamic-Huffman level 9 remains open.
+  upload-pack encoder path with deterministic bounded LZ77 and canonical
+  dynamic-Huffman level-9 DEFLATE. A separate fixed-Huffman entry point uses
+  the same bounded search profile for byte-exact interoperability coverage;
+  workload characteristics never select a codec or profile.
 - `CONFIRMED`: baseline `repository.rs` nested an `mrml-mldsa65` payload under
   the OpenPGP commit signature, but it had no complete protected-history trust
   policy or privately constructed activation transaction. The bounded hybrid

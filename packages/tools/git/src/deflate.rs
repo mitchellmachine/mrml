@@ -14,6 +14,12 @@ struct Bits {
     count: u8,
 }
 
+#[derive(Clone, Copy)]
+enum HuffmanProfile {
+    Fixed,
+    Dynamic,
+}
+
 impl Bits {
     fn new() -> Self {
         Self {
@@ -47,10 +53,27 @@ impl Bits {
 /// position. The codec and all search/table parameters are fixed; input data
 /// never selects another codec or profile.
 pub(crate) fn encode_zlib(source: &[u8]) -> Vector<u8> {
+    encode_zlib_with_profile(source, HuffmanProfile::Dynamic)
+}
+
+/// First-party fixed-Huffman compatibility profile. Canonical pack storage
+/// uses [`encode_zlib`]; this entry point exists for exact interoperability
+/// coverage and never selects a profile from workload characteristics.
+#[allow(dead_code)]
+pub(crate) fn encode_zlib_fixed(source: &[u8]) -> Vector<u8> {
+    encode_zlib_with_profile(source, HuffmanProfile::Fixed)
+}
+
+fn encode_zlib_with_profile(source: &[u8], profile: HuffmanProfile) -> Vector<u8> {
     let mut bits = Bits::new();
     bits.write(1, 1);
-    bits.write(2, 2);
-    write_dynamic_header(&mut bits);
+    match profile {
+        HuffmanProfile::Fixed => bits.write(1, 2),
+        HuffmanProfile::Dynamic => {
+            bits.write(2, 2);
+            write_dynamic_header(&mut bits);
+        }
+    }
     let mut heads = Vector::new();
     heads.resize(HASH_SIZE, usize::MAX);
     let mut previous = Vector::new();
@@ -59,19 +82,19 @@ pub(crate) fn encode_zlib(source: &[u8]) -> Vector<u8> {
     while cursor < source.len() {
         let (length, distance) = find_match(source, cursor, &heads, &previous);
         if length >= MIN_MATCH {
-            write_length(&mut bits, length);
-            write_distance(&mut bits, distance);
+            write_length(&mut bits, length, profile);
+            write_distance(&mut bits, distance, profile);
             for position in cursor..cursor + length {
                 insert(source, position, &mut heads, &mut previous);
             }
             cursor += length;
         } else {
-            dynamic_symbol(&mut bits, source[cursor] as usize);
+            write_symbol(&mut bits, source[cursor] as usize, profile);
             insert(source, cursor, &mut heads, &mut previous);
             cursor += 1;
         }
     }
-    dynamic_symbol(&mut bits, 256);
+    write_symbol(&mut bits, 256, profile);
     // CMF/FLG advertises a 32 KiB window and the maximum-compression profile.
     let mut output = Vector::from([0x78, 0xda]);
     output.extend(bits.finish());
@@ -164,6 +187,24 @@ fn dynamic_symbol(bits: &mut Bits, symbol: usize) {
     bits.write(reverse(code, count), count);
 }
 
+fn fixed_symbol(bits: &mut Bits, symbol: usize) {
+    let (code, count) = match symbol {
+        0..=143 => (0x30 + symbol as u32, 8),
+        144..=255 => (0x190 + (symbol - 144) as u32, 9),
+        256..=279 => ((symbol - 256) as u32, 7),
+        280..=287 => (0xc0 + (symbol - 280) as u32, 8),
+        _ => unreachable!(),
+    };
+    bits.write(reverse(code, count), count);
+}
+
+fn write_symbol(bits: &mut Bits, symbol: usize, profile: HuffmanProfile) {
+    match profile {
+        HuffmanProfile::Fixed => fixed_symbol(bits, symbol),
+        HuffmanProfile::Dynamic => dynamic_symbol(bits, symbol),
+    }
+}
+
 fn write_dynamic_header(bits: &mut Bits) {
     // Include all RFC 1951 literal/length and distance symbols. The code-length
     // alphabet deliberately uses the simple complete 0..=15 four-bit tree;
@@ -204,22 +245,27 @@ const DISTANCE_EXTRA: [u8; 30] = [
     13,
 ];
 
-fn write_length(bits: &mut Bits, length: usize) {
+fn write_length(bits: &mut Bits, length: usize, profile: HuffmanProfile) {
     let index = LENGTH_BASE
         .iter()
         .rposition(|base| *base <= length)
         .unwrap();
-    dynamic_symbol(bits, 257 + index);
+    write_symbol(bits, 257 + index, profile);
     bits.write((length - LENGTH_BASE[index]) as u32, LENGTH_EXTRA[index]);
 }
 
-fn write_distance(bits: &mut Bits, distance: usize) {
+fn write_distance(bits: &mut Bits, distance: usize, profile: HuffmanProfile) {
     let index = DISTANCE_BASE
         .iter()
         .rposition(|base| *base <= distance)
         .unwrap();
-    let (code, count) = distance_code(index);
-    bits.write(reverse(code, count), count);
+    match profile {
+        HuffmanProfile::Fixed => bits.write(reverse(index as u32, 5), 5),
+        HuffmanProfile::Dynamic => {
+            let (code, count) = distance_code(index);
+            bits.write(reverse(code, count), count);
+        }
+    }
     bits.write(
         (distance - DISTANCE_BASE[index]) as u32,
         DISTANCE_EXTRA[index],
@@ -258,6 +304,20 @@ mod tests {
             let encoded = encode_zlib(input);
             assert_eq!(&encoded[..2], &[0x78, 0xda]);
             assert_eq!(encoded[2] & 7, 5);
+            assert_eq!(&*inflate_zlib(&encoded).unwrap(), input);
+        }
+    }
+
+    #[test]
+    fn fixed_huffman_stream_uses_the_same_bounded_lz77_profile() {
+        for input in [
+            &b""[..],
+            &b"fixed literals"[..],
+            &b"fixed fixed fixed fixed fixed fixed"[..],
+        ] {
+            let encoded = encode_zlib_fixed(input);
+            assert_eq!(&encoded[..2], &[0x78, 0xda]);
+            assert_eq!(encoded[2] & 7, 3);
             assert_eq!(&*inflate_zlib(&encoded).unwrap(), input);
         }
     }
