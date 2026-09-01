@@ -26,7 +26,15 @@ docker buildx build --platform linux/amd64 --network=none --load \
   -f deploy/compose/Dockerfile.acmed -t mrml/acmed:VERSION .
 ```
 
-The production VPS consumes a separately checksummed offline bundle containing
+Set `COSIGN_KEY` and `COSIGN_PUBLIC_KEY` to an offline signing keypair, then use
+the bounded bundle builder (the output path must not already exist):
+
+```text
+COSIGN_KEY=/secure/cosign.key COSIGN_PUBLIC_KEY=/secure/cosign.pub \
+  deploy/compose/build-offline-acme-bundle.sh VERSION /absolute/mrml-acme-VERSION.tar
+```
+
+The production VPS consumes that separately checksummed offline bundle containing
 the two saved images, the Compose file, configuration, SBOMs, signatures, and
 verification material. It must not receive the source tree, Rust toolchain,
 Cargo cache, private keys, provider credential, account metadata, certificate
@@ -45,7 +53,17 @@ production policy files. Install `cloudflare-api-token` as `21004:21004` mode
 `0400`; install `certd.json` and `acmed.json` as `0:0` mode `0444`; then rerun
 the script. Docker Compose bind mounts do not encrypt secrets.
 
-After independently verifying and loading the offline images:
+On the VPS, extract the bundle into a new empty directory, verify it before
+loading either image, and inspect the recorded image identities:
+
+```text
+./verify-offline-acme-bundle.sh .
+docker load -i images/certd.tar
+docker load -i images/acmed.tar
+cat images/certd.identity images/acmed.identity
+```
+
+After installing and rechecking configuration and secrets:
 
 ```text
 export MRML_ACME_VERSION=VERSION
