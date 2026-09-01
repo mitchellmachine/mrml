@@ -5,6 +5,7 @@ use mrml_runtime::{Text, Vector};
 mod arrival_pack;
 mod audit_receipt;
 mod deflate;
+mod detached_commit_proof;
 mod diff;
 mod gitd_core;
 mod hybrid_signing;
@@ -26,8 +27,8 @@ mod remote;
 mod repository;
 mod repository_view;
 mod sha1;
-mod smart_protocol;
 mod signed_audit_receipt;
+mod smart_protocol;
 mod transport;
 mod trust_policy;
 mod verification;
@@ -36,6 +37,10 @@ pub use arrival_pack::ArrivalPackStore;
 pub use audit_receipt::{
     AuditReceiptDirectory, AuditReceiptError, MAX_AUDIT_RECEIPT_BYTES, encode_audit_receipt,
     parse_audit_receipt,
+};
+pub use detached_commit_proof::{
+    DetachedCommitProofRecord, DetachedCommitProofStore, DetachedHybridCommitVerifier,
+    MAX_DETACHED_COMMIT_PROOFS,
 };
 pub use diff::FileDiff;
 pub use gitd_core::{
@@ -104,15 +109,15 @@ pub use repository::{
 };
 pub use repository_view::FilesystemRepositoryView;
 pub use sha1::{ObjectFormat, ObjectId, Sha1};
+pub use signed_audit_receipt::{
+    AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
+    AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
+};
 pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,
     ProtocolV2Request, ReceivePackRequest, ReceiveRefStatus, read_pkt_line,
     read_receive_pack_commands, read_v2_request, write_pkt_line, write_receive_pack_report,
     write_v2_capability_advertisement,
-};
-pub use signed_audit_receipt::{
-    AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
-    AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
 };
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,

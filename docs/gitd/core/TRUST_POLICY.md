@@ -63,9 +63,18 @@ Protected-history admission now exposes only
 parent-before-child order, including every merge-side parent. The proof is
 minted only by hashing the exact authenticated commit payload as a Git commit
 object, requiring that hash to equal the requested commit ID, and binding the
-successful hybrid verification to the exact repository identity, repository generation, trust generation,
-revocation generation, `GitCommit` purpose, and object format. A callback that
+successful hybrid verification to the exact repository identity, repository
+generation, trust generation, revocation generation, `GitCommit` purpose, and
+object format. A callback that
 merely returns success cannot construct the proof.
+
+`DetachedCommitProofStore` is the concrete bounded source for this path. It
+accepts at most 5,000 strictly object-ID-ordered records, rejects duplicates,
+bounds OpenPGP armor, and requires the exact ML-DSA-65 signature width. Stored
+records remain untrusted data: `DetachedHybridCommitVerifier` authenticates
+both signatures over the supplied exact commit contents and full context before
+the Git object hash is bound and an opaque proof is returned. Missing,
+substituted, malformed, oversized, or context-mismatched records fail closed.
 
 The resulting private `VerifiedCommitRange` carries that same context into the
 atomic `VerifiedRefTransaction` constructor. A range from another repository,
@@ -74,6 +83,8 @@ is crate-private and retained only for internal/test graph fixtures; it is not a
 public protected-ref authorization boundary. This proof path currently consumes
 detached signatures over the exact commit contents. The installed-as-`git`
 commit/tag path does not yet encode and self-verify the complete
-`MRML-GIT-HYBRID-V1` result before its local ref update, and protected receive
-does not yet load those detached proofs from an authenticated repository object.
-End-to-end protected ref activation therefore remains unavailable.
+`MRML-GIT-HYBRID-V1` result before its local ref update. Protected receive can
+now consume a caller-provisioned bounded proof store through its verifier
+boundary. Durable proof-record storage and its authorization policy remain open;
+records gain no authority merely by being stored. End-to-end protected ref
+activation therefore remains unavailable.

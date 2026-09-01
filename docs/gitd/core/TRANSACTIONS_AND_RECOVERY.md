@@ -60,10 +60,11 @@ public boundary. The fast-forward constructor requires exact verified commit
 ranges whose opaque per-commit proofs match the candidate's exact repository,
 repository/trust/revocation generations, `GitCommit` purpose, object format,
 and old/new IDs. Every introduced merge-side commit is covered; an unsigned
-intermediate or a no-op verifier cannot mint the range. Creation, deletion,
-history replacement, a concrete authenticated detached-proof store, and
-audit signing remain unavailable until their policy-specific concrete storage
-implementations exist.
+intermediate or a no-op verifier cannot mint the range. A concrete bounded
+detached-proof store and hybrid verifier now feed this boundary; stored bytes
+remain untrusted until both signatures, exact contents, and full context verify.
+Creation, deletion, history replacement, durable proof-record storage, and audit
+signing remain unavailable until their policy-specific implementations exist.
 
 `prepare_protected_receive` now composes the pre-activation protected path for
 existing refs: it parses only atomic `report-status-v2` commands, exact-matches
@@ -162,9 +163,23 @@ closed. Hosted Linux persists each receipt once as an immutable regular file,
 fsyncs it and the receipt directory, then reopens and compares the exact
 record. Duplicate transaction receipts are rejected. The checksum makes the
 record auditable for accidental/torn-storage detection but is not a signature.
-Receipt signing through isolated key custody and independent signature
-verification remains open; this filesystem store must not be used as the final
-protected-repository receipt authority until that interface is connected.
+
+Protected activation instead requires `AuthenticatedReceiveStore`. It passes a
+purpose-separated `MRML-GIT-AUDIT-RECEIPT-V1` transcript to an
+`AuditReceiptAuthority`, whose interface exposes signing and verification
+operations plus a public 64-byte signer identity but no private key bytes. The
+bounded `MRARCP01` container binds the canonical receipt, full signer identity,
+and at most 32 KiB of signature bytes, adds a storage-integrity checksum, writes
+the result as a new immutable file, fsyncs the file and directory, and reopens
+and independently verifies it before reporting success. The protected receive
+preparation is consumed exactly once by
+`activate_prepared_protected_receive`, and that API accepts only this
+authenticated store wrapper. Stale authority, abort-before-activation, and an
+uncertain post-activation failure remain distinct results. Hosted-Linux tests
+exercise prepare-through-activation and reopen the authenticated receipt;
+Windows compilation and non-filesystem behavior are exercised under Wine.
+Production key-service integration, native-Windows directory durability,
+process-kill injection, power-loss, and physical-storage evidence remain open.
 
 `LinuxDurableReceiveStore` composes the concrete journal, immutable arrival
 pack/index, active-ref generation, and receipt directories behind the same
@@ -174,9 +189,10 @@ arrival pack, preventing an unrelated pack from being activated with a valid
 ref typestate. The end-to-end hosted-Linux test stages and installs a SHA-256
 pack/index, persists each journal phase, re-reads old refs, atomically advances
 the active generation, appends the receipt, and independently reopens and
-validates all four durable artifacts. It is concrete filesystem-ordering
-evidence, not process-kill, power-loss, physical-storage, signed-receipt, or
-production-read-path evidence.
+validates all four durable artifacts. A separate protected-path test uses the
+authenticated receipt wrapper and reopens its signature-bound receipt. These
+are concrete filesystem-ordering tests, not process-kill, power-loss,
+physical-storage, production-key-service, or production-read-path evidence.
 
 Recovery enumeration re-reads the canonical active-ref file for every bounded
 journal and classifies it using the old repository generation before activation
