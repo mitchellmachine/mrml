@@ -444,6 +444,53 @@ impl GitdCoreBackend for FilesystemRepositoryView {
 }
 
 impl FilesystemRepositoryView {
+    /// Executes one protected receive against the same authenticated object
+    /// and ref stores used by reads. Callers retain authority, policy, storage,
+    /// resource, and transaction-ID ownership.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_protected_receive<A: crate::ProtectedReceiveAuthority>(
+        &mut self,
+        request: SmartGitRequest,
+        store: &mut crate::LinuxDurableReceiveStore,
+        policy: &crate::TrustPolicyState,
+        signed_receipts_path: &str,
+        authority: &mut A,
+        transaction: crate::QuarantineTransactionId,
+        quarantine_limits: crate::QuarantineLimits,
+        history_limits: crate::HistoryVerificationLimits,
+        ordinary_free_bytes: u64,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+        work_budget: WorkBudget,
+    ) -> Result<SmartGitResponse, GitdCoreError> {
+        let active = self.refs.load().map_err(|_| GitdCoreError::Storage)?;
+        if active.repository != self.identity
+            || request.repository != self.identity
+            || request.repository_generation != active.repository_generation
+            || request.object_format != active.object_format
+        {
+            return Err(GitdCoreError::StaleGeneration);
+        }
+        crate::ReceivePackCore {
+            request,
+            transaction,
+            quarantine_limits,
+            history_limits,
+            ordinary_free_bytes,
+            work_budget,
+        }
+        .execute_with_authority(
+            &active,
+            &self.objects,
+            store,
+            policy,
+            signed_receipts_path,
+            authority,
+            input,
+            output,
+        )
+    }
+
     fn stream_pack_response(
         &self,
         state: &crate::ActiveRefState,
