@@ -40,9 +40,11 @@ listener failure marks readiness false and enters worker drain. POSIX
 termination handling remains incomplete. Gitd's native Compose health command
 performs a fresh loopback TLS 1.3 handshake, authenticates the configured
 server name through the project trust policy, and requires negotiated HTTP/2;
-it loads no private key and does not use curl or a shell. The authority's
-current Compose check remains configuration/state validation rather than a
-live request through its serving socket.
+it loads no private key and does not use curl or a shell. The authority health
+command now performs a bounded authenticated request over its production Unix
+socket using the authority-side channel capability. The listener admits that
+exact authority UID only for `Health`; Gitd remains the sole peer admitted for
+receive, ref, proof, and receipt operations.
 
 Before UDP admission, the endpoint receives a distinct generated retry key and
 nonzero generation. Gitd configures a 30-second one-use retry-token manager,

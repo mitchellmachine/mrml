@@ -138,9 +138,11 @@ fn serve(
         validation_time,
         repository_generation,
     )?;
-    let listener =
-        AuthorityListener::bind(Path::new(socket), 0o660, expected_gitd).map_err(|_| ())?;
+    let listener = AuthorityListener::bind(Path::new(socket), 0o660, expected_gitd)
+        .and_then(|listener| listener.allow_health_peer(authority_peer))
+        .map_err(|_| ())?;
     let mut replay = AuthorityReplayWindow::new();
+    let mut health_replay = AuthorityReplayWindow::new();
     loop {
         let mut session = match listener.accept() {
             Ok(session) => session,
@@ -151,17 +153,26 @@ fn serve(
             Ok(length) => length,
             Err(_) => continue,
         };
+        let observed_peer = session.observed_peer();
+        let request_replay = if observed_peer == expected_gitd {
+            &mut replay
+        } else {
+            &mut health_replay
+        };
         let request = match decode_frame(
             &encoded[..length],
             AuthorityFrameKind::Request,
-            session.observed_peer(),
-            expected_gitd,
+            observed_peer,
+            observed_peer,
             &capability,
-            &mut replay,
+            request_replay,
         ) {
             Ok(request) => request,
             Err(_) => continue,
         };
+        if observed_peer != expected_gitd && request.operation != AuthorityOperation::Health {
+            continue;
+        }
         let result = mrml_runtime::unix_time_seconds()
             .ok_or(AuthorityDispatchError::Unavailable)
             .and_then(|now| authority.set_validation_time(now))
@@ -243,10 +254,11 @@ fn healthcheck(
 ) -> Result<(), ()> {
     let capability = read_capability(capability_path, authority_peer.uid)?;
     let mut session = AuthoritySession::connect(Path::new(socket)).map_err(|_| ())?;
+    let request_id = mrml_runtime::unix_time_seconds().ok_or(())?;
     let request = AuthorityFrame {
         kind: AuthorityFrameKind::Request,
         operation: AuthorityOperation::Health,
-        request_id: 1,
+        request_id,
         status: 0,
         peer: own_peer,
         payload: &[],

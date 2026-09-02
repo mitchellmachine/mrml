@@ -47,20 +47,13 @@ services:
       test:
         - CMD
         - /usr/bin/mrml-git-authority
-        - check-config
+        - healthcheck
         - /run/mrml/git-authority/authority.sock
         - /run/secrets/git-authority-channel
-        - "21001"
-        - "21001"
         - "21002"
         - "21002"
-        - /var/lib/mrml/authority/policies
-        - /var/lib/mrml/authority/proofs
-        - /etc/mrml/authority/openpgp-public.asc
-        - /etc/mrml/authority/ml-dsa-public.bin
-        - /run/secrets/receipt.key
-        - "${MRML_AUTHORITY_VALIDATION_TIME:?set MRML_AUTHORITY_VALIDATION_TIME}"
-        - "${MRML_REPOSITORY_GENERATION:?set MRML_REPOSITORY_GENERATION}"
+        - "21002"
+        - "21002"
       interval: 30s
       timeout: 5s
       retries: 3

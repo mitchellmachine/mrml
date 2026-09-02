@@ -26,6 +26,7 @@ pub struct AuthorityListener {
     listener: UnixListener,
     path: PathBuf,
     expected_peer: AuthorityPeer,
+    health_peer: Option<AuthorityPeer>,
 }
 
 impl AuthorityListener {
@@ -56,7 +57,16 @@ impl AuthorityListener {
             listener,
             path: path.to_path_buf(),
             expected_peer,
+            health_peer: None,
         })
+    }
+
+    pub fn allow_health_peer(mut self, peer: AuthorityPeer) -> Result<Self, UnixAuthorityError> {
+        if peer == self.expected_peer {
+            return Err(UnixAuthorityError::UnauthorizedPeer);
+        }
+        self.health_peer = Some(peer);
+        Ok(self)
     }
 
     pub fn accept(&self) -> Result<AuthoritySession, UnixAuthorityError> {
@@ -72,7 +82,7 @@ impl AuthorityListener {
             uid: credentials.uid,
             gid: credentials.gid,
         };
-        if observed != self.expected_peer {
+        if observed != self.expected_peer && self.health_peer != Some(observed) {
             return Err(UnixAuthorityError::UnauthorizedPeer);
         }
         Ok(AuthoritySession { stream, observed })
@@ -198,6 +208,11 @@ mod tests {
         };
         let socket = root.join("authority.sock");
         let listener = AuthorityListener::bind(&socket, 0o600, peer).unwrap();
+        assert!(matches!(
+            AuthorityListener::bind(&root.join("duplicate.sock"), 0o600, peer)
+                .and_then(|listener| listener.allow_health_peer(peer)),
+            Err(UnixAuthorityError::UnauthorizedPeer)
+        ));
         let capability = AuthorityCapability::new([0x61; 32]).unwrap();
         let request = AuthorityFrame {
             kind: AuthorityFrameKind::Request,
@@ -234,6 +249,7 @@ mod tests {
         });
         drop(listener);
         fs::remove_file(socket).unwrap();
+        fs::remove_file(root.join("duplicate.sock")).unwrap();
         fs::remove_dir(root).unwrap();
     }
 }
