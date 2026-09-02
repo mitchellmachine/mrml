@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-29"
 
 [graphs]
-compile_edges = 210
+compile_edges = 214
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 190
+package_edges = 194
 system_release_edges = 3
 
 [[package]]
@@ -787,6 +787,19 @@ isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.test.gitd-certd-fixture"
+path = "packages/tests/gitd-certd-fixture"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.service.gitd"]
+
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.service.gitd"]
 boot_bound = []
 system_release_bound = []
 

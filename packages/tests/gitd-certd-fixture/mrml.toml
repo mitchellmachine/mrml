@@ -1,0 +1,76 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.test.gitd-certd-fixture"
+kind = "test"
+name = "mrml-gitd-certd-test-fixture"
+profile = "test"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_gitd_certd_test_fixture"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-gitd-certd-test-fixture"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-gitd-certd-test-probe"
+
+[rust]
+crate_name = "mrml_gitd_certd_test_fixture"
+crate_type = "lib"
+source = "packages/tests/gitd-certd-fixture/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_gitd_certd_test_fixture"
+output = "mrml-gitd-certd-test-fixture"
+self_extern = true
+source = "packages/tests/gitd-certd-fixture/src/main.rs"
+targets = ["LINUX"]
+
+[[binary]]
+crate_name = "mrml_gitd_certd_test_probe"
+output = "mrml-gitd-certd-test-probe"
+self_extern = true
+source = "packages/tests/gitd-certd-fixture/src/probe.rs"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_certificate"
+compile_name = "mrml-certd"
+package = "org.mrml.service.certificate"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tls"
+compile_name = "mrml-tls"
+package = "org.mrml.library.tls"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_gitd"
+compile_name = "mrml-gitd"
+package = "org.mrml.service.gitd"
+scope = "compile"
+
+[[host_test]]
+targets = ["LINUX"]
+
+[test_policy]
+stack_bytes = 8388608

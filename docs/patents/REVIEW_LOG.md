@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-02 — Gitd certd real-process test fixture
+
+Patent review: **NOT_TRIGGERED**.
+
+This test-only component composes existing conventional Unix peer credentials,
+bounded HMAC-authenticated framing, X.509 parsing, SHA-256, and TLS 1.3 ECDSA
+proof verification. It introduces no new production mechanism, certificate
+issuance behavior, or cryptographic construction. The fixture is excluded from
+production images and Compose deployment.
+
 # 2026-09-01 — Bounded RFC 8878 Zstandard encoder — Canada
 
 Patent review: **TRIGGERED**. Disposition: **CONDITIONAL_PROCEED**. Search
