@@ -105,6 +105,7 @@ impl AcmedChannelRequestCounter {
 pub enum AcmedAccountPhase {
     RequestMayHaveBeenSent = 1,
     Active = 2,
+    RolloverMayHaveBeenSent = 3,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -286,7 +287,8 @@ impl AcmedAccountRecord {
             || self.policy_generation == 0
             || self.account_identity == [0; 16]
             || self.key_thumbprint.0 == [0; 32]
-            || (self.phase == AcmedAccountPhase::Active) != self.account_url.is_some()
+            || (self.phase == AcmedAccountPhase::RequestMayHaveBeenSent)
+                == self.account_url.is_some()
             || url.len() > MAX_URL_BYTES
         {
             return Err(AcmedAccountRecordError::InvalidState);
@@ -325,6 +327,7 @@ impl AcmedAccountRecord {
         let phase = match input[8] {
             1 => AcmedAccountPhase::RequestMayHaveBeenSent,
             2 => AcmedAccountPhase::Active,
+            3 => AcmedAccountPhase::RolloverMayHaveBeenSent,
             _ => return Err(AcmedAccountRecordError::Malformed),
         };
         let url_length = usize::from(u16::from_be_bytes([input[10], input[11]]));
@@ -1531,6 +1534,16 @@ mod tests {
         assert!(
             AcmedAccountRecord::decode(&encoded[..length], &config.directory_url, false).unwrap()
                 == active
+        );
+        let rollover = AcmedAccountRecord {
+            phase: AcmedAccountPhase::RolloverMayHaveBeenSent,
+            account_generation: 2,
+            ..active
+        };
+        let length = rollover.encode(&mut encoded).unwrap();
+        assert!(
+            AcmedAccountRecord::decode(&encoded[..length], &config.directory_url, false).unwrap()
+                == rollover
         );
         encoded[9] = 1;
         assert!(

@@ -4,11 +4,12 @@ use mrml_acme::{
     CaClass, ChallengeKind, Dns01ActivationEvidence, HostedAcmeTransport, JoseError,
     MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES,
     MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
-    ProtectedKey, ReplayNonce, RevocationOutcome, account_contacts_digest, dns01_txt_digest,
-    execute_prepared_account_create, execute_prepared_finalize, execute_prepared_order_create,
-    fetch_authorization, fetch_directory, fetch_renewal_info, poll_order, prepare_order_creation,
-    recover_uncertain_account_creation, revoke_certificate, trigger_propagated_dns01_challenge,
-    write_key_authorization,
+    ParsedAccountStatus, ProtectedKey, ReplayNonce, RevocationOutcome, account_contacts_digest,
+    dns01_txt_digest, execute_prepared_account_create, execute_prepared_finalize,
+    execute_prepared_order_create, fetch_authorization, fetch_directory, fetch_renewal_info,
+    parse_account_response, poll_order, post_jws, prepare_order_creation,
+    recover_uncertain_account_creation, resolve_uncertain_account_action, revoke_certificate,
+    trigger_propagated_dns01_challenge, write_key_authorization,
 };
 use mrml_acmed::{
     AcmeDirectoryClass, AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase,
@@ -80,6 +81,11 @@ impl CertdEnvelopeWriter<'_> {
             return Ok(self.configured_account_generation);
         }
         if supplied != self.configured_account_generation {
+            if self.operation == AcmeJwsOperation::KeyChange
+                && supplied.checked_add(1) == Some(self.configured_account_generation)
+            {
+                return Ok(supplied);
+            }
             return Err(JoseError::SigningUnavailable);
         }
         Ok(supplied)
@@ -634,26 +640,28 @@ fn serve(
         order_durable_generation = replacement.2;
     }
     loop {
-        publish_dns_challenges(
-            &config,
-            &account,
-            &mut order,
-            &authorization_resources,
-            &mut envelope_writer,
-            &mut provider,
-            &mut state,
-            &mut state_authenticator,
-        )?;
-        order_durable_generation = poll_and_persist_order(
-            &config,
-            &account,
-            &mut order,
-            &authorization_resources,
-            &mut envelope_writer,
-            &mut state,
-            &mut state_authenticator,
-            order_durable_generation,
-        )?;
+        if order.state != mrml_acme::OrderState::Valid {
+            publish_dns_challenges(
+                &config,
+                &account,
+                &mut order,
+                &authorization_resources,
+                &mut envelope_writer,
+                &mut provider,
+                &mut state,
+                &mut state_authenticator,
+            )?;
+            order_durable_generation = poll_and_persist_order(
+                &config,
+                &account,
+                &mut order,
+                &authorization_resources,
+                &mut envelope_writer,
+                &mut state,
+                &mut state_authenticator,
+                order_durable_generation,
+            )?;
+        }
         if order.state == mrml_acme::OrderState::Ready {
             order_durable_generation = finalize_ready_order(
                 &config,
@@ -1194,6 +1202,21 @@ fn establish_account(
     let loaded = load_account_record(config, state, authenticator)?;
     match loaded {
         Some((record, _durable_generation)) if record.phase == AcmedAccountPhase::Active => {
+            if record.account_generation.checked_add(1) == Some(config.account_generation) {
+                return rollover_account(
+                    config,
+                    record,
+                    _durable_generation,
+                    &directory,
+                    &public_key,
+                    contact_digest,
+                    signer,
+                    state,
+                    authenticator,
+                    &mut exchange,
+                    &mut transport,
+                );
+            }
             record
                 .require_policy(config)
                 .map_err(|_| "stale ACME account policy")?;
@@ -1285,6 +1308,23 @@ fn establish_account(
                 Err(_) => Err("ACME account recovery remains uncertain"),
             }
         }
+        Some((record, durable_generation))
+            if record.phase == AcmedAccountPhase::RolloverMayHaveBeenSent =>
+        {
+            recover_account_rollover(
+                config,
+                record,
+                durable_generation,
+                &directory,
+                &public_key,
+                contact_digest,
+                signer,
+                state,
+                authenticator,
+                &mut exchange,
+                &mut transport,
+            )
+        }
         Some(_) => Err("unsupported ACME account durable phase"),
         None => {
             if config.account_generation != 1 {
@@ -1306,6 +1346,249 @@ fn establish_account(
             )
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rollover_account(
+    config: &AcmedConfig,
+    previous: AcmedAccountRecord,
+    durable_generation: u64,
+    directory: &mrml_acme::AcmeDirectory,
+    new_public_key: &P256Jwk,
+    contact_digest: [u8; 32],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    exchange: &mut AcmeExchange,
+    transport: &mut HostedAcmeTransport,
+) -> Result<AccountLifecycle, &'static str> {
+    if previous.policy_generation != config.policy_generation
+        || previous.account_identity != config.account_identity
+        || previous.contact_digest != contact_digest
+    {
+        return Err("stale ACME account rollover policy");
+    }
+    let account_url = previous.account_url.ok_or("active account URL missing")?;
+    let old_public_key = certd_account_public_key(config, previous.account_generation, signer)?;
+    if old_public_key
+        .thumbprint()
+        .map_err(|_| "invalid previous ACME account key")?
+        != previous.key_thumbprint
+    {
+        return Err("previous ACME account key binding mismatch");
+    }
+    let ca_class = match config.directory_class {
+        AcmeDirectoryClass::PublicProduction => CaClass::Production,
+        AcmeDirectoryClass::LocalTest | AcmeDirectoryClass::PublicStaging => CaClass::Staging,
+    };
+    let mut lifecycle = AccountLifecycle::restore_active(
+        directory,
+        ca_class,
+        previous.account_generation,
+        previous.policy_generation,
+        account_url,
+        &old_public_key,
+        contact_digest,
+    )
+    .map_err(|_| "cannot restore account for rollover")?;
+    let receipt = lifecycle
+        .prepare_rollover(new_public_key, config.policy_generation)
+        .map_err(|_| "cannot prepare account rollover")?;
+    let new_thumbprint = new_public_key
+        .thumbprint()
+        .map_err(|_| "invalid replacement ACME account key")?;
+    let pending_generation = persist_account_record(
+        config,
+        state,
+        authenticator,
+        durable_generation,
+        AcmedAccountPhase::RolloverMayHaveBeenSent,
+        new_thumbprint,
+        contact_digest,
+        Some(account_url),
+    )?;
+    let marker = b"MRML account rollover inner v1";
+    let inner_request = ConstrainedAcmeJwsRequest {
+        operation: AcmeJwsOperation::KeyChange,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        account_identity: config.account_identity,
+        protected_url: directory.key_change,
+        nonce: ReplayNonce::parse("mrml-account-rollover")
+            .map_err(|_| "cannot construct account rollover request")?,
+        account_url: Some(account_url),
+        payload: marker,
+    };
+    let mut encoded = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
+    let encoded_length = encode_certd_jws_request(&inner_request, &mut encoded)
+        .map_err(|_| "cannot encode account rollover inner request")?;
+    let mut inner = [0u8; MAX_JWS_REQUEST_BYTES];
+    let inner_length = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::CreateAccountRolloverInnerJws,
+        &encoded[..encoded_length],
+        &mut inner,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    signer.operation = AcmeJwsOperation::KeyChange;
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let result = post_jws(
+        exchange,
+        transport,
+        &directory.new_nonce,
+        &directory.key_change,
+        ProtectedKey::Kid(&account_url),
+        &inner[..inner_length],
+        previous.account_generation,
+        signer,
+        &mut response,
+        &mut jws,
+    )
+    .map_err(|_| "ACME account rollover response is uncertain")?;
+    if result.problem.is_some()
+        || result.metadata.status != 200
+        || result.metadata.response_type != mrml_acme::AcmeResponseType::Json
+    {
+        return Err("ACME account rollover response is uncertain or rejected");
+    }
+    let body = core::str::from_utf8(&response[..result.metadata.body_length])
+        .map_err(|_| "invalid ACME account rollover response")?;
+    let parsed = parse_account_response(body, account_url.origin())
+        .map_err(|_| "invalid ACME account rollover response")?;
+    if parsed.status != ParsedAccountStatus::Valid || parsed.contacts_digest != contact_digest {
+        return Err("ACME account rollover response binding mismatch");
+    }
+    lifecycle
+        .commit(receipt)
+        .map_err(|_| "cannot commit ACME account rollover")?;
+    persist_account_record(
+        config,
+        state,
+        authenticator,
+        pending_generation,
+        AcmedAccountPhase::Active,
+        new_thumbprint,
+        contact_digest,
+        Some(account_url),
+    )?;
+    Ok(lifecycle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_account_rollover(
+    config: &AcmedConfig,
+    record: AcmedAccountRecord,
+    durable_generation: u64,
+    directory: &mrml_acme::AcmeDirectory,
+    new_public_key: &P256Jwk,
+    contact_digest: [u8; 32],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+    exchange: &mut AcmeExchange,
+    transport: &mut HostedAcmeTransport,
+) -> Result<AccountLifecycle, &'static str> {
+    record
+        .require_policy(config)
+        .map_err(|_| "stale ACME account rollover policy")?;
+    if record.key_thumbprint
+        != new_public_key
+            .thumbprint()
+            .map_err(|_| "invalid replacement ACME account key")?
+        || record.contact_digest != contact_digest
+    {
+        return Err("ACME account rollover recovery binding mismatch");
+    }
+    let previous_generation = config
+        .account_generation
+        .checked_sub(1)
+        .ok_or("invalid ACME account rollover generation")?;
+    let old_public_key = certd_account_public_key(config, previous_generation, signer)?;
+    let account_url = record.account_url.ok_or("account rollover URL missing")?;
+    let ca_class = match config.directory_class {
+        AcmeDirectoryClass::PublicProduction => CaClass::Production,
+        AcmeDirectoryClass::LocalTest | AcmeDirectoryClass::PublicStaging => CaClass::Staging,
+    };
+    let mut lifecycle = AccountLifecycle::restore_active(
+        directory,
+        ca_class,
+        previous_generation,
+        config.policy_generation,
+        account_url,
+        &old_public_key,
+        contact_digest,
+    )
+    .map_err(|_| "cannot restore uncertain account rollover")?;
+    let receipt = lifecycle
+        .prepare_rollover(new_public_key, config.policy_generation)
+        .map_err(|_| "cannot reconstruct account rollover")?;
+    lifecycle
+        .mark_uncertain()
+        .map_err(|_| "cannot mark account rollover uncertain")?;
+    signer.operation = AcmeJwsOperation::AccountUpdate;
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let generation = resolve_uncertain_account_action(
+        &mut lifecycle,
+        receipt,
+        directory,
+        new_public_key,
+        exchange,
+        transport,
+        signer,
+        &mut response,
+        &mut jws,
+    )
+    .map_err(|_| "ACME account rollover remains uncertain")?;
+    if generation != config.account_generation {
+        return Err("ACME account rollover was not committed by the CA");
+    }
+    persist_account_record(
+        config,
+        state,
+        authenticator,
+        durable_generation,
+        AcmedAccountPhase::Active,
+        record.key_thumbprint,
+        contact_digest,
+        Some(account_url),
+    )?;
+    Ok(lifecycle)
+}
+
+fn certd_account_public_key(
+    config: &AcmedConfig,
+    account_generation: u64,
+    signer: &mut CertdEnvelopeWriter<'_>,
+) -> Result<P256Jwk, &'static str> {
+    let request = CertdAccountKeyRequest {
+        account_identity: config.account_identity,
+        directory_generation: config.directory_generation,
+        account_generation,
+    };
+    let encoded = encode_certd_account_key_request(request)
+        .map_err(|_| "cannot encode certd account key request")?;
+    let mut response = [0u8; CERTD_P256_PUBLIC_KEY_BYTES];
+    let response_length = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::GetAcmeAccountPublicIdentity,
+        &encoded,
+        &mut response,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    if response_length != response.len() {
+        return Err("invalid certd account public key response");
+    }
+    account_public_key(&response)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1539,9 +1822,15 @@ fn establish_order(
             Err("ACME order response is uncertain; duplicate order creation refused")
         }
         Some((record, durable_generation)) if record.phase == AcmedOrderPhase::Created => {
-            record
-                .require_policy(config)
-                .map_err(|_| "stale ACME order policy")?;
+            if record.require_policy(config).is_err()
+                && !(record.state == Some(mrml_acme::OrderState::Valid)
+                    && record.directory_generation == config.directory_generation
+                    && record.account_generation.checked_add(1) == Some(config.account_generation)
+                    && record.policy_generation == config.policy_generation
+                    && record.identity == config.identity)
+            {
+                return Err("stale ACME order policy");
+            }
             if usize::from(record.authorization_count) != count {
                 return Err("ACME order authorization count mismatch");
             }
