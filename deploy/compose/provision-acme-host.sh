@@ -62,9 +62,6 @@ make_secret() {
 
 make_dir "$root" 0 0 0755
 make_dir "$root/secrets" 0 0 0700
-make_dir "$root/secrets/certd" 21003 21003 0700
-make_dir "$root/secrets/acmed" 21004 21004 0700
-make_dir "$root/secrets/channels" 0 0 0700
 make_dir "$root/secrets/admin" 21005 21005 0700
 make_dir "$root/config" 0 0 0750
 make_dir "$root/backups" 21005 21005 0711
@@ -98,14 +95,24 @@ make_volume mrml-acmed-state 21004 21004 0700
 make_volume mrml-acmed-challenges 21004 21004 0700
 make_volume mrml-runtime-certd-gitd 21003 21902 2770
 make_volume mrml-runtime-certd-acmed 21003 21903 2770
+make_volume mrml-certd-secrets 21003 21003 0700
+make_volume mrml-certd-config 0 0 0755
+make_volume mrml-acmed-secrets 21004 21004 0700
+make_volume mrml-acmed-config 0 0 0755
+make_volume mrml-gitd-secrets 21001 21001 0700
 
-make_secret "$root/secrets/certd/certd-unlock.key" 21003 21003
-make_secret "$root/secrets/acmed/acmed-state.key" 21004 21004
+certd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-secrets)
+acmed_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-acmed-secrets)
+certd_config=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-config)
+acmed_config=$(docker volume inspect --format '{{.Mountpoint}}' mrml-acmed-config)
+
+make_secret "$certd_secrets/certd-unlock.key" 21003 21003
+make_secret "$acmed_secrets/acmed-state.key" 21004 21004
 
 create_backup_key_copies() {
   admin_copy=$root/secrets/admin/backup-auth.key
-  certd_copy=$root/secrets/certd/backup-auth.key
-  acmed_copy=$root/secrets/acmed/backup-auth.key
+  certd_copy=$certd_secrets/backup-auth.key
+  acmed_copy=$acmed_secrets/backup-auth.key
   if [ ! -e "$admin_copy" ]; then
     [ ! -e "$certd_copy" ] && [ ! -e "$acmed_copy" ] || {
       echo "backup authentication copies are incomplete" >&2
@@ -144,8 +151,15 @@ create_backup_key_copies
 
 create_channel_pair() {
   name=$1 peer_uid=$2 peer_gid=$3
-  certd_copy=$root/secrets/channels/$name.cap.certd
-  peer_copy=$root/secrets/channels/$name.cap.$4
+  certd_copy=$certd_secrets/$name.cap
+  case $4 in
+    gitd)
+      gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-secrets)
+      peer_copy=$gitd_secrets/certd-gitd-channel
+      ;;
+    acmed) peer_copy=$acmed_secrets/certd-acmed.cap ;;
+    *) exit 1 ;;
+  esac
   if { [ -e "$certd_copy" ] && [ ! -e "$peer_copy" ]; } ||
      { [ ! -e "$certd_copy" ] && [ -e "$peer_copy" ]; }; then
     echo "incomplete channel pair rejected: $name" >&2
@@ -171,7 +185,7 @@ create_channel_pair() {
 create_channel_pair certd-gitd 21001 21001 gitd
 create_channel_pair certd-acmed 21004 21004 acmed
 
-token=$root/secrets/acmed/cloudflare-api-token
+token=$acmed_secrets/cloudflare-api-token
 if [ -e "$token" ]; then
   require_no_symlink_path "$token"
   [ -f "$token" ] && [ ! -L "$token" ] || exit 1
@@ -197,8 +211,9 @@ verify_config() {
   [ "$size" -gt 0 ] && [ "$size" -le 16384 ] || exit 1
 }
 
-verify_config "$root/config/certd.json"
-verify_config "$root/config/acmed.json"
+verify_config "$certd_config/config.json"
+verify_config "$certd_config/acme-trust-roots.pem"
+verify_config "$acmed_config/config.json"
 
 available_kib=$(df -Pk "$root" | awk 'NR==2 {print $4}')
 [ "$available_kib" -ge "$minimum_kib" ] || { echo "insufficient free space" >&2; exit 1; }

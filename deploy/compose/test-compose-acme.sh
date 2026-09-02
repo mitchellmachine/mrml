@@ -31,15 +31,17 @@ require 'mrml-runtime-certd-gitd:/run/mrml/certd-gitd:rw' "$compose"
 require 'mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw' "$compose"
 require 'mrml-certd-state:/var/lib/mrml/certd:rw' "$compose"
 require 'mrml-acmed-state:/var/lib/mrml/acmed:rw' "$compose"
-require 'certd-gitd.cap.certd' "$compose"
-require 'certd-acmed.cap.certd' "$compose"
-require 'certd-acmed.cap.acmed' "$compose"
+require 'mrml-certd-secrets:/run/secrets:ro' "$compose"
+require 'mrml-certd-config:/etc/mrml/certd:ro' "$compose"
+require 'mrml-acmed-secrets:/run/secrets:ro' "$compose"
+require 'mrml-acmed-config:/etc/mrml/acmed:ro' "$compose"
 reject 'build:' "$compose"
 reject 'ports:' "$compose"
 reject '/var/run/docker.sock' "$compose"
 reject '/run/secrets/cloudflare-api-token' "$certd_dockerfile"
 reject '/certd/state:/var/lib/mrml/certd' "$compose"
 reject '/acmed/state:/var/lib/mrml/acmed' "$compose"
+reject '${MRML_DEPLOY_ROOT' "$compose"
 
 for dockerfile in "$certd_dockerfile" "$acmed_dockerfile"; do
   require 'FROM docker.io/library/debian@sha256:' "$dockerfile"
@@ -85,9 +87,11 @@ require 'MRML_ACMED_OFFLINE_RESTORE=1' deploy/compose/restore-acme.sh
 require 'restore-check' deploy/compose/restore-acme.sh
 require 'services remain disabled' deploy/compose/restore-acme.sh
 require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
-require 'secrets/certd/backup-auth.key' deploy/compose/provision-acme-host.sh
-require 'secrets/acmed/backup-auth.key' deploy/compose/provision-acme-host.sh
+require 'certd_secrets/backup-auth.key' deploy/compose/provision-acme-host.sh
+require 'acmed_secrets/backup-auth.key' deploy/compose/provision-acme-host.sh
 require 'backup authentication copy differs' deploy/compose/provision-acme-host.sh
 require 'backups/certd" 21003 21005 0750' deploy/compose/provision-acme-host.sh
 require 'backups/acmed" 21004 21005 0750' deploy/compose/provision-acme-host.sh
 reject 'backup-auth.key' "$compose"
+require 'cloudflare-token)' deploy/compose/install-volume-inputs.sh
+require 'refusing to update a volume used by a running container' deploy/compose/install-volume-inputs.sh

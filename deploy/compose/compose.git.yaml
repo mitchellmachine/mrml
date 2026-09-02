@@ -25,10 +25,8 @@ services:
       - "mrml-authority-state:/var/lib/mrml/authority:rw"
       - "mrml-gitd-policies:/var/lib/mrml/git-policies:ro"
       - "mrml-runtime-git-authority:/run/mrml/git-authority:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.authority:/run/secrets/git-authority-channel:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/receipt.key:/run/secrets/receipt.key:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/openpgp-public.asc:/etc/mrml/authority/openpgp-public.asc:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/ml-dsa-public.bin:/etc/mrml/authority/ml-dsa-public.bin:ro"
+      - "mrml-git-authority-secrets:/run/secrets:ro"
+      - "mrml-git-authority-config:/etc/mrml/authority:ro"
     command:
       - serve
       - /run/mrml/git-authority/authority.sock
@@ -95,11 +93,8 @@ services:
       - "mrml-gitd-policies:/mnt/mrml/gitd/policies:ro"
       - "mrml-runtime-git-authority:/run/mrml/git-authority:ro"
       - "mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.gitd:/run/secrets/git-authority-channel:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-gitd.cap.gitd:/run/secrets/certd-gitd-channel:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/gitd/token-pepper.key:/run/secrets/gitd-token-pepper:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/gitd/quic-retry.key:/run/secrets/gitd-quic-retry-key:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/gitd.conf:/etc/mrml/gitd.conf:ro"
+      - "mrml-gitd-secrets:/run/secrets:ro"
+      - "mrml-gitd-config:/etc/mrml:ro"
     command: [serve, /etc/mrml/gitd.conf, "${MRML_AUTHORITY_SIGNER_IDENTITY:?set MRML_AUTHORITY_SIGNER_IDENTITY}"]
     healthcheck:
       test: [CMD, /usr/bin/mrml-gitd, listener-health, /etc/mrml/gitd.conf]
@@ -132,3 +127,11 @@ volumes:
     name: mrml-runtime-git-authority
   mrml-runtime-certd-gitd:
     name: mrml-runtime-certd-gitd
+  mrml-git-authority-secrets:
+    name: mrml-git-authority-secrets
+  mrml-git-authority-config:
+    name: mrml-git-authority-config
+  mrml-gitd-secrets:
+    name: mrml-gitd-secrets
+  mrml-gitd-config:
+    name: mrml-gitd-config

@@ -3,9 +3,9 @@
 ## 2026-09-02: Docker-managed Git/certificate deployment volumes
 
 - Result: **NOT_TRIGGERED**.
-- Scope: replacing persistent and Unix-socket directory bind mounts with named
-  Docker volumes, exact numeric ownership/mode provisioning, and first-use image
-  directory metadata.
+- Scope: replacing persistent, secret, configuration, and Unix-socket bind
+  mounts with separately scoped named Docker volumes, exact numeric
+  ownership/mode provisioning, and stopped-service input installation.
 - Reason: this is conventional container storage and filesystem provisioning;
   it introduces no new protocol, cryptographic construction, compression
   mechanism, or specialized storage algorithm.

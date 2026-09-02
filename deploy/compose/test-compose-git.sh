@@ -42,8 +42,9 @@ require 'mrml-gitd-policies:/var/lib/mrml/git-policies:ro' "$compose"
 require 'mrml-gitd-repos:/mnt/mrml/gitd/repos:rw' "$compose"
 require 'name: mrml-gitd-repos' "$compose"
 require 'MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY' "$compose"
-require 'git-authority.cap.gitd' "$compose"
-require 'certd-gitd.cap.gitd' "$compose"
+require 'mrml-git-authority-secrets:/run/secrets:ro' "$compose"
+require 'mrml-gitd-secrets:/run/secrets:ro' "$compose"
+require 'mrml-gitd-config:/etc/mrml:ro' "$compose"
 require 'stop_grace_period:' "$compose"
 require 'nofile:' "$compose"
 require 'listener-health' "$compose"
@@ -58,6 +59,7 @@ reject 'userns_mode: host' "$compose"
 reject 'container_name:' "$compose"
 reject '/gitd/repos:/mnt/mrml/gitd/repos' "$compose"
 reject '/runtime/git-authority:/run/mrml/git-authority' "$compose"
+reject '${MRML_DEPLOY_ROOT' "$compose"
 
 published=$(grep -c '443:8443/' "$compose")
 [ "$published" -eq 2 ] || {
@@ -79,6 +81,7 @@ require '/payload/dirs/authority /var/lib/mrml/authority' "$authority_dockerfile
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-host.sh
 require 'wrong owner on Docker volume' deploy/compose/provision-git-host.sh
 require 'mrml-runtime-certd-gitd' deploy/compose/provision-git-host.sh
+require 'gitd-token-pepper' deploy/compose/provision-git-host.sh
 
 for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/initialize-git-protected-policy.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
   [ -x "$operator" ] || {

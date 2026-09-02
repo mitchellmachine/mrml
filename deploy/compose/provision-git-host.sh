@@ -88,10 +88,6 @@ ensure_dir() {
 
 verify_components "$(dirname "$deployment_root")"
 ensure_dir "$deployment_root" 0 0 755
-ensure_dir "$deployment_root/secrets" 0 0 700
-ensure_dir "$deployment_root/secrets/git-authority" "$authority_uid" "$authority_gid" 700
-ensure_dir "$deployment_root/secrets/gitd" "$gitd_uid" "$gitd_gid" 700
-ensure_dir "$deployment_root/secrets/channels" 0 0 700
 ensure_dir "$deployment_root/backups" "$admin_uid" "$admin_gid" 711
 ensure_dir "$deployment_root/backups/git" "$admin_uid" "$admin_gid" 700
 ensure_dir "$deployment_root/config" 0 0 750
@@ -130,6 +126,10 @@ ensure_volume mrml-gitd-policies "$gitd_uid" "$gitd_gid" 755
 ensure_volume mrml-authority-state "$authority_uid" "$authority_gid" 700
 ensure_volume mrml-runtime-git-authority "$authority_uid" "$authority_socket_gid" 2770
 ensure_volume mrml-runtime-certd-gitd "$certd_uid" "$certd_socket_gid" 2770
+ensure_volume mrml-git-authority-secrets "$authority_uid" "$authority_gid" 700
+ensure_volume mrml-git-authority-config 0 0 755
+ensure_volume mrml-gitd-secrets "$gitd_uid" "$gitd_gid" 700
+ensure_volume mrml-gitd-config 0 0 755
 
 authority_mount=$(docker volume inspect --format '{{.Mountpoint}}' mrml-authority-state) ||
     fail "cannot inspect authority state volume"
@@ -158,8 +158,10 @@ ensure_secret() {
 }
 
 create_channel_pair() {
-    authority_copy=$deployment_root/secrets/channels/git-authority.cap.authority
-    gitd_copy=$deployment_root/secrets/channels/git-authority.cap.gitd
+    authority_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-authority-secrets)
+    gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-secrets)
+    authority_copy=$authority_secrets/git-authority-channel
+    gitd_copy=$gitd_secrets/git-authority-channel
     if { [ -e "$authority_copy" ] && [ ! -e "$gitd_copy" ]; } ||
        { [ ! -e "$authority_copy" ] && [ -e "$gitd_copy" ]; }; then
         fail "incomplete Git authority channel pair"
@@ -182,9 +184,11 @@ create_channel_pair() {
 }
 
 create_channel_pair
-ensure_secret "$deployment_root/secrets/git-authority/receipt.key" "$authority_uid" "$authority_gid" 32
-ensure_secret "$deployment_root/secrets/gitd/token-pepper.key" "$gitd_uid" "$gitd_gid" 32
-ensure_secret "$deployment_root/secrets/gitd/quic-retry.key" "$gitd_uid" "$gitd_gid" 16
+authority_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-authority-secrets)
+gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-secrets)
+ensure_secret "$authority_secrets/receipt.key" "$authority_uid" "$authority_gid" 32
+ensure_secret "$gitd_secrets/gitd-token-pepper" "$gitd_uid" "$gitd_gid" 32
+ensure_secret "$gitd_secrets/gitd-quic-retry-key" "$gitd_uid" "$gitd_gid" 16
 
 available_kib=$(df -Pk "$deployment_root" | awk 'NR == 2 {print $4}')
 case $available_kib in

@@ -26,11 +26,8 @@ services:
       - "mrml-certd-publications:/var/lib/mrml/publications:rw"
       - "mrml-runtime-certd-gitd:/run/mrml/certd-gitd:rw"
       - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/certd/certd-unlock.key:/run/secrets/certd-unlock.key:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-gitd.cap.certd:/run/secrets/certd-gitd.cap:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-acmed.cap.certd:/run/secrets/certd-acmed.cap:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/certd.json:/etc/mrml/certd/config.json:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/acme-trust-roots.pem:/etc/mrml/certd/acme-trust-roots.pem:ro"
+      - "mrml-certd-secrets:/run/secrets:ro"
+      - "mrml-certd-config:/etc/mrml/certd:ro"
     healthcheck:
       test: [CMD, /usr/bin/mrml-certd, health]
       interval: 30s
@@ -64,10 +61,8 @@ services:
       - "mrml-acmed-state:/var/lib/mrml/acmed:rw"
       - "mrml-acmed-challenges:/var/lib/mrml/challenges:rw"
       - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/acmed/acmed-state.key:/run/secrets/acmed-state.key:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/acmed/cloudflare-api-token:/run/secrets/cloudflare-api-token:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-acmed.cap.acmed:/run/secrets/certd-acmed.cap:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/acmed.json:/etc/mrml/acmed/config.json:ro"
+      - "mrml-acmed-secrets:/run/secrets:ro"
+      - "mrml-acmed-config:/etc/mrml/acmed:ro"
     healthcheck:
       test: [CMD, /usr/bin/mrml-acmed, health]
       interval: 30s
@@ -93,3 +88,11 @@ volumes:
     name: mrml-runtime-certd-gitd
   mrml-runtime-certd-acmed:
     name: mrml-runtime-certd-acmed
+  mrml-certd-secrets:
+    name: mrml-certd-secrets
+  mrml-certd-config:
+    name: mrml-certd-config
+  mrml-acmed-secrets:
+    name: mrml-acmed-secrets
+  mrml-acmed-config:
+    name: mrml-acmed-config
