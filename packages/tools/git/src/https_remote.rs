@@ -158,18 +158,18 @@ impl HttpsRemote {
         let (status, response_headers, body) = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 let response = connection
                     .request("GET", &authority, &target, &headers)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 (response.status, response.headers, response.body)
             }
             HttpsTransport::Http3V2 => {
                 let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 let response = connection
                     .request("GET", &authority, &target, &headers)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 (response.status, response.headers, response.body)
             }
         };
@@ -190,18 +190,18 @@ impl HttpsRemote {
         let (status, response_headers, body) = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 let response = connection
                     .request("GET", &authority, &target, &headers)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 (response.status, response.headers, response.body)
             }
             HttpsTransport::Http3V2 => {
                 let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 let response = connection
                     .request("GET", &authority, &target, &headers)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 (response.status, response.headers, response.body)
             }
         };
@@ -267,18 +267,18 @@ impl HttpsRemote {
         let (status, response_headers, response_body) = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 let response = connection
                     .request_with_body("POST", &authority, &target, &headers, &body)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 (response.status, response.headers, response.body)
             }
             HttpsTransport::Http3V2 => {
                 let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 let response = connection
                     .request_control_with_body("POST", &authority, &target, &headers, &body)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 (response.status, response.headers, response.body)
             }
         };
@@ -359,7 +359,7 @@ impl HttpsRemote {
         let head = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 connection
                     .request_with_body_to(
                         "POST",
@@ -369,11 +369,11 @@ impl HttpsRemote {
                         &body,
                         &mut decoder,
                     )
-                    .map_err(|_| HttpsRemoteError::Transport)?
+                    .map_err(HttpsRemoteError::Transport)?
             }
             HttpsTransport::Http3V2 => {
                 let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 connection
                     .request_control_with_body_to(
                         "POST",
@@ -383,7 +383,7 @@ impl HttpsRemote {
                         &body,
                         &mut decoder,
                     )
-                    .map_err(|_| HttpsRemoteError::Transport)?
+                    .map_err(HttpsRemoteError::Transport)?
             }
         };
         validate_service_response(
@@ -483,7 +483,7 @@ impl HttpsRemote {
         let head = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 connection
                     .request_streaming_body_to(
                         "POST",
@@ -493,11 +493,11 @@ impl HttpsRemote {
                         &mut source,
                         &mut report,
                     )
-                    .map_err(|_| HttpsRemoteError::Transport)?
+                    .map_err(HttpsRemoteError::Transport)?
             }
             HttpsTransport::Http3V2 => {
                 let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
-                    .map_err(|_| HttpsRemoteError::Transport)?;
+                    .map_err(HttpsRemoteError::Transport)?;
                 connection
                     .request_streaming_body_to(
                         "POST",
@@ -507,7 +507,7 @@ impl HttpsRemote {
                         &mut source,
                         &mut report,
                     )
-                    .map_err(|_| HttpsRemoteError::Transport)?
+                    .map_err(HttpsRemoteError::Transport)?
             }
         };
         validate_service_response(
@@ -930,7 +930,7 @@ fn valid_identity_component(value: &str) -> bool {
 pub enum HttpsRemoteError {
     InvalidUrl,
     InvalidRepositoryPath,
-    Transport,
+    Transport(HttpError),
     HttpStatus,
     ContentType,
     Protocol,
@@ -944,7 +944,7 @@ impl fmt::Display for HttpsRemoteError {
         formatter.write_str(match self {
             Self::InvalidUrl => "invalid HTTPS remote URL",
             Self::InvalidRepositoryPath => "invalid HTTPS repository path",
-            Self::Transport => "HTTPS transport failed",
+            Self::Transport(error) => return write!(formatter, "HTTPS transport failed: {error}"),
             Self::HttpStatus => "Git service returned an unsuccessful status",
             Self::ContentType => "Git service returned an invalid content type",
             Self::Protocol => "Git protocol-v2 discovery is invalid",
