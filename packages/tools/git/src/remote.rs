@@ -23,7 +23,7 @@ pub struct RemoteInfo {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FetchError {
     Ssh,
-    Https,
+    Https(crate::HttpsRemoteError),
     Protocol,
     Remote,
     Pack,
@@ -71,7 +71,7 @@ fn fetch_https_with_provider(
         Some(provider) => remote.list_refs_authenticated(provider),
         None => remote.list_refs(),
     }
-    .map_err(|_| FetchError::Https)?;
+    .map_err(FetchError::Https)?;
     let mut branches: Vector<(Text, ObjectId)> = advertisement
         .refs
         .into_iter()
@@ -136,7 +136,7 @@ fn fetch_https_with_provider(
                 ),
                 None => remote.fetch_pack_to_file(wants, &[], &pack, maximum_pack_bytes),
             }
-            .map_err(|_| FetchError::Https)?;
+            .map_err(FetchError::Https)?;
             let installed = repository
                 .import_pack_file_validated_commit_tips(&pack, &scratch, wants, limits)
                 .map_err(|_| FetchError::Pack)?;
@@ -331,7 +331,7 @@ impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Ssh => "native SSH transport failed",
-            Self::Https => "native HTTPS transport failed",
+            Self::Https(error) => return write!(f, "native HTTPS transport failed: {error}"),
             Self::Protocol => "remote Git protocol response is invalid",
             Self::Remote => "remote Git service failed",
             Self::Pack => "received Git pack failed authentication",
