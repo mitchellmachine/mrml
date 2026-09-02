@@ -1,6 +1,6 @@
 use mrml_acme::{AcmeIdentifier, CaClass};
 use mrml_certificate::{
-    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
+    AccountP256SigningKey, AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
     CertdActivationRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
     CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdConfig,
     CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
@@ -63,7 +63,7 @@ const MAX_GENERATION_WAIT_MILLISECONDS: u32 = 30_000;
 
 struct CertdHostedState {
     config: CertdConfig,
-    account_key: Mutex<AccountP256SigningKey>,
+    account_keys: Mutex<Vec<AccountP256SigningKey>>,
     certificate_keys: Mutex<Vec<CertificateP256SigningKey>>,
     trust_roots: PemCertificateChain,
     candidate: Mutex<Option<StagedCandidate>>,
@@ -225,7 +225,7 @@ fn dispatch_channel_request(
         CertdChannelOperation::Health => {
             if !payload.is_empty()
                 || state.config.identity == [0; 16]
-                || state.account_key.is_poisoned()
+                || state.account_keys.is_poisoned()
                 || state.certificate_keys.is_poisoned()
                 || output.len() < 5
                 || (role == CertdChannelRole::Gitd && load_active_candidate(state).is_err())
@@ -247,7 +247,11 @@ fn dispatch_channel_request(
         CertdChannelOperation::GetAcmeAccountPublicIdentity => {
             let request = decode_certd_account_key_request(payload).map_err(|_| ())?;
             require_account_request(state.config, request)?;
-            let account = state.account_key.lock().map_err(|_| ())?;
+            let accounts = state.account_keys.lock().map_err(|_| ())?;
+            let account = accounts
+                .iter()
+                .find(|key| key.account_generation() == request.account_generation)
+                .ok_or(())?;
             let public = account.public_jwk().map_err(|_| ())?.sec1_uncompressed();
             if output.len() < public.len() {
                 return Err(());
@@ -261,18 +265,29 @@ fn dispatch_channel_request(
                 state.config.directory_class == CertdDirectoryClass::LocalTest,
             )
             .map_err(|_| ())?;
-            let mut account = state.account_key.lock().map_err(|_| ())?;
+            let current = request.account_generation == state.config.account_generation;
+            let previous_for_rollover = request.operation == AcmeJwsOperation::KeyChange
+                && request.account_generation.checked_add(1)
+                    == Some(state.config.account_generation);
+            if !current && !previous_for_rollover {
+                return Err(());
+            }
+            let mut accounts = state.account_keys.lock().map_err(|_| ())?;
+            let account = accounts
+                .iter_mut()
+                .find(|key| key.account_generation() == request.account_generation)
+                .ok_or(())?;
             let public = account.public_jwk().map_err(|_| ())?;
             let jws = write_constrained_acme_jws(
                 ConstrainedAcmeJwsPolicy {
                     directory_url: state.config.directory_url,
                     directory_generation: state.config.directory_generation,
-                    account_generation: state.config.account_generation,
+                    account_generation: request.account_generation,
                     account_identity: state.config.account_identity,
                 },
                 request,
                 &public,
-                &mut account,
+                &mut *account,
                 output,
             )
             .map_err(|_| ())?;
@@ -699,7 +714,8 @@ fn append(output: &mut [u8], offset: &mut usize, bytes: &[u8]) -> Result<(), ()>
 fn require_account_request(config: CertdConfig, request: CertdAccountKeyRequest) -> Result<(), ()> {
     if request.account_identity != config.account_identity
         || request.directory_generation != config.directory_generation
-        || request.account_generation != config.account_generation
+        || (request.account_generation != config.account_generation
+            && request.account_generation.checked_add(1) != Some(config.account_generation))
     {
         Err(())
     } else {
@@ -726,27 +742,35 @@ fn load_or_create_keys(
     durable_authenticator: HmacSha256DurableAuthenticator,
     durable_state: HostedDurableStateStore,
 ) -> Result<CertdHostedState, &'static str> {
-    let account_descriptor = HostedP256KeyDescriptor {
-        role: HostedP256KeyRole::AcmeAccount,
-        object_id: config.account_identity,
-        key_generation: config.account_generation,
-        binding_generation: config.directory_generation,
-        binding_digest: directory_binding(config),
-    };
-    let account_key = match key_store.load_account(account_descriptor) {
-        Ok(key) => key,
-        Err(HostedP256KeyError::NotFound) => key_store
-            .create_account(account_descriptor, fill_entropy)
-            .or_else(|error| {
-                if error == HostedP256KeyError::AlreadyExists {
-                    key_store.load_account(account_descriptor)
-                } else {
-                    Err(error)
-                }
-            })
-            .map_err(|_| "cannot create ACME account key")?,
-        Err(_) => return Err("cannot load ACME account key"),
-    };
+    let mut account_keys = Vec::new();
+    let first_retained_account_generation = config.account_generation.saturating_sub(63).max(1);
+    for generation in first_retained_account_generation..=config.account_generation {
+        let descriptor = HostedP256KeyDescriptor {
+            role: HostedP256KeyRole::AcmeAccount,
+            object_id: config.account_identity,
+            key_generation: generation,
+            binding_generation: config.directory_generation,
+            binding_digest: directory_binding(config),
+        };
+        match key_store.load_account(descriptor) {
+            Ok(key) => account_keys.push(key),
+            Err(HostedP256KeyError::NotFound) if generation < config.account_generation => {}
+            Err(HostedP256KeyError::NotFound) => {
+                let key = key_store
+                    .create_account(descriptor, fill_entropy)
+                    .or_else(|error| {
+                        if error == HostedP256KeyError::AlreadyExists {
+                            key_store.load_account(descriptor)
+                        } else {
+                            Err(error)
+                        }
+                    })
+                    .map_err(|_| "cannot create ACME account key")?;
+                account_keys.push(key);
+            }
+            Err(_) => return Err("cannot load retained ACME account key"),
+        }
+    }
     let mut certificate_keys = Vec::new();
     let first_retained_generation = config.key_generation.saturating_sub(63).max(1);
     for generation in first_retained_generation..=config.key_generation {
@@ -785,7 +809,7 @@ fn load_or_create_keys(
     }
     Ok(CertdHostedState {
         config,
-        account_key: Mutex::new(account_key),
+        account_keys: Mutex::new(account_keys),
         certificate_keys: Mutex::new(certificate_keys),
         trust_roots,
         candidate: Mutex::new(None),

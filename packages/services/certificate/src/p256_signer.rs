@@ -48,6 +48,10 @@ impl AccountP256SigningKey {
         P256Jwk::from_coordinates(x, y).map_err(|_| P256Error::InvalidKey)
     }
 
+    pub const fn account_generation(&self) -> u64 {
+        self.account_generation
+    }
+
     pub fn authorize_generation(&mut self, directory_generation: u64, account_generation: u64) {
         self.directory_generation = directory_generation;
         self.account_generation = account_generation;
