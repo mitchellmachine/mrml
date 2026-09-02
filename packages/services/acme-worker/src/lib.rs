@@ -23,6 +23,8 @@ const CHALLENGE_RECORD_MAGIC: &[u8; 8] = b"MRMLACH1";
 const FINALIZATION_RECORD_MAGIC: &[u8; 8] = b"MRMLAFN1";
 const FINALIZATION_RECORD_BYTES: usize = 128;
 const CHALLENGE_RECORD_HEADER_BYTES: usize = 146;
+const REVOCATION_RECORD_MAGIC: &[u8; 8] = b"MRMLARV1";
+pub const REVOCATION_RECORD_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcmedRequestIdReservation {
@@ -123,6 +125,157 @@ pub enum AcmedAccountRecordError {
     OutputTooSmall,
     Malformed,
     PolicyMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcmedRevocationPhase {
+    Prepared = 1,
+    SubmissionMayHaveBeenSent = 2,
+    Revoked = 3,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct AcmedRevocationRecord {
+    pub phase: AcmedRevocationPhase,
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub policy_generation: u64,
+    pub identity: [u8; 16],
+    pub identity_generation: u64,
+    pub revocation_generation: u64,
+    pub certificate_id: mrml_acme::AriCertificateId,
+    pub chain_digest: [u8; 32],
+    pub reason: u8,
+    pub authorization_digest: [u8; 32],
+    pub transaction_digest: [u8; 32],
+    pub revoked_at_unix: u64,
+}
+
+impl AcmedRevocationRecord {
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, AcmedAccountRecordError> {
+        let certificate_id = self.certificate_id.as_str().as_bytes();
+        let revoked = self.phase == AcmedRevocationPhase::Revoked;
+        if output.len() < REVOCATION_RECORD_BYTES
+            || self.directory_generation == 0
+            || self.account_generation == 0
+            || self.policy_generation == 0
+            || self.identity == [0; 16]
+            || self.identity_generation == 0
+            || self.revocation_generation == 0
+            || certificate_id.is_empty()
+            || certificate_id.len() > mrml_acme::MAX_ARI_CERTIFICATE_ID
+            || self.chain_digest == [0; 32]
+            || !matches!(self.reason, 0 | 1 | 3 | 4 | 5 | 9)
+            || self.authorization_digest == [0; 32]
+            || revoked != (self.transaction_digest != [0; 32] && self.revoked_at_unix != 0)
+            || (!revoked && (self.transaction_digest != [0; 32] || self.revoked_at_unix != 0))
+        {
+            return Err(if output.len() < REVOCATION_RECORD_BYTES {
+                AcmedAccountRecordError::OutputTooSmall
+            } else {
+                AcmedAccountRecordError::InvalidState
+            });
+        }
+        output[..REVOCATION_RECORD_BYTES].fill(0);
+        output[..8].copy_from_slice(REVOCATION_RECORD_MAGIC);
+        output[8] = self.phase as u8;
+        output[9] = self.reason;
+        output[10] = certificate_id.len() as u8;
+        output[16..24].copy_from_slice(&self.directory_generation.to_be_bytes());
+        output[24..32].copy_from_slice(&self.account_generation.to_be_bytes());
+        output[32..40].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[40..56].copy_from_slice(&self.identity);
+        output[56..64].copy_from_slice(&self.identity_generation.to_be_bytes());
+        output[64..72].copy_from_slice(&self.revocation_generation.to_be_bytes());
+        output[72..104].copy_from_slice(&self.chain_digest);
+        output[104..136].copy_from_slice(&self.authorization_digest);
+        output[136..168].copy_from_slice(&self.transaction_digest);
+        output[168..176].copy_from_slice(&self.revoked_at_unix.to_be_bytes());
+        output[176..176 + certificate_id.len()].copy_from_slice(certificate_id);
+        Ok(REVOCATION_RECORD_BYTES)
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, AcmedAccountRecordError> {
+        if input.len() != REVOCATION_RECORD_BYTES
+            || input.get(..8) != Some(REVOCATION_RECORD_MAGIC)
+            || input[11..16].iter().any(|byte| *byte != 0)
+        {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        let id_length = usize::from(input[10]);
+        if id_length == 0
+            || id_length > mrml_acme::MAX_ARI_CERTIFICATE_ID
+            || input[176 + id_length..].iter().any(|byte| *byte != 0)
+        {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        let certificate_id = core::str::from_utf8(&input[176..176 + id_length])
+            .map_err(|_| AcmedAccountRecordError::Malformed)
+            .and_then(|text| {
+                mrml_acme::AriCertificateId::parse(text)
+                    .map_err(|_| AcmedAccountRecordError::Malformed)
+            })?;
+        let record = Self {
+            phase: match input[8] {
+                1 => AcmedRevocationPhase::Prepared,
+                2 => AcmedRevocationPhase::SubmissionMayHaveBeenSent,
+                3 => AcmedRevocationPhase::Revoked,
+                _ => return Err(AcmedAccountRecordError::Malformed),
+            },
+            reason: input[9],
+            directory_generation: read_nonzero_u64(&input[16..24])?,
+            account_generation: read_nonzero_u64(&input[24..32])?,
+            policy_generation: read_nonzero_u64(&input[32..40])?,
+            identity: input[40..56]
+                .try_into()
+                .map_err(|_| AcmedAccountRecordError::Malformed)?,
+            identity_generation: read_nonzero_u64(&input[56..64])?,
+            revocation_generation: read_nonzero_u64(&input[64..72])?,
+            chain_digest: input[72..104]
+                .try_into()
+                .map_err(|_| AcmedAccountRecordError::Malformed)?,
+            authorization_digest: input[104..136]
+                .try_into()
+                .map_err(|_| AcmedAccountRecordError::Malformed)?,
+            transaction_digest: input[136..168]
+                .try_into()
+                .map_err(|_| AcmedAccountRecordError::Malformed)?,
+            revoked_at_unix: u64::from_be_bytes(
+                input[168..176]
+                    .try_into()
+                    .map_err(|_| AcmedAccountRecordError::Malformed)?,
+            ),
+            certificate_id,
+        };
+        let mut canonical = [0u8; REVOCATION_RECORD_BYTES];
+        record.encode(&mut canonical)?;
+        if canonical != input {
+            return Err(AcmedAccountRecordError::Malformed);
+        }
+        Ok(record)
+    }
+
+    pub fn require_policy(&self, config: &AcmedConfig) -> Result<(), AcmedAccountRecordError> {
+        if self.directory_generation != config.directory_generation
+            || self.account_generation != config.account_generation
+            || self.policy_generation != config.policy_generation
+            || self.identity != config.identity
+        {
+            Err(AcmedAccountRecordError::PolicyMismatch)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn read_nonzero_u64(input: &[u8]) -> Result<u64, AcmedAccountRecordError> {
+    let value = read_u64(input)?;
+    if value == 0 {
+        Err(AcmedAccountRecordError::Malformed)
+    } else {
+        Ok(value)
+    }
 }
 
 impl AcmedAccountRecord {
@@ -1714,6 +1867,54 @@ mod tests {
         assert!(AcmedFinalizationRecord::decode(&encoded).unwrap() != record);
         encoded[9] = 1;
         assert!(AcmedFinalizationRecord::decode(&encoded).is_err());
+    }
+
+    #[test]
+    fn revocation_record_preserves_uncertainty_and_exact_terminal_receipt() {
+        let config = parse_acmed_config(STAGING).unwrap();
+        let prepared = AcmedRevocationRecord {
+            phase: AcmedRevocationPhase::Prepared,
+            directory_generation: config.directory_generation,
+            account_generation: config.account_generation,
+            policy_generation: config.policy_generation,
+            identity: config.identity,
+            identity_generation: 7,
+            revocation_generation: 2,
+            certificate_id: mrml_acme::AriCertificateId::parse("a2V5.aWQ").unwrap(),
+            chain_digest: [0x51; 32],
+            reason: 1,
+            authorization_digest: [0x61; 32],
+            transaction_digest: [0; 32],
+            revoked_at_unix: 0,
+        };
+        prepared.require_policy(&config).unwrap();
+        let mut encoded = [0u8; REVOCATION_RECORD_BYTES];
+        assert_eq!(
+            prepared.encode(&mut encoded).unwrap(),
+            REVOCATION_RECORD_BYTES
+        );
+        assert!(AcmedRevocationRecord::decode(&encoded).unwrap() == prepared);
+
+        let uncertain = AcmedRevocationRecord {
+            phase: AcmedRevocationPhase::SubmissionMayHaveBeenSent,
+            ..prepared
+        };
+        uncertain.encode(&mut encoded).unwrap();
+        assert!(AcmedRevocationRecord::decode(&encoded).unwrap() == uncertain);
+
+        let revoked = AcmedRevocationRecord {
+            phase: AcmedRevocationPhase::Revoked,
+            transaction_digest: [0x71; 32],
+            revoked_at_unix: 9,
+            ..uncertain
+        };
+        revoked.encode(&mut encoded).unwrap();
+        assert!(AcmedRevocationRecord::decode(&encoded).unwrap() == revoked);
+        encoded[9] = 2;
+        assert!(AcmedRevocationRecord::decode(&encoded).is_err());
+        encoded[9] = 1;
+        encoded[220] = 1;
+        assert!(AcmedRevocationRecord::decode(&encoded).is_err());
     }
 
     #[test]
