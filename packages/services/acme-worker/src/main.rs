@@ -248,18 +248,40 @@ fn serve(
                 &mut state_authenticator,
             )?;
             if unix_time()? >= schedule.renew_at_unix {
-                let replacement = create_replacement_order(
-                    &config,
-                    &account,
-                    schedule,
-                    &mut envelope_writer,
-                    &mut state,
-                    &mut state_authenticator,
-                )?;
-                order = replacement.0;
-                authorization_resources = replacement.1;
-                order_durable_generation = replacement.2;
-                continue;
+                if schedule.failure_count >= config.order_retry_limit {
+                    eprintln!(
+                        "mrml-acmed event=renewal_retry_limit identity_generation={} failures={} health={:?}",
+                        schedule.identity_generation, schedule.failure_count, schedule.health
+                    );
+                } else {
+                    match create_replacement_order(
+                        &config,
+                        &account,
+                        schedule,
+                        &mut envelope_writer,
+                        &mut state,
+                        &mut state_authenticator,
+                    ) {
+                        Ok(replacement) => {
+                            order = replacement.0;
+                            authorization_resources = replacement.1;
+                            order_durable_generation = replacement.2;
+                            continue;
+                        }
+                        Err(error) => {
+                            let failed = record_renewal_failure(
+                                &config,
+                                schedule,
+                                &mut state,
+                                &mut state_authenticator,
+                            )?;
+                            eprintln!(
+                                "mrml-acmed event=renewal_failed identity_generation={} failures={} health={:?} reason={error}",
+                                failed.identity_generation, failed.failure_count, failed.health
+                            );
+                        }
+                    }
+                }
             }
         }
         if envelope_writer.next_request_id > reservation.last {
@@ -1108,7 +1130,7 @@ fn establish_order(
             )
             .map_err(|_| "cannot reconstruct ACME order request")?;
             if prepared.request_digest != record.request_digest {
-                let schedule = load_renewal_schedule(config, state, authenticator)?
+                let (schedule, _) = load_renewal_schedule(config, state, authenticator)?
                     .ok_or("ACME order request binding mismatch")?;
                 prepared = prepare_order_creation(
                     &directory,
@@ -1389,7 +1411,7 @@ fn load_renewal_schedule(
     config: &AcmedConfig,
     state: &mut HostedDurableStateStore,
     authenticator: &mut impl DurableAuthenticator,
-) -> Result<Option<RenewalSchedule>, &'static str> {
+) -> Result<Option<(RenewalSchedule, u64)>, &'static str> {
     let object = renewal_schedule_object(config.identity);
     let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
     let Some(length) = state
@@ -1413,7 +1435,36 @@ fn load_renewal_schedule(
     {
         return Err("renewal schedule policy mismatch");
     }
-    Ok(Some(schedule))
+    Ok(Some((schedule, durable.generation)))
+}
+
+fn record_renewal_failure(
+    config: &AcmedConfig,
+    expected: RenewalSchedule,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<RenewalSchedule, &'static str> {
+    let (mut schedule, generation) = load_renewal_schedule(config, state, authenticator)?
+        .ok_or("missing renewal schedule during failure recording")?;
+    if schedule != expected {
+        return Err("renewal schedule changed during order attempt");
+    }
+    schedule
+        .record_failure(
+            unix_time()?,
+            None,
+            config.renewal_policy,
+            &mut HostedRenewalEntropy,
+        )
+        .map_err(|_| "cannot advance renewal failure backoff")?;
+    store_renewal_schedule(
+        renewal_schedule_object(config.identity),
+        generation,
+        schedule,
+        state,
+        authenticator,
+    )?;
+    Ok(schedule)
 }
 
 #[allow(clippy::too_many_arguments)]
