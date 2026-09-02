@@ -2,11 +2,11 @@ use crate::{MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PemCertificateChain};
 use mrml_acme::{AriCertificateId, CertificateProfile, MAX_ARI_CERTIFICATE_ID};
 
 const MAGIC: &[u8; 8] = b"MRMLCCV1";
-const HEADER_BYTES: usize = 96;
+const HEADER_BYTES: usize = 104;
 const STATE_MAGIC: &[u8; 8] = b"MRMLCSV1";
 const ACTIVATION_MAGIC: &[u8; 8] = b"MRMLCAV1";
-pub const CERTD_CANDIDATE_STATE_BYTES: usize = 352;
-pub const CERTD_ACTIVATION_REQUEST_BYTES: usize = 120;
+pub const CERTD_CANDIDATE_STATE_BYTES: usize = 360;
+pub const CERTD_ACTIVATION_REQUEST_BYTES: usize = 128;
 pub const MAX_CERTD_CANDIDATE_CHAIN_BYTES: usize = MAX_CERTD_CHANNEL_PAYLOAD_BYTES - HEADER_BYTES;
 
 pub struct CertdCandidateRequest {
@@ -14,6 +14,7 @@ pub struct CertdCandidateRequest {
     pub directory_generation: u64,
     pub account_generation: u64,
     pub key_generation: u64,
+    pub identity_generation: u64,
     pub policy_generation: u64,
     pub order_url_digest: [u8; 32],
     pub profile: CertificateProfile,
@@ -45,6 +46,7 @@ pub struct CertdCandidateState {
     pub directory_generation: u64,
     pub account_generation: u64,
     pub key_generation: u64,
+    pub identity_generation: u64,
     pub policy_generation: u64,
     pub order_url_digest: [u8; 32],
     pub chain_digest: [u8; 32],
@@ -63,6 +65,7 @@ pub struct CertdActivationRequest {
     pub directory_generation: u64,
     pub account_generation: u64,
     pub key_generation: u64,
+    pub identity_generation: u64,
     pub policy_generation: u64,
     pub chain_digest: [u8; 32],
     pub request_digest: [u8; 32],
@@ -75,6 +78,7 @@ impl CertdActivationRequest {
             || self.directory_generation == 0
             || self.account_generation == 0
             || self.key_generation == 0
+            || self.identity_generation == 0
             || self.policy_generation == 0
             || self.chain_digest == [0; 32]
             || self.request_digest == [0; 32]
@@ -87,9 +91,10 @@ impl CertdActivationRequest {
         output[24..32].copy_from_slice(&self.directory_generation.to_be_bytes());
         output[32..40].copy_from_slice(&self.account_generation.to_be_bytes());
         output[40..48].copy_from_slice(&self.key_generation.to_be_bytes());
-        output[48..56].copy_from_slice(&self.policy_generation.to_be_bytes());
-        output[56..88].copy_from_slice(&self.chain_digest);
-        output[88..120].copy_from_slice(&self.request_digest);
+        output[48..56].copy_from_slice(&self.identity_generation.to_be_bytes());
+        output[56..64].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[64..96].copy_from_slice(&self.chain_digest);
+        output[96..128].copy_from_slice(&self.request_digest);
         Ok(CERTD_ACTIVATION_REQUEST_BYTES)
     }
 
@@ -103,9 +108,10 @@ impl CertdActivationRequest {
             directory_generation: read_u64(&input[24..32])?,
             account_generation: read_u64(&input[32..40])?,
             key_generation: read_u64(&input[40..48])?,
-            policy_generation: read_u64(&input[48..56])?,
-            chain_digest: copy(&input[56..88])?,
-            request_digest: copy(&input[88..120])?,
+            identity_generation: read_u64(&input[48..56])?,
+            policy_generation: read_u64(&input[56..64])?,
+            chain_digest: copy(&input[64..96])?,
+            request_digest: copy(&input[96..128])?,
         };
         let mut canonical = [0u8; CERTD_ACTIVATION_REQUEST_BYTES];
         request.encode(&mut canonical)?;
@@ -123,6 +129,7 @@ impl CertdCandidateState {
             || self.directory_generation == 0
             || self.account_generation == 0
             || self.key_generation == 0
+            || self.identity_generation == 0
             || self.policy_generation == 0
             || self.order_url_digest == [0; 32]
             || self.chain_digest == [0; 32]
@@ -152,6 +159,7 @@ impl CertdCandidateState {
         output[216..216 + certificate_id.len()].copy_from_slice(certificate_id);
         output[336..344].copy_from_slice(&self.created_at_unix.to_be_bytes());
         output[344..352].copy_from_slice(&self.previous_identity_generation.to_be_bytes());
+        output[352..360].copy_from_slice(&self.identity_generation.to_be_bytes());
         Ok(CERTD_CANDIDATE_STATE_BYTES)
     }
 
@@ -199,6 +207,7 @@ impl CertdCandidateState {
                     .try_into()
                     .map_err(|_| CertdCandidateProtocolError::InvalidRequest)?,
             ),
+            identity_generation: read_u64(&input[352..360])?,
         };
         let mut canonical = [0u8; CERTD_CANDIDATE_STATE_BYTES];
         state.encode(&mut canonical)?;
@@ -235,6 +244,7 @@ pub fn encode_certd_candidate_request(
         || request.directory_generation == 0
         || request.account_generation == 0
         || request.key_generation == 0
+        || request.identity_generation == 0
         || request.policy_generation == 0
         || request.order_url_digest == [0; 32]
         || profile.is_empty()
@@ -256,10 +266,11 @@ pub fn encode_certd_candidate_request(
     output[32..40].copy_from_slice(&request.directory_generation.to_be_bytes());
     output[40..48].copy_from_slice(&request.account_generation.to_be_bytes());
     output[48..56].copy_from_slice(&request.key_generation.to_be_bytes());
-    output[56..64].copy_from_slice(&request.policy_generation.to_be_bytes());
-    output[64..96].copy_from_slice(&request.order_url_digest);
-    output[96..96 + profile.len()].copy_from_slice(profile);
-    let mut cursor = 96 + profile.len();
+    output[56..64].copy_from_slice(&request.identity_generation.to_be_bytes());
+    output[64..72].copy_from_slice(&request.policy_generation.to_be_bytes());
+    output[72..104].copy_from_slice(&request.order_url_digest);
+    output[104..104 + profile.len()].copy_from_slice(profile);
+    let mut cursor = 104 + profile.len();
     for index in 0..request.chain.count() {
         let certificate = request
             .chain
@@ -304,10 +315,10 @@ pub fn decode_certd_candidate_request(
         return Err(CertdCandidateProtocolError::InvalidRequest);
     }
     let directory_generation = read_u64(&input[32..40])?;
-    let profile = core::str::from_utf8(&input[96..96 + profile_length])
+    let profile = core::str::from_utf8(&input[104..104 + profile_length])
         .map_err(|_| CertdCandidateProtocolError::InvalidProfile)?;
     let mut certificates = [&[][..]; crate::MAX_CERTIFICATES];
-    let mut cursor = 96 + profile_length;
+    let mut cursor = 104 + profile_length;
     for certificate in certificates.iter_mut().take(certificate_count) {
         let length_bytes = input
             .get(cursor..cursor + 2)
@@ -332,8 +343,9 @@ pub fn decode_certd_candidate_request(
         directory_generation,
         account_generation: read_u64(&input[40..48])?,
         key_generation: read_u64(&input[48..56])?,
-        policy_generation: read_u64(&input[56..64])?,
-        order_url_digest: input[64..96]
+        identity_generation: read_u64(&input[56..64])?,
+        policy_generation: read_u64(&input[64..72])?,
+        order_url_digest: input[72..104]
             .try_into()
             .map_err(|_| CertdCandidateProtocolError::InvalidRequest)?,
         profile: CertificateProfile::parse(profile, directory_generation)
@@ -372,7 +384,8 @@ mod tests {
             directory_generation: 2,
             account_generation: 3,
             key_generation: 4,
-            policy_generation: 5,
+            identity_generation: 5,
+            policy_generation: 6,
             order_url_digest: [6; 32],
             profile: CertificateProfile::parse("classic", 2).unwrap(),
             chain: PemCertificateChain::parse(
@@ -390,9 +403,10 @@ mod tests {
         let decoded = decode_certd_candidate_request(&encoded[..length]).unwrap();
         assert_eq!(decoded.identity, request.identity);
         assert_eq!(decoded.key_generation, request.key_generation);
+        assert_eq!(decoded.identity_generation, request.identity_generation);
         assert_eq!(decoded.order_url_digest, request.order_url_digest);
         assert_eq!(decoded.chain.chain_digest(), request.chain.chain_digest());
-        encoded[64] ^= 1;
+        encoded[72] ^= 1;
         assert_ne!(
             decode_certd_candidate_request(&encoded[..length])
                 .unwrap()
@@ -411,7 +425,8 @@ mod tests {
             directory_generation: 2,
             account_generation: 3,
             key_generation: 4,
-            policy_generation: 5,
+            identity_generation: 5,
+            policy_generation: 6,
             order_url_digest: [6; 32],
             chain_digest: [7; 32],
             leaf_spki_digest: [8; 32],
@@ -440,7 +455,8 @@ mod tests {
             directory_generation: 2,
             account_generation: 3,
             key_generation: 4,
-            policy_generation: 5,
+            identity_generation: 5,
+            policy_generation: 6,
             chain_digest: [6; 32],
             request_digest: [7; 32],
         };

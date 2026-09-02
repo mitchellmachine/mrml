@@ -72,6 +72,8 @@ struct CertdHostedState {
 
 struct StagedCandidate {
     chain: PemCertificateChain,
+    identity_generation: u64,
+    order_url_digest: [u8; 32],
     leaf_spki_digest: [u8; 32],
     not_before: u64,
     not_after: u64,
@@ -405,6 +407,8 @@ fn dispatch_channel_request(
             let mut candidate = state.candidate.lock().map_err(|_| ())?;
             if let Some(existing) = candidate.as_ref() {
                 if existing.chain.chain_digest() != verified.chain_digest
+                    || existing.identity_generation != request.identity_generation
+                    || existing.order_url_digest != request.order_url_digest
                     || existing.leaf_spki_digest != verified.leaf_spki_digest
                     || existing.not_before != verified.not_before
                     || existing.not_after != verified.not_after
@@ -420,12 +424,15 @@ fn dispatch_channel_request(
                     verified.not_before,
                     verified.not_after,
                     request.order_url_digest,
+                    request.identity_generation,
                     verified.ari_certificate_id,
                     now_unix,
                 )
                 .map_err(|_| ())?;
                 *candidate = Some(StagedCandidate {
                     chain: request.chain,
+                    identity_generation: request.identity_generation,
+                    order_url_digest: request.order_url_digest,
                     leaf_spki_digest: verified.leaf_spki_digest,
                     not_before: verified.not_before,
                     not_after: verified.not_after,
@@ -487,7 +494,11 @@ fn write_identity_snapshot(
     let name_length = u16::try_from(server_name.len()).map_err(|_| ())?;
     let mut offset = 0usize;
     append(output, &mut offset, IDENTITY_SNAPSHOT_MAGIC)?;
-    append(output, &mut offset, &candidate.key_generation.to_be_bytes())?;
+    append(
+        output,
+        &mut offset,
+        &candidate.identity_generation.to_be_bytes(),
+    )?;
     append(output, &mut offset, &name_length.to_be_bytes())?;
     append(output, &mut offset, server_name.as_bytes())?;
     append(output, &mut offset, &[request.chain.count() as u8])?;
@@ -520,7 +531,7 @@ fn sign_gitd_certificate_verify(
     let digest: [u8; 32] = payload[18..50].try_into().map_err(|_| ())?;
     let logical_request_id = u64::from_be_bytes(payload[50..58].try_into().map_err(|_| ())?);
     let (candidate, _) = load_active_candidate(state).map_err(|_| ())?;
-    if generation != candidate.key_generation
+    if generation != candidate.identity_generation
         || scheme != ECDSA_SECP256R1_SHA256
         || logical_request_id == 0
     {
@@ -562,13 +573,17 @@ fn write_generation_wait(
         return Err(());
     }
     let (active, _) = load_active_candidate(state).map_err(|_| ())?;
-    if active.key_generation < current_generation {
+    if active.identity_generation < current_generation {
         return Err(());
     }
-    let changed = u8::from(active.key_generation > current_generation);
+    let changed = u8::from(active.identity_generation > current_generation);
     let mut offset = 0usize;
     append(output, &mut offset, GENERATION_WAIT_RESPONSE_MAGIC)?;
-    append(output, &mut offset, &active.key_generation.to_be_bytes())?;
+    append(
+        output,
+        &mut offset,
+        &active.identity_generation.to_be_bytes(),
+    )?;
     append(output, &mut offset, &[changed])?;
     Ok(offset)
 }
@@ -616,6 +631,7 @@ fn load_active_candidate(
     if request.identity != candidate.identity
         || request.chain.chain_digest() != candidate.chain_digest
         || request.key_generation != candidate.key_generation
+        || request.identity_generation != candidate.identity_generation
         || request.policy_generation != candidate.policy_generation
     {
         return Err("active publication binding mismatch");
@@ -745,26 +761,10 @@ fn persist_staged_candidate(
     not_before: u64,
     not_after: u64,
     order_url_digest: [u8; 32],
+    identity_generation: u64,
     ari_certificate_id: mrml_acme::AriCertificateId,
     created_at_unix: u64,
 ) -> Result<(), &'static str> {
-    let candidate_state = CertdCandidateState {
-        stage: CertdCandidateStage::Staged,
-        identity: state.config.identity,
-        directory_generation: state.config.directory_generation,
-        account_generation: state.config.account_generation,
-        key_generation: state.config.key_generation,
-        policy_generation: state.config.policy_generation,
-        order_url_digest,
-        chain_digest,
-        leaf_spki_digest,
-        not_before,
-        not_after,
-        request_digest: Sha256::digest(request),
-        ari_certificate_id,
-        created_at_unix,
-        previous_identity_generation: 0,
-    };
     let object = DurableObjectId(state.config.identity);
     let mut durable_state = state
         .durable_state
@@ -775,9 +775,10 @@ fn persist_staged_candidate(
         .lock()
         .map_err(|_| "candidate authenticator poisoned")?;
     let mut existing_bytes = [0u8; mrml_certificate::MAX_DURABLE_RECORD_BYTES];
-    if let Some(length) = durable_state
+    let existing = durable_state
         .load_authoritative(DurableNamespace::PublicState, object, &mut existing_bytes)
-        .map_err(|_| "cannot load candidate state")?
+        .map_err(|_| "cannot load candidate state")?;
+    let (previous_record_generation, previous_identity_generation) = if let Some(length) = existing
     {
         let existing = DurableRecord::decode(&existing_bytes[..length], &mut *authenticator)
             .map_err(|_| "cannot authenticate candidate state")?;
@@ -786,17 +787,54 @@ fn persist_staged_candidate(
         }
         let decoded = CertdCandidateState::decode(existing.payload())
             .map_err(|_| "cannot decode candidate state")?;
-        let mut comparable = decoded;
-        comparable.stage = CertdCandidateStage::Staged;
-        if comparable != candidate_state {
+        let request_digest = Sha256::digest(request);
+        if decoded.request_digest == request_digest {
+            if decoded.identity_generation != identity_generation
+                || decoded.chain_digest != chain_digest
+                || decoded.order_url_digest != order_url_digest
+            {
+                return Err("candidate request digest binding mismatch");
+            }
+            let file = read_owned_publication(CANDIDATE_PATH)?;
+            if Sha256::digest(&file) != request_digest || file != request {
+                return Err("candidate publication substitution detected");
+            }
+            return Ok(());
+        }
+        if decoded.stage != CertdCandidateStage::Active
+            || identity_generation
+                != decoded
+                    .identity_generation
+                    .checked_add(1)
+                    .ok_or("identity generation exhausted")?
+        {
             return Err("different durable candidate already exists");
         }
-        let file = read_owned_publication(CANDIDATE_PATH)?;
-        if Sha256::digest(&file) != candidate_state.request_digest || file != request {
-            return Err("candidate publication substitution detected");
+        (existing.generation, decoded.identity_generation)
+    } else {
+        if identity_generation != state.config.key_generation {
+            return Err("initial identity generation mismatch");
         }
-        return Ok(());
-    }
+        (0, 0)
+    };
+    let candidate_state = CertdCandidateState {
+        stage: CertdCandidateStage::Staged,
+        identity: state.config.identity,
+        directory_generation: state.config.directory_generation,
+        account_generation: state.config.account_generation,
+        key_generation: state.config.key_generation,
+        identity_generation,
+        policy_generation: state.config.policy_generation,
+        order_url_digest,
+        chain_digest,
+        leaf_spki_digest,
+        not_before,
+        not_after,
+        request_digest: Sha256::digest(request),
+        ari_certificate_id,
+        created_at_unix,
+        previous_identity_generation,
+    };
     write_candidate_file(request)?;
     let mut payload = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
     let length = candidate_state
@@ -806,7 +844,7 @@ fn persist_staged_candidate(
         DurableNamespace::PublicState,
         DurableRecordKind::Certificate,
         object,
-        0,
+        previous_record_generation,
         &payload[..length],
         &mut *authenticator,
     )
@@ -879,6 +917,7 @@ fn activate_staged_candidate(
         || candidate.directory_generation != request.directory_generation
         || candidate.account_generation != request.account_generation
         || candidate.key_generation != request.key_generation
+        || candidate.identity_generation != request.identity_generation
         || candidate.policy_generation != request.policy_generation
         || candidate.chain_digest != request.chain_digest
         || candidate.request_digest != request.request_digest
@@ -897,7 +936,7 @@ fn activate_staged_candidate(
             Err("active publication substitution detected")
         };
     }
-    write_active_publication(&publication, candidate.key_generation)?;
+    write_active_publication(&publication, candidate.identity_generation)?;
     candidate.stage = CertdCandidateStage::Active;
     let mut payload = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
     let payload_length = candidate
@@ -918,6 +957,10 @@ fn activate_staged_candidate(
     durable_state
         .commit(prepared)
         .map_err(|_| "active candidate state commit uncertain")?;
+    *state
+        .candidate
+        .lock()
+        .map_err(|_| "candidate memory state poisoned")? = None;
     Ok(())
 }
 

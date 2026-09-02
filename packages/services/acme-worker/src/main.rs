@@ -302,6 +302,8 @@ fn retrieve_and_stage_certificate(
     )
     .map_err(|_| "cannot retrieve bound ACME certificate chain")?;
     let chain_digest = chain.chain_digest();
+    let order_url_digest = mrml_crypto::Sha256::digest(order.order_url.as_str().as_bytes());
+    let identity_generation = next_identity_generation(config, order_url_digest, signer)?;
     let mut request = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
     let request_length = encode_certd_candidate_request(
         &CertdCandidateRequest {
@@ -309,8 +311,9 @@ fn retrieve_and_stage_certificate(
             directory_generation: config.directory_generation,
             account_generation: config.account_generation,
             key_generation: config.key_generation,
+            identity_generation,
             policy_generation: config.policy_generation,
-            order_url_digest: mrml_crypto::Sha256::digest(order.order_url.as_str().as_bytes()),
+            order_url_digest,
             profile: config.certificate_profile,
             chain,
         },
@@ -337,6 +340,7 @@ fn retrieve_and_stage_certificate(
         directory_generation: config.directory_generation,
         account_generation: config.account_generation,
         key_generation: config.key_generation,
+        identity_generation,
         policy_generation: config.policy_generation,
         chain_digest,
         request_digest: mrml_crypto::Sha256::digest(&request[..request_length]),
@@ -361,6 +365,45 @@ fn retrieve_and_stage_certificate(
         return Err("certd activation receipt mismatch");
     }
     Ok(chain_digest)
+}
+
+fn next_identity_generation(
+    config: &AcmedConfig,
+    order_url_digest: [u8; 32],
+    signer: &mut CertdEnvelopeWriter<'_>,
+) -> Result<u64, &'static str> {
+    let mut status = [0u8; mrml_certificate::CERTD_CANDIDATE_STATE_BYTES];
+    let result = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::GetCertificateLifecycleStatus,
+        &[],
+        &mut status,
+    );
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    let Ok(length) = result else {
+        return Ok(config.key_generation);
+    };
+    let active = CertdCandidateState::decode(&status[..length])
+        .map_err(|_| "invalid certd lifecycle status")?;
+    if active.stage != CertdCandidateStage::Active
+        || active.identity != config.identity
+        || active.key_generation != config.key_generation
+        || active.policy_generation != config.policy_generation
+    {
+        return Err("certd lifecycle status policy mismatch");
+    }
+    if active.order_url_digest == order_url_digest {
+        Ok(active.identity_generation)
+    } else {
+        active
+            .identity_generation
+            .checked_add(1)
+            .ok_or("identity generation exhausted")
+    }
 }
 
 fn cleanup_dns_challenges(
@@ -479,7 +522,7 @@ fn persist_renewal_schedule(
         }
         let schedule = RenewalSchedule::decode(durable.payload())
             .map_err(|_| "invalid durable renewal schedule")?;
-        if schedule.identity_generation == active.key_generation
+        if schedule.identity_generation == active.identity_generation
             && schedule.certificate_id == active.ari_certificate_id
             && schedule.not_after_unix == active.not_after
         {
@@ -491,7 +534,7 @@ fn persist_renewal_schedule(
             store_renewal_schedule(object, durable.generation, refreshed, state, authenticator)?;
             return Ok(refreshed);
         }
-        if schedule.identity_generation >= active.key_generation {
+        if schedule.identity_generation >= active.identity_generation {
             return Err("renewal schedule generation rollback rejected");
         }
         durable.generation
@@ -500,7 +543,7 @@ fn persist_renewal_schedule(
     };
     let schedule = RenewalSchedule::fallback_for_certificate(
         TlsIdentityId(config.identity),
-        active.key_generation,
+        active.identity_generation,
         active.ari_certificate_id,
         active.not_before,
         active.not_after,
@@ -545,7 +588,7 @@ fn refresh_renewal_schedule(
         ) {
             return RenewalSchedule::from_ari_for_certificate(
                 TlsIdentityId(config.identity),
-                active.key_generation,
+                active.identity_generation,
                 active.ari_certificate_id,
                 active.not_after,
                 info,
