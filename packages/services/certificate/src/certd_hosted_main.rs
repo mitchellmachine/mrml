@@ -55,7 +55,10 @@ const IDENTITY_REQUEST_MAGIC: &[u8; 8] = b"MRGIDR01";
 const IDENTITY_SNAPSHOT_MAGIC: &[u8; 8] = b"MRGIDS01";
 const CERTIFICATE_VERIFY_REQUEST_MAGIC: &[u8; 8] = b"MRGSGN01";
 const CERTIFICATE_VERIFY_RESPONSE_MAGIC: &[u8; 8] = b"MRGSGS01";
+const GENERATION_WAIT_REQUEST_MAGIC: &[u8; 8] = b"MRGWAI01";
+const GENERATION_WAIT_RESPONSE_MAGIC: &[u8; 8] = b"MRGWAS01";
 const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
+const MAX_GENERATION_WAIT_MILLISECONDS: u32 = 30_000;
 
 struct CertdHostedState {
     config: CertdConfig,
@@ -185,9 +188,13 @@ fn serve_channel(
         let operation = request.operation;
         let request_id = request.request_id;
         let mut response_payload = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
-        let Ok(response_length) =
-            dispatch_channel_request(&state, operation, request.payload, &mut response_payload)
-        else {
+        let Ok(response_length) = dispatch_channel_request(
+            &state,
+            role,
+            operation,
+            request.payload,
+            &mut response_payload,
+        ) else {
             continue;
         };
         let response = CertdChannelRequest {
@@ -206,6 +213,7 @@ fn serve_channel(
 
 fn dispatch_channel_request(
     state: &CertdHostedState,
+    role: CertdChannelRole,
     operation: CertdChannelOperation,
     payload: &[u8],
     output: &mut [u8],
@@ -217,6 +225,7 @@ fn dispatch_channel_request(
                 || state.account_key.is_poisoned()
                 || state.certificate_key.is_poisoned()
                 || output.len() < 5
+                || (role == CertdChannelRole::Gitd && load_active_candidate(state).is_err())
             {
                 return Err(());
             }
@@ -228,6 +237,9 @@ fn dispatch_channel_request(
         }
         CertdChannelOperation::SignTls13CertificateVerify => {
             sign_gitd_certificate_verify(state, payload, output)
+        }
+        CertdChannelOperation::WaitForIdentityGeneration => {
+            write_generation_wait(state, payload, output)
         }
         CertdChannelOperation::GetAcmeAccountPublicIdentity => {
             let request = decode_certd_account_key_request(payload).map_err(|_| ())?;
@@ -524,6 +536,34 @@ fn sign_gitd_certificate_verify(
     Ok(offset)
 }
 
+fn write_generation_wait(
+    state: &CertdHostedState,
+    payload: &[u8],
+    output: &mut [u8],
+) -> Result<usize, ()> {
+    if payload.len() != 20 || payload.get(..8) != Some(GENERATION_WAIT_REQUEST_MAGIC) {
+        return Err(());
+    }
+    let current_generation = u64::from_be_bytes(payload[8..16].try_into().map_err(|_| ())?);
+    let timeout_milliseconds = u32::from_be_bytes(payload[16..20].try_into().map_err(|_| ())?);
+    if current_generation == 0
+        || timeout_milliseconds == 0
+        || timeout_milliseconds > MAX_GENERATION_WAIT_MILLISECONDS
+    {
+        return Err(());
+    }
+    let (active, _) = load_active_candidate(state).map_err(|_| ())?;
+    if active.key_generation < current_generation {
+        return Err(());
+    }
+    let changed = u8::from(active.key_generation > current_generation);
+    let mut offset = 0usize;
+    append(output, &mut offset, GENERATION_WAIT_RESPONSE_MAGIC)?;
+    append(output, &mut offset, &active.key_generation.to_be_bytes())?;
+    append(output, &mut offset, &[changed])?;
+    Ok(offset)
+}
+
 fn load_active_candidate(
     state: &CertdHostedState,
 ) -> Result<(CertdCandidateState, mrml_certificate::CertdCandidateRequest), &'static str> {
@@ -550,6 +590,13 @@ fn load_active_candidate(
         || candidate.stage != CertdCandidateStage::Active
     {
         return Err("certificate is not active");
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "system time is before the Unix epoch")?
+        .as_secs();
+    if now < candidate.not_before || now >= candidate.not_after {
+        return Err("active certificate is outside its validity interval");
     }
     let bytes = read_owned_publication(ACTIVE_PATH)?;
     if Sha256::digest(&bytes) != candidate.request_digest {
