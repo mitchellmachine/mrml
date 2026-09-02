@@ -46,6 +46,13 @@ for evidence in source.commit metadata configured-limits process.tsv docker-stat
   install -m 0444 "$GIT_STREAMING_EVIDENCE/$evidence" "$payload/evidence/streaming/$evidence"
 done
 
+# Cosign v3 uses an explicit service configuration. The offline blob profile
+# deliberately contains no Fulcio, OIDC, Rekor, or timestamp service, so the
+# private key operation cannot initiate a transparency-service request.
+cosign signing-config create \
+  --no-default-fulcio --no-default-oidc --no-default-rekor --no-default-tsa \
+  --out "$payload/signatures/offline-signing-config.json"
+
 target/release/mrml manifest lock --check
 target/release/mrml manifest check
 target/release/mrml test org.mrml.service.git-authority --target linux
@@ -78,7 +85,8 @@ for image in git-authority gitd; do
   # equivalent and binds the SBOM to the bytes that are actually distributed.
   syft "docker-archive:$payload/images/$image.tar" \
     -o "spdx-json=$payload/sbom/$image.spdx.json"
-  cosign sign-blob --key "$COSIGN_KEY" --tlog-upload=false \
+  cosign sign-blob --key "$COSIGN_KEY" \
+    --signing-config "$payload/signatures/offline-signing-config.json" \
     --bundle "$payload/signatures/$image.cosign.bundle" "$payload/images/$image.tar"
 done
 {

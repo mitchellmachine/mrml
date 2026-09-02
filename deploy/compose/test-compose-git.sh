@@ -81,6 +81,9 @@ require 'run -T --rm --no-deps' deploy/compose/token-git.sh
 require 'recovery administration requires stopped Gitd' deploy/compose/recovery-git.sh
 require 'recover-safe' deploy/compose/recovery-git.sh
 require 'GIT_STREAMING_EVIDENCE' deploy/compose/build-offline-git-bundle.sh
+require 'docker-archive:$payload/images/$image.tar' deploy/compose/build-offline-git-bundle.sh
+require 'offline-signing-config.json' deploy/compose/build-offline-git-bundle.sh
+require '--insecure-ignore-tlog' deploy/compose/verify-offline-git-bundle.sh
 require 'evidence/streaming' deploy/compose/verify-offline-git-bundle.sh
 
 echo "Git Compose static invariants PASS"
