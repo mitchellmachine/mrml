@@ -16,8 +16,8 @@ use mrml_certificate::{
     decode_certd_tls_key_request, encode_certd_channel_request, encode_certd_tls_key_response,
     parse_certd_config, write_constrained_acme_jws, write_pkcs10_csr,
 };
-use mrml_crypto::ecdsa_p256_digest_verify_raw;
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
+use mrml_crypto::{ecdsa_p256_digest_verify_raw, encode_der_signature};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
@@ -51,6 +51,11 @@ const GITD_CAPABILITY: &str = "/run/secrets/certd-gitd.cap";
 const ACMED_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
 const LINUX_O_NOFOLLOW: i32 = 0x20_000;
+const IDENTITY_REQUEST_MAGIC: &[u8; 8] = b"MRGIDR01";
+const IDENTITY_SNAPSHOT_MAGIC: &[u8; 8] = b"MRGIDS01";
+const CERTIFICATE_VERIFY_REQUEST_MAGIC: &[u8; 8] = b"MRGSGN01";
+const CERTIFICATE_VERIFY_RESPONSE_MAGIC: &[u8; 8] = b"MRGSGS01";
+const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
 
 struct CertdHostedState {
     config: CertdConfig,
@@ -217,6 +222,12 @@ fn dispatch_channel_request(
             }
             output[..5].copy_from_slice(b"ready");
             Ok(5)
+        }
+        CertdChannelOperation::GetIdentitySnapshot => {
+            write_identity_snapshot(state, payload, output)
+        }
+        CertdChannelOperation::SignTls13CertificateVerify => {
+            sign_gitd_certificate_verify(state, payload, output)
         }
         CertdChannelOperation::GetAcmeAccountPublicIdentity => {
             let request = decode_certd_account_key_request(payload).map_err(|_| ())?;
@@ -431,6 +442,153 @@ fn dispatch_channel_request(
         }
         _ => Err(()),
     }
+}
+
+fn write_identity_snapshot(
+    state: &CertdHostedState,
+    payload: &[u8],
+    output: &mut [u8],
+) -> Result<usize, ()> {
+    if payload.len() < 10 || payload.get(..8) != Some(IDENTITY_REQUEST_MAGIC) {
+        return Err(());
+    }
+    let name_length = usize::from(u16::from_be_bytes(
+        payload[8..10].try_into().map_err(|_| ())?,
+    ));
+    if payload.len() != 10usize.checked_add(name_length).ok_or(())? {
+        return Err(());
+    }
+    let server_name = core::str::from_utf8(&payload[10..]).map_err(|_| ())?;
+    if !configured_server_name(state.config, server_name) {
+        return Err(());
+    }
+    let (candidate, request) = load_active_candidate(state).map_err(|_| ())?;
+    let name_length = u16::try_from(server_name.len()).map_err(|_| ())?;
+    let mut offset = 0usize;
+    append(output, &mut offset, IDENTITY_SNAPSHOT_MAGIC)?;
+    append(output, &mut offset, &candidate.key_generation.to_be_bytes())?;
+    append(output, &mut offset, &name_length.to_be_bytes())?;
+    append(output, &mut offset, server_name.as_bytes())?;
+    append(output, &mut offset, &[request.chain.count() as u8])?;
+    for index in 0..request.chain.count() {
+        let certificate = request.chain.certificate(index).ok_or(())?;
+        let length = u32::try_from(certificate.len()).map_err(|_| ())?;
+        append(output, &mut offset, &length.to_be_bytes())?;
+        append(output, &mut offset, certificate)?;
+    }
+    append(output, &mut offset, &candidate.leaf_spki_digest)?;
+    append(output, &mut offset, &candidate.not_before.to_be_bytes())?;
+    append(output, &mut offset, &candidate.not_after.to_be_bytes())?;
+    append(output, &mut offset, &[1])?;
+    append(output, &mut offset, &ECDSA_SECP256R1_SHA256.to_be_bytes())?;
+    append(output, &mut offset, &candidate.chain_digest)?;
+    append(output, &mut offset, &[1])?;
+    Ok(offset)
+}
+
+fn sign_gitd_certificate_verify(
+    state: &CertdHostedState,
+    payload: &[u8],
+    output: &mut [u8],
+) -> Result<usize, ()> {
+    if payload.len() != 58 || payload.get(..8) != Some(CERTIFICATE_VERIFY_REQUEST_MAGIC) {
+        return Err(());
+    }
+    let generation = u64::from_be_bytes(payload[8..16].try_into().map_err(|_| ())?);
+    let scheme = u16::from_be_bytes(payload[16..18].try_into().map_err(|_| ())?);
+    let digest: [u8; 32] = payload[18..50].try_into().map_err(|_| ())?;
+    let logical_request_id = u64::from_be_bytes(payload[50..58].try_into().map_err(|_| ())?);
+    let (candidate, _) = load_active_candidate(state).map_err(|_| ())?;
+    if generation != candidate.key_generation
+        || scheme != ECDSA_SECP256R1_SHA256
+        || logical_request_id == 0
+    {
+        return Err(());
+    }
+    let mut certificate = state.certificate_key.lock().map_err(|_| ())?;
+    let approved =
+        mrml_certificate::ApprovedTls13CertificateVerify::new(digest, certificate.route());
+    let signature = certificate
+        .sign_tls13_certificate_verify(&approved)
+        .map_err(|_| ())?;
+    let mut der = [0u8; 72];
+    let der = encode_der_signature(signature.as_bytes(), &mut der).map_err(|_| ())?;
+    let der_length = u16::try_from(der.len()).map_err(|_| ())?;
+    let mut offset = 0usize;
+    append(output, &mut offset, CERTIFICATE_VERIFY_RESPONSE_MAGIC)?;
+    append(output, &mut offset, &generation.to_be_bytes())?;
+    append(output, &mut offset, &scheme.to_be_bytes())?;
+    append(output, &mut offset, &logical_request_id.to_be_bytes())?;
+    append(output, &mut offset, &der_length.to_be_bytes())?;
+    append(output, &mut offset, der)?;
+    Ok(offset)
+}
+
+fn load_active_candidate(
+    state: &CertdHostedState,
+) -> Result<(CertdCandidateState, mrml_certificate::CertdCandidateRequest), &'static str> {
+    let object = DurableObjectId(state.config.identity);
+    let durable_state = state
+        .durable_state
+        .lock()
+        .map_err(|_| "candidate state poisoned")?;
+    let mut authenticator = state
+        .durable_authenticator
+        .lock()
+        .map_err(|_| "candidate authenticator poisoned")?;
+    let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_RECORD_BYTES];
+    let length = durable_state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load active state")?
+        .ok_or("active state is absent")?;
+    let record = DurableRecord::decode(&encoded[..length], &mut *authenticator)
+        .map_err(|_| "cannot authenticate active state")?;
+    let candidate =
+        CertdCandidateState::decode(record.payload()).map_err(|_| "cannot decode active state")?;
+    if record.kind != DurableRecordKind::Certificate
+        || record.object != object
+        || candidate.stage != CertdCandidateStage::Active
+    {
+        return Err("certificate is not active");
+    }
+    let bytes = read_owned_publication(ACTIVE_PATH)?;
+    if Sha256::digest(&bytes) != candidate.request_digest {
+        return Err("active publication substitution detected");
+    }
+    let request =
+        decode_certd_candidate_request(&bytes).map_err(|_| "cannot decode active publication")?;
+    if request.identity != candidate.identity
+        || request.chain.chain_digest() != candidate.chain_digest
+        || request.key_generation != candidate.key_generation
+        || request.policy_generation != candidate.policy_generation
+    {
+        return Err("active publication binding mismatch");
+    }
+    Ok((candidate, request))
+}
+
+fn configured_server_name(config: CertdConfig, server_name: &str) -> bool {
+    config.identifiers.iter().flatten().any(|identifier| {
+        let configured = identifier.as_str();
+        configured == server_name
+            || configured.strip_prefix("*.").is_some_and(|suffix| {
+                server_name.strip_suffix(suffix).is_some_and(|prefix| {
+                    !prefix.is_empty()
+                        && prefix.ends_with('.')
+                        && !prefix[..prefix.len() - 1].contains('.')
+                })
+            })
+    })
+}
+
+fn append(output: &mut [u8], offset: &mut usize, bytes: &[u8]) -> Result<(), ()> {
+    let end = offset.checked_add(bytes.len()).ok_or(())?;
+    output
+        .get_mut(*offset..end)
+        .ok_or(())?
+        .copy_from_slice(bytes);
+    *offset = end;
+    Ok(())
 }
 
 fn require_account_request(config: CertdConfig, request: CertdAccountKeyRequest) -> Result<(), ()> {
