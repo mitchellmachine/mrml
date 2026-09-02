@@ -1,4 +1,4 @@
-use mrml_runtime::{SocketAddress, UdpSocket, Vector};
+use mrml_runtime::{Shared, SocketAddress, UdpSocket, Vector};
 
 use crate::quic::{
     PacketReceiveState, ReceivedPacket, initial_token, initial_version_and_destination_id,
@@ -98,7 +98,7 @@ struct RetiredConnectionId {
 /// change as migration. It labels it as a candidate for the connection's
 /// existing authenticated PATH_CHALLENGE/PATH_RESPONSE state machine.
 pub struct QuicServerEndpoint {
-    socket: Option<UdpSocket>,
+    socket: Option<Shared<UdpSocket>>,
     connections: Vector<EndpointConnection>,
     connection_ids: Vector<ConnectionIdEntry>,
     retired_ids: Vector<RetiredConnectionId>,
@@ -135,7 +135,7 @@ impl QuicServerEndpoint {
             return Err(QuicError::Limit);
         }
         Ok(Self {
-            socket: Some(socket),
+            socket: Some(Shared::new(socket)),
             connections: Vector::new(),
             connection_ids: Vector::new(),
             retired_ids: Vector::new(),

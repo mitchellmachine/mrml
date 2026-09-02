@@ -1,4 +1,4 @@
-use mrml_runtime::{Instant, SocketAddress, TcpStream, UdpSocket, Vector};
+use mrml_runtime::{Instant, Shared, SocketAddress, TcpStream, UdpSocket, Vector};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
 use crate::quic::{
@@ -133,7 +133,7 @@ fn handshake_message(bytes: &[u8], at: usize) -> Result<Option<&[u8]>, QuicError
 }
 
 pub struct QuicConnection {
-    socket: UdpSocket,
+    socket: Shared<UdpSocket>,
     peer: SocketAddress,
     local_id: Vector<u8>,
     peer_id: Vector<u8>,
@@ -514,7 +514,9 @@ impl QuicClientConnection {
         } else {
             [0, 0, 0, 0]
         };
-        let socket = UdpSocket::bind(bind_ip, 0).map_err(|_| QuicError::SocketBind)?;
+        let socket = Shared::new(
+            UdpSocket::bind(bind_ip, 0).map_err(|_| QuicError::SocketBind)?,
+        );
         socket
             .set_read_timeout_millis(30_000)
             .map_err(|_| QuicError::SocketTimeout)?;
@@ -728,12 +730,12 @@ impl QuicClientConnection {
 }
 
 pub struct QuicServerListener {
-    socket: UdpSocket,
+    socket: Shared<UdpSocket>,
     parameters: QuicTransportParameters,
 }
 impl QuicServerListener {
     pub fn bind(ip: [u8; 4], port: u16) -> Result<Self, QuicError> {
-        let socket = UdpSocket::bind(ip, port).map_err(|_| QuicError::Io)?;
+        let socket = Shared::new(UdpSocket::bind(ip, port).map_err(|_| QuicError::Io)?);
         socket
             .set_read_timeout_millis(30_000)
             .map_err(|_| QuicError::Io)?;
