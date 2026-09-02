@@ -4,9 +4,11 @@
 
 use mrml_error::{Context, Result, anyhow};
 use mrml_git::{
-    Cli, GitSignatureFormat, MergeOutcome, NativeChangeKind, ObjectFormat, OpenPgpDigestAlgorithm,
-    OpenPgpFingerprint, OpenPgpPublicKey, OpenPgpSigningKey, OpenPgpVerificationPolicy,
-    RebaseOutcome, Repository, check_ssh, fetch_ssh, inspect_ssh, parse_public_key_ascii,
+    Cli, GitSignatureFormat, HttpsCredentialError, HttpsCredentialProvider, HttpsCredentialScope,
+    HttpsRemote, HttpsTransport, MergeOutcome, NativeChangeKind, ObjectFormat,
+    OpenPgpDigestAlgorithm, OpenPgpFingerprint, OpenPgpPublicKey, OpenPgpSigningKey,
+    OpenPgpVerificationPolicy, RebaseOutcome, Repository, ScopedBearerCredential, check_ssh,
+    fetch_https, fetch_https_authenticated, fetch_ssh, inspect_ssh, parse_public_key_ascii,
     parse_tree_with_format, push_ssh, sign_git_payload_via_interface, validate_positional,
     verify_detached_ascii,
 };
@@ -15,7 +17,7 @@ use mrml_interface_detached_signing_v1::{
 };
 use mrml_runtime::{
     File, Text, Vector, join_path, mrml_format as format, mrml_println as println, path_is_file,
-    read_file_bounded, read_file_text_bounded,
+    read_file_bounded, read_file_text_bounded, read_stdin_secret_bounded,
 };
 use mrml_ssh::{
     RsaPrivateKey, SshRemote, encode_rsa_public_key, parse_rsa_private_pem, parse_rsa_public_line,
@@ -25,6 +27,44 @@ use mrml_terminal_style::Colorize;
 const MRML_OPENPGP_FINGERPRINT: &str = "6EE75495B0427A4F3F97BA1C14D70434990F1CA9";
 const MRML_OPENPGP_PUBLIC_KEY: &str = "docs/keys/mrml-commit-signing-key.asc";
 const MRML_OPENPGP_KEY_NOT_AFTER: u64 = 1_851_111_680;
+const MAX_HTTPS_PACK_BYTES: u64 = 1024 * 1024 * 1024;
+
+struct StandardInputBearerProvider {
+    token: Vector<u8>,
+}
+
+impl StandardInputBearerProvider {
+    fn read() -> Result<Self> {
+        let mut token = read_stdin_secret_bounded(66)
+            .map_err(|_| anyhow!("cannot read bounded HTTPS credential from standard input"))?;
+        if token.last() == Some(&b'\n') {
+            token.pop();
+        }
+        if token.last() == Some(&b'\r') {
+            token.pop();
+        }
+        if token.len() != 64 {
+            erase_secret(&mut token);
+            return Err(anyhow!("HTTPS credential from standard input is invalid"));
+        }
+        Ok(Self { token })
+    }
+}
+
+impl HttpsCredentialProvider for StandardInputBearerProvider {
+    fn credential(
+        &mut self,
+        scope: &HttpsCredentialScope,
+    ) -> core::result::Result<ScopedBearerCredential, HttpsCredentialError> {
+        ScopedBearerCredential::from_provider_token(scope.clone(), &self.token)
+    }
+}
+
+impl Drop for StandardInputBearerProvider {
+    fn drop(&mut self) {
+        erase_secret(&mut self.token);
+    }
+}
 
 fn native_repository(repository: Option<&str>) -> Result<Repository> {
     Repository::discover(repository.unwrap_or(".")).map_err(|error| anyhow!("{}", error))
@@ -176,6 +216,65 @@ fn ssh_remote(repository: Option<&str>, name: &str) -> Result<(Text, SshRemote)>
     let parsed =
         SshRemote::parse(&url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
     Ok((url, parsed))
+}
+
+fn remote_url(repository: &Repository, name: &str) -> Result<Text> {
+    repository
+        .remotes()
+        .map_err(|error| anyhow!("{}", error))?
+        .into_iter()
+        .find(|(remote, _)| remote == name)
+        .map(|(_, url)| url)
+        .ok_or_else(|| anyhow!("remote '{}' does not exist", name))
+}
+
+fn parse_https_transport(value: Option<&str>) -> Result<HttpsTransport> {
+    match value {
+        None | Some("h2") => Ok(HttpsTransport::Http2),
+        Some("h3-v2") => Ok(HttpsTransport::Http3V2),
+        Some(_) => Err(anyhow!("unsupported native HTTPS transport")),
+    }
+}
+
+fn repository_https_transport(repository: &Repository) -> Result<HttpsTransport> {
+    let configured = repository
+        .config_value("http", "transport")
+        .map_err(|error| anyhow!("{}", error))?;
+    parse_https_transport(configured.as_deref())
+}
+
+fn repository_https_provider(repository: &Repository) -> Result<Option<Text>> {
+    let provider = repository
+        .config_value("http", "credentialProvider")
+        .map_err(|error| anyhow!("{}", error))?;
+    match provider.as_deref() {
+        None => Ok(None),
+        Some("standard-input") => Ok(provider),
+        Some(_) => Err(anyhow!("HTTPS credential provider is unavailable")),
+    }
+}
+
+fn fetch_configured_https(
+    repository: &Repository,
+    remote_name: &str,
+    remote: &HttpsRemote,
+) -> Result<mrml_git::FetchResult> {
+    match repository_https_provider(repository)?.as_deref() {
+        None => fetch_https(repository, remote_name, remote, MAX_HTTPS_PACK_BYTES)
+            .map_err(|error| anyhow!("{}", error)),
+        Some("standard-input") => {
+            let mut provider = StandardInputBearerProvider::read()?;
+            fetch_https_authenticated(
+                repository,
+                remote_name,
+                remote,
+                MAX_HTTPS_PACK_BYTES,
+                &mut provider,
+            )
+            .map_err(|error| anyhow!("{}", error))
+        }
+        Some(_) => Err(anyhow!("HTTPS credential provider is unavailable")),
+    }
 }
 
 fn print_ssh_remote(name: &str, url: &str, remote: &SshRemote) {
@@ -741,10 +840,17 @@ fn repository_result_with_detail<T>(
 
 fn native_fetch(repository: Option<&str>, name: &str) -> Result<()> {
     let repo = native_repository(repository)?;
-    let (_, remote) = ssh_remote(repository, name)?;
-    let (key, host) = ssh_credentials(&repo)?;
-    let result =
-        fetch_ssh(&repo, name, &remote, &key, &host).map_err(|error| anyhow!("{}", error))?;
+    let url = remote_url(&repo, name)?;
+    let result = if url.starts_with("https://") {
+        let remote = HttpsRemote::parse(&url, repository_https_transport(&repo)?)
+            .map_err(|error| anyhow!("invalid HTTPS remote: {}", error))?;
+        fetch_configured_https(&repo, name, &remote)?
+    } else {
+        let remote =
+            SshRemote::parse(&url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
+        let (key, host) = ssh_credentials(&repo)?;
+        fetch_ssh(&repo, name, &remote, &key, &host).map_err(|error| anyhow!("{}", error))?
+    };
     println!(
         "Fetched {} object(s) and {} branch ref(s) from {}",
         result.objects.len(),
@@ -753,6 +859,111 @@ fn native_fetch(repository: Option<&str>, name: &str) -> Result<()> {
     );
     Ok(())
 }
+
+fn finish_clone(
+    repo: &Repository,
+    url: &str,
+    target: &str,
+    result: &mrml_git::FetchResult,
+) -> Result<()> {
+    let branch = result
+        .default_branch
+        .as_ref()
+        .and_then(|name| result.branches.iter().find(|(branch, _)| branch == name))
+        .or_else(|| result.branches.iter().find(|(branch, _)| branch == "main"))
+        .or_else(|| {
+            result
+                .branches
+                .iter()
+                .find(|(branch, _)| branch == "master")
+        })
+        .or_else(|| result.branches.first());
+    if let Some(branch) = branch {
+        repo.checkout_branch_at(&branch.0, branch.1)
+            .map_err(|error| anyhow!("{}", error))?;
+        repo.set_upstream(&mrml_runtime::mrml_format!("origin/{}", branch.0))
+            .map_err(|error| anyhow!("{}", error))?;
+        println!("Cloned {} into {} on branch {}", url, target, branch.0);
+    } else {
+        println!("Cloned empty repository {} into {}", url, target);
+    }
+    Ok(())
+}
+
+fn native_clone(url: &str, explicit_target: Option<&str>) -> Result<()> {
+    if url.starts_with("https://") {
+        let transport_setting = mrml_runtime::environment_variable("MRML_GIT_HTTPS_TRANSPORT");
+        let transport = parse_https_transport(transport_setting.as_deref())?;
+        let remote = HttpsRemote::parse(url, transport)
+            .map_err(|error| anyhow!("invalid HTTPS remote: {}", error))?;
+        let target: Text = explicit_target.map(Into::into).unwrap_or_else(|| {
+            remote
+                .repository_path
+                .rsplit('/')
+                .next()
+                .unwrap_or("repository.git")
+                .trim_end_matches(".git")
+                .into()
+        });
+        let provider = mrml_runtime::environment_variable("MRML_GIT_CREDENTIAL_PROVIDER");
+        if provider
+            .as_deref()
+            .is_some_and(|value| value != "standard-input")
+        {
+            return Err(anyhow!("HTTPS credential provider is unavailable"));
+        }
+        let repo = Repository::init_with_format(&target, ObjectFormat::Sha256)
+            .map_err(|error| anyhow!("{}", error))?;
+        repo.set_remote("origin", url, false)
+            .map_err(|error| anyhow!("{}", error))?;
+        repo.set_config_value(
+            "http",
+            "transport",
+            match transport {
+                HttpsTransport::Http2 => "h2",
+                HttpsTransport::Http3V2 => "h3-v2",
+            },
+        )
+        .map_err(|error| anyhow!("{}", error))?;
+        if provider.as_deref() == Some("standard-input") {
+            repo.set_config_value("http", "credentialProvider", "standard-input")
+                .map_err(|error| anyhow!("{}", error))?;
+        }
+        let result = fetch_configured_https(&repo, "origin", &remote)?;
+        return finish_clone(&repo, url, &target, &result);
+    }
+
+    let remote = SshRemote::parse(url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
+    let target: Text = explicit_target.map(Into::into).unwrap_or_else(|| {
+        remote
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or("repository")
+            .trim_end_matches(".git")
+            .into()
+    });
+    let private_path = mrml_runtime::environment_variable("MRML_GIT_SSH_KEY")
+        .ok_or_else(|| anyhow!("clone requires MRML_GIT_SSH_KEY"))?;
+    let host_path = mrml_runtime::environment_variable("MRML_GIT_SSH_HOST_KEY")
+        .ok_or_else(|| anyhow!("clone requires MRML_GIT_SSH_HOST_KEY"))?;
+    let (key, host) = ssh_credentials_paths(&private_path, &host_path)?;
+    let remote_info = inspect_ssh(&remote, &key, &host).map_err(|error| anyhow!("{}", error))?;
+    let repo = Repository::init_with_format(&target, remote_info.object_format)
+        .map_err(|error| anyhow!("{}", error))?;
+    repo.set_remote("origin", url, false)
+        .map_err(|error| anyhow!("{}", error))?;
+    repo.set_config_value("ssh", "credentialProvider", "development-key-file")
+        .map_err(|error| anyhow!("{}", error))?;
+    repo.set_config_value("ssh", "developmentPrivateKeyFile", &private_path)
+        .map_err(|error| anyhow!("{}", error))?;
+    repo.set_config_value("ssh", "hostKey", &host_path)
+        .map_err(|error| anyhow!("{}", error))?;
+    let result =
+        fetch_ssh(&repo, "origin", &remote, &key, &host).map_err(|error| anyhow!("{}", error))?;
+    finish_clone(&repo, url, &target, &result)
+}
+
 fn native_push(repository: Option<&str>, name: &str, branch: Option<&str>) -> Result<()> {
     let repo = native_repository(repository)?;
     let branch = branch
@@ -904,58 +1115,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
         }
         "clone" if matches!(tail.len(), 1 | 2) => {
             checked_positionals(tail)?;
-            let remote = SshRemote::parse(&tail[0])
-                .map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
-            let target = tail.get(1).cloned().unwrap_or_else(|| {
-                remote
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("repository")
-                    .trim_end_matches(".git")
-                    .into()
-            });
-            let private_path = mrml_runtime::environment_variable("MRML_GIT_SSH_KEY")
-                .ok_or_else(|| anyhow!("clone requires MRML_GIT_SSH_KEY"))?;
-            let host_path = mrml_runtime::environment_variable("MRML_GIT_SSH_HOST_KEY")
-                .ok_or_else(|| anyhow!("clone requires MRML_GIT_SSH_HOST_KEY"))?;
-            let (key, host) = ssh_credentials_paths(&private_path, &host_path)?;
-            let remote_info =
-                inspect_ssh(&remote, &key, &host).map_err(|error| anyhow!("{}", error))?;
-            let repo = Repository::init_with_format(&target, remote_info.object_format)
-                .map_err(|error| anyhow!("{}", error))?;
-            repo.set_remote("origin", &tail[0], false)
-                .map_err(|error| anyhow!("{}", error))?;
-            repo.set_config_value("ssh", "credentialProvider", "development-key-file")
-                .map_err(|error| anyhow!("{}", error))?;
-            repo.set_config_value("ssh", "developmentPrivateKeyFile", &private_path)
-                .map_err(|error| anyhow!("{}", error))?;
-            repo.set_config_value("ssh", "hostKey", &host_path)
-                .map_err(|error| anyhow!("{}", error))?;
-            let result = fetch_ssh(&repo, "origin", &remote, &key, &host)
-                .map_err(|error| anyhow!("{}", error))?;
-            let branch = result
-                .default_branch
-                .as_ref()
-                .and_then(|name| result.branches.iter().find(|(branch, _)| branch == name))
-                .or_else(|| result.branches.iter().find(|(branch, _)| branch == "main"))
-                .or_else(|| {
-                    result
-                        .branches
-                        .iter()
-                        .find(|(branch, _)| branch == "master")
-                })
-                .or_else(|| result.branches.first());
-            if let Some(branch) = branch {
-                repo.checkout_branch_at(&branch.0, branch.1)
-                    .map_err(|error| anyhow!("{}", error))?;
-                repo.set_upstream(&mrml_runtime::mrml_format!("origin/{}", branch.0))
-                    .map_err(|error| anyhow!("{}", error))?;
-                println!("Cloned {} into {} on branch {}", tail[0], target, branch.0);
-            } else {
-                println!("Cloned empty repository {} into {}", tail[0], target);
-            }
-            Ok(())
+            native_clone(&tail[0], tail.get(1).map(Text::as_str))
         }
         "log" => {
             let count = tail.first().map(Text::as_str).unwrap_or("12");
@@ -1959,6 +2119,39 @@ mod tests {
             assert!(!rendered.contains("/secret/"));
             assert!(rendered.contains("provider"));
         }
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn https_transport_and_provider_selection_are_exact_and_tokenless() {
+        assert_eq!(parse_https_transport(None).unwrap(), HttpsTransport::Http2);
+        assert_eq!(
+            parse_https_transport(Some("h3-v2")).unwrap(),
+            HttpsTransport::Http3V2
+        );
+        assert!(parse_https_transport(Some("HTTP/3")).is_err());
+        let path = join_path(
+            &temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-git-https-provider-{}", process_id()),
+        );
+        let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
+        repository
+            .set_config_value("http", "token", &"a".repeat(64))
+            .unwrap();
+        assert_eq!(repository_https_provider(&repository).unwrap(), None);
+        repository
+            .set_config_value("http", "credentialProvider", "standard-input")
+            .unwrap();
+        assert_eq!(
+            repository_https_provider(&repository).unwrap().as_deref(),
+            Some("standard-input")
+        );
+        repository
+            .set_config_value("http", "credentialProvider", "raw-token-file")
+            .unwrap();
+        let rendered = format!("{}", repository_https_provider(&repository).unwrap_err());
+        assert!(!rendered.contains(&"a".repeat(64)));
+        assert!(rendered.contains("provider"));
         remove_dir_all(&path).unwrap();
     }
 

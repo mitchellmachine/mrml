@@ -61,3 +61,45 @@ pub fn read_stdin_to_end() -> Result<Text, StdinError> {
     }
     Text::try_from_utf8(bytes).map_err(|_| StdinError::InvalidUtf8)
 }
+
+/// Reads an exact, caller-bounded secret payload without converting it into
+/// cloneable text. The caller remains responsible for volatile erasure.
+pub fn read_stdin_secret_bounded(maximum: usize) -> Result<Vector<u8>, StdinError> {
+    if maximum == 0 || maximum > 4096 {
+        return Err(StdinError::TooLarge);
+    }
+    let mut bytes = Vector::new();
+    let mut chunk = [0u8; 128];
+    loop {
+        let read = read_native(&mut chunk).ok_or(StdinError::ReadFailed)?;
+        if read == 0 {
+            break;
+        }
+        if bytes
+            .len()
+            .checked_add(read)
+            .is_none_or(|length| length > maximum)
+        {
+            for byte in &mut bytes {
+                unsafe { core::ptr::write_volatile(byte, 0) };
+            }
+            for byte in &mut chunk[..read] {
+                unsafe { core::ptr::write_volatile(byte, 0) };
+            }
+            return Err(StdinError::TooLarge);
+        }
+        let extended = bytes
+            .try_extend_from_slice(&chunk[..read])
+            .map_err(|_| StdinError::ReadFailed);
+        for byte in &mut chunk[..read] {
+            unsafe { core::ptr::write_volatile(byte, 0) };
+        }
+        if let Err(error) = extended {
+            for byte in &mut bytes {
+                unsafe { core::ptr::write_volatile(byte, 0) };
+            }
+            return Err(error);
+        }
+    }
+    Ok(bytes)
+}

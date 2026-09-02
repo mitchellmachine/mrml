@@ -19,8 +19,25 @@ on drop.
 This bridge is not a production signer, credential daemon, HSM integration, or
 claim that compiler-created copies, registers, caches, swap, or hardware traces
 are erased. Production protected operation must reject it and use a narrow
-capability-selected provider. The remaining provider transport and production
-credential service are not yet implemented.
+capability-selected provider.
+
+Native HTTPS now has a non-cloneable scoped Bearer credential boundary. Each
+use is bound to the exact host, port, repository path, and read/write action;
+only canonical lowercase 256-bit token encodings are accepted. Diagnostics are
+redacted and the sole authorization buffer is erased with volatile stores on
+drop. H2 and H3-v2 add exactly one Authorization header only while borrowing a
+matching scoped credential. Anonymous operations never synthesize one.
+
+The CLI's `standard-input` provider is an explicit non-persistent bridge for
+deployment secret injection. It reads at most 66 bytes through a dedicated
+byte-buffer API, accepts one canonical token with an optional line ending,
+stores neither token nor token path in repository configuration, and erases its
+input and retained token buffers. Clone selects it with the non-secret
+`MRML_GIT_CREDENTIAL_PROVIDER=standard-input`; an existing repository selects
+it with `http.credentialProvider=standard-input`. Token plaintext is supplied
+only on standard input. A capability-selected OS credential service and HSM or
+desktop-vault integration remain future providers behind the same interface;
+they are not claimed by this bridge.
 
 The native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
 signature algorithm is not negotiable. Duplicate algorithm-list entries fail

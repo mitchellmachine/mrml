@@ -38,7 +38,7 @@ pub use owned::Owned;
 pub use process::{
     Child, Command, ExitStatus, Output, PipedChild, ProcessError, process_id, temporary_directory,
 };
-pub use stdin::{StdinError, read_stdin_line, read_stdin_to_end};
+pub use stdin::{StdinError, read_stdin_line, read_stdin_secret_bounded, read_stdin_to_end};
 pub use sync::{OnceCell, Shared, SpinMutex, SpinMutexGuard};
 pub use text::Text;
 pub use thread::{JoinHandle, available_parallelism, spawn_detached, spawn_joinable, yield_now};
