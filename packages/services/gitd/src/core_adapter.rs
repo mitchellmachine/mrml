@@ -351,6 +351,13 @@ impl<B: GitdCoreBackend> GitdBackend for GitdCoreAdapter<B> {
                 {
                     return Err(BackendError::StaleGeneration);
                 }
+                let (repository_generation, trust_generation, revocation_generation) = self
+                    .core
+                    .authority_generations(&repository)
+                    .map_err(map_error)?;
+                if repository_generation != summary.repository_generation {
+                    return Err(BackendError::StaleGeneration);
+                }
                 let output_limit = budget.max_output_bytes;
                 let mut protocol = mrml_git::ProtocolBudget::new(mrml_git::WorkBudget {
                     max_input_bytes: budget.max_input_bytes,
@@ -358,9 +365,12 @@ impl<B: GitdCoreBackend> GitdBackend for GitdCoreAdapter<B> {
                     max_memory_bytes: budget.max_memory_bytes,
                     max_work_units: budget.max_work_units,
                 });
-                mrml_git::write_v2_receive_capability_advertisement(
+                mrml_git::write_v2_protected_receive_capability_advertisement(
                     &mut WriteBridge(output),
                     ObjectFormat::Sha256,
+                    repository_generation,
+                    trust_generation,
+                    revocation_generation,
                     &mut protocol,
                 )
                 .map_err(map_error)?;
