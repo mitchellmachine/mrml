@@ -164,6 +164,10 @@ pub trait DurableReceiveStore {
         &mut self,
         receipt: &AuditReceipt,
     ) -> Result<(), DurableFailure>;
+    fn mark_complete_and_fsync(
+        &mut self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<(), DurableFailure>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -547,6 +551,10 @@ pub fn durably_activate_verified_receive(
     if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
         return Err(record_failure(transaction, verified, store, failure));
     }
+    // Receipt and activated refs already make the outcome definitely
+    // successful. Completion cleanup is retried from the authenticated journal
+    // after a crash or sync failure and must not turn success into uncertainty.
+    let _ = store.mark_complete_and_fsync(transaction.id());
     Ok(receipt)
 }
 
@@ -565,6 +573,7 @@ mod tests {
         install_count: u8,
         activation_count: u8,
         receipt_count: u8,
+        completion_count: u8,
         journal_failure_at: Option<QuarantinePhase>,
         install_failure: Option<DurableFailure>,
         snapshot_failure: Option<DurableFailure>,
@@ -616,6 +625,14 @@ mod tests {
         ) -> Result<(), DurableFailure> {
             self.receipt_count += 1;
             self.receipt_failure.map_or(Ok(()), Err)
+        }
+
+        fn mark_complete_and_fsync(
+            &mut self,
+            _: QuarantineTransactionId,
+        ) -> Result<(), DurableFailure> {
+            self.completion_count += 1;
+            Ok(())
         }
     }
 
@@ -823,6 +840,7 @@ mod tests {
             install_count: 0,
             activation_count: 0,
             receipt_count: 0,
+            completion_count: 0,
             journal_failure_at: None,
             install_failure: None,
             snapshot_failure: None,
@@ -841,6 +859,7 @@ mod tests {
         assert_eq!(store.install_count, 1);
         assert_eq!(store.activation_count, 1);
         assert_eq!(store.receipt_count, 1);
+        assert_eq!(store.completion_count, 1);
         assert_eq!(receipt.updates[0].1, old);
         assert_eq!(
             &*store.phases,

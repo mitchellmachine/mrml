@@ -2,7 +2,7 @@
 
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_is_directory,
-    read_directory, rename_file,
+    read_directory, remove_file, rename_file,
 };
 
 use crate::{
@@ -93,6 +93,17 @@ impl ReceiveJournalDirectory {
         }
         records.sort_unstable_by_key(|record| record.transaction);
         Ok(records)
+    }
+
+    pub fn remove_exact(&self, expected: &ReceiveJournalRecord) -> Result<(), DurableFailure> {
+        let reread = self
+            .load(expected.transaction)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        if &reread != expected {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        remove_file(&self.record_path(expected.transaction)).map_err(|_| DurableFailure::Rename)?;
+        sync_journal_directory(&self.root)
     }
 
     fn record_path(&self, transaction: QuarantineTransactionId) -> Text {

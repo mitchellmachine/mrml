@@ -199,6 +199,13 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
     ) -> Result<(), DurableFailure> {
         self.receipts.append(receipt, self.authority)
     }
+
+    fn mark_complete_and_fsync(
+        &mut self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<(), DurableFailure> {
+        self.inner.mark_complete_and_fsync(transaction)
+    }
 }
 
 fn transcript(canonical: &[u8]) -> Result<Vector<u8>, ()> {

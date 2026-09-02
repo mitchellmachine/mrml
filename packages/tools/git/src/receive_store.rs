@@ -4,9 +4,10 @@ use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
 use crate::{
     ActivationSnapshot, ActiveRefFile, ActiveRefState, ArrivalPackStore, AuditReceipt,
     AuditReceiptDirectory, BoundedRead, DurableFailure, DurableReceiveStore, GitdCoreError, Object,
-    ObjectFormat, ObjectId, PackError, PackGeneration, PackSetLimits, QuarantineTransaction,
-    QuarantineTransactionId, ReceiveJournalDirectory, ReceiveJournalError, ReceiveJournalRecord,
-    RecoveryAction, Repository, VerifiedRefTransaction, classify_receive_recovery,
+    ObjectFormat, ObjectId, PackError, PackGeneration, PackSetLimits, QuarantinePhase,
+    QuarantineTransaction, QuarantineTransactionId, ReceiveJournalDirectory, ReceiveJournalError,
+    ReceiveJournalRecord, RecoveryAction, Repository, VerifiedRefTransaction,
+    classify_receive_recovery,
 };
 
 /// Concrete storage ordering backend. Receipt records are currently
@@ -211,6 +212,27 @@ impl LinuxDurableReceiveStore {
         Ok(receipt)
     }
 
+    pub fn complete_recovered_journal(
+        &self,
+        journal: &ReceiveJournalRecord,
+    ) -> Result<(), DurableFailure> {
+        let reread = self
+            .journals
+            .load(journal.transaction)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        if &reread != journal {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let snapshot = self.recovery_snapshot(journal)?;
+        if !matches!(
+            classify_receive_recovery(journal, &snapshot),
+            RecoveryAction::RecoverAuditReceipt | RecoveryAction::MarkComplete
+        ) {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        self.journals.remove_exact(journal)
+    }
+
     pub(crate) fn recovery_audit_receipt(
         &self,
         journal: &ReceiveJournalRecord,
@@ -355,6 +377,20 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
         receipt: &AuditReceipt,
     ) -> Result<(), DurableFailure> {
         self.receipts.append(receipt)
+    }
+
+    fn mark_complete_and_fsync(
+        &mut self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<(), DurableFailure> {
+        let journal = self
+            .journals
+            .load(transaction)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        if journal.phase != QuarantinePhase::AuditReceiptAppended || journal.failure.is_some() {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        self.journals.remove_exact(&journal)
     }
 }
 
@@ -731,10 +767,10 @@ mod tests {
             }
         );
         assert_eq!(store.receipts().load(id).unwrap(), receipt);
-        let final_journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
-            .unwrap()
-            .load(id)
-            .unwrap();
+        let final_journal = crate::parse_receive_journal(
+            &crate::encode_receive_journal(&transaction, &verified).unwrap(),
+        )
+        .unwrap();
         assert_eq!(final_journal.phase, QuarantinePhase::AuditReceiptAppended);
         assert_eq!(
             classify_receive_recovery(
@@ -743,10 +779,7 @@ mod tests {
             ),
             RecoveryAction::MarkComplete
         );
-        assert_eq!(
-            store.recovery_actions().unwrap()[0].1,
-            RecoveryAction::MarkComplete
-        );
+        assert!(store.recovery_actions().unwrap().is_empty());
         let mut activated_journal = final_journal.clone();
         activated_journal.phase = QuarantinePhase::RefsAtomicallyActivated;
         let recovery_store = LinuxDurableReceiveStore::open(
