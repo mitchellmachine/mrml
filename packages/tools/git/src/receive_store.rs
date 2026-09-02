@@ -398,7 +398,7 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
 mod tests {
     #[cfg(target_os = "linux")]
     use mrml_runtime::Command;
-    use mrml_runtime::{Text, Vector, join_path, path_exists, write_file};
+    use mrml_runtime::{Text, Vector, join_path, path_exists, read_file_bounded, write_file};
 
     use super::*;
     use crate::{
@@ -533,102 +533,180 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn child_process_pauses_after_durable_ref_activation() {
+    fn child_process_pauses_at_requested_durable_boundary() {
         if !path_exists("run-crash-helper") {
             return;
         }
+        let pause = |boundary: &str| {
+            if &*read_file_bounded("crash-at", 64).unwrap() == boundary.as_bytes() {
+                write_file("boundary-ready", boundary.as_bytes()).unwrap();
+                loop {
+                    mrml_runtime::yield_now();
+                }
+            }
+        };
         let (mut transaction, verified, mut store) = crash_fixture(".");
         transaction.ref_updates_prepared().unwrap();
         store
             .persist_journal_and_fsync(&transaction, &verified)
             .unwrap();
+        pause("journal-prepared");
         store
             .install_arrival_pack_and_fsync(transaction.id())
             .unwrap();
+        pause("pack-installed");
         transaction.objects_durably_installed().unwrap();
         store
             .persist_journal_and_fsync(&transaction, &verified)
             .unwrap();
+        pause("journal-installed");
         let snapshot = store.reread_activation_snapshot(&verified).unwrap();
         assert_eq!(snapshot.repository_generation, RepositoryGeneration(7));
         store.activate_refs_atomically_and_fsync(&verified).unwrap();
-        // This marker is deliberately after the ref-state and directory fsync
-        // and before the journal can advance past ObjectsDurablyInstalled.
-        write_file("refs-activated-ready", b"ready").unwrap();
-        loop {
-            mrml_runtime::yield_now();
-        }
+        pause("refs-activated");
+        transaction.refs_atomically_activated().unwrap();
+        store
+            .persist_journal_and_fsync(&transaction, &verified)
+            .unwrap();
+        pause("journal-activated");
+        let receipt = AuditReceipt {
+            transaction: transaction.id(),
+            repository: verified.repository().clone(),
+            repository_generation: verified.repository_generation(),
+            activated_repository_generation: RepositoryGeneration(8),
+            trust_generation: verified.trust_generation(),
+            revocation_generation: verified.revocation_generation(),
+            updates: verified
+                .updates()
+                .iter()
+                .map(|update| {
+                    (
+                        update.name().clone(),
+                        update.expected_old().unwrap(),
+                        update.proposed_new().unwrap(),
+                    )
+                })
+                .collect(),
+        };
+        store.append_audit_receipt_and_fsync(&receipt).unwrap();
+        pause("receipt-appended");
+        transaction.audit_receipt_appended().unwrap();
+        store
+            .persist_journal_and_fsync(&transaction, &verified)
+            .unwrap();
+        pause("journal-receipt");
+        store.mark_complete_and_fsync(transaction.id()).unwrap();
+        pause("journal-complete");
     }
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn killed_child_after_ref_activation_reopens_as_receipt_recovery() {
-        let root = join_path(
-            &mrml_runtime::temporary_directory(),
-            &mrml_runtime::mrml_format!("mrml-receive-kill-{}", mrml_runtime::process_id()),
-        );
-        let _ = mrml_runtime::remove_dir_all(&root);
-        mrml_runtime::create_dir_all(&root).unwrap();
-        write_file(&path(&root, "run-crash-helper"), b"run").unwrap();
-        let mut command = Command::new("/proc/self/exe");
-        command
-            .args([
-                "--exact",
-                "receive_store::tests::child_process_pauses_after_durable_ref_activation",
-                "--nocapture",
-            ])
-            .current_dir(&root);
-        let mut child = command.spawn_silent().unwrap();
-        let ready = path(&root, "refs-activated-ready");
-        for _ in 0..1_000_000 {
-            if path_exists(&ready) {
-                break;
-            }
-            assert!(
-                child.try_wait().is_none(),
-                "crash helper exited before boundary"
+    fn process_kill_matrix_classifies_every_durable_receive_boundary() {
+        for (boundary, expected) in [
+            (
+                "journal-prepared",
+                Some(RecoveryAction::DiscardBeforeActivation),
+            ),
+            (
+                "pack-installed",
+                Some(RecoveryAction::DiscardBeforeActivation),
+            ),
+            (
+                "journal-installed",
+                Some(RecoveryAction::ReverifyBeforeActivation),
+            ),
+            ("refs-activated", Some(RecoveryAction::RecoverAuditReceipt)),
+            (
+                "journal-activated",
+                Some(RecoveryAction::RecoverAuditReceipt),
+            ),
+            (
+                "receipt-appended",
+                Some(RecoveryAction::RecoverAuditReceipt),
+            ),
+            ("journal-receipt", Some(RecoveryAction::MarkComplete)),
+            ("journal-complete", None),
+        ] {
+            let root = join_path(
+                &mrml_runtime::temporary_directory(),
+                &mrml_runtime::mrml_format!(
+                    "mrml-receive-kill-{}-{boundary}",
+                    mrml_runtime::process_id()
+                ),
             );
-            mrml_runtime::yield_now();
-        }
-        assert!(
-            path_exists(&ready),
-            "crash helper did not reach activation boundary"
-        );
-        assert!(child.kill());
-        assert!(!child.wait().unwrap().success());
+            let _ = mrml_runtime::remove_dir_all(&root);
+            mrml_runtime::create_dir_all(&root).unwrap();
+            write_file(&path(&root, "run-crash-helper"), b"run").unwrap();
+            write_file(&path(&root, "crash-at"), boundary.as_bytes()).unwrap();
+            let mut command = Command::new("/proc/self/exe");
+            command
+                .args([
+                    "--exact",
+                    "receive_store::tests::child_process_pauses_at_requested_durable_boundary",
+                    "--nocapture",
+                ])
+                .current_dir(&root);
+            let mut child = command.spawn_silent().unwrap();
+            let ready = path(&root, "boundary-ready");
+            for _ in 0..1_000_000 {
+                if path_exists(&ready) {
+                    break;
+                }
+                assert!(child.try_wait().is_none(), "child exited before {boundary}");
+                mrml_runtime::yield_now();
+            }
+            assert!(path_exists(&ready), "child did not reach {boundary}");
+            assert!(child.kill());
+            assert!(!child.wait().unwrap().success());
 
-        let journal = ReceiveJournalDirectory::open(&path(&root, "journals"))
-            .unwrap()
-            .load(QuarantineTransactionId([44; 16]))
+            let state = ActiveRefFile::open(&path(&root, "refs"))
+                .unwrap()
+                .load()
+                .unwrap();
+            let snapshot = crate::ActivationSnapshot {
+                repository_generation: state.repository_generation,
+                trust_generation: state.trust_generation,
+                revocation_generation: state.revocation_generation,
+                refs: state
+                    .refs
+                    .iter()
+                    .map(|(name, id)| (name.clone(), Some(*id)))
+                    .collect(),
+            };
+            let journals = ReceiveJournalDirectory::open(&path(&root, "journals"))
+                .unwrap()
+                .load_all()
+                .unwrap();
+            match expected {
+                Some(action) => {
+                    assert_eq!(journals.len(), 1, "{boundary}");
+                    assert_eq!(classify_receive_recovery(&journals[0], &snapshot), action);
+                }
+                None => assert!(journals.is_empty(), "{boundary}"),
+            }
+            let new = ObjectId::blob_with_format(ObjectFormat::Sha256, b"crash boundary");
+            let activated = boundary.starts_with("refs-")
+                || boundary.starts_with("journal-activated")
+                || boundary.starts_with("receipt-")
+                || boundary.starts_with("journal-receipt")
+                || boundary.starts_with("journal-complete");
+            assert_eq!(state.refs[0].1 == new, activated, "{boundary}");
+            let reopened = LinuxDurableReceiveStore::open(
+                &path(&root, "journals"),
+                &path(&root, "packs"),
+                &path(&root, "refs"),
+                &path(&root, "receipts"),
+                ObjectFormat::Sha256,
+                1024 * 1024,
+            )
             .unwrap();
-        assert_eq!(journal.phase, QuarantinePhase::ObjectsDurablyInstalled);
-        let state = ActiveRefFile::open(&path(&root, "refs"))
-            .unwrap()
-            .load()
-            .unwrap();
-        let new = ObjectId::blob_with_format(ObjectFormat::Sha256, b"crash boundary");
-        assert_eq!(state.repository_generation, RepositoryGeneration(8));
-        assert_eq!(state.pack_generation, PackGeneration(2));
-        assert_eq!(state.refs[0].1, new);
-        let snapshot = crate::ActivationSnapshot {
-            repository_generation: state.repository_generation,
-            trust_generation: state.trust_generation,
-            revocation_generation: state.revocation_generation,
-            refs: state
-                .refs
-                .iter()
-                .map(|(name, id)| (name.clone(), Some(*id)))
-                .collect(),
-        };
-        assert_eq!(
-            classify_receive_recovery(&journal, &snapshot),
-            RecoveryAction::RecoverAuditReceipt
-        );
-        assert!(path_exists(&path(
-            &root,
-            "packs/arrivals/2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c"
-        )));
-        mrml_runtime::remove_dir_all(&root).unwrap();
+            assert_eq!(
+                reopened.read_active_arrival_object(new, 1024).is_ok(),
+                activated,
+                "{boundary}"
+            );
+            mrml_runtime::remove_dir_all(&root).unwrap();
+        }
     }
 
     #[test]

@@ -22,12 +22,16 @@ The following commands passed on the local Linux x86-64 workspace:
 | `deploy/compose/test-compose-git.sh` | PASS, static source invariants |
 | POSIX `sh -n` over the Git deployment operators | PASS |
 
-The Git tests include one hosted child-process kill after durable ref activation,
-durable-boundary failure injection, authenticated recovery and idempotence,
+The Git tests include real child-process SIGKILL at eight durable boundaries:
+prepared journal, installed arrival pack, installed-phase journal, ref
+activation, activated-phase journal, receipt append, receipt-phase journal, and
+journal completion. Each reopen exact-checks the recovery classification, live
+ref generation, and whether the arrival pack is selected/visible. They also
+include durable-boundary failure injection, authenticated recovery and idempotence,
 same-repository conflict serialization, independent-repository concurrency,
 complete introduced merge ancestry, SHA-1 boundary rejection, streaming pack
 validation, and deterministic hostile parser corpora. Those tests do not prove
-power-loss behavior, every process-kill boundary, coverage-guided fuzzing,
+power-loss behavior outside those exact boundaries, coverage-guided fuzzing,
 sanitizer execution, multiprocess distributed contention, or physical-storage
 ordering.
 
