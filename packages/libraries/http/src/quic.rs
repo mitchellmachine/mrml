@@ -1396,6 +1396,7 @@ pub struct QuicStreamAssembler {
     bytes: Vector<u8>,
     chunks: Vector<StreamChunk>,
     final_size: Option<usize>,
+    base_offset: usize,
     limit: usize,
 }
 
@@ -1413,27 +1414,43 @@ impl QuicStreamAssembler {
             bytes: Vector::new(),
             chunks: Vector::new(),
             final_size: None,
+            base_offset: 0,
             limit,
         }
     }
     pub fn insert(&mut self, offset: u64, data: &[u8], fin: bool) -> Result<(), QuicError> {
-        let offset = usize::try_from(offset).map_err(|_| QuicError::Limit)?;
-        let end = offset.checked_add(data.len()).ok_or(QuicError::Limit)?;
-        if end > self.limit
-            || offset.saturating_sub(self.bytes.len()) > MAX_STREAM_GAP
+        let mut offset = usize::try_from(offset).map_err(|_| QuicError::Limit)?;
+        let absolute_end = offset.checked_add(data.len()).ok_or(QuicError::Limit)?;
+        if self.final_size.is_some_and(|size| absolute_end > size) {
+            return Err(QuicError::Limit);
+        }
+        if fin {
+            if self.final_size.is_some_and(|size| size != absolute_end) {
+                return Err(QuicError::InvalidFrame);
+            }
+            self.final_size = Some(absolute_end)
+        }
+        if absolute_end <= self.base_offset {
+            return Ok(());
+        }
+        let consumed_prefix = self.base_offset.saturating_sub(offset);
+        let data = &data[consumed_prefix..];
+        offset = offset.max(self.base_offset);
+        let end = absolute_end;
+        let contiguous_end = self
+            .base_offset
+            .checked_add(self.bytes.len())
+            .ok_or(QuicError::Limit)?;
+        if end.saturating_sub(self.base_offset) > self.limit
+            || offset.saturating_sub(contiguous_end) > MAX_STREAM_GAP
             || self.final_size.is_some_and(|size| end > size)
         {
             return Err(QuicError::Limit);
         }
-        if fin {
-            if self.final_size.is_some_and(|size| size != end) {
-                return Err(QuicError::InvalidFrame);
-            }
-            self.final_size = Some(end)
-        }
-        let prefix_overlap = end.min(self.bytes.len()).saturating_sub(offset);
+        let prefix_overlap = end.min(contiguous_end).saturating_sub(offset);
         if prefix_overlap != 0
-            && self.bytes[offset..offset + prefix_overlap] != data[..prefix_overlap]
+            && self.bytes[offset - self.base_offset..offset - self.base_offset + prefix_overlap]
+                != data[..prefix_overlap]
         {
             return Err(QuicError::InvalidFrame);
         }
@@ -1449,7 +1466,7 @@ impl QuicStreamAssembler {
             }
         }
 
-        let mut cursor = offset.max(self.bytes.len());
+        let mut cursor = offset.max(contiguous_end);
         while cursor < end {
             if let Some(chunk) = self
                 .chunks
@@ -1493,10 +1510,10 @@ impl QuicStreamAssembler {
         while self
             .chunks
             .first()
-            .is_some_and(|chunk| chunk.offset <= self.bytes.len())
+            .is_some_and(|chunk| chunk.offset <= self.base_offset + self.bytes.len())
         {
             let chunk = self.chunks.remove(0);
-            let already = self.bytes.len().saturating_sub(chunk.offset);
+            let already = (self.base_offset + self.bytes.len()).saturating_sub(chunk.offset);
             if already < chunk.bytes.len() {
                 self.bytes
                     .try_extend_from_slice(&chunk.bytes[already..])
@@ -1509,7 +1526,9 @@ impl QuicStreamAssembler {
         &self.bytes
     }
     pub fn is_finished(&self) -> bool {
-        self.final_size == Some(self.bytes.len())
+        self.base_offset
+            .checked_add(self.bytes.len())
+            .is_some_and(|end| self.final_size == Some(end))
     }
     pub fn consume(&mut self, amount: usize) -> Result<(), QuicError> {
         if amount > self.bytes.len() {
@@ -1518,15 +1537,10 @@ impl QuicStreamAssembler {
         let remaining = self.bytes.len() - amount;
         self.bytes.copy_within(amount.., 0);
         self.bytes.truncate(remaining);
-        for chunk in &mut self.chunks {
-            chunk.offset = chunk
-                .offset
-                .checked_sub(amount)
-                .ok_or(QuicError::InvalidFrame)?;
-        }
-        if let Some(size) = &mut self.final_size {
-            *size -= amount
-        }
+        self.base_offset = self
+            .base_offset
+            .checked_add(amount)
+            .ok_or(QuicError::Limit)?;
         Ok(())
     }
 }
@@ -2211,6 +2225,13 @@ mod tests {
         assert_eq!(stream.insert(1, b"X", false), Err(QuicError::InvalidFrame));
         stream.consume(2).unwrap();
         assert_eq!(stream.contiguous(), b"llo");
+        let mut streaming = QuicStreamAssembler::new(16);
+        streaming.insert(0, b"hello", false).unwrap();
+        streaming.consume(2).unwrap();
+        streaming.insert(0, b"he", false).unwrap();
+        streaming.insert(5, b"!", true).unwrap();
+        assert_eq!(streaming.contiguous(), b"llo!");
+        assert!(streaming.is_finished());
     }
     #[test]
     fn stream_assembler_does_not_allocate_to_sparse_high_offset() {
