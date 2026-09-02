@@ -39,12 +39,12 @@ pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAutho
     ) -> Result<(), GitdCoreError>;
 }
 
-struct AuthorityVerifier<'a, A: ?Sized> {
-    authority: &'a mut A,
+struct AuthorityVerifier<'a> {
+    authority: &'a mut dyn ProtectedReceiveAuthority,
     policy_digest: [u8; 64],
 }
 
-impl<A: ProtectedReceiveAuthority + ?Sized> ProtectedCommitVerifier for AuthorityVerifier<'_, A> {
+impl ProtectedCommitVerifier for AuthorityVerifier<'_> {
     fn authorize_transaction(
         &mut self,
         transaction: &crate::CandidateRefTransaction,
@@ -93,14 +93,14 @@ impl ReceivePackCore {
     /// quarantine state is created. The same authority then verifies every
     /// introduced commit and authenticates the final durable receipt.
     #[allow(clippy::too_many_arguments)]
-    pub fn execute_with_authority<A: ProtectedReceiveAuthority + ?Sized>(
+    pub fn execute_with_authority(
         &self,
         active: &ActiveRefState,
         active_objects: &Repository,
         store: &mut LinuxDurableReceiveStore,
         policy: &TrustPolicyState,
         signed_receipts_path: &str,
-        authority: &mut A,
+        authority: &mut dyn ProtectedReceiveAuthority,
         input: &mut dyn BoundedRead,
         output: &mut dyn BoundedWrite,
     ) -> Result<SmartGitResponse, GitdCoreError> {

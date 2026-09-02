@@ -13,6 +13,7 @@ mod http3_stream;
 mod http3_workers;
 mod identity;
 mod listener;
+mod production_receive;
 mod startup;
 mod tls_identity;
 
@@ -49,6 +50,7 @@ pub use identity::{
     validate_identity_snapshot,
 };
 pub use listener::{GitdBoundListeners, GitdListenerError, load_quic_retry_key};
+pub use production_receive::ProductionReceiveRepository;
 pub use startup::{
     AdmittedRepository, RepositoryAdmissionError, RepositoryRecoveryError,
     RepositoryRecoveryStatus, RepositoryRecoverySummary, RepositoryStoragePaths,
