@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mrml_certificate::{
     CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
@@ -45,12 +47,13 @@ pub enum GitdCertdChannelError {
     OutputLimit,
 }
 
+#[derive(Clone)]
 pub struct GitdCertdChannelClient {
     socket: PathBuf,
-    capability: CertdChannelCapability,
+    capability: Arc<CertdChannelCapability>,
     gitd_peer: CertdPeerIdentity,
     certd_peer: CertdPeerIdentity,
-    next_request_id: u64,
+    next_request_id: Arc<AtomicU64>,
 }
 
 impl GitdCertdChannelClient {
@@ -72,10 +75,10 @@ impl GitdCertdChannelClient {
         }
         Ok(Self {
             socket: socket.to_path_buf(),
-            capability,
+            capability: Arc::new(capability),
             gitd_peer,
             certd_peer,
-            next_request_id,
+            next_request_id: Arc::new(AtomicU64::new(next_request_id)),
         })
     }
 
@@ -86,6 +89,14 @@ impl GitdCertdChannelClient {
             return Err(GitdCertdChannelError::Authenticate);
         }
         Ok(())
+    }
+
+    fn allocate_request_id(&self) -> Result<u64, GitdCertdChannelError> {
+        self.next_request_id
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| GitdCertdChannelError::SequenceExhausted)
     }
 
     pub fn get_identity_snapshot(
@@ -170,11 +181,7 @@ impl GitdCertdChannelClient {
         {
             return Err(GitdCertdChannelError::OutputLimit);
         }
-        let request_id = self.next_request_id;
-        self.next_request_id = self
-            .next_request_id
-            .checked_add(1)
-            .ok_or(GitdCertdChannelError::SequenceExhausted)?;
+        let request_id = self.allocate_request_id()?;
         let mut frame = vec![0u8; CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
         let written = encode_certd_channel_request(
             CertdChannelRequest {
@@ -547,6 +554,23 @@ mod tests {
         );
         assert!(parse_generation_wait_response(&response(6, 1), 7).is_err());
         assert!(parse_generation_wait_response(&response(8, 0), 7).is_err());
+    }
+
+    #[test]
+    fn cloned_clients_share_one_monotonic_request_sequence() {
+        let peer = CertdPeerIdentity { uid: 1, gid: 1 };
+        let first = GitdCertdChannelClient::new(
+            Path::new("/run/certd.sock"),
+            CertdChannelCapability::new([0x62; 32]).unwrap(),
+            peer,
+            peer,
+            41,
+        )
+        .unwrap();
+        let second = first.clone();
+        assert_eq!(first.allocate_request_id(), Ok(41));
+        assert_eq!(second.allocate_request_id(), Ok(42));
+        assert_eq!(first.allocate_request_id(), Ok(43));
     }
 
     #[test]

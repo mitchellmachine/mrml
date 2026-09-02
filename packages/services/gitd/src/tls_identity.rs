@@ -26,7 +26,8 @@ pub struct GitdCertdTlsSigningKey {
 
 #[derive(Clone)]
 pub struct GitdCertdSigningRoute {
-    certd: Arc<Mutex<GitdCertdChannelClient>>,
+    signing_certd: Arc<Mutex<GitdCertdChannelClient>>,
+    refresh_certd: Arc<Mutex<GitdCertdChannelClient>>,
     next_logical_request_id: Arc<AtomicU64>,
 }
 
@@ -95,8 +96,10 @@ impl GitdCertdSigningRoute {
         if next_logical_request_id == 0 {
             return Err(TlsError::Certificate);
         }
+        let refresh_certd = certd.clone();
         Ok(Self {
-            certd: Arc::new(Mutex::new(certd)),
+            signing_certd: Arc::new(Mutex::new(certd)),
+            refresh_certd: Arc::new(Mutex::new(refresh_certd)),
             next_logical_request_id: Arc::new(AtomicU64::new(next_logical_request_id)),
         })
     }
@@ -133,7 +136,7 @@ impl TlsServerSigningKey for GitdCertdTlsSigningKey {
         let request_id = self.route.allocate_logical_request_id()?;
         let signature = self
             .route
-            .certd
+            .signing_certd
             .lock()
             .map_err(|_| TlsError::AuthenticationFailed)?
             .sign_tls13_certificate_verify(
@@ -185,7 +188,7 @@ pub fn refresh_certd_tls_config(
 ) -> Result<bool, GitdTlsRefreshError> {
     let current_generation = store.snapshot().map_err(|_| GitdTlsRefreshError::Tls)?.0;
     let mut certd = route
-        .certd
+        .refresh_certd
         .lock()
         .map_err(|_| GitdTlsRefreshError::Channel)?;
     let Some(observed_generation) = certd
