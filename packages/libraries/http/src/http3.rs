@@ -1575,7 +1575,12 @@ impl Http3ServerConnection {
             .encode()?;
             let fin = end_stream && (index + 1) * 800 >= body.len();
             self.connection
-                .send_frames(&[stream_frame(id, self.response_offset, fin, &bytes)?])
+                .send_frames_flow_controlled(&[stream_frame(
+                    id,
+                    self.response_offset,
+                    fin,
+                    &bytes,
+                )?])
                 .map_err(quic_error)?;
             self.response_offset = self
                 .response_offset

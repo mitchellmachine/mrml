@@ -216,6 +216,7 @@ struct PendingPacket {
 }
 
 impl QuicConnection {
+    const MAX_PENDING_FRAMES: usize = 4096;
     pub fn state(&self) -> &QuicConnectionState {
         &self.state
     }
@@ -248,13 +249,36 @@ impl QuicConnection {
         self.send_payload(payload, ack_eliciting, 0)
     }
 
+    pub fn send_frames_flow_controlled(&mut self, frames: &[QuicFrame]) -> Result<(), QuicError> {
+        loop {
+            match self.send_frames(frames) {
+                Ok(()) => return Ok(()),
+                Err(QuicError::FlowControl) => {
+                    let received = self.receive_fresh_frames()?;
+                    for frame in received {
+                        if !matches!(frame, QuicFrame::Stream { .. }) {
+                            continue;
+                        }
+                        if self.pending_frames.len() >= Self::MAX_PENDING_FRAMES {
+                            return Err(QuicError::Limit);
+                        }
+                        self.pending_frames
+                            .try_push(frame)
+                            .map_err(|_| QuicError::Allocation)?;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     fn now_micros(&self) -> u64 {
         self.epoch.elapsed().as_micros().min(u64::MAX as u128) as u64
     }
 
     pub fn release_receive_credit(&mut self, id: u64, amount: usize) -> Result<(), QuicError> {
         let (connection, stream) = self.receive_flow.release(id, amount)?;
-        self.send_frames(&[
+        self.send_frames_flow_controlled(&[
             QuicFrame::MaxData(connection),
             QuicFrame::MaxStreamData {
                 id,
@@ -371,6 +395,10 @@ impl QuicConnection {
         if !self.pending_frames.is_empty() {
             return Ok(core::mem::take(&mut self.pending_frames));
         }
+        self.receive_fresh_frames()
+    }
+
+    fn receive_fresh_frames(&mut self) -> Result<Vector<QuicFrame>, QuicError> {
         let mut datagram = [0; 65_527];
         let (packet, peer, amount) = loop {
             match self.socket.receive_from(&mut datagram) {
