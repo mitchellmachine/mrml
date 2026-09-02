@@ -3,8 +3,10 @@
 Status: **PARTIALLY IMPLEMENTED**. Git-owned directories and shared Gitd socket
 directories have an idempotent host provisioner. Image-only Compose validation,
 offline image bundling, cold backup/restore, and immutable image
-upgrade/rollback are separate implemented operators. Native one-shot repository,
-token, trust-transition, and recovery administration remains incomplete.
+upgrade/rollback are separate implemented operators. Native one-shot repository
+and initial protected-policy creation, token administration, and bounded recovery
+operations exist. Authenticated normal and emergency trust-transition
+administration remains incomplete.
 
 Run `deploy/compose/provision-git-host.sh` as root. The deployment root defaults
 to `/mnt/mrml`; fixed production identities and socket groups default to the
@@ -34,6 +36,20 @@ authenticated empty `tokens.v1`. Creation uses a private same-directory
 temporary file, file sync, a no-overwrite hard-link activation, temporary
 unlink, and directory sync. It refuses an existing destination and creates no
 access token.
+
+With Gitd and the authority stopped, `initialize-git-repository.sh` creates one
+exact authenticated-catalog repository and prints its deterministic initial
+SHA-256 tip and generations. For a catalog entry classified `protected`, install
+the owner-selected OpenPGP v6 and ML-DSA-65 public keys as authority-owned
+mode-`0444` regular files, then run
+`initialize-git-protected-policy.sh OWNER/REPOSITORY VALID_FROM VALID_UNTIL`.
+The second one-shot command requires the repository to equal
+`MRML_PROTECTED_REPOSITORY`, reopens and admits its exact catalog generations,
+binds `refs/heads/main` and the admitted initial tip as the hybrid cutover, and
+creates the policy beneath a Gitd-owned mode-`0700` path. It permits SHA-256 and
+requires the exact hybrid pair; it neither reads nor creates private signing
+keys. Existing policy state is never overwritten. An ambiguous storage failure
+is retained for inspection instead of being represented as safely retryable.
 
 `token-git.sh issue` and `token-git.sh revoke` are cold one-shot operations:
 they refuse a running Gitd so its authenticated in-memory snapshot cannot race

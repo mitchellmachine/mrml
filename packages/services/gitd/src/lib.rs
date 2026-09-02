@@ -52,11 +52,11 @@ pub use identity::{
 pub use listener::{load_quic_retry_key, GitdBoundListeners, GitdListenerError};
 pub use production_receive::ProductionReceiveRepository;
 pub use startup::{
-    admit_catalog_repository, initialize_catalog_repository, inspect_admitted_repository_recovery,
-    recover_admitted_repository, validate_storage_layout, AdmittedRepository,
-    RepositoryAdmissionError, RepositoryInitializationError, RepositoryRecoveryError,
-    RepositoryRecoveryStatus, RepositoryRecoverySummary, RepositoryStoragePaths,
-    StartupValidationError,
+    admit_catalog_repository, initialize_catalog_protected_policy, initialize_catalog_repository,
+    inspect_admitted_repository_recovery, recover_admitted_repository, validate_storage_layout,
+    AdmittedRepository, ProtectedPolicyInitializationError, RepositoryAdmissionError,
+    RepositoryInitializationError, RepositoryRecoveryError, RepositoryRecoveryStatus,
+    RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,
 };
 pub use tls_identity::{
     build_certd_tls_server_config, build_certd_tls_server_config_with_route,

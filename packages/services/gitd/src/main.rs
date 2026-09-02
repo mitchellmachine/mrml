@@ -20,6 +20,7 @@ use mrml_gitd::{
     GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
+use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
 
 const O_NOFOLLOW: i32 = 0x20_000;
 
@@ -32,6 +33,53 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if let [_, command, config_path, repository, openpgp_path, ml_dsa_path, valid_from, valid_until] =
+        arguments.as_slice()
+    {
+        if command != "initialize-protected-policy" {
+            return Err(());
+        }
+        let config = load_gitd_config(Path::new(config_path)).map_err(|_| ())?;
+        let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+        let entry = catalog
+            .repositories
+            .iter()
+            .find(|entry| entry.repository.as_str() == repository)
+            .ok_or(())?;
+        let openpgp_bytes = read_public_file(
+            openpgp_path,
+            config.authority_uid,
+            1,
+            MAX_OPENPGP_PUBLIC_KEY_BYTES,
+        )?;
+        let mut scratch = vec![0; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        let openpgp = parse_public_key_v6_ascii(&openpgp_bytes, &mut scratch).map_err(|_| ())?;
+        let ml_dsa_bytes = read_public_file(
+            ml_dsa_path,
+            config.authority_uid,
+            mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
+            mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
+        )?;
+        let mut ml_dsa = [0; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
+        ml_dsa.copy_from_slice(&ml_dsa_bytes);
+        let tip = mrml_gitd::initialize_catalog_protected_policy(
+            &config,
+            entry,
+            &openpgp,
+            &ml_dsa,
+            valid_from.parse().map_err(|_| ())?,
+            valid_until.parse().map_err(|_| ())?,
+        )
+        .map_err(|_| ())?;
+        println!(
+            "repository={} protected_tip={} trust_generation={} revocation_generation={}",
+            entry.repository.as_str(),
+            tip.to_hex(),
+            entry.trust_generation.0,
+            entry.revocation_generation.0
+        );
+        return Ok(());
+    }
     if let [_, command, config] = arguments.as_slice() {
         if command == "listener-health" {
             let config = load_gitd_config(Path::new(config)).map_err(|_| ())?;
@@ -242,7 +290,7 @@ fn run() -> Result<(), ()> {
         arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-repository CONFIG REPOSITORY | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-repository CONFIG REPOSITORY | initialize-protected-policy CONFIG REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC VALID_FROM VALID_UNTIL | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };
@@ -605,6 +653,35 @@ fn read_capability(path: &str, expected_owner: u32) -> Result<Vec<u8>, ()> {
     Ok(bytes)
 }
 
+fn read_public_file(
+    path: &str,
+    expected_owner: u32,
+    minimum: usize,
+    maximum: usize,
+) -> Result<Vec<u8>, ()> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| ())?;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if minimum == 0
+        || minimum > maximum
+        || !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || metadata.uid() != expected_owner
+        || metadata.mode() & 0o777 != 0o444
+        || metadata.len() < minimum as u64
+        || metadata.len() > maximum as u64
+    {
+        return Err(());
+    }
+    let mut bytes = vec![0; metadata.len() as usize];
+    file.read_exact(&mut bytes).map_err(|_| ())?;
+    Ok(bytes)
+}
+
 fn read_key(path: &Path, expected_owner: u32) -> Result<[u8; 32], ()> {
     let path = path.to_str().ok_or(())?;
     let mut bytes = read_capability(path, expected_owner)?;
@@ -626,4 +703,32 @@ fn load_certd_capability(path: &Path, expected_owner: u32) -> Result<CertdChanne
     let capability = CertdChannelCapability::new(key).map_err(|_| ());
     erase_secret_bytes(&mut key);
     capability
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn bootstrap_public_file_requires_exact_read_only_regular_file() {
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-public-key-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let key = root.join("public.key");
+        std::fs::write(&key, [7u8; 32]).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let uid = std::fs::metadata(&key).unwrap().uid();
+        assert_eq!(
+            read_public_file(key.to_str().unwrap(), uid, 32, 32).unwrap(),
+            [7; 32]
+        );
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_public_file(key.to_str().unwrap(), uid, 32, 32).is_err());
+        let link = root.join("link.key");
+        symlink(&key, &link).unwrap();
+        assert!(read_public_file(link.to_str().unwrap(), uid, 1, 32).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

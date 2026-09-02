@@ -3,9 +3,12 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use mrml_git::{
-    AuditReceiptAuthority, AuthenticatedReceiveStore, FilesystemRepositoryView,
-    LinuxDurableReceiveStore, ObjectFormat, RecoveryAction,
+    AuditReceiptAuthority, AuthenticatedReceiveStore, AuthorizedHybridPair,
+    FilesystemRepositoryView, FullRefName, LinuxDurableReceiveStore, LinuxDurableTrustPolicyStore,
+    ObjectFormat, PolicyPairStatus, RecoveryAction, TrustPolicyCandidate, TrustPolicyState,
 };
+use mrml_openpgp::PublicKeyV6;
+use mrml_runtime::Vector;
 
 use crate::{
     verify_repository_admission, DeploymentRepository, DeploymentRepositoryProfile, GitdConfig,
@@ -50,6 +53,106 @@ pub enum RepositoryInitializationError {
     Create,
     Initialize,
     Verify,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtectedPolicyInitializationError {
+    Profile,
+    Validity,
+    Admission,
+    Path,
+    Layout,
+    Create,
+    Policy,
+    Exists,
+    Verify,
+}
+
+pub fn initialize_catalog_protected_policy(
+    config: &GitdConfig,
+    entry: &DeploymentRepository,
+    openpgp: &PublicKeyV6,
+    ml_dsa: &[u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES],
+    valid_from: u64,
+    valid_until: u64,
+) -> Result<mrml_git::ObjectId, ProtectedPolicyInitializationError> {
+    if entry.profile.class != DeploymentRepositoryProfile::Protected {
+        return Err(ProtectedPolicyInitializationError::Profile);
+    }
+    if valid_from == 0 || valid_from >= valid_until {
+        return Err(ProtectedPolicyInitializationError::Validity);
+    }
+    let admitted = admit_catalog_repository(config, entry)
+        .map_err(|_| ProtectedPolicyInitializationError::Admission)?;
+    let tip = admitted
+        .view
+        .resolve_ref(&entry.repository, "refs/heads/main")
+        .map_err(|_| ProtectedPolicyInitializationError::Admission)?;
+    let pair = AuthorizedHybridPair::bind(openpgp, ml_dsa);
+    let policy = TrustPolicyState::establish(TrustPolicyCandidate {
+        repository: entry.repository.clone(),
+        generation: entry.trust_generation,
+        previous_policy_digest: [0; 64],
+        revocation_generation: entry.revocation_generation,
+        protected_refs: [FullRefName::parse("refs/heads/main")
+            .map_err(|_| ProtectedPolicyInitializationError::Policy)?]
+        .into(),
+        allow_sha1: false,
+        allow_sha256: true,
+        hybrid_required: true,
+        legacy_checkpoint: None,
+        hybrid_cutover: Some(tip),
+        emergency_policy_digest: None,
+        active_pairs: [pair].into(),
+        pair_statuses: [PolicyPairStatus::new(pair, valid_from, valid_until, None)
+            .map_err(|_| ProtectedPolicyInitializationError::Policy)?]
+        .into(),
+        legacy_v4_statuses: Vector::new(),
+        revoked_legacy_v4: Vector::new(),
+        revoked_openpgp: Vector::new(),
+        revoked_ml_dsa: Vector::new(),
+    })
+    .map_err(|_| ProtectedPolicyInitializationError::Policy)?;
+    let (owner, repository) = entry
+        .repository
+        .as_str()
+        .split_once('/')
+        .ok_or(ProtectedPolicyInitializationError::Path)?;
+    let owner_path = config.policy_root.join(owner);
+    if owner_path.exists() {
+        validate_directory(&owner_path, config.gitd_uid, config.gitd_gid, true)
+            .map_err(|_| ProtectedPolicyInitializationError::Layout)?;
+    } else {
+        fs::create_dir(&owner_path).map_err(|_| ProtectedPolicyInitializationError::Create)?;
+        fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o700))
+            .map_err(|_| ProtectedPolicyInitializationError::Create)?;
+    }
+    let policy_path = owner_path.join(repository);
+    if policy_path.exists() || policy_path.symlink_metadata().is_ok() {
+        return Err(ProtectedPolicyInitializationError::Exists);
+    }
+    fs::create_dir(&policy_path).map_err(|_| ProtectedPolicyInitializationError::Create)?;
+    fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o700))
+        .map_err(|_| ProtectedPolicyInitializationError::Create)?;
+    let policy_path = policy_path
+        .to_str()
+        .ok_or(ProtectedPolicyInitializationError::Path)?;
+    match LinuxDurableTrustPolicyStore::create(policy_path, &policy) {
+        Ok(store) => {
+            if store
+                .load()
+                .map_err(|_| ProtectedPolicyInitializationError::Verify)?
+                != policy
+            {
+                return Err(ProtectedPolicyInitializationError::Verify);
+            }
+            Ok(tip)
+        }
+        Err(mrml_git::TrustPolicyFileError::AlreadyExists) => {
+            Err(ProtectedPolicyInitializationError::Exists)
+        }
+        Err(_) => Err(ProtectedPolicyInitializationError::Policy),
+    }
 }
 
 /// Initializes one exact catalog entry and no other repository. All derived
@@ -398,10 +501,12 @@ fn validate_components(path: &Path) -> Result<(), StartupValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_crypto::ml_dsa_65_keygen;
     use mrml_git::{
         RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
     };
     use mrml_http::GitdBackend;
+    use mrml_openpgp::SigningKeyV6;
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     struct TestReceiptAuthority;
@@ -523,6 +628,32 @@ mod tests {
         assert_eq!(
             initialize_catalog_repository(&config, &entry),
             Err(RepositoryInitializationError::Exists)
+        );
+        let openpgp = SigningKeyV6::from_seed([7; 32], 1_700_000_000).unwrap();
+        let mut ml_public = [0; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut ml_secret = [0; mrml_crypto::ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[9; 32], &mut ml_public, &mut ml_secret).unwrap();
+        assert_eq!(
+            initialize_catalog_protected_policy(
+                &config,
+                &entry,
+                &openpgp.public_key(),
+                &ml_public,
+                1_700_000_000,
+                1_800_000_000,
+            ),
+            Ok(tip)
+        );
+        assert_eq!(
+            initialize_catalog_protected_policy(
+                &config,
+                &entry,
+                &openpgp.public_key(),
+                &ml_public,
+                1_700_000_000,
+                1_800_000_000,
+            ),
+            Err(ProtectedPolicyInitializationError::Exists)
         );
         let objects = config.repository_root.join("owner/project");
         let admitted = admit_catalog_repository(&config, &entry).unwrap();

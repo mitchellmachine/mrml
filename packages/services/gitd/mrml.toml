@@ -66,6 +66,12 @@ package = "org.mrml.library.http"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_openpgp"
+compile_name = "mrml-openpgp"
+package = "org.mrml.library.openpgp"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"

@@ -66,7 +66,7 @@ for dockerfile in "$gitd_dockerfile" "$authority_dockerfile"; do
   reject 'COPY . ' "$dockerfile"
 done
 
-for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
+for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/initialize-git-protected-policy.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
   [ -x "$operator" ] || {
     echo "missing executable Git deployment operator: $operator" >&2
     exit 1
@@ -80,6 +80,8 @@ require 'run --rm --no-deps' deploy/compose/initialize-git.sh
 require 'initialize-token-store' deploy/compose/initialize-git.sh
 require 'repository initialization requires stopped Gitd' deploy/compose/initialize-git-repository.sh
 require 'initialize-repository /etc/mrml/gitd.conf' deploy/compose/initialize-git-repository.sh
+require 'protected policy initialization requires stopped Gitd and authority' deploy/compose/initialize-git-protected-policy.sh
+require 'initialize-protected-policy /etc/mrml/gitd.conf' deploy/compose/initialize-git-protected-policy.sh
 require 'token administration requires stopped Gitd' deploy/compose/token-git.sh
 require 'run -T --rm --no-deps' deploy/compose/token-git.sh
 require 'recovery administration requires stopped Gitd' deploy/compose/recovery-git.sh
