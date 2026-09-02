@@ -342,6 +342,38 @@ impl Http3Frame {
         Ok((Self { kind, payload }, at + n))
     }
 }
+
+fn partial_varint(input: &[u8], at: &mut usize) -> Result<Option<u64>, HttpError> {
+    let Some(first) = input.get(*at).copied() else {
+        return Ok(None);
+    };
+    let length = 1usize << ((first >> 6) as usize);
+    if input.len() - *at < length {
+        return Ok(None);
+    }
+    let mut value = (first & 0x3f) as u64;
+    for byte in &input[*at + 1..*at + length] {
+        value = (value << 8) | *byte as u64;
+    }
+    *at += length;
+    Ok(Some(value))
+}
+
+fn complete_frame_length(input: &[u8]) -> Result<Option<usize>, HttpError> {
+    let mut at = 0;
+    if partial_varint(input, &mut at)?.is_none() {
+        return Ok(None);
+    }
+    let Some(payload) = partial_varint(input, &mut at)? else {
+        return Ok(None);
+    };
+    let payload = usize::try_from(payload).map_err(|_| HttpError::BodyTooLarge)?;
+    if payload > MAX_FRAME {
+        return Err(HttpError::BodyTooLarge);
+    }
+    let total = at.checked_add(payload).ok_or(HttpError::BodyTooLarge)?;
+    Ok((input.len() >= total).then_some(total))
+}
 fn qstr(out: &mut Vector<u8>, s: &str) -> Result<(), HttpError> {
     if s.len() > 127 {
         return Err(HttpError::HeaderTooLarge);
@@ -780,7 +812,6 @@ impl Http3ClientConnection {
             .send_frames(&[stream_frame(id, 0, true, &request)?])
             .map_err(quic_error)?;
         let mut stream = QuicStreamAssembler::new(16 * 1024 * 1024);
-        let mut parsed = 0;
         let mut head = None;
         let mut body = Vector::new();
         loop {
@@ -802,9 +833,11 @@ impl Http3ClientConnection {
                     }
                 }
             }
-            while parsed < stream.contiguous().len() {
-                let (frame, used) = Http3Frame::decode(&stream.contiguous()[parsed..])?;
-                parsed += used;
+            while let Some(used) = complete_frame_length(stream.contiguous())? {
+                let (frame, decoded) = Http3Frame::decode(&stream.contiguous()[..used])?;
+                if decoded != used {
+                    return Err(HttpError::InvalidResponse);
+                }
                 match frame.kind {
                     Http3FrameKind::Headers if head.is_none() => {
                         head = Some(self.protocol.response(&frame)?)
@@ -819,8 +852,12 @@ impl Http3ClientConnection {
                     Http3FrameKind::Unknown(_) => {}
                     _ => return Err(HttpError::InvalidResponse),
                 }
+                stream.consume(used).map_err(quic_error)?;
             }
             if stream.is_finished() {
+                if !stream.contiguous().is_empty() {
+                    return Err(HttpError::InvalidResponse);
+                }
                 let head = head.ok_or(HttpError::InvalidResponse)?;
                 return Ok(Http3Response {
                     status: head.status,
@@ -1589,6 +1626,24 @@ mod tests {
         assert_eq!(used + consumed, wire.len());
         assert_eq!(
             client.request_with_control_body("POST", "https", "x", "/", &[], &[0; 4097]),
+            Err(HttpError::BodyTooLarge)
+        );
+    }
+    #[test]
+    fn partial_frame_length_waits_for_fragmented_header_and_payload() {
+        let wire = Http3Frame {
+            kind: Http3FrameKind::Data,
+            payload: [7; 80].into(),
+        }
+        .encode()
+        .unwrap();
+        for end in 0..wire.len() {
+            assert_eq!(complete_frame_length(&wire[..end]).unwrap(), None);
+        }
+        assert_eq!(complete_frame_length(&wire).unwrap(), Some(wire.len()));
+        let oversized = [0, 0x80, 0x10, 0, 1];
+        assert_eq!(
+            complete_frame_length(&oversized),
             Err(HttpError::BodyTooLarge)
         );
     }
