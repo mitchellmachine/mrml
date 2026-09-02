@@ -200,7 +200,7 @@ mod tests {
             assert_eq!(client.health(), Ok(()));
         });
         drop(listener);
-        fs::remove_file(socket).unwrap();
+        assert!(!socket.exists());
         fs::remove_dir(root).unwrap();
     }
 }
