@@ -62,6 +62,10 @@ impl GitdBoundListeners {
         &mut self.quic
     }
 
+    pub fn into_parts(self) -> (TcpListener, QuicServerEndpoint) {
+        (self.tcp, self.quic)
+    }
+
     pub fn configure_public_quic(
         &mut self,
         retry_key: [u8; 16],

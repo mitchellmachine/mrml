@@ -2,6 +2,8 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mrml_certificate::{CertdChannelCapability, CertdPeerIdentity};
 use mrml_crypto::erase_secret_bytes;
@@ -9,9 +11,11 @@ use mrml_git::RemoteProtectedReceiveAuthority;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
     GitAuthorityChannelClient, GitdCertdChannelClient, admit_catalog_repository,
-    load_deployment_catalog, load_gitd_authentication, load_gitd_config,
-    prove_identity_signing_route, recover_admitted_repository, validate_identity_snapshot,
-    validate_storage_layout,
+    GitdBoundListeners, GitdCertdSigningRoute, GitdHttp2WorkerPool, GitdHttp3Reactor,
+    GitdHttp3WorkerPool, GitdTlsConfigStore, build_certd_tls_server_config_with_route,
+    compose_gitd_service, load_deployment_catalog, load_gitd_authentication, load_gitd_config,
+    load_quic_retry_key, prove_identity_signing_route, recover_admitted_repository,
+    validate_identity_snapshot, validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -40,6 +44,9 @@ fn run() -> Result<(), ()> {
         return Ok(());
     }
     if let [_, command, config_path, signer_identity] = arguments.as_slice() {
+        if command == "serve" {
+            return serve(Path::new(config_path), signer_identity);
+        }
         if command != "dependencies-health" {
             return Err(());
         }
@@ -113,7 +120,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | dependencies-health CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };
@@ -139,6 +146,146 @@ fn run() -> Result<(), ()> {
     client.health().map_err(|_| ())?;
     println!("ready");
     Ok(())
+}
+
+fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
+    let config = load_gitd_config(config_path).map_err(|_| ())?;
+    validate_storage_layout(&config).map_err(|_| ())?;
+    let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+    let authority_capability =
+        load_authority_capability(config.authority_capability.as_path(), config.authority_uid)?;
+    let certd_capability =
+        load_certd_capability(config.certd_capability.as_path(), config.certd_uid)?;
+    let mut authority = GitAuthorityChannelClient::new(
+        config.authority_socket.as_path(),
+        authority_capability,
+        AuthorityPeer {
+            uid: config.gitd_uid,
+            gid: config.gitd_gid,
+        },
+        AuthorityPeer {
+            uid: config.authority_uid,
+            gid: config.authority_gid,
+        },
+        parse_signer_identity(signer_identity)?,
+        config.next_authority_request_id,
+    )
+    .map_err(|_| ())?;
+    let mut certd = GitdCertdChannelClient::new(
+        config.certd_socket.as_path(),
+        certd_capability,
+        CertdPeerIdentity {
+            uid: config.gitd_uid,
+            gid: config.gitd_gid,
+        },
+        CertdPeerIdentity {
+            uid: config.certd_uid,
+            gid: config.certd_gid,
+        },
+        config.next_certd_request_id,
+    )
+    .map_err(|_| ())?;
+    authority.health().map_err(|_| ())?;
+    certd.health().map_err(|_| ())?;
+    let identity = certd
+        .get_identity_snapshot(&config.server_name)
+        .map_err(|_| ())?;
+    let identity = validate_identity_snapshot(identity, None).map_err(|_| ())?;
+    prove_identity_signing_route(&mut certd, &identity, 1).map_err(|_| ())?;
+    let signing_route = GitdCertdSigningRoute::new(certd, 2).map_err(|_| ())?;
+    let identity_generation = identity.snapshot().identity_generation;
+    let tls_config =
+        build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|_| ())?;
+    let tls = Arc::new(
+        GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?,
+    );
+
+    let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
+    let service = compose_gitd_service(
+        &config,
+        &catalog,
+        &mut receipt_authority,
+        16 * 1024 * 1024,
+    )
+    .map_err(|_| ())?;
+    let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
+    if !(4..=65_536).contains(&maximum_connections) {
+        return Err(());
+    }
+    let http2_maximum = maximum_connections / 2;
+    let http3_maximum = maximum_connections - http2_maximum;
+    let http2_workers = http2_maximum.min(16).min(http2_maximum / 2).max(1);
+    let http3_workers = http3_maximum.min(16).min(http3_maximum / 2).max(1);
+    let http2_queue = http2_maximum.checked_sub(http2_workers).ok_or(())?;
+    let http3_queue = http3_maximum.checked_sub(http3_workers).ok_or(())?;
+    if http2_queue == 0 || http3_queue == 0 {
+        return Err(());
+    }
+
+    let retry_key = load_quic_retry_key(&config.quic_retry_key, config.gitd_uid).map_err(|_| ())?;
+    let mut listeners = GitdBoundListeners::bind(
+        [0, 0, 0, 0],
+        config.listen_port,
+        u32::try_from(http3_maximum).map_err(|_| ())?,
+    )
+    .map_err(|_| ())?;
+    listeners
+        .configure_public_quic(
+            retry_key,
+            config.quic_retry_generation,
+            u32::try_from(http3_maximum).map_err(|_| ())?,
+        )
+        .map_err(|_| ())?;
+    let http2 = GitdHttp2WorkerPool::new(
+        &service,
+        tls.clone(),
+        http2_workers,
+        http2_queue,
+        http2_maximum,
+        8 * 1024 * 1024,
+        config.max_body_bytes,
+        30_000,
+    )
+    .map_err(|_| ())?;
+    let http3 = GitdHttp3WorkerPool::new(
+        &service,
+        tls,
+        http3_workers,
+        http3_queue,
+        http3_maximum,
+        8 * 1024 * 1024,
+        config.max_body_bytes,
+    )
+    .map_err(|_| ())?;
+    let reactor = GitdHttp3Reactor::new(http3, 256 * 1024, 64).map_err(|_| ())?;
+    let (tcp, mut quic) = listeners.into_parts();
+    let tcp_failed = Arc::new(AtomicBool::new(false));
+    let worker_failed = tcp_failed.clone();
+    let tcp_worker = mrml_runtime::spawn_joinable(move || {
+        loop {
+            let socket = match tcp.accept() {
+                Ok(socket) => socket,
+                Err(_) => break,
+            };
+            if http2.submit(socket).is_err() {
+                break;
+            }
+        }
+        worker_failed.store(true, Ordering::Release);
+    })
+    .map_err(|_| ())?;
+
+    loop {
+        if tcp_failed.load(Ordering::Acquire) {
+            let _ = reactor.shutdown(&mut quic);
+            let _ = tcp_worker.join();
+            return Err(());
+        }
+        if reactor.step(&mut quic).is_err() {
+            let _ = reactor.shutdown(&mut quic);
+            return Err(());
+        }
+    }
 }
 
 fn parse_peer(uid: &str, gid: &str) -> Result<AuthorityPeer, ()> {
