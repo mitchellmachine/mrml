@@ -44,6 +44,7 @@ reject 'privileged:' "$compose"
 reject 'pid: host' "$compose"
 reject 'ipc: host' "$compose"
 reject 'userns_mode: host' "$compose"
+reject 'name:' "$compose"
 
 published=$(grep -c '443:8443/' "$compose")
 [ "$published" -eq 2 ] || {

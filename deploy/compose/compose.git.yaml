@@ -1,5 +1,3 @@
-name: mrml-git
-
 services:
   git-authority:
     image: "mrml/git-authority:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
