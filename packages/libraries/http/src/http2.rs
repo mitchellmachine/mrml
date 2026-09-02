@@ -1,7 +1,9 @@
 use mrml_runtime::{Text, Vector};
 use mrml_tls::{TlsClientStream, TlsError, TlsServerStream};
 
-use crate::{Header, HttpError, RequestHead, ResponseHead, valid_header, valid_value};
+use crate::{
+    Header, HttpError, RequestHead, ResponseBodySink, ResponseHead, valid_header, valid_value,
+};
 
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
@@ -699,6 +701,25 @@ pub struct Http2ClientConnection {
     stream: TlsClientStream,
     protocol: Http2Client,
 }
+struct LimitedBody {
+    bytes: Vector<u8>,
+    limit: usize,
+}
+impl ResponseBodySink for LimitedBody {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), HttpError> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|length| length > self.limit)
+        {
+            return Err(HttpError::BodyTooLarge);
+        }
+        self.bytes
+            .try_extend_from_slice(bytes)
+            .map_err(|_| HttpError::Allocation)
+    }
+}
 impl Http2ClientConnection {
     pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
         let mut stream =
@@ -745,6 +766,27 @@ impl Http2ClientConnection {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<Http2Response, HttpError> {
+        let mut output = LimitedBody {
+            bytes: Vector::new(),
+            limit: 16 * 1024 * 1024,
+        };
+        let head =
+            self.request_with_body_to(method, authority, target, headers, body, &mut output)?;
+        Ok(Http2Response {
+            status: head.status,
+            headers: head.headers,
+            body: output.bytes,
+        })
+    }
+    pub fn request_with_body_to(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+        output: &mut dyn ResponseBodySink,
+    ) -> Result<ResponseHead, HttpError> {
         if body.len() > 16 * 1024 * 1024 {
             return Err(HttpError::BodyTooLarge);
         }
@@ -776,7 +818,6 @@ impl Http2ClientConnection {
                 .map_err(|_| HttpError::Tls)?;
         }
         let mut head = None;
-        let mut body = Vector::new();
         loop {
             let frame = read_client_frame(&mut self.stream)?;
             match frame.kind {
@@ -810,13 +851,12 @@ impl Http2ClientConnection {
                     }
                 }
                 Http2FrameKind::Data if frame.stream_id == stream_id => {
-                    if head.is_none() || body.len() + frame.payload.len() > 16 * 1024 * 1024 {
-                        return Err(HttpError::BodyTooLarge);
+                    if head.is_none() {
+                        return Err(HttpError::InvalidResponse);
                     }
                     let consumed =
                         u32::try_from(frame.payload.len()).map_err(|_| HttpError::BodyTooLarge)?;
-                    body.try_extend_from_slice(&frame.payload)
-                        .map_err(|_| HttpError::Allocation)?;
+                    output.write(&frame.payload)?;
                     if consumed != 0 {
                         for target in [0, stream_id] {
                             self.stream
@@ -840,12 +880,7 @@ impl Http2ClientConnection {
                 _ => {}
             }
         }
-        let head = head.ok_or(HttpError::InvalidResponse)?;
-        Ok(Http2Response {
-            status: head.status,
-            headers: head.headers,
-            body,
-        })
+        head.ok_or(HttpError::InvalidResponse)
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::{
     Header, HttpError, QuicClientConnection, QuicConnection, QuicFrame, QuicServerListener,
-    QuicStreamAssembler, QuicVersion, RequestHead, ResponseHead, valid_header, valid_value,
+    QuicStreamAssembler, QuicVersion, RequestHead, ResponseBodySink, ResponseHead, valid_header,
+    valid_value,
 };
 use mrml_runtime::{JoinHandle, Receiver, Sender, Vector};
 use mrml_tls::TlsServerConfig;
@@ -751,6 +752,25 @@ pub struct Http3ClientConnection {
     protocol: Http3Client,
     state: Http3ConnectionState,
 }
+struct LimitedBody {
+    bytes: Vector<u8>,
+    limit: usize,
+}
+impl ResponseBodySink for LimitedBody {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), HttpError> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|length| length > self.limit)
+        {
+            return Err(HttpError::BodyTooLarge);
+        }
+        self.bytes
+            .try_extend_from_slice(bytes)
+            .map_err(|_| HttpError::Allocation)
+    }
+}
 impl Http3ClientConnection {
     pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
         Self::connect_version(host, port, QuicVersion::V1)
@@ -804,6 +824,34 @@ impl Http3ClientConnection {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<Http3Response, HttpError> {
+        let mut output = LimitedBody {
+            bytes: Vector::new(),
+            limit: 16 * 1024 * 1024,
+        };
+        let head = self.request_control_with_body_to(
+            method,
+            authority,
+            target,
+            headers,
+            body,
+            &mut output,
+        )?;
+        Ok(Http3Response {
+            status: head.status,
+            headers: head.headers,
+            body: output.bytes,
+        })
+    }
+
+    pub fn request_control_with_body_to(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+        output: &mut dyn ResponseBodySink,
+    ) -> Result<ResponseHead, HttpError> {
         let id = self.connection.open_bidi_stream().map_err(quic_error)?;
         let request = self
             .protocol
@@ -811,9 +859,8 @@ impl Http3ClientConnection {
         self.connection
             .send_frames(&[stream_frame(id, 0, true, &request)?])
             .map_err(quic_error)?;
-        let mut stream = QuicStreamAssembler::new(16 * 1024 * 1024);
+        let mut stream = QuicStreamAssembler::new(MAX_FRAME + 64 * 1024);
         let mut head = None;
-        let mut body = Vector::new();
         loop {
             for frame in self.connection.receive_frames().map_err(quic_error)? {
                 if let QuicFrame::Stream {
@@ -843,11 +890,7 @@ impl Http3ClientConnection {
                         head = Some(self.protocol.response(&frame)?)
                     }
                     Http3FrameKind::Data if head.is_some() => {
-                        if body.len() + frame.payload.len() > 16 * 1024 * 1024 {
-                            return Err(HttpError::BodyTooLarge);
-                        }
-                        body.try_extend_from_slice(&frame.payload)
-                            .map_err(|_| HttpError::Allocation)?;
+                        output.write(&frame.payload)?;
                     }
                     Http3FrameKind::Unknown(_) => {}
                     _ => return Err(HttpError::InvalidResponse),
@@ -858,12 +901,7 @@ impl Http3ClientConnection {
                 if !stream.contiguous().is_empty() {
                     return Err(HttpError::InvalidResponse);
                 }
-                let head = head.ok_or(HttpError::InvalidResponse)?;
-                return Ok(Http3Response {
-                    status: head.status,
-                    headers: head.headers,
-                    body,
-                });
+                return head.ok_or(HttpError::InvalidResponse);
             }
         }
     }

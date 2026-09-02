@@ -84,6 +84,13 @@ impl fmt::Display for HttpError {
 }
 impl core::error::Error for HttpError {}
 
+/// Caller-owned destination for an HTTP response body. Implementations must
+/// apply their own durable-storage and size policy; transport flow-control
+/// credit is returned only after `write` succeeds.
+pub trait ResponseBodySink {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), HttpError>;
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Url {
     pub host: Text,
