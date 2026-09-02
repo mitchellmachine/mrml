@@ -143,7 +143,10 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
     }
     connection
         .respond_head(stream_id, response.status, &headers, false)
-        .map_err(|_| GitdHttp2StreamError::Transport)?;
+        .map_err(|_| {
+            eprintln!("component=mrml-gitd event=http2_response_head_failed");
+            GitdHttp2StreamError::Transport
+        })?;
 
     let transport = RefCell::new(connection);
     let mut input = Http2Input {
@@ -162,7 +165,10 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
         Ok(_) => transport
             .borrow_mut()
             .finish(stream_id)
-            .map_err(|_| GitdHttp2StreamError::Transport),
+            .map_err(|_| {
+                eprintln!("component=mrml-gitd event=http2_response_finish_failed");
+                GitdHttp2StreamError::Transport
+            }),
         Err(error) => {
             eprintln!(
                 "component=mrml-gitd event={}",
@@ -258,7 +264,10 @@ pub fn serve_gitd_http2_connection_with_drain<B: GitdBackend>(
         }
         let (stream_id, request) = connection
             .next_request()
-            .map_err(|_| GitdHttp2StreamError::Transport)?;
+            .map_err(|_| {
+                eprintln!("component=mrml-gitd event=http2_connection_read_failed");
+                GitdHttp2StreamError::Transport
+            })?;
         if is_smart_git_target(&request.target) {
             match serve_smart_git_http2_with_drain(
                 edge,
