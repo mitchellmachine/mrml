@@ -95,7 +95,8 @@ pub use gitd_core::{
     VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget, build_verified_fast_forward_transaction,
 };
 pub use https_remote::{
-    HttpsDiscovery, HttpsRemote, HttpsRemoteError, HttpsTransport, SmartGitService,
+    HttpsDiscovery, HttpsRefAdvertisement, HttpsRemote, HttpsRemoteError, HttpsTransport,
+    SmartGitService,
 };
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};

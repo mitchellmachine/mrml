@@ -3,6 +3,8 @@ use mrml_http::{Header, Http2ClientConnection, Http3ClientConnection, Url};
 use mrml_runtime::{Text, Vector};
 
 const MAX_DISCOVERY_BYTES: usize = 256 * 1024;
+const MAX_LS_REFS_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LS_REFS: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HttpsTransport {
@@ -37,6 +39,13 @@ pub struct HttpsRemote {
 pub struct HttpsDiscovery {
     pub ls_refs_unborn: bool,
     pub fetch_ofs_delta: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HttpsRefAdvertisement {
+    pub refs: Vector<crate::RemoteRef>,
+    pub default_branch: Option<Text>,
+    pub unborn: bool,
 }
 
 impl HttpsRemote {
@@ -120,6 +129,172 @@ impl HttpsRemote {
         };
         validate_discovery_response(status, &response_headers, &body)
     }
+
+    pub fn list_refs(&self) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
+        let discovery = self.discover_upload_pack()?;
+        if !discovery.ls_refs_unborn {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        let body = ls_refs_request()?;
+        let target = self.service_target(SmartGitService::UploadPack);
+        let authority = self.authority();
+        let headers = [
+            ("accept", "application/x-git-upload-pack-result"),
+            ("content-type", "application/x-git-upload-pack-request"),
+            ("git-protocol", "version=2"),
+        ];
+        let (status, response_headers, response_body) = match self.transport {
+            HttpsTransport::Http2 => {
+                let mut connection = Http2ClientConnection::connect(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                let response = connection
+                    .request_with_body("POST", &authority, &target, &headers, &body)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                (response.status, response.headers, response.body)
+            }
+            HttpsTransport::Http3V2 => {
+                let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                let response = connection
+                    .request_control_with_body("POST", &authority, &target, &headers, &body)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                (response.status, response.headers, response.body)
+            }
+        };
+        validate_service_response(
+            status,
+            &response_headers,
+            &response_body,
+            "application/x-git-upload-pack-result",
+        )?;
+        parse_ls_refs(&response_body)
+    }
+}
+
+fn ls_refs_request() -> Result<Vector<u8>, HttpsRemoteError> {
+    let mut body = Vector::new();
+    for line in [b"command=ls-refs\n".as_slice(), b"object-format=sha256\n"] {
+        crate::encode_packet(line, &mut body).map_err(|_| HttpsRemoteError::Protocol)?;
+    }
+    body.try_extend_from_slice(b"0001")
+        .map_err(|_| HttpsRemoteError::TooLarge)?;
+    for line in [
+        b"peel\n".as_slice(),
+        b"symrefs\n",
+        b"unborn\n",
+        b"ref-prefix HEAD\n",
+        b"ref-prefix refs/heads/\n",
+        b"ref-prefix refs/tags/\n",
+    ] {
+        crate::encode_packet(line, &mut body).map_err(|_| HttpsRemoteError::Protocol)?;
+    }
+    crate::encode_flush(&mut body);
+    Ok(body)
+}
+
+fn validate_service_response(
+    status: u16,
+    headers: &[Header],
+    _body: &[u8],
+    expected_content_type: &str,
+) -> Result<(), HttpsRemoteError> {
+    if status != 200 {
+        return Err(HttpsRemoteError::HttpStatus);
+    }
+    let mut content_type = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("content-type"));
+    if content_type.next().map(|header| header.value.as_str()) != Some(expected_content_type)
+        || content_type.next().is_some()
+    {
+        return Err(HttpsRemoteError::ContentType);
+    }
+    Ok(())
+}
+
+fn parse_ls_refs(body: &[u8]) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
+    if body.len() > MAX_LS_REFS_BYTES {
+        return Err(HttpsRemoteError::TooLarge);
+    }
+    let packets = crate::decode_packets(body).map_err(|_| HttpsRemoteError::Protocol)?;
+    if packets.last() != Some(&None)
+        || packets[..packets.len().saturating_sub(1)]
+            .iter()
+            .any(Option::is_none)
+    {
+        return Err(HttpsRemoteError::Protocol);
+    }
+    let mut refs = Vector::new();
+    let mut default_branch = None;
+    let mut unborn = false;
+    let mut previous: Option<Text> = None;
+    for packet in &packets[..packets.len() - 1] {
+        if refs.len() >= MAX_LS_REFS {
+            return Err(HttpsRemoteError::TooLarge);
+        }
+        let bytes = packet.as_deref().ok_or(HttpsRemoteError::Protocol)?;
+        let line = core::str::from_utf8(bytes).map_err(|_| HttpsRemoteError::Protocol)?;
+        let line = line.strip_suffix('\n').ok_or(HttpsRemoteError::Protocol)?;
+        let mut fields = line.split(' ');
+        let id = fields.next().ok_or(HttpsRemoteError::Protocol)?;
+        let name = fields.next().ok_or(HttpsRemoteError::Protocol)?;
+        if name == "HEAD" {
+            if default_branch.is_some() || unborn {
+                return Err(HttpsRemoteError::Protocol);
+            }
+            let symref = fields.next().ok_or(HttpsRemoteError::Protocol)?;
+            if fields.next().is_some() {
+                return Err(HttpsRemoteError::Protocol);
+            }
+            let target = symref
+                .strip_prefix("symref-target:")
+                .ok_or(HttpsRemoteError::Protocol)?;
+            crate::FullRefName::parse(target).map_err(|_| HttpsRemoteError::Protocol)?;
+            if id == "unborn" {
+                unborn = true;
+            } else {
+                crate::ObjectId::parse_for(crate::ObjectFormat::Sha256, id)
+                    .ok_or(HttpsRemoteError::Protocol)?;
+            }
+            default_branch = Some(target.into());
+            continue;
+        }
+        let parsed_name =
+            crate::FullRefName::parse(name).map_err(|_| HttpsRemoteError::Protocol)?;
+        if !name.starts_with("refs/heads/") && !name.starts_with("refs/tags/") {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        if previous
+            .as_ref()
+            .is_some_and(|value| value.as_str() >= name)
+        {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        previous = Some(name.into());
+        let id = crate::ObjectId::parse_for(crate::ObjectFormat::Sha256, id)
+            .ok_or(HttpsRemoteError::Protocol)?;
+        if let Some(attribute) = fields.next() {
+            let peeled = attribute
+                .strip_prefix("peeled:")
+                .ok_or(HttpsRemoteError::Protocol)?;
+            if !name.starts_with("refs/tags/")
+                || crate::ObjectId::parse_for(crate::ObjectFormat::Sha256, peeled).is_none()
+                || fields.next().is_some()
+            {
+                return Err(HttpsRemoteError::Protocol);
+            }
+        }
+        refs.try_push(crate::RemoteRef {
+            name: parsed_name.as_str().into(),
+            id,
+        })
+        .map_err(|_| HttpsRemoteError::TooLarge)?;
+    }
+    Ok(HttpsRefAdvertisement {
+        refs,
+        default_branch,
+        unborn,
+    })
 }
 
 fn validate_discovery_response(
@@ -331,6 +506,62 @@ mod tests {
         ] {
             assert_eq!(
                 parse_v2_discovery(&discovery_body(&lines)),
+                Err(HttpsRemoteError::Protocol)
+            );
+        }
+    }
+
+    #[test]
+    fn ls_refs_request_and_sha256_response_are_exact() {
+        let request = ls_refs_request().unwrap();
+        assert!(
+            request
+                .windows(b"command=ls-refs\n".len())
+                .any(|v| v == b"command=ls-refs\n")
+        );
+        assert!(
+            request
+                .windows(b"object-format=sha256\n".len())
+                .any(|v| v == b"object-format=sha256\n")
+        );
+        assert!(request.windows(4).any(|value| value == b"0001"));
+        let main = "11".repeat(32);
+        let tag = "22".repeat(32);
+        let peeled = "33".repeat(32);
+        let response = discovery_body(&[
+            &mrml_runtime::mrml_format!("{main} HEAD symref-target:refs/heads/main\n"),
+            &mrml_runtime::mrml_format!("{main} refs/heads/main\n"),
+            &mrml_runtime::mrml_format!("{tag} refs/tags/v1 peeled:{peeled}\n"),
+        ]);
+        let parsed = parse_ls_refs(&response).unwrap();
+        assert_eq!(parsed.default_branch.as_deref(), Some("refs/heads/main"));
+        assert!(!parsed.unborn);
+        assert_eq!(parsed.refs.len(), 2);
+    }
+
+    #[test]
+    fn ls_refs_rejects_sha1_unknown_attributes_duplicates_and_unsorted_refs() {
+        let sha256 = "11".repeat(32);
+        for lines in [
+            Vector::from([mrml_runtime::mrml_format!(
+                "{} refs/heads/main\n",
+                "11".repeat(20)
+            )]),
+            Vector::from([mrml_runtime::mrml_format!(
+                "{sha256} refs/heads/main hidden:value\n"
+            )]),
+            Vector::from([
+                mrml_runtime::mrml_format!("{sha256} refs/heads/main\n"),
+                mrml_runtime::mrml_format!("{sha256} refs/heads/main\n"),
+            ]),
+            Vector::from([
+                mrml_runtime::mrml_format!("{sha256} refs/tags/v1\n"),
+                mrml_runtime::mrml_format!("{sha256} refs/heads/main\n"),
+            ]),
+        ] {
+            let borrowed: Vector<&str> = lines.iter().map(Text::as_str).collect();
+            assert_eq!(
+                parse_ls_refs(&discovery_body(&borrowed)),
                 Err(HttpsRemoteError::Protocol)
             );
         }
