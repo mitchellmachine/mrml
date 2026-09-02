@@ -550,13 +550,15 @@ impl QuicTlsClientHandshake {
                     self.certificates.get(1).ok_or(TlsError::Certificate)?,
                 )
                 .map_err(|_| TlsError::Certificate)?;
-                crate::verify_stapled_ocsp(
-                    self.stapled_ocsp.as_deref().ok_or(TlsError::Certificate)?,
-                    &leaf,
-                    &issuer,
-                    mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?,
-                )
-                .map_err(|_| TlsError::AuthenticationFailed)?;
+                if let Some(response) = self.stapled_ocsp.as_deref() {
+                    crate::verify_stapled_ocsp(
+                        response,
+                        &leaf,
+                        &issuer,
+                        mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?,
+                    )
+                    .map_err(|_| TlsError::AuthenticationFailed)?;
+                }
                 self.got_certificate = true;
                 self.transcript.update(message);
                 Ok(None)
@@ -838,13 +840,10 @@ impl TlsClientStream {
                             .map_err(|_| TlsError::Certificate)?;
                             let now =
                                 mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?;
-                            crate::verify_stapled_ocsp(
-                                stapled_ocsp.as_deref().ok_or(TlsError::Certificate)?,
-                                &leaf,
-                                &issuer,
-                                now,
-                            )
-                            .map_err(|_| TlsError::Certificate)?;
+                            if let Some(response) = stapled_ocsp.as_deref() {
+                                crate::verify_stapled_ocsp(response, &leaf, &issuer, now)
+                                    .map_err(|_| TlsError::Certificate)?;
+                            }
                         }
                         got_certificate = true;
                         transcript.update(&message)
