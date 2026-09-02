@@ -1,4 +1,4 @@
-use crate::{
+use mrml_http::{
     BackendError, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdBackend, ObjectId,
     QueryLimits, RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
     RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage,

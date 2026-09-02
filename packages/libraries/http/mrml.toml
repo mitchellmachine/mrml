@@ -49,10 +49,3 @@ alias = "mrml_zstd"
 compile_name = "mrml-zstd"
 package = "org.mrml.zstd"
 scope = "compile"
-
-[[dependency]]
-alias = "mrml_git"
-compile_name = "mrml-git"
-package = "org.mrml.tool.git"
-scope = "compile"
-targets = ["WINDOWS", "LINUX"]

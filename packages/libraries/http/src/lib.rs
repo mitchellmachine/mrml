@@ -6,7 +6,6 @@ use mrml_tls::TlsClientStream;
 
 mod crlset_update;
 mod gitd_auth;
-mod gitd_core_adapter;
 mod gitd_edge;
 mod gitd_resource;
 mod http2;
@@ -22,7 +21,6 @@ pub use crlset_update::{
     CHROMIUM_CRLSET_COMPONENT_SPKI_SHA256, ChromiumCrlSetPackage, ChromiumCrlSetUpdater,
 };
 pub use gitd_auth::*;
-pub use gitd_core_adapter::GitdCoreAdapter;
 pub use gitd_edge::*;
 pub use gitd_resource::*;
 pub use http2::{

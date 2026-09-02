@@ -5,6 +5,7 @@ mod catalog;
 mod certd_rpc;
 mod composition;
 mod config;
+mod core_adapter;
 mod http2_stream;
 mod http2_workers;
 mod http3_reactor;
@@ -29,6 +30,7 @@ pub use catalog::{
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError, GitdIdentitySnapshot};
 pub use composition::{GitdComposedService, GitdCompositionError, compose_gitd_service};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};
+pub use core_adapter::GitdCoreAdapter;
 pub use http2_stream::{
     GitdHttp2StreamError, serve_gitd_http2_connection, serve_gitd_http2_connection_with_drain,
     serve_smart_git_http2,

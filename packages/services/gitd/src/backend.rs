@@ -1,13 +1,13 @@
 use std::sync::{Arc, Mutex};
 
 use mrml_http::{
-    BackendError, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdBackend, GitdCoreAdapter,
-    ObjectId, QueryLimits, RepositoryGeneration, RepositoryIdentity, RepositoryPath,
-    RepositorySummary, RevocationGeneration, SmartGitRequest, SmartGitResponse, TreePage,
-    TrustGeneration, VerificationSummary, WorkBudget,
+    BackendError, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdBackend, ObjectId,
+    QueryLimits, RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
+    RevocationGeneration, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,
+    VerificationSummary, WorkBudget,
 };
 
-use crate::{AdmittedRepository, DeploymentRepository};
+use crate::{AdmittedRepository, DeploymentRepository, GitdCoreAdapter};
 
 pub struct GitdRepositorySet {
     repositories: Vec<(
