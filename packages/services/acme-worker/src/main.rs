@@ -369,6 +369,9 @@ fn revoke_command(
     {
         return Err("unexpected revocation argument");
     }
+    if submit && std::env::var("MRML_ACMED_OFFLINE_ADMIN").as_deref() != Ok("1") {
+        return Err("revocation requires the stopped-worker one-shot administration context");
+    }
     let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
     let reservation = reserve_channel_request_ids(&config, &mut state, &mut authenticator)?;

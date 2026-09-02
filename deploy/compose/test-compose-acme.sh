@@ -48,7 +48,7 @@ done
 
 echo "ACME Compose static invariants PASS"
 
-for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh deploy/compose/renew-acme.sh deploy/compose/cleanup-acme-dns.sh; do
+for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh deploy/compose/renew-acme.sh deploy/compose/cleanup-acme-dns.sh deploy/compose/revoke-acme.sh; do
   sh -n "$operator"
 done
 require 'up -d --no-build --pull never certd acmed' deploy/compose/switch-acme-version.sh
@@ -57,5 +57,8 @@ require 'stop acmed' deploy/compose/renew-acme.sh
 require 'MRML_ACMED_OFFLINE_ADMIN=1' deploy/compose/renew-acme.sh
 require 'confirm-exact-records' deploy/compose/cleanup-acme-dns.sh
 require 'MRML_ACMED_OFFLINE_ADMIN=1' deploy/compose/cleanup-acme-dns.sh
+require 'stop acmed' deploy/compose/revoke-acme.sh
+require 'revoke-preview' deploy/compose/revoke-acme.sh
+require 'MRML_ACMED_OFFLINE_ADMIN=1' deploy/compose/revoke-acme.sh
 require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
 reject 'backup-auth.key' "$compose"

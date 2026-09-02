@@ -108,6 +108,18 @@ only the matching value and preserves unrelated TXT values:
 ./cleanup-acme-dns.sh confirm-exact-records
 ```
 
+Certificate revocation uses an active-generation preview and an exact approval
+digest. The commit form stops acmed while the durable revocation transaction is
+submitted and restarts it on both success and failure:
+
+```text
+./revoke-acme.sh preview key-compromise
+./revoke-acme.sh commit key-compromise APPROVAL_SHA256_FROM_PREVIEW
+```
+
+Do not retire or destroy the corresponding key merely because revocation was
+requested; first confirm the terminal revocation state with `status-acme.sh`.
+
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The
 networkless certd design ensures that compromise of acmed does not reveal an
