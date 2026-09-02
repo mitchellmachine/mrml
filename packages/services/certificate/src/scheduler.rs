@@ -207,23 +207,46 @@ impl RenewalSchedule {
         now_unix: u64,
         entropy: &mut impl RenewalEntropy,
     ) -> Result<Self, SchedulerError> {
+        Self::fallback_for_certificate(
+            identity,
+            identity_generation,
+            certificate.ari_certificate_id,
+            certificate.not_before,
+            certificate.not_after,
+            policy,
+            now_unix,
+            entropy,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fallback_for_certificate(
+        identity: TlsIdentityId,
+        identity_generation: u64,
+        certificate_id: AriCertificateId,
+        not_before: u64,
+        not_after: u64,
+        policy: RenewalPolicy,
+        now_unix: u64,
+        entropy: &mut impl RenewalEntropy,
+    ) -> Result<Self, SchedulerError> {
         validate_policy(policy)?;
-        if now_unix >= certificate.not_after {
+        if identity == TlsIdentityId([0; 16])
+            || identity_generation == 0
+            || now_unix >= not_after
+            || not_before >= not_after
+        {
             return Err(SchedulerError::Expired);
         }
-        let lifetime = certificate
-            .not_after
-            .checked_sub(certificate.not_before)
+        let lifetime = not_after
+            .checked_sub(not_before)
             .ok_or(SchedulerError::InvalidPolicy)?;
         let elapsed = (u128::from(lifetime) * u128::from(policy.fallback_elapsed_numerator)
             / u128::from(policy.fallback_elapsed_denominator)) as u64;
-        let nominal = certificate
-            .not_before
+        let nominal = not_before
             .checked_add(elapsed)
             .ok_or(SchedulerError::ArithmeticOverflow)?;
-        let latest = certificate
-            .not_after
-            .saturating_sub(policy.minimum_renewal_lead_seconds);
+        let latest = not_after.saturating_sub(policy.minimum_renewal_lead_seconds);
         let renew_at = if latest <= now_unix {
             now_unix
         } else {
@@ -240,15 +263,15 @@ impl RenewalSchedule {
             identity,
             identity_generation,
             policy_generation: policy.generation,
-            certificate_id: certificate.ari_certificate_id,
+            certificate_id,
             source: RenewalSource::LifetimeFallback,
             renew_at_unix: renew_at,
             requery_ari_at_unix: now_unix
                 .checked_add(policy.ari_requery_min_seconds)
                 .ok_or(SchedulerError::ArithmeticOverflow)?,
-            not_after_unix: certificate.not_after,
+            not_after_unix: not_after,
             failure_count: 0,
-            health: health(certificate.not_after, now_unix, policy),
+            health: health(not_after, now_unix, policy),
         })
     }
 

@@ -19,19 +19,21 @@ use mrml_acmed::{
 use mrml_certificate::{
     AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
     CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdActivationRequest,
-    CertdCandidateRequest, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
-    CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
-    CertdTlsKeyRequest, CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider,
-    Dns01PublicationRequest, DnsObservationClass, DnsObservationRoute, DnsPropagationObserver,
-    DnsPropagationPolicy, DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord,
-    DurableRecordKind, DurableStateStore, HostedDnsObservationEndpoint, HostedDnsPropagationQuery,
-    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
-    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
-    PRODUCTION_SECRET_MODE, UnixCertdSession, decode_certd_channel_request,
-    encode_certd_account_key_request, encode_certd_candidate_request, encode_certd_channel_request,
-    encode_certd_jws_request, encode_certd_tls_key_request, load_durable_authenticator,
-    p256_public_key_is_valid, retrieve_certificate_chain,
+    CertdCandidateRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
+    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole,
+    CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest, CloudflareDns01Provider,
+    ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DnsObservationClass,
+    DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy, DurableAuthenticator,
+    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
+    HostedDnsObservationEndpoint, HostedDnsPropagationQuery, HostedDurableStateStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES,
+    MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE, RENEWAL_SCHEDULE_BYTES,
+    RenewalEntropy, RenewalSchedule, SchedulerError, TlsIdentityId, UnixCertdSession,
+    decode_certd_channel_request, encode_certd_account_key_request, encode_certd_candidate_request,
+    encode_certd_channel_request, encode_certd_jws_request, encode_certd_tls_key_request,
+    load_durable_authenticator, p256_public_key_is_valid, retrieve_certificate_chain,
 };
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -239,6 +241,12 @@ fn serve(
         if order.state == mrml_acme::OrderState::Valid {
             retrieve_and_stage_certificate(&config, &account, &order, &mut envelope_writer)?;
             cleanup_dns_challenges(&config, &mut provider, &mut state, &mut state_authenticator)?;
+            persist_renewal_schedule(
+                &config,
+                &mut envelope_writer,
+                &mut state,
+                &mut state_authenticator,
+            )?;
         }
         if envelope_writer.next_request_id > reservation.last {
             return Err("certd channel request ID reservation exhausted");
@@ -404,6 +412,117 @@ fn cleanup_dns_challenges(
         )?;
     }
     Ok(())
+}
+
+struct HostedRenewalEntropy;
+
+impl RenewalEntropy for HostedRenewalEntropy {
+    fn random_u64(&mut self) -> Result<u64, SchedulerError> {
+        let mut bytes = [0u8; 8];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .map_err(|_| SchedulerError::EntropyUnavailable)?;
+        Ok(u64::from_be_bytes(bytes))
+    }
+}
+
+fn renewal_schedule_object(identity: [u8; 16]) -> DurableObjectId {
+    let mut digest = mrml_crypto::Sha256::new();
+    digest.update(b"MRML acmed renewal schedule v1\0");
+    digest.update(&identity);
+    let digest = digest.finalize();
+    let mut object = [0u8; 16];
+    object.copy_from_slice(&digest[..16]);
+    DurableObjectId(object)
+}
+
+fn persist_renewal_schedule(
+    config: &AcmedConfig,
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<RenewalSchedule, &'static str> {
+    let mut status = [0u8; mrml_certificate::CERTD_CANDIDATE_STATE_BYTES];
+    let status_length = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::GetCertificateLifecycleStatus,
+        &[],
+        &mut status,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    let active = CertdCandidateState::decode(&status[..status_length])
+        .map_err(|_| "invalid certd lifecycle status")?;
+    if active.stage != CertdCandidateStage::Active
+        || active.identity != config.identity
+        || active.policy_generation != config.policy_generation
+        || active.key_generation != config.key_generation
+    {
+        return Err("certd lifecycle status policy mismatch");
+    }
+    let object = renewal_schedule_object(config.identity);
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let existing = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load renewal schedule")?;
+    let previous_generation = if let Some(length) = existing {
+        let durable = DurableRecord::decode(&encoded[..length], authenticator)
+            .map_err(|_| "renewal schedule authentication failed")?;
+        if durable.namespace != DurableNamespace::PublicState
+            || durable.kind != DurableRecordKind::AriSchedule
+            || durable.object != object
+        {
+            return Err("renewal schedule durable record type mismatch");
+        }
+        let schedule = RenewalSchedule::decode(durable.payload())
+            .map_err(|_| "invalid durable renewal schedule")?;
+        if schedule.identity_generation == active.key_generation
+            && schedule.certificate_id == active.ari_certificate_id
+            && schedule.not_after_unix == active.not_after
+        {
+            return Ok(schedule);
+        }
+        if schedule.identity_generation >= active.key_generation {
+            return Err("renewal schedule generation rollback rejected");
+        }
+        durable.generation
+    } else {
+        0
+    };
+    let schedule = RenewalSchedule::fallback_for_certificate(
+        TlsIdentityId(config.identity),
+        active.key_generation,
+        active.ari_certificate_id,
+        active.not_before,
+        active.not_after,
+        config.renewal_policy,
+        unix_time()?,
+        &mut HostedRenewalEntropy,
+    )
+    .map_err(|_| "cannot construct renewal schedule")?;
+    let mut payload = [0u8; RENEWAL_SCHEDULE_BYTES];
+    schedule
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode renewal schedule")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::AriSchedule,
+        object,
+        previous_generation,
+        &payload,
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate renewal schedule")?;
+    let prepared = state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare renewal schedule")?;
+    state
+        .commit(prepared)
+        .map_err(|_| "renewal schedule commit uncertain")?;
+    Ok(schedule)
 }
 
 fn reserve_channel_request_ids(
