@@ -10,12 +10,12 @@ use mrml_crypto::erase_secret_bytes;
 use mrml_git::RemoteProtectedReceiveAuthority;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
-    GitAuthorityChannelClient, GitdCertdChannelClient, admit_catalog_repository,
-    GitdBoundListeners, GitdCertdSigningRoute, GitdHttp2WorkerPool, GitdHttp3Reactor,
-    GitdHttp3WorkerPool, GitdTlsConfigStore, build_certd_tls_server_config_with_route,
-    compose_gitd_service, load_deployment_catalog, load_gitd_authentication, load_gitd_config,
-    load_quic_retry_key, prove_identity_signing_route, recover_admitted_repository,
-    refresh_certd_tls_config, validate_identity_snapshot, validate_storage_layout,
+    GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
+    GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
+    admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
+    load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
+    prove_identity_signing_route, recover_admitted_repository, refresh_certd_tls_config,
+    validate_identity_snapshot, validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -164,6 +164,7 @@ fn run() -> Result<(), ()> {
 }
 
 fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
+    let termination_signals = TerminationSignals::block_current()?;
     let config = load_gitd_config(config_path).map_err(|_| ())?;
     validate_storage_layout(&config).map_err(|_| ())?;
     let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
@@ -211,18 +212,11 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let identity_generation = identity.snapshot().identity_generation;
     let tls_config =
         build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|_| ())?;
-    let tls = Arc::new(
-        GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?,
-    );
+    let tls = Arc::new(GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?);
 
     let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
-    let service = compose_gitd_service(
-        &config,
-        &catalog,
-        &mut receipt_authority,
-        16 * 1024 * 1024,
-    )
-    .map_err(|_| ())?;
+    let service = compose_gitd_service(&config, &catalog, &mut receipt_authority, 16 * 1024 * 1024)
+        .map_err(|_| ())?;
     let operational_health = service.operational_health();
     let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
     if !(4..=65_536).contains(&maximum_connections) {
@@ -260,7 +254,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         http2_maximum,
         8 * 1024 * 1024,
         config.max_body_bytes,
-        30_000,
+        u64::from(config.drain_seconds)
+            .checked_mul(1_000)
+            .ok_or(())?,
     )
     .map_err(|_| ())?;
     let http3 = GitdHttp3WorkerPool::new(
@@ -276,6 +272,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let reactor = GitdHttp3Reactor::new(http3, 256 * 1024, 64).map_err(|_| ())?;
     let (tcp, mut quic) = listeners.into_parts();
     let fatal = Arc::new(AtomicBool::new(false));
+    let terminating = Arc::new(AtomicBool::new(false));
     let rotation_stop = Arc::new(AtomicBool::new(false));
     let rotation_fatal = fatal.clone();
     let rotation_health = operational_health.clone();
@@ -301,6 +298,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     })
     .map_err(|_| ())?;
     let worker_fatal = fatal.clone();
+    let worker_terminating = terminating.clone();
     let tcp_health = operational_health.clone();
     let _tcp_worker = mrml_runtime::spawn_joinable(move || {
         loop {
@@ -308,7 +306,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
                 Ok(socket) => socket,
                 Err(_) => break,
             };
-            if worker_fatal.load(Ordering::Acquire) {
+            if worker_fatal.load(Ordering::Acquire) || worker_terminating.load(Ordering::Acquire) {
                 break;
             }
             if http2.submit(socket).is_err() {
@@ -319,9 +317,39 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         worker_fatal.store(true, Ordering::Release);
     })
     .map_err(|_| ())?;
+    let signal_terminating = terminating.clone();
+    let listen_port = config.listen_port;
+    let _signal_worker = mrml_runtime::spawn_joinable(move || {
+        if termination_signals.wait().is_ok() {
+            signal_terminating.store(true, Ordering::Release);
+            if let Ok(socket) = mrml_runtime::UdpSocket::bind([127, 0, 0, 1], 0) {
+                let _ = socket.send_to(
+                    &[0],
+                    mrml_runtime::SocketAddress {
+                        ip: [127, 0, 0, 1],
+                        port: listen_port,
+                    },
+                );
+            }
+            let _ = mrml_runtime::TcpStream::connect([127, 0, 0, 1], listen_port);
+        }
+    })
+    .map_err(|_| ())?;
 
     operational_health.mark_ready();
     loop {
+        if terminating.load(Ordering::Acquire) {
+            operational_health.begin_drain();
+            rotation_stop.store(true, Ordering::Release);
+            let quic_result = reactor.shutdown(&mut quic);
+            let rotation_result = rotation_worker.join();
+            let tcp_result = _tcp_worker.join();
+            return if quic_result.is_ok() && rotation_result && tcp_result {
+                Ok(())
+            } else {
+                Err(())
+            };
+        }
         if fatal.load(Ordering::Acquire) {
             operational_health.begin_drain();
             let _ = reactor.shutdown(&mut quic);
@@ -330,6 +358,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             return Err(());
         }
         if reactor.step(&mut quic).is_err() {
+            if terminating.load(Ordering::Acquire) {
+                continue;
+            }
             operational_health.fail();
             let _ = reactor.shutdown(&mut quic);
             fatal.store(true, Ordering::Release);
@@ -338,6 +369,51 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             return Err(());
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NativeSignalSet {
+    bits: [u64; 16],
+}
+
+struct TerminationSignals {
+    set: NativeSignalSet,
+}
+
+impl TerminationSignals {
+    fn block_current() -> Result<Self, ()> {
+        const SIG_BLOCK: i32 = 0;
+        const SIGINT: i32 = 2;
+        const SIGTERM: i32 = 15;
+        let mut set = NativeSignalSet { bits: [0; 16] };
+        // Linux x86_64 production adapter: block before worker creation so only
+        // the dedicated synchronous waiter consumes termination signals.
+        if unsafe { sigemptyset(&mut set) } != 0
+            || unsafe { sigaddset(&mut set, SIGINT) } != 0
+            || unsafe { sigaddset(&mut set, SIGTERM) } != 0
+            || unsafe { pthread_sigmask(SIG_BLOCK, &set, core::ptr::null_mut()) } != 0
+        {
+            return Err(());
+        }
+        Ok(Self { set })
+    }
+
+    fn wait(self) -> Result<i32, ()> {
+        let mut signal = 0;
+        if unsafe { sigwait(&self.set, &mut signal) } == 0 && matches!(signal, 2 | 15) {
+            Ok(signal)
+        } else {
+            Err(())
+        }
+    }
+}
+
+unsafe extern "C" {
+    fn sigemptyset(set: *mut NativeSignalSet) -> i32;
+    fn sigaddset(set: *mut NativeSignalSet, signal: i32) -> i32;
+    fn pthread_sigmask(how: i32, set: *const NativeSignalSet, old: *mut NativeSignalSet) -> i32;
+    fn sigwait(set: *const NativeSignalSet, signal: *mut i32) -> i32;
 }
 
 fn parse_peer(uid: &str, gid: &str) -> Result<AuthorityPeer, ()> {

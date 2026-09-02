@@ -36,8 +36,13 @@ drops the partial TCP listener and returns no bundle. A hosted loopback test
 proved simultaneous TCP/UDP ownership and over-limit refusal. HTTP/2 and HTTP/3
 now dispatch to the same authenticated backend. QUIC admission uses an
 authenticated Retry before substantial connection state. Fatal dependency or
-listener failure marks readiness false and enters worker drain. POSIX
-termination handling remains incomplete. Gitd's native Compose health command
+listener failure marks readiness false and enters worker drain. The Linux
+daemon blocks SIGINT/SIGTERM before worker creation, consumes them in one
+synchronous waiter, wakes both listeners, stops admission, marks readiness
+draining, stops certificate rotation, and joins the HTTP/2 and HTTP/3 worker
+pools. Connection I/O deadlines use the configured bounded drain interval.
+This path compiled and passed package tests, but a real-process signal test in
+the production containers has not run on the current host. Gitd's native Compose health command
 performs a fresh loopback TLS 1.3 handshake, authenticates the configured
 server name through the project trust policy, and requires negotiated HTTP/2;
 it loads no private key and does not use curl or a shell. The authority health
