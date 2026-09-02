@@ -12267,3 +12267,13 @@ socket cleanup, but no new cryptographic primitive, compression, similarity,
 cache, or storage-selection mechanism. Existing Git patent-screen guardrails
 remain controlling; see
 [`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
+
+# 2026-09-02 — HTTP/2 trailing flow control and initial clone activation
+
+Patent review: **NOT_TRIGGERED**. This increment accepts conventional HTTP/2
+flow-control acknowledgements that race behind a completed response and orders
+an initial local checkout before its branch-ref activation. It introduces no
+cryptographic primitive, compression or delta selection, similarity mechanism,
+cache policy, or storage-selection mechanism. Existing Git patent-screen
+guardrails remain controlling; see
+[`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).

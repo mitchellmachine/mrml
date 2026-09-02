@@ -374,6 +374,68 @@ production image or production Compose file. It is not evidence for a real
 certd deployment, public network, VPS, physical host, power loss, H3 large
 transfer, or independent security review.
 
+## Large-fetch transport and initial-clone correction
+
+Follow-up validation through signed local commit `dac14c19` isolated the
+remaining large H2 failure. Gitd completed the response and then cleared the
+completed stream before reading response-body `WINDOW_UPDATE` frames that had
+legitimately raced behind its final DATA frame. The server rejected the old
+stream update and closed TLS while the client was still acknowledging data.
+`8d476041` retains the completed stream until the next request HEADERS arrives.
+The HTTP suite passed all 75 tests, including a 256 KiB response spanning
+multiple flow-control windows.
+
+The corrected real-container H2 transfer fetched and installed all objects for
+a 268,456,731-byte protected repository. Four independent 64 MiB incompressible
+files were restored from the fetched objects and matched their sources exactly:
+
+```text
+74a2500349e10eb91073623d93d6b0d960073d407acf18434ad1f8b97d81c54b
+db6bd32d084e1b5fdf37c1af286370aea8d6b80a2882e7c5cba0ed381f85a57b
+eb60a02c65f43d67197d08aad6eaf368060b6728de9f04a59a254d8a07691b94
+c10c3224d17e4f39d5d20605bc614777c363ae886fbd5356979dd69dfe177f4f
+```
+
+The controlled local run took 8,127 seconds, or 33,032 source bytes per second.
+Podman cgroup samples reported a Gitd peak of 144,814,080 bytes and 35
+processes/threads under the configured 2 GiB memory and 192 PID limits; the
+authority peak was 1,654,784 bytes and two processes/threads. These are hosted
+rootless-Podman observations, not physical-host or VPS measurements. The very
+low deterministic level-9 throughput on incompressible data remains an explicit
+performance risk; no production throughput SLA is claimed.
+
+The transfer then exposed a separate initial-checkout ordering error. The clone
+path created the branch ref before invoking ordinary branch switching, so the
+newly non-empty HEAD made the still-empty initial index appear dirty.
+`dac14c19` materializes and writes the authenticated target index before branch
+ref and HEAD activation. The Git suite passed 225 library, four CLI, and three
+protected-signer tests, including a fresh-initial-checkout regression. The
+already fetched large repository was reset/restored with the corrected binary
+and reported a clean index and worktree. Because the original large clone
+process exited at the post-fetch checkout error, this evidence proves the large
+transfer, object installation, payload integrity, and corrected checkout logic
+separately; it does not relabel that original process exit as success.
+
+Final network-disabled local images and exact exports at `dac14c19`:
+
+```text
+mrml-gitd binary sha256:3ee621e0bdcb5cd554d859ca254da97fcd0542dabcdea23c366c9ff04df2114d
+mrml-git-authority binary sha256:63426fb1d7e22fee0204387bfa3026678f3c82514b90198f2cd7414d18fae54e
+mrml-git client binary sha256:432235bbdaba8fb16fa15a009bc1bdd383514a124d0920812062bfd2fc02bf04
+mrml/gitd:dac14c19 image id sha256:d9e22bda065fec0e79a58582b4a081ca39248fbbf7b61cb90afa073b0a39e8fe
+mrml/gitd:dac14c19 manifest sha256:77733e55297bdb90ef4365c36f994b0e5128ddcc65ede80e170d87505c973c8f
+mrml/git-authority:dac14c19 image id sha256:ad4bd633a1ab4c377fd139d84b932ca9d6ab46f1350d99b40d2d91cd2b7c6193
+mrml/git-authority:dac14c19 manifest sha256:d1ed5e040116e739ce9b838ce41339c3f6b7b7c3701a82aa60a459b39e04dea6
+Gitd archive sha256:f174e74b6c2f8f06022027d1c78833ae7e12a6fd2068d400cd823d13e21ad1c3
+authority archive sha256:93c067e0383874eb207d00b7e3ac3d77a63a5ff681f36f75ceff3846ca7271e9
+Gitd SPDX JSON sha256:6fac2b4d6c7d5f387616a63231665982a38e35a87cfb193fca6a939e1f0daac2
+authority SPDX JSON sha256:6be316c841f62ded8f44cf7fa68cf3032509cd12d6f248baebe5a5b0ec52c7d7
+```
+
+Syft 1.51.0 produced valid SPDX 2.3 JSON with 12 runtime package records per
+exact Docker-format archive. No Rust toolchain, source tree, Git, OpenSSH,
+GnuPG, curl, wget, Python, Perl, or package manager was present.
+
 Patent review: **NOT_TRIGGERED**. The corrections use conventional bounded
 protocol state, generation matching, startup composition, POSIX termination,
 per-operation timeouts, and in-memory transaction cleanup. They introduce no
