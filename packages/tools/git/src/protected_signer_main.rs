@@ -177,16 +177,25 @@ fn serve(
         stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
         let peer = stream.peer_cred().map_err(|_| ())?;
         if peer.uid != config.client_uid || peer.gid != config.client_gid {
+            eprintln!("component=mrml-git-protected-signer event=request_failed category=peer");
             continue;
         }
-        let _ = serve_one(
+        match serve_one(
             &mut stream,
             config,
             capability,
             openpgp,
             ml_dsa_public,
             ml_dsa,
-        );
+        ) {
+            Ok(()) => eprintln!(
+                "component=mrml-git-protected-signer event=request_complete category=sign"
+            ),
+            Err(error) => eprintln!(
+                "component=mrml-git-protected-signer event=request_failed category={}",
+                error.category()
+            ),
+        }
     }
     drop(socket_guard);
     Ok(())
@@ -251,6 +260,39 @@ unsafe extern "C" {
     fn sigwait(set: *const NativeSignalSet, signal: *mut i32) -> i32;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServeError {
+    Read,
+    Authenticate,
+    SignContext,
+    SignCommit,
+    SignTranscript,
+    SignRandom,
+    SignOpenPgp,
+    SignMlDsa,
+    SignOutput,
+    Encode,
+    Write,
+}
+
+impl ServeError {
+    const fn category(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Authenticate => "authenticate",
+            Self::SignContext => "sign-context",
+            Self::SignCommit => "sign-commit",
+            Self::SignTranscript => "sign-transcript",
+            Self::SignRandom => "sign-random",
+            Self::SignOpenPgp => "sign-openpgp",
+            Self::SignMlDsa => "sign-ml-dsa",
+            Self::SignOutput => "sign-output",
+            Self::Encode => "encode",
+            Self::Write => "write",
+        }
+    }
+}
+
 fn serve_one(
     stream: &mut UnixStream,
     config: &Configuration,
@@ -258,18 +300,41 @@ fn serve_one(
     openpgp: &SigningKeyV6,
     ml_dsa_public: &[u8],
     ml_dsa: &[u8],
-) -> Result<(), ()> {
-    let frame = read_frame(stream)?;
-    let request = decode_protected_signer_request(&frame, capability).map_err(|_| ())?;
+) -> Result<(), ServeError> {
+    let frame = read_frame(stream).map_err(|_| ServeError::Read)?;
+    let request = decode_protected_signer_request(&frame, capability)
+        .map_err(|_| ServeError::Authenticate)?;
     let request_id = request.request_id;
     let result = sign_request(config, openpgp, ml_dsa_public, ml_dsa, request);
     let response = encode_protected_signer_response(
         request_id,
-        result.as_ref().map_err(|error| *error),
+        result
+            .as_ref()
+            .map_err(|_| UnixProtectedSignerError::Rejected),
         capability,
     )
-    .map_err(|_| ())?;
-    write_frame(stream, &response)
+    .map_err(|_| ServeError::Encode)?;
+    write_frame(stream, &response).map_err(|_| ServeError::Write)?;
+    result.map(|_| ()).map_err(|error| match error {
+        SignError::Context => ServeError::SignContext,
+        SignError::Commit => ServeError::SignCommit,
+        SignError::Transcript => ServeError::SignTranscript,
+        SignError::Random => ServeError::SignRandom,
+        SignError::OpenPgp => ServeError::SignOpenPgp,
+        SignError::MlDsa => ServeError::SignMlDsa,
+        SignError::Output => ServeError::SignOutput,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SignError {
+    Context,
+    Commit,
+    Transcript,
+    Random,
+    OpenPgp,
+    MlDsa,
+    Output,
 }
 
 fn sign_request(
@@ -278,13 +343,13 @@ fn sign_request(
     ml_dsa_public: &[u8],
     ml_dsa: &[u8],
     request: mrml_git::ProtectedSignerRequest,
-) -> Result<HybridCommitSignatures, UnixProtectedSignerError> {
+) -> Result<HybridCommitSignatures, SignError> {
     if request.repository != config.repository
         || request.repository_generation != config.repository_generation
         || request.trust_generation != config.trust_generation
         || request.revocation_generation != config.revocation_generation
     {
-        return Err(UnixProtectedSignerError::Rejected);
+        return Err(SignError::Context);
     }
     let (computed, _) = encode_loose_object_with_format(
         ObjectFormat::Sha256,
@@ -292,12 +357,11 @@ fn sign_request(
         &request.exact_contents,
     );
     if computed != request.commit {
-        return Err(UnixProtectedSignerError::Rejected);
+        return Err(SignError::Commit);
     }
     let public = openpgp.public_key();
-    let public_ml_dsa: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] = ml_dsa_public
-        .try_into()
-        .map_err(|_| UnixProtectedSignerError::Rejected)?;
+    let public_ml_dsa: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] =
+        ml_dsa_public.try_into().map_err(|_| SignError::Context)?;
     let pair = AuthorizedHybridPair::bind(&public, public_ml_dsa);
     let transcript = canonical_hybrid_transcript(
         &request.repository,
@@ -308,21 +372,21 @@ fn sign_request(
         pair,
         &request.exact_contents,
     )
-    .map_err(|_| UnixProtectedSignerError::Rejected)?;
-    let mut salt = [0; 64];
+    .map_err(|_| SignError::Transcript)?;
+    let mut salt = [0; 32];
     let mut randomizer = [0; 32];
-    mrml_runtime::fill_random(&mut salt).map_err(|_| UnixProtectedSignerError::Rejected)?;
-    mrml_runtime::fill_random(&mut randomizer).map_err(|_| UnixProtectedSignerError::Rejected)?;
+    mrml_runtime::fill_random(&mut salt).map_err(|_| SignError::Random)?;
+    mrml_runtime::fill_random(&mut randomizer).map_err(|_| SignError::Random)?;
     let mut openpgp_signature = [0; MAX_OPENPGP_SIGNATURE_BYTES];
     let openpgp_length = sign_detached_v6_ascii_with_salt(
         openpgp,
         &transcript,
         DigestAlgorithm::Sha512,
-        mrml_runtime::unix_time_seconds().ok_or(UnixProtectedSignerError::Rejected)?,
+        mrml_runtime::unix_time_seconds().ok_or(SignError::OpenPgp)?,
         &salt,
         &mut openpgp_signature,
     )
-    .map_err(|_| UnixProtectedSignerError::Rejected)?;
+    .map_err(|_| SignError::OpenPgp)?;
     let mut ml_dsa_signature = [0; ML_DSA_65_SIGNATURE_BYTES];
     ml_dsa_65_sign(
         ml_dsa,
@@ -331,11 +395,11 @@ fn sign_request(
         &randomizer,
         &mut ml_dsa_signature,
     )
-    .map_err(|_| UnixProtectedSignerError::Rejected)?;
+    .map_err(|_| SignError::MlDsa)?;
     erase_secret_bytes(&mut salt);
     erase_secret_bytes(&mut randomizer);
     HybridCommitSignatures::new(&openpgp_signature[..openpgp_length], &ml_dsa_signature)
-        .map_err(|_| UnixProtectedSignerError::Rejected)
+        .map_err(|_| SignError::Output)
 }
 
 fn parse_arguments(arguments: &[String]) -> Result<Configuration, ()> {
@@ -488,6 +552,53 @@ mod tests {
         public[0] ^= 1;
         assert!(validate_ml_dsa_pair(&public, &secret).is_err());
         erase_secret_bytes(&mut secret);
+    }
+
+    #[test]
+    fn signer_operation_produces_hybrid_commit_signatures() {
+        let values = [
+            "signer",
+            "serve",
+            "/run/user/1/s.sock",
+            "/run/user/1/cap",
+            "1",
+            "1",
+            "1",
+            "owner/repo",
+            "2",
+            "3",
+            "4",
+            "/keys/pgp",
+            "1700000000",
+            "/keys/ml.pub",
+            "/keys/ml.secret",
+        ]
+        .map(String::from);
+        let config = parse_arguments(&values).unwrap();
+        let openpgp = SigningKeyV6::from_seed([7; 32], 1_700_000_000).unwrap();
+        let mut ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        mrml_crypto::ml_dsa_65_keygen(&[9; 32], &mut ml_public, &mut ml_secret).unwrap();
+        let contents =
+            b"tree 1111111111111111111111111111111111111111111111111111111111111111\n\na\n";
+        let (commit, _) = encode_loose_object_with_format(
+            ObjectFormat::Sha256,
+            mrml_git::ObjectKind::Commit,
+            contents,
+        );
+        let request = mrml_git::ProtectedSignerRequest {
+            request_id: 1,
+            repository: RepositoryIdentity::parse("owner/repo").unwrap(),
+            repository_generation: RepositoryGeneration(2),
+            trust_generation: TrustGeneration(3),
+            revocation_generation: RevocationGeneration(4),
+            commit,
+            exact_contents: (*contents).into(),
+        };
+        let signatures = sign_request(&config, &openpgp, &ml_public, &ml_secret, request).unwrap();
+        assert!(!signatures.openpgp().is_empty());
+        assert_eq!(signatures.ml_dsa().len(), ML_DSA_65_SIGNATURE_BYTES);
+        erase_secret_bytes(&mut ml_secret);
     }
 
     #[test]

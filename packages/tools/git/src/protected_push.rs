@@ -132,8 +132,11 @@ impl<P: HybridCommitSigningProvider> ProtectedCommitProofSigner
             openpgp_signature: &signatures.openpgp,
             ml_dsa_signature: &signatures.ml_dsa,
         };
+        let mut verification_policy = self.policy;
+        verification_policy.validation_time =
+            Some(mrml_runtime::unix_time_seconds().ok_or(HistoryVerificationError::Signature)?);
         let verified = verify_hybrid_signature(
-            &self.policy,
+            &verification_policy,
             self.openpgp_key,
             self.ml_dsa_key,
             &request,
@@ -277,6 +280,7 @@ mod tests {
             .unwrap()
     }
 
+
     #[test]
     fn signs_every_merge_side_commit_once_and_returns_canonical_order() {
         let root = mrml_runtime::join_path(
@@ -316,7 +320,6 @@ mod tests {
         assert!(proofs[0].commit() < proofs[1].commit());
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
-
 
     #[test]
     fn capability_provider_output_is_independently_verified() {
