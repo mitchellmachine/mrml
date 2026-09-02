@@ -11,10 +11,10 @@ use mrml_git_authority::{
 use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
 use std::fs::OpenOptions;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 const EX_USAGE: i32 = 64;
 const EX_CONFIG: i32 = 78;
@@ -80,13 +80,37 @@ fn run() -> Result<(), ()> {
                 parse_peer(authority_uid, authority_gid)?,
             )
         }
+        [_, command, socket, own_uid, socket_gid] if command == "listener-health" => {
+            listener_health(
+                Path::new(socket),
+                own_uid.parse().map_err(|_| ())?,
+                socket_gid.parse().map_err(|_| ())?,
+            )
+        }
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
     }
+}
+
+fn listener_health(socket: &Path, own_uid: u32, socket_gid: u32) -> Result<(), ()> {
+    if own_uid == 0 || socket_gid == 0 {
+        return Err(());
+    }
+    let metadata = std::fs::symlink_metadata(socket).map_err(|_| ())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_socket()
+        || metadata.uid() != own_uid
+        || metadata.gid() != socket_gid
+        || metadata.mode() & 0o777 != 0o660
+    {
+        return Err(());
+    }
+    println!("ready");
+    Ok(())
 }
 
 fn serve(
@@ -406,6 +430,28 @@ fn read_regular(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn listener_health_requires_exact_socket_identity_and_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-authority-listener-health-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let socket = root.join("authority.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660)).unwrap();
+        let metadata = std::fs::symlink_metadata(&socket).unwrap();
+        assert!(listener_health(&socket, metadata.uid(), metadata.gid()).is_ok());
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(listener_health(&socket, metadata.uid(), metadata.gid()).is_err());
+        drop(listener);
+        std::fs::remove_file(socket).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn authority_paths_require_absolute_roots_and_canonical_repository_identity() {

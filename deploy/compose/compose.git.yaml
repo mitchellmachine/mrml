@@ -49,13 +49,10 @@ services:
       test:
         - CMD
         - /usr/bin/mrml-git-authority
-        - healthcheck
+        - listener-health
         - /run/mrml/git-authority/authority.sock
-        - /run/secrets/git-authority-channel
         - "21002"
-        - "21002"
-        - "21002"
-        - "21002"
+        - "21901"
       interval: 30s
       timeout: 5s
       retries: 3

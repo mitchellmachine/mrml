@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-09-02 — Authority Compose listener health correction
+
+Patent review: **NOT_TRIGGERED**.
+
+This change replaces an impossible same-container authenticated self-check
+with a conventional exact Unix-socket type/owner/group/mode readiness check.
+The separate Gitd protocol health exchange remains authenticated. No new
+mechanism is introduced.
+
 ## 2026-09-02 — Gitd local channel-capability ownership correction
 
 Patent review: **NOT_TRIGGERED**.

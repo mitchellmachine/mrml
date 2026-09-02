@@ -224,3 +224,20 @@ test also passed.
 Patent review: **NOT_TRIGGERED**. This is an ownership-consistency correction
 for an existing local secret-file check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
+
+## Authority Compose health correction
+
+The production Compose healthcheck previously opened the authenticated
+authority protocol from inside the authority container as UID 21002, while the
+listener correctly admits only Gitd UID 21001. That self-check could never
+succeed. Compose now uses a non-signing `listener-health` command that requires
+the exact Unix socket type, authority UID 21002, shared socket GID 21901, and
+mode `0660`. Gitd still completes the HMAC-authenticated, peer-credential-bound
+authority health operation before public listener startup.
+
+The authority suite passed four library and two binary tests with local Unix
+socket access. The production Compose invariant test passed.
+
+Patent review: **NOT_TRIGGERED**. This is a conventional local Unix-socket
+readiness check and introduces no new cryptographic or authorization mechanism.
+See `docs/patents/REVIEW_LOG.md`.
