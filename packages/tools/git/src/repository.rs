@@ -1,8 +1,8 @@
 use core::{cell::RefCell, fmt};
 use mrml_runtime::{
-    FileError, Text, Vector, canonical_path, create_dir_all, join_path, parent_path, path_exists,
-    path_is_directory, path_is_file, read_directory, read_file_bounded, read_file_text_bounded,
-    write_file,
+    File, FileError, Text, Vector, canonical_path, create_dir_all, join_path, parent_path,
+    path_exists, path_is_directory, path_is_file, read_directory, read_file_bounded,
+    read_file_text_bounded, remove_file, rename_file, sync_directory, write_file,
 };
 use mrml_ssh::{RsaPrivateKey, RsaPublicKey, sign_sshsig, verify_sshsig};
 
@@ -46,6 +46,7 @@ const MAX_PACKED_REFS_BYTES: usize = 64 * 1024 * 1024;
 const MAX_WORKTREE_FILE: usize = 256 * 1024 * 1024;
 const MAX_WORKTREE_ENTRIES: usize = 1_000_000;
 const MAX_DEPTH: usize = 128;
+const MAX_REMOTE_REFS_BYTES: usize = 64 * 1024 * 1024;
 
 fn append_reachable_children(
     object: &Object,
@@ -760,6 +761,15 @@ impl Repository {
 
     fn read_reference(&self, reference: &str) -> Result<Option<ObjectId>, RepositoryError> {
         validate_reference(reference)?;
+        if let Some(remote_reference) = reference.strip_prefix("refs/remotes/")
+            && let Some((remote, branch)) = remote_reference.split_once('/')
+            && let Some(refs) = self.active_remote_refs(remote)?
+        {
+            return Ok(refs
+                .into_iter()
+                .find(|(name, _)| name == branch)
+                .map(|(_, id)| id));
+        }
         let path = join_path(&self.git_dir, reference);
         if path_is_file(&path) {
             let value = read_file_text_bounded(&path, 4096)?;
@@ -2154,6 +2164,75 @@ impl Repository {
         }
         write_file(&path, mrml_runtime::mrml_format!("{id}\n").as_bytes())?;
         Ok(())
+    }
+
+    /// Durably selects one complete remote-tracking branch set with a single
+    /// rename. Once present, this manifest is authoritative over legacy loose
+    /// and packed remote refs, including for branches omitted by the new set.
+    pub fn activate_remote_refs_atomically(
+        &self,
+        remote: &str,
+        branches: &[(Text, ObjectId)],
+    ) -> Result<(), RepositoryError> {
+        validate_config_name(remote)?;
+        if branches.len() > MAX_WORKTREE_ENTRIES {
+            return Err(RepositoryError::TooManyFiles);
+        }
+        let mut sorted: Vector<(Text, ObjectId)> = branches.iter().cloned().collect();
+        sorted.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        for (index, (branch, id)) in sorted.iter().enumerate() {
+            validate_reference(&mrml_runtime::mrml_format!("refs/heads/{branch}"))?;
+            if id.format() != self.object_format || index > 0 && sorted[index - 1].0 == *branch {
+                return Err(RepositoryError::InvalidReference);
+            }
+        }
+        let root = join_path(&self.git_dir, "mrml-remote-refs");
+        create_dir_all(&root)?;
+        let active = join_path(&root, &mrml_runtime::mrml_format!("{remote}.refs"));
+        let temporary = mrml_runtime::mrml_format!("{active}.new");
+        let lock = mrml_runtime::mrml_format!("{active}.lock");
+        let lock_file = File::create_new(&lock).map_err(|_| RepositoryError::AlreadyExists)?;
+        let result = (|| {
+            if path_exists(&temporary) {
+                return Err(RepositoryError::AlreadyExists);
+            }
+            let bytes = encode_remote_refs(self.object_format, &sorted)?;
+            let mut file = File::create_new(&temporary)?;
+            file.write_all(&bytes)?;
+            file.sync()?;
+            drop(file);
+            rename_file(&temporary, &active)?;
+            sync_directory(&root)?;
+            if self.active_remote_refs(remote)? != Some(sorted.clone()) {
+                return Err(RepositoryError::InvalidReference);
+            }
+            Ok(())
+        })();
+        drop(lock_file);
+        let _ = remove_file(&lock);
+        if result.is_err() && path_exists(&temporary) {
+            let _ = remove_file(&temporary);
+        }
+        result
+    }
+
+    fn active_remote_refs(
+        &self,
+        remote: &str,
+    ) -> Result<Option<Vector<(Text, ObjectId)>>, RepositoryError> {
+        validate_config_name(remote)?;
+        let path = join_path(
+            &join_path(&self.git_dir, "mrml-remote-refs"),
+            &mrml_runtime::mrml_format!("{remote}.refs"),
+        );
+        if !path_is_file(&path) {
+            return Ok(None);
+        }
+        parse_remote_refs(
+            self.object_format,
+            &read_file_bounded(&path, MAX_REMOTE_REFS_BYTES)?,
+        )
+        .map(Some)
     }
 
     pub fn prune_remote_refs(
@@ -3609,6 +3688,84 @@ fn line_mapping(child: &[&str], parent: &[&str]) -> Vector<Option<usize>> {
     mapping
 }
 
+fn encode_remote_refs(
+    format: ObjectFormat,
+    refs: &[(Text, ObjectId)],
+) -> Result<Vector<u8>, RepositoryError> {
+    let mut text = mrml_runtime::mrml_format!(
+        "MRML-REMOTE-REFS 1 {}\ncount {}\n",
+        format.name(),
+        refs.len()
+    );
+    for (name, id) in refs {
+        text.push_str(&mrml_runtime::mrml_format!("{id} {name}\n"));
+        if text.len() > MAX_REMOTE_REFS_BYTES - 128 {
+            return Err(RepositoryError::FileTooLarge);
+        }
+    }
+    let digest = ObjectId::blob_with_format(format, text.as_bytes());
+    text.push_str(&mrml_runtime::mrml_format!("checksum {digest}\n"));
+    if text.len() > MAX_REMOTE_REFS_BYTES {
+        return Err(RepositoryError::FileTooLarge);
+    }
+    let mut bytes = Vector::new();
+    bytes
+        .try_extend_from_slice(text.as_bytes())
+        .map_err(|_| RepositoryError::FileTooLarge)?;
+    Ok(bytes)
+}
+
+fn parse_remote_refs(
+    format: ObjectFormat,
+    bytes: &[u8],
+) -> Result<Vector<(Text, ObjectId)>, RepositoryError> {
+    let text = core::str::from_utf8(bytes).map_err(|_| RepositoryError::InvalidReference)?;
+    let checksum_marker = text
+        .rfind("checksum ")
+        .ok_or(RepositoryError::InvalidReference)?;
+    if checksum_marker == 0 || !text.ends_with('\n') {
+        return Err(RepositoryError::InvalidReference);
+    }
+    let authenticated = &text[..checksum_marker];
+    let checksum = text[checksum_marker + "checksum ".len()..]
+        .strip_suffix('\n')
+        .and_then(|value| ObjectId::parse_for(format, value))
+        .ok_or(RepositoryError::InvalidReference)?;
+    if checksum != ObjectId::blob_with_format(format, authenticated.as_bytes()) {
+        return Err(RepositoryError::InvalidReference);
+    }
+    let expected_header = mrml_runtime::mrml_format!("MRML-REMOTE-REFS 1 {}", format.name());
+    let mut lines = authenticated.lines();
+    if lines.next() != Some(expected_header.as_str()) {
+        return Err(RepositoryError::InvalidReference);
+    }
+    let count = lines
+        .next()
+        .and_then(|line| line.strip_prefix("count "))
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count <= MAX_WORKTREE_ENTRIES)
+        .ok_or(RepositoryError::InvalidReference)?;
+    let mut refs: Vector<(Text, ObjectId)> = Vector::new();
+    for line in lines {
+        let (hex, name) = line
+            .split_once(' ')
+            .ok_or(RepositoryError::InvalidReference)?;
+        validate_reference(&mrml_runtime::mrml_format!("refs/heads/{name}"))?;
+        let id = ObjectId::parse_for(format, hex).ok_or(RepositoryError::InvalidReference)?;
+        if refs
+            .last()
+            .is_some_and(|(previous, _)| previous.as_bytes() >= name.as_bytes())
+        {
+            return Err(RepositoryError::InvalidReference);
+        }
+        refs.push((name.into(), id));
+    }
+    if refs.len() != count {
+        return Err(RepositoryError::InvalidReference);
+    }
+    Ok(refs)
+}
+
 impl From<FileError> for RepositoryError {
     fn from(value: FileError) -> Self {
         Self::File(value)
@@ -4677,6 +4834,52 @@ mod tests {
             Some("host.pub")
         );
         assert!(repository.set_config_value("ssh", "bad key", "x").is_err());
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn remote_branch_set_activates_as_one_authenticated_manifest() {
+        let path = root("atomic-remote-refs");
+        let repository = Repository::init(&path).unwrap();
+        let old = ObjectId::blob(b"old");
+        let main = ObjectId::blob(b"main");
+        let topic = ObjectId::blob(b"topic");
+        repository
+            .update_remote_ref("origin", "refs/heads/main", old)
+            .unwrap();
+        repository
+            .update_remote_ref("origin", "refs/heads/stale", old)
+            .unwrap();
+        repository
+            .activate_remote_refs_atomically(
+                "origin",
+                &[(Text::from("topic"), topic), (Text::from("main"), main)],
+            )
+            .unwrap();
+        assert_eq!(
+            repository
+                .resolve_revision("refs/remotes/origin/main")
+                .unwrap(),
+            main
+        );
+        assert_eq!(
+            repository
+                .resolve_revision("refs/remotes/origin/topic")
+                .unwrap(),
+            topic
+        );
+        assert_eq!(
+            repository.resolve_revision("refs/remotes/origin/stale"),
+            Err(RepositoryError::ReferenceMissing)
+        );
+        let active = join_path(
+            &join_path(&repository.git_dir, "mrml-remote-refs"),
+            "origin.refs",
+        );
+        let mut tampered = read_file_bounded(&active, MAX_REMOTE_REFS_BYTES).unwrap();
+        tampered[0] ^= 1;
+        write_file(&active, &tampered).unwrap();
+        assert!(repository.active_remote_refs("origin").is_err());
         remove_dir_all(&path).unwrap();
     }
 
