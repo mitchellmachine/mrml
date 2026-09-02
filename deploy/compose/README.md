@@ -120,6 +120,17 @@ submitted and restarts it on both success and failure:
 Do not retire or destroy the corresponding key merely because revocation was
 requested; first confirm the terminal revocation state with `status-acme.sh`.
 
+Account and TLS key rotation require both root-owned configuration files to be
+edited to the same exact next generation. The rotation helper verifies that
+agreement in one-shot containers before restarting either daemon. Runtime
+state machines reject skips and perform the nested ACME account rollover or
+immediate replacement issuance respectively:
+
+```text
+./rotate-acme-key.sh account EXPECTED_NEXT_GENERATION
+./rotate-acme-key.sh tls EXPECTED_NEXT_GENERATION
+```
+
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The
 networkless certd design ensures that compromise of acmed does not reveal an

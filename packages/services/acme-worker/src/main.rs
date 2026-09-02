@@ -168,6 +168,16 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-acmed configuration valid");
             Ok(())
         }
+        "config-status" => {
+            println!(
+                "directory_generation={} account_generation={} key_generation={} policy_generation={}",
+                config.directory_generation,
+                config.account_generation,
+                config.key_generation,
+                config.policy_generation
+            );
+            Ok(())
+        }
         "health" => acmed_health(config, capability, state_authenticator),
         "status" => acmed_status(config, state_authenticator),
         "renew-now-preview" => renew_now_command(config, state_authenticator, false),
@@ -182,7 +192,7 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|health|status|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|config-status|health|status|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
 }

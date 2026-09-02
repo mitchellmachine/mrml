@@ -98,9 +98,19 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-certd configuration valid");
             Ok(())
         }
+        "config-status" => {
+            println!(
+                "directory_generation={} account_generation={} key_generation={} policy_generation={}",
+                config.directory_generation,
+                config.account_generation,
+                config.key_generation,
+                config.policy_generation
+            );
+            Ok(())
+        }
         "health" => check_hosted_health(config),
         "serve" => serve(config),
-        _ => Err("usage: mrml-certd [serve|check-config|health]"),
+        _ => Err("usage: mrml-certd [serve|check-config|config-status|health]"),
     }
 }
 
