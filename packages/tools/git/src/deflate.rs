@@ -157,13 +157,8 @@ fn find_match(
     best
 }
 
-fn reverse(mut value: u32, count: u8) -> u32 {
-    let mut reversed = 0;
-    for _ in 0..count {
-        reversed = (reversed << 1) | (value & 1);
-        value >>= 1;
-    }
-    reversed
+fn reverse(value: u32, count: u8) -> u32 {
+    value.reverse_bits() >> (u32::BITS - u32::from(count))
 }
 
 fn literal_length_code_length(symbol: usize) -> u8 {
@@ -324,6 +319,8 @@ mod tests {
 
     #[test]
     fn dynamic_profile_is_exact_and_complete() {
+        assert_eq!(reverse(0b1101, 4), 0b1011);
+        assert_eq!(reverse(0b1_0010_1101, 9), 0b1_0110_1001);
         assert_eq!(MAX_CHAIN, 4096);
         assert_eq!(literal_length_code_length(0), 8);
         assert_eq!(literal_length_code_length(147), 8);
