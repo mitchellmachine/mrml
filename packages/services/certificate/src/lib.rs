@@ -99,9 +99,10 @@ pub use catalog_lifecycle_provider::{
     CatalogLifecycleProvider, CertificateLifecycleSupplementalProvider,
 };
 pub use certd_candidate_protocol::{
-    CERTD_CANDIDATE_STATE_BYTES, CertdCandidateProtocolError, CertdCandidateRequest,
-    CertdCandidateStage, CertdCandidateState, MAX_CERTD_CANDIDATE_CHAIN_BYTES,
-    decode_certd_candidate_request, encode_certd_candidate_request,
+    CERTD_ACTIVATION_REQUEST_BYTES, CERTD_CANDIDATE_STATE_BYTES, CertdActivationRequest,
+    CertdCandidateProtocolError, CertdCandidateRequest, CertdCandidateStage, CertdCandidateState,
+    MAX_CERTD_CANDIDATE_CHAIN_BYTES, decode_certd_candidate_request,
+    encode_certd_candidate_request,
 };
 pub use certd_channel::{
     CERTD_CHANNEL_CAPABILITY_BYTES, CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability,

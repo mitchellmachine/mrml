@@ -4,7 +4,9 @@ use mrml_acme::CertificateProfile;
 const MAGIC: &[u8; 8] = b"MRMLCCV1";
 const HEADER_BYTES: usize = 96;
 const STATE_MAGIC: &[u8; 8] = b"MRMLCSV1";
+const ACTIVATION_MAGIC: &[u8; 8] = b"MRMLCAV1";
 pub const CERTD_CANDIDATE_STATE_BYTES: usize = 208;
+pub const CERTD_ACTIVATION_REQUEST_BYTES: usize = 120;
 pub const MAX_CERTD_CANDIDATE_CHAIN_BYTES: usize = MAX_CERTD_CHANNEL_PAYLOAD_BYTES - HEADER_BYTES;
 
 pub struct CertdCandidateRequest {
@@ -47,6 +49,65 @@ pub struct CertdCandidateState {
     pub not_before: u64,
     pub not_after: u64,
     pub request_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct CertdActivationRequest {
+    pub identity: [u8; 16],
+    pub directory_generation: u64,
+    pub account_generation: u64,
+    pub key_generation: u64,
+    pub policy_generation: u64,
+    pub chain_digest: [u8; 32],
+    pub request_digest: [u8; 32],
+}
+
+impl CertdActivationRequest {
+    pub fn encode(&self, output: &mut [u8]) -> Result<usize, CertdCandidateProtocolError> {
+        if output.len() < CERTD_ACTIVATION_REQUEST_BYTES
+            || self.identity == [0; 16]
+            || self.directory_generation == 0
+            || self.account_generation == 0
+            || self.key_generation == 0
+            || self.policy_generation == 0
+            || self.chain_digest == [0; 32]
+            || self.request_digest == [0; 32]
+        {
+            return Err(CertdCandidateProtocolError::InvalidRequest);
+        }
+        output[..CERTD_ACTIVATION_REQUEST_BYTES].fill(0);
+        output[..8].copy_from_slice(ACTIVATION_MAGIC);
+        output[8..24].copy_from_slice(&self.identity);
+        output[24..32].copy_from_slice(&self.directory_generation.to_be_bytes());
+        output[32..40].copy_from_slice(&self.account_generation.to_be_bytes());
+        output[40..48].copy_from_slice(&self.key_generation.to_be_bytes());
+        output[48..56].copy_from_slice(&self.policy_generation.to_be_bytes());
+        output[56..88].copy_from_slice(&self.chain_digest);
+        output[88..120].copy_from_slice(&self.request_digest);
+        Ok(CERTD_ACTIVATION_REQUEST_BYTES)
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, CertdCandidateProtocolError> {
+        if input.len() != CERTD_ACTIVATION_REQUEST_BYTES || input.get(..8) != Some(ACTIVATION_MAGIC)
+        {
+            return Err(CertdCandidateProtocolError::InvalidRequest);
+        }
+        let request = Self {
+            identity: copy(&input[8..24])?,
+            directory_generation: read_u64(&input[24..32])?,
+            account_generation: read_u64(&input[32..40])?,
+            key_generation: read_u64(&input[40..48])?,
+            policy_generation: read_u64(&input[48..56])?,
+            chain_digest: copy(&input[56..88])?,
+            request_digest: copy(&input[88..120])?,
+        };
+        let mut canonical = [0u8; CERTD_ACTIVATION_REQUEST_BYTES];
+        request.encode(&mut canonical)?;
+        if canonical != input {
+            return Err(CertdCandidateProtocolError::InvalidRequest);
+        }
+        Ok(request)
+    }
 }
 
 impl CertdCandidateState {
@@ -331,5 +392,23 @@ mod tests {
         assert!(CertdCandidateState::decode(&encoded).unwrap() == state);
         encoded[9] = 1;
         assert!(CertdCandidateState::decode(&encoded).is_err());
+    }
+
+    #[test]
+    fn activation_request_round_trips_and_rejects_mutation() {
+        let request = CertdActivationRequest {
+            identity: [1; 16],
+            directory_generation: 2,
+            account_generation: 3,
+            key_generation: 4,
+            policy_generation: 5,
+            chain_digest: [6; 32],
+            request_digest: [7; 32],
+        };
+        let mut encoded = [0u8; CERTD_ACTIVATION_REQUEST_BYTES];
+        request.encode(&mut encoded).unwrap();
+        assert!(CertdActivationRequest::decode(&encoded).unwrap() == request);
+        encoded[0] ^= 1;
+        assert!(CertdActivationRequest::decode(&encoded).is_err());
     }
 }

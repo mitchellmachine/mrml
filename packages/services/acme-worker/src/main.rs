@@ -18,13 +18,13 @@ use mrml_acmed::{
 };
 use mrml_certificate::{
     AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
-    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdCandidateRequest,
-    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
-    CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
-    CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest,
-    DnsObservationClass, DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy,
-    DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
-    DurableStateStore, HostedDnsObservationEndpoint, HostedDnsPropagationQuery,
+    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdActivationRequest,
+    CertdCandidateRequest, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
+    CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
+    CertdTlsKeyRequest, CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider,
+    Dns01PublicationRequest, DnsObservationClass, DnsObservationRoute, DnsPropagationObserver,
+    DnsPropagationPolicy, DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord,
+    DurableRecordKind, DurableStateStore, HostedDnsObservationEndpoint, HostedDnsPropagationQuery,
     HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
     PRODUCTION_SECRET_MODE, UnixCertdSession, decode_certd_channel_request,
@@ -322,6 +322,34 @@ fn retrieve_and_stage_certificate(
         .ok_or("channel request ID exhausted")?;
     if response_length != 32 || stage_response != chain_digest {
         return Err("certd candidate stage receipt mismatch");
+    }
+    let activation = CertdActivationRequest {
+        identity: config.identity,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        key_generation: config.key_generation,
+        policy_generation: config.policy_generation,
+        chain_digest,
+        request_digest: mrml_crypto::Sha256::digest(&request[..request_length]),
+    };
+    let mut activation_request = [0u8; mrml_certificate::CERTD_ACTIVATION_REQUEST_BYTES];
+    let activation_length = activation
+        .encode(&mut activation_request)
+        .map_err(|_| "cannot encode certd activation request")?;
+    let mut activation_response = [0u8; 32];
+    let response_length = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::ActivateCertificateGeneration,
+        &activation_request[..activation_length],
+        &mut activation_response,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    if response_length != 32 || activation_response != chain_digest {
+        return Err("certd activation receipt mismatch");
     }
     Ok(chain_digest)
 }

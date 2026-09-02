@@ -1,20 +1,20 @@
 use mrml_acme::{AcmeIdentifier, CaClass};
 use mrml_certificate::{
-    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest, CertdCandidateStage,
-    CertdCandidateState, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
-    CertdChannelRequest, CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity,
-    CertdReplayWindow, CertdTlsKeyRequest, CertificateChainVerifier, CertificateP256SigningKey,
-    CertificateValidationPolicy, ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId,
-    DurableRecord, DurableRecordKind, DurableStateStore, HmacSha256DurableAuthenticator,
-    HostedCertificateChainVerifier, HostedDurableStateStore, HostedP256KeyDescriptor,
-    HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore, HostedSecret,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATE_CHAIN_BYTES,
-    MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
-    PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
-    UnixCertdListener, decode_certd_account_key_request, decode_certd_candidate_request,
-    decode_certd_channel_request, decode_certd_jws_request, decode_certd_tls_key_request,
-    encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
-    write_constrained_acme_jws, write_pkcs10_csr,
+    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
+    CertdActivationRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
+    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdConfig,
+    CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
+    CertificateChainVerifier, CertificateP256SigningKey, CertificateValidationPolicy,
+    ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
+    DurableStateStore, HmacSha256DurableAuthenticator, HostedCertificateChainVerifier,
+    HostedDurableStateStore, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
+    HostedP256KeyStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS,
+    PRODUCTION_SECRET_MODE, PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId,
+    TlsKeyIdentity, TlsSigningRoute, UnixCertdListener, decode_certd_account_key_request,
+    decode_certd_candidate_request, decode_certd_channel_request, decode_certd_jws_request,
+    decode_certd_tls_key_request, encode_certd_channel_request, encode_certd_tls_key_response,
+    parse_certd_config, write_constrained_acme_jws, write_pkcs10_csr,
 };
 use mrml_crypto::ecdsa_p256_digest_verify_raw;
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
@@ -43,6 +43,8 @@ const KEY_STORE_ROOT: &str = "/var/lib/mrml/certd/keys";
 const CANDIDATE_STATE_ROOT: &str = "/var/lib/mrml/certd/state";
 const CANDIDATE_PATH: &str = "/var/lib/mrml/publications/candidate.bin";
 const CANDIDATE_TEMP_PATH: &str = "/var/lib/mrml/publications/candidate.tmp";
+const ACTIVE_PATH: &str = "/var/lib/mrml/publications/active.bin";
+const ACTIVE_TEMP_PATH: &str = "/var/lib/mrml/publications/active.tmp";
 const CONFIG_PATH: &str = "/etc/mrml/certd/config.json";
 const TRUST_ROOTS_PATH: &str = "/etc/mrml/certd/acme-trust-roots.pem";
 const GITD_CAPABILITY: &str = "/run/secrets/certd-gitd.cap";
@@ -410,6 +412,23 @@ fn dispatch_channel_request(
             output[..32].copy_from_slice(&verified.chain_digest);
             Ok(32)
         }
+        CertdChannelOperation::ActivateCertificateGeneration => {
+            let request = CertdActivationRequest::decode(payload).map_err(|_| ())?;
+            if request.identity != state.config.identity
+                || request.directory_generation != state.config.directory_generation
+                || request.account_generation != state.config.account_generation
+                || request.key_generation != state.config.key_generation
+                || request.policy_generation != state.config.policy_generation
+            {
+                return Err(());
+            }
+            activate_staged_candidate(state, request).map_err(|_| ())?;
+            if output.len() < 32 {
+                return Err(());
+            }
+            output[..32].copy_from_slice(&request.chain_digest);
+            Ok(32)
+        }
         _ => Err(()),
     }
 }
@@ -548,10 +567,12 @@ fn persist_staged_candidate(
         }
         let decoded = CertdCandidateState::decode(existing.payload())
             .map_err(|_| "cannot decode candidate state")?;
-        if decoded != candidate_state {
+        let mut comparable = decoded;
+        comparable.stage = CertdCandidateStage::Staged;
+        if comparable != candidate_state {
             return Err("different durable candidate already exists");
         }
-        let file = std::fs::read(CANDIDATE_PATH).map_err(|_| "missing candidate publication")?;
+        let file = read_owned_publication(CANDIDATE_PATH)?;
         if Sha256::digest(&file) != candidate_state.request_digest || file != request {
             return Err("candidate publication substitution detected");
         }
@@ -608,6 +629,144 @@ fn write_candidate_file(request: &[u8]) -> Result<(), &'static str> {
     std::fs::File::open("/var/lib/mrml/publications")
         .and_then(|directory| directory.sync_all())
         .map_err(|_| "cannot sync candidate publication directory")
+}
+
+fn activate_staged_candidate(
+    state: &CertdHostedState,
+    request: CertdActivationRequest,
+) -> Result<(), &'static str> {
+    let object = DurableObjectId(state.config.identity);
+    let mut durable_state = state
+        .durable_state
+        .lock()
+        .map_err(|_| "candidate state poisoned")?;
+    let mut authenticator = state
+        .durable_authenticator
+        .lock()
+        .map_err(|_| "candidate authenticator poisoned")?;
+    let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_RECORD_BYTES];
+    let length = durable_state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load candidate state")?
+        .ok_or("candidate state is absent")?;
+    let existing = DurableRecord::decode(&encoded[..length], &mut *authenticator)
+        .map_err(|_| "cannot authenticate candidate state")?;
+    if existing.kind != DurableRecordKind::Certificate || existing.object != object {
+        return Err("candidate durable record type mismatch");
+    }
+    let mut candidate = CertdCandidateState::decode(existing.payload())
+        .map_err(|_| "cannot decode candidate state")?;
+    if candidate.identity != request.identity
+        || candidate.directory_generation != request.directory_generation
+        || candidate.account_generation != request.account_generation
+        || candidate.key_generation != request.key_generation
+        || candidate.policy_generation != request.policy_generation
+        || candidate.chain_digest != request.chain_digest
+        || candidate.request_digest != request.request_digest
+    {
+        return Err("activation request does not bind staged candidate");
+    }
+    let publication = read_owned_publication(CANDIDATE_PATH)?;
+    if Sha256::digest(&publication) != candidate.request_digest {
+        return Err("candidate publication substitution detected");
+    }
+    if candidate.stage == CertdCandidateStage::Active {
+        let active = read_owned_publication(ACTIVE_PATH)?;
+        return if active == publication {
+            Ok(())
+        } else {
+            Err("active publication substitution detected")
+        };
+    }
+    write_active_publication(&publication, candidate.key_generation)?;
+    candidate.stage = CertdCandidateStage::Active;
+    let mut payload = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+    let payload_length = candidate
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode active candidate state")?;
+    let active = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::Certificate,
+        object,
+        existing.generation,
+        &payload[..payload_length],
+        &mut *authenticator,
+    )
+    .map_err(|_| "cannot authenticate active candidate state")?;
+    let prepared = durable_state
+        .prepare(&active)
+        .map_err(|_| "cannot prepare active candidate state")?;
+    durable_state
+        .commit(prepared)
+        .map_err(|_| "active candidate state commit uncertain")?;
+    Ok(())
+}
+
+fn read_owned_publication(path: &str) -> Result<Vec<u8>, &'static str> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(LINUX_O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| "cannot open certificate publication")?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "cannot inspect certificate publication")?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != CERTD_UID
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.len() > MAX_CERTD_CHANNEL_PAYLOAD_BYTES as u64
+    {
+        return Err("unsafe certificate publication file");
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::BufReader::new(file), &mut bytes)
+        .map_err(|_| "cannot read certificate publication")?;
+    Ok(bytes)
+}
+
+fn write_active_publication(publication: &[u8], generation: u64) -> Result<(), &'static str> {
+    let generation_path = format!("/var/lib/mrml/publications/identity-{generation:016x}.bin");
+    write_publication_file(&generation_path, publication, true)?;
+    write_publication_file(ACTIVE_TEMP_PATH, publication, false)?;
+    std::fs::rename(ACTIVE_TEMP_PATH, ACTIVE_PATH)
+        .map_err(|_| "cannot activate certificate publication")?;
+    std::fs::File::open("/var/lib/mrml/publications")
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "cannot sync active publication directory")
+}
+
+fn write_publication_file(
+    path: &str,
+    publication: &[u8],
+    immutable: bool,
+) -> Result<(), &'static str> {
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .write(true)
+        .mode(0o600)
+        .custom_flags(LINUX_O_NOFOLLOW);
+    if immutable {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
+    match options.open(path) {
+        Ok(mut file) => {
+            file.write_all(publication)
+                .map_err(|_| "cannot write certificate publication")?;
+            file.sync_all()
+                .map_err(|_| "cannot sync certificate publication")
+        }
+        Err(error) if immutable && error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if read_owned_publication(path)? == publication {
+                Ok(())
+            } else {
+                Err("immutable certificate generation substitution detected")
+            }
+        }
+        Err(_) => Err("cannot create certificate publication"),
+    }
 }
 
 fn load_trust_roots(config: CertdConfig) -> Result<PemCertificateChain, &'static str> {
