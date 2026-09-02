@@ -1,5 +1,5 @@
 use mrml_crypto::Sha256;
-use mrml_runtime::{Text, Vector};
+use mrml_runtime::{Shared, Text, Vector};
 use mrml_zstd::{HttpEncodingProfile, encode_http};
 
 use crate::{GitdAuthentication, Header, RepositoryAction, RequestHead};
@@ -859,7 +859,7 @@ pub struct GitdHttp3Server<B: GitdBackend> {
     flights: RepresentationSingleFlight,
     trust: TrustGeneration,
     revocations: RevocationGeneration,
-    authentication: Option<GitdAuthentication>,
+    authentication: Option<Shared<GitdAuthentication>>,
 }
 
 impl<B: GitdBackend> GitdHttp3Server<B> {
@@ -874,6 +874,9 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         })
     }
     pub fn configure_authentication(&mut self, authentication: GitdAuthentication) {
+        self.authentication = Some(Shared::new(authentication));
+    }
+    pub fn configure_shared_authentication(&mut self, authentication: Shared<GitdAuthentication>) {
         self.authentication = Some(authentication);
     }
     pub fn set_verification_generations(

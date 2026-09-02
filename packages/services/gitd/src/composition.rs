@@ -1,5 +1,6 @@
 use mrml_git::{AuditReceiptAuthority, RepositoryIdentity};
-use mrml_http::GitdHttp3Server;
+use mrml_http::{BackendError, GitdAuthentication, GitdHttp3Server};
+use mrml_runtime::Shared;
 
 use crate::{
     AuthenticationStoreError, DeploymentCatalog, GitdConfig, GitdRepositorySet,
@@ -20,6 +21,19 @@ pub enum GitdCompositionError {
 pub struct GitdComposedService {
     pub edge: GitdHttp3Server<SharedGitdRepositorySet>,
     pub recovery: Vec<(RepositoryIdentity, RepositoryRecoverySummary)>,
+    backend: SharedGitdRepositorySet,
+    authentication: Shared<GitdAuthentication>,
+}
+
+impl GitdComposedService {
+    pub fn worker_edge(
+        &self,
+        cache_bytes: usize,
+    ) -> Result<GitdHttp3Server<SharedGitdRepositorySet>, BackendError> {
+        let mut edge = GitdHttp3Server::new(self.backend.clone(), cache_bytes)?;
+        edge.configure_shared_authentication(self.authentication.clone());
+        Ok(edge)
+    }
 }
 
 /// Construct the routable Git service only after every catalog repository is
@@ -57,8 +71,14 @@ pub fn compose_gitd_service(
     let shared = repositories
         .into_shared()
         .map_err(|_| GitdCompositionError::Backend)?;
-    let mut edge =
-        GitdHttp3Server::new(shared, cache_bytes).map_err(|_| GitdCompositionError::Cache)?;
-    edge.configure_authentication(authentication);
-    Ok(GitdComposedService { edge, recovery })
+    let authentication = Shared::new(authentication);
+    let mut edge = GitdHttp3Server::new(shared.clone(), cache_bytes)
+        .map_err(|_| GitdCompositionError::Cache)?;
+    edge.configure_shared_authentication(authentication.clone());
+    Ok(GitdComposedService {
+        edge,
+        recovery,
+        backend: shared,
+        authentication,
+    })
 }
