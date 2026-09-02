@@ -7,7 +7,7 @@ authority_dockerfile=${3:-deploy/compose/Dockerfile.git-authority}
 
 require() {
   pattern=$1 file=$2
-  grep -F "$pattern" "$file" >/dev/null || {
+  grep -F -- "$pattern" "$file" >/dev/null || {
     echo "missing required Git deployment invariant: $pattern" >&2
     exit 1
   }
@@ -15,7 +15,7 @@ require() {
 
 reject() {
   pattern=$1 file=$2
-  if grep -F "$pattern" "$file" >/dev/null; then
+  if grep -F -- "$pattern" "$file" >/dev/null; then
     echo "forbidden Git deployment setting: $pattern" >&2
     exit 1
   fi
@@ -61,5 +61,14 @@ for dockerfile in "$gitd_dockerfile" "$authority_dockerfile"; do
   reject 'wget' "$dockerfile"
   reject 'COPY . ' "$dockerfile"
 done
+
+for operator in deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh; do
+  [ -x "$operator" ] || {
+    echo "missing executable Git deployment operator: $operator" >&2
+    exit 1
+  }
+done
+require '--no-build --pull never git-authority gitd' deploy/compose/switch-git-version.sh
+require 'repository data was not rolled back' deploy/compose/switch-git-version.sh
 
 echo "Git Compose static invariants PASS"
