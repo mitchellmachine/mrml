@@ -1,6 +1,12 @@
 # TEST ONLY: combine with deploy/compose/compose.git.yaml. Never deploy this
 # overlay or its fixture image to production.
 services:
+  gitd:
+    environment:
+      MRML_CA_BUNDLE: /run/test-only/root.pem
+    volumes:
+      - "${MRML_TEST_CERT_ROOT:?set MRML_TEST_CERT_ROOT}/root.pem:/run/test-only/root.pem:ro"
+
   certd:
     image: "mrml/gitd-certd-test-fixture:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
     platform: linux/amd64

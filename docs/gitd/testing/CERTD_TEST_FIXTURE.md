@@ -64,6 +64,10 @@ drops every capability, uses a read-only root, and mounts only the certd-Gitd
 channel, runtime socket directory, and ephemeral certificate inputs. Production
 image and Compose policy tests reject the fixture name.
 
+The overlay adds the ephemeral root PEM to Gitd's process-local trust bundle
+through `MRML_CA_BUNDLE`. This is explicit test trust for the generated leaf;
+it is absent from the production Compose fragment and production images.
+
 Podman Compose 1.6.0 successfully rendered the test overlay with
 `deploy/compose/compose.git.yaml`. The merged model retained the production
 Gitd and authority confinement and required fixture health before Gitd startup.
