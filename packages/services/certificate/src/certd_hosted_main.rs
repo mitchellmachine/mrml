@@ -13,8 +13,9 @@ use mrml_certificate::{
     PRODUCTION_SECRET_MODE, PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId,
     TlsKeyIdentity, TlsSigningRoute, UnixCertdListener, decode_certd_account_key_request,
     decode_certd_candidate_request, decode_certd_channel_request, decode_certd_jws_request,
-    decode_certd_tls_key_request, encode_certd_channel_request, encode_certd_tls_key_response,
-    parse_certd_config, write_constrained_acme_jws, write_pkcs10_csr,
+    decode_certd_tls_key_request, encode_certd_candidate_request, encode_certd_channel_request,
+    encode_certd_tls_key_response, parse_certd_config, write_constrained_acme_jws,
+    write_pkcs10_csr,
 };
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use mrml_crypto::{ecdsa_p256_digest_verify_raw, encode_der_signature};
@@ -467,6 +468,13 @@ fn dispatch_channel_request(
             }
             let (active, _) = load_active_candidate(state).map_err(|_| ())?;
             active.encode(output).map_err(|_| ())
+        }
+        CertdChannelOperation::GetActiveCertificateForRevocation => {
+            if role != CertdChannelRole::Acmed || !payload.is_empty() {
+                return Err(());
+            }
+            let (_, active) = load_active_candidate(state).map_err(|_| ())?;
+            encode_certd_candidate_request(&active, output).map_err(|_| ())
         }
         _ => Err(()),
     }

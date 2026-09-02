@@ -29,6 +29,7 @@ pub enum CertdChannelOperation {
     RetireCertificateGeneration = 22,
     GetCertificateLifecycleStatus = 23,
     RequestCertificateKeyProofForRevocation = 24,
+    GetActiveCertificateForRevocation = 25,
 }
 
 impl CertdChannelOperation {
@@ -47,6 +48,7 @@ impl CertdChannelOperation {
             22 => Self::RetireCertificateGeneration,
             23 => Self::GetCertificateLifecycleStatus,
             24 => Self::RequestCertificateKeyProofForRevocation,
+            25 => Self::GetActiveCertificateForRevocation,
             _ => return None,
         })
     }
@@ -72,6 +74,7 @@ impl CertdChannelOperation {
                     | Self::RetireCertificateGeneration
                     | Self::GetCertificateLifecycleStatus
                     | Self::RequestCertificateKeyProofForRevocation
+                    | Self::GetActiveCertificateForRevocation
             ),
         }
     }
