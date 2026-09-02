@@ -107,16 +107,21 @@ impl GitdHttp2WorkerPool {
                             continue;
                         }
                     };
-                    if serve_gitd_http2_connection_with_drain(
+                    if let Err(error) = serve_gitd_http2_connection_with_drain(
                         &mut edge,
                         &mut connection,
                         maximum_body_bytes,
                         &worker_draining,
-                    )
-                    .is_err()
-                    {
+                    ) {
                         increment(&worker_counters.application_failures);
-                        eprintln!("component=mrml-gitd event=http2_application_failed");
+                        eprintln!(
+                            "component=mrml-gitd event={}",
+                            match error {
+                                crate::GitdHttp2StreamError::Transport => "http2_transport_failed",
+                                crate::GitdHttp2StreamError::Prepare(_) => "http2_prepare_failed",
+                                crate::GitdHttp2StreamError::Backend(_) => "http2_backend_failed",
+                            }
+                        );
                     }
                 }
             }) {
