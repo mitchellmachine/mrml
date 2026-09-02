@@ -51,6 +51,16 @@ socket using the authority-side channel capability. The listener admits that
 exact authority UID only for `Health`; Gitd remains the sole peer admitted for
 receive, ref, proof, and receipt operations.
 
+The authority's selected protected policy is not a second deployment copy.
+Compose mounts Gitd's policy root read-only into the networkless authority and
+passes the exact `MRML_PROTECTED_REPOSITORY` separately. The authority validates
+that canonical identity and derives its path beneath the fixed root; Gitd opens
+the same policy through its catalog-derived path. Authority-owned detached proofs
+remain under the matching repository identity in authority state. This release
+profile deliberately serves one explicitly selected protected repository per
+authority process; the name selects state but grants no authority, and startup
+fails if the selected policy, generation, keys, or catalog state disagree.
+
 Before UDP admission, the endpoint receives a distinct generated retry key and
 nonzero generation. Gitd configures a 30-second one-use retry-token manager,
 bounded half-open/per-IPv4/memory admission, and the shared resource controller

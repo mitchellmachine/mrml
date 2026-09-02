@@ -1,16 +1,18 @@
 use mrml_crypto::erase_secret_bytes;
-use mrml_git::{DurableDetachedCommitProofDirectory, LinuxDurableTrustPolicyStore};
-use mrml_git_authority::{
-    AUTHORITY_CAPABILITY_BYTES, AUTHORITY_HEADER_BYTES, AuthorityCapability,
-    AuthorityDispatchError, AuthorityFrame, AuthorityFrameKind, AuthorityListener,
-    AuthorityOperation, AuthorityPeer, AuthorityReplayWindow, AuthoritySession,
-    MAX_AUTHORITY_PAYLOAD_BYTES, ProductionAuthority, decode_frame, encode_frame,
+use mrml_git::{
+    DurableDetachedCommitProofDirectory, LinuxDurableTrustPolicyStore, RepositoryIdentity,
 };
-use mrml_openpgp::{MAX_OPENPGP_PUBLIC_KEY_BYTES, parse_public_key_v6_ascii};
+use mrml_git_authority::{
+    decode_frame, encode_frame, AuthorityCapability, AuthorityDispatchError, AuthorityFrame,
+    AuthorityFrameKind, AuthorityListener, AuthorityOperation, AuthorityPeer,
+    AuthorityReplayWindow, AuthoritySession, ProductionAuthority, AUTHORITY_CAPABILITY_BYTES,
+    AUTHORITY_HEADER_BYTES, MAX_AUTHORITY_PAYLOAD_BYTES,
+};
+use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const EX_USAGE: i32 = 64;
 const EX_CONFIG: i32 = 78;
@@ -28,23 +30,9 @@ fn main() {
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
     match arguments.as_slice() {
-        [
-            _,
-            command,
-            _socket,
-            capability,
-            peer_uid,
-            peer_gid,
-            own_uid,
-            own_gid,
-            policy,
-            proofs,
-            openpgp,
-            ml_dsa,
-            receipt_key,
-            validation_time,
-            repository_generation,
-        ] if command == "check-config" => {
+        [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
+            if command == "check-config" =>
+        {
             let _ = parse_peer(peer_uid, peer_gid)?;
             let authority_peer = parse_peer(own_uid, own_gid)?;
             let _capability = read_capability(capability, authority_peer.uid)?;
@@ -52,6 +40,7 @@ fn run() -> Result<(), ()> {
                 authority_peer.uid,
                 policy,
                 proofs,
+                repository,
                 openpgp,
                 ml_dsa,
                 receipt_key,
@@ -61,53 +50,37 @@ fn run() -> Result<(), ()> {
             println!("valid");
             Ok(())
         }
-        [
-            _,
-            command,
-            socket,
-            capability,
-            peer_uid,
-            peer_gid,
-            own_uid,
-            own_gid,
-            policy,
-            proofs,
-            openpgp,
-            ml_dsa,
-            receipt_key,
-            validation_time,
-            repository_generation,
-        ] if command == "serve" => serve(
-            socket,
-            capability,
-            parse_peer(peer_uid, peer_gid)?,
-            parse_peer(own_uid, own_gid)?,
-            policy,
-            proofs,
-            openpgp,
-            ml_dsa,
-            receipt_key,
-            validation_time.parse().map_err(|_| ())?,
-            repository_generation.parse().map_err(|_| ())?,
-        ),
-        [
-            _,
-            command,
-            socket,
-            capability,
-            own_uid,
-            own_gid,
-            authority_uid,
-            authority_gid,
-        ] if command == "healthcheck" => healthcheck(
-            socket,
-            capability,
-            parse_peer(own_uid, own_gid)?,
-            parse_peer(authority_uid, authority_gid)?,
-        ),
+        [_, command, socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
+            if command == "serve" =>
+        {
+            serve(
+                socket,
+                capability,
+                parse_peer(peer_uid, peer_gid)?,
+                parse_peer(own_uid, own_gid)?,
+                policy,
+                proofs,
+                repository,
+                openpgp,
+                ml_dsa,
+                receipt_key,
+                validation_time.parse().map_err(|_| ())?,
+                repository_generation.parse().map_err(|_| ())?,
+            )
+        }
+        [_, command, socket, capability, own_uid, own_gid, authority_uid, authority_gid]
+            if command == "healthcheck" =>
+        {
+            healthcheck(
+                socket,
+                capability,
+                parse_peer(own_uid, own_gid)?,
+                parse_peer(authority_uid, authority_gid)?,
+            )
+        }
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_DIR PROOF_DIR OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_DIR PROOF_DIR OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
@@ -121,6 +94,7 @@ fn serve(
     authority_peer: AuthorityPeer,
     policy_path: &str,
     proof_path: &str,
+    repository: &str,
     openpgp_path: &str,
     ml_dsa_path: &str,
     receipt_key_path: &str,
@@ -132,6 +106,7 @@ fn serve(
         authority_peer.uid,
         policy_path,
         proof_path,
+        repository,
         openpgp_path,
         ml_dsa_path,
         receipt_key_path,
@@ -201,14 +176,18 @@ fn load_authority(
     authority_uid: u32,
     policy_path: &str,
     proof_path: &str,
+    repository: &str,
     openpgp_path: &str,
     ml_dsa_path: &str,
     receipt_key_path: &str,
     validation_time: u64,
     repository_generation: u64,
 ) -> Result<ProductionAuthority, ()> {
-    let policy = LinuxDurableTrustPolicyStore::open(policy_path).map_err(|_| ())?;
-    let proofs = DurableDetachedCommitProofDirectory::open(proof_path).map_err(|_| ())?;
+    let (policy_path, proof_path) = authority_storage_paths(policy_path, proof_path, repository)?;
+    let policy =
+        LinuxDurableTrustPolicyStore::open(policy_path.to_str().ok_or(())?).map_err(|_| ())?;
+    let proofs = DurableDetachedCommitProofDirectory::open(proof_path.to_str().ok_or(())?)
+        .map_err(|_| ())?;
     let openpgp_bytes = read_regular(
         openpgp_path,
         1,
@@ -244,6 +223,23 @@ fn load_authority(
     .map_err(|_| ())?;
     erase_secret_bytes(&mut receipt_key);
     Ok(authority)
+}
+
+fn authority_storage_paths(
+    policy_root: &str,
+    proof_root: &str,
+    repository: &str,
+) -> Result<(PathBuf, PathBuf), ()> {
+    let policy_root = Path::new(policy_root);
+    let proof_root = Path::new(proof_root);
+    if !policy_root.is_absolute() || !proof_root.is_absolute() {
+        return Err(());
+    }
+    let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    Ok((
+        policy_root.join(repository.as_str()),
+        proof_root.join(repository.as_str()),
+    ))
 }
 
 fn healthcheck(
@@ -342,4 +338,30 @@ fn read_regular(
     let mut bytes = vec![0u8; metadata.len() as usize];
     file.read_exact(&mut bytes).map_err(|_| ())?;
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authority_paths_require_absolute_roots_and_canonical_repository_identity() {
+        assert_eq!(
+            authority_storage_paths("/policy", "/proof", "owner/project").unwrap(),
+            (
+                PathBuf::from("/policy/owner/project"),
+                PathBuf::from("/proof/owner/project")
+            )
+        );
+        for repository in [
+            "../policy",
+            "owner/../policy",
+            "/owner/project",
+            "owner//repo",
+        ] {
+            assert!(authority_storage_paths("/policy", "/proof", repository).is_err());
+        }
+        assert!(authority_storage_paths("policy", "/proof", "owner/project").is_err());
+        assert!(authority_storage_paths("/policy", "proof", "owner/project").is_err());
+    }
 }

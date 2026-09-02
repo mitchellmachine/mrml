@@ -23,6 +23,7 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=21002,gid=21002,mode=0700
     volumes:
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/authority/state:/var/lib/mrml/authority:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/policies:/var/lib/mrml/git-policies:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/git-authority:/run/mrml/git-authority:rw"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.authority:/run/secrets/git-authority-channel:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/receipt.key:/run/secrets/receipt.key:ro"
@@ -36,8 +37,9 @@ services:
       - "21001"
       - "21002"
       - "21002"
-      - /var/lib/mrml/authority/policies
+      - /var/lib/mrml/git-policies
       - /var/lib/mrml/authority/proofs
+      - "${MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY}"
       - /etc/mrml/authority/openpgp-public.asc
       - /etc/mrml/authority/ml-dsa-public.bin
       - /run/secrets/receipt.key
