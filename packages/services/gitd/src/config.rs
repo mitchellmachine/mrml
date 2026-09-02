@@ -40,6 +40,7 @@ pub struct GitdConfig {
     pub max_uploads: u32,
     pub max_receives: u32,
     pub max_body_bytes: u64,
+    pub minimum_free_space_bytes: u64,
     pub drain_seconds: u32,
 }
 
@@ -128,6 +129,7 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
     let mut max_uploads = None;
     let mut max_receives = None;
     let mut max_body_bytes = None;
+    let mut minimum_free_space_bytes = None;
     let mut drain_seconds = None;
 
     for line in input.lines() {
@@ -194,6 +196,10 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
                 max_body_bytes,
                 bounded_u64(value, 1024, 8 * 1024 * 1024 * 1024 * 1024)?
             ),
+            "minimum_free_space_bytes" => set!(
+                minimum_free_space_bytes,
+                bounded_u64(value, 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024 * 1024)?
+            ),
             "drain_seconds" => set!(drain_seconds, bounded_u32(value, 1, 300)?),
             _ => return Err(GitdConfigError::UnknownField),
         }
@@ -239,6 +245,7 @@ pub fn parse_gitd_config(input: &[u8]) -> Result<GitdConfig, GitdConfigError> {
         max_uploads: required!(max_uploads),
         max_receives: required!(max_receives),
         max_body_bytes: required!(max_body_bytes),
+        minimum_free_space_bytes: required!(minimum_free_space_bytes),
         drain_seconds: required!(drain_seconds),
     };
     let authoritative = [
@@ -385,7 +392,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nquic_retry_key=/run/secrets/gitd-quic-retry-key\nquic_retry_generation=1\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\ndrain_seconds=30\n";
+    const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nquic_retry_key=/run/secrets/gitd-quic-retry-key\nquic_retry_generation=1\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\nminimum_free_space_bytes=42949672960\ndrain_seconds=30\n";
 
     #[test]
     fn exact_v1_config_parses_with_production_defaults() {
@@ -394,6 +401,7 @@ mod tests {
         assert_eq!(config.authority_uid, 21002);
         assert_eq!(config.certd_uid, 21003);
         assert_eq!(config.listen_port, 8443);
+        assert_eq!(config.minimum_free_space_bytes, 40 * 1024 * 1024 * 1024);
     }
 
     #[test]

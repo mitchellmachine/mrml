@@ -23,6 +23,7 @@ pub struct ProductionReceiveRepository {
     authenticated_receipts: PathBuf,
     max_body_bytes: u64,
     max_object_bytes: u64,
+    minimum_free_space_bytes: u64,
 }
 
 impl ProductionReceiveRepository {
@@ -65,6 +66,7 @@ impl ProductionReceiveRepository {
             authenticated_receipts: admitted.paths.receipts.join("authenticated"),
             max_body_bytes: receive_pack_limit(config.max_body_bytes),
             max_object_bytes: entry.profile.max_object_bytes,
+            minimum_free_space_bytes: config.minimum_free_space_bytes,
         })
     }
 
@@ -94,6 +96,7 @@ impl ProductionReceiveRepository {
         let mut quarantine_limits = QuarantineLimits::default();
         quarantine_limits.max_incoming_pack_bytes = self.max_body_bytes;
         quarantine_limits.max_individual_object_bytes = self.max_object_bytes;
+        quarantine_limits.minimum_free_space_bytes = self.minimum_free_space_bytes;
         quarantine_limits.max_expanded_object_bytes = self
             .max_body_bytes
             .checked_mul(4)

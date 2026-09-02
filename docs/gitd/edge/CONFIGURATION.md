@@ -20,8 +20,11 @@ under the state root; a token-verifier pepper and distinct QUIC retry key
 restricted to `/run/secrets`; a nonzero retry generation; authority and certd
 sockets and capability files; the Gitd, authority, and certd
 numeric identities; nonzero persisted next authority and certd request
-identifiers; connection/upload/receive/body limits; one unprivileged shared
-TCP/UDP port; and a bounded drain interval. Paths identify deployment objects
+identifiers; connection/upload/receive/body limits; an explicit retained
+ordinary free-space floor of at least 1 GiB; one unprivileged shared TCP/UDP
+port; and a bounded drain interval. The production example retains 40 GiB;
+smaller constrained deployments must deliberately select and monitor their
+reduced emergency reserve. Paths identify deployment objects
 but do not grant authority. Startup must subsequently open and validate each as
 the appropriate capability before admitting traffic.
 

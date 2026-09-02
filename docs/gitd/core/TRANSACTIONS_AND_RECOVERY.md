@@ -19,8 +19,11 @@ maxima and the later validation phase binds the exact nonzero object count and
 expanded bytes without increasing authority. `reserve_push_disk` remains the
 lower-level exact-forecast operation. The default limits are 2 GiB incoming
 pack, 8 GiB expanded objects,
-128 MiB individual objects, one million objects, 32 refs, and a retained
-40 GiB ordinary free-space reserve. Checked arithmetic reserves quarantine
+128 MiB individual objects, one million objects, and 32 refs. The production
+deployment example retains the default 40 GiB ordinary free-space reserve;
+Gitd configuration can explicitly reduce that floor no lower than 1 GiB for a
+constrained deployment, without changing the conservative pack and expansion
+forecast. Checked arithmetic reserves quarantine
 bytes, expanded validation material, a second immutable arrival-pack extent,
 index, staged metadata, receipt, and emergency reserve. Limit overflow,
 arithmetic overflow, and insufficient space are distinct failures.

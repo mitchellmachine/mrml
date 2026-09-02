@@ -30,7 +30,7 @@ trap 'if [ -n "${child_pid-}" ]; then kill "$child_pid" 2>/dev/null || true; fi'
 
 git -C "$directory" rev-parse --verify HEAD >"$output/source.commit"
 printf 'format=mrml-git-streaming-evidence-v1\nsource_bytes=%s\n' "$source_bytes" >"$output/metadata"
-sed -n '/^max_connections=/p;/^max_uploads=/p;/^max_receives=/p;/^max_body_bytes=/p;/^drain_seconds=/p' \
+sed -n '/^max_connections=/p;/^max_uploads=/p;/^max_receives=/p;/^max_body_bytes=/p;/^minimum_free_space_bytes=/p;/^drain_seconds=/p' \
   "$deploy_root/config/gitd.conf" >"$output/configured-limits"
 
 gitd_container=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" ps -q gitd)
