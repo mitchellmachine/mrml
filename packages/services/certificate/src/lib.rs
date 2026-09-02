@@ -99,7 +99,8 @@ pub use catalog_lifecycle_provider::{
     CatalogLifecycleProvider, CertificateLifecycleSupplementalProvider,
 };
 pub use certd_candidate_protocol::{
-    CertdCandidateProtocolError, CertdCandidateRequest, MAX_CERTD_CANDIDATE_CHAIN_BYTES,
+    CERTD_CANDIDATE_STATE_BYTES, CertdCandidateProtocolError, CertdCandidateRequest,
+    CertdCandidateStage, CertdCandidateState, MAX_CERTD_CANDIDATE_CHAIN_BYTES,
     decode_certd_candidate_request, encode_certd_candidate_request,
 };
 pub use certd_channel::{

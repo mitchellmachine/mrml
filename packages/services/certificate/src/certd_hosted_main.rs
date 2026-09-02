@@ -1,21 +1,25 @@
 use mrml_acme::{AcmeIdentifier, CaClass};
 use mrml_certificate::{
-    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
-    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
-    CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow,
-    CertdTlsKeyRequest, CertificateChainVerifier, CertificateP256SigningKey,
-    CertificateValidationPolicy, ConstrainedAcmeJwsPolicy, HmacSha256DurableAuthenticator,
-    HostedCertificateChainVerifier, HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole,
-    HostedP256KeyStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES,
-    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS,
-    PRODUCTION_SECRET_MODE, PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId,
-    TlsKeyIdentity, TlsSigningRoute, UnixCertdListener, decode_certd_account_key_request,
-    decode_certd_candidate_request, decode_certd_channel_request, decode_certd_jws_request,
-    decode_certd_tls_key_request, encode_certd_channel_request, encode_certd_tls_key_response,
-    parse_certd_config, write_constrained_acme_jws, write_pkcs10_csr,
+    AccountP256SigningKey, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest, CertdCandidateStage,
+    CertdCandidateState, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
+    CertdChannelRequest, CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity,
+    CertdReplayWindow, CertdTlsKeyRequest, CertificateChainVerifier, CertificateP256SigningKey,
+    CertificateValidationPolicy, ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId,
+    DurableRecord, DurableRecordKind, DurableStateStore, HmacSha256DurableAuthenticator,
+    HostedCertificateChainVerifier, HostedDurableStateStore, HostedP256KeyDescriptor,
+    HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATE_CHAIN_BYTES,
+    MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
+    PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
+    UnixCertdListener, decode_certd_account_key_request, decode_certd_candidate_request,
+    decode_certd_channel_request, decode_certd_jws_request, decode_certd_tls_key_request,
+    encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
+    write_constrained_acme_jws, write_pkcs10_csr,
 };
 use mrml_crypto::ecdsa_p256_digest_verify_raw;
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
+use std::io::Write;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -36,11 +40,15 @@ const GITD_SOCKET: &str = "/run/mrml/certd-gitd/certd.sock";
 const ACMED_SOCKET: &str = "/run/mrml/certd-acmed/certd.sock";
 const UNLOCK_SECRET: &str = "/run/secrets/certd-unlock.key";
 const KEY_STORE_ROOT: &str = "/var/lib/mrml/certd/keys";
+const CANDIDATE_STATE_ROOT: &str = "/var/lib/mrml/certd/state";
+const CANDIDATE_PATH: &str = "/var/lib/mrml/publications/candidate.bin";
+const CANDIDATE_TEMP_PATH: &str = "/var/lib/mrml/publications/candidate.tmp";
 const CONFIG_PATH: &str = "/etc/mrml/certd/config.json";
 const TRUST_ROOTS_PATH: &str = "/etc/mrml/certd/acme-trust-roots.pem";
 const GITD_CAPABILITY: &str = "/run/secrets/certd-gitd.cap";
 const ACMED_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
+const LINUX_O_NOFOLLOW: i32 = 0x20_000;
 
 struct CertdHostedState {
     config: CertdConfig,
@@ -48,6 +56,8 @@ struct CertdHostedState {
     certificate_key: Mutex<CertificateP256SigningKey>,
     trust_roots: PemCertificateChain,
     candidate: Mutex<Option<StagedCandidate>>,
+    durable_authenticator: Mutex<HmacSha256DurableAuthenticator>,
+    durable_state: Mutex<HostedDurableStateStore>,
 }
 
 struct StagedCandidate {
@@ -72,7 +82,6 @@ fn application_main() -> Result<(), &'static str> {
             let (_authenticator, _key_store) = load_certd_storage()?;
             let _trust_roots = load_trust_roots(config)?;
             let _gitd = load_channel_capability(GITD_CAPABILITY)?;
-            let _acmed = load_channel_capability(ACMED_CAPABILITY)?;
             println!("mrml-certd configuration valid");
             Ok(())
         }
@@ -82,9 +91,17 @@ fn application_main() -> Result<(), &'static str> {
 }
 
 fn serve(config: CertdConfig) -> Result<(), &'static str> {
-    let (_durable_authenticator, key_store) = load_certd_storage()?;
+    let (durable_authenticator, key_store) = load_certd_storage()?;
     let trust_roots = load_trust_roots(config)?;
-    let state = Arc::new(load_or_create_keys(config, &key_store, trust_roots)?);
+    let durable_state = HostedDurableStateStore::open(Path::new(CANDIDATE_STATE_ROOT))
+        .map_err(|_| "cannot open certd candidate state")?;
+    let state = Arc::new(load_or_create_keys(
+        config,
+        &key_store,
+        trust_roots,
+        durable_authenticator,
+        durable_state,
+    )?);
     let gitd_capability = load_channel_capability(GITD_CAPABILITY)?;
     let acmed_capability = load_channel_capability(ACMED_CAPABILITY)?;
     let gitd = UnixCertdListener::bind(
@@ -370,6 +387,16 @@ fn dispatch_channel_request(
                     return Err(());
                 }
             } else {
+                persist_staged_candidate(
+                    state,
+                    payload,
+                    verified.chain_digest,
+                    verified.leaf_spki_digest,
+                    verified.not_before,
+                    verified.not_after,
+                    request.order_url_digest,
+                )
+                .map_err(|_| ())?;
                 *candidate = Some(StagedCandidate {
                     chain: request.chain,
                     leaf_spki_digest: verified.leaf_spki_digest,
@@ -414,6 +441,8 @@ fn load_or_create_keys(
     config: CertdConfig,
     key_store: &HostedP256KeyStore,
     trust_roots: PemCertificateChain,
+    durable_authenticator: HmacSha256DurableAuthenticator,
+    durable_state: HostedDurableStateStore,
 ) -> Result<CertdHostedState, &'static str> {
     let account_descriptor = HostedP256KeyDescriptor {
         role: HostedP256KeyRole::AcmeAccount,
@@ -470,7 +499,115 @@ fn load_or_create_keys(
         certificate_key: Mutex::new(certificate_key),
         trust_roots,
         candidate: Mutex::new(None),
+        durable_authenticator: Mutex::new(durable_authenticator),
+        durable_state: Mutex::new(durable_state),
     })
+}
+
+fn persist_staged_candidate(
+    state: &CertdHostedState,
+    request: &[u8],
+    chain_digest: [u8; 32],
+    leaf_spki_digest: [u8; 32],
+    not_before: u64,
+    not_after: u64,
+    order_url_digest: [u8; 32],
+) -> Result<(), &'static str> {
+    let candidate_state = CertdCandidateState {
+        stage: CertdCandidateStage::Staged,
+        identity: state.config.identity,
+        directory_generation: state.config.directory_generation,
+        account_generation: state.config.account_generation,
+        key_generation: state.config.key_generation,
+        policy_generation: state.config.policy_generation,
+        order_url_digest,
+        chain_digest,
+        leaf_spki_digest,
+        not_before,
+        not_after,
+        request_digest: Sha256::digest(request),
+    };
+    let object = DurableObjectId(state.config.identity);
+    let mut durable_state = state
+        .durable_state
+        .lock()
+        .map_err(|_| "candidate state poisoned")?;
+    let mut authenticator = state
+        .durable_authenticator
+        .lock()
+        .map_err(|_| "candidate authenticator poisoned")?;
+    let mut existing_bytes = [0u8; mrml_certificate::MAX_DURABLE_RECORD_BYTES];
+    if let Some(length) = durable_state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut existing_bytes)
+        .map_err(|_| "cannot load candidate state")?
+    {
+        let existing = DurableRecord::decode(&existing_bytes[..length], &mut *authenticator)
+            .map_err(|_| "cannot authenticate candidate state")?;
+        if existing.kind != DurableRecordKind::Certificate || existing.object != object {
+            return Err("candidate durable record type mismatch");
+        }
+        let decoded = CertdCandidateState::decode(existing.payload())
+            .map_err(|_| "cannot decode candidate state")?;
+        if decoded != candidate_state {
+            return Err("different durable candidate already exists");
+        }
+        let file = std::fs::read(CANDIDATE_PATH).map_err(|_| "missing candidate publication")?;
+        if Sha256::digest(&file) != candidate_state.request_digest || file != request {
+            return Err("candidate publication substitution detected");
+        }
+        return Ok(());
+    }
+    write_candidate_file(request)?;
+    let mut payload = [0u8; mrml_certificate::MAX_DURABLE_PAYLOAD];
+    let length = candidate_state
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode candidate state")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::Certificate,
+        object,
+        0,
+        &payload[..length],
+        &mut *authenticator,
+    )
+    .map_err(|_| "cannot authenticate candidate state")?;
+    let prepared = durable_state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare candidate state")?;
+    durable_state
+        .commit(prepared)
+        .map_err(|_| "candidate state commit uncertain")?;
+    Ok(())
+}
+
+fn write_candidate_file(request: &[u8]) -> Result<(), &'static str> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(LINUX_O_NOFOLLOW)
+        .open(CANDIDATE_TEMP_PATH)
+        .map_err(|_| "cannot create candidate publication")?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "cannot inspect candidate publication")?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != CERTD_UID
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err("unsafe candidate publication file");
+    }
+    file.write_all(request)
+        .map_err(|_| "cannot write candidate publication")?;
+    file.sync_all()
+        .map_err(|_| "cannot sync candidate publication")?;
+    std::fs::rename(CANDIDATE_TEMP_PATH, CANDIDATE_PATH)
+        .map_err(|_| "cannot publish candidate file")?;
+    std::fs::File::open("/var/lib/mrml/publications")
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "cannot sync candidate publication directory")
 }
 
 fn load_trust_roots(config: CertdConfig) -> Result<PemCertificateChain, &'static str> {
