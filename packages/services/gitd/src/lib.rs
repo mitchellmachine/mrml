@@ -8,6 +8,7 @@ mod config;
 mod http2_stream;
 mod http2_workers;
 mod http3_stream;
+mod http3_workers;
 mod identity;
 mod listener;
 mod startup;
@@ -32,6 +33,10 @@ pub use http2_workers::{GitdHttp2WorkerError, GitdHttp2WorkerMetrics, GitdHttp2W
 pub use http3_stream::{
     GitdHttp3StreamError, serve_gitd_http3_connection, serve_gitd_http3_connection_with_drain,
     serve_smart_git_http3,
+};
+pub use http3_workers::{
+    GitdHttp3LifecycleEvent, GitdHttp3WorkerError, GitdHttp3WorkerMetrics,
+    GitdHttp3WorkerPool,
 };
 pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,
