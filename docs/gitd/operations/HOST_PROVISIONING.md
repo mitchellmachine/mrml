@@ -80,6 +80,15 @@ authenticated authority/certd dependencies available, then performs only the
 existing provably safe receipt recovery and completion cleanup. Reverification
 and manual-uncertain states remain unavailable rather than being guessed.
 
+`backup-git.sh` requires root so it can read the Docker-managed volume
+mountpoints after confirming their exact names, bounded mountpoint shape, and
+absence of symlinks. It writes the same deterministic, numeric-owner archive
+namespace as before, combining volume data with the narrowly mounted secret and
+configuration files. `restore-git.sh` refuses any pre-existing target data
+volume, validates the archive before extraction, provisions fresh volumes, and
+extracts each subtree into only its exact volume before a final structural
+revalidation. Runtime socket volumes and the rebuildable cache are not restored.
+
 Normal receive completion now re-reads the exact final journal, removes it, and
 syncs the journal directory after the durable receipt and final journal phase.
 If cleanup alone fails, the receive remains definitely activated and successful;

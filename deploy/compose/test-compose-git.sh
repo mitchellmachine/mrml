@@ -90,6 +90,10 @@ require '--no-build --pull never git-authority gitd' deploy/compose/switch-git-v
 require 'repository data was not rolled back' deploy/compose/switch-git-version.sh
 require 'docker load -i' deploy/compose/load-offline-git-images.sh
 require 'loaded image identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
+require 'managed-volume backup must run as root' deploy/compose/backup-git.sh
+require 'mrml-gitd-repos' deploy/compose/backup-git.sh
+require 'restore requires absent Docker volume' deploy/compose/restore-git.sh
+require 'strip-components' deploy/compose/restore-git.sh
 require 'run --rm --no-deps' deploy/compose/initialize-git.sh
 require 'initialize-token-store' deploy/compose/initialize-git.sh
 require 'repository initialization requires stopped Gitd' deploy/compose/initialize-git-repository.sh

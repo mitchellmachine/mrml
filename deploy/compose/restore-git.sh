@@ -30,6 +30,15 @@ for required in gitd/repos gitd/state gitd/receipts gitd/policies authority/stat
   printf '%s\n' "$entries" | grep -F "$required" >/dev/null || { echo "backup missing $required" >&2; exit 1; }
 done
 
+volumes='gitd/repos:mrml-gitd-repos gitd/state:mrml-gitd-state gitd/quarantine:mrml-gitd-quarantine gitd/receipts:mrml-gitd-receipts gitd/policies:mrml-gitd-policies authority/state:mrml-authority-state'
+required_absent_volumes='mrml-gitd-repos mrml-gitd-state mrml-gitd-quarantine mrml-gitd-cache mrml-gitd-receipts mrml-gitd-policies mrml-authority-state mrml-runtime-git-authority'
+for volume in $required_absent_volumes; do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    echo "restore requires absent Docker volume: $volume" >&2
+    exit 1
+  fi
+done
+
 if [ -e "$target" ]; then
   [ -d "$target" ] && [ ! -L "$target" ] && [ -z "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
     echo "restore target must be a new empty directory" >&2
@@ -38,6 +47,17 @@ if [ -e "$target" ]; then
 else
   install -d -o 0 -g 0 -m 0755 "$target"
 fi
-tar --numeric-owner --same-permissions -C "$target" -xzf "$archive"
-MRML_DEPLOY_ROOT="$target" "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/provision-git-host.sh"
-echo "restore structurally verified at $target; run authenticated Gitd recovery before activation"
+tar --numeric-owner --same-permissions -C "$target" -xzf "$archive" \
+  secrets/git-authority secrets/gitd secrets/channels config/gitd.conf
+provisioner=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/provision-git-host.sh
+MRML_DEPLOY_ROOT="$target" "$provisioner"
+for mapping in $volumes; do
+  archive_path=${mapping%:*}
+  volume=${mapping#*:}
+  mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$volume")
+  case $archive_path in gitd/*|authority/*) strip=2 ;; *) exit 1 ;; esac
+  tar --numeric-owner --same-permissions -C "$mountpoint" --strip-components="$strip" \
+    -xzf "$archive" "$archive_path"
+done
+MRML_DEPLOY_ROOT="$target" "$provisioner"
+echo "restore structurally verified into managed volumes and $target; run authenticated Gitd recovery before activation"
