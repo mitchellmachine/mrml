@@ -33,12 +33,12 @@ fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
     match arguments.as_slice() {
         [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
-            if command == "check-config" =>
+            if matches!(command.as_str(), "check-config" | "describe-signer") =>
         {
             let _ = parse_peer(peer_uid, peer_gid)?;
             let authority_peer = parse_peer(own_uid, own_gid)?;
             let _capability = read_capability(capability, authority_peer.uid)?;
-            load_authority(
+            let authority = load_authority(
                 authority_peer.uid,
                 policy,
                 proofs,
@@ -49,7 +49,11 @@ fn run() -> Result<(), ()> {
                 validation_time.parse().map_err(|_| ())?,
                 repository_generation.parse().map_err(|_| ())?,
             )?;
-            println!("valid");
+            if command == "describe-signer" {
+                print_hex(&authority.signer_identity());
+            } else {
+                println!("valid");
+            }
             Ok(())
         }
         [_, command, socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
@@ -89,11 +93,25 @@ fn run() -> Result<(), ()> {
         }
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
     }
+}
+
+fn print_hex(bytes: &[u8]) {
+    println!("{}", lower_hex(bytes));
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[usize::from(byte >> 4)] as char);
+        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
 }
 
 fn listener_health(socket: &Path, own_uid: u32, socket_gid: u32) -> Result<(), ()> {
@@ -472,5 +490,10 @@ mod tests {
         }
         assert!(authority_storage_paths("policy", "/proof", "owner/project").is_err());
         assert!(authority_storage_paths("/policy", "proof", "owner/project").is_err());
+    }
+
+    #[test]
+    fn signer_identity_encoding_is_exact_lowercase_hex() {
+        assert_eq!(lower_hex(&[0x00, 0xab, 0xff]), "00abff");
     }
 }

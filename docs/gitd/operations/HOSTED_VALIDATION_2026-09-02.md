@@ -241,3 +241,18 @@ socket access. The production Compose invariant test passed.
 Patent review: **NOT_TRIGGERED**. This is a conventional local Unix-socket
 readiness check and introduces no new cryptographic or authorization mechanism.
 See `docs/patents/REVIEW_LOG.md`.
+
+## Authority signer-identity bootstrap
+
+The authority binary now provides `describe-signer` with the same bounded,
+owner-checked inputs as `check-config`. It loads and validates the complete
+authority configuration, derives the receipt signer identity from the private
+receipt key, and emits only the 128-character lowercase hexadecimal public
+identity required by Gitd. It does not print or export the receipt key.
+
+The authority suite passed four library and three binary tests, including exact
+lowercase identity encoding.
+
+Patent review: **NOT_TRIGGERED**. This exposes an already derived public
+identifier through a bounded administrative command and introduces no new
+mechanism. See `docs/patents/REVIEW_LOG.md`.

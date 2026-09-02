@@ -1,5 +1,13 @@
 # Patent review log
 
+## 2026-09-02 — Authority signer-identity bootstrap command
+
+Patent review: **NOT_TRIGGERED**.
+
+This bounded administrative command emits an existing public identity derived
+from an owner-checked receipt key. It neither exports the key nor introduces a
+new cryptographic construction.
+
 ## 2026-09-02 — Authority Compose listener health correction
 
 Patent review: **NOT_TRIGGERED**.
