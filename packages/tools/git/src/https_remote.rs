@@ -5,6 +5,8 @@ use mrml_runtime::{Text, Vector};
 const MAX_DISCOVERY_BYTES: usize = 256 * 1024;
 const MAX_LS_REFS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LS_REFS: usize = 1_000_000;
+pub const MAX_FETCH_WANTS_PER_REQUEST: usize = 32;
+pub const MAX_FETCH_HAVES_PER_REQUEST: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HttpsTransport {
@@ -169,6 +171,122 @@ impl HttpsRemote {
         )?;
         parse_ls_refs(&response_body)
     }
+
+    pub fn fetch_pack_to_file(
+        &self,
+        wants: &[crate::ObjectId],
+        haves: &[crate::ObjectId],
+        pack_path: &str,
+        maximum_pack_bytes: u64,
+    ) -> Result<u64, HttpsRemoteError> {
+        if !self.discover_upload_pack()?.fetch_ofs_delta {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        let body = fetch_request(wants, haves)?;
+        let target = self.service_target(SmartGitService::UploadPack);
+        let authority = self.authority();
+        let headers = [
+            ("accept", "application/x-git-upload-pack-result"),
+            ("content-type", "application/x-git-upload-pack-request"),
+            ("git-protocol", "version=2"),
+        ];
+        let output = crate::FilePackOutput::create_new(pack_path, maximum_pack_bytes)
+            .map_err(map_pack_error)?;
+        let mut decoder = crate::V2PackResponseDecoder::new(output);
+        let head = match self.transport {
+            HttpsTransport::Http2 => {
+                let mut connection = Http2ClientConnection::connect(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                connection
+                    .request_with_body_to(
+                        "POST",
+                        &authority,
+                        &target,
+                        &headers,
+                        &body,
+                        &mut decoder,
+                    )
+                    .map_err(|_| HttpsRemoteError::Transport)?
+            }
+            HttpsTransport::Http3V2 => {
+                let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                connection
+                    .request_control_with_body_to(
+                        "POST",
+                        &authority,
+                        &target,
+                        &headers,
+                        &body,
+                        &mut decoder,
+                    )
+                    .map_err(|_| HttpsRemoteError::Transport)?
+            }
+        };
+        validate_service_response(
+            head.status,
+            &head.headers,
+            &[],
+            "application/x-git-upload-pack-result",
+        )?;
+        let (output, bytes) = decoder.finish().map_err(map_pack_error)?;
+        if output.bytes_written() != bytes {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        Ok(bytes)
+    }
+}
+
+fn map_pack_error(error: crate::HttpsPackError) -> HttpsRemoteError {
+    match error {
+        crate::HttpsPackError::TooLarge => HttpsRemoteError::TooLarge,
+        crate::HttpsPackError::Storage => HttpsRemoteError::Storage,
+        _ => HttpsRemoteError::Protocol,
+    }
+}
+
+fn fetch_request(
+    wants: &[crate::ObjectId],
+    haves: &[crate::ObjectId],
+) -> Result<Vector<u8>, HttpsRemoteError> {
+    if wants.is_empty()
+        || wants.len() > MAX_FETCH_WANTS_PER_REQUEST
+        || haves.len() > MAX_FETCH_HAVES_PER_REQUEST
+        || wants
+            .iter()
+            .chain(haves)
+            .any(|id| id.format() != crate::ObjectFormat::Sha256 || id.is_zero())
+    {
+        return Err(HttpsRemoteError::Protocol);
+    }
+    let mut body = Vector::new();
+    for line in [b"command=fetch\n".as_slice(), b"object-format=sha256\n"] {
+        crate::encode_packet(line, &mut body).map_err(|_| HttpsRemoteError::Protocol)?;
+    }
+    body.try_extend_from_slice(b"0001")
+        .map_err(|_| HttpsRemoteError::TooLarge)?;
+    for id in wants {
+        crate::encode_packet(
+            mrml_runtime::mrml_format!("want {}\n", id.to_hex()).as_bytes(),
+            &mut body,
+        )
+        .map_err(|_| HttpsRemoteError::Protocol)?;
+    }
+    for id in haves {
+        crate::encode_packet(
+            mrml_runtime::mrml_format!("have {}\n", id.to_hex()).as_bytes(),
+            &mut body,
+        )
+        .map_err(|_| HttpsRemoteError::Protocol)?;
+    }
+    for line in [b"done\n".as_slice(), b"ofs-delta\n", b"sideband-all\n"] {
+        crate::encode_packet(line, &mut body).map_err(|_| HttpsRemoteError::Protocol)?;
+    }
+    crate::encode_flush(&mut body);
+    if body.len() > 4096 {
+        return Err(HttpsRemoteError::TooLarge);
+    }
+    Ok(body)
 }
 
 fn ls_refs_request() -> Result<Vector<u8>, HttpsRemoteError> {
@@ -375,6 +493,7 @@ pub enum HttpsRemoteError {
     ContentType,
     Protocol,
     TooLarge,
+    Storage,
 }
 
 impl fmt::Display for HttpsRemoteError {
@@ -387,6 +506,7 @@ impl fmt::Display for HttpsRemoteError {
             Self::ContentType => "Git service returned an invalid content type",
             Self::Protocol => "Git protocol-v2 discovery is invalid",
             Self::TooLarge => "Git discovery response exceeds its limit",
+            Self::Storage => "Git fetch quarantine storage failed",
         })
     }
 }
@@ -565,5 +685,41 @@ mod tests {
                 Err(HttpsRemoteError::Protocol)
             );
         }
+    }
+
+    #[test]
+    fn fetch_request_is_exact_sha256_v2_and_control_bounded() {
+        let want =
+            crate::ObjectId::parse_for(crate::ObjectFormat::Sha256, &"11".repeat(32)).unwrap();
+        let have =
+            crate::ObjectId::parse_for(crate::ObjectFormat::Sha256, &"22".repeat(32)).unwrap();
+        let request = fetch_request(&[want], &[have]).unwrap();
+        for required in [
+            "command=fetch\n",
+            "object-format=sha256\n",
+            "done\n",
+            "ofs-delta\n",
+            "sideband-all\n",
+        ] {
+            assert!(
+                request
+                    .windows(required.len())
+                    .any(|window| window == required.as_bytes())
+            );
+        }
+        assert!(request.windows(4).any(|window| window == b"0001"));
+        assert!(request.ends_with(b"0000"));
+        assert!(request.len() <= 4096);
+    }
+
+    #[test]
+    fn fetch_request_rejects_empty_zero_sha1_and_excess_batches() {
+        let sha256 =
+            crate::ObjectId::parse_for(crate::ObjectFormat::Sha256, &"11".repeat(32)).unwrap();
+        let sha1 = crate::ObjectId::parse_for(crate::ObjectFormat::Sha1, &"11".repeat(20)).unwrap();
+        assert!(fetch_request(&[], &[]).is_err());
+        assert!(fetch_request(&[crate::ObjectId::zero(crate::ObjectFormat::Sha256)], &[]).is_err());
+        assert!(fetch_request(&[sha1], &[]).is_err());
+        assert!(fetch_request(&[sha256; MAX_FETCH_WANTS_PER_REQUEST + 1], &[]).is_err());
     }
 }

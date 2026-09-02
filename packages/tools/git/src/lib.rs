@@ -97,7 +97,7 @@ pub use gitd_core::{
 };
 pub use https_remote::{
     HttpsDiscovery, HttpsRefAdvertisement, HttpsRemote, HttpsRemoteError, HttpsTransport,
-    SmartGitService,
+    SmartGitService, MAX_FETCH_HAVES_PER_REQUEST, MAX_FETCH_WANTS_PER_REQUEST,
 };
 pub use https_pack::{FilePackOutput, HttpsPackError, PackOutput, V2PackResponseDecoder};
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
