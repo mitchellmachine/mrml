@@ -168,6 +168,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let config = load_gitd_config(config_path).map_err(|_| ())?;
     validate_storage_layout(&config).map_err(|_| ())?;
     let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+    operational_event("startup_configuration_valid");
     let authority_capability =
         load_authority_capability(config.authority_capability.as_path(), config.authority_uid)?;
     let certd_capability =
@@ -203,6 +204,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?;
     authority.health().map_err(|_| ())?;
     certd.health().map_err(|_| ())?;
+    operational_event("startup_dependencies_authenticated");
     let identity = certd
         .get_identity_snapshot(&config.server_name)
         .map_err(|_| ())?;
@@ -217,6 +219,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
     let service = compose_gitd_service(&config, &catalog, &mut receipt_authority, 16 * 1024 * 1024)
         .map_err(|_| ())?;
+    operational_event("startup_recovery_complete");
     let operational_health = service.operational_health();
     let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
     if !(4..=65_536).contains(&maximum_connections) {
@@ -271,6 +274,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?;
     let reactor = GitdHttp3Reactor::new(http3, 256 * 1024, 64).map_err(|_| ())?;
     let (tcp, mut quic) = listeners.into_parts();
+    operational_event("startup_listeners_bound");
     let fatal = Arc::new(AtomicBool::new(false));
     let terminating = Arc::new(AtomicBool::new(false));
     let rotation_stop = Arc::new(AtomicBool::new(false));
@@ -337,20 +341,25 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?;
 
     operational_health.mark_ready();
+    operational_event("ready");
     loop {
         if terminating.load(Ordering::Acquire) {
+            operational_event("shutdown_signal_received");
             operational_health.begin_drain();
             rotation_stop.store(true, Ordering::Release);
             let quic_result = reactor.shutdown(&mut quic);
             let rotation_result = rotation_worker.join();
             let tcp_result = _tcp_worker.join();
             return if quic_result.is_ok() && rotation_result && tcp_result {
+                operational_event("shutdown_complete");
                 Ok(())
             } else {
+                operational_event("shutdown_incomplete");
                 Err(())
             };
         }
         if fatal.load(Ordering::Acquire) {
+            operational_event("fatal_dependency_failure");
             operational_health.begin_drain();
             let _ = reactor.shutdown(&mut quic);
             rotation_stop.store(true, Ordering::Release);
@@ -362,6 +371,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
                 continue;
             }
             operational_health.fail();
+            operational_event("fatal_http3_failure");
             let _ = reactor.shutdown(&mut quic);
             fatal.store(true, Ordering::Release);
             rotation_stop.store(true, Ordering::Release);
@@ -369,6 +379,10 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             return Err(());
         }
     }
+}
+
+fn operational_event(event: &'static str) {
+    eprintln!("component=mrml-gitd event={event}");
 }
 
 #[repr(C)]
