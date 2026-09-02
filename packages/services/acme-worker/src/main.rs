@@ -169,6 +169,7 @@ fn application_main() -> Result<(), &'static str> {
             Ok(())
         }
         "health" => acmed_health(config, capability, state_authenticator),
+        "status" => acmed_status(config, state_authenticator),
         "serve" => serve(
             config,
             capability,
@@ -178,9 +179,50 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|health|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|health|status|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn acmed_status(
+    config: AcmedConfig,
+    mut authenticator: impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+        .map_err(|_| "cannot open acmed durable state")?;
+    let account = load_account_record(&config, &state, &mut authenticator)?;
+    let renewal = load_renewal_schedule(&config, &mut state, &mut authenticator)?;
+    let revocation = load_revocation_record(
+        &config,
+        revocation_object(config.identity),
+        &state,
+        &mut authenticator,
+    )?;
+    let (account_phase, account_generation) = account
+        .map(|(record, _)| (record.phase as u8, record.account_generation))
+        .unwrap_or((0, 0));
+    let (identity_generation, renew_at, failures, health) = renewal
+        .map(|(schedule, _)| {
+            (
+                schedule.identity_generation,
+                schedule.renew_at_unix,
+                schedule.failure_count,
+                match schedule.health {
+                    mrml_certificate::ExpiryHealth::Healthy => "healthy",
+                    mrml_certificate::ExpiryHealth::Warning => "warning",
+                    mrml_certificate::ExpiryHealth::Critical => "critical",
+                    mrml_certificate::ExpiryHealth::Expired => "expired",
+                },
+            )
+        })
+        .unwrap_or((0, 0, 0, "unavailable"));
+    let (revocation_phase, revocation_generation) = revocation
+        .map(|(record, _)| (record.phase as u8, record.revocation_generation))
+        .unwrap_or((0, 0));
+    println!(
+        "account_phase={account_phase} account_generation={account_generation} identity_generation={identity_generation} renew_at_unix={renew_at} renewal_failures={failures} health={health} revocation_phase={revocation_phase} revocation_generation={revocation_generation}"
+    );
+    Ok(())
 }
 
 fn acmed_health(
