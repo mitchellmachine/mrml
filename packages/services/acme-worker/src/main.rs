@@ -614,6 +614,25 @@ fn serve(
         &mut state,
         &mut state_authenticator,
     )?;
+    if let Some(rotation_schedule) = key_rotation_schedule(
+        &config,
+        &mut envelope_writer,
+        &mut state,
+        &mut state_authenticator,
+    )? {
+        let replacement = create_replacement_order(
+            &config,
+            &account,
+            rotation_schedule,
+            true,
+            &mut envelope_writer,
+            &mut state,
+            &mut state_authenticator,
+        )?;
+        order = replacement.0;
+        authorization_resources = replacement.1;
+        order_durable_generation = replacement.2;
+    }
     loop {
         publish_dns_challenges(
             &config,
@@ -667,6 +686,7 @@ fn serve(
                         &config,
                         &account,
                         schedule,
+                        false,
                         &mut envelope_writer,
                         &mut state,
                         &mut state_authenticator,
@@ -1687,6 +1707,7 @@ fn create_replacement_order(
     config: &AcmedConfig,
     account: &AccountLifecycle,
     schedule: RenewalSchedule,
+    force_key_rotation: bool,
     signer: &mut CertdEnvelopeWriter<'_>,
     state: &mut HostedDurableStateStore,
     authenticator: &mut impl DurableAuthenticator,
@@ -1700,7 +1721,7 @@ fn create_replacement_order(
 > {
     if schedule.identity != TlsIdentityId(config.identity)
         || schedule.policy_generation != config.policy_generation
-        || unix_time()? < schedule.renew_at_unix
+        || (!force_key_rotation && unix_time()? < schedule.renew_at_unix)
     {
         return Err("replacement order schedule mismatch");
     }
@@ -1845,6 +1866,80 @@ fn load_renewal_schedule(
         return Err("renewal schedule policy mismatch");
     }
     Ok(Some((schedule, durable.generation)))
+}
+
+fn key_rotation_schedule(
+    config: &AcmedConfig,
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<RenewalSchedule>, &'static str> {
+    let mut status = [0u8; mrml_certificate::CERTD_CANDIDATE_STATE_BYTES];
+    let result = certd_call(
+        signer.capability,
+        signer.next_request_id,
+        CertdChannelOperation::GetCertificateLifecycleStatus,
+        &[],
+        &mut status,
+    );
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    let Ok(length) = result else {
+        return Ok(None);
+    };
+    let active = CertdCandidateState::decode(&status[..length])
+        .map_err(|_| "invalid certd lifecycle status")?;
+    if active.stage != CertdCandidateStage::Active
+        || active.identity != config.identity
+        || active.policy_generation != config.policy_generation
+    {
+        return Err("certd lifecycle status policy mismatch");
+    }
+    if active.key_generation == config.key_generation {
+        return Ok(None);
+    }
+    if active
+        .key_generation
+        .checked_add(1)
+        .ok_or("TLS key generation exhausted")?
+        != config.key_generation
+    {
+        return Err("TLS key rotation must advance exactly one generation");
+    }
+    let now = unix_time()?;
+    let object = renewal_schedule_object(config.identity);
+    let previous_generation = match load_renewal_schedule(config, state, authenticator)? {
+        Some((schedule, generation)) => {
+            if schedule.identity_generation != active.identity_generation
+                || schedule.certificate_id != active.ari_certificate_id
+                || schedule.not_after_unix != active.not_after
+            {
+                return Err("TLS key rotation renewal schedule mismatch");
+            }
+            if schedule.renew_at_unix <= now {
+                return Ok(Some(schedule));
+            }
+            generation
+        }
+        None => 0,
+    };
+    let mut schedule = RenewalSchedule::fallback_for_certificate(
+        TlsIdentityId(config.identity),
+        active.identity_generation,
+        active.ari_certificate_id,
+        active.not_before,
+        active.not_after,
+        config.renewal_policy,
+        now,
+        &mut HostedRenewalEntropy,
+    )
+    .map_err(|_| "cannot construct TLS key rotation schedule")?;
+    schedule.renew_at_unix = now;
+    schedule.requery_ari_at_unix = now;
+    store_renewal_schedule(object, previous_generation, schedule, state, authenticator)?;
+    Ok(Some(schedule))
 }
 
 fn record_renewal_failure(
