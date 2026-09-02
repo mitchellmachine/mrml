@@ -133,6 +133,10 @@ impl GitAuthorityChannelClient {
             return Err(GitAuthorityChannelError::Authenticate);
         }
         if decoded.status != 0 {
+            eprintln!(
+                "component=mrml-gitd event={}",
+                authority_denied_event(operation)
+            );
             return Err(GitAuthorityChannelError::Denied);
         }
         let destination = response
@@ -140,6 +144,19 @@ impl GitAuthorityChannelClient {
             .ok_or(GitAuthorityChannelError::OutputLimit)?;
         destination.copy_from_slice(decoded.payload);
         Ok(decoded.payload.len())
+    }
+}
+
+const fn authority_denied_event(operation: AuthorityOperation) -> &'static str {
+    match operation {
+        AuthorityOperation::Health => "authority_health_denied",
+        AuthorityOperation::AuthorizeReceive => "authority_receive_denied",
+        AuthorityOperation::AuthorizeRefTransaction => "authority_transaction_denied",
+        AuthorityOperation::VerifyCommit => "authority_commit_denied",
+        AuthorityOperation::VerifyLegacyCommit => "authority_legacy_commit_denied",
+        AuthorityOperation::SignReceipt => "authority_receipt_sign_denied",
+        AuthorityOperation::VerifyReceipt => "authority_receipt_verify_denied",
+        AuthorityOperation::InstallProof => "authority_proof_install_denied",
     }
 }
 
