@@ -71,6 +71,17 @@ impl ProductionAuthority {
         self.signer_identity
     }
 
+    pub fn set_validation_time(
+        &mut self,
+        validation_time: u64,
+    ) -> Result<(), AuthorityDispatchError> {
+        if validation_time == 0 {
+            return Err(AuthorityDispatchError::Unavailable);
+        }
+        self.validation_time = validation_time;
+        Ok(())
+    }
+
     pub fn dispatch(
         &mut self,
         operation: AuthorityOperation,
@@ -89,8 +100,13 @@ impl ProductionAuthority {
     }
 
     fn health(&self) -> Result<Vector<u8>, AuthorityDispatchError> {
-        self.policy
+        let policy = self
+            .policy
             .load()
+            .map_err(|_| AuthorityDispatchError::Unavailable)?;
+        let pair = AuthorizedHybridPair::bind(&self.openpgp_key, &self.ml_dsa_key);
+        policy
+            .active_verification_policy_at(pair, self.validation_time, true)
             .map_err(|_| AuthorityDispatchError::Unavailable)?;
         let mut output = Vector::new();
         output

@@ -162,7 +162,10 @@ fn serve(
             Ok(request) => request,
             Err(_) => continue,
         };
-        let result = authority.dispatch(request.operation, request.payload);
+        let result = mrml_runtime::unix_time_seconds()
+            .ok_or(AuthorityDispatchError::Unavailable)
+            .and_then(|now| authority.set_validation_time(now))
+            .and_then(|()| authority.dispatch(request.operation, request.payload));
         let (status, payload) = match &result {
             Ok(payload) => (STATUS_OK, &payload[..]),
             Err(AuthorityDispatchError::Malformed) => (2, &[][..]),
