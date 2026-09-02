@@ -6,8 +6,8 @@ use mrml_acme::{
 };
 use mrml_certificate::{
     Dns01PublicationReceipt, Dns01PublicationRequest, Dns01RecordName, Dns01TxtValue,
-    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, RenewalPolicy, certd_identifier_set_digest,
-    dns01_publication_binding,
+    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, RENEWAL_SCHEDULE_BYTES, RenewalPolicy, RenewalSchedule,
+    certd_identifier_set_digest, dns01_publication_binding,
 };
 use mrml_crypto::Sha256;
 use mrml_json::Value;
@@ -25,6 +25,22 @@ const FINALIZATION_RECORD_BYTES: usize = 128;
 const CHALLENGE_RECORD_HEADER_BYTES: usize = 146;
 const REVOCATION_RECORD_MAGIC: &[u8; 8] = b"MRMLARV1";
 pub const REVOCATION_RECORD_BYTES: usize = 256;
+
+pub fn renew_now_approval_digest(
+    schedule: &RenewalSchedule,
+    durable_generation: u64,
+) -> Option<[u8; 32]> {
+    if durable_generation == 0 {
+        return None;
+    }
+    let mut encoded = [0u8; RENEWAL_SCHEDULE_BYTES];
+    schedule.encode(&mut encoded).ok()?;
+    let mut digest = Sha256::new();
+    digest.update(b"MRML acmed owner renew-now approval v1\0");
+    digest.update(&durable_generation.to_be_bytes());
+    digest.update(&encoded);
+    Some(digest.finalize())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcmedRequestIdReservation {
@@ -1496,11 +1512,41 @@ fn decode_hex(value: &[u8]) -> Result<u8, AcmedConfigError> {
 mod tests {
     use super::*;
     use mrml_certificate::{
-        DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
-        HmacSha256DurableAuthenticator, MAX_DURABLE_RECORD_BYTES,
+        DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, ExpiryHealth,
+        HmacSha256DurableAuthenticator, MAX_DURABLE_RECORD_BYTES, RenewalSource, TlsIdentityId,
     };
 
     const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"certificate_profile":"classic","order_lifetime_seconds":3600,"order_retry_limit":6,"authoritative_dns_ipv4":"192.0.2.53","authoritative_dns_port":53,"recursive_dns_ipv4":"198.51.100.53","recursive_dns_port":53,"propagation_attempts":12,"propagation_interval_seconds":5,"propagation_timeout_seconds":300,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2,"renewal_elapsed_numerator":2,"renewal_elapsed_denominator":3,"minimum_renewal_lead_seconds":604800,"warning_lead_seconds":1209600,"critical_lead_seconds":259200,"initial_backoff_seconds":60,"maximum_backoff_seconds":21600,"ari_requery_min_seconds":21600,"ari_requery_max_seconds":43200}"#;
+
+    #[test]
+    fn renew_now_approval_binds_every_authenticated_schedule_field_and_generation() {
+        let schedule = RenewalSchedule {
+            identity: TlsIdentityId([7; 16]),
+            identity_generation: 4,
+            policy_generation: 2,
+            certificate_id: mrml_acme::AriCertificateId::parse("a2V5.aWQ").unwrap(),
+            source: RenewalSource::Ari,
+            renew_at_unix: 500,
+            requery_ari_at_unix: 300,
+            not_after_unix: 900,
+            failure_count: 1,
+            health: ExpiryHealth::Warning,
+        };
+        let approval = renew_now_approval_digest(&schedule, 9).unwrap();
+        assert_eq!(renew_now_approval_digest(&schedule, 9), Some(approval));
+        assert_ne!(renew_now_approval_digest(&schedule, 10), Some(approval));
+        assert_eq!(renew_now_approval_digest(&schedule, 0), None);
+        assert_ne!(
+            renew_now_approval_digest(
+                &RenewalSchedule {
+                    renew_at_unix: 501,
+                    ..schedule
+                },
+                9
+            ),
+            Some(approval)
+        );
+    }
 
     #[test]
     fn account_record_round_trips_only_exact_policy_bound_states() {

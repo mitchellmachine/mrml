@@ -48,8 +48,10 @@ done
 
 echo "ACME Compose static invariants PASS"
 
-for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh; do
+for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh deploy/compose/renew-acme.sh; do
   sh -n "$operator"
 done
 require 'up -d --no-build --pull never certd acmed' deploy/compose/switch-acme-version.sh
 require 'certificate state was not rolled back' deploy/compose/switch-acme-version.sh
+require 'stop acmed' deploy/compose/renew-acme.sh
+require 'MRML_ACMED_OFFLINE_ADMIN=1' deploy/compose/renew-acme.sh

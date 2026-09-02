@@ -84,6 +84,20 @@ sudo ./upgrade-acme.sh NEW_VERSION
 sudo ./rollback-acme.sh PREVIOUS_VERSION
 ```
 
+To force an authenticated renewal without editing durable state by hand, first
+obtain a preview. The commit form stops the long-running worker, revalidates the
+preview against the current authenticated schedule in a one-shot container,
+commits the immediate schedule, and restarts the worker:
+
+```text
+./renew-acme.sh preview
+./renew-acme.sh commit APPROVAL_SHA256_FROM_PREVIEW
+```
+
+A stale preview is rejected. This command does not bypass candidate validation
+or activation policy; it only advances the next renewal attempt to the current
+time.
+
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The
 networkless certd design ensures that compromise of acmed does not reveal an

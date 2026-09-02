@@ -76,6 +76,7 @@ install -m 0555 deploy/compose/provision-acme-host.sh "$payload/deploy/provision
 install -m 0555 deploy/compose/validate-acme.sh "$payload/deploy/validate-acme.sh"
 install -m 0555 deploy/compose/start-acme.sh "$payload/deploy/start-acme.sh"
 install -m 0555 deploy/compose/status-acme.sh "$payload/deploy/status-acme.sh"
+install -m 0555 deploy/compose/renew-acme.sh "$payload/deploy/renew-acme.sh"
 install -m 0555 deploy/compose/switch-acme-version.sh "$payload/deploy/switch-acme-version.sh"
 install -m 0555 deploy/compose/upgrade-acme.sh "$payload/deploy/upgrade-acme.sh"
 install -m 0555 deploy/compose/rollback-acme.sh "$payload/deploy/rollback-acme.sh"

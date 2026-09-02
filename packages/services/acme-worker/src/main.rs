@@ -16,7 +16,7 @@ use mrml_acmed::{
     AcmedChallengeRecord, AcmedChannelRequestCounter, AcmedConfig, AcmedFinalizationPhase,
     AcmedFinalizationRecord, AcmedOrderPhase, AcmedOrderRecord, AcmedRequestIdReservation,
     AcmedRevocationPhase, AcmedRevocationRecord, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
-    finalization_object_id, parse_acmed_config,
+    finalization_object_id, parse_acmed_config, renew_now_approval_digest,
 };
 use mrml_certificate::{
     AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
@@ -170,6 +170,8 @@ fn application_main() -> Result<(), &'static str> {
         }
         "health" => acmed_health(config, capability, state_authenticator),
         "status" => acmed_status(config, state_authenticator),
+        "renew-now-preview" => renew_now_command(config, state_authenticator, false),
+        "renew-now" => renew_now_command(config, state_authenticator, true),
         "serve" => serve(
             config,
             capability,
@@ -179,9 +181,66 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|health|status|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|health|status|renew-now-preview|renew-now APPROVAL_SHA256|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn renew_now_command(
+    config: AcmedConfig,
+    mut authenticator: impl DurableAuthenticator,
+    commit: bool,
+) -> Result<(), &'static str> {
+    if (!commit && std::env::args().nth(2).is_some())
+        || (commit && std::env::args().nth(3).is_some())
+    {
+        return Err("unexpected renew-now argument");
+    }
+    if commit && std::env::var("MRML_ACMED_OFFLINE_ADMIN").as_deref() != Ok("1") {
+        return Err("renew-now requires the stopped-worker one-shot administration context");
+    }
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+        .map_err(|_| "cannot open acmed durable state")?;
+    let (mut schedule, generation) =
+        load_renewal_schedule(&config, &mut state, &mut authenticator)?
+            .ok_or("no active renewal schedule")?;
+    let approval = renew_now_approval_digest(&schedule, generation)
+        .ok_or("cannot encode renewal approval binding")?;
+    if !commit {
+        println!(
+            "identity_generation={} schedule_generation={} certificate_id={} current_renew_at_unix={} approval_sha256={}",
+            schedule.identity_generation,
+            generation,
+            schedule.certificate_id.as_str(),
+            schedule.renew_at_unix,
+            hex(&approval)
+        );
+        return Ok(());
+    }
+    let supplied = parse_digest(
+        &std::env::args()
+            .nth(2)
+            .ok_or("renew-now approval SHA-256 is required")?,
+    )?;
+    if supplied != approval {
+        return Err("renew-now approval does not match the current authenticated schedule");
+    }
+    let now = unix_time()?.max(1);
+    if now >= schedule.not_after_unix {
+        return Err("cannot renew an already expired identity");
+    }
+    schedule.renew_at_unix = now;
+    schedule.requery_ari_at_unix = now;
+    schedule.failure_count = 0;
+    let committed = store_renewal_schedule(
+        renewal_schedule_object(config.identity),
+        generation,
+        schedule,
+        &mut state,
+        &mut authenticator,
+    )?;
+    println!("renewal scheduled immediately generation={committed}");
+    Ok(())
 }
 
 fn acmed_status(
