@@ -1,6 +1,6 @@
 use crate::{
-    BackupDescriptor, BackupError, BackupRestoreTarget, DurableAuthenticator, MAX_BACKUP_BYTES,
-    restore_backup, verify_backup,
+    restore_backup, verify_backup, BackupDescriptor, BackupError, BackupRestoreTarget,
+    DurableAuthenticator, MAX_BACKUP_BYTES,
 };
 use mrml_crypto::Sha256;
 use mrml_interface_certificate_lifecycle_v1 as abi;
@@ -757,8 +757,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        DurableError, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
-        create_backup,
+        create_backup, DurableError, DurableNamespace, DurableObjectId, DurableRecord,
+        DurableRecordKind,
     };
 
     struct Auth;

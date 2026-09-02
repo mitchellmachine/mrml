@@ -1,4 +1,4 @@
-use crate::{MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PemCertificateChain};
+use crate::{PemCertificateChain, MAX_CERTD_CHANNEL_PAYLOAD_BYTES};
 use mrml_acme::{AriCertificateId, CertificateProfile, MAX_ARI_CERTIFICATE_ID};
 
 const MAGIC: &[u8; 8] = b"MRMLCCV1";

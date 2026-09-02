@@ -1,7 +1,7 @@
 use crate::{
+    challenge_dns::{decode_name, encode_name},
     DnsChallengeError, DnsObservationClass, DnsObservationRoute, DnsPropagationQuery,
     DnsTxtObservationReceipt, DnsTxtObservationRequest, MAX_DNS_PACKET,
-    challenge_dns::{decode_name, encode_name},
 };
 use mrml_acme::decode_base64url;
 use mrml_runtime::{NetError, TcpStream};
@@ -243,10 +243,10 @@ mod tests {
         let resolver = Shared::new(HostedDnsChallengeSockets::bind([127, 0, 0, 1], 0).unwrap());
         for sockets in [authoritative.clone(), resolver.clone()] {
             let zone = zone.clone();
-            assert!(
-                mrml_runtime::spawn_detached(move || sockets.serve_tcp_one(&zone, 10).unwrap())
-                    .is_ok()
-            );
+            assert!(mrml_runtime::spawn_detached(move || sockets
+                .serve_tcp_one(&zone, 10)
+                .unwrap())
+            .is_ok());
         }
         let authoritative_route = DnsObservationRoute {
             class: DnsObservationClass::Authoritative,

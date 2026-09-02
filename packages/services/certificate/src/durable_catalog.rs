@@ -101,7 +101,7 @@ mod tests {
     use super::*;
     extern crate std;
     use crate::{CommittedStoreReceipt, DurableRecordKind, PreparedStoreReceipt};
-    use mrml_crypto::{Sha256, hmac_sha256};
+    use mrml_crypto::{hmac_sha256, Sha256};
     use std::vec::Vec;
 
     struct Auth([u8; 32]);

@@ -1,4 +1,4 @@
-use mrml_acme::{DnsIdentifier, encode_base64url};
+use mrml_acme::{encode_base64url, DnsIdentifier};
 
 pub const MAX_DNS_PACKET: usize = 1232;
 pub const MAX_DNS_TXT_RECORDS: usize = 32;

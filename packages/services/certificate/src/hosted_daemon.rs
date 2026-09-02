@@ -171,12 +171,10 @@ mod tests {
         let port = listener.local_port().unwrap();
         let holder = Shared::new(SpinMutex::new(None));
         let accepted = holder.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                *accepted.lock() = Some(listener.accept().unwrap());
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            *accepted.lock() = Some(listener.accept().unwrap());
+        })
+        .is_ok());
         let client = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         loop {
             if let Some(stream) = holder.lock().take() {
@@ -206,16 +204,14 @@ mod tests {
         });
         let worker = Shared::new(SpinMutex::new(None));
         let result = worker.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                *result.lock() = Some(run_hosted_lifecycle_daemon(
-                    &mut supervisor,
-                    &mut service,
-                    3,
-                ));
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            *result.lock() = Some(run_hosted_lifecycle_daemon(
+                &mut supervisor,
+                &mut service,
+                3,
+            ));
+        })
+        .is_ok());
         for (client, expected) in [(client_one, 1u64), (client_two, 2u64)] {
             let mut hosted = crate::HostedLifecycleClient::from_authorized_stream(client).unwrap();
             let mut memory = [0u8; 72];

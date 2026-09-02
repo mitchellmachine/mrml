@@ -1,6 +1,6 @@
 use crate::AccountP256SigningKey;
 use mrml_acme::{
-    AcmeUrl, MAX_JWS_PAYLOAD, P256Jwk, ProtectedKey, ReplayNonce, write_flattened_jws,
+    write_flattened_jws, AcmeUrl, P256Jwk, ProtectedKey, ReplayNonce, MAX_JWS_PAYLOAD,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

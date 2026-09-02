@@ -1,4 +1,4 @@
-use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
+use mrml_crypto::{erase_secret_bytes, hmac_sha256, Sha256};
 
 pub const CERTD_CHANNEL_HEADER_BYTES: usize = 96;
 pub const MAX_CERTD_CHANNEL_PAYLOAD_BYTES: usize = 16 * 1024;

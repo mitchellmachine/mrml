@@ -1,12 +1,12 @@
 use crate::{
-    BACKUP_EXPORT_COMMAND_BYTES, BACKUP_EXPORT_RECEIPT_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES,
-    BackupExportCommand, BackupExportReceipt, BackupTransferCommand, BackupTransferPurpose,
-    BackupTransferReceipt, BackupTransferReceiptState, CertificateLifecycleAuthorizer,
-    CertificateLifecycleProvider, MAX_BACKUP_BYTES, MAX_BACKUP_EXPORT_CHUNK, MAX_BACKUP_WIRE_CHUNK,
-    MAX_MANAGED_STATUS_BYTES, ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId,
     decode_backup_export_receipt, decode_backup_transfer_receipt, decode_managed_identity_status,
     dispatch_lifecycle_call, encode_backup_export_command, encode_backup_transfer_command,
-    untrusted_backup_container_digest,
+    untrusted_backup_container_digest, BackupExportCommand, BackupExportReceipt,
+    BackupTransferCommand, BackupTransferPurpose, BackupTransferReceipt,
+    BackupTransferReceiptState, CertificateLifecycleAuthorizer, CertificateLifecycleProvider,
+    ManagedIdentityStatus, ManagedStatusCodecError, TlsIdentityId, BACKUP_EXPORT_COMMAND_BYTES,
+    BACKUP_EXPORT_RECEIPT_BYTES, BACKUP_TRANSFER_RECEIPT_BYTES, MAX_BACKUP_BYTES,
+    MAX_BACKUP_EXPORT_CHUNK, MAX_BACKUP_WIRE_CHUNK, MAX_MANAGED_STATUS_BYTES,
 };
 use mrml_interface_certificate_lifecycle_v1 as abi;
 use mrml_runtime::{NetError, TcpListener, TcpStream};
@@ -1110,14 +1110,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut memory = [0u8; 64];
@@ -1164,14 +1162,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let identity = TlsIdentityId([9; 16]);
@@ -1187,14 +1183,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut output = [0u8; 8];
@@ -1213,14 +1207,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut output = [0u8; 8];
@@ -1245,18 +1237,16 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut capability = HostedLifecycleSessionCapability::new([0x5a; 32]).unwrap();
-                let mut server = capability.accept_one(&server_listener).unwrap();
-                server.serve_one(&Authorizer, &mut Provider).unwrap();
-                assert!(matches!(
-                    capability.accept_one(&server_listener),
-                    Err(HostedLifecycleTransportError::SessionDenied)
-                ));
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut capability = HostedLifecycleSessionCapability::new([0x5a; 32]).unwrap();
+            let mut server = capability.accept_one(&server_listener).unwrap();
+            server.serve_one(&Authorizer, &mut Provider).unwrap();
+            assert!(matches!(
+                capability.accept_one(&server_listener),
+                Err(HostedLifecycleTransportError::SessionDenied)
+            ));
+        })
+        .is_ok());
         let mut client =
             HostedLifecycleClient::connect_session([127, 0, 0, 1], port, [0x5a; 32]).unwrap();
         let status = client.identity_status(TlsIdentityId([9; 16])).unwrap();
@@ -1269,14 +1259,12 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                server.serve_one(&BackupAuthorizer, &mut Provider).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            server.serve_one(&BackupAuthorizer, &mut Provider).unwrap();
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let receipt = client
@@ -1305,23 +1293,21 @@ mod tests {
         let port = listener.local_port().unwrap();
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
-                let mut provider = TransferProvider {
-                    lifecycle: crate::BackupTransferLifecycle::new(&mut storage).unwrap(),
-                    authenticator: TransferAuth,
-                    target: TransferTarget { committed: false },
-                };
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                for _ in 0..5 {
-                    server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
-                }
-                assert!(provider.target.committed);
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
+            let mut provider = TransferProvider {
+                lifecycle: crate::BackupTransferLifecycle::new(&mut storage).unwrap(),
+                authenticator: TransferAuth,
+                target: TransferTarget { committed: false },
+            };
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            for _ in 0..5 {
+                server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
+            }
+            assert!(provider.target.committed);
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let receipt = client
@@ -1339,24 +1325,22 @@ mod tests {
         let listener = Shared::new(listener);
         let server_listener = listener.clone();
         let expected_for_server = expected.clone();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
-                let mut provider = ExportProvider {
-                    lifecycle: crate::BackupExportSession::new(&mut storage).unwrap(),
-                    source: ExportSource {
-                        bytes: expected_for_server,
-                        digest,
-                    },
-                };
-                let stream = server_listener.accept().unwrap();
-                let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
-                for _ in 0..3 {
-                    server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
-                }
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut storage = std::vec![0; crate::MAX_BACKUP_BYTES];
+            let mut provider = ExportProvider {
+                lifecycle: crate::BackupExportSession::new(&mut storage).unwrap(),
+                source: ExportSource {
+                    bytes: expected_for_server,
+                    digest,
+                },
+            };
+            let stream = server_listener.accept().unwrap();
+            let mut server = HostedLifecycleServer::from_authorized_stream(stream).unwrap();
+            for _ in 0..3 {
+                server.serve_one(&BackupAuthorizer, &mut provider).unwrap();
+            }
+        })
+        .is_ok());
         let stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         let mut client = HostedLifecycleClient::from_authorized_stream(stream).unwrap();
         let mut output = std::vec![0; crate::MAX_BACKUP_BYTES];

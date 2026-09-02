@@ -1,7 +1,7 @@
 use crate::{ApprovedTls13CertificateVerify, TlsCertificateSigningKey, TlsSigningRoute};
 use mrml_crypto::encode_der_signature;
 use mrml_runtime::SpinMutex;
-use mrml_tls::{ECDSA_SECP256R1_SHA256, MAX_TLS13_SIGNATURE_BYTES, TlsError, TlsServerSigningKey};
+use mrml_tls::{TlsError, TlsServerSigningKey, ECDSA_SECP256R1_SHA256, MAX_TLS13_SIGNATURE_BYTES};
 
 /// Hosted adapter from the shared generation-bound certificate-key role to the
 /// first-party TLS stack. The TLS server receives no key bytes and can request

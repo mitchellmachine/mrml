@@ -1,7 +1,7 @@
 use crate::{
+    dispatch_challenge_call, dispatch_identity_call, dispatch_lifecycle_call,
     CertificateChallengeProvider, CertificateIdentityProvider, CertificateLifecycleAuthorizer,
-    CertificateLifecycleProvider, dispatch_challenge_call, dispatch_identity_call,
-    dispatch_lifecycle_call,
+    CertificateLifecycleProvider,
 };
 use mrml_interface_certificate_signing_v1 as abi;
 use mrml_kernel::{Capability, ControlEvent, Endpoint, TaskId, TaskRuntime, TaskRuntimeError};

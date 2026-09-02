@@ -1,7 +1,7 @@
 use crate::{AuthoritativeChallengeZone, DnsChallengeError, MAX_DNS_TXT_RECORDS};
 use mrml_acme::{
-    AcmeIdentifier, ChallengeError, ChallengeKind, ChallengePublicationRequest, ChallengePublisher,
-    PublicationReceipt, PublicationState, publication_binding_digest,
+    publication_binding_digest, AcmeIdentifier, ChallengeError, ChallengeKind,
+    ChallengePublicationRequest, ChallengePublisher, PublicationReceipt, PublicationState,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]

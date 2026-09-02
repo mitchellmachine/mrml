@@ -205,8 +205,8 @@ mod tests {
     use super::*;
     use crate::TlsIdentityId;
     use mrml_acme::{
-        AcmeExchange, DeterministicAcmeAuthority, FirstPartyP256JwsVerifier, LOCAL_DIRECTORY_URL,
-        ProtectedKey, fetch_directory, post_jws, write_pkcs10_csr,
+        fetch_directory, post_jws, write_pkcs10_csr, AcmeExchange, DeterministicAcmeAuthority,
+        FirstPartyP256JwsVerifier, ProtectedKey, LOCAL_DIRECTORY_URL,
     };
     use mrml_crypto::ecdsa_p256_digest_verify_raw;
 
@@ -240,14 +240,12 @@ mod tests {
         let signature = certificate
             .sign_tls13_certificate_verify(&approved)
             .unwrap();
-        assert!(
-            ecdsa_p256_digest_verify_raw(
-                &certificate_public,
-                approved.digest(),
-                signature.as_bytes()
-            )
-            .is_ok()
-        );
+        assert!(ecdsa_p256_digest_verify_raw(
+            &certificate_public,
+            approved.digest(),
+            signature.as_bytes()
+        )
+        .is_ok());
         let mut wrong = certificate.route();
         wrong.identity_generation += 1;
         let wrong = ApprovedTls13CertificateVerify::new([4; 32], wrong);

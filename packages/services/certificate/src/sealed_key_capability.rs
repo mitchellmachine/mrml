@@ -1,4 +1,4 @@
-use crate::{BackupError, MAX_SEALED_KEY_BYTES, SealedKeyProvider, SecretHandle};
+use crate::{BackupError, SealedKeyProvider, SecretHandle, MAX_SEALED_KEY_BYTES};
 use mrml_crypto::Sha256;
 
 #[derive(Clone, Copy, Eq, PartialEq)]

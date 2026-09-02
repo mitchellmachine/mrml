@@ -1,7 +1,7 @@
 use crate::{
-    CertificateChallengeProvider, CertificateIdentityProvider, CertificateLifecycleAuthorizer,
-    CertificateLifecycleProvider, CertificateSigningProvider, dispatch_challenge_call,
-    dispatch_identity_call, dispatch_lifecycle_call, dispatch_signing_call,
+    dispatch_challenge_call, dispatch_identity_call, dispatch_lifecycle_call,
+    dispatch_signing_call, CertificateChallengeProvider, CertificateIdentityProvider,
+    CertificateLifecycleAuthorizer, CertificateLifecycleProvider, CertificateSigningProvider,
 };
 
 pub const MAX_CERTIFICATE_CALL_BYTES: usize = 208;
@@ -31,7 +31,7 @@ pub trait CertificateNativeSyscalls {
         output: &mut [u8; MAX_CERTIFICATE_SHARED_BYTES],
     ) -> Result<usize, Self::Error>;
     fn write_preinstalled_shared(&mut self, offset: usize, input: &[u8])
-    -> Result<(), Self::Error>;
+        -> Result<(), Self::Error>;
     fn send_response(&mut self, response: &[u8; RESPONSE_BYTES]) -> Result<(), Self::Error>;
 }
 

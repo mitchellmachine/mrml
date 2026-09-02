@@ -1,6 +1,6 @@
 use mrml_acme::{
-    ChallengeKind, ChallengePublicationRequest, MAX_HTTP01_REQUEST, MAX_KEY_AUTHORIZATION,
-    validate_http01_identifier_request,
+    validate_http01_identifier_request, ChallengeKind, ChallengePublicationRequest,
+    MAX_HTTP01_REQUEST, MAX_KEY_AUTHORIZATION,
 };
 use mrml_crypto::Sha256;
 use mrml_runtime::{NetError, TcpListener, TcpStream};
@@ -173,12 +173,10 @@ mod tests {
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
         let (challenge, key_authorization, key_authorization_len) = challenge();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
+        })
+        .is_ok());
         let mut client = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         client.set_read_timeout_millis(1000).unwrap();
         client
@@ -229,12 +227,10 @@ mod tests {
             HostedHttp01Challenge::new(lifecycle.request, &key_authorization[..written]).unwrap();
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            assert_eq!(challenge.serve_one(&listener, 15), Ok(true));
+        })
+        .is_ok());
         let mut client = TcpStream::connect([127, 0, 0, 1], port).unwrap();
         client.set_read_timeout_millis(1000).unwrap();
         client

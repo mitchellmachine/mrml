@@ -1,4 +1,4 @@
-use mrml_acme::{DnsIdentifier, encode_base64url};
+use mrml_acme::{encode_base64url, DnsIdentifier};
 use mrml_crypto::Sha256;
 
 pub const MAX_DNS01_RECORD_NAME_BYTES: usize = 253;

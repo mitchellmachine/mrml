@@ -1,7 +1,7 @@
 extern crate std;
 
 use crate::{
-    CERTD_CHANNEL_HEADER_BYTES, CertdChannelError, CertdChannelPolicy, CertdPeerIdentity,
+    CertdChannelError, CertdChannelPolicy, CertdPeerIdentity, CERTD_CHANNEL_HEADER_BYTES,
     MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
 };
 use std::fs;
@@ -194,8 +194,8 @@ fn validate_socket_path(path: &Path) -> Result<(), UnixCertdChannelError> {
 mod tests {
     use super::*;
     use crate::{
-        CertdChannelCapability, CertdChannelOperation, CertdChannelRequest, CertdChannelRole,
-        CertdReplayWindow, decode_certd_channel_request, encode_certd_channel_request,
+        decode_certd_channel_request, encode_certd_channel_request, CertdChannelCapability,
+        CertdChannelOperation, CertdChannelRequest, CertdChannelRole, CertdReplayWindow,
     };
     use std::os::unix::fs::MetadataExt;
 
