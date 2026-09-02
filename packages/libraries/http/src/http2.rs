@@ -743,8 +743,8 @@ impl ResponseBodySink for LimitedBody {
 }
 impl Http2ClientConnection {
     pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
-        let mut stream =
-            TlsClientStream::connect_with_alpn(host, port, &["h2"]).map_err(|_| HttpError::Tls)?;
+        let mut stream = TlsClientStream::connect_with_alpn(host, port, &["h2"])
+            .map_err(map_tls_read_error)?;
         if stream.negotiated_protocol() != Some("h2") {
             return Err(HttpError::Tls);
         }
