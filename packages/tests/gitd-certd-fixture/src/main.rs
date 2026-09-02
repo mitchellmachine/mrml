@@ -1,15 +1,16 @@
 use mrml_certificate::{
-    decode_certd_channel_request, encode_certd_channel_request, CertdChannelCapability,
-    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole,
-    CertdPeerIdentity, CertdReplayWindow, UnixCertdListener, CERTD_CHANNEL_HEADER_BYTES,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
+    CERTD_CHANNEL_HEADER_BYTES, CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy,
+    CertdChannelRequest, CertdChannelRole, CertdPeerIdentity, CertdReplayWindow,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, UnixCertdListener, decode_certd_channel_request,
+    encode_certd_channel_request,
 };
-use mrml_crypto::{encode_der_signature, erase_secret_bytes, P256SecretKey, Sha256};
+use mrml_crypto::{P256SecretKey, Sha256, encode_der_signature, erase_secret_bytes};
 use mrml_tls::Certificate;
 use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 const O_NOFOLLOW: i32 = 0x20_000;
 const IDENTITY_REQUEST_MAGIC: &[u8; 8] = b"MRGIDR01";
@@ -254,6 +255,9 @@ fn write_wait(identity: &FixtureIdentity, payload: &[u8], output: &mut [u8]) -> 
     if current == 0 || timeout == 0 || timeout > 30_000 || current > identity.generation {
         return Err(());
     }
+    if current == identity.generation {
+        std::thread::sleep(Duration::from_millis(u64::from(timeout)));
+    }
     let mut offset = 0;
     append(output, &mut offset, GENERATION_WAIT_RESPONSE_MAGIC)?;
     append(output, &mut offset, &identity.generation.to_be_bytes())?;
@@ -344,8 +348,23 @@ fn publication_digest(
 }
 
 fn parse_arguments(arguments: &[String]) -> Result<Configuration, ()> {
-    let [command, socket, capability, client_uid, client_gid, fixture_uid, fixture_gid, owner_uid, socket_gid, server_name, generation, leaf, issuer, key, request_limit] =
-        arguments
+    let [
+        command,
+        socket,
+        capability,
+        client_uid,
+        client_gid,
+        fixture_uid,
+        fixture_gid,
+        owner_uid,
+        socket_gid,
+        server_name,
+        generation,
+        leaf,
+        issuer,
+        key,
+        request_limit,
+    ] = arguments
     else {
         return Err(());
     };
