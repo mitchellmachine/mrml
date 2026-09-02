@@ -268,8 +268,8 @@ pub use revocation::{
     RevocationReceipt, RevocationState,
 };
 pub use scheduler::{
-    ExpiryHealth, RenewalEntropy, RenewalPolicy, RenewalSchedule, RenewalSource,
-    ReplacementBinding, SchedulerError,
+    ExpiryHealth, RENEWAL_SCHEDULE_BYTES, RenewalEntropy, RenewalPolicy, RenewalSchedule,
+    RenewalSource, ReplacementBinding, SchedulerError,
 };
 pub use sealed_key_capability::{
     CapabilitySealedKeyProvider, RestoreKeyCapabilityReceipt, SealKeyCapabilityReceipt,
