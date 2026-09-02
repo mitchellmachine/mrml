@@ -198,7 +198,7 @@ fn serve(
         &mut state,
         &mut state_authenticator,
     )?;
-    let (mut order, authorization_resources, mut order_durable_generation) = establish_order(
+    let (mut order, mut authorization_resources, mut order_durable_generation) = establish_order(
         &config,
         &account,
         &mut envelope_writer,
@@ -241,12 +241,26 @@ fn serve(
         if order.state == mrml_acme::OrderState::Valid {
             retrieve_and_stage_certificate(&config, &account, &order, &mut envelope_writer)?;
             cleanup_dns_challenges(&config, &mut provider, &mut state, &mut state_authenticator)?;
-            persist_renewal_schedule(
+            let schedule = persist_renewal_schedule(
                 &config,
                 &mut envelope_writer,
                 &mut state,
                 &mut state_authenticator,
             )?;
+            if unix_time()? >= schedule.renew_at_unix {
+                let replacement = create_replacement_order(
+                    &config,
+                    &account,
+                    schedule,
+                    &mut envelope_writer,
+                    &mut state,
+                    &mut state_authenticator,
+                )?;
+                order = replacement.0;
+                authorization_resources = replacement.1;
+                order_durable_generation = replacement.2;
+                continue;
+            }
         }
         if envelope_writer.next_request_id > reservation.last {
             return Err("certd channel request ID reservation exhausted");
@@ -1081,7 +1095,7 @@ fn establish_order(
                 return Err("ACME order authorization count mismatch");
             }
             let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
-            let prepared = prepare_order_creation(
+            let mut prepared = prepare_order_creation(
                 &directory,
                 account,
                 identifiers,
@@ -1094,7 +1108,23 @@ fn establish_order(
             )
             .map_err(|_| "cannot reconstruct ACME order request")?;
             if prepared.request_digest != record.request_digest {
-                return Err("ACME order request binding mismatch");
+                let schedule = load_renewal_schedule(config, state, authenticator)?
+                    .ok_or("ACME order request binding mismatch")?;
+                prepared = prepare_order_creation(
+                    &directory,
+                    account,
+                    identifiers,
+                    &config.certificate_profile,
+                    Some(schedule.certificate_id.as_str()),
+                    record.deadline_unix,
+                    config.order_retry_limit,
+                    false,
+                    &mut payload,
+                )
+                .map_err(|_| "cannot reconstruct ACME replacement order request")?;
+                if prepared.request_digest != record.request_digest {
+                    return Err("ACME order request binding mismatch");
+                }
             }
             let mut order = OrderLifecycle::create(
                 &directory,
@@ -1222,6 +1252,170 @@ fn establish_order(
     }
 }
 
+fn create_replacement_order(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    schedule: RenewalSchedule,
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<
+    (
+        OrderLifecycle,
+        [Option<AuthorizationResource>; MAX_AUTHORIZATIONS],
+        u64,
+    ),
+    &'static str,
+> {
+    if schedule.identity != TlsIdentityId(config.identity)
+        || schedule.policy_generation != config.policy_generation
+        || unix_time()? < schedule.renew_at_unix
+    {
+        return Err("replacement order schedule mismatch");
+    }
+    let (prior, prior_generation) = load_order_record(config, state, authenticator)?
+        .ok_or("missing completed order for renewal")?;
+    if prior.phase != AcmedOrderPhase::Created || prior.state != Some(mrml_acme::OrderState::Valid)
+    {
+        return Err("replacement order requires a valid completed order");
+    }
+    let now = unix_time()?;
+    let deadline = now
+        .checked_add(config.order_lifetime_seconds)
+        .ok_or("ACME replacement order deadline overflow")?;
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for replacement order")?;
+    let count = usize::from(config.identifier_count);
+    let first = config.identifiers[0].ok_or("missing configured identifier")?;
+    let mut identifier_storage = [AcmeIdentifier::Dns(first); MAX_CSR_IDENTIFIERS];
+    for (slot, identifier) in identifier_storage
+        .iter_mut()
+        .zip(config.identifiers[..count].iter().flatten())
+    {
+        *slot = AcmeIdentifier::Dns(*identifier);
+    }
+    let identifiers = &identifier_storage[..count];
+    let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+    let prepared = prepare_order_creation(
+        &directory,
+        account,
+        identifiers,
+        &config.certificate_profile,
+        Some(schedule.certificate_id.as_str()),
+        deadline,
+        config.order_retry_limit,
+        false,
+        &mut payload,
+    )
+    .map_err(|_| "cannot prepare ACME replacement order")?;
+    let pending = AcmedOrderRecord {
+        phase: AcmedOrderPhase::RequestMayHaveBeenSent,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        policy_generation: config.policy_generation,
+        identity: config.identity,
+        request_digest: prepared.request_digest,
+        deadline_unix: deadline,
+        state: None,
+        order_url: None,
+        finalize_url: None,
+        certificate_url: None,
+        authorization_urls: [None; MAX_AUTHORIZATIONS],
+        authorization_count: 0,
+    };
+    let pending_generation =
+        persist_order_record(config, state, authenticator, prior_generation, &pending)?;
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let mut resources = [None; MAX_AUTHORIZATIONS];
+    signer.operation = AcmeJwsOperation::NewOrder;
+    let order = execute_prepared_order_create(
+        prepared,
+        &directory,
+        account,
+        identifiers,
+        config.certificate_profile,
+        Some(schedule.certificate_id.as_str()),
+        false,
+        now,
+        &mut exchange,
+        &mut transport,
+        signer,
+        OrderCreateBuffers {
+            payload: &mut payload,
+            response: &mut response,
+            jws: &mut jws,
+            authorizations: &mut resources[..count],
+        },
+    )
+    .map_err(|_| "ACME replacement order creation is uncertain or rejected")?;
+    let mut authorization_urls = [None; MAX_AUTHORIZATIONS];
+    for (slot, resource) in authorization_urls
+        .iter_mut()
+        .zip(resources[..count].iter().flatten())
+    {
+        *slot = Some(resource.url);
+    }
+    let created = AcmedOrderRecord {
+        phase: AcmedOrderPhase::Created,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        policy_generation: config.policy_generation,
+        identity: config.identity,
+        request_digest: prepared.request_digest,
+        deadline_unix: deadline,
+        state: Some(order.state),
+        order_url: Some(order.order_url),
+        finalize_url: Some(order.finalize_url),
+        certificate_url: order.certificate_url,
+        authorization_urls,
+        authorization_count: count as u8,
+    };
+    let created_generation =
+        persist_order_record(config, state, authenticator, pending_generation, &created)?;
+    Ok((order, resources, created_generation))
+}
+
+fn load_renewal_schedule(
+    config: &AcmedConfig,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<RenewalSchedule>, &'static str> {
+    let object = renewal_schedule_object(config.identity);
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let Some(length) = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load renewal schedule")?
+    else {
+        return Ok(None);
+    };
+    let durable = DurableRecord::decode(&encoded[..length], authenticator)
+        .map_err(|_| "renewal schedule authentication failed")?;
+    if durable.namespace != DurableNamespace::PublicState
+        || durable.kind != DurableRecordKind::AriSchedule
+        || durable.object != object
+    {
+        return Err("renewal schedule durable record type mismatch");
+    }
+    let schedule = RenewalSchedule::decode(durable.payload())
+        .map_err(|_| "invalid durable renewal schedule")?;
+    if schedule.identity != TlsIdentityId(config.identity)
+        || schedule.policy_generation != config.policy_generation
+    {
+        return Err("renewal schedule policy mismatch");
+    }
+    Ok(Some(schedule))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn poll_and_persist_order(
     config: &AcmedConfig,
@@ -1321,13 +1515,14 @@ fn finalize_ready_order(
     };
     let finalization_generation = match load_finalization_record(config, state, authenticator)? {
         Some((record, generation)) => {
-            if record.order_url_digest != expected.order_url_digest
-                || record.csr_digest != expected.csr_digest
-                || record.key_generation != expected.key_generation
-            {
+            let binding_matches = record.order_url_digest == expected.order_url_digest
+                && record.csr_digest == expected.csr_digest
+                && record.key_generation == expected.key_generation;
+            if !binding_matches && record.phase == AcmedFinalizationPhase::ResponseAuthenticated {
+                persist_finalization_record(config, state, authenticator, generation, &expected)?
+            } else if !binding_matches {
                 return Err("ACME finalization durable binding mismatch");
-            }
-            if record.phase == AcmedFinalizationPhase::ResponseAuthenticated {
+            } else if record.phase == AcmedFinalizationPhase::ResponseAuthenticated {
                 let receipt = order
                     .prepare_finalize(csr)
                     .map_err(|_| "cannot reconstruct authenticated ACME finalization")?;
@@ -1349,8 +1544,9 @@ fn finalize_ready_order(
                         ..existing
                     },
                 );
+            } else {
+                generation
             }
-            generation
         }
         None => persist_finalization_record(config, state, authenticator, 0, &expected)?,
     };
@@ -1636,9 +1832,20 @@ fn publish_dns_challenges(
         let (record, durable_generation) = match loaded {
             Some((record, generation)) => {
                 if !same_challenge_binding(&record, &expected) {
-                    return Err("ACME challenge durable binding mismatch");
+                    if record.phase != AcmedChallengePhase::Complete {
+                        return Err("ACME challenge durable binding mismatch");
+                    }
+                    let next_generation = persist_challenge_record(
+                        config,
+                        state,
+                        authenticator,
+                        generation,
+                        &expected,
+                    )?;
+                    (expected, next_generation)
+                } else {
+                    (record, generation)
                 }
-                (record, generation)
             }
             None => {
                 let generation =
