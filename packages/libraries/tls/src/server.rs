@@ -1025,6 +1025,20 @@ impl TlsServerStream {
     pub fn negotiated_protocol(&self) -> Option<&str> {
         self.negotiated_protocol.as_deref()
     }
+    /// Change only the established application-data channel timeout. The
+    /// handshake remains governed by the shorter bound supplied to `accept`.
+    pub fn set_application_io_timeout_millis(
+        &self,
+        timeout_millis: u64,
+    ) -> Result<(), TlsError> {
+        if !(1_000..=900_000).contains(&timeout_millis) {
+            return Err(TlsError::Io);
+        }
+        self.stream
+            .set_read_timeout_millis(timeout_millis)
+            .and_then(|_| self.stream.set_write_timeout_millis(timeout_millis))
+            .map_err(|_| TlsError::Io)
+    }
     pub fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
         for chunk in data.chunks(1 << 14) {
             let mut out = Vector::new();

@@ -9,6 +9,7 @@ use crate::{
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
 const ESTABLISHED_HTTP2_IO_TIMEOUT_MILLIS: u64 = 15 * 60 * 1_000;
+const ESTABLISHED_HTTP2_SERVER_IO_TIMEOUT_MILLIS: u64 = 5 * 60 * 1_000;
 const HPACK_STATIC: [(&str, &str); 61] = [
     (":authority", ""),
     (":method", "GET"),
@@ -1079,6 +1080,9 @@ impl Http2ServerConnection {
         if stream.negotiated_protocol() != Some("h2") {
             return Err(HttpError::Tls);
         }
+        stream
+            .set_application_io_timeout_millis(ESTABLISHED_HTTP2_SERVER_IO_TIMEOUT_MILLIS)
+            .map_err(|_| HttpError::Tls)?;
         let mut preface = [0; 24];
         tls_read_exact_server(&mut stream, &mut preface)?;
         if &preface != HTTP2_CLIENT_PREFACE {
