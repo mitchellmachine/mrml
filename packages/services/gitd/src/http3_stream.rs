@@ -32,7 +32,7 @@ impl BoundedRead for Http3Input<'_> {
             return Err(BackendError::Storage);
         }
         if self.remaining == 0 {
-            return Err(BackendError::ResourceLimit);
+            return Ok(0);
         }
         let limit = usize::try_from(self.remaining)
             .unwrap_or(usize::MAX)

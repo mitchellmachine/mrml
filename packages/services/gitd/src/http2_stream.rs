@@ -57,7 +57,7 @@ impl<T: Http2BodyTransport> BoundedRead for Http2Input<'_, T> {
             return Err(BackendError::Storage);
         }
         if self.remaining == 0 {
-            return Err(BackendError::ResourceLimit);
+            return Ok(0);
         }
         let limit = usize::try_from(self.remaining)
             .unwrap_or(usize::MAX)
@@ -373,7 +373,7 @@ mod tests {
         let mut bytes = [0; 8];
         assert_eq!(input.read(&mut bytes).unwrap(), 4);
         assert_eq!(&bytes[..4], b"abcd");
-        assert_eq!(input.read(&mut bytes), Err(BackendError::ResourceLimit));
+        assert_eq!(input.read(&mut bytes), Ok(0));
         output.write(b"abc").unwrap();
         assert_eq!(output.write(b"d"), Err(BackendError::ResourceLimit));
         draining.store(true, Ordering::Release);
