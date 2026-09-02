@@ -22,7 +22,7 @@ trap 'rm -f -- "$paths" "$archive"' EXIT HUP INT TERM
 
 git ls-tree -r --name-only "$commit" -- \
   AGENTS.md README.md VALUES.md \
-  docs/ACME.md docs/SECURITY.md docs/ENGINEERING_CONSTITUTION.md \
+  docs/ACME.md docs/ACME_PRODUCTION_EVIDENCE.md docs/SECURITY.md docs/ENGINEERING_CONSTITUTION.md \
   docs/patents/ACME_CERTIFICATE_REVIEW_2026-09-01.md \
   docs/patents/REVIEW_LOG.md docs/gitd/edge/CERTD_CHANNEL.md \
   deploy/compose/Dockerfile.acmed deploy/compose/Dockerfile.certd \
@@ -35,6 +35,7 @@ git ls-tree -r --name-only "$commit" -- \
   deploy/compose/rollback-acme.sh \
   deploy/compose/renew-acme.sh \
   deploy/compose/cleanup-acme-dns.sh \
+  deploy/compose/revoke-acme.sh \
   deploy/compose/build-offline-acme-bundle.sh \
   deploy/compose/verify-offline-acme-bundle.sh \
   packages/interfaces/certificate packages/libraries/acme \
