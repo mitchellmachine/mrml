@@ -31,6 +31,7 @@ mod pack_delta;
 mod pack_file;
 mod pack_index;
 mod pack_set;
+mod protected_push;
 mod quarantine;
 mod receive_backend;
 mod receive_journal;
@@ -137,6 +138,10 @@ pub use pack_set::{
     MAX_PACK_SET_MANIFEST_BYTES, PackSetEntry, PackSetError, PackSetLimits, PackSetManifest,
     encode_pack_set_manifest, parse_pack_set_manifest,
 };
+pub use protected_push::{
+    CapabilityVerifiedProofSigner, HybridCommitSignatures, HybridCommitSigningProvider,
+    ProtectedCommitProofSigner, ProtectedCommitSigningRequest, sign_protected_introduced_history,
+};
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
     DEFAULT_MAX_INCOMING_PACK_BYTES, DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
@@ -168,7 +173,8 @@ pub use ref_state::{
 pub use ref_state_file::ActiveRefFile;
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_https,
-    fetch_https_authenticated, fetch_ssh, inspect_ssh, push_https_authenticated, push_ssh,
+    fetch_https_authenticated, fetch_ssh, inspect_ssh, push_https_authenticated,
+    push_https_protected_authenticated, push_ssh,
 };
 pub use repository::{
     BlameLine, FetchPackLimits, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind,
@@ -187,9 +193,10 @@ pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,
     ProtocolV2Request, ReceivePackRequest, ReceiveRefStatus, read_pkt_line,
     read_receive_pack_commands, read_v2_request, write_pkt_line, write_receive_pack_report,
-    write_v2_capability_advertisement, write_v2_receive_capability_advertisement,
+    write_v2_capability_advertisement, write_v2_protected_receive_capability_advertisement,
+    write_v2_receive_capability_advertisement,
 };
-pub use transport::protected_push_command_prefix;
+pub use transport::{protected_push_command_prefix, protected_push_command_with_proofs};
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
     extract_pack_response, fetch_request, parse_advertisement, parse_push_response,

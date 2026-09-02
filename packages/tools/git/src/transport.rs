@@ -389,7 +389,7 @@ pub fn protected_push_command_prefix(
         return Err(TransportError::InvalidObjectId);
     }
     let line = mrml_runtime::mrml_format!(
-        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta object-format=sha256\n"
+        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 object-format=sha256\n"
     );
     let mut output = Vector::new();
     encode_packet(line.as_bytes(), &mut output)?;
@@ -397,6 +397,53 @@ pub fn protected_push_command_prefix(
     if output.len() > 1024 {
         return Err(TransportError::TooLarge);
     }
+    Ok(output)
+}
+
+pub fn protected_push_command_with_proofs(
+    old: ObjectId,
+    new: ObjectId,
+    reference: &str,
+    proofs: &[crate::DetachedCommitProofRecord],
+) -> Result<Vector<u8>, TransportError> {
+    if proofs.is_empty()
+        || proofs.len() > crate::MAX_DETACHED_COMMIT_PROOFS
+        || !proofs
+            .windows(2)
+            .all(|pair| pair[0].commit() < pair[1].commit())
+    {
+        return Err(TransportError::TooLarge);
+    }
+    let mut output = protected_push_command_prefix(old, new, reference)?;
+    output.truncate(output.len() - 4);
+    output
+        .try_extend_from_slice(b"0001")
+        .map_err(|_| TransportError::TooLarge)?;
+    for proof in proofs {
+        let mut payload = Vector::new();
+        payload
+            .try_extend_from_slice(crate::smart_protocol::RECEIVE_PROOF_MAGIC)
+            .map_err(|_| TransportError::TooLarge)?;
+        payload
+            .try_extend_from_slice(proof.commit().as_bytes())
+            .map_err(|_| TransportError::TooLarge)?;
+        payload
+            .try_extend_from_slice(&(proof.openpgp_signature().len() as u16).to_be_bytes())
+            .map_err(|_| TransportError::TooLarge)?;
+        payload
+            .try_extend_from_slice(&(proof.ml_dsa_signature().len() as u16).to_be_bytes())
+            .map_err(|_| TransportError::TooLarge)?;
+        payload
+            .try_extend_from_slice(proof.openpgp_signature())
+            .map_err(|_| TransportError::TooLarge)?;
+        payload
+            .try_extend_from_slice(proof.ml_dsa_signature())
+            .map_err(|_| TransportError::TooLarge)?;
+        encode_packet(&payload, &mut output)?;
+    }
+    output
+        .try_extend_from_slice(b"0000")
+        .map_err(|_| TransportError::TooLarge)?;
     Ok(output)
 }
 

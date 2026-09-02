@@ -489,6 +489,104 @@ pub fn push_https_authenticated(
     result
 }
 
+pub fn push_https_protected_authenticated(
+    repository: &Repository,
+    remote_name: &str,
+    branch: &str,
+    remote: &HttpsRemote,
+    credential_provider: &mut dyn crate::HttpsCredentialProvider,
+    proof_signer: &mut dyn crate::ProtectedCommitProofSigner,
+    history_limits: crate::HistoryVerificationLimits,
+) -> Result<PushResult, PushError> {
+    if repository.object_format() != crate::ObjectFormat::Sha256 {
+        return Err(PushError::Protocol);
+    }
+    let reference = mrml_runtime::mrml_format!("refs/heads/{branch}");
+    let advertisement = remote
+        .list_refs_authenticated(credential_provider)
+        .map_err(|_| PushError::Https)?;
+    let old = advertisement
+        .refs
+        .iter()
+        .find(|entry| entry.name == reference)
+        .map(|entry| entry.id)
+        .ok_or(PushError::NeedsFetch)?;
+    let new = repository
+        .resolve_revision(branch)
+        .map_err(|_| PushError::Repository)?;
+    if old == new {
+        return Ok(PushResult { old, new });
+    }
+    match repository.is_ancestor(old, new) {
+        Ok(true) => {}
+        Ok(false) => return Err(PushError::NonFastForward),
+        Err(_) => return Err(PushError::NeedsFetch),
+    }
+    let discovery = remote
+        .discover_receive_pack_authenticated(credential_provider)
+        .map_err(|_| PushError::Https)?;
+    let identity = remote
+        .repository_identity()
+        .map_err(|_| PushError::Protocol)?;
+    let context = crate::ProtectedHistoryContext {
+        repository: &identity,
+        repository_generation: discovery.repository_generation,
+        trust_generation: discovery.trust_generation,
+        revocation_generation: discovery.revocation_generation,
+        purpose: crate::SignaturePurpose::GitCommit,
+        object_format: crate::ObjectFormat::Sha256,
+    };
+    let proofs = crate::sign_protected_introduced_history(
+        repository,
+        context,
+        old,
+        new,
+        history_limits,
+        proof_signer,
+    )
+    .map_err(|_| PushError::Protocol)?;
+    let pack_path = mrml_runtime::join_path(
+        &repository.git_dir,
+        &mrml_runtime::mrml_format!("mrml-push-{}.pack", mrml_runtime::process_id()),
+    );
+    if mrml_runtime::path_exists(&pack_path) {
+        return Err(PushError::Repository);
+    }
+    let result = (|| {
+        let mut output = PushPackFile::create_new(&pack_path)?;
+        if repository
+            .write_negotiated_pack(&[new], &[old], &mut output)
+            .is_err()
+        {
+            return Err(if output.failed {
+                PushError::Repository
+            } else {
+                PushError::Protocol
+            });
+        }
+        output.finish()?;
+        remote
+            .push_protected_pack_file_authenticated(
+                old,
+                new,
+                &reference,
+                &pack_path,
+                discovery,
+                &proofs,
+                credential_provider,
+            )
+            .map_err(|_| PushError::Https)?;
+        repository
+            .update_remote_ref(remote_name, &reference, new)
+            .map_err(|_| PushError::Repository)?;
+        Ok(PushResult { old, new })
+    })();
+    if mrml_runtime::path_exists(&pack_path) && mrml_runtime::remove_file(&pack_path).is_err() {
+        return Err(PushError::Repository);
+    }
+    result
+}
+
 pub fn push_ssh(
     repository: &Repository,
     remote_name: &str,

@@ -48,6 +48,13 @@ pub struct HttpsDiscovery {
     pub fetch_ofs_delta: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtectedReceiveDiscovery {
+    pub repository_generation: crate::RepositoryGeneration,
+    pub trust_generation: crate::TrustGeneration,
+    pub revocation_generation: crate::RevocationGeneration,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HttpsRefAdvertisement {
     pub refs: Vector<crate::RemoteRef>,
@@ -87,6 +94,16 @@ impl HttpsRemote {
             repository_path: url.target,
             transport,
         })
+    }
+
+    pub fn repository_identity(&self) -> Result<crate::RepositoryIdentity, HttpsRemoteError> {
+        crate::RepositoryIdentity::parse(
+            self.repository_path
+                .strip_prefix('/')
+                .and_then(|path| path.strip_suffix(".git"))
+                .ok_or(HttpsRemoteError::InvalidRepositoryPath)?,
+        )
+        .map_err(|_| HttpsRemoteError::InvalidRepositoryPath)
     }
 
     pub fn authority(&self) -> Text {
@@ -157,6 +174,60 @@ impl HttpsRemote {
             }
         };
         validate_discovery_response(status, &response_headers, &body)
+    }
+
+    fn discover_receive_pack_with_authorization(
+        &self,
+        authorization: &str,
+    ) -> Result<ProtectedReceiveDiscovery, HttpsRemoteError> {
+        let target = self.discovery_target(SmartGitService::ReceivePack);
+        let authority = self.authority();
+        let headers = request_headers(
+            "application/x-git-receive-pack-advertisement",
+            None,
+            Some(authorization),
+        );
+        let (status, response_headers, body) = match self.transport {
+            HttpsTransport::Http2 => {
+                let mut connection = Http2ClientConnection::connect(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                let response = connection
+                    .request("GET", &authority, &target, &headers)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                (response.status, response.headers, response.body)
+            }
+            HttpsTransport::Http3V2 => {
+                let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                let response = connection
+                    .request("GET", &authority, &target, &headers)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                (response.status, response.headers, response.body)
+            }
+        };
+        validate_service_response(
+            status,
+            &response_headers,
+            &body,
+            "application/x-git-receive-pack-advertisement",
+        )?;
+        parse_protected_receive_discovery(&body)
+    }
+
+    pub fn discover_receive_pack_authenticated<
+        P: crate::HttpsCredentialProvider + ?Sized,
+    >(
+        &self,
+        provider: &mut P,
+    ) -> Result<ProtectedReceiveDiscovery, HttpsRemoteError> {
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Write)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        self.discover_receive_pack_with_authorization(authorization)
     }
 
     pub fn list_refs(&self) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
@@ -343,8 +414,56 @@ impl HttpsRemote {
         let authorization = credential
             .authorization_for(&scope)
             .map_err(|_| HttpsRemoteError::Credential)?;
+        self.discover_receive_pack_with_authorization(authorization)?;
         let prefix = crate::protected_push_command_prefix(old, new, reference)
             .map_err(|_| HttpsRemoteError::Protocol)?;
+        self.push_pack_file_with_authorization(
+            reference,
+            pack_path,
+            authorization,
+            prefix,
+        )
+    }
+
+    pub fn push_protected_pack_file_authenticated<
+        P: crate::HttpsCredentialProvider + ?Sized,
+    >(
+        &self,
+        old: crate::ObjectId,
+        new: crate::ObjectId,
+        reference: &str,
+        pack_path: &str,
+        expected: ProtectedReceiveDiscovery,
+        proofs: &[crate::DetachedCommitProofRecord],
+        provider: &mut P,
+    ) -> Result<(), HttpsRemoteError> {
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Write)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        if self.discover_receive_pack_with_authorization(authorization)? != expected {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        let prefix = crate::protected_push_command_with_proofs(old, new, reference, proofs)
+            .map_err(|_| HttpsRemoteError::Protocol)?;
+        self.push_pack_file_with_authorization(
+            reference,
+            pack_path,
+            authorization,
+            prefix,
+        )
+    }
+
+    fn push_pack_file_with_authorization(
+        &self,
+        reference: &str,
+        pack_path: &str,
+        authorization: &str,
+        prefix: Vector<u8>,
+    ) -> Result<(), HttpsRemoteError> {
         let file = File::open_regular(pack_path).map_err(|_| HttpsRemoteError::Storage)?;
         let pack_bytes = file.len().map_err(|_| HttpsRemoteError::Storage)?;
         if pack_bytes == 0 || pack_bytes > MAX_PUSH_PACK_BYTES {
@@ -738,6 +857,65 @@ fn parse_v2_discovery(body: &[u8]) -> Result<HttpsDiscovery, HttpsRemoteError> {
     })
 }
 
+fn parse_protected_receive_discovery(
+    body: &[u8],
+) -> Result<ProtectedReceiveDiscovery, HttpsRemoteError> {
+    if body.len() > MAX_DISCOVERY_BYTES {
+        return Err(HttpsRemoteError::TooLarge);
+    }
+    let packets = crate::decode_packets(body).map_err(|_| HttpsRemoteError::Protocol)?;
+    if packets.len() != 5 || packets.last() != Some(&None) {
+        return Err(HttpsRemoteError::Protocol);
+    }
+    let line = |index: usize| -> Result<&str, HttpsRemoteError> {
+        core::str::from_utf8(
+            packets[index]
+                .as_deref()
+                .ok_or(HttpsRemoteError::Protocol)?,
+        )
+        .map_err(|_| HttpsRemoteError::Protocol)?
+        .strip_suffix('\n')
+        .ok_or(HttpsRemoteError::Protocol)
+    };
+    if line(0)? != "version 2"
+        || line(1)? != "object-format=sha256"
+        || line(2)?
+            != "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1"
+    {
+        return Err(HttpsRemoteError::Protocol);
+    }
+    let context = line(3)?
+        .strip_prefix("mrml-receive-context=")
+        .ok_or(HttpsRemoteError::Protocol)?;
+    let mut values = context.split(':');
+    let repository_generation = parse_nonzero_generation(values.next())?;
+    let trust_generation = parse_nonzero_generation(values.next())?;
+    let revocation_generation = parse_nonzero_generation(values.next())?;
+    if values.next().is_some() {
+        return Err(HttpsRemoteError::Protocol);
+    }
+    Ok(ProtectedReceiveDiscovery {
+        repository_generation: crate::RepositoryGeneration(repository_generation),
+        trust_generation: crate::TrustGeneration(trust_generation),
+        revocation_generation: crate::RevocationGeneration(revocation_generation),
+    })
+}
+
+fn parse_nonzero_generation(value: Option<&str>) -> Result<u64, HttpsRemoteError> {
+    let value = value.ok_or(HttpsRemoteError::Protocol)?;
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(HttpsRemoteError::Protocol);
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|generation| *generation != 0)
+        .ok_or(HttpsRemoteError::Protocol)
+}
+
 fn valid_identity_component(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -853,6 +1031,36 @@ mod tests {
                 fetch_ofs_delta: true,
             }
         );
+    }
+
+    #[test]
+    fn protected_receive_discovery_binds_exact_nonzero_generations() {
+        let body = discovery_body(&[
+            "version 2\n",
+            "object-format=sha256\n",
+            "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+            "mrml-receive-context=7:11:13\n",
+        ]);
+        assert_eq!(
+            parse_protected_receive_discovery(&body),
+            Ok(ProtectedReceiveDiscovery {
+                repository_generation: crate::RepositoryGeneration(7),
+                trust_generation: crate::TrustGeneration(11),
+                revocation_generation: crate::RevocationGeneration(13),
+            })
+        );
+        for context in ["0:11:13", "07:11:13", "7:11", "7:11:13:17", "7:x:13"] {
+            let malformed = mrml_runtime::mrml_format!("mrml-receive-context={context}\n");
+            assert_eq!(
+                parse_protected_receive_discovery(&discovery_body(&[
+                    "version 2\n",
+                    "object-format=sha256\n",
+                    "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+                    malformed.as_str(),
+                ])),
+                Err(HttpsRemoteError::Protocol)
+            );
+        }
     }
 
     #[test]

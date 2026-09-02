@@ -45,6 +45,13 @@ struct AuthorityVerifier<'a> {
 }
 
 impl ProtectedCommitVerifier for AuthorityVerifier<'_> {
+    fn begin_receive_proofs(
+        &mut self,
+        proofs: &[crate::DetachedCommitProofRecord],
+    ) -> Result<(), GitdCoreError> {
+        self.authority.begin_receive_proofs(proofs)
+    }
+
     fn authorize_transaction(
         &mut self,
         transaction: &crate::CandidateRefTransaction,
@@ -71,6 +78,10 @@ impl ProtectedCommitVerifier for AuthorityVerifier<'_> {
     ) -> Result<crate::VerifiedLegacyCommitProof, crate::HistoryVerificationError> {
         self.authority
             .verify_legacy_commit(context, commit, exact_contents)
+    }
+
+    fn finish_receive_proofs(&mut self) -> Result<(), GitdCoreError> {
+        self.authority.finish_receive_proofs()
     }
 }
 

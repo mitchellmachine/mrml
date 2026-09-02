@@ -44,6 +44,7 @@ pub enum ProtocolV2Request {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReceivePackRequest {
     pub candidate: CandidateRefTransaction,
+    pub proofs: Vector<crate::DetachedCommitProofRecord>,
     pub report_status_v2: bool,
     pub atomic: bool,
     pub delete_refs: bool,
@@ -196,6 +197,32 @@ pub fn read_receive_pack_commands(
                         revocation_generation,
                         updates,
                     },
+                    proofs: Vector::new(),
+                    report_status_v2: capabilities.report_status_v2,
+                    atomic: capabilities.atomic,
+                    delete_refs: allow_delete_candidates,
+                    side_band_64k: capabilities.side_band_64k,
+                    ofs_delta: capabilities.ofs_delta,
+                });
+            }
+            PktLine::Delimiter => {
+                if updates.is_empty()
+                    || !capabilities.report_status_v2
+                    || !capabilities.atomic
+                    || !capabilities.mrml_proof_v1
+                {
+                    return Err(GitdCoreError::Unsupported);
+                }
+                let proofs = read_receive_proofs(input, budget)?;
+                return Ok(ReceivePackRequest {
+                    candidate: CandidateRefTransaction {
+                        repository,
+                        repository_generation,
+                        trust_generation,
+                        revocation_generation,
+                        updates,
+                    },
+                    proofs,
                     report_status_v2: capabilities.report_status_v2,
                     atomic: capabilities.atomic,
                     delete_refs: allow_delete_candidates,
@@ -239,12 +266,63 @@ pub fn read_receive_pack_commands(
     Err(GitdCoreError::Resource)
 }
 
+pub const RECEIVE_PROOF_MAGIC: &[u8; 8] = b"MRGPUSH1";
+
+fn read_receive_proofs(
+    input: &mut dyn BoundedRead,
+    budget: &mut ProtocolBudget,
+) -> Result<Vector<crate::DetachedCommitProofRecord>, GitdCoreError> {
+    let mut proofs = Vector::new();
+    for _ in 0..crate::MAX_DETACHED_COMMIT_PROOFS {
+        let payload = match read_pkt_line(input, budget)? {
+            PktLine::Flush if !proofs.is_empty() => return Ok(proofs),
+            PktLine::Data(payload) => payload,
+            _ => return Err(GitdCoreError::MalformedInput),
+        };
+        let fixed = RECEIVE_PROOF_MAGIC.len() + 32 + 2 + 2;
+        if payload.len() < fixed || &payload[..8] != RECEIVE_PROOF_MAGIC {
+            return Err(GitdCoreError::MalformedInput);
+        }
+        let commit = ObjectId::from_bytes(ObjectFormat::Sha256, &payload[8..40])
+            .filter(|commit| !commit.is_zero())
+            .ok_or(GitdCoreError::MalformedInput)?;
+        let openpgp_length = usize::from(u16::from_be_bytes([payload[40], payload[41]]));
+        let ml_dsa_length = usize::from(u16::from_be_bytes([payload[42], payload[43]]));
+        let openpgp_end = fixed
+            .checked_add(openpgp_length)
+            .ok_or(GitdCoreError::Resource)?;
+        let end = openpgp_end
+            .checked_add(ml_dsa_length)
+            .ok_or(GitdCoreError::Resource)?;
+        if end != payload.len() {
+            return Err(GitdCoreError::MalformedInput);
+        }
+        let proof = crate::DetachedCommitProofRecord::new(
+            commit,
+            &payload[fixed..openpgp_end],
+            &payload[openpgp_end..end],
+        )
+        .map_err(|_| GitdCoreError::Authorization)?;
+        if proofs
+            .last()
+            .is_some_and(|previous: &crate::DetachedCommitProofRecord| {
+                previous.commit() >= proof.commit()
+            })
+        {
+            return Err(GitdCoreError::MalformedInput);
+        }
+        proofs.push(proof);
+    }
+    Err(GitdCoreError::Resource)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ReceiveCapabilities {
     report_status_v2: bool,
     atomic: bool,
     side_band_64k: bool,
     ofs_delta: bool,
+    mrml_proof_v1: bool,
 }
 
 fn parse_receive_capabilities(
@@ -262,6 +340,7 @@ fn parse_receive_capabilities(
             b"atomic" => set_once(&mut output.atomic)?,
             b"side-band-64k" => set_once(&mut output.side_band_64k)?,
             b"ofs-delta" => set_once(&mut output.ofs_delta)?,
+            b"mrml-proof-v1" => set_once(&mut output.mrml_proof_v1)?,
             _ if capability.starts_with(b"object-format=") => {
                 set_once(&mut saw_object_format)?;
                 let expected = match format {
@@ -360,10 +439,42 @@ pub fn write_v2_receive_capability_advertisement(
     for line in [
         b"version 2\n".as_slice(),
         b"object-format=sha256\n",
-        b"receive=report-status-v2 atomic side-band-64k ofs-delta\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
     ] {
         write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
     }
+    write_pkt_line(output, &PktLine::Flush, budget)
+}
+
+pub fn write_v2_protected_receive_capability_advertisement(
+    output: &mut dyn BoundedWrite,
+    format: ObjectFormat,
+    repository_generation: crate::RepositoryGeneration,
+    trust_generation: crate::TrustGeneration,
+    revocation_generation: crate::RevocationGeneration,
+    budget: &mut ProtocolBudget,
+) -> Result<(), GitdCoreError> {
+    if format != ObjectFormat::Sha256
+        || repository_generation.0 == 0
+        || trust_generation.0 == 0
+        || revocation_generation.0 == 0
+    {
+        return Err(GitdCoreError::Unsupported);
+    }
+    for line in [
+        b"version 2\n".as_slice(),
+        b"object-format=sha256\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+    ] {
+        write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
+    }
+    let context = mrml_runtime::mrml_format!(
+        "mrml-receive-context={}:{}:{}\n",
+        repository_generation.0,
+        trust_generation.0,
+        revocation_generation.0
+    );
+    write_pkt_line(output, &PktLine::Data(copy_bytes(context.as_bytes())?), budget)?;
     write_pkt_line(output, &PktLine::Flush, budget)
 }
 
@@ -957,6 +1068,7 @@ mod tests {
         assert!(receive.contains(" atomic "));
         assert!(receive.contains("side-band-64k"));
         assert!(receive.contains("ofs-delta"));
+        assert!(receive.contains("mrml-proof-v1"));
         assert!(!receive.contains("push-options"));
         assert!(
             write_v2_receive_capability_advertisement(
@@ -1099,6 +1211,34 @@ mod tests {
             b"PACKtrailing",
             "the pack body belongs to quarantine validation, not command parsing"
         );
+    }
+
+    #[test]
+    fn receive_pack_parses_ordered_proofs_and_leaves_pack_unread() {
+        let old = ObjectId::from_bytes(ObjectFormat::Sha256, &[1; 32]).unwrap();
+        let new = ObjectId::from_bytes(ObjectFormat::Sha256, &[2; 32]).unwrap();
+        let proof = crate::DetachedCommitProofRecord::new(
+            new,
+            &[3; 64],
+            &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        let mut bytes = crate::protected_push_command_with_proofs(
+            old,
+            new,
+            "refs/heads/main",
+            core::slice::from_ref(&proof),
+        )
+        .unwrap();
+        bytes.try_extend_from_slice(b"PACKtrailing").unwrap();
+        let mut reader = Reader {
+            bytes,
+            offset: 0,
+            chunk: 7,
+        };
+        let parsed = receive(&mut reader).unwrap();
+        assert_eq!(&parsed.proofs[..], &[proof]);
+        assert_eq!(&reader.bytes[reader.offset..], b"PACKtrailing");
     }
 
     #[test]

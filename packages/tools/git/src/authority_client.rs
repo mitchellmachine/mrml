@@ -26,11 +26,15 @@ pub trait ProtectedAuthorityRpc {
 
 pub struct RemoteProtectedReceiveAuthority<T> {
     transport: T,
+    pending_proofs: mrml_runtime::Vector<DetachedCommitProofRecord>,
 }
 
 impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
     pub const fn new(transport: T) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            pending_proofs: mrml_runtime::Vector::new(),
+        }
     }
 
     pub fn into_transport(self) -> T {
@@ -81,12 +85,37 @@ impl<T: ProtectedAuthorityRpc> ProtectedReceiveAuthority for RemoteProtectedRece
 }
 
 impl<T: ProtectedAuthorityRpc> ProtectedCommitVerifier for RemoteProtectedReceiveAuthority<T> {
+    fn begin_receive_proofs(
+        &mut self,
+        proofs: &[DetachedCommitProofRecord],
+    ) -> Result<(), GitdCoreError> {
+        if proofs.is_empty()
+            || !self.pending_proofs.is_empty()
+            || proofs.len() > crate::MAX_DETACHED_COMMIT_PROOFS
+            || !proofs
+                .windows(2)
+                .all(|pair| pair[0].commit() < pair[1].commit())
+        {
+            return Err(GitdCoreError::Authorization);
+        }
+        self.pending_proofs
+            .try_extend_from_slice(proofs)
+            .map_err(|_| GitdCoreError::Resource)
+    }
+
     fn verify_commit(
         &mut self,
         context: ProtectedHistoryContext<'_>,
         commit: ObjectId,
         exact_contents: &[u8],
     ) -> Result<VerifiedCommitProof, HistoryVerificationError> {
+        let index = self
+            .pending_proofs
+            .binary_search_by_key(&commit, DetachedCommitProofRecord::commit)
+            .map_err(|_| HistoryVerificationError::Signature)?;
+        let proof = self.pending_proofs.remove(index);
+        self.install_commit_proof(context, commit, exact_contents, &proof)
+            .map_err(|_| HistoryVerificationError::Signature)?;
         let encoded = encode_authority_commit(context, commit, exact_contents)
             .map_err(|_| HistoryVerificationError::Signature)?;
         self.empty_response(AUTHORITY_OP_VERIFY_COMMIT, &encoded)
@@ -109,6 +138,15 @@ impl<T: ProtectedAuthorityRpc> ProtectedCommitVerifier for RemoteProtectedReceiv
         _: &[u8],
     ) -> Result<VerifiedLegacyCommitProof, HistoryVerificationError> {
         Err(HistoryVerificationError::Signature)
+    }
+
+    fn finish_receive_proofs(&mut self) -> Result<(), GitdCoreError> {
+        if self.pending_proofs.is_empty() {
+            Ok(())
+        } else {
+            self.pending_proofs.clear();
+            Err(GitdCoreError::Authorization)
+        }
     }
 }
 
@@ -147,8 +185,9 @@ impl<T: ProtectedAuthorityRpc> AuditReceiptAuthority for RemoteProtectedReceiveA
 mod tests {
     use super::*;
     use crate::{
-        parse_authority_commit, parse_authority_receive, ObjectFormat, RepositoryGeneration,
-        RepositoryIdentity, RevocationGeneration, SignaturePurpose, TrustGeneration,
+        parse_authority_commit, parse_authority_proof_install, parse_authority_receive,
+        ObjectFormat, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+        SignaturePurpose, TrustGeneration,
     };
     use mrml_runtime::Vector;
 
@@ -175,6 +214,10 @@ mod tests {
                 }
                 AUTHORITY_OP_VERIFY_COMMIT => {
                     parse_authority_commit(request).map_err(|_| ())?;
+                    Ok(0)
+                }
+                AUTHORITY_OP_INSTALL_PROOF => {
+                    parse_authority_proof_install(request).map_err(|_| ())?;
                     Ok(0)
                 }
                 AUTHORITY_OP_SIGN_RECEIPT => {
@@ -207,9 +250,19 @@ mod tests {
             allow: true,
             calls: Vector::new(),
         });
+        let proof = DetachedCommitProofRecord::new(
+            commit,
+            &[3; 64],
+            &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        allowed
+            .begin_receive_proofs(core::slice::from_ref(&proof))
+            .unwrap();
         assert!(allowed
             .verify_commit(context, commit, b"commit bytes")
             .is_ok());
+        assert_eq!(allowed.finish_receive_proofs(), Ok(()));
         let mut signature = [0u8; 64];
         assert_eq!(allowed.sign(b"receipt", &mut signature), Ok(32));
         assert_eq!(&signature[..32], &[0x55; 32]);
@@ -219,8 +272,65 @@ mod tests {
             allow: false,
             calls: Vector::new(),
         });
+        denied
+            .begin_receive_proofs(core::slice::from_ref(&proof))
+            .unwrap();
         assert_eq!(
             denied.verify_commit(context, commit, b"commit bytes"),
+            Err(HistoryVerificationError::Signature)
+        );
+    }
+
+    #[test]
+    fn receive_proof_batch_rejects_missing_and_unused_records() {
+        let repository = RepositoryIdentity::parse("owner/protected").unwrap();
+        let context = ProtectedHistoryContext {
+            repository: &repository,
+            repository_generation: RepositoryGeneration(3),
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(8),
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha256,
+        };
+        let first = ObjectId::from_bytes(ObjectFormat::Sha256, &[7; 32]).unwrap();
+        let second = ObjectId::from_bytes(ObjectFormat::Sha256, &[8; 32]).unwrap();
+        let first_proof = DetachedCommitProofRecord::new(
+            first,
+            &[3; 64],
+            &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        let second_proof = DetachedCommitProofRecord::new(
+            second,
+            &[5; 64],
+            &[6; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        let mut authority = RemoteProtectedReceiveAuthority::new(ExactRpc {
+            allow: true,
+            calls: Vector::new(),
+        });
+        authority
+            .begin_receive_proofs(&[first_proof, second_proof])
+            .unwrap();
+        assert_eq!(
+            authority.verify_commit(context, first, b"first commit bytes"),
+            Ok(VerifiedCommitProof {
+                commit: first,
+                repository: repository.clone(),
+                repository_generation: RepositoryGeneration(3),
+                trust_generation: TrustGeneration(4),
+                revocation_generation: RevocationGeneration(8),
+                purpose: SignaturePurpose::GitCommit,
+                object_format: ObjectFormat::Sha256,
+            })
+        );
+        assert_eq!(
+            authority.finish_receive_proofs(),
+            Err(GitdCoreError::Authorization)
+        );
+        assert_eq!(
+            authority.verify_commit(context, second, b"second commit bytes"),
             Err(HistoryVerificationError::Signature)
         );
     }

@@ -490,6 +490,13 @@ pub trait GitdCoreBackend {
         repository: &RepositoryIdentity,
     ) -> Result<RepositoryGeneration, GitdCoreError>;
 
+    fn authority_generations(
+        &self,
+        _repository: &RepositoryIdentity,
+    ) -> Result<(RepositoryGeneration, TrustGeneration, RevocationGeneration), GitdCoreError> {
+        Err(GitdCoreError::Unsupported)
+    }
+
     fn repository_summary(
         &self,
         repository: &RepositoryIdentity,

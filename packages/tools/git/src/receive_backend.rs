@@ -19,6 +19,19 @@ use crate::{
 /// Verification-only authority. Implementations receive public policy/key state
 /// and exact commit bytes; no signing key belongs at this boundary.
 pub trait ProtectedCommitVerifier {
+    /// Begin one receive's bounded detached-proof set. Implementations that do
+    /// not support proof installation reject non-empty sets by default.
+    fn begin_receive_proofs(
+        &mut self,
+        proofs: &[crate::DetachedCommitProofRecord],
+    ) -> Result<(), GitdCoreError> {
+        if proofs.is_empty() {
+            Ok(())
+        } else {
+            Err(GitdCoreError::Authorization)
+        }
+    }
+
     /// Optional exact ref-transaction authorization used by the production
     /// authority composition after command parsing and before pack admission.
     fn authorize_transaction(
@@ -42,6 +55,12 @@ pub trait ProtectedCommitVerifier {
         _: &[u8],
     ) -> Result<VerifiedLegacyCommitProof, HistoryVerificationError> {
         Err(HistoryVerificationError::Signature)
+    }
+
+    /// Complete proof consumption before a verified transaction can be
+    /// constructed. Any unused supplied proof fails closed.
+    fn finish_receive_proofs(&mut self) -> Result<(), GitdCoreError> {
+        Ok(())
     }
 }
 
@@ -317,6 +336,11 @@ fn prepare_receive_internal(
     if !request.atomic || !request.report_status_v2 || request.delete_refs {
         return Err(GitdCoreError::Unsupported);
     }
+    match verifier.as_deref_mut() {
+        Some(verifier) => verifier.begin_receive_proofs(&request.proofs)?,
+        None if !request.proofs.is_empty() => return Err(GitdCoreError::Unsupported),
+        None => {}
+    }
     if require_transaction_authorization {
         verifier
             .as_deref_mut()
@@ -479,6 +503,9 @@ fn prepare_receive_internal(
         }
         .map_err(map_history_error)?;
         ranges.push(range);
+    }
+    if let Some(verifier) = verifier.as_deref_mut() {
+        verifier.finish_receive_proofs()?;
     }
     let verified = build_verified_fast_forward_transaction(request.candidate.clone(), &ranges)?;
     transaction

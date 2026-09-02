@@ -46,6 +46,24 @@ the remote channel consumes a strictly advancing request identifier; the
 durable receipt path always calls remote verification after signing and again
 when reopening a stored receipt.
 
+Protected HTTPS receives use the explicit `mrml-proof-v1` capability. The
+receive discovery additionally returns one canonical
+`mrml-receive-context=<repository>:<trust>:<revocation>` line sourced from the
+authenticated active repository state. The client rejects missing, duplicate,
+zero, non-canonical, or extra generation fields and re-runs discovery before
+upload so a signer result cannot be silently replayed after rotation.
+
+`ProtectedCommitProofSigner` is limited to exact commit proof creation. Its
+production composition, `CapabilityVerifiedProofSigner`, treats isolated
+provider output as untrusted and independently verifies OpenPGP v6 and
+ML-DSA-65 over the canonical repository-, purpose-, generation-, and
+payload-bound transcript. `sign_protected_introduced_history` uses the same
+bounded graph verifier as the server, including merge-side ancestry, and emits
+one strictly sorted record per introduced commit. The server consumes every
+record exactly once while reading authenticated quarantine objects, installs
+it through the authority's narrow operation, and refuses activation if any
+proof is missing or unused.
+
 This change introduces no new codec, similarity search, compression selection,
 or garbage-collection mechanism. Patent review: **NOT_TRIGGERED**; the work is
 conventional capability injection and exact-context signature/receipt

@@ -174,6 +174,18 @@ impl GitdCoreBackend for FilesystemRepositoryView {
         Ok(self.load_for(repository)?.repository_generation)
     }
 
+    fn authority_generations(
+        &self,
+        repository: &RepositoryIdentity,
+    ) -> Result<(RepositoryGeneration, TrustGeneration, RevocationGeneration), GitdCoreError> {
+        let state = self.load_for(repository)?;
+        Ok((
+            state.repository_generation,
+            state.trust_generation,
+            state.revocation_generation,
+        ))
+    }
+
     fn repository_summary(
         &self,
         repository: &RepositoryIdentity,
