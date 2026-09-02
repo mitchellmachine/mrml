@@ -231,9 +231,9 @@ fn run() -> Result<(), ()> {
             admit_catalog_repository(&config, repository).map_err(|_| ())?;
         }
         let authority_capability =
-            load_authority_capability(config.authority_capability.as_path(), config.authority_uid)?;
+            load_authority_capability(config.authority_capability.as_path(), config.gitd_uid)?;
         let certd_capability =
-            load_certd_capability(config.certd_capability.as_path(), config.certd_uid)?;
+            load_certd_capability(config.certd_capability.as_path(), config.gitd_uid)?;
         let mut authority = GitAuthorityChannelClient::new(
             config.authority_socket.as_path(),
             authority_capability,
@@ -336,9 +336,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
     operational_event("startup_configuration_valid");
     let authority_capability =
-        load_authority_capability(config.authority_capability.as_path(), config.authority_uid)?;
+        load_authority_capability(config.authority_capability.as_path(), config.gitd_uid)?;
     let certd_capability =
-        load_certd_capability(config.certd_capability.as_path(), config.certd_uid)?;
+        load_certd_capability(config.certd_capability.as_path(), config.gitd_uid)?;
     let mut authority = GitAuthorityChannelClient::new(
         config.authority_socket.as_path(),
         authority_capability,
@@ -709,6 +709,24 @@ fn load_certd_capability(path: &Path, expected_owner: u32) -> Result<CertdChanne
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn gitd_capability_copy_requires_its_local_file_owner() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-local-capability-owner-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let capability = root.join("channel.cap");
+        std::fs::write(&capability, [0x51u8; 32]).unwrap();
+        std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let gitd_uid = std::fs::metadata(&capability).unwrap().uid();
+        assert!(load_certd_capability(&capability, gitd_uid).is_ok());
+        assert!(load_certd_capability(&capability, gitd_uid.saturating_add(1)).is_err());
+        std::fs::remove_file(capability).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn bootstrap_public_file_requires_exact_read_only_regular_file() {

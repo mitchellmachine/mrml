@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-02 — Gitd local channel-capability ownership correction
+
+Patent review: **NOT_TRIGGERED**.
+
+This change makes Gitd validate its local authority/certd capability-file
+copies against the configured Gitd UID, matching the existing provisioner and
+Compose mounts. Remote service identity remains independently authenticated by
+Unix peer credentials and the channel protocol. No new mechanism is
+introduced.
+
 ## 2026-09-02 — Gitd certd real-process test fixture
 
 Patent review: **NOT_TRIGGERED**.

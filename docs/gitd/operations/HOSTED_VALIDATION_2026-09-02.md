@@ -204,3 +204,23 @@ OpenSSH, GnuPG, curl, wget, Python, Perl, or package manager.
 This follow-up adds a separate purpose-limited protected signer and completes
 the client proof-generation route, but it does not change the remaining real
 VPS, full certd-backed stack, or 256 MiB transfer evidence boundary above.
+
+## Gitd local capability ownership correction
+
+The production provisioner creates distinct Gitd-side authority and certd
+channel-capability copies as UID/GID `21001:21001`, and Compose mounts those
+copies read-only into Gitd. A startup audit found that Gitd nevertheless asked
+its secure file loader to require the remote service UID for each local copy.
+Both dependency-health and serve paths now require the configured Gitd UID for
+the local files. Unix peer credentials remain independently checked against the
+authority and certd UIDs; this change does not weaken remote peer identity.
+
+The hosted Gitd suite passed 29 library and 2 binary tests with local Unix,
+TCP, and UDP socket access. An initial sandboxed run passed the 26 non-socket
+tests and failed only the three denied bind operations; the unchanged suite
+then passed with local socket access. The production Compose static-invariant
+test also passed.
+
+Patent review: **NOT_TRIGGERED**. This is an ownership-consistency correction
+for an existing local secret-file check and introduces no new mechanism. See
+`docs/patents/REVIEW_LOG.md`.
